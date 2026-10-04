@@ -3,12 +3,14 @@ from pathlib import Path
 
 import av
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from av.codec.codec import UnknownCodecError
 
-from positronic.dataset import Time
-from positronic.dataset.signal import RECORDED_TIME, TIMELINE_METADATA_KEY, Kind
+from positronic.dataset.signal import RECORDED_TIME, Kind
+from positronic.dataset.time import Time
+from positronic.dataset.vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY
 from positronic.dataset.video import LibavEncoder, VideoSignal, VideoSignalWriter
 
 
@@ -66,7 +68,7 @@ class TestVideoSignalWriter:
         assert video_paths['frames'].exists()
         table = pq.read_table(video_paths['frames'])
         assert len(table) == 0
-        assert 'ts_ns' in table.column_names
+        assert table.column_names == []
 
     def test_write_single_frame(self, writer, video_paths):
         """Test writing a single frame."""
@@ -82,7 +84,7 @@ class TestVideoSignalWriter:
         frames_table = pq.read_table(video_paths['frames'])
         assert len(frames_table) == 1
         # Timestamps are stored as int64
-        assert frames_table['ts_ns'][0].as_py() == 1000
+        assert frames_table[f'ts.{RECORDED_TIME}'][0].as_py() == 1000
 
     def test_write_multiple_frames(self, writer, video_paths):
         """Test writing multiple frames with increasing timestamps."""
@@ -96,7 +98,7 @@ class TestVideoSignalWriter:
         frames_table = pq.read_table(video_paths['frames'])
         assert len(frames_table) == 10
         # Verify timestamps match what we wrote
-        stored_ts = [t.as_py() for t in frames_table['ts_ns']]
+        stored_ts = [t.as_py() for t in frames_table[f'ts.{RECORDED_TIME}']]
         assert stored_ts == timestamps
 
     def test_invalid_frame_shape(self, video_paths):
@@ -270,17 +272,17 @@ class TestVideoSignalStartLastTs:
             writer.append(create_frame(30), Time(**{RECORDED_TIME: 4000}))
 
         s = VideoSignal(video_paths['video'], video_paths['frames'])
-        assert s.start_ts == 1000
-        assert s.last_ts == 4000
+        assert s.bounds(RECORDED_TIME).start == 1000
+        assert s.bounds(RECORDED_TIME).finish == 4000
 
     def test_video_start_last_ts_empty_raises(self, video_paths):
         with VideoSignalWriter(video_paths['video'], video_paths['frames']):
             pass
         s = VideoSignal(video_paths['video'], video_paths['frames'])
         with pytest.raises(ValueError):
-            _ = s.start_ts
+            _ = s.bounds(RECORDED_TIME).start
         with pytest.raises(ValueError):
-            _ = s.last_ts
+            _ = s.bounds(RECORDED_TIME).finish
 
 
 class TestVideoInterface:
@@ -288,9 +290,9 @@ class TestVideoInterface:
         sig = create_video_signal(video_paths, [(create_frame(50), 1000), (create_frame(100), 2000)])
         assert len(sig) == 2
         frame0, ts0 = sig[0]
-        assert ts0 == 1000
+        assert ts0 == Time(**{RECORDED_TIME: 1000})
         assert_frames_equal(frame0, create_frame(50))
-        assert sig._ts_at([1])[0] == 2000
+        assert sig._ts_at([1], (RECORDED_TIME,))[0] == Time(**{RECORDED_TIME: 2000})
 
     def test_video_kind(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(10), 1000)])
@@ -314,12 +316,12 @@ class TestVideoInterface:
 
     def test_search_ts_empty_and_numeric(self, video_paths):
         sig = create_video_signal(video_paths, [(create_frame(50), 1000)])
-        empty = sig._search_ts(np.array([], dtype=np.int64))
+        empty = sig._search_ts([Time(**{RECORDED_TIME: t}) for t in np.array([], dtype=np.int64)])
         assert isinstance(empty, np.ndarray)
         assert empty.size == 0
-        idx = sig._search_ts(np.array([999, 1000, 1001], dtype=np.int64))
+        idx = sig._search_ts([Time(**{RECORDED_TIME: t}) for t in np.array([999, 1000, 1001], dtype=np.int64)])
         assert np.array_equal(idx, np.array([-1, 0, 0]))
-        assert sig._search_ts([1000])[0] == 0
+        assert sig._search_ts([Time(**{RECORDED_TIME: t}) for t in [1000]])[0] == 0
 
 
 class TestVideoExtraTimelines:
@@ -332,12 +334,12 @@ class TestVideoExtraTimelines:
 
         # Read the frames index directly
         table = pq.read_table(video_paths['frames'])
-        assert {'ts_ns', 'ts_ns.consumer', 'ts_ns.producer'} == set(table.column_names)
+        assert {f'ts.{RECORDED_TIME}', 'ts.consumer', 'ts.producer'} == set(table.column_names)
 
         # Verify the data
-        assert table['ts_ns'].to_pylist() == [1000, 2000, 3000]
-        assert table['ts_ns.producer'].to_pylist() == [900, 1900, 2900]
-        assert table['ts_ns.consumer'].to_pylist() == [1100, 2100, 3100]
+        assert table[f'ts.{RECORDED_TIME}'].to_pylist() == [1000, 2000, 3000]
+        assert table['ts.producer'].to_pylist() == [900, 1900, 2900]
+        assert table['ts.consumer'].to_pylist() == [1100, 2100, 3100]
 
     def test_video_writer_empty_with_no_extra_timelines(self, video_paths):
         """Test empty video writer doesn't create extra timeline columns."""
@@ -345,7 +347,7 @@ class TestVideoExtraTimelines:
             pass
 
         table = pq.read_table(video_paths['frames'])
-        assert {'ts_ns'} == set(table.column_names)
+        assert table.column_names == []
         assert len(table) == 0
 
     def test_video_inconsistent_timestamp_keys_raises(self, video_paths):
@@ -371,27 +373,25 @@ class TestVideoExtraTimelines:
 
 
 @pytest.mark.parametrize('count', [0, 2])
-def test_video_main_name_is_stored_without_changing_queries(video_paths, count):
-    with VideoSignalWriter(video_paths['video'], video_paths['frames'], main_timeline='camera') as writer:
+def test_video_named_timelines(video_paths, count):
+    with VideoSignalWriter(video_paths['video'], video_paths['frames']) as writer:
         for i in range(count):
             writer.append(create_frame(i * 100), Time(camera=1000 + i * 100))
-    assert pq.read_schema(video_paths['frames']).metadata[TIMELINE_METADATA_KEY] == b'camera'
+    assert pq.read_schema(video_paths['frames']).metadata[SIGNAL_VERSION_KEY] == SIGNAL_VERSION
     signal = VideoSignal(video_paths['video'], video_paths['frames'])
-    assert signal.main_timeline == 'camera'
-    assert list(signal.keys()) == [1000 + i * 100 for i in range(count)]
+    assert signal.timelines == (('camera',) if count else ())
+    assert len(signal) == count
     if count:
-        frame, ts = signal.time[1050]
-        assert ts == 1000
+        frame, ts = signal.time[Time(camera=1050)]
+        assert ts == Time(camera=1000)
         assert_frames_equal(frame, create_frame(0))
 
 
 def test_legacy_video_queries(video_paths):
     create_video_signal(video_paths, [(create_frame(40), 1000)])
-    table = pq.read_table(video_paths['frames'])
-    assert table.schema.metadata[TIMELINE_METADATA_KEY] == RECORDED_TIME.encode()
-    pq.write_table(table.replace_schema_metadata(None), video_paths['frames'])
+    pq.write_table(pa.table({'ts_ns': [1000], 'ts_ns.wall': [900]}), video_paths['frames'])
     signal = VideoSignal(video_paths['video'], video_paths['frames'])
-    assert signal.main_timeline == RECORDED_TIME
-    frame, ts = signal.time[1000]
-    assert ts == 1000
+    assert signal.timelines == (RECORDED_TIME,)
+    frame, ts = signal.time[Time(**{RECORDED_TIME: 1000})]
+    assert ts == Time(**{RECORDED_TIME: 1000})
     assert_frames_equal(frame, create_frame(40))

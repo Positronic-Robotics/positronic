@@ -10,12 +10,21 @@ import pos3
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic.dataset import Dataset
-from positronic.dataset.signal import MAIN_TIMELINE_KEY, SupportsEncodedRepresentation
+from positronic.dataset.remote import (
+    API_PREFIX,
+    SIGNAL_BOUNDS_KEY,
+    SIGNAL_DTYPE_KEY,
+    SIGNAL_KIND_KEY,
+    SIGNAL_SHAPE_KEY,
+    encode_times,
+)
+from positronic.dataset.signal import TIMELINES_KEY, SupportsEncodedRepresentation
+from positronic.dataset.time import Time, validate_timelines
 from positronic.utils.serialization import serialize
 
 _dataset: Dataset | None = None
@@ -27,55 +36,86 @@ class IndicesRequest(BaseModel):
     slice: list[int | None] | None = None
 
 
+class TimestampIndicesRequest(IndicesRequest):
+    timelines: tuple[str, ...]
+
+
 class TimestampsRequest(BaseModel):
-    timestamps: list[int]
+    timelines: tuple[str, ...]
+    timestamps: list[list[StrictInt]]
+
+    def times(self) -> list[Time]:
+        validate_timelines(self.timelines, allow_empty=not self.timestamps)
+        return [Time(**dict(zip(self.timelines, row, strict=True))) for row in self.timestamps]
 
 
-@_app.get('/api/v1/dataset/info')
+@_app.get(f'{API_PREFIX}/dataset/info')
 def dataset_info():
     ds = _get_dataset()
     return {'num_episodes': len(ds), 'meta': ds.meta}
 
 
-@_app.get('/api/v1/episodes/{index}/info')
+@_app.get(f'{API_PREFIX}/episodes/{{index}}/info')
 def episode_info(index: int):
     ep = _get_episode(index)
     signals_meta = {}
     for name, sig in ep.signals.items():
         supports_encoded = isinstance(sig, SupportsEncodedRepresentation)
         signals_meta[name] = {
-            MAIN_TIMELINE_KEY: sig.main_timeline,
+            TIMELINES_KEY: sig.timelines,
+            SIGNAL_BOUNDS_KEY: encode_times(sig.bounds(sig.timelines) if len(sig) else (), timelines=sig.timelines),
             'length': len(sig),
-            'kind': sig.kind.value,
-            'dtype': np.dtype(sig.dtype).str,
-            'shape': list(sig.shape) if sig.shape else [],
             'encoding_format': sig.encoding_format if supports_encoded else None,
         }
     return {'meta': ep.meta, 'static': serialize(ep.static).hex(), 'signals': signals_meta}
 
 
-@_app.post('/api/v1/episodes/{ep}/signals/{sig}/timestamps')
-def signal_timestamps(ep: int, sig: str, req: IndicesRequest):
+@_app.get(f'{API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/meta')
+def signal_meta(ep: int, sig: str):
+    signal = _get_signal(ep, sig)
+    return {
+        SIGNAL_KIND_KEY: signal.kind.value,
+        SIGNAL_DTYPE_KEY: np.dtype(signal.dtype).str,
+        SIGNAL_SHAPE_KEY: list(signal.shape or ()),
+    }
+
+
+@_app.post(f'{API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/timestamps')
+def signal_timestamps(ep: int, sig: str, req: TimestampIndicesRequest):
     signal = _get_signal(ep, sig)
     indices = _parse_indices(req)
-    return {'timestamps': np.asarray(signal._ts_at(indices)).tolist()}
+    try:
+        signal._validate_selection(req.timelines)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return encode_times(signal._ts_at(indices, req.timelines), timelines=req.timelines)
 
 
-@_app.post('/api/v1/episodes/{ep}/signals/{sig}/values')
+@_app.post(f'{API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/values')
 def signal_values(ep: int, sig: str, req: IndicesRequest):
     signal = _get_signal(ep, sig)
     values = list(signal._values_at(_parse_indices(req)))
     return StreamingResponse(iter([serialize(values)]), media_type='application/msgpack')
 
 
-@_app.post('/api/v1/episodes/{ep}/signals/{sig}/search')
+@_app.post(f'{API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/search')
 def signal_search(ep: int, sig: str, req: TimestampsRequest):
     signal = _get_signal(ep, sig)
-    indices = signal._search_ts(np.array(req.timestamps, dtype=np.int64))
+    try:
+        queries = req.times()
+        if queries:
+            signal._validate_selection(queries[0].timelines)
+        indices = signal._search_ts(queries)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     return {'indices': np.asarray(indices).tolist()}
 
 
-@_app.get('/api/v1/episodes/{ep}/signals/{sig}/encoded')
+@_app.get(f'{API_PREFIX}/episodes/{{ep}}/signals/{{sig}}/encoded')
 def signal_encoded(ep: int, sig: str):
     signal = _get_signal(ep, sig)
     if not isinstance(signal, SupportsEncodedRepresentation):
@@ -87,16 +127,20 @@ def signal_encoded(ep: int, sig: str):
     )
 
 
-@_app.post('/api/v1/episodes/{ep}/sample')
+@_app.post(f'{API_PREFIX}/episodes/{{ep}}/sample')
 def episode_sample(ep: int, req: TimestampsRequest):
     episode = _get_episode(ep)
-    timestamps = np.array(req.timestamps, dtype=np.int64)
-    sampled = episode.time[timestamps]
+    try:
+        sampled = episode.time[req.times()]
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
     result_static, result_signals = {}, {}
     for key, value in sampled.items():
         if key in episode.signals:
-            result_signals[key] = {'timestamps': timestamps.tolist(), 'values': serialize(list(value)).hex()}
+            result_signals[key] = {'values': serialize(list(value)).hex()}
         else:
             result_static[key] = value
     return {'static': serialize(result_static).hex(), 'signals': result_signals}

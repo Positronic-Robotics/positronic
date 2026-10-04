@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from functools import cached_property
 from typing import Any, TypeVar
 
 import httpx
@@ -12,9 +13,26 @@ from positronic.utils.serialization import deserialize
 
 from .dataset import Dataset
 from .episode import Episode, _EpisodeTimeIndexer
-from .signal import MAIN_TIMELINE_KEY, RECORDED_TIME, IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta
+from .signal import TIMELINES_KEY, IndicesLike, Kind, Signal, SignalMeta
+from .time import Time, TimeArray, TimeBounds, validate_queries
 
 T = TypeVar('T')
+API_PREFIX = '/api/v2'
+TIMESTAMP_VALUES_KEY = 'timestamps'
+SIGNAL_BOUNDS_KEY = 'bounds'
+SIGNAL_KIND_KEY = 'kind'
+SIGNAL_DTYPE_KEY = 'dtype'
+SIGNAL_SHAPE_KEY = 'shape'
+
+
+def encode_times(times: Sequence[Time], *, timelines: tuple[str, ...]) -> dict:
+    return {TIMELINES_KEY: timelines, TIMESTAMP_VALUES_KEY: [[time[name] for name in timelines] for time in times]}
+
+
+def decode_times(data: dict) -> TimeArray:
+    names = tuple(data[TIMELINES_KEY])
+    rows = data[TIMESTAMP_VALUES_KEY]
+    return TimeArray(names, np.array(rows, dtype=np.int64).reshape(len(rows), len(names)))
 
 
 class DatasetClient:
@@ -37,41 +55,56 @@ class DatasetClient:
             self._session = None
 
     def get_dataset_info(self) -> dict:
-        r = self.session.get('/api/v1/dataset/info')
+        r = self.session.get(f'{API_PREFIX}/dataset/info')
         r.raise_for_status()
         return r.json()
 
     def get_episode_info(self, index: int) -> dict:
-        r = self.session.get(f'/api/v1/episodes/{index}/info')
+        r = self.session.get(f'{API_PREFIX}/episodes/{index}/info')
         r.raise_for_status()
         info = r.json()
         info['static'] = deserialize(bytes.fromhex(info['static']))
         return info
 
-    def get_signal_timestamps(self, ep: int, sig: str, indices: IndicesLike) -> np.ndarray:
-        r = self.session.post(f'/api/v1/episodes/{ep}/signals/{sig}/timestamps', json=_encode_indices(indices))
+    def get_signal_timestamps(self, ep: int, sig: str, indices: IndicesLike, timelines: tuple[str, ...]) -> TimeArray:
+        r = self.session.post(
+            f'{API_PREFIX}/episodes/{ep}/signals/{sig}/timestamps',
+            json={**_encode_indices(indices), TIMELINES_KEY: timelines},
+        )
         r.raise_for_status()
-        return np.array(r.json()['timestamps'], dtype=np.int64)
+        return decode_times(r.json())
+
+    def get_signal_meta(self, ep: int, sig: str) -> SignalMeta:
+        r = self.session.get(f'{API_PREFIX}/episodes/{ep}/signals/{sig}/meta')
+        r.raise_for_status()
+        data = r.json()
+        return SignalMeta(
+            dtype=np.dtype(data[SIGNAL_DTYPE_KEY]),
+            shape=tuple(data[SIGNAL_SHAPE_KEY]),
+            kind=Kind(data[SIGNAL_KIND_KEY]),
+        )
 
     def get_signal_values(self, ep: int, sig: str, indices: IndicesLike) -> list:
         r = self.session.post(
-            f'/api/v1/episodes/{ep}/signals/{sig}/values',
+            f'{API_PREFIX}/episodes/{ep}/signals/{sig}/values',
             json=_encode_indices(indices),
             headers={'Accept': 'application/msgpack'},
         )
         r.raise_for_status()
         return deserialize(r.content)
 
-    def search_signal_timestamps(self, ep: int, sig: str, ts_array: RealNumericArrayLike) -> np.ndarray:
-        r = self.session.post(
-            f'/api/v1/episodes/{ep}/signals/{sig}/search', json={'timestamps': np.asarray(ts_array).tolist()}
-        )
+    def search_signal_timestamps(self, ep: int, sig: str, queries: Sequence[Time]) -> np.ndarray:
+        payload = encode_times(queries, timelines=queries[0].timelines if len(queries) else ())
+        r = self.session.post(f'{API_PREFIX}/episodes/{ep}/signals/{sig}/search', json=payload)
         r.raise_for_status()
         return np.array(r.json()['indices'], dtype=np.int64)
 
-    def sample_episode(self, ep: int, timestamps: np.ndarray) -> dict:
+    def sample_episode(self, ep: int, timestamps: Sequence[Time]) -> dict:
         """Batch sample all signals at given timestamps."""
-        r = self.session.post(f'/api/v1/episodes/{ep}/sample', json={'timestamps': timestamps.tolist()})
+        payload = encode_times(timestamps, timelines=timestamps[0].timelines if len(timestamps) else ())
+        r = self.session.post(f'{API_PREFIX}/episodes/{ep}/sample', json=payload)
+        if r.status_code == 404:
+            raise KeyError(r.json()['detail'])
         r.raise_for_status()
         data = r.json()
         result = deserialize(bytes.fromhex(data['static']))
@@ -80,7 +113,7 @@ class DatasetClient:
         return result
 
     def stream_encoded(self, ep: int, sig: str) -> Iterator[bytes]:
-        with self.session.stream('GET', f'/api/v1/episodes/{ep}/signals/{sig}/encoded') as r:
+        with self.session.stream('GET', f'{API_PREFIX}/episodes/{ep}/signals/{sig}/encoded') as r:
             r.raise_for_status()
             yield from r.iter_bytes(chunk_size=64 * 1024)
 
@@ -99,39 +132,44 @@ class RemoteSignal(Signal[T]):
         client: DatasetClient,
         episode_index: int,
         signal_name: str,
-        meta: SignalMeta,
         length: int,
         encoding_format: str | None,
         *,
-        main_timeline: str = RECORDED_TIME,
+        timelines: tuple[str, ...],
+        bounds: Sequence[Time],
     ):
         self._client = client
         self._episode_index = episode_index
         self._signal_name = signal_name
-        self._meta_cached = meta
         self._length = length
         self._encoding_format = encoding_format
-        self._main_timeline = main_timeline
+        self._timelines = timelines
+        self._time_bounds = bounds
 
     @property
-    def main_timeline(self) -> str:
-        return self._main_timeline
+    def timelines(self) -> tuple[str, ...]:
+        return self._timelines
 
     def __len__(self) -> int:
         return self._length
 
-    @property
+    @cached_property
     def meta(self) -> SignalMeta:
-        return self._meta_cached
+        if not len(self):
+            raise ValueError('Signal is empty')
+        return self._client.get_signal_meta(self._episode_index, self._signal_name)
 
-    def _ts_at(self, indices: IndicesLike) -> np.ndarray:
-        return self._client.get_signal_timestamps(self._episode_index, self._signal_name, indices)
+    def _bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]:
+        return TimeBounds(self._time_bounds[0][timelines], self._time_bounds[1][timelines])
+
+    def _ts_at(self, indices: IndicesLike, timelines: tuple[str, ...]) -> Sequence[Time]:
+        return self._client.get_signal_timestamps(self._episode_index, self._signal_name, indices, timelines)
 
     def _values_at(self, indices: IndicesLike) -> Sequence[T]:
         return self._client.get_signal_values(self._episode_index, self._signal_name, indices)
 
-    def _search_ts(self, ts_array: RealNumericArrayLike) -> np.ndarray:
-        return self._client.search_signal_timestamps(self._episode_index, self._signal_name, ts_array)
+    def _search_ts(self, queries: Sequence[Time]) -> np.ndarray:
+        return self._client.search_signal_timestamps(self._episode_index, self._signal_name, queries)
 
     @property
     def encoding_format(self) -> str | None:
@@ -143,16 +181,15 @@ class RemoteSignal(Signal[T]):
         return self._client.stream_encoded(self._episode_index, self._signal_name)
 
 
-class _RemoteEpisodeTimeIndexer:
-    """Optimized time indexer using batch API for array access."""
-
+class _RemoteEpisodeTimeIndexer(_EpisodeTimeIndexer):
     def __init__(self, episode: RemoteEpisode):
-        self._episode = episode
+        self.episode: RemoteEpisode = episode
 
-    def __getitem__(self, timestamps):
-        if isinstance(timestamps, np.ndarray):
-            return self._episode._client.sample_episode(self._episode._index, timestamps)
-        return _EpisodeTimeIndexer(self._episode)[timestamps]
+    def __getitem__(self, request):
+        if isinstance(request, Sequence) and not isinstance(request, str | bytes):
+            validate_queries(request)
+            return self.episode._client.sample_episode(self.episode._index, request)
+        return super().__getitem__(request)
 
 
 class RemoteEpisode(Episode):
@@ -185,19 +222,14 @@ class RemoteEpisode(Episode):
         if name in info['signals']:
             if name not in self._signals:
                 sig_info = info['signals'][name]
-                sig_meta = SignalMeta(
-                    dtype=np.dtype(sig_info['dtype']),
-                    shape=tuple(sig_info['shape']) if sig_info['shape'] else (),
-                    kind=Kind(sig_info['kind']),
-                )
                 self._signals[name] = RemoteSignal(
                     self._client,
                     self._index,
                     name,
-                    sig_meta,
                     sig_info['length'],
                     sig_info.get('encoding_format'),
-                    main_timeline=sig_info.get(MAIN_TIMELINE_KEY, RECORDED_TIME),
+                    timelines=tuple(sig_info[TIMELINES_KEY]),
+                    bounds=tuple(decode_times(sig_info[SIGNAL_BOUNDS_KEY])),
                 )
             return self._signals[name]
         raise KeyError(f"'{name}' not found in episode {self._index}")

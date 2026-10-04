@@ -1,19 +1,19 @@
 import collections.abc
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
-from typing import Any
+from typing import Any, overload
 
 import numpy as np
 
 from .episode import Episode, EpisodeWriter
-from .signal import RECORDED_TIME, IndicesLike
+from .signal import IndicesLike
 
 
 class DatasetWriter(AbstractContextManager, ABC):
     """Abstract factory for creating new Episodes within a dataset."""
 
     @abstractmethod
-    def new_episode(self, *, main_timeline: str = RECORDED_TIME) -> EpisodeWriter:
+    def new_episode(self) -> EpisodeWriter:
         """Allocate and return a writer for a new episode."""
         pass
 
@@ -34,6 +34,12 @@ class Dataset(ABC, collections.abc.Sequence[Episode]):
     def _get_episode(self, index: int) -> Episode:
         """Return the episode at a single, already-normalized index."""
         pass
+
+    @overload
+    def __getitem__(self, index_or_slice: int) -> Episode: ...
+
+    @overload
+    def __getitem__(self, index_or_slice: IndicesLike) -> list[Episode]: ...
 
     def __getitem__(self, index_or_slice: int | IndicesLike) -> Episode | list[Episode]:
         """Return an Episode or list of Episodes after normalizing integer-based indices."""

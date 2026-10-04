@@ -2,11 +2,13 @@
 
 Quality signals are composed from general-purpose signal transforms (diff, norm,
 view) — nothing expensive happens until values are accessed.
+Derivative timelines must measure nanoseconds.
 """
 
 import numpy as np
 
 from positronic import keys
+from positronic.dataset.signal import RECORDED_TIME
 
 from .signals import Elementwise, Join, diff, norm, view
 
@@ -14,9 +16,16 @@ _TRANSLATION = slice(0, 3)
 _DT_SEC = 1 / 15
 
 
-def idle_mask(episode, signal=keys.JOINTS, velocity_threshold=0.015, dt_sec=_DT_SEC):
+def idle_mask(
+    episode,
+    signal=keys.JOINTS,
+    velocity_threshold=0.015,
+    dt_sec=_DT_SEC,
+    *,
+    timelines: tuple[str, ...] = (RECORDED_TIME,),
+):
     """Per-frame bool: True where joint speed < threshold (rad/s)."""
-    speed = norm(diff(episode.signals[signal], dt_sec))
+    speed = norm(diff(episode.signals[signal], dt_sec, timelines=timelines))
 
     def fn(vals):
         return np.array(vals) < velocity_threshold
@@ -24,12 +33,19 @@ def idle_mask(episode, signal=keys.JOINTS, velocity_threshold=0.015, dt_sec=_DT_
     return Elementwise(speed, fn)
 
 
-def jerk(episode, signal=keys.JOINTS, dt_sec=_DT_SEC):
+def jerk(episode, signal=keys.JOINTS, dt_sec=_DT_SEC, *, timelines: tuple[str, ...] = (RECORDED_TIME,)):
     """Per-frame joint acceleration magnitude (rad/s^2)."""
-    return norm(diff(episode.signals[signal], dt_sec, order=2))
+    return norm(diff(episode.signals[signal], dt_sec, order=2, timelines=timelines))
 
 
-def cmd_lag(episode, cmd_signal=keys.TARGET_EE_POSE, state_signal=keys.EE_POSE, components=_TRANSLATION):
+def cmd_lag(
+    episode,
+    cmd_signal=keys.TARGET_EE_POSE,
+    state_signal=keys.EE_POSE,
+    components=_TRANSLATION,
+    *,
+    timelines: tuple[str, ...] = (RECORDED_TIME,),
+):
     """Per-frame distance between commanded and actual pose (meters)."""
     cmd = episode.signals[cmd_signal]
     ee = episode.signals[state_signal]
@@ -38,9 +54,16 @@ def cmd_lag(episode, cmd_signal=keys.TARGET_EE_POSE, state_signal=keys.EE_POSE, 
         arr = np.array(pairs)  # (batch, 2, dim)
         return np.linalg.norm(arr[:, 0, components] - arr[:, 1, components], axis=-1)
 
-    return Elementwise(Join(cmd, ee), fn)
+    return Elementwise(Join(cmd, ee, timelines=timelines), fn)
 
 
-def cmd_velocity(episode, signal=keys.TARGET_EE_POSE, components=_TRANSLATION, dt_sec=_DT_SEC):
+def cmd_velocity(
+    episode,
+    signal=keys.TARGET_EE_POSE,
+    components=_TRANSLATION,
+    dt_sec=_DT_SEC,
+    *,
+    timelines: tuple[str, ...] = (RECORDED_TIME,),
+):
     """Per-frame command translation velocity (m/s). Spikes = tracking glitches."""
-    return norm(diff(view(episode.signals[signal], components), dt_sec))
+    return norm(diff(view(episode.signals[signal], components), dt_sec, timelines=timelines))

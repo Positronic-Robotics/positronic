@@ -10,6 +10,7 @@ from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command, models
@@ -125,7 +126,9 @@ class DroidCodec(Codec):
                 **state_encoders,
                 keys.TASK: Get(keys.TASK, ''),
                 ACTION: lambda episode: tf.concat(
-                    *(derive(episode) for derive in state_encoders.values()), dtype=np.float32
+                    *(derive(episode) for derive in state_encoders.values()),
+                    timelines=(RECORDED_TIME,),
+                    dtype=np.float32,
                 ),
                 **{name: partial(self._derive_image, source) for name, source in self.image_mappings.items()},
             },

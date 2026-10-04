@@ -88,7 +88,7 @@ class Derive(EpisodeTransform):
 
     Example:
         Derive(
-            state=Concat('joint_q', 'ee_pose'),
+            state=Concat('joint_q', 'ee_pose', timelines=('world',)),
             label=FromValue('pick_place')
         )
     """
@@ -260,18 +260,20 @@ class Concat:
     This is a callable helper (not an EpisodeTransform) typically used within Derive.
 
     Example:
-        Derive(ee_pose=Concat('ee_translation', 'ee_quaternion'))
+        Derive(ee_pose=Concat('ee_translation', 'ee_quaternion', timelines=('world',)))
     """
 
-    def __init__(self, *features: str) -> None:
+    def __init__(self, *features: str, timelines: tuple[str, ...]) -> None:
         """
         Args:
             *features: Episode keys to concatenate in order
+            timelines: Common timelines to align and retain
         """
         self._features = features
+        self._timelines = timelines
 
     def __call__(self, episode: Episode) -> NpSignal:
-        return signals.concat(*[episode[k] for k in self._features])
+        return signals.concat(*[episode[k] for k in self._features], timelines=self._timelines)
 
 
 class FromValue:

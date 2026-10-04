@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from positronic.dataset import Episode, Time, edits
+from positronic.dataset import Episode, edits
 from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import (
     UNFINISHED_MARKER,
@@ -16,6 +16,7 @@ from positronic.dataset.local_dataset import (
     load_dataset,
 )
 from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time
 
 from .test_dataset import build_dataset_with_signal, episode_ids
 
@@ -39,7 +40,7 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
     ep0 = ds[0]
     assert isinstance(ep0, Episode)
     assert ep0['id'] == 0
-    assert ep0['a'][0] == (0, 1000)
+    assert ep0['a'][0] == (0, Time(**{RECORDED_TIME: 1000}))
 
     # Restart writer and keep appending
     with LocalDatasetWriter(root) as w2:

@@ -20,6 +20,7 @@ from positronic import keys
 from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
 from positronic.dataset.local_dataset import load_all_datasets
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import Elementwise, TransformedDataset, agg_fraction_true, agg_max, agg_percentile
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
@@ -121,8 +122,10 @@ def _flip_grip(key: str):
 # Signal transformations for sim datasets
 old_to_new = Group(
     Derive(**{
-        keys.TARGET_EE_POSE: Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
-        keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion'),
+        keys.TARGET_EE_POSE: Concat(
+            'target_robot_position_translation', 'target_robot_position_quaternion', timelines=(RECORDED_TIME,)
+        ),
+        keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion', timelines=(RECORDED_TIME,)),
         keys.TASK: FromValue('Pick up the green cube and place it on the red cube.'),
         keys.GRIP: _flip_grip(keys.GRIP),
         keys.TARGET_GRIP: _flip_grip(keys.TARGET_GRIP),

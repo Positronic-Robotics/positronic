@@ -26,7 +26,7 @@ from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.dataset.signal import Kind, Signal
+from positronic.dataset.signal import RECORDED_TIME, Kind, Signal
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.video import VideoSignal
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -540,7 +540,7 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int, max_hz: 
     first_frame = np.asarray(sig[0][0])
     h, w = first_frame.shape[:2]
     width, height = _size_capped_to(w, h, max_resolution)
-    kept = set(_decimation_indices(np.asarray(sig.keys(), dtype='datetime64[ns]'), max_hz).tolist())
+    kept = set(_decimation_indices(np.asarray(sig.timestamps(RECORDED_TIME), dtype='datetime64[ns]'), max_hz).tolist())
     stream = cast(VideoStream, container.add_stream('libx265', rate=30))
     stream.width = width
     stream.height = height
@@ -554,7 +554,7 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int, max_hz: 
         if (width, height) != (w, h):
             frame = frame.reformat(width=width, height=height)
         frame.pts, frame.time_base = position, _FRAME_INDEX_TIME_BASE
-        times_by_pts[position] = ts
+        times_by_pts[position] = ts[RECORDED_TIME]
         _log_encoded(stream.encode(frame))
 
     _log_encoded(stream.encode())
@@ -604,7 +604,7 @@ def _log_video_signals(
     for name in signals.videos:
         sig = ep.signals[name]
         if isinstance(sig, VideoSignal):
-            our_ts = np.asarray(sig.keys(), dtype='datetime64[ns]')
+            our_ts = np.asarray(sig.timestamps(RECORDED_TIME), dtype='datetime64[ns]')
             kept = _decimation_indices(our_ts, max_hz)
             video_bytes = _mp4_reduced_to(sig.video_path, max_resolution, kept if len(kept) < len(our_ts) else None)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
@@ -670,7 +670,7 @@ def _log_numeric_signals(
         sig = ep.signals[key]
         if len(sig) == 0:
             continue
-        ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
+        ts_arr = np.asarray(sig.timestamps(RECORDED_TIME), dtype='datetime64[ns]')
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
@@ -857,7 +857,7 @@ def _to_centiseconds(durations: np.ndarray) -> np.ndarray:
 def _recording_start(ep_signals: dict[str, Signal[Any]], signals: EpisodeSignals) -> np.datetime64:
     """The first time the recording logs, which the viewer's time and its `?t=` link count from."""
     logged = {*signals.videos, *signals.plotted, *signals.texts, *signals.poses, *signals.joints}
-    starts = [ep_signals[name].start_ts for name in logged if len(ep_signals[name])]
+    starts = [ep_signals[name].bounds(RECORDED_TIME).start for name in logged if len(ep_signals[name])]
     return np.datetime64(min(starts), 'ns') if starts else np.datetime64(0, 'ns')
 
 
@@ -871,7 +871,7 @@ def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStre
     recording_start = _recording_start(ep_signals, signals)
     for key in signals.texts:
         sig = ep_signals[key]
-        ts_arr = np.asarray(sig.keys(), dtype='datetime64[ns]')
+        ts_arr = np.asarray(sig.timestamps(RECORDED_TIME), dtype='datetime64[ns]')
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
         time_idx = [

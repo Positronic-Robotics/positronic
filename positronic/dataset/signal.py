@@ -1,119 +1,25 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping, Sequence
-from collections.abc import Sequence as SequenceABC
+from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import Enum
-from functools import lru_cache
-from operator import index
-from types import MappingProxyType
-from typing import Any, Generic, Protocol, SupportsIndex, TypeAlias, TypeVar, Union, final, overload, runtime_checkable
+from functools import cached_property
+from typing import Any, Generic, Protocol, TypeAlias, TypeVar, final, overload, runtime_checkable
 
 import numpy as np
 
+from positronic.utils.lazy import LazySequence
+
+from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timelines
+
 RECORDED_TIME = 'recorded'
 TIMELINE_METADATA_KEY = b'positronic.timeline'
-MAIN_TIMELINE_KEY = 'main_timeline'
+TIMELINES_KEY = 'timelines'
 
 
 T = TypeVar('T')
 
 IndicesLike: TypeAlias = slice | Sequence[int] | np.ndarray
-RealNumericArrayLike: TypeAlias = Sequence[int] | np.ndarray
-
-
-def validate_timeline(timeline: str) -> None:
-    if not isinstance(timeline, str) or not timeline.strip():
-        raise ValueError('A timeline name must be a non-empty string')
-
-
-class Time(Mapping[str, int]):
-    """Immutable integer coordinates on a nonempty set of named timelines."""
-
-    __slots__ = ('_coordinates',)
-
-    def __init__(self, /, **timestamps: SupportsIndex):
-        if not timestamps:
-            raise ValueError('Time must contain at least one timeline')
-        coordinates = {}
-        for name, value in timestamps.items():
-            validate_timeline(name)
-            if isinstance(value, bool | np.bool_):
-                raise TypeError('Timeline coordinates must be integers, not booleans')
-            coordinates[name] = index(value)
-        self._coordinates = MappingProxyType(coordinates)
-
-    @property
-    def timelines(self) -> tuple[str, ...]:
-        return tuple(self._coordinates)
-
-    @overload
-    def __getitem__(self, key: str) -> int: ...
-
-    @overload
-    def __getitem__(self, key: tuple[str, ...]) -> 'Time': ...
-
-    def __getitem__(self, key: str | tuple[str, ...]) -> 'int | Time':
-        if isinstance(key, str):
-            return self._coordinates[key]
-        if not isinstance(key, tuple):
-            raise TypeError('Select a timeline name or a tuple of timeline names')
-        if not key or len(set(key)) != len(key):
-            raise ValueError('Select a nonempty tuple of unique timeline names')
-        return Time(**{name: self._coordinates[name] for name in key})
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._coordinates)
-
-    def __len__(self) -> int:
-        return len(self._coordinates)
-
-    def __contains__(self, key: object) -> bool:
-        return key in self._coordinates
-
-    def __repr__(self) -> str:
-        return f'Time(**{dict(self._coordinates)!r})'
-
-    def _validate_timelines(self, other: 'Time') -> None:
-        if self._coordinates.keys() != other._coordinates.keys():
-            raise ValueError('Timestamp operations require the same timeline names')
-
-    def __le__(self, other: 'Time') -> bool:
-        if not isinstance(other, Time):
-            return NotImplemented
-        self._validate_timelines(other)
-        return all(value <= other[name] for name, value in self.items())
-
-    def __lt__(self, other: 'Time') -> bool:
-        if not isinstance(other, Time):
-            return NotImplemented
-        return self <= other and self != other
-
-    def __ge__(self, other: 'Time') -> bool:
-        if not isinstance(other, Time):
-            return NotImplemented
-        return other <= self
-
-    def __gt__(self, other: 'Time') -> bool:
-        if not isinstance(other, Time):
-            return NotImplemented
-        return other < self
-
-    def __add__(self, other: 'Time') -> 'Time':
-        if not isinstance(other, Time):
-            return NotImplemented
-        self._validate_timelines(other)
-        return Time(**{name: value + other[name] for name, value in self.items()})
-
-    def __sub__(self, other: 'Time') -> 'Time':
-        if not isinstance(other, Time):
-            return NotImplemented
-        self._validate_timelines(other)
-        return Time(**{name: value - other[name] for name, value in self.items()})
-
-
-def is_realnum_dtype(dtype) -> bool:
-    return np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating)
 
 
 def _infer_item_dtype_shape(item: Any) -> tuple[Any, Any]:
@@ -139,9 +45,11 @@ def _infer_item_dtype_shape(item: Any) -> tuple[Any, Any]:
 
 @runtime_checkable
 class TimeIndexerLike(Protocol, Generic[T]):
-    def __getitem__(
-        self, key: int | float | slice | Sequence[int] | Sequence[float] | np.ndarray
-    ) -> Union[tuple[T, int], 'Signal[T]']: ...
+    @overload
+    def __getitem__(self, key: Time) -> tuple[T, Time]: ...
+
+    @overload
+    def __getitem__(self, key: slice | Sequence[Time]) -> 'Signal[T]': ...
 
 
 class Kind(Enum):
@@ -151,138 +59,83 @@ class Kind(Enum):
 
 @dataclass
 class SignalMeta:
-    """Container for signal element metadata."""
+    """Metadata of a signal's values."""
 
     dtype: Any
     shape: Any
-    kind: 'Kind' = Kind.NUMERIC
+    kind: Kind = Kind.NUMERIC
 
 
-class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
-    """Strictly typed, stepwise function of time with a uniform access contract.
+class Signal(Sequence[tuple[T, Time]], ABC, Generic[T]):
+    """An ordered record stream on a fixed set of named integer timelines.
 
-    Implementations must provide only a minimal abstract interface; all indexing
-    and time semantics are implemented in this base class.
-
-    The base class assumes a *time-ordered* underlying record stream:
-    - Each record is a pair: (value, timestamp_ns).
-    - Timestamps are integer nanoseconds and are **monotonically non-decreasing**
-      with increasing record index.
-    - Random access is supported through the protected methods below; the public
-      API (`__getitem__`, `time[...]`, `keys()`, `values()`) is implemented in
-      terms of those methods and therefore inherits their correctness
-      requirements.
+    Coordinates never decrease, and each record advances at least one timeline.
+    Backends provide batched value/timestamp reads and can optimize timestamp search.
     """
 
     @abstractmethod
-    def __len__(self) -> int:
-        raise NotImplementedError
-
-    # "Protected" API
-
-    @abstractmethod
-    def _ts_at(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
-        """Return timestamps for the requested *record indices*.
-
-        This is the timestamp backend used by the base class to implement:
-        - `keys()`
-        - integer/slice/array indexing (`__getitem__`)
-        - time-based indexing (`time[...]`)
-
-        Implementations must follow these rules:
-        - **Input**: `indices` is either a `slice`, a sequence/array of ints, or
-          a numpy integer array (see `IndicesLike`). Indices are *record indices*
-          (0-based), not timestamps.
-        - **Output**: a 1D sequence/array of integer timestamps (nanoseconds)
-          aligned with the request. For array-like indices, the output length
-          must match `len(indices)`; for a slice, it must match the slice span.
-        - **Ordering**: when indices are in increasing order, returned
-          timestamps must be non-decreasing.
-        - **Bounds**: the base class validates bounds for public indexing
-          paths; implementations may assume indices are valid.
-
-        Returning a numpy array is recommended for efficiency, but not required.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def _values_at(self, indices: IndicesLike) -> Sequence[T]:
-        """Return values for the requested *record indices*.
-
-        This is the value backend used by the base class to implement:
-        - `values()`
-        - integer/slice/array indexing (`__getitem__`)
-        - metadata inference (`meta`) when not overridden
-
-        Implementations must follow these rules:
-        - **Input**: same indexing contract as `_ts_at` (`IndicesLike`).
-        - **Output**: a sequence of values aligned with the request. For
-          array-like indices, the output length must match `len(indices)`; for a
-          slice, it must match the slice span.
-        - **Stability**: repeated calls with the same indices must return values
-          corresponding to the same records (i.e., the signal is conceptually
-          immutable for readers).
-        - **Bounds**: as with `_ts_at`, public indexing does bounds checks; the
-          implementation can assume valid indices.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
-        """Map timestamps to record indices by searching in the signal timeline.
-
-        The base class uses this method to implement time-based indexing via
-        `signal.time[...]`:
-        - For a timestamp `t`, we want the most recent record at or before `t`.
-
-        Implementations must follow these rules:
-        - **Input**: `ts_array` is array-like (python sequence or numpy array) of
-          real numeric timestamps (ints/floats). Timestamps are in the same
-          units as stored keys (nanoseconds).
-        - **Output**: an integer index (or an array of integer indices) of the
-          same shape/length as the input where each element is:
-          - the greatest record index `i` such that `keys()[i] <= t`, or
-          - `-1` if `t` precedes the first record.
-        - **Monotonicity**: if `ts_array` is non-decreasing, the returned
-          indices must be non-decreasing.
-        - **Empty signal**: should return `-1` (or an array of `-1`s) for all
-          queries.
-
-        A typical implementation is `np.searchsorted(keys, ts_array, "right") - 1`.
-        """
-        raise NotImplementedError
-
-    # Public API
+    def __len__(self) -> int: ...
 
     @property
-    def main_timeline(self) -> str:
-        """Name of the timeline used by the time query API."""
-        return RECORDED_TIME
+    @abstractmethod
+    def timelines(self) -> tuple[str, ...]: ...
 
-    @property
-    def start_ts(self) -> int:
-        if len(self) == 0:
+    @abstractmethod
+    def _ts_at(self, indices: IndicesLike, timelines: tuple[str, ...]) -> Sequence[Time]:
+        """Read selected coordinates at record indices without loading values."""
+        ...
+
+    @abstractmethod
+    def _values_at(self, indices: IndicesLike) -> Sequence[T]: ...
+
+    def _search_ts(self, queries: Sequence[Time]) -> Sequence[int] | np.ndarray:
+        """Last record satisfying every requested upper bound, or -1 if none does."""
+        result = []
+        for query in queries:
+            self._validate_selection(query.timelines)
+            lo, hi = 0, len(self)
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if self._ts_at([mid], query.timelines)[0] <= query:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            result.append(lo - 1)
+        return result
+
+    def _validate_selection(self, timelines: tuple[str, ...]) -> None:
+        validate_timelines(timelines)
+        for name in timelines:
+            if name not in self.timelines:
+                raise KeyError(name)
+
+    @overload
+    def bounds(self, timelines: str) -> TimeBounds[int]: ...
+
+    @overload
+    def bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]: ...
+
+    @final
+    def bounds(self, timelines: str | tuple[str, ...]) -> TimeBounds[int] | TimeBounds[Time]:
+        """Inclusive endpoints: integers for a name, Time values for a tuple of names."""
+        names = (timelines,) if isinstance(timelines, str) else timelines
+        if not len(self):
             raise ValueError('Signal is empty')
-        return int(np.asarray(self._ts_at([0]))[0])
+        self._validate_selection(names)
+        bounds = self._bounds(names)
+        if isinstance(timelines, str):
+            return TimeBounds(bounds.start[timelines], bounds.finish[timelines])
+        return bounds
 
-    @property
-    def last_ts(self) -> int:
-        if len(self) == 0:
-            raise ValueError('Signal is empty')
-        return int(np.asarray(self._ts_at([len(self) - 1]))[0])
+    def _bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]:
+        bounds = self._ts_at([0, len(self) - 1], timelines)
+        return TimeBounds(bounds[0], bounds[1])
 
-    @property
-    @lru_cache(maxsize=1)
+    @cached_property
     def meta(self) -> SignalMeta:
-        """Metadata accessor for signal elements (dtype, shape).
-
-        Default: infer from first value. Subclasses may override to supply
-        domain-specific kind/names or alternate inference.
-        """
-        if len(self) == 0:
+        if not len(self):
             raise ValueError('Signal is empty')
         dtype, shape = _infer_item_dtype_shape(self._values_at([0])[0])
-        # Heuristic: uint8 HxWx3 treated as Image, else Numeric
         kind = (
             Kind.IMAGE
             if (dtype == np.uint8 and isinstance(shape, tuple) and len(shape) == 3 and shape[2] == 3)
@@ -302,7 +155,6 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
     def kind(self) -> Kind:
         return self.meta.kind
 
-    @final
     @property
     def time(self) -> TimeIndexerLike[T]:
         return _SignalViewTime(self)
@@ -311,183 +163,223 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
     def values(self) -> Sequence[T]:
         return self._values_at(slice(None))
 
-    @final
-    def keys(self) -> Sequence[int]:
-        return self._ts_at(slice(None))
+    @overload
+    def timestamps(self, timelines: str) -> Sequence[int]: ...
+
+    @overload
+    def timestamps(self, timelines: tuple[str, ...]) -> Sequence[Time]: ...
 
     @final
-    def __getitem__(self, index_or_slice: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
-        match index_or_slice:
-            case int() | np.integer() as idx:
-                if idx < 0:
-                    idx = len(self) + idx
-                if idx < 0 or idx >= len(self):
-                    raise IndexError(f'Index {idx} out of range for Signal of length {len(self)}')
-                return self._values_at([idx])[0], int(self._ts_at([idx])[0])
-            case slice() as sl:
-                if sl.step is not None and sl.step <= 0:
-                    raise ValueError('Slice step must be positive')
-                return _SignalView(self, range(*sl.indices(len(self))))
-            case np.ndarray() | SequenceABC() as idxs:
-                arr = np.asarray(idxs)
-                if arr.size == 0:
-                    return _SignalView(self, arr.astype(np.int64))
-                if arr.dtype == np.bool_:
-                    raise IndexError('Boolean mask indexing is not supported for Signal')
-                if not np.issubdtype(arr.dtype, np.integer):
-                    raise TypeError(f'Unsupported index dtype: {arr.dtype}')
-                arr[arr < 0] += len(self)
-                if (arr < 0).any() or (arr >= len(self)).any():
-                    raise IndexError('Index out of range for Signal')
-                return _SignalView(self, arr)
-            case _:
-                raise TypeError(f'Unsupported index type: {type(index_or_slice)}')
+    def timestamps(self, timelines: str | tuple[str, ...]) -> Sequence[int] | Sequence[Time]:
+        """Selected coordinates: integers for a name, Time values for a tuple of names."""
+        names = (timelines,) if isinstance(timelines, str) else timelines
+        self._validate_selection(names)
+        times = self._ts_at(slice(None), names)
+        if isinstance(timelines, str):
+            return LazySequence(times, lambda ts: ts[timelines])
+        return times
+
+    @overload
+    def __getitem__(self, key: int) -> tuple[T, Time]: ...
+
+    @overload
+    def __getitem__(self, key: IndicesLike) -> 'Signal[T]': ...
+
+    @final
+    def __getitem__(self, key: int | IndicesLike) -> 'tuple[T, Time] | Signal[T]':
+        if isinstance(key, int | np.integer):
+            idx = int(key)
+            if idx < 0:
+                idx += len(self)
+            if not 0 <= idx < len(self):
+                raise IndexError(idx)
+            return self._values_at([idx])[0], self._ts_at([idx], self.timelines)[0]
+        if isinstance(key, slice):
+            if key.step is not None and key.step <= 0:
+                raise ValueError('Slice step must be positive')
+            return _SignalView(self, range(*key.indices(len(self))))
+        if isinstance(key, np.ndarray | Sequence) and not isinstance(key, str | bytes):
+            indices = np.array(key, copy=True)
+            if indices.ndim != 1:
+                raise ValueError('Signal indices must be one-dimensional')
+            if indices.size == 0:
+                return _SignalView(self, range(0))
+            if not np.issubdtype(indices.dtype, np.integer):
+                raise TypeError('Signal indices must be integers')
+            indices[indices < 0] += len(self)
+            if np.any(indices < 0) or np.any(indices >= len(self)):
+                raise IndexError('Signal index out of range')
+            if np.any(indices[1:] <= indices[:-1]):
+                raise ValueError('Record indices must be strictly increasing')
+            return _SignalView(self, indices)
+        raise TypeError(f'Unsupported index type: {type(key)}')
 
 
-class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
+class _SignalViewTime(Generic[T]):
     def __init__(self, signal: Signal[T]):
         self._signal = signal
 
-    def __getitem__(self, ts_or_array: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
-        match ts_or_array:
-            case int() | float() | np.floating() as ts:
-                idx = int(self._signal._search_ts([ts])[0])
-                if idx < 0:
-                    raise KeyError(f'Timestamp {ts} precedes the first record')
-                return self._signal._values_at([idx])[0], int(self._signal._ts_at([idx])[0])
-            case slice() as sl if sl.step is None:
-                if len(self._signal) == 0:
-                    return _SignalView(self._signal, range(0, 0))
-                start = sl.start if sl.start is not None else self._signal.start_ts
-                stop = sl.stop if sl.stop is not None else self._signal.last_ts + 1
-                start_id, end_id = self._signal._search_ts([start, stop])
-                start_id, end_id = int(start_id), int(end_id)
-                if stop > self._signal._ts_at([end_id])[0]:
-                    end_id += 1
-                kwargs = {}
-                if start_id > -1 and self._signal._ts_at([start_id])[0] < start:
-                    kwargs['start_ts'] = start
-                if start_id < 0:
-                    start_id = 0
-                return _SignalView(self._signal, range(start_id, end_id, 1), **kwargs)
-            case slice() as sl if sl.step is not None and sl.step <= 0:
-                raise ValueError('Slice step must be positive')
-            case slice() as sl if sl.step is not None and sl.start is None:
+    @overload
+    def __getitem__(self, key: Time) -> tuple[T, Time]: ...
+
+    @overload
+    def __getitem__(self, key: slice | Sequence[Time]) -> Signal[T]: ...
+
+    def __getitem__(self, key):
+        if isinstance(key, Time):
+            self._signal._validate_selection(key.timelines)
+            idx = int(self._signal._search_ts([key])[0])
+            if idx < 0:
+                raise KeyError(f'No record at or before {key}')
+            return self._signal[idx]
+        if isinstance(key, slice):
+            return self._slice(key)
+        if not isinstance(key, Sequence):
+            raise TypeError('Expected Time, a time slice, or a sequence of Time')
+        validate_queries(key)
+        if not len(key):
+            return _SignalView(self._signal, range(0))
+        self._signal._validate_selection(key[0].timelines)
+        indices = self._signal._search_ts(key)
+        if any(i < 0 for i in indices):
+            raise KeyError('No record at or before some requested timestamps')
+        return _SignalView(self._signal, indices, timestamps=key)
+
+    def _window_start_index(self, start: Time) -> int:
+        first = int(self._signal._search_ts([start])[0])
+        if first >= 0:
+            return first
+        lo, hi = 0, len(self._signal)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if start <= self._signal._ts_at([mid], start.timelines)[0]:
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
+
+    def _slice(self, selection: slice) -> Signal[T]:
+        start, stop, step = selection.start, selection.stop, selection.step
+        supplied = [time for time in (start, stop, step) if time is not None]
+        if not supplied:
+            raise ValueError('A time slice requires named endpoints')
+        if any(not isinstance(time, Time) for time in supplied):
+            raise TypeError('Time slice endpoints and step must be Time values')
+        names = supplied[0].timelines
+        self._signal._validate_selection(names)
+        for time in supplied[1:]:
+            supplied[0]._validate_timelines(time)
+        if step is not None:
+            if start is None:
                 raise ValueError('Slice start is required when step is provided')
-            case np.ndarray() | SequenceABC() | slice() as tss:
-                if isinstance(tss, slice):
-                    if len(self._signal) == 0:
-                        return _SignalView(self._signal, range(0, 0))
-                    start = tss.start if tss.start is not None else self._signal.start_ts
-                    stop = tss.stop if tss.stop is not None else self._signal.last_ts + 1
-                    if start < self._signal.start_ts:
-                        raise KeyError(f'Timestamp {start} precedes the first record')
-                    tss = np.arange(start, stop, tss.step)
-                idxs = np.asarray(self._signal._search_ts(tss))
-                if (idxs < 0).any():
-                    raise KeyError('No record at or before some of the requested timestamps')
-                return _SignalView(self._signal, idxs, tss)
-            case _:
-                raise TypeError(f'Unsupported index type: {type(ts_or_array)}')
+            # Validate the increment even for an empty source.
+            TimeGrid(start, start, step)
+            if not len(self._signal):
+                return _SignalView(self._signal, range(0))
+            if int(self._signal._search_ts([start])[0]) < 0:
+                raise KeyError(f'No record at or before {start}')
+            bound = stop if stop is not None else self._signal.bounds(names).finish
+            return self[TimeGrid(start, bound, step, inclusive=stop is None)]
+        if not len(self._signal) or (start is not None and stop is not None and not start < stop):
+            return _SignalView(self._signal, range(0))
+        first = self._window_start_index(start) if start is not None else 0
+        start = start if start is not None else self._signal.bounds(names).start
+        end = len(self._signal)
+        if stop is not None:
+            end = int(self._signal._search_ts([stop])[0]) + 1
+            while end > 0 and self._signal._ts_at([end - 1], names)[0] == stop:
+                end -= 1
+        if first >= end:
+            return _SignalView(self._signal, range(0))
+        carried = self._signal._ts_at([first], names)[0]
+        view = _SignalView(self._signal, range(first, end), start=start if carried < start else None)
+        if len(view) > 1 and not view._ts_at([0], view.timelines)[0] < view._ts_at([1], view.timelines)[0]:
+            raise ValueError('The carried window timestamp is incompatible with the following record')
+        return view
 
 
-class _SignalView(Signal[T], Generic[T]):
+class _SignalView(Signal[T]):
     def __init__(
         self,
         signal: Signal[T],
-        indices: Sequence[int],
-        timestamps: Sequence[int] | None = None,
-        start_ts: int | None = None,
+        indices: Sequence[int] | np.ndarray,
+        *,
+        timestamps: Sequence[Time] | None = None,
+        start: Time | None = None,
     ):
         self._signal = signal
         self._indices = indices
-        assert timestamps is None or start_ts is None, 'Only one of timestamps or start_ts can be provided'
         self._timestamps = timestamps
-        self._start_ts = start_ts
+        self._start = start
 
     @property
-    def main_timeline(self) -> str:
-        return self._signal.main_timeline
+    def timelines(self) -> tuple[str, ...]:
+        return self._signal.timelines
 
-    @property
+    @cached_property
     def meta(self) -> SignalMeta:
-        if len(self) == 0:
+        if not len(self):
             raise ValueError('Signal is empty')
         return self._signal.meta
 
     def __len__(self) -> int:
         return len(self._indices)
 
-    def _ts_at(self, indices: IndicesLike | slice) -> Sequence[int] | np.ndarray:
-        if self._timestamps is not None:
-            return np.asarray(self._timestamps)[indices]
-        match indices:
-            case slice() | np.ndarray() | SequenceABC() as idxs:
-                if isinstance(idxs, slice):
-                    mapped = self._indices[idxs]
-                else:
-                    idxs = np.asarray(idxs)
-                    mapped = np.asarray(self._indices)[idxs]
-                result = self._signal._ts_at(mapped)
-                if self._start_ts is not None:
-                    if isinstance(idxs, slice):
-                        idxs = np.arange(*idxs.indices(len(self)))
-                    result[idxs == 0] = self._start_ts
-                return result
-            case _:
-                raise TypeError(f'Unsupported index type: {type(indices)}')
+    def _mapped(self, indices: IndicesLike) -> Sequence[int] | np.ndarray:
+        if isinstance(indices, slice):
+            return self._indices[indices]
+        return [self._indices[int(i)] for i in indices]
 
-    def _values_at(self, indices: IndicesLike | slice) -> Sequence[T]:
-        match indices:
-            case slice() | np.ndarray() | SequenceABC():
-                if isinstance(indices, slice):
-                    mapped = self._indices[indices]
-                else:
-                    idxs = np.asarray(indices)
-                    mapped = np.asarray(self._indices)[idxs]
-                return self._signal._values_at(mapped)
-            case _:
-                raise TypeError(f'Unsupported index type: {type(indices)}')
+    def _ts_at(self, indices: IndicesLike, timelines: tuple[str, ...]) -> Sequence[Time]:
+        source = self._signal._ts_at(self._mapped(indices), timelines)
+        if self._timestamps is None and self._start is None:
+            return source
+        positions = range(*indices.indices(len(self))) if isinstance(indices, slice) else indices
 
-    def _search_ts(self, ts_array: RealNumericArrayLike) -> IndicesLike:
-        match ts_array:
-            case slice() | np.ndarray() | SequenceABC():
-                if self._timestamps is None:
-                    parent_idx = self._signal._search_ts(ts_array)
-                    return np.searchsorted(self._indices, parent_idx, side='right') - 1
-                else:
-                    return np.searchsorted(self._timestamps, ts_array, side='right') - 1
-            case _:
-                raise TypeError(f'Unsupported index type: {type(ts_array)}')
+        def overlay(position: int) -> Time:
+            i = int(positions[position])
+            query = self._timestamps[i] if self._timestamps is not None else self._start if i == 0 else None
+            original = source[position]
+            return Time(**{
+                name: query[name] if query is not None and name in query else original[name] for name in timelines
+            })
+
+        return LazySequence(range(len(positions)), overlay)
+
+    def _values_at(self, indices: IndicesLike) -> Sequence[T]:
+        return self._signal._values_at(self._mapped(indices))
+
+    def _search_ts(self, queries: Sequence[Time]) -> Sequence[int] | np.ndarray:
+        if self._timestamps is None and self._start is None:
+            return np.searchsorted(self._indices, self._signal._search_ts(queries), side='right') - 1
+        return super()._search_ts(queries)
 
 
 class SignalWriter(AbstractContextManager, ABC, Generic[T]):
-    """Append-only writer for Signals."""
+    """Append-only writer whose first successful record fixes the timeline set."""
 
-    def __init__(self, *, main_timeline: str = RECORDED_TIME):
-        validate_timeline(main_timeline)
-        self._main_timeline = main_timeline
-
-    @property
-    def main_timeline(self) -> str:
-        return self._main_timeline
+    def __init__(self):
+        self._last_time: Time | None = None
 
     def _validate_timestamps(self, timestamps: Time) -> None:
         if not isinstance(timestamps, Time):
             raise TypeError('Expected Time')
-        if self.main_timeline not in timestamps:
-            raise ValueError(f'Missing timestamp for main timeline {self.main_timeline!r}')
+        if any(value < -(2**63) or value >= 2**63 for value in timestamps.values()):
+            raise OverflowError('Stored timestamps must fit int64')
+        if self._last_time is not None:
+            if set(timestamps) != set(self._last_time):
+                raise ValueError('Timeline names must be consistent across all appends')
+            if not self._last_time < timestamps:
+                raise ValueError('Timestamp is not increasing: no coordinate may decrease, and one must advance')
 
     @abstractmethod
-    def append(self, data: T, timestamps: Time) -> None:
-        pass
+    def append(self, data: T, timestamps: Time) -> None: ...
 
     @abstractmethod
     def __exit__(self, exc_type, exc, tb) -> None: ...
 
     @abstractmethod
-    def abort(self) -> None:
-        pass
+    def abort(self) -> None: ...
 
 
 @runtime_checkable

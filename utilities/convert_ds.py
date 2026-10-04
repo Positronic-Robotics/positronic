@@ -12,7 +12,7 @@ special handling. Instead of materialising individual frames, the underlying
 verbatim so the resulting dataset preserves the original video assets without
 re-encoding.
 
-All source signals must use the recorded main timeline.
+All exposed timelines are preserved.
 
 Example:
 
@@ -27,7 +27,7 @@ import configuronic as cfn
 import tqdm
 
 from positronic import keys
-from positronic.dataset import Dataset, Time
+from positronic.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.signal import RECORDED_TIME, Kind
 from positronic.dataset.transforms import TransformedDataset
@@ -48,9 +48,15 @@ def update_v0_1_0(path: str):
         LocalDataset(Path(path)),
         Group(
             Derive(**{
-                'controller_positions.right': Concat('right_controller_translation', 'right_controller_quaternion'),
-                'robot_commands.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
-                keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion'),
+                'controller_positions.right': Concat(
+                    'right_controller_translation', 'right_controller_quaternion', timelines=(RECORDED_TIME,)
+                ),
+                'robot_commands.pose': Concat(
+                    'target_robot_position_translation', 'target_robot_position_quaternion', timelines=(RECORDED_TIME,)
+                ),
+                keys.EE_POSE: Concat(
+                    'robot_position_translation', 'robot_position_quaternion', timelines=(RECORDED_TIME,)
+                ),
                 'task': FromValue('Pick up the green cube and place it on the red cube.'),
             }),
             Rename(**{
@@ -76,10 +82,6 @@ def main(output_path: str, original_ds: Dataset | None = None):
                     ew.set_static(key, value)
 
                 for key, signal in episode.signals.items():
-                    assert signal.main_timeline == RECORDED_TIME, (
-                        f'Cannot convert signal {key!r}: main timeline must be {RECORDED_TIME!r}, '
-                        f'got {signal.main_timeline!r}'
-                    )
                     if signal.kind == Kind.IMAGE:
                         assert isinstance(signal, VideoSignal)
                         shutil.copy(signal.video_path, ew.path / signal.video_path.name)
@@ -87,7 +89,7 @@ def main(output_path: str, original_ds: Dataset | None = None):
                         continue
 
                     for value, ts in signal:
-                        ew.append(key, value, Time(**{RECORDED_TIME: ts}))
+                        ew.append(key, value, ts)
 
 
 if __name__ == '__main__':

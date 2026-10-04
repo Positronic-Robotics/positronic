@@ -4,6 +4,9 @@ import os
 import numpy as np
 import pytest
 
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time, TimeBounds
+
 lerobot = pytest.importorskip('lerobot')
 if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':
     pytest.skip('Requires lerobot >= 0.4', allow_module_level=True)
@@ -33,13 +36,15 @@ class _MockTimeIndex:
 
 class _MockEpisode:
     def __init__(self, num_frames, fps):
-        self.start_ts = 0
-        self.last_ts = int(num_frames * 1e9 / fps)
+        self._bounds = (Time(**{RECORDED_TIME: 0}), Time(**{RECORDED_TIME: int(num_frames * 1e9 / fps)}))
         data = {
             'observation.state': np.random.randn(num_frames, 8).astype(np.float32),
             'action': np.random.randn(num_frames, 8).astype(np.float32),
         }
         self.time = _MockTimeIndex(data)
+
+    def bounds(self, timelines):
+        return TimeBounds(self._bounds[0][timelines], self._bounds[1][timelines])
 
 
 class _MockDataset(torch.utils.data.Dataset):

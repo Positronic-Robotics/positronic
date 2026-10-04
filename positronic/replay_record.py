@@ -16,6 +16,7 @@ from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
 from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers import roboarm
 from positronic.gui import dpg_ui
@@ -158,7 +159,8 @@ def main(
             ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
             player_cmd.emit(DsPlayerStartCommand(episode))
 
-            p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')
+            first, last = episode.bounds(RECORDED_TIME)
+            p_bar = tqdm.tqdm(total=round((last - first) / 1e9, 1), unit='s')
 
             for _ in sim_iter:
                 p_bar.n = round(world.clock.now(), 1)

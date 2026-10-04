@@ -40,6 +40,7 @@ from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
@@ -704,20 +705,23 @@ async def api_episodes(request: Request):
     if cache_key in _api_cache:
         return _api_cache[cache_key]
 
-    ds = app_state.get('dataset')
-    config = app_state['episode_table_cfg']
+    ds = cast(Dataset, app_state['dataset'])
+    config = cast(TableConfig, app_state['episode_table_cfg'])
     columns, formatters, defaults = parse_table_cfg(config)
     filters = {k: v for k, v in request.query_params.items() if v}
 
     def matches(ep: Episode) -> bool:
         return all(filter_spelling(ep.static.get(k)) == v for k, v in filters.items())
 
-    ep_it = (
-        {'__episode_index__': i, '__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static}
-        for i, ep in enumerate(ds)
-        if matches(ep)
-    )
-    episodes = get_episodes_list(ep_it, config.keys(), formatters=formatters, defaults=defaults)
+    def table_row(i: int, ep: Episode) -> dict:
+        duration = 0.0
+        if any(RECORDED_TIME in signal.timelines for signal in ep.signals.values()):
+            first, last = ep.bounds(RECORDED_TIME)
+            duration = (last - first) / 1e9
+        return {'__episode_index__': i, '__meta__': ep.meta, '__duration__': duration, **ep.static}
+
+    ep_it = (table_row(i, ep) for i, ep in enumerate(ds) if matches(ep))
+    episodes = get_episodes_list(ep_it, list(config), formatters=formatters, defaults=defaults)
     result = {'columns': columns, 'episodes': episodes}
     _api_cache[cache_key] = result
     return result

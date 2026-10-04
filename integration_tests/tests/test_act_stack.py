@@ -40,9 +40,9 @@ def recorded_signals(monkeypatch, tmp_path):
         'cube_trace',
         lambda episode: {
             CUBE_POSES: np.zeros((len(times), 2, 7)),
-            CUBE_POSES + TIME_SUFFIX: times - episode.start_ts,
+            CUBE_POSES + TIME_SUFFIX: times - episode.bounds(RECORDED_TIME).start,
             SUPPORTED: np.ones(len(times), dtype=bool),
-            SUPPORTED + TIME_SUFFIX: times - episode.start_ts,
+            SUPPORTED + TIME_SUFFIX: times - episode.bounds(RECORDED_TIME).start,
         },
     )
     monkeypatch.setattr(act_stack, 'read_episode', lambda output, seed: EpisodeContainer(signals))

@@ -1,9 +1,12 @@
+from functools import partial
+
 import numpy as np
 import pytest
 
-from positronic import geom
-from positronic.dataset import Time
+from positronic import geom, keys
+from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time
 from positronic.dataset.transforms import (
     Elementwise,
     IndexOffsets,
@@ -15,6 +18,7 @@ from positronic.dataset.transforms import (
     recode_transform,
     view,
 )
+from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
 from positronic.geom import Rotation
 
@@ -56,40 +60,52 @@ def _times10(x):
     'transform',
     [
         lambda signal: signal[:],
-        lambda signal: signal.time[[1000, 2000]],
+        lambda signal: signal.time[[Time(**{'world': t}) for t in [1000, 2000]]],
         lambda signal: Elementwise(signal, _times10),
         lambda signal: IndexOffsets(signal, 0),
-        lambda signal: TimeOffsets(signal, 0),
-        lambda signal: Join(signal, signal),
+        lambda signal: TimeOffsets(signal, Time(**{'world': 0})),
+        lambda signal: Join(signal, signal, timelines=('world',)),
     ],
     ids=['slice', 'sample', 'elementwise', 'index-offsets', 'time-offsets', 'join'],
 )
-def test_views_preserve_main_timeline(tmp_path, transform):
+def test_views_preserve_timelines(tmp_path, transform):
     path = tmp_path / 'signal.parquet'
-    with SimpleSignalWriter(path, main_timeline='world') as writer:
+    with SimpleSignalWriter(path) as writer:
         writer.append(1, Time(world=1000))
         writer.append(2, Time(world=2000))
-    assert transform(SimpleSignal(path)).main_timeline == 'world'
+    assert transform(SimpleSignal(path)).timelines == ('world',)
 
 
 @pytest.mark.parametrize('join', [Join, concat], ids=['join', 'concat'])
 def test_join_rejects_different_clocks_at_construction(tmp_path, join):
     signals = []
-    for main_timeline in [RECORDED_TIME, 'world']:
-        path = tmp_path / f'{main_timeline}.parquet'
-        with SimpleSignalWriter(path, main_timeline=main_timeline) as writer:
-            writer.append(1, Time(**{main_timeline: 1000}))
+    for timeline in [RECORDED_TIME, 'world']:
+        path = tmp_path / f'{timeline}.parquet'
+        with SimpleSignalWriter(path) as writer:
+            writer.append(1, Time(**{timeline: 1000}))
         signals.append(SimpleSignal(path))
-    with pytest.raises(ValueError, match='different main timelines'):
-        join(*signals)
+    with pytest.raises(KeyError):
+        join(*signals, timelines=('world',))
 
 
 def test_elementwise(sig_simple):
     ew = Elementwise(sig_simple, _times10)
     # Length preserved; values transformed; timestamps unchanged
-    assert list(ew) == [(100, 1000), (200, 2000), (300, 3000), (400, 4000), (500, 5000)]
+    assert list(ew) == [
+        (100, Time(**{RECORDED_TIME: 1000})),
+        (200, Time(**{RECORDED_TIME: 2000})),
+        (300, Time(**{RECORDED_TIME: 3000})),
+        (400, Time(**{RECORDED_TIME: 4000})),
+        (500, Time(**{RECORDED_TIME: 5000})),
+    ]
     # Underlying signal remains unchanged
-    assert list(sig_simple) == [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)]
+    assert list(sig_simple) == [
+        (10, Time(**{RECORDED_TIME: 1000})),
+        (20, Time(**{RECORDED_TIME: 2000})),
+        (30, Time(**{RECORDED_TIME: 3000})),
+        (40, Time(**{RECORDED_TIME: 4000})),
+        (50, Time(**{RECORDED_TIME: 5000})),
+    ]
 
 
 def test_view_slice_returns_lazy_subset(vector_signal):
@@ -129,7 +145,7 @@ def test_recode_rotation_quat_to_rotvec_with_slice():
 
     for (vals, ts_out), expected, ts_in in zip(samples, expected_rotvecs, ts, strict=False):
         np.testing.assert_allclose(vals, expected)
-        assert ts_out == ts_in
+        assert ts_out == Time(**{RECORDED_TIME: ts_in})
 
     recoded_quat = recode_rotation(
         Rotation.Representation.QUAT, Rotation.Representation.QUAT, signal, slice=slice(0, 4)
@@ -160,7 +176,7 @@ def test_recode_transform_rotation_matrix_to_quat():
     for (vec, ts_out), transform, ts_in in zip(samples, transforms, ts, strict=False):
         expected = transform.as_vector(Rotation.Representation.QUAT)
         np.testing.assert_allclose(vec, expected)
-        assert ts_out == ts_in
+        assert ts_out == Time(**{RECORDED_TIME: ts_in})
 
 
 def test_recode_transform_identity_returns_original_signal():
@@ -176,28 +192,58 @@ def test_recode_transform_identity_returns_original_signal():
 def test_join_relative_index_prev_next_equivalents(sig_simple):
     # [0, 1] (current and next)
     j_next = IndexOffsets(sig_simple, 0, 1)
-    assert list(j_next) == [((10, 20), 1000), ((20, 30), 2000), ((30, 40), 3000), ((40, 50), 4000)]
+    assert list(j_next) == [
+        ((10, 20), Time(**{RECORDED_TIME: 1000})),
+        ((20, 30), Time(**{RECORDED_TIME: 2000})),
+        ((30, 40), Time(**{RECORDED_TIME: 3000})),
+        ((40, 50), Time(**{RECORDED_TIME: 4000})),
+    ]
     # [0, -1] (current and previous)
     j_prev = IndexOffsets(sig_simple, 0, -1)
-    assert list(j_prev) == [((20, 10), 2000), ((30, 20), 3000), ((40, 30), 4000), ((50, 40), 5000)]
+    assert list(j_prev) == [
+        ((20, 10), Time(**{RECORDED_TIME: 2000})),
+        ((30, 20), Time(**{RECORDED_TIME: 3000})),
+        ((40, 30), Time(**{RECORDED_TIME: 4000})),
+        ((50, 40), Time(**{RECORDED_TIME: 5000})),
+    ]
 
 
 def test_join_relative_index_basic(sig_simple):
     # [0, 1] returns (v_i, v_{i+1}, t_i, t_{i+1})
     j = IndexOffsets(sig_simple, 0, 1)
-    assert list(j) == [((10, 20), 1000), ((20, 30), 2000), ((30, 40), 3000), ((40, 50), 4000)]
+    assert list(j) == [
+        ((10, 20), Time(**{RECORDED_TIME: 1000})),
+        ((20, 30), Time(**{RECORDED_TIME: 2000})),
+        ((30, 40), Time(**{RECORDED_TIME: 3000})),
+        ((40, 50), Time(**{RECORDED_TIME: 4000})),
+    ]
 
     # [0, -1] returns (v_i, v_{i-1}, t_i, t_{i-1})
     jprev = IndexOffsets(sig_simple, 0, -1)
-    assert list(jprev) == [((20, 10), 2000), ((30, 20), 3000), ((40, 30), 4000), ((50, 40), 5000)]
+    assert list(jprev) == [
+        ((20, 10), Time(**{RECORDED_TIME: 2000})),
+        ((30, 20), Time(**{RECORDED_TIME: 3000})),
+        ((40, 30), Time(**{RECORDED_TIME: 4000})),
+        ((50, 40), Time(**{RECORDED_TIME: 5000})),
+    ]
 
     # Single offset without ref timestamps -> bare values as first element in (value, ref_ts)
     j_single = IndexOffsets(sig_simple, 1)
-    assert list(j_single) == [(20, 1000), (30, 2000), (40, 3000), (50, 4000)]
+    assert list(j_single) == [
+        (20, Time(**{RECORDED_TIME: 1000})),
+        (30, Time(**{RECORDED_TIME: 2000})),
+        (40, Time(**{RECORDED_TIME: 3000})),
+        (50, Time(**{RECORDED_TIME: 4000})),
+    ]
 
     # Single offset with ref timestamps -> (value, ts_at_offset)
     j_single_ref = IndexOffsets(sig_simple, 1, include_ref_ts=True)
-    assert list(j_single_ref) == [((20, 2000), 1000), ((30, 3000), 2000), ((40, 4000), 3000), ((50, 5000), 4000)]
+    assert list(j_single_ref) == [
+        ((20, Time(**{RECORDED_TIME: 2000})), Time(**{RECORDED_TIME: 1000})),
+        ((30, Time(**{RECORDED_TIME: 3000})), Time(**{RECORDED_TIME: 2000})),
+        ((40, Time(**{RECORDED_TIME: 4000})), Time(**{RECORDED_TIME: 3000})),
+        ((50, Time(**{RECORDED_TIME: 5000})), Time(**{RECORDED_TIME: 4000})),
+    ]
 
 
 def test_join_relative_index_errors_and_edges(sig_simple, empty_signal):
@@ -209,25 +255,43 @@ def test_join_relative_index_errors_and_edges(sig_simple, empty_signal):
 
 
 def test_time_offsets_positive(sig_simple):
-    to = TimeOffsets(sig_simple, 1000)
+    to = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: 1000}))
     # Positive delta: length preserved, last clamps to itself
-    assert list(to) == [(20, 1000), (30, 2000), (40, 3000), (50, 4000), (50, 5000)]
+    assert list(to) == [
+        (20, Time(**{RECORDED_TIME: 1000})),
+        (30, Time(**{RECORDED_TIME: 2000})),
+        (40, Time(**{RECORDED_TIME: 3000})),
+        (50, Time(**{RECORDED_TIME: 4000})),
+        (50, Time(**{RECORDED_TIME: 5000})),
+    ]
     # With include_ref_ts=True returns (value_at_shift, ts_at_shift)
-    to_ref = TimeOffsets(sig_simple, 1000, include_ref_ts=True)
+    to_ref = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: 1000}), include_ref_ts=True)
     assert list(to_ref) == [
-        ((20, 2000), 1000),
-        ((30, 3000), 2000),
-        ((40, 4000), 3000),
-        ((50, 5000), 4000),
-        ((50, 5000), 5000),
+        ((20, Time(**{RECORDED_TIME: 2000})), Time(**{RECORDED_TIME: 1000})),
+        ((30, Time(**{RECORDED_TIME: 3000})), Time(**{RECORDED_TIME: 2000})),
+        ((40, Time(**{RECORDED_TIME: 4000})), Time(**{RECORDED_TIME: 3000})),
+        ((50, Time(**{RECORDED_TIME: 5000})), Time(**{RECORDED_TIME: 4000})),
+        ((50, Time(**{RECORDED_TIME: 5000})), Time(**{RECORDED_TIME: 5000})),
     ]
 
     # Multiple deltas without ref timestamps -> tuple of values, with clamping at the end
-    to_multi = TimeOffsets(sig_simple, -1000, 0, 1000)
-    assert list(to_multi) == [((10, 20, 30), 2000), ((20, 30, 40), 3000), ((30, 40, 50), 4000), ((40, 50, 50), 5000)]
+    to_multi = TimeOffsets(
+        sig_simple, Time(**{RECORDED_TIME: -1000}), Time(**{RECORDED_TIME: 0}), Time(**{RECORDED_TIME: 1000})
+    )
+    assert list(to_multi) == [
+        ((10, 20, 30), Time(**{RECORDED_TIME: 2000})),
+        ((20, 30, 40), Time(**{RECORDED_TIME: 3000})),
+        ((30, 40, 50), Time(**{RECORDED_TIME: 4000})),
+        ((40, 50, 50), Time(**{RECORDED_TIME: 5000})),
+    ]
 
-    # Multiple deltas with ref timestamps -> (values_tuple, np.array(ref_timestamps))
-    to_multi_ref = TimeOffsets(sig_simple, -1000, 0, 1000, include_ref_ts=True)
+    to_multi_ref = TimeOffsets(
+        sig_simple,
+        Time(**{RECORDED_TIME: -1000}),
+        Time(**{RECORDED_TIME: 0}),
+        Time(**{RECORDED_TIME: 1000}),
+        include_ref_ts=True,
+    )
     actual = list(to_multi_ref)
     exp_vals = [(10, 20, 30), (20, 30, 40), (30, 40, 50), (40, 50, 50)]
     exp_ts_arrays = [
@@ -240,33 +304,50 @@ def test_time_offsets_positive(sig_simple):
     assert len(actual) == 4
     for i, ((vals, ts_arr), ref_ts) in enumerate(actual):
         assert tuple(vals) == exp_vals[i]
-        assert np.array_equal(ts_arr, exp_ts_arrays[i])
-        assert ref_ts == exp_ref_ts[i]
+        assert np.array_equal([ts[RECORDED_TIME] for ts in ts_arr], exp_ts_arrays[i])
+        assert ref_ts == Time(**{RECORDED_TIME: exp_ref_ts[i]})
 
 
 def test_time_offsets_negative(sig_simple):
-    to = TimeOffsets(sig_simple, -1000)
+    to = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: -1000}))
     # Drops first; pairs each with previous at -1000
-    assert list(to) == [(10, 2000), (20, 3000), (30, 4000), (40, 5000)]
+    assert list(to) == [
+        (10, Time(**{RECORDED_TIME: 2000})),
+        (20, Time(**{RECORDED_TIME: 3000})),
+        (30, Time(**{RECORDED_TIME: 4000})),
+        (40, Time(**{RECORDED_TIME: 5000})),
+    ]
 
 
 def test_time_offsets_zero(sig_simple):
-    to = TimeOffsets(sig_simple, 0)
-    assert list(to) == [(10, 1000), (20, 2000), (30, 3000), (40, 4000), (50, 5000)]
+    to = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: 0}))
+    assert list(to) == [
+        (10, Time(**{RECORDED_TIME: 1000})),
+        (20, Time(**{RECORDED_TIME: 2000})),
+        (30, Time(**{RECORDED_TIME: 3000})),
+        (40, Time(**{RECORDED_TIME: 4000})),
+        (50, Time(**{RECORDED_TIME: 5000})),
+    ]
 
 
 def test_time_offsets_offset_rounding(sig_simple):
     # Delta that doesn't align with sampling: should carry back
-    to = TimeOffsets(sig_simple, 2500)
+    to = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: 2500}))
     # All elements preserved; last clamps to itself
-    assert list(to) == [(30, 1000), (40, 2000), (50, 3000), (50, 4000), (50, 5000)]
-    to_ref = TimeOffsets(sig_simple, 2500, include_ref_ts=True)
+    assert list(to) == [
+        (30, Time(**{RECORDED_TIME: 1000})),
+        (40, Time(**{RECORDED_TIME: 2000})),
+        (50, Time(**{RECORDED_TIME: 3000})),
+        (50, Time(**{RECORDED_TIME: 4000})),
+        (50, Time(**{RECORDED_TIME: 5000})),
+    ]
+    to_ref = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: 2500}), include_ref_ts=True)
     assert list(to_ref) == [
-        ((30, 3000), 1000),
-        ((40, 4000), 2000),
-        ((50, 5000), 3000),
-        ((50, 5000), 4000),
-        ((50, 5000), 5000),
+        ((30, Time(**{RECORDED_TIME: 3000})), Time(**{RECORDED_TIME: 1000})),
+        ((40, Time(**{RECORDED_TIME: 4000})), Time(**{RECORDED_TIME: 2000})),
+        ((50, Time(**{RECORDED_TIME: 5000})), Time(**{RECORDED_TIME: 3000})),
+        ((50, Time(**{RECORDED_TIME: 5000})), Time(**{RECORDED_TIME: 4000})),
+        ((50, Time(**{RECORDED_TIME: 5000})), Time(**{RECORDED_TIME: 5000})),
     ]
 
 
@@ -276,46 +357,64 @@ def test_time_offsets_irregular_series():
     sig = DummySignal(ts, vals)
 
     # Positive delta: floor carry-back across irregular gaps, full length
-    to_pos = TimeOffsets(sig, 1000)
+    to_pos = TimeOffsets(sig, Time(**{RECORDED_TIME: 1000}))
     assert list(to_pos) == [
-        (3, 1000),  # 1000 -> 2000
-        (3, 1300),  # 1300 -> 2300 -> 2000
-        (4, 2000),  # 2000 -> 3000 -> 2700
-        (4, 2700),  # 2700 -> 3700 -> 2700
-        (5, 5000),  # 5000 -> 6000 -> 5000
+        (3, Time(**{RECORDED_TIME: 1000})),  # 1000 -> 2000
+        (3, Time(**{RECORDED_TIME: 1300})),  # 1300 -> 2300 -> 2000
+        (4, Time(**{RECORDED_TIME: 2000})),  # 2000 -> 3000 -> 2700
+        (4, Time(**{RECORDED_TIME: 2700})),  # 2700 -> 3700 -> 2700
+        (5, Time(**{RECORDED_TIME: 5000})),  # 5000 -> 6000 -> 5000
     ]
 
     # Negative delta: match to earlier floors with varying diffs
-    to_neg = TimeOffsets(sig, -1000)
+    to_neg = TimeOffsets(sig, Time(**{RECORDED_TIME: -1000}))
     assert list(to_neg) == [
-        (1, 2000),  # 2000 -> 1000
-        (2, 2700),  # 2700 -> 1300
-        (4, 5000),  # 5000 -> 2700
+        (1, Time(**{RECORDED_TIME: 2000})),  # 2000 -> 1000
+        (2, Time(**{RECORDED_TIME: 2700})),  # 2700 -> 1300
+        (4, Time(**{RECORDED_TIME: 5000})),  # 5000 -> 2700
     ]
 
     # Zero delta: identity pairs with zero time difference
-    to_zero = TimeOffsets(sig, 0)
-    assert list(to_zero) == [(1, 1000), (2, 1300), (3, 2000), (4, 2700), (5, 5000)]
+    to_zero = TimeOffsets(sig, Time(**{RECORDED_TIME: 0}))
+    assert list(to_zero) == [
+        (1, Time(**{RECORDED_TIME: 1000})),
+        (2, Time(**{RECORDED_TIME: 1300})),
+        (3, Time(**{RECORDED_TIME: 2000})),
+        (4, Time(**{RECORDED_TIME: 2700})),
+        (5, Time(**{RECORDED_TIME: 5000})),
+    ]
 
 
 def test_time_offsets_empty_signal(empty_signal):
-    assert list(TimeOffsets(empty_signal, 0)) == []
-    assert list(TimeOffsets(empty_signal, 123456)) == []
-    assert list(TimeOffsets(empty_signal, -987654)) == []
+    assert list(TimeOffsets(empty_signal, Time(**{RECORDED_TIME: 0}))) == []
+    assert list(TimeOffsets(empty_signal, Time(**{RECORDED_TIME: 123456}))) == []
+    assert list(TimeOffsets(empty_signal, Time(**{RECORDED_TIME: -987654}))) == []
+
+
+@pytest.mark.parametrize('offsets', [({},), ({RECORDED_TIME: 0},), (Time(**{RECORDED_TIME: 0}), {RECORDED_TIME: 1})])
+def test_time_offsets_reject_dict_coordinates(sig_simple, offsets):
+    with pytest.raises(TypeError, match='Time'):
+        TimeOffsets(sig_simple, *offsets)
 
 
 def test_time_offsets_very_large_deltas(sig_simple):
     # Negative delta too large: no elements remain
-    delta_empty = -(sig_simple.last_ts - sig_simple.start_ts + 1)
-    to_empty = TimeOffsets(sig_simple, delta_empty)
+    delta_empty = -(sig_simple.bounds(RECORDED_TIME).finish - sig_simple.bounds(RECORDED_TIME).start + 1)
+    to_empty = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: delta_empty}))
     assert list(to_empty) == []
 
 
 def test_time_offsets_positive_delta_too_large(sig_simple):
     # Positive delta strictly greater than span -> full length, pairs with last
-    delta_too_large = (sig_simple.last_ts - sig_simple.start_ts) + 1
-    to = TimeOffsets(sig_simple, delta_too_large)
-    assert list(to) == [(50, 1000), (50, 2000), (50, 3000), (50, 4000), (50, 5000)]
+    delta_too_large = (sig_simple.bounds(RECORDED_TIME).finish - sig_simple.bounds(RECORDED_TIME).start) + 1
+    to = TimeOffsets(sig_simple, Time(**{RECORDED_TIME: delta_too_large}))
+    assert list(to) == [
+        (50, Time(**{RECORDED_TIME: 1000})),
+        (50, Time(**{RECORDED_TIME: 2000})),
+        (50, Time(**{RECORDED_TIME: 3000})),
+        (50, Time(**{RECORDED_TIME: 4000})),
+        (50, Time(**{RECORDED_TIME: 5000})),
+    ]
 
 
 def test_join_basic():
@@ -328,17 +427,17 @@ def test_join_basic():
     v2 = [1, 2, 3, 4, 5]
     s2 = DummySignal(ts2, v2)
 
-    jn = Join(s1, s2)
+    jn = Join(s1, s2, timelines=(RECORDED_TIME,))
     assert list(jn) == [
-        ((10, 1), 1500),
-        ((20, 1), 2000),
-        ((20, 2), 2500),
-        ((30, 2), 3000),
-        ((30, 3), 3500),
-        ((40, 3), 4000),
-        ((40, 4), 4500),
-        ((50, 4), 5000),
-        ((50, 5), 5500),
+        ((10, 1), Time(**{RECORDED_TIME: 1500})),
+        ((20, 1), Time(**{RECORDED_TIME: 2000})),
+        ((20, 2), Time(**{RECORDED_TIME: 2500})),
+        ((30, 2), Time(**{RECORDED_TIME: 3000})),
+        ((30, 3), Time(**{RECORDED_TIME: 3500})),
+        ((40, 3), Time(**{RECORDED_TIME: 4000})),
+        ((40, 4), Time(**{RECORDED_TIME: 4500})),
+        ((50, 4), Time(**{RECORDED_TIME: 5000})),
+        ((50, 5), Time(**{RECORDED_TIME: 5500})),
     ]
 
 
@@ -352,22 +451,21 @@ def test_join_basic_no_ref_timestamps():
     v2 = [1, 2, 3, 4, 5]
     s2 = DummySignal(ts2, v2)
 
-    jn = Join(s1, s2, include_ref_ts=False)
+    jn = Join(s1, s2, include_ref_ts=False, timelines=(RECORDED_TIME,))
     assert list(jn) == [
-        ((10, 1), 1500),
-        ((20, 1), 2000),
-        ((20, 2), 2500),
-        ((30, 2), 3000),
-        ((30, 3), 3500),
-        ((40, 3), 4000),
-        ((40, 4), 4500),
-        ((50, 4), 5000),
-        ((50, 5), 5500),
+        ((10, 1), Time(**{RECORDED_TIME: 1500})),
+        ((20, 1), Time(**{RECORDED_TIME: 2000})),
+        ((20, 2), Time(**{RECORDED_TIME: 2500})),
+        ((30, 2), Time(**{RECORDED_TIME: 3000})),
+        ((30, 3), Time(**{RECORDED_TIME: 3500})),
+        ((40, 3), Time(**{RECORDED_TIME: 4000})),
+        ((40, 4), Time(**{RECORDED_TIME: 4500})),
+        ((50, 4), Time(**{RECORDED_TIME: 5000})),
+        ((50, 5), Time(**{RECORDED_TIME: 5500})),
     ]
 
 
 def test_index_offsets_multiple_with_ref_timestamps(sig_simple):
-    # Offsets [-1, 0, 1] should return grouped timestamps as np.ndarray[int64]
     j = IndexOffsets(sig_simple, -1, 0, 1, include_ref_ts=True)
     actual = list(j)
     exp_vals = [(10, 20, 30), (20, 30, 40), (30, 40, 50)]
@@ -380,8 +478,8 @@ def test_index_offsets_multiple_with_ref_timestamps(sig_simple):
     assert len(actual) == 3
     for i, ((vals, ts_arr), ref_ts) in enumerate(actual):
         assert tuple(vals) == exp_vals[i]
-        assert np.array_equal(ts_arr, exp_ts_arrays[i])
-        assert ref_ts == exp_ref_ts[i]
+        assert np.array_equal([ts[RECORDED_TIME] for ts in ts_arr], exp_ts_arrays[i])
+        assert ref_ts == Time(**{RECORDED_TIME: exp_ref_ts[i]})
 
 
 def test_join_with_ref_timestamps_grouped():
@@ -394,7 +492,7 @@ def test_join_with_ref_timestamps_grouped():
     v2 = [1, 2, 3, 4, 5]
     s2 = DummySignal(ts2, v2)
 
-    jn = Join(s1, s2, include_ref_ts=True)
+    jn = Join(s1, s2, include_ref_ts=True, timelines=(RECORDED_TIME,))
     actual = list(jn)
     exp_vals = [(10, 1), (20, 1), (20, 2), (30, 2), (30, 3), (40, 3), (40, 4), (50, 4), (50, 5)]
     exp_ts_arrays = [
@@ -412,27 +510,27 @@ def test_join_with_ref_timestamps_grouped():
     assert len(actual) == len(exp_vals)
     for i, ((vals, ts_arr), ref_ts) in enumerate(actual):
         assert tuple(vals) == exp_vals[i]
-        assert np.array_equal(ts_arr, exp_ts_arrays[i])
-        assert ref_ts == exp_union_ts[i]
+        assert np.array_equal([ts[RECORDED_TIME] for ts in ts_arr], exp_ts_arrays[i])
+        assert ref_ts == Time(**{RECORDED_TIME: exp_union_ts[i]})
 
 
 def test_join_equal_timestamps_drop_duplicates_default():
     # Overlapping timestamp at 2000; by default duplicates dropped -> single entry at 2000
     s1 = DummySignal([1000, 2000], [1, 2])
     s2 = DummySignal([2000, 3000], [10, 20])
-    jn = Join(s1, s2)
+    jn = Join(s1, s2, timelines=(RECORDED_TIME,))
     assert list(jn) == [
-        ((2, 10), 2000),  # single entry at 2000
-        ((2, 20), 3000),
+        ((2, 10), Time(**{RECORDED_TIME: 2000})),  # single entry at 2000
+        ((2, 20), Time(**{RECORDED_TIME: 3000})),
     ]
 
 
 def test_join_empty():
     empty = DummySignal([], [])
     s1 = DummySignal([1000], [1])
-    assert list(Join(empty, empty)) == []
-    assert list(Join(s1, empty)) == []
-    assert list(Join(empty, s1)) == []
+    assert list(Join(empty, empty, timelines=(RECORDED_TIME,))) == []
+    assert list(Join(s1, empty, timelines=(RECORDED_TIME,))) == []
+    assert list(Join(empty, s1, timelines=(RECORDED_TIME,))) == []
 
 
 def test_join_three_signals_basic():
@@ -443,17 +541,17 @@ def test_join_three_signals_basic():
     # s3: shifted by +200 from s1 and extends further
     s3 = DummySignal([1200, 2200, 3200, 4200], [100, 200, 300, 400])
 
-    jn = Join(s1, s2, s3)
+    jn = Join(s1, s2, s3, timelines=(RECORDED_TIME,))
     # Start from max starts (1500), union of timestamps with carry-back
     assert list(jn) == [
-        ((10, 1, 100), 1500),
-        ((20, 1, 100), 2000),
-        ((20, 1, 200), 2200),
-        ((20, 2, 200), 2500),
-        ((30, 2, 200), 3000),
-        ((30, 2, 300), 3200),
-        ((30, 3, 300), 3500),
-        ((30, 3, 400), 4200),
+        ((10, 1, 100), Time(**{RECORDED_TIME: 1500})),
+        ((20, 1, 100), Time(**{RECORDED_TIME: 2000})),
+        ((20, 1, 200), Time(**{RECORDED_TIME: 2200})),
+        ((20, 2, 200), Time(**{RECORDED_TIME: 2500})),
+        ((30, 2, 200), Time(**{RECORDED_TIME: 3000})),
+        ((30, 2, 300), Time(**{RECORDED_TIME: 3200})),
+        ((30, 3, 300), Time(**{RECORDED_TIME: 3500})),
+        ((30, 3, 400), Time(**{RECORDED_TIME: 4200})),
     ]
 
 
@@ -465,16 +563,16 @@ def test_join_three_signals_no_ref_timestamps():
     # s3: shifted by +200 from s1 and extends further
     s3 = DummySignal([1200, 2200, 3200, 4200], [100, 200, 300, 400])
 
-    jn = Join(s1, s2, s3, include_ref_ts=False)
+    jn = Join(s1, s2, s3, include_ref_ts=False, timelines=(RECORDED_TIME,))
     assert list(jn) == [
-        ((10, 1, 100), 1500),
-        ((20, 1, 100), 2000),
-        ((20, 1, 200), 2200),
-        ((20, 2, 200), 2500),
-        ((30, 2, 200), 3000),
-        ((30, 2, 300), 3200),
-        ((30, 3, 300), 3500),
-        ((30, 3, 400), 4200),
+        ((10, 1, 100), Time(**{RECORDED_TIME: 1500})),
+        ((20, 1, 100), Time(**{RECORDED_TIME: 2000})),
+        ((20, 1, 200), Time(**{RECORDED_TIME: 2200})),
+        ((20, 2, 200), Time(**{RECORDED_TIME: 2500})),
+        ((30, 2, 200), Time(**{RECORDED_TIME: 3000})),
+        ((30, 2, 300), Time(**{RECORDED_TIME: 3200})),
+        ((30, 3, 300), Time(**{RECORDED_TIME: 3500})),
+        ((30, 3, 400), Time(**{RECORDED_TIME: 4200})),
     ]
 
 
@@ -483,14 +581,14 @@ def test_pairwise_basic_and_alignment():
     s1 = DummySignal([1000, 2000, 3000, 4000], [1, 2, 3, 4])
     s2 = DummySignal([1500, 2500, 3500], [10, 20, 30])
 
-    add_sig = pairwise(s1, s2, np.add)
+    add_sig = pairwise(s1, s2, np.add, timelines=(RECORDED_TIME,))
     assert list(add_sig) == [
-        (11, 1500),  # 1 + 10
-        (12, 2000),  # 2 + 10
-        (22, 2500),  # 2 + 20
-        (23, 3000),  # 3 + 20
-        (33, 3500),  # 3 + 30
-        (34, 4000),  # 4 + 30
+        (11, Time(**{RECORDED_TIME: 1500})),  # 1 + 10
+        (12, Time(**{RECORDED_TIME: 2000})),  # 2 + 10
+        (22, Time(**{RECORDED_TIME: 2500})),  # 2 + 20
+        (23, Time(**{RECORDED_TIME: 3000})),  # 3 + 20
+        (33, Time(**{RECORDED_TIME: 3500})),  # 3 + 30
+        (34, Time(**{RECORDED_TIME: 4000})),  # 4 + 30
     ]
 
 
@@ -498,12 +596,12 @@ def test_pairwise_vectors_and_subtract():
     s1 = DummySignal([1000, 2000, 3000], [[1, 2], [3, 4], [5, 6]])
     s2 = DummySignal([1500, 2500], [[10, 20], [30, 40]])
 
-    sub = pairwise(s1, s2, np.subtract)
+    sub = pairwise(s1, s2, np.subtract, timelines=(RECORDED_TIME,))
     assert [(v.tolist(), t) for v, t in sub] == [
-        ([1 - 10, 2 - 20], 1500),
-        ([3 - 10, 4 - 20], 2000),
-        ([3 - 30, 4 - 40], 2500),
-        ([5 - 30, 6 - 40], 3000),
+        ([1 - 10, 2 - 20], Time(**{RECORDED_TIME: 1500})),
+        ([3 - 10, 4 - 20], Time(**{RECORDED_TIME: 2000})),
+        ([3 - 30, 4 - 40], Time(**{RECORDED_TIME: 2500})),
+        ([5 - 30, 6 - 40], Time(**{RECORDED_TIME: 3000})),
     ]
 
 
@@ -516,7 +614,7 @@ def test_concat_vectors_batched_and_alignment():
     ts2 = [1500, 2500]
     v2 = [[10], [20]]
     s2 = DummySignal(ts2, v2)
-    cat = concat(s1, s2)
+    cat = concat(s1, s2, timelines=(RECORDED_TIME,))
 
     # Expected union starting from max start (1500): [1500, 2000, 2500, 3000]
     # Values are concatenated vectors with carry-back
@@ -533,4 +631,88 @@ def test_concat_vectors_batched_and_alignment():
     vals = [v for v, _ in cat]
     ts = [t for _, t in cat]
     assert np.array_equal(np.stack(vals, axis=0), expected_rows)
-    assert ts == expected_ts
+    assert ts == [Time(**{RECORDED_TIME: t}) for t in expected_ts]
+
+
+def test_named_offsets_retain_all_reference_coordinates():
+    source = DummySignal([[100, 900], [140, 950], [220, 1100]], [1, 2, 3], timelines=('A', 'B'))
+    shifted = TimeOffsets(source, Time(A=-30), include_ref_ts=True)
+    assert list(shifted) == [
+        ((1, Time(A=100, B=900)), Time(A=140, B=950)),
+        ((2, Time(A=140, B=950)), Time(A=220, B=1100)),
+    ]
+
+
+def test_projected_join_collapses_duplicates_and_retains_full_references():
+    left = DummySignal([[100, 1], [100, 2], [200, 2]], [1, 2, 3], timelines=('A', 'B'))
+    right = DummySignal([[100, 9], [200, 10]], [4, 5], timelines=('A', 'C'))
+    joined = Join(left, right, timelines=('A',), include_ref_ts=True)
+    assert list(joined) == [
+        (((2, 4), (Time(A=100, B=2), Time(A=100, C=9))), Time(A=100)),
+        (((3, 5), (Time(A=200, B=2), Time(A=200, C=10))), Time(A=200)),
+    ]
+
+
+@pytest.mark.parametrize('timelines', [('A', 'B'), ('B', 'A')])
+@pytest.mark.parametrize('count', [1, 2])
+def test_join_includes_coordinatewise_start(timelines, count):
+    left = DummySignal([[0, 10], [20, 20]][:count], [1, 3][:count], timelines=('A', 'B'))
+    right = DummySignal([[10, 0], [30, 30]][:count], [2, 4][:count], timelines=('A', 'B'))
+    expected = [((1, 2), Time(A=10, B=10))]
+    if count == 2:
+        expected += [((3, 2), Time(A=20, B=20)), ((3, 4), Time(A=30, B=30))]
+    joined = Join(left, right, timelines=timelines)
+    assert list(joined) == expected
+    assert joined.bounds(timelines).start == Time(A=10, B=10)
+    assert joined.time[Time(A=10, B=10)] == expected[0]
+    with_references = Join(left, right, timelines=timelines, include_ref_ts=True)
+    assert with_references[0] == (((1, 2), (Time(A=0, B=10), Time(A=10, B=0))), Time(A=10, B=10))
+
+
+@pytest.mark.parametrize('timelines', [('A', 'B'), ('B', 'A')])
+def test_join_carries_updates_to_common_start(timelines):
+    left = DummySignal([[0, 10], [5, 20]], [1, 3], timelines=('A', 'B'))
+    right = DummySignal([[10, 0], [20, 30]], [2, 4], timelines=('A', 'B'))
+    assert list(Join(left, right, timelines=timelines)) == [
+        ((1, 2), Time(A=10, B=10)),
+        ((3, 2), Time(A=10, B=20)),
+        ((3, 4), Time(A=20, B=30)),
+    ]
+
+
+@pytest.mark.parametrize('timelines', [('A', 'B'), ('B', 'A')])
+def test_join_rejects_conflicting_updates_at_common_start(timelines):
+    left = DummySignal([[0, 10], [5, 20]], [1, 3], timelines=('A', 'B'))
+    right = DummySignal([[10, 0], [20, 5]], [2, 4], timelines=('A', 'B'))
+    with pytest.raises(ValueError, match='non-decreasing'):
+        list(Join(left, right, timelines=timelines))
+
+
+@pytest.mark.parametrize('timelines', [(RECORDED_TIME,), ('world',), ('wall', 'world')])
+@pytest.mark.parametrize(
+    'transform, expected',
+    [
+        (partial(idle_mask, velocity_threshold=3, dt_sec=1), [True, False, False]),
+        (partial(jerk, dt_sec=1), [2, 2, 2]),
+        (cmd_lag, [0.5, 0.5, 0.5, 0.5]),
+        (partial(cmd_velocity, dt_sec=1), [2, 2, 2]),
+    ],
+    ids=['idle', 'acceleration', 'lag', 'velocity'],
+)
+def test_quality_transforms_select_timelines(timelines, transform, expected):
+    seconds = np.arange(5)
+    coordinates = np.column_stack([
+        *(seconds * 1_000_000_000 + i * 10_000_000_000 for i in range(len(timelines))),
+        seconds,
+    ])
+    names = (*timelines, 'tick')
+    joints = np.column_stack([seconds**2, np.zeros((5, 2))])
+    state = np.column_stack([seconds * 2, np.zeros((5, 2))])
+    command = state + [0.5, 0, 0]
+    episode = EpisodeContainer({
+        keys.JOINTS: DummySignal(coordinates, joints, timelines=names),
+        keys.EE_POSE: DummySignal(coordinates, state, timelines=names),
+        keys.TARGET_EE_POSE: DummySignal(coordinates, command, timelines=names),
+    })
+    signal = transform(episode) if timelines == (RECORDED_TIME,) else transform(episode, timelines=timelines)
+    np.testing.assert_allclose(signal.values()[:-1], expected)
