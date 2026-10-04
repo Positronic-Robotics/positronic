@@ -13,12 +13,12 @@ test that the image starts with the network denied before you submit:
 ## Example images
 
 The openpi and GR00T recipes build on a `positro/<vendor>-base` image on Docker Hub, which carries
-the vendor stack. MolmoAct2 has no vendor stack, so its recipe builds on a Python 3.13 image with
-uv. These three recipes add the weights, the positronic source with an offline environment,
-`EXPOSE 8000` and a start command. Their layers go from the least often changed to the most: base,
-weights, dependencies, source. A source change rebuilds and pushes the source layer only. The FLUX 3
-Action recipe builds the vendor stack itself, and CI publishes the image. Build from the root of a
-positronic checkout:
+the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: MolmoAct2 has no
+vendor stack. These three recipes add the weights, the positronic source with an offline
+environment, `EXPOSE 8000` and a start command. Their layers go from the least often changed to the
+most: base, weights, dependencies, source. A source change rebuilds and pushes the source layer only.
+The FLUX 3 Action recipe builds the vendor stack itself, and CI publishes the image. Build from the
+root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
@@ -36,8 +36,8 @@ The GR00T recipe downloads `nvidia/GR00T-N1.7-DROID` (6.9 GB) and its backbone
 Hub page, then put a read token in `$HOME/.hf_token`. The build reads the token through a secret
 mount, and it enters no layer.
 
-The MolmoAct2 recipe downloads `allenai/MolmoAct2-DROID` (21.8 GB in float32). The repository is
-not gated, so the build needs no token. The image is 24.4 GB compressed.
+The MolmoAct2 recipe downloads `allenai/MolmoAct2-DROID` (21.8 GB in float32). The build needs no
+token: the repository is not gated. The image is 24.4 GB compressed.
 
 Other models:
 

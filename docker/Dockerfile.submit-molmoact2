@@ -10,8 +10,8 @@
 # The layers go from the least often changed to the most: base, weights, dependencies, source. A
 # source commit rebuilds and pushes the source layer only.
 #
-# MolmoAct2 has no vendor stack, so the base is a Python 3.13 image with a compiler and uv. The
-# CUDA runtime comes in with the PyPI torch wheels.
+# The base is a Python 3.13 image with a compiler and uv: MolmoAct2 has no vendor stack. The CUDA
+# runtime comes in with the PyPI torch wheels.
 
 ARG BASE_IMAGE=ghcr.io/astral-sh/uv:python3.13-bookworm
 ARG MODEL=allenai/MolmoAct2-DROID
