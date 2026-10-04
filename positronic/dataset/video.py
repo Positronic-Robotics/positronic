@@ -24,7 +24,7 @@ from .signal import (
     Signal,
     SignalMeta,
     SignalWriter,
-    Timestamps,
+    Time,
     is_realnum_dtype,
 )
 
@@ -168,7 +168,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._height, self._width = height, width
         self._session = self.encoder.open(self.video_path, width, height, self.fps, self.gop_size)
 
-    def append(self, data: np.ndarray, timestamps: Timestamps) -> None:
+    def append(self, data: np.ndarray, timestamps: Time) -> None:
         """Append a video frame with timestamp.
 
         Args:
@@ -184,7 +184,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         if self._aborted:
             raise RuntimeError('Cannot append to an aborted writer')
 
-        timestamps = self._validate_timestamps(timestamps)
+        self._validate_timestamps(timestamps)
         ts_ns = timestamps[self.main_timeline]
         extra_ts = {name: ts for name, ts in timestamps.items() if name != self.main_timeline}
         if self._last_ts is not None and extra_ts.keys() != self._extra_timelines.keys():

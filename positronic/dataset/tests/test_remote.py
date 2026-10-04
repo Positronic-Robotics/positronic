@@ -13,6 +13,7 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
+from positronic.dataset import Time
 from positronic.dataset.edits import EditedEpisode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
@@ -35,7 +36,11 @@ def dataset_with_video(tmp_path):
 
                 # Numeric signal
                 for i in range(5):
-                    ew.append('action', np.array([i * 0.1, i * 0.2], dtype=np.float32), {RECORDED_TIME: 1000 + i * 100})
+                    ew.append(
+                        'action',
+                        np.array([i * 0.1, i * 0.2], dtype=np.float32),
+                        Time(**{RECORDED_TIME: 1000 + i * 100}),
+                    )
 
                 # Video signal
                 video_path = ew.path / 'cam.mp4'
@@ -43,7 +48,7 @@ def dataset_with_video(tmp_path):
                 with VideoSignalWriter(video_path, frames_path, fps=30) as vw:
                     for i in range(3):
                         frame = np.full((64, 64, 3), (ep_idx + 1) * 50 + i * 10, dtype=np.uint8)
-                        vw.append(frame, {RECORDED_TIME: 1000 + i * 100})
+                        vw.append(frame, Time(**{RECORDED_TIME: 1000 + i * 100}))
 
     return LocalDataset(root)
 
@@ -252,7 +257,7 @@ def test_migration_rejects_custom_main_timeline(tmp_path, running_server, monkey
     dest_root = tmp_path / 'dest'
     with LocalDatasetWriter(source_root) as writer:
         with writer.new_episode(main_timeline='world') as episode:
-            episode.append('signal', data, {'world': 1000})
+            episode.append('signal', data, Time(world=1000))
     source = LocalDataset(source_root)
     monkeypatch.setattr(remote_server, '_dataset', source)
     with pos3.mirror(), RemoteDataset(running_server) as remote_source:
@@ -284,7 +289,7 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
             with w.new_episode() as ew:
                 ew.set_static('id', i)
                 for j in range(3):
-                    ew.append('signal', np.array([j], dtype=np.float32), {RECORDED_TIME: 1000 + j * 100})
+                    ew.append('signal', np.array([j], dtype=np.float32), Time(**{RECORDED_TIME: 1000 + j * 100}))
 
     source_ds = LocalDataset(source_root)
     port = find_free_port()

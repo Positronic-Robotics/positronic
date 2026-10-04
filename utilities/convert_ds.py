@@ -27,7 +27,7 @@ import configuronic as cfn
 import tqdm
 
 from positronic import keys
-from positronic.dataset import Dataset
+from positronic.dataset import Dataset, Time
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.signal import RECORDED_TIME, Kind
 from positronic.dataset.transforms import TransformedDataset
@@ -87,7 +87,7 @@ def main(output_path: str, original_ds: Dataset | None = None):
                         continue
 
                     for value, ts in signal:
-                        ew.append(key, value, {RECORDED_TIME: ts})
+                        ew.append(key, value, Time(**{RECORDED_TIME: ts}))
 
 
 if __name__ == '__main__':

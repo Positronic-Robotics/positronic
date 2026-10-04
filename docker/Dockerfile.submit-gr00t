@@ -1,42 +1,74 @@
 # syntax=docker/dockerfile:1.7
-# A policy image the platform can run: GR00T N1.7 DROID on top of `positro/gr00t`.
+# A policy image the platform can run: GR00T N1.7 DROID on top of `positro/gr00t-base`.
 # docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
 #
-# Usage
+# Usage (from the repository root)
 #   docker buildx build --platform linux/amd64 --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
-#       -f docker/Dockerfile.submit-gr00t -t docker.io/<you>/gr00t-droid:v1 --push docker
+#       -f docker/Dockerfile.submit-gr00t -t docker.io/<you>/gr00t-droid:v1 --push .
 #   docker run --rm --network none docker.io/<you>/gr00t-droid:v1        # the offline pre-flight
+#
+# The layers go from the least often changed to the most: base, weights, dependencies, source. A
+# source commit rebuilds and pushes the source layer only.
 #
 # The Hugging Face token is for `nvidia/Cosmos-Reason2-2B`, the backbone every N1.7 checkpoint
 # loads: the repository is gated, and NVIDIA grants access on the form. The token enters no layer.
 
-ARG BASE_IMAGE=positro/gr00t:latest
-FROM ${BASE_IMAGE}
-
+ARG BASE_IMAGE=positro/gr00t-base:latest
 ARG MODEL=nvidia/GR00T-N1.7-DROID
+ARG MODEL_REVISION=05e7cc97e40dbd33b0890c35cc0214fcb0547ab5
 ARG BACKBONE=nvidia/Cosmos-Reason2-2B
+ARG BACKBONE_REVISION=9ce19a195e423419c349abfc86fd07178b230561
+
+# The weights stage does not build on the base, so a new base reuses the downloaded weights.
+FROM python:3.12-slim AS weights
+ARG MODEL MODEL_REVISION BACKBONE BACKBONE_REVISION
+ENV HF_HOME=/opt/hf
+RUN pip install --no-cache-dir huggingface_hub==0.35.3
+# A download by commit writes no `refs/main`, and the offline load of the default revision reads it.
+RUN --mount=type=secret,id=hf_token \
+    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ && for spec in "${MODEL}@${MODEL_REVISION}" "${BACKBONE}@${BACKBONE_REVISION}"; do \
+      repo="${spec%@*}" rev="${spec#*@}" \
+   && hf download "$repo" --revision "$rev" > /dev/null \
+   && refs="$HF_HOME/hub/models--$(echo "$repo" | sed 's|/|--|g')/refs" \
+   && mkdir -p "$refs" && printf %s "$rev" > "$refs/main" || exit 1; \
+    done
+
+FROM ${BASE_IMAGE}
+ARG MODEL
+RUN apt-get update && apt-get install -y --no-install-recommends libturbojpeg && rm -rf /var/lib/apt/lists/*
+
+# For a fine-tuned checkpoint of your own, `COPY` its `checkpoint-<step>` directories instead and
+# set GROOT_MODEL_SOURCE to their parent directory. The backbone still comes from the weights stage.
+COPY --from=weights /opt/hf /opt/hf
+
 # The server loads GROOT_MODEL_SOURCE, so the model this build caches is the model the image serves.
 ENV HF_HOME=/opt/hf \
     GROOT_MODEL_SOURCE=hf://${MODEL} \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/positronic:/gr00t \
+    UV_PROJECT_ENVIRONMENT=/positronic/.venv \
+    VIRTUAL_ENV=/positronic/.venv \
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=600
 
-# The base image carries the positronic tree at /positronic and no environment for it: `uv run`
-# would build one at container start, and the platform runs the container with no network.
+# The dependencies install from the lock alone, so a source change does not reinstall them.
 WORKDIR /positronic
-RUN uv sync --locked --python 3.13 --no-dev && uv cache clean
+COPY pyproject.toml uv.lock ./
+COPY client/pyproject.toml client/
+COPY wire/pyproject.toml wire/
+RUN uv sync --locked --python 3.13 --no-dev --no-install-workspace && uv cache clean
 
-# Both repositories land in HF_HOME, where the offline load below reads them. For a fine-tuned
-# checkpoint of your own, `COPY` its `checkpoint-<step>` directories instead and set
-# GROOT_MODEL_SOURCE to their parent directory.
-RUN --mount=type=secret,id=hf_token \
-    HF_TOKEN="$(cat /run/secrets/hf_token)" /opt/gr00t-venv/bin/python -c \
-      "from huggingface_hub import snapshot_download as get; get('${MODEL}'); get('${BACKBONE}')"
+COPY . /positronic
+RUN uv sync --locked --python 3.13 --no-dev && uv cache clean
 
 # GROOT_PATCH_MISTRAL: transformers asks the Hub about the backbone's tokenizer on every load, with
 # no cache fallback, and the patch answers that question locally. Without it the offline load fails;
 # without HF_HUB_OFFLINE each file costs a retried HEAD request and the load exceeds the ready budget.
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
+    UV_OFFLINE=1 \
+    UV_NO_SYNC=1 \
     GROOT_PATCH_MISTRAL=1
 
 EXPOSE 8000
