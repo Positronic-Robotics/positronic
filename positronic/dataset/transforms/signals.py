@@ -355,7 +355,11 @@ def diff(signal: NpSignal, dt_sec: float, order: int = 1, *, timelines: tuple[st
         signal: Input signal with ndarray values of shape (dim,).
         dt_sec: Time window in seconds for the finite difference stencil.
         order: Derivative order. 1 = velocity, 2 = acceleration.
-        timelines: Timeline names used for the finite difference stencil.
+        timelines: Time axes, assumed to be measured in nanoseconds.
+
+    For another fixed scale of ``units_per_second``, pass
+    ``dt_sec=window_seconds * units_per_second / 1e9`` and multiply the result by
+    ``(units_per_second / 1e9) ** order``. All selected timelines must use the same scale.
 
     Returns:
         Signal of per-frame derivative vectors (same dim as input).
