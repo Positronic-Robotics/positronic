@@ -201,6 +201,14 @@ def test_the_same_caps_reach_the_same_cached_rrd(rrd_cache):
     assert rrd_cache(30.0, 640) == rrd_cache(30.0, 640)
 
 
+def test_a_single_timeline_cached_rrd_is_not_reused(rrd_cache):
+    current = rrd_cache(30.0, 640)
+    old = current.parent / 'ep-uid-30.0hz-640px.rrd'
+    old.write_bytes(b'single timeline recording')
+    assert current != old
+    assert not current.exists()
+
+
 _GRIP_LAYOUT = ReplayLayout(row_shares=(3, 1), top_shares=(1, 3), charts={'Grip': [keys.GRIP]})
 
 
@@ -282,6 +290,7 @@ def _server_rooted_urls(html: str, base_href: str) -> list[str]:
 class _StubEpisode:
     meta = {META_PATH: '/datasets/run-7/episode_3', 'size_mb': 12.5}
     static = {keys.TASK: 'pick the cube', 'scene': b'a mesh'}
+    timelines = (RECORDED_TIME,)
 
 
 class _StubDataset:
@@ -845,6 +854,15 @@ def test_episode_table_handles_disjoint_timelines(flat_with_hidden, monkeypatch,
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
     assert response.json()['episodes'] == [[0, [2.0]]]
+
+
+def test_episode_table_does_not_interpret_ticks_as_seconds(flat_with_hidden, monkeypatch):
+    episode = EpisodeContainer({'value': DummySignal([1, 2], [10, 20], timelines=('tick',))})
+    monkeypatch.setitem(app_state, 'dataset', [episode])
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration', default='—')})
+    response = flat_with_hidden.get('/api/episodes')
+    assert response.status_code == 200
+    assert response.json()['episodes'] == [[0, ['—']]]
 
 
 def test_the_flat_table_carries_a_hidden_column_value_to_the_page(flat_with_hidden):
