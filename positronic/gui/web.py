@@ -99,11 +99,6 @@ class CameraFeed:
         )
 
 
-def _raise_if_stopped(server_thread: threading.Thread) -> None:
-    if not server_thread.is_alive():
-        raise RuntimeError('The station console web server stopped')
-
-
 class StationConsole(pimm.ControlSystem):
     """Serves the station page and turns its presses into episodes.
 
@@ -124,6 +119,11 @@ class StationConsole(pimm.ControlSystem):
         self._episode: pimm.calls.Answer[dict[str, Any]] | None = None
         self._verdict: dict[str, Any] | None = None
 
+    @staticmethod
+    def _raise_if_stopped(server_thread: threading.Thread) -> None:
+        if not server_thread.is_alive():
+            raise RuntimeError('The station console web server stopped')
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         station = Station(self._next_task)
         feeds = {name: CameraFeed() for name in self.cameras}
@@ -139,12 +139,12 @@ class StationConsole(pimm.ControlSystem):
         server_thread.start()
         try:
             while not server.started:
-                _raise_if_stopped(server_thread)
+                self._raise_if_stopped(server_thread)
                 yield pimm.Sleep(0.05)
             logger.info(f'Station console: http://{self._host}:{self._port}/')
             limiter = pimm.RateLimiter(clock, hz=TILE_FPS)
             while not should_stop.value:
-                _raise_if_stopped(server_thread)
+                self._raise_if_stopped(server_thread)
                 for name, feed in feeds.items():
                     if (frame := pimm.value_updated(self.cameras[name])) is not None:
                         feed.push(frame.array, clock.now())
