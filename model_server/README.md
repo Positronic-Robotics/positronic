@@ -21,6 +21,7 @@ In a checkout, install the workspace packages together: `uv pip install ./wire .
 This test server returns each observation as a one-element result list:
 
 ```python
+from positronic_model_server import keys
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.spec import component
@@ -35,7 +36,7 @@ def load_model():
             client_stack=component("chunked_schedule", version=2, fps=params["fps"]),
         )
 
-    return Model(prepare_session, parameters={"fps": 20}, metadata={"checkpoint_id": "example"})
+    return Model(prepare_session, parameters={"fps": 20}, metadata={keys.CHECKPOINT_ID: "example"})
 
 server = ModelServer(load_model, idle_timeout_min=10)
 server.serve([WebsocketWire(ServedHostPort("0.0.0.0", 8000))])

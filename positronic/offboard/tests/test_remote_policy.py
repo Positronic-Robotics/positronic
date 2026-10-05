@@ -290,10 +290,12 @@ class TestNewSessionRetriesRefusedConnects:
         assert slept == [deadline], f'a {deadline}s connect deadline slept {slept}'
 
 
-def _ready(session_id: str, meta: dict | None = None) -> bytes:
+def _ready(
+    session_id: str, meta: dict | None = None, *, version: protocol.ProtocolVersion = protocol.ProtocolVersion.V2
+) -> bytes:
     return legacy_protocol.serialise({
         protocol.STATUS: protocol.ServerStatus.READY,
-        protocol.PROTOCOL_VERSION: 2,
+        protocol.PROTOCOL_VERSION: version.value,
         protocol.META: meta if meta is not None else {'model_name': 'test'},
         protocol.SESSION_ID: session_id,
     })
@@ -333,6 +335,39 @@ class TestADroppedConnectionReconnects:
         assert _observations_sent(reopened) == [{'image': 'test'}]
         assert legacy_protocol.deserialise(reopened.send.call_args.args[0])[protocol.SESSION_ID] == 'second'
         assert session.session_id == 'second'
+
+    @pytest.mark.parametrize('version', list(protocol.ProtocolVersion))
+    def test_numpy_metadata_survives_a_reconnect_and_reordered_mapping(self, version):
+        stats = {'mean': np.array([1.0, 2.0]), 'scale': np.float32(0.5)}
+        first_meta = {'model': {'stats': [stats]}, 'name': 'test'}
+        second_meta = {'name': 'test', 'model': {'stats': [dict(reversed(stats.items()))]}}
+        dropped = _connection(_ready('first', first_meta, version=version), wire.PeerDisconnected('dropped'))
+        reopened = _connection(_ready('second', second_meta, version=version), _answer({'action_data': [1, 2]}))
+        session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
+
+        assert session.infer({'image': 'test'}) == {'action_data': [1, 2]}
+        dropped.close.assert_called_once()
+        assert session.session_id == (None if version is protocol.ProtocolVersion.V1 else 'second')
+
+    @pytest.mark.parametrize('version', list(protocol.ProtocolVersion))
+    @pytest.mark.parametrize(
+        'changed',
+        [np.array([1.0, 3.0]), np.array([[1.0, 2.0]]), np.array([1.0, 2.0], dtype=np.float32)],
+        ids=['values', 'shape', 'dtype'],
+    )
+    def test_changed_numpy_metadata_refuses_a_reconnect(self, version, changed):
+        first_meta = {'model': {'stats': [np.array([1.0, 2.0])]}}
+        second_meta = {'model': {'stats': [changed]}}
+        dropped = _connection(_ready('first', first_meta, version=version), wire.PeerDisconnected('dropped'))
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        reopened = _connection(_ready('second', second_meta, version=version), end_ack)
+        session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
+
+        with pytest.raises(wire.PeerDisconnected, match='other metadata'):
+            session.infer({'image': 'test'})
+
+        assert _observations_sent(reopened) == []
+        reopened.close.assert_called_once()
 
     def test_a_drop_after_an_answer_reaches_the_caller(self):
         """The server's session held state for the episode, and a new session would start without it."""

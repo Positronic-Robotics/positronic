@@ -143,10 +143,25 @@ class InferenceSession:
             # A second drop is a server that cannot serve this observation, and reaches the caller.
             return self._round_trip(obs)
 
+    @staticmethod
+    def _wire_values_equal(left: Any, right: Any) -> bool:
+        """Compare wire values independently of mapping order and NumPy's elementwise equality."""
+        if isinstance(left, Mapping) and isinstance(right, Mapping):
+            return left.keys() == right.keys() and all(
+                InferenceSession._wire_values_equal(value, right[key]) for key, value in left.items()
+            )
+        if isinstance(left, list) and isinstance(right, list):
+            return len(left) == len(right) and all(
+                InferenceSession._wire_values_equal(a, b) for a, b in zip(left, right, strict=True)
+            )
+        return serialise(left) == serialise(right)
+
     def _adopt(self, reopened: 'InferenceSession') -> None:
         """Carry on over ``reopened``'s connection, which must serve what this session opened on."""
         # The caller built its rig-side stack from this session's handshake, and the episode records that handshake.
-        if reopened.protocol_version is not self._protocol or reopened.metadata != self._metadata:
+        if reopened.protocol_version is not self._protocol or not self._wire_values_equal(
+            reopened.metadata, self._metadata
+        ):
             reopened.close()
             raise wire.PeerDisconnected('The server this session reconnected to declares other metadata')
         self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
