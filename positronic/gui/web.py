@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.requests import HTTPConnection
 
 import pimm
 from positronic import keys
@@ -196,12 +197,16 @@ class StationConsole(pimm.ControlSystem):
         app = FastAPI()
         app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
 
+        def sent_from_another_site(connection: HTTPConnection) -> bool:
+            """A browser sends ``Origin`` with each cross-site POST and each WebSocket handshake. A client that sends
+            none passes."""
+            origin = connection.headers.get('origin')
+            return origin is not None and urlparse(origin).netloc != connection.url.netloc
+
         @app.middleware('http')
         async def refuse_foreign_origins(request: Request, call_next):
-            """A browser sends ``Origin`` with each cross-site POST, so a page on another site cannot start an episode.
-            A client that sends no ``Origin`` passes."""
-            origin = request.headers.get('origin')
-            if request.method != 'GET' and origin is not None and urlparse(origin).netloc != request.url.netloc:
+            """A page on another site cannot start or end an episode."""
+            if request.method != 'GET' and sent_from_another_site(request):
                 return JSONResponse({'detail': 'cross-origin request refused'}, status_code=403)
             return await call_next(request)
 
@@ -239,8 +244,9 @@ class StationConsole(pimm.ControlSystem):
 
         @app.websocket('/video/{name}')
         async def video(websocket: WebSocket, name: str):
+            """The HTTP middleware does not see a WebSocket, so this refuses a page on another site itself."""
             feed = feeds.get(name)
-            if feed is None:
+            if feed is None or sent_from_another_site(websocket):
                 await websocket.close()
                 return
             await websocket.accept()

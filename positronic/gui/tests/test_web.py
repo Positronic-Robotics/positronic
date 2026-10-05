@@ -110,16 +110,27 @@ def test_a_post_from_another_site_is_refused(console):
     assert accepted.status_code == 200
 
 
-def test_a_tile_streams_its_codec_its_init_segment_and_then_fragments(console):
+PAGE_ORIGIN = {'Origin': 'http://testserver'}
+
+
+def test_a_tile_streams_its_codec_its_init_segment_and_then_fragments_to_the_page(console):
     for i in range(20):
         console.feed.push(_frame(i), SystemClock().now())
-    with console.client.websocket_connect(f'/video/{CAMERA}') as socket:
+    with console.client.websocket_connect(f'/video/{CAMERA}', headers=PAGE_ORIGIN) as socket:
         assert socket.receive_text().startswith('avc1.')
         assert socket.receive_bytes() == console.feed.stream.init_segment
         for i in range(20, 40):
             console.feed.push(_frame(i), SystemClock().now())
         assert socket.receive_bytes()[4:8] == b'moof'
         console.should_stop.push(True)
+
+
+def test_a_tile_is_refused_to_a_page_from_another_site(console):
+    for i in range(20):
+        console.feed.push(_frame(i), SystemClock().now())
+    with pytest.raises(WebSocketDisconnect):
+        with console.client.websocket_connect(f'/video/{CAMERA}', headers={'Origin': 'http://example.com'}) as socket:
+            socket.receive_text()
 
 
 def test_a_tile_for_an_unknown_camera_is_refused(console):
