@@ -126,7 +126,8 @@ class ShutdownPolicy(Enum):
 
     # A foreground loop stops at once. A background process gets 90 s, then is terminated.
     BEST_EFFORT = auto()
-    # The World runs the shutdown to its end, with no timeout. A background process ignores SIGINT and SIGTERM.
+    # The World runs the shutdown to its end, with no timeout. While one runs, SIGINT and SIGTERM only stop the
+    # World, and take effect after its shutdown. A background process ignores both signals.
     WAIT_FOR_COMPLETION = auto()
 
 

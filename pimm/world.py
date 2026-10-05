@@ -17,10 +17,10 @@ from collections.abc import Callable, Iterator, Mapping
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.managers import ValueProxy
-from multiprocessing.process import BaseProcess
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
+from types import FrameType
 from typing import TypeVar, overload
 
 from .calls import ControlSystemCaller, ControlSystemHandler, handlers_of
@@ -467,11 +467,7 @@ class _CallAnsweringLoop:
 
 
 _ORPHAN_POLL_S = 0.5
-_DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
-
-
-def _exit_on_sigterm(signum, frame) -> None:
-    raise SystemExit(128 + signum)
+_STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
 
 def _stop_when_orphaned(stop_event: EventClass, name: str, parent_pid: int) -> None:
@@ -499,7 +495,7 @@ def _bg_wrapper(
 ):
     if shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
         # Stop only on the parent's stop event, so the device finishes its shutdown.
-        for signum in _DEFERRED_SIGNALS:
+        for signum in _STOP_SIGNALS:
             signal.signal(signum, signal.SIG_IGN)
     _stop_when_orphaned(stop_event, name, parent_pid)
     try:
@@ -552,16 +548,69 @@ class World:
         self._protected_foreground_loops: list[Iterator[Command]] = []
         self._cleanup_emitters_readers = []
         self.entered = False
-        self._previous_sigterm = None
+        self._previous_handlers: dict[int, Callable[[int, FrameType | None], object] | int] = {}
+        self._signal_scope = contextlib.ExitStack()
+        self._stopped_by_signal: int | None = None
         self._connections = []
 
     def __enter__(self):
         self.entered = True
-        self._previous_sigterm = None
+        self._stopped_by_signal = None
+        self._signal_scope = contextlib.ExitStack()
         if threading.current_thread() is threading.main_thread():
-            # A SIGTERM ends the World through `__exit__`, which stops and joins its children.
-            self._previous_sigterm = signal.signal(signal.SIGTERM, _exit_on_sigterm)
+            self._take_signals()
         return self
+
+    @property
+    def _protects_a_shutdown(self) -> bool:
+        return bool(self._protected_foreground_loops) or (
+            ShutdownPolicy.WAIT_FOR_COMPLETION in self._shutdown_policies.values()
+        )
+
+    def _take_signals(self) -> None:
+        """Handle SIGINT and SIGTERM until ``__exit__``. A handler that the block sets wins inside it."""
+        read_fd, write_fd = os.pipe()
+        relay = threading.Thread(target=self._relay_signals, args=(read_fd,), name='pimm.World.signals', daemon=True)
+        relay.start()
+        self._signal_scope.callback(relay.join)
+        self._signal_scope.callback(os.close, write_fd)
+
+        def on_signal(signum: int, frame: FrameType | None) -> None:
+            if not self._protects_a_shutdown:
+                self._deliver_signal(signum, frame)
+                return
+            if self._stopped_by_signal is None:
+                self._stopped_by_signal = signum
+            # FOOTGUN: a handler runs where the main thread stopped, which can be inside the stop event's lock.
+            # `request_stop` here would deadlock, so the relay thread raises the stop.
+            os.write(write_fd, bytes([signum]))
+
+        self._previous_handlers = {}
+        for signum in _STOP_SIGNALS:
+            previous = signal.getsignal(signum)
+            # A signal the process ignores stays ignored, and a handler set outside Python is left alone.
+            if callable(previous) or previous == signal.SIG_DFL:
+                self._previous_handlers[signum] = previous
+                signal.signal(signum, on_signal)
+                self._signal_scope.callback(signal.signal, signum, previous)
+
+    def _relay_signals(self, read_fd: int) -> None:
+        """Stop the World for each signal that ``on_signal`` writes to the pipe, until the pipe closes."""
+        with open(read_fd, 'rb', buffering=0) as received:
+            while signum := received.read(1):
+                name = signal.Signals(signum[0]).name
+                logger.warning(f'{name}: stopping the World once each protected shutdown completes')
+                self.request_stop()
+
+    def _deliver_signal(self, signum: int, frame: FrameType | None) -> None:
+        """What the signal does once nothing is left to protect: SIGTERM exits, SIGINT runs the earlier handler."""
+        if signum == signal.SIGTERM:
+            raise SystemExit(128 + signum)
+        previous = self._previous_handlers[signum]
+        if callable(previous):
+            previous(signum, frame)
+        else:
+            signal.default_int_handler(signum, frame)
 
     def _drive(self, loop: Iterator[Command]) -> None:
         real_time = not isinstance(self._clock, VirtualClock)
@@ -579,114 +628,52 @@ class World:
             except BaseException as exc:
                 errors.append(exc)
 
-        loops = [finish(loop) for loop in self._protected_foreground_loops]
-        while True:
-            try:
-                self._drive(self._interleave(loops))
-            except BaseException as exc:
-                errors.append(exc)
-            else:
-                break
+        self._drive(self._interleave([finish(loop) for loop in self._protected_foreground_loops]))
         if len(errors) == 1:
             raise errors[0]
         if errors:
             raise BaseExceptionGroup('Foreground shutdown failed', errors)
 
-    def _join_process(self, process: BaseProcess, timeout_s: float | None, errors: list[BaseException]) -> None:
-        while True:
-            try:
-                process.join(timeout=timeout_s)
-                return
-            except (KeyboardInterrupt, SystemExit) as exc:
-                if ShutdownPolicy.WAIT_FOR_COMPLETION not in self._shutdown_policies.values():
-                    raise
-                errors.append(exc)
-
     def _join_background_processes(self) -> None:
-        errors: list[BaseException] = []
         logger.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
             policy = self._shutdown_policies[process]
-            timeout_s = None if policy is ShutdownPolicy.WAIT_FOR_COMPLETION else 90.0
-            self._join_process(process, timeout_s, errors)
+            process.join(timeout=None if policy is ShutdownPolicy.WAIT_FOR_COMPLETION else 90.0)
             if process.is_alive():
                 logger.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
                 process.terminate()
-                self._join_process(process, 2.0, errors)
+                process.join(timeout=2.0)
                 if process.is_alive():
                     logger.warning(f'Process {process.name} (pid {process.pid}) still alive, killing...')
                     process.kill()
-                    self._join_process(process, None, errors)
+                    process.join()
             logger.info(f'Process {process.name} (pid {process.pid}) finished')
             process.close()
-        if len(errors) == 1:
-            raise errors[0]
-        if errors:
-            raise BaseExceptionGroup('Background shutdown interrupted', errors)
-
-    @contextlib.contextmanager
-    def _defer_signals(self, errors: list[BaseException], *, registering_protected: bool = False) -> Iterator[None]:
-        has_protected_systems = (
-            registering_protected
-            or bool(self._protected_foreground_loops)
-            or ShutdownPolicy.WAIT_FOR_COMPLETION in self._shutdown_policies.values()
-        )
-        if not has_protected_systems or threading.current_thread() is not threading.main_thread():
-            yield
-            return
-        previous = {}
-        for signum in _DEFERRED_SIGNALS:
-            handler = signal.getsignal(signum)
-            # A SIGINT left at SIG_DFL replays as `default_int_handler`; any other non-Python handler is left alone.
-            if callable(handler) or (signum == signal.SIGINT and handler == signal.SIG_DFL):
-                previous[signum] = handler
-        pending = []
-
-        def defer(signum, frame):
-            pending.append((signum, frame))
-
-        for signum in previous:
-            signal.signal(signum, defer)
-        try:
-            yield
-        finally:
-            for signum, handler in previous.items():
-                signal.signal(signum, handler)
-            for signum, frame in pending:
-                handler = previous[signum]
-                try:
-                    if callable(handler):
-                        handler(signum, frame)
-                    else:
-                        signal.default_int_handler(signum, frame)
-                except BaseException as exc:
-                    errors.append(exc)
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
         errors: list[BaseException] = []
-        with self._defer_signals(errors):
-            logger.info('Stopping background processes...')
-            self.request_stop()
-            cleanup = [self._finish_foreground_shutdown, self._join_background_processes]
-            for emitter, receivers in self._cleanup_emitters_readers:
-                cleanup.extend(
-                    receiver.close for receiver in (receivers if isinstance(receivers, list) else [receivers])
-                )
-                cleanup.append(emitter.close)
-            for finish in cleanup:
-                try:
-                    finish()
-                except BaseException as exc:
-                    errors.append(exc)
-        if self._previous_sigterm is not None:
-            signal.signal(signal.SIGTERM, self._previous_sigterm)
+        logger.info('Stopping background processes...')
+        self.request_stop()
+        cleanup = [self._finish_foreground_shutdown, self._join_background_processes]
+        for emitter, receivers in self._cleanup_emitters_readers:
+            cleanup.extend(receiver.close for receiver in (receivers if isinstance(receivers, list) else [receivers]))
+            cleanup.append(emitter.close)
+        cleanup.append(self._signal_scope.close)
+        for finish in cleanup:
+            try:
+                finish()
+            except BaseException as exc:
+                errors.append(exc)
         if errors and exc_value is not None:
             errors.insert(0, exc_value)
         if len(errors) == 1:
             raise errors[0]
         if errors:
             raise BaseExceptionGroup('World shutdown failed', errors)
+        if exc_value is None and self._stopped_by_signal is not None:
+            # A signal that stopped a protected World takes effect after its shutdown, unless something else raised.
+            self._deliver_signal(self._stopped_by_signal, None)
 
     def request_stop(self):
         self._stop_event.set()
@@ -911,23 +898,13 @@ class World:
             yield from loop
             return
         self._protected_foreground_loops.append(loop)
+        # Stepped by hand: closing this generator must not close the device's loop, which `__exit__` finishes.
         while True:
-            errors: list[BaseException] = []
-            step: tuple[Command] | None = None
-            with self._defer_signals(errors):
-                try:
-                    step = (next(loop),)
-                except StopIteration:
-                    pass
-                except BaseException as exc:
-                    errors.append(exc)
-            if len(errors) == 1:
-                raise errors[0]
-            if errors:
-                raise BaseExceptionGroup('Foreground step failed', errors)
-            if step is None:
+            try:
+                command = next(loop)
+            except StopIteration:
                 return
-            yield step[0]
+            yield command
 
     def _bind_multiprocess_connections(self, connections) -> None:
         grouped_mp_connections = defaultdict(list)
@@ -1062,34 +1039,23 @@ class World:
                 daemon=True,
                 name=name,
             )
-            # A Ctrl-C between the spawn and the registration would leave a protected child unjoined.
-            errors: list[BaseException] = []
-            with self._defer_signals(
-                errors, registering_protected=shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION
-            ):
-                self._spawn_and_register(p, name, shutdown_policy)
-            if len(errors) == 1:
-                raise errors[0]
-            if errors:
-                raise BaseExceptionGroup('Background start interrupted', errors)
-
-    def _spawn_and_register(self, p: BaseProcess, name: str, shutdown_policy: ShutdownPolicy) -> None:
-        try:
-            p.start()
-        except Exception as e:
-            # With spawn, starting a subprocess requires all arguments (incl. bg_loop)
-            # to be picklable. Provide a clearer error than "can't pickle local object".
-            raise RuntimeError(
-                f'Failed to spawn background process for {name!r}. '
-                f'Current pid={os.getpid()}. '
-                'Background control systems must be picklable under spawn. '
-                'If you captured closures, lambdas, bound methods with non-picklable state, '
-                'or hold OS resources (e.g. sockets/GUI handles), refactor to construct them '
-                'inside the background process or run them in the main process.'
-            ) from e
-        self._shutdown_policies[p] = shutdown_policy
-        self.background_processes.append(p)
-        logger.info(f'Started background process {name} (pid {p.pid})')
+            # Registered before the spawn, so a signal during it finds the World protected.
+            self._shutdown_policies[p] = shutdown_policy
+            try:
+                p.start()
+            except Exception as e:
+                # With spawn, starting a subprocess requires all arguments (incl. bg_loop)
+                # to be picklable. Provide a clearer error than "can't pickle local object".
+                raise RuntimeError(
+                    f'Failed to spawn background process for {name!r}. '
+                    f'Current pid={os.getpid()}. '
+                    'Background control systems must be picklable under spawn. '
+                    'If you captured closures, lambdas, bound methods with non-picklable state, '
+                    'or hold OS resources (e.g. sockets/GUI handles), refactor to construct them '
+                    'inside the background process or run them in the main process.'
+                ) from e
+            self.background_processes.append(p)
+            logger.info(f'Started background process {name} (pid {p.pid})')
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel within the same process.

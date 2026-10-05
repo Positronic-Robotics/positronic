@@ -761,7 +761,9 @@ if __name__ == '__main__':
 
         def pump(seconds: float):
             deadline = time.monotonic() + seconds
-            while time.monotonic() < deadline and not world.should_stop:
+            while time.monotonic() < deadline:
+                if world.should_stop:
+                    raise SystemExit('The World stopped before the smoke finished')
                 cmd = next(loop)
                 time.sleep(cmd.seconds if isinstance(cmd, pimm.Sleep) else 0)
 
