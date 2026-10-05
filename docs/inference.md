@@ -103,7 +103,7 @@ The model sees measured hand state and camera images, then requests one bounded 
 
 ## Who Decides Episode Boundaries
 
-Something has to say when an episode starts and when it finishes. There are three answers, one command each:
+Something has to say when an episode starts and when it finishes.
 
 **Unattended — `positronic eval run`:** a driver walks the eval's tasks, `--eval.trial_count=10` episodes back-to-back. Each ends when its benchmark reports the task done, or when the task's timeout expires (`--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
 
