@@ -108,7 +108,7 @@ class StationConsole(pimm.ControlSystem):
 
     Connect each camera to ``cameras``, ``run_trial`` to a handler that runs a trial as an episode, and ``done`` to
     the harness. Schedule it as a background control system, so the harness never waits for the encoders or the
-    web server. ``next_task`` makes the trials, and ``policy`` is the text the page shows for the policy.
+    web server. ``next_task`` makes the trials, and the page names the policy with ``policy``.
     """
 
     def __init__(self, next_task: Callable[[], Task], *, policy: str, host: str, port: int):

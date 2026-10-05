@@ -76,9 +76,8 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
 
-    The keyboard shows nothing; ``web`` is the attended path that shows the cameras. A run ends when the
-    operator returns — on ``q``, or on a stdin that is not a terminal — since a control system returning stops
-    the world.
+    The keyboard shows nothing; ``web`` shows the cameras. A run ends when the operator returns — on ``q``, or on
+    a stdin that is not a terminal — since a control system returning stops the world.
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
