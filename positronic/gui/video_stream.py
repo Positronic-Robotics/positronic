@@ -14,20 +14,6 @@ def codec_string(init: bytes) -> str:
     return f'avc1.{record[1]:02X}{record[2]:02X}{record[3]:02X}'
 
 
-def _even(value: int) -> int:
-    return max(2, value - value % 2)
-
-
-def _scaled_to_width(rgb: np.ndarray, width: int) -> np.ndarray:
-    h, w = rgb.shape[:2]
-    width = _even(width)
-    height = _even(round(h * width / w))
-    if (h, w) == (height, width):
-        return rgb
-    frame = av.VideoFrame.from_ndarray(rgb, format='rgb24')
-    return frame.reformat(width=width, height=height).to_ndarray(format='rgb24')
-
-
 class _ChunkBuffer:
     """A write-only file for the muxer, emptied by the producer after each frame."""
 
@@ -90,8 +76,22 @@ class VideoStream:
         stream.bit_rate = self._bitrate
         return container, stream
 
+    @staticmethod
+    def _even(value: int) -> int:
+        return max(2, value - value % 2)
+
+    @staticmethod
+    def _scaled_to_width(rgb: np.ndarray, width: int) -> np.ndarray:
+        h, w = rgb.shape[:2]
+        width = VideoStream._even(width)
+        height = VideoStream._even(round(h * width / w))
+        if (h, w) == (height, width):
+            return rgb
+        frame = av.VideoFrame.from_ndarray(rgb, format='rgb24')
+        return frame.reformat(width=width, height=height).to_ndarray(format='rgb24')
+
     def push(self, rgb: np.ndarray) -> None:
-        scaled = _scaled_to_width(rgb, self._width)
+        scaled = self._scaled_to_width(rgb, self._width)
         if self._encoder is None:
             self._encoder = self._open(*scaled.shape[:2])
         container, stream = self._encoder

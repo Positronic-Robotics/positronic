@@ -127,6 +127,7 @@ class TrialForwarder(pimm.ControlSystem):
             yield pimm.Sleep(FORWARD_POLL_S)
 
 
+@scoped_env_var(ENV_TELEMETRY_DIR)
 def web(
     policy,
     embodiment: Embodiment,
@@ -146,24 +147,21 @@ def web(
 
     logger.info('Reading the policy metadata')
     label = policy.meta().get(policy_keys.TYPE, type(policy).__name__)
-    with scoped_env_var(ENV_TELEMETRY_DIR):
-        output_path = prepare_output_dir(output_dir)
-        console = StationConsole(next_task, policy=label, host=host, port=port)
-        forwarder = TrialForwarder(partial(Rollout, policy=policy, output_path=output_path))
-        harness = Harness(embodiment)
-        with pimm.World() as world:
-            ds_agent = wire.wire_embodiment(
-                world, harness, embodiment, record=output_path is not None, done=console.done
-            )
-            world.connect(console.run_trial, forwarder.run_trial)
-            world.connect(forwarder.perform_task, harness.perform_task)
-            for name, observation in embodiment.observations.items():
-                if name.startswith(keys.IMAGE_PREFIX):
-                    world.connect(observation.source, console.cameras[name])
-            if ds_agent is not None:
-                world.connect(harness.ds_command, ds_agent.command)
-            producers = [cs for cs in embodiment.control_systems if cs is not None]
-            world.run([forwarder, harness], [*producers, ds_agent, console])
+    output_path = prepare_output_dir(output_dir)
+    console = StationConsole(next_task, policy=label, host=host, port=port)
+    forwarder = TrialForwarder(partial(Rollout, policy=policy, output_path=output_path))
+    harness = Harness(embodiment)
+    with pimm.World() as world:
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, record=output_path is not None, done=console.done)
+        world.connect(console.run_trial, forwarder.run_trial)
+        world.connect(forwarder.perform_task, harness.perform_task)
+        for name, observation in embodiment.observations.items():
+            if name.startswith(keys.IMAGE_PREFIX):
+                world.connect(observation.source, console.cameras[name])
+        if ds_agent is not None:
+            world.connect(harness.ds_command, ds_agent.command)
+        producers = [cs for cs in embodiment.control_systems if cs is not None]
+        world.run([forwarder, harness], [*producers, ds_agent, console])
 
 
 web_cfg = cfn.Config(

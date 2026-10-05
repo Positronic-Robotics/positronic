@@ -31,7 +31,7 @@ class _Console:
 
     def __init__(self):
         self.actions: list[Action] = []
-        self.feed = CameraFeed(CAMERA)
+        self.feed = CameraFeed()
         self.should_stop = ManualCommandReceiver[bool]()
         self.should_stop.push(False)
         self.station = Station(_trial)
@@ -127,12 +127,12 @@ def test_a_tile_for_an_unknown_camera_is_refused(console):
 
 
 def test_a_camera_reads_live_with_its_rate_until_its_frames_stop():
-    feed = CameraFeed(CAMERA)
+    feed = CameraFeed()
     for i in range(11):
         feed.push(_frame(i), now=100.0 + i * 0.1)
-    live = feed.view(now=101.05)
+    live = feed.view(CAMERA, now=101.05)
     assert live.live and live.fps == pytest.approx(10.0)
-    stale = feed.view(now=103.0)
+    stale = feed.view(CAMERA, now=103.0)
     assert not stale.live and stale.fps == 0.0
     assert (stale.width, stale.height) == (640, 360)
     feed.stream.close()

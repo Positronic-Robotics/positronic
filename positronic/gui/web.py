@@ -70,8 +70,7 @@ class EndBody(BaseModel):
 class CameraFeed:
     """One camera's tile: the stream the page plays, and the arrival times that give its frame rate."""
 
-    def __init__(self, name: str):
-        self.name = name
+    def __init__(self):
         self.stream = VideoStream(TILE_FPS, TILE_WIDTH, TILE_KEYFRAME_INTERVAL, TILE_BITRATE)
         self._arrivals: deque[float] = deque(maxlen=2 * TILE_FPS)
         self._size: tuple[int, int] | None = None
@@ -83,14 +82,14 @@ class CameraFeed:
             self._arrivals.append(now)
             self._size = (rgb.shape[1], rgb.shape[0])
 
-    def view(self, now: float) -> CameraView:
+    def view(self, name: str, now: float) -> CameraView:
         with self._lock:
             arrivals, size = list(self._arrivals), self._size
         live = bool(arrivals) and now - arrivals[-1] < CAMERA_STALE_AFTER_S
         span = arrivals[-1] - arrivals[0] if live else 0.0
         return CameraView(
-            name=self.name,
-            label=self.name.removeprefix(keys.IMAGE_PREFIX).replace('_', ' '),
+            name=name,
+            label=name.removeprefix(keys.IMAGE_PREFIX).replace('_', ' '),
             live=live,
             fps=(len(arrivals) - 1) / span if span > 0 else 0.0,
             width=size[0] if size else None,
@@ -122,7 +121,7 @@ class StationConsole(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         station = Station(self._next_task)
-        feeds = {name: CameraFeed(name) for name in self.cameras}
+        feeds = {name: CameraFeed() for name in self.cameras}
         actions: queue.SimpleQueue[Action] = queue.SimpleQueue()
         app = self.build_app(station, feeds, actions.put, clock, should_stop)
         # The legacy asyncio `websockets` backend drains the transport from its reader and keepalive coroutines
@@ -208,7 +207,7 @@ class StationConsole(pimm.ControlSystem):
 
         def status() -> Status:
             now = clock.now()
-            cameras = [feed.view(now) for feed in feeds.values()]
+            cameras = [feed.view(name, now) for name, feed in feeds.items()]
             return Status(run=station.view(now), cameras=cameras, policy=self._policy, host=self._host)
 
         @app.get('/')
