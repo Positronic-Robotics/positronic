@@ -103,13 +103,15 @@ The model sees measured hand state and camera images, then requests one bounded 
 
 ## Who Decides Episode Boundaries
 
-Something has to say when an episode starts and when it finishes. There are two answers, one command each:
+Something has to say when an episode starts and when it finishes. There are three answers, one command each:
 
 **Unattended — `positronic eval run`:** a driver walks the eval's tasks, `--eval.trial_count=10` episodes back-to-back. Each ends when its benchmark reports the task done, or when the task's timeout expires (`--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
 
 **Keyboard — `positronic-inference real`:** press `s` to start an episode, `p` to stop and save, `q` to quit. Headless — it renders nothing — and it takes `--next_task`, `--embodiment`, `--policy` and `--output_dir`. `--next_task` names the config that makes each trial, one per press. The default draws a new start pose for every one of them. Set the goal with `--next_task.instruction="..."`. Manual evaluation and debugging on hardware.
 
-Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the policy definition the episode runs and names where it records. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
+**Browser — `positronic-inference web`:** a page at `http://127.0.0.1:8080/` shows a live tile for each camera. Start opens an episode on the trial `--next_task` makes. Finish ends it with a pass or fail verdict, and Discard ends it as an attempt that does not count. The instruction field shows the configured instruction. An edit becomes an override, which stays in force until Reset to configured, and the field locks while an episode runs. It takes the flags of `real`, plus `--host` and `--port` for the page. The page serves on localhost; reach it from another machine over an SSH tunnel. `--host=0.0.0.0` lets anyone who reaches the machine start an episode. Ctrl-C ends the run. Each recorded episode stores the instruction it sent (`task`), whether that was an override (`eval.instruction_overridden`), its number in the run (`eval.trial_index`), and the verdict (`eval.success`, or `eval.discarded`).
+
+Anything richer — a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the policy definition the episode runs and names where it records. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
 
 ## Recording and Replay
 

@@ -1,9 +1,10 @@
-"""Legacy ``positronic-inference`` CLI: the attended keyboard ``real`` path plus the ``sim`` and ``stats``
-aliases over ``cli.eval.run``."""
+"""Legacy ``positronic-inference`` CLI: the attended ``real`` (keyboard) and ``web`` (browser console) paths, plus
+the ``sim`` and ``stats`` aliases over ``cli.eval.run``."""
 
 import logging
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -15,14 +16,17 @@ import positronic.cfg.embodiment
 import positronic.cfg.eval.real.droid
 import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
+from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run, run_world, scoped_env_var
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
+from positronic.gui.web import StationConsole
 from positronic.policy import Policy
-from positronic.policy.harness import Rollout
+from positronic.policy import keys as policy_keys
+from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
@@ -72,9 +76,9 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
 
-    The keyboard is the only attended surface this library ships, and there is no viewer — a console that
-    shows the cameras composes a world of its own. A run ends when the operator returns — on ``q``, or on a
-    stdin that is not a terminal — since a control system returning stops the world.
+    The keyboard shows nothing; ``web`` is the attended path that shows the cameras. A run ends when the
+    operator returns — on ``q``, or on a stdin that is not a terminal — since a control system returning stops
+    the world.
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
@@ -94,6 +98,82 @@ real_cfg = cfn.Config(
 )
 
 
+# The lag between a Start and the harness taking the trial, and between the harness's answer and the console.
+FORWARD_POLL_S = 0.02
+
+
+class TrialForwarder(pimm.ControlSystem):
+    """Asks the harness to perform each trial that ``run_trial`` receives, as the rollout ``rollout_of`` makes, and
+    answers the call with the harness's answer.
+
+    It runs beside the harness for a caller in another process, which cannot hand the harness a policy.
+    """
+
+    def __init__(self, rollout_of: Callable[[Task], Rollout]):
+        self._rollout_of = rollout_of
+        self.run_trial = pimm.calls.ControlSystemHandler[Task, dict[str, Any]](self)
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        pending: list[tuple[pimm.calls.Call[Task, dict[str, Any]], pimm.calls.Answer[dict[str, Any]]]] = []
+        while not should_stop.value:
+            for call in self.run_trial.incoming():
+                pending.append((call, self.perform_task(self._rollout_of(call.request))))
+            for call, answer in pending:
+                if answer.done():
+                    with pimm.calls.raise_to(call):
+                        call.set_result(answer.result())
+            pending = [(call, answer) for call, answer in pending if not answer.done()]
+            yield pimm.Sleep(FORWARD_POLL_S)
+
+
+def web(
+    policy,
+    embodiment: Embodiment,
+    next_task: Callable[[], Task],
+    output_dir=None,
+    host: str = '127.0.0.1',
+    port: int = 8080,
+):
+    """Run one hardware embodiment attended from a browser, at ``http://{host}:{port}/``.
+
+    The page shows each camera, starts an episode on the trial ``next_task`` makes, and ends it with a verdict or a
+    discard. The run ends on Ctrl-C. The policy's metadata is read once before the page opens, so a policy that
+    cannot answer stops the run there.
+    """
+    if embodiment.simulated:
+        raise ValueError('the web console drives hardware in real time; run a simulated embodiment as `sim`')
+
+    logger.info('Reading the policy metadata')
+    label = policy.meta().get(policy_keys.TYPE, type(policy).__name__)
+    with scoped_env_var(ENV_TELEMETRY_DIR):
+        output_path = prepare_output_dir(output_dir)
+        console = StationConsole(next_task, policy=label, host=host, port=port)
+        forwarder = TrialForwarder(partial(Rollout, policy=policy, output_path=output_path))
+        harness = Harness(embodiment)
+        with pimm.World() as world:
+            ds_agent = wire.wire_embodiment(
+                world, harness, embodiment, record=output_path is not None, done=console.done
+            )
+            world.connect(console.run_trial, forwarder.run_trial)
+            world.connect(forwarder.perform_task, harness.perform_task)
+            for name, observation in embodiment.observations.items():
+                if name.startswith(keys.IMAGE_PREFIX):
+                    world.connect(observation.source, console.cameras[name])
+            if ds_agent is not None:
+                world.connect(harness.ds_command, ds_agent.command)
+            producers = [cs for cs in embodiment.control_systems if cs is not None]
+            world.run([forwarder, harness], [*producers, ds_agent, console])
+
+
+web_cfg = cfn.Config(
+    web,
+    embodiment=positronic.cfg.embodiment.droid,
+    next_task=positronic.cfg.eval.real.droid.attended_trials,
+    policy=policy_cfg.placeholder,
+)
+
+
 # Console entry point for [project.scripts].
 @pos3.with_mirror()
 def _internal_main():
@@ -101,6 +181,7 @@ def _internal_main():
     cfn.cli({
         'run': real_cfg,
         'real': real_cfg,  # `real` is the documented name for the hardware path
+        'web': web_cfg,
         'sim': run.override(eval=stack_cubes),
         'stats': stats,
     })

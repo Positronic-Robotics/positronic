@@ -310,6 +310,7 @@ positronic = [
   "assets/**",
   "drivers/**/*.xml",
   "drivers/**/*.urdf",
+  "gui/static/**",
   "server/static/**",
   "server/templates/**",
   # The launcher needs these dependency constraints in installed distributions too.

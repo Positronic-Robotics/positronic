@@ -1,0 +1,275 @@
+"""The station console: a browser page with a live tile per camera and the controls that start and end episodes.
+
+``positronic-inference web`` composes the world around it. The page reads the console through ``GET /status``.
+"""
+
+import asyncio
+import logging
+import queue
+import threading
+from collections import deque
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import numpy as np
+import uvicorn
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import pimm
+from positronic import keys
+from positronic.eval import Task
+from positronic.gui.station import Outcome, Refused, RunView, Station, Verdict, outcome_of
+from positronic.gui.video_stream import VideoStream, codec_string
+
+logger = logging.getLogger(__name__)
+
+STATIC_DIR = Path(__file__).resolve().parent / 'static'
+
+# The console reads each camera at this rate, so a tile shows at most this many frames per second.
+TILE_FPS = 15
+TILE_WIDTH = 640
+# A fragment ends at each keyframe, so a tile runs this many frames behind its camera.
+TILE_KEYFRAME_INTERVAL = 8
+TILE_BITRATE = 1_000_000
+CAMERA_STALE_AFTER_S = 1.0
+
+Action = Task | dict[str, Any]
+
+
+class CameraView(BaseModel):
+    # The observation key, which also names the tile's stream: ``/video/{name}``.
+    name: str
+    label: str
+    live: bool
+    fps: float
+    # The size of the last frame. ``None`` until the first frame.
+    width: int | None
+    height: int | None
+
+
+class Status(BaseModel):
+    run: RunView
+    cameras: list[CameraView]
+    policy: str
+    host: str
+
+
+class InstructionBody(BaseModel):
+    override: str | None
+
+
+class EndBody(BaseModel):
+    verdict: Verdict
+
+
+class CameraFeed:
+    """One camera's tile: the stream the page plays, and the arrival times that give its frame rate."""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.stream = VideoStream(TILE_FPS, TILE_WIDTH, TILE_KEYFRAME_INTERVAL, TILE_BITRATE)
+        self._arrivals: deque[float] = deque(maxlen=2 * TILE_FPS)
+        self._size: tuple[int, int] | None = None
+        self._lock = threading.Lock()
+
+    def push(self, rgb: np.ndarray, now: float) -> None:
+        self.stream.push(rgb)
+        with self._lock:
+            self._arrivals.append(now)
+            self._size = (rgb.shape[1], rgb.shape[0])
+
+    def view(self, now: float) -> CameraView:
+        with self._lock:
+            arrivals, size = list(self._arrivals), self._size
+        live = bool(arrivals) and now - arrivals[-1] < CAMERA_STALE_AFTER_S
+        span = arrivals[-1] - arrivals[0] if live else 0.0
+        return CameraView(
+            name=self.name,
+            label=self.name.removeprefix(keys.IMAGE_PREFIX).replace('_', ' '),
+            live=live,
+            fps=(len(arrivals) - 1) / span if span > 0 else 0.0,
+            width=size[0] if size else None,
+            height=size[1] if size else None,
+        )
+
+
+def _raise_if_stopped(server_thread: threading.Thread) -> None:
+    if not server_thread.is_alive():
+        raise RuntimeError('The station console web server stopped')
+
+
+class StationConsole(pimm.ControlSystem):
+    """Serves the station page and turns its presses into episodes.
+
+    Connect each camera to ``cameras``, ``run_trial`` to a handler that runs a trial as an episode, and ``done`` to
+    the harness. Schedule it as a background control system, so the harness never waits for the encoders or the
+    web server. ``next_task`` makes the trials, and ``policy`` is the text the page shows for the policy.
+    """
+
+    def __init__(self, next_task: Callable[[], Task], *, policy: str, host: str, port: int):
+        self._next_task = next_task
+        self._policy = policy
+        self._host = host
+        self._port = port
+        self.cameras = pimm.ReceiverDict(self)
+        self.run_trial = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
+        self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        station = Station(self._next_task)
+        feeds = {name: CameraFeed(name) for name in self.cameras}
+        actions: queue.SimpleQueue[Action] = queue.SimpleQueue()
+        app = self.build_app(station, feeds, actions.put, clock, should_stop)
+        # The legacy asyncio `websockets` backend drains the transport from its reader and keepalive coroutines
+        # while the video loop sends, and an assertion then kills the feed. The sans-io backend serializes writes.
+        config = uvicorn.Config(
+            app, host=self._host, port=self._port, ws='websockets-sansio', log_level='warning', access_log=False
+        )
+        server = uvicorn.Server(config)
+        server_thread = threading.Thread(target=server.run, daemon=True)
+        server_thread.start()
+        episode: pimm.calls.Answer[dict[str, Any]] | None = None
+        try:
+            while not server.started:
+                _raise_if_stopped(server_thread)
+                yield pimm.Sleep(0.05)
+            logger.info(f'Station console: http://{self._host}:{self._port}/')
+            limiter = pimm.RateLimiter(clock, hz=TILE_FPS)
+            while not should_stop.value:
+                _raise_if_stopped(server_thread)
+                for name, feed in feeds.items():
+                    if (frame := pimm.value_updated(self.cameras[name])) is not None:
+                        feed.push(frame.array, clock.now())
+                episode = self._drive_episode(station, actions, episode, clock)
+                yield limiter.wait()
+        finally:
+            for feed in feeds.values():
+                feed.stream.close()
+            server.should_exit = True
+            server_thread.join()
+
+    def _drive_episode(
+        self,
+        station: Station,
+        actions: queue.SimpleQueue[Action],
+        episode: pimm.calls.Answer[dict[str, Any]] | None,
+        clock: pimm.Clock,
+    ) -> pimm.calls.Answer[dict[str, Any]] | None:
+        """Send what the page asked for, in order, and record the episode once the harness answers it."""
+        while True:
+            try:
+                action = actions.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(action, Task):
+                episode = self.run_trial(action)
+            else:
+                self.done.emit(action, clock.now_ns())
+        if episode is None or not episode.done():
+            return episode
+        try:  # rules-allow: swallowed-error — the page shows the episode as an error, and the log says why
+            result = episode.result()
+        except Exception:
+            logger.exception('Episode failed')
+            station.close(Outcome.ERROR, clock.now())
+        else:
+            station.close(outcome_of(result), clock.now())
+        return None
+
+    def build_app(
+        self,
+        station: Station,
+        feeds: dict[str, CameraFeed],
+        submit: Callable[[Action], None],
+        clock: pimm.Clock,
+        should_stop: pimm.SignalReceiver,
+    ) -> FastAPI:
+        """The console's HTTP surface. ``submit`` hands a trial or a ``done`` payload to the control loop."""
+        app = FastAPI()
+        app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
+
+        @app.middleware('http')
+        async def refuse_foreign_origins(request: Request, call_next):
+            """A browser sends ``Origin`` with each cross-site POST, so a page on another site cannot start an episode.
+            A client that sends no ``Origin`` passes."""
+            origin = request.headers.get('origin')
+            if request.method != 'GET' and origin is not None and urlparse(origin).netloc != request.url.netloc:
+                return JSONResponse({'detail': 'cross-origin request refused'}, status_code=403)
+            return await call_next(request)
+
+        @app.exception_handler(Refused)
+        async def conflict(request: Request, exc: Refused):
+            return JSONResponse({'detail': str(exc)}, status_code=409)
+
+        def status() -> Status:
+            now = clock.now()
+            cameras = [feed.view(now) for feed in feeds.values()]
+            return Status(run=station.view(now), cameras=cameras, policy=self._policy, host=self._host)
+
+        @app.get('/')
+        async def index():
+            return FileResponse(STATIC_DIR / 'station.html')
+
+        @app.get('/status')
+        async def get_status() -> Status:
+            return status()
+
+        @app.post('/instruction')
+        async def instruction(body: InstructionBody) -> Status:
+            station.set_override(body.override)
+            return status()
+
+        @app.post('/episode/start')
+        async def start() -> Status:
+            submit(station.start(clock.now()))
+            return status()
+
+        @app.post('/episode/end')
+        async def end(body: EndBody) -> Status:
+            submit(station.end(body.verdict))
+            return status()
+
+        @app.websocket('/video/{name}')
+        async def video(websocket: WebSocket, name: str):
+            feed = feeds.get(name)
+            if feed is None:
+                await websocket.close()
+                return
+            await websocket.accept()
+            await _stream(websocket, feed.stream, should_stop)
+
+        return app
+
+
+def _next_fragment(subscriber: queue.Queue[bytes]) -> bytes | None:
+    try:
+        return subscriber.get(timeout=1.0)
+    except queue.Empty:
+        return None
+
+
+async def _stream(websocket: WebSocket, stream: VideoStream, should_stop: pimm.SignalReceiver) -> None:
+    """Send the codec string, the init segment, and then each fragment until the client leaves or the run stops."""
+    subscriber = stream.subscribe()
+    loop = asyncio.get_running_loop()
+    try:
+        while not stream.init_segment and not should_stop.value:
+            await asyncio.sleep(0.05)
+        init = stream.init_segment
+        if not init:
+            return
+        await websocket.send_text(codec_string(init))
+        await websocket.send_bytes(init)
+        while not should_stop.value:
+            fragment = await loop.run_in_executor(None, _next_fragment, subscriber)
+            if fragment is not None:
+                await websocket.send_bytes(fragment)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        stream.unsubscribe(subscriber)

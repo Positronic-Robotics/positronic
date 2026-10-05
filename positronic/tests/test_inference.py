@@ -1,21 +1,35 @@
 import io
 import logging
+import multiprocessing
+import os
+import signal
+import socket
 import sys
+import time
 from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
+from pathlib import Path
 from typing import Any
 
+import httpx
+import numpy as np
+import pos3
 import pytest
+from websockets.sync.client import connect
 
 import pimm
+from pimm.shared_memory import NumpySMAdapter
 from positronic import keys
+from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.serializers import Serializers
 from positronic.drivers import keyboard
-from positronic.eval import Embodiment, Task
+from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
-from positronic.inference import KeyboardOperator, real
+from positronic.inference import KeyboardOperator, TrialForwarder, real, web
 from positronic.policy import Policy
 from positronic.policy.base import Step
+from positronic.policy.harness import Rollout
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 
 
@@ -156,3 +170,171 @@ def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog
 
     assert received == [task]
     assert 'already running' in caplog.text
+
+
+def test_the_web_console_refuses_a_simulated_embodiment():
+    with pytest.raises(ValueError, match='sim'):
+        web(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), next_task=_trial())
+
+
+def test_the_forwarder_runs_each_trial_as_its_rollout_and_returns_the_harness_answer():
+    policy = _IdlePolicy()
+    forwarder = TrialForwarder(partial(Rollout, policy=policy, output_path=None))
+    task = Task(instruction_source='pick', timeout_sec=None)
+    rollouts, answers = [], []
+    with pimm.World(virtual_time=True) as world:
+        trials = world.pair(forwarder.run_trial)
+        harness = world.pair(forwarder.perform_task)
+
+        def ask():
+            answers.append(trials(task))
+
+        def perform():
+            for call in harness.incoming():
+                rollouts.append(call.request)
+                call.set_result({eval_keys.TERMINATED: True})
+
+        drive_scheduler(world.start([forwarder, scripted_driver((ask, 0.05), (perform, 0.05), (None, 0.05))]))
+        assert answers[0].result() == {eval_keys.TERMINATED: True}
+    assert rollouts == [Rollout(task, policy, None)]
+
+
+def test_the_forwarder_hands_a_failed_episode_back_to_its_caller():
+    forwarder = TrialForwarder(partial(Rollout, policy=_IdlePolicy(), output_path=None))
+    answers = []
+    with pimm.World(virtual_time=True) as world:
+        trials = world.pair(forwarder.run_trial)
+        harness = world.pair(forwarder.perform_task)
+
+        def refuse():
+            for call in harness.incoming():
+                call.set_exception(RuntimeError('endpoint down'))
+
+        def ask():
+            answers.append(trials(Task(instruction_source='pick', timeout_sec=None)))
+
+        drive_scheduler(world.start([forwarder, scripted_driver((ask, 0.05), (refuse, 0.05), (None, 0.05))]))
+        with pytest.raises(RuntimeError, match='endpoint down'):
+            answers[0].result()
+
+
+class _Camera(pimm.ControlSystem):
+    """A camera that sends a new frame 15 times a second."""
+
+    def __init__(self):
+        self.frame = pimm.ControlSystemEmitter[NumpySMAdapter](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        adapter = None
+        count = 0
+        while not should_stop.value:
+            adapter = NumpySMAdapter.lazy_init(np.full((120, 160, 3), count % 256, dtype=np.uint8), adapter)
+            self.frame.emit(adapter, clock.now_ns())
+            count += 1
+            yield pimm.Sleep(1 / 15)
+
+
+class _MarkingPolicy(Policy):
+    """Commands nothing, and creates ``marks/episode-<n>`` when the n-th episode's first observation reaches it,
+    so a test outside the run knows that the episode is open."""
+
+    def __init__(self, marks: Path):
+        self._marks = marks
+        self._episodes = 0
+
+    def run(self, runtime):
+        self._episodes += 1
+        number = self._episodes
+        yield
+        (self._marks / f'episode-{number}').touch()
+        while True:
+            yield Step({}, runtime.time_ns + 100_000_000)
+
+
+def _serve_station(port: int, output_dir: Path, marks: Path) -> None:
+    camera, devices = _Camera(), _ReadyDevices()
+    embodiment = Embodiment(
+        descriptor='stub',
+        observations={keys.WRIST_IMAGE: Observation(camera.frame, Serializers.camera_images)},
+        commands={},
+        prepare_handlers={eval_keys.ARM: devices.arm, eval_keys.GRIPPER: devices.gripper},
+        static_meta={},
+        meta_source=None,
+        control_systems=(devices, camera),
+    )
+    with pos3.mirror():
+        web(_MarkingPolicy(marks), embodiment, _trial('pick up the cube'), output_dir=str(output_dir), port=port)
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        return probe.getsockname()[1]
+
+
+def _wait_for(condition: Callable[[], Any], what: str, timeout: float = 90.0) -> Any:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if value := condition():
+            return value
+        time.sleep(0.1)
+    raise AssertionError(f'timed out waiting for {what}')
+
+
+def _status(base: str) -> dict[str, Any] | None:
+    try:
+        return httpx.get(f'{base}/status', timeout=2.0).json()
+    except httpx.TransportError:
+        return None
+
+
+def _run_episode(base: str, marks: Path, number: int, verdict: str) -> dict[str, Any]:
+    httpx.post(f'{base}/episode/start').raise_for_status()
+    _wait_for((marks / f'episode-{number}').exists, f'episode {number} to open')
+    httpx.post(f'{base}/episode/end', json={'verdict': verdict}).raise_for_status()
+
+    def closed():
+        status = _status(base)
+        return status if status and status['run']['phase'] == 'ready' else None
+
+    return _wait_for(closed, f'episode {number} to close')['run']['episodes'][number - 1]
+
+
+@pytest.mark.timeout(240.0)
+def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(tmp_path):
+    """The whole command, in a process of its own: the page streams the camera, and each episode it starts
+    records the instruction it sent, the override flag, its number, and the operator's verdict."""
+    port = _free_port()
+    base = f'http://127.0.0.1:{port}'
+    marks = tmp_path / 'marks'
+    marks.mkdir()
+    output_dir = tmp_path / 'episodes'
+    run = multiprocessing.get_context('spawn').Process(target=_serve_station, args=(port, output_dir, marks))
+    run.start()
+    try:
+        status = _wait_for(lambda: (s := _status(base)) and s['cameras'][0]['live'] and s, 'the camera to be live')
+        assert status['run']['configured'] == 'pick up the cube'
+        with connect(f'ws://127.0.0.1:{port}/video/{keys.WRIST_IMAGE}', open_timeout=10) as tile:
+            codec, _init, fragment = (tile.recv(timeout=10) for _ in range(3))
+            assert isinstance(codec, str) and codec.startswith('avc1.')
+            assert isinstance(fragment, bytes) and fragment[4:8] == b'moof'
+
+        httpx.post(f'{base}/instruction', json={'override': 'pick up the red cube'}).raise_for_status()
+        assert _run_episode(base, marks, 1, 'pass')['outcome'] == 'pass'
+        assert _run_episode(base, marks, 2, 'discarded')['outcome'] == 'discarded'
+    finally:
+        if run.pid is not None and run.is_alive():
+            os.kill(run.pid, signal.SIGINT)
+        run.join(timeout=120)
+        if run.is_alive():
+            run.kill()
+
+    first, second = (episode.static for episode in LocalDataset(output_dir))
+    assert first[keys.TASK] == 'pick up the red cube'
+    assert first[eval_keys.INSTRUCTION_OVERRIDDEN] is True
+    assert first[eval_keys.TRIAL_INDEX] == 0
+    assert first[eval_keys.SUCCESS] is True
+    assert first[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_OPERATOR
+    assert second[eval_keys.TRIAL_INDEX] == 1
+    assert second[eval_keys.DISCARDED] is True
+    assert eval_keys.SUCCESS not in second

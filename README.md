@@ -142,7 +142,7 @@ After installation, the following command-line scripts will be available:
 - `positronic-server`: Browse and inspect datasets
 - `lerobot-0_3_3-convert`: Convert datasets to model format
 - `positronic`: Run evals in simulation or on hardware, and read back the ones sent to the platform
-- `positronic-inference`: Run an attended keyboard session on hardware
+- `positronic-inference`: Run an attended session on hardware, from the keyboard or from a browser console
 
 All commands work both inside an activated virtual environment and with `uv run --locked` prefix (e.g., `uv run --locked positronic-server`). Use `--locked` so the installed environment matches the committed `uv.lock` — uv errors loudly if you edited `pyproject.toml` without re-running `uv lock`.
 
