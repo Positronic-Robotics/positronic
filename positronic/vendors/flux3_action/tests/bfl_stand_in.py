@@ -10,6 +10,7 @@ import enum
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -35,11 +36,12 @@ def _summary(value: Any) -> Any:
 
 
 def main() -> None:
-    log_path, mode_token, *argv = sys.argv[1:]
+    log_token, mode_token, *argv = sys.argv[1:]
+    log_path = Path(log_token)
     mode = Mode(mode_token)
 
     def record(entry: dict[str, Any]) -> None:
-        with open(log_path, 'a') as log:
+        with log_path.open('a') as log:
             log.write(json.dumps(entry) + '\n')
 
     def handle(connection: ServerConnection) -> None:
