@@ -1,9 +1,7 @@
 name: Build and Push the FLUX 3 Action Image
 
-# A pull request builds and checks the image; main also pushes it. Main republishes on a change to the recipe,
-# the FLUX server code or the session protocol (`model_server/`), because each publish uploads 25 GB of new
-# layers; run the workflow by hand after another change to the code the image bakes in. A test-only change
-# builds nothing.
+# A pull request builds and checks the image, and main pushes it. Each push uploads 25 GB of new layers, so
+# after another change to the positronic code the image bakes in, run the workflow by hand.
 on:
   pull_request:
     branches:
