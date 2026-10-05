@@ -4,9 +4,8 @@
 Usage (from the repository root)
   uv run --package positronic-platform-client --no-dev docker/check_image_budget.py positro/<name>:local
 
-Reads one `docker save` stream and needs `pigz`. A push compresses each layer with gzip at its default
-level, and this compresses the stream at level 1, so the compressed size it prints is an upper estimate.
-The unpacked size and the file count are the platform's own counts. Exits 1 when the image is over a budget.
+Needs `pigz`. The compressed size is an upper estimate: this compresses at gzip level 1, and a push at the
+default level. Exits 1 when the image is over a budget.
 """
 
 import math
