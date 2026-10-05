@@ -52,7 +52,7 @@ help:
 	@echo "Targets:"
 	@echo "  make build-training  Build the training image"
 	@echo "  make build-galaxea   Build the internal non-commercial evaluation image"
-	@echo "  make build-flux3-action  Build the FLUX 3 Action image (about 34 GB on disk)"
+	@echo "  make build-flux3-action  Build the FLUX 3 Action image (about 36 GB on disk)"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
 	@echo "  make tag-training    Tag the training image (depends on build-training)"

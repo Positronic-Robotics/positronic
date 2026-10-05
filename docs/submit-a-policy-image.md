@@ -74,30 +74,19 @@ address.
 
 ### FLUX 3 Action
 
-`positro/flux3-action` holds FLUX 3 Action DROID, Black Forest Labs' serving code, and every weight
-the server loads. It needs no network at start and no arguments. CI builds it when its recipe
-changes, and tags each build with the commit. Read its digest with
-`docker/read_image_digest.sh positro/flux3-action:main`.
+`positro/flux3-action` holds FLUX 3 Action DROID, the serving code of Black Forest Labs (BFL), and
+every weight the server loads. It serves the session protocol, and the platform runs the published image as a
+submission. CI builds it when its recipe changes, and tags each build with the commit. Read its digest
+with `docker/read_image_digest.sh positro/flux3-action:main`.
 
-The image serves the roboarena wire, not the session protocol:
-
-- `GET /healthz` answers 200 once the model is loaded and warm. A session opens on the root, `/`.
-- On connect, the server sends its config: three 360x640 views, the wrist view included, and
-  `joint_position` actions.
-- With `AUTH_TOKEN` set, every request must carry `Authorization: Bearer <token>`, `/healthz`
-  included. With it unset, the server serves open.
-- The server compiles the model for about 140 s before it binds port 8000. Its GPU memory peaks at
-  about 33 000 MiB.
-
-The platform runs a submitted image over the `websocket` wire only
-([Eval plans](../client/README.md#eval-plans)), so it does not run this image as a submission. Use
-the image as a reference: copy the recipe, or run the image on your own GPU. Start it as the
-[test below](#test-the-image-before-you-submit) does, then call `/healthz`:
-
-```bash
-docker exec policy /opt/flux-action/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/healthz', headers={'Authorization': 'Bearer test'})).read())"
-```
+- The image holds two Python environments. positronic's server answers on port 8000. It starts BFL's
+  own server in BFL's environment, on port 9000 inside the container, and sends it each observation.
+- The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
+  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
+  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
+  `droid_3cam` in the recipe's `ENTRYPOINT`.
+- BFL's server compiles the model for about 140 s, and port 8000 binds after it. The GPU memory peaks
+  at about 33 000 MiB.
 
 ### Build and push
 
@@ -216,10 +205,12 @@ docker run --rm --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
 In a correct image, the server pins its checkpoint, starts the model process, and reads the
 weights from the image. The GR00T recipe then fails on the missing GPU with
 `Flash Attention 2 is not available on CPU`. The openpi and MolmoAct2 recipes load the model on the
-CPU and serve. Everything you control is then correct. The run must not print `NameResolutionError`,
-`dns error` or `OfflineModeIsEnabled`, and it must not hang. albumentations prints a `UserWarning`
-about fetching its version; ignore it. MolmoAct2 prints `A new version of the following files was
-downloaded` when `transformers` copies the model's code into its module cache; no download occurs.
+CPU and serve. For the FLUX 3 Action recipe, BFL's server exits on the missing GPU, and the server
+reports `FLUX 3 Action backend exited with code 1`. Everything you control is then correct. The run must
+not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it must not hang.
+albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints `A new
+version of the following files was downloaded` when `transformers` copies the model's code into its
+module cache; no download occurs.
 
 On a machine with a GPU, serve it with the network denied and call the keepalive route from inside
 the container with the token:
