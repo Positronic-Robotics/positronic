@@ -17,8 +17,8 @@ the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: Mo
 vendor stack. These three recipes add the weights, the positronic source with an offline
 environment, `EXPOSE 8000` and a start command. Their layers go from the least often changed to the
 most: base, weights, dependencies, source. A source change rebuilds and pushes the source layer only.
-The FLUX 3 Action recipe builds the vendor stack itself, and CI publishes the image. Build from the
-root of a positronic checkout:
+The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves, and CI publishes each
+image. Build from the root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
@@ -26,6 +26,7 @@ root of a positronic checkout:
 | GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
 | MolmoAct2 DROID | [`docker/Dockerfile.submit-molmoact2`](../docker/Dockerfile.submit-molmoact2) | `ghcr.io/astral-sh/uv:python3.13-bookworm` | `allenai/MolmoAct2-DROID` at a pinned revision |
 | FLUX 3 Action DROID | [`docker/Dockerfile.flux3-action`](../docker/Dockerfile.flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
+| Cosmos3-Nano DROID | [`docker/Dockerfile.cosmos3-nano`](../docker/Dockerfile.cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
 
 The header of each recipe gives its build command. The comments in each recipe say where a
 checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM
@@ -87,6 +88,27 @@ with `docker/read_image_digest.sh positro/flux3-action:main`.
   `droid_3cam` in the recipe's `ENTRYPOINT`.
 - BFL's server compiles the model for about 140 s, and port 8000 binds after it. The GPU memory peaks
   at about 33 000 MiB.
+
+### Cosmos3-Nano
+
+`positro/cosmos3-nano` holds Cosmos3-Nano-Policy-DROID, NVIDIA's action server with its environment,
+and the Wan2.2 VAE the model loads. It serves the session protocol, and the platform runs the
+published image as a submission. CI builds it when its recipe or the positronic source it installs
+changes, and tags each build with the commit. Read its digest with
+`docker/read_image_digest.sh positro/cosmos3-nano:main`.
+
+- The image holds two Python environments. positronic's server answers on port 8000. It starts
+  NVIDIA's server in NVIDIA's environment, on port 9000 inside the container, and sends it each
+  observation.
+- The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
+  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
+  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
+  `droid_3cam` in the recipe's `ENTRYPOINT`.
+- The client plays each chunk of 32 actions in full, and a gripper value above 0.5 closes the
+  gripper, as in NVIDIA's RoboLab client.
+- The guardrails are off. Their model repository is gated, and they serve only the video and text
+  generation paths, which the action server does not use.
+- The GPU memory peaks at about 32 500 MiB.
 
 ### Build and push
 
@@ -206,11 +228,12 @@ In a correct image, the server pins its checkpoint, starts the model process, an
 weights from the image. The GR00T recipe then fails on the missing GPU with
 `Flash Attention 2 is not available on CPU`. The openpi and MolmoAct2 recipes load the model on the
 CPU and serve. For the FLUX 3 Action recipe, BFL's server exits on the missing GPU, and the server
-reports `FLUX 3 Action backend exited with code 1`. Everything you control is then correct. The run must
-not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it must not hang.
-albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints `A new
-version of the following files was downloaded` when `transformers` copies the model's code into its
-module cache; no download occurs.
+reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano recipe, NVIDIA's server exits
+the same way, and the server reports `Cosmos3 backend exited with code 1`. Everything you control is then
+correct. The run must not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it
+must not hang. albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2
+prints `A new version of the following files was downloaded` when `transformers` copies the model's code
+into its module cache; no download occurs.
 
 On a machine with a GPU, serve it with the network denied and call the keepalive route from inside
 the container with the token:
