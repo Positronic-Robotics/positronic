@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, Generic, TypeVar, overload
 
-from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
+from pimm.time import RECEIVED_WORLD
 
 from .signal import RECORDED_TIME, Signal
 from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timeline, validate_timelines
@@ -205,20 +205,14 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
 
 
 def select_timeline(timelines: Iterable[str], *, timeline: str | None = None) -> str:
-    """Choose a viewing/playback axis from the available names.
-
-    Prefer simulation receipt, then wall receipt. Legacy recordings retain their stored
-    timeline; ambiguous recordings require an explicit selection.
-    """
+    """Use world receipt time, legacy recorded time, or an explicitly requested timeline."""
     available = set(timelines)
     if timeline is not None:
         validate_timeline(timeline)
         if timeline not in available:
             raise KeyError(timeline)
         return timeline
-    for name in (RECEIVED_WORLD, RECEIVED_WALL, RECORDED_TIME):
+    for name in (RECEIVED_WORLD, RECORDED_TIME):
         if name in available:
             return name
-    if len(available) == 1:
-        return available.pop()
     raise ValueError(f'Select an explicit timeline from {sorted(available)}')

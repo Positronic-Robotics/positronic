@@ -40,7 +40,7 @@ class AbsolutePositionAction(Codec):
             pose,
             episode[self.tgt_grip_key],
             dtype=np.float32,
-            timelines=(select_timeline(set(pose.timelines) & set(episode[self.tgt_grip_key].timelines)),),
+            timelines=(select_timeline(pose.timelines + episode[self.tgt_grip_key].timelines),),
         )
 
     @property
@@ -86,11 +86,7 @@ class AbsoluteJointsAction(Codec):
             episode[self.tgt_joints_key],
             episode[self.tgt_grip_key],
             dtype=np.float32,
-            timelines=(
-                select_timeline(
-                    set(episode[self.tgt_joints_key].timelines) & set(episode[self.tgt_grip_key].timelines)
-                ),
-            ),
+            timelines=(select_timeline(episode[self.tgt_joints_key].timelines + episode[self.tgt_grip_key].timelines),),
         )
 
     @property

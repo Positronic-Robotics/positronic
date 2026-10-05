@@ -463,6 +463,13 @@ def _bg_wrapper(
         stop_event.set()
 
 
+class _WallOnlyClock(SystemClock):
+    """A host clock without access to the world's time."""
+
+    def time(self) -> Time:
+        return Time(wall=self.now_ns())
+
+
 class World:
     """Utility class to bind and run control loops."""
 
@@ -519,6 +526,10 @@ class World:
     def clock(self) -> Clock:
         """The clock this world schedules against (wall or virtual)."""
         return self._clock
+
+    @property
+    def _background_clock(self) -> Clock:
+        return _WallOnlyClock() if isinstance(self._clock, VirtualClock) else self._clock
 
     @property
     def should_stop(self) -> bool:
@@ -758,7 +769,7 @@ class World:
         local_cs = set(in_process)
         all_cs = local_cs | set(spawned)
 
-        system_clock = SystemClock()
+        background_clock = self._background_clock
         local_connections, mp_connections = [], []
         for emitter, receiver, emitter_wrp, receiver_wrp in self._connections:
             if emitter.owner in local_cs and receiver.owner in local_cs:
@@ -768,7 +779,7 @@ class World:
             elif receiver.owner not in all_cs:
                 raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
-                clock = self._clock if emitter.owner in local_cs else system_clock
+                clock = self._clock if emitter.owner in local_cs else background_clock
                 mp_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, clock))
 
         for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, _clock in local_connections:
@@ -784,8 +795,7 @@ class World:
             grouped_mp_connections[emitter].append((emitter_wrp, receiver_wrp, receiver, maxsize, clock))
 
         for emitter_logical, receivers_logical in grouped_mp_connections.items():
-            # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
-            # have to serialise our local clock to the other process, which is not what we want.
+            # Simulation time is shared only by endpoints in the main process.
             num_receivers = len(receivers_logical)
             emitter_wrp, _, _, maxsize, clock = receivers_logical[0]  # parameters the same for all receivers
 
@@ -803,7 +813,7 @@ class World:
                 clock=clock,
                 num_receivers=num_receivers,
                 receiver_clocks=[
-                    self._clock if receiver.owner in local_cs else system_clock
+                    self._clock if receiver.owner in local_cs else background_clock
                     for _, _, receiver, _, _ in receivers_logical
                 ],
                 **kwargs,
@@ -854,10 +864,9 @@ class World:
                 name = f'{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}'
             else:
                 name = getattr(bg_loop, '__name__', 'anonymous')
-            # TODO: now we allow only real clock, change clock to a Emitter?
             p = self._mp_ctx.Process(
                 target=_bg_wrapper,
-                args=(bg_loop, self._stop_event, SystemClock(), name, parent_component_levels),
+                args=(bg_loop, self._stop_event, self._background_clock, name, parent_component_levels),
                 daemon=True,
                 name=name,
             )

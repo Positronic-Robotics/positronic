@@ -122,7 +122,7 @@ class DroidCodec(Codec):
 
         def derive_action(episode):
             signals = [derive(episode) for derive in state_encoders.values()]
-            timeline = select_timeline(set.intersection(*(set(signal.timelines) for signal in signals)))
+            timeline = select_timeline(name for signal in signals for name in signal.timelines)
             return tf.concat(*signals, timelines=(timeline,), dtype=np.float32)
 
         return Derive(

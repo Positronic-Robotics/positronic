@@ -472,5 +472,5 @@ def ik_joints_from_episode(episode, solver_cls, tgt_ee_pose_key, current_q_key):
         episode[current_q_key],
         targets,
         solver.solve,
-        timelines=(select_timeline(set(episode[current_q_key].timelines) & set(targets.timelines)),),
+        timelines=(select_timeline(episode[current_q_key].timelines + targets.timelines),),
     )

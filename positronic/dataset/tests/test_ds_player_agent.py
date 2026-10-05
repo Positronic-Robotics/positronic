@@ -4,6 +4,7 @@ import pimm
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic.dataset.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand
 from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter, drive_until
 
@@ -152,7 +153,7 @@ def test_raises_for_static_only_output(world):
         next(scheduler)
 
 
-@pytest.mark.parametrize('axis', [RECEIVED_WORLD, RECEIVED_WALL, 'legacy.clock'])
+@pytest.mark.parametrize('axis', [RECEIVED_WORLD, RECORDED_TIME])
 def test_default_axis_plays_new_and_legacy_recordings(world, axis):
     outputs = {'a': RecordingEmitter()}
     agent, commands, finished = create_agent(outputs)
@@ -162,12 +163,25 @@ def test_default_axis_plays_new_and_legacy_recordings(world, axis):
     assert [(time['playback.scheduled'], value) for time, value in outputs['a'].emitted] == [(0, 1), (200, 2)]
 
 
-def test_default_axis_prefers_world_receipt_over_wall(world):
+def test_default_axis_uses_world_receipt(world):
     outputs = {'a': RecordingEmitter()}
     agent, commands, finished = create_agent(outputs)
     episode = EpisodeContainer({
         'a': DummySignal([[100, 1000], [300, 9000]], [1, 2], timelines=(RECEIVED_WORLD, RECEIVED_WALL))
     })
     commands.push(DsPlayerStartCommand(episode))
+    drive_until(world.interleave(agent.run), lambda: bool(finished.emitted))
+    assert [time['playback.scheduled'] for time, _ in outputs['a'].emitted] == [0, 200]
+
+
+@pytest.mark.parametrize('axis', [RECEIVED_WALL, 'legacy.clock'])
+def test_other_timelines_require_explicit_selection(world, axis):
+    outputs = {'a': RecordingEmitter()}
+    agent, commands, finished = create_agent(outputs)
+    episode = EpisodeContainer({'a': DummySignal([100, 300], [1, 2], timelines=(axis,))})
+    commands.push(DsPlayerStartCommand(episode))
+    with pytest.raises(ValueError, match='explicit timeline'):
+        next(world.interleave(agent.run))
+    commands.push(DsPlayerStartCommand(episode, timeline=axis))
     drive_until(world.interleave(agent.run), lambda: bool(finished.emitted))
     assert [time['playback.scheduled'] for time, _ in outputs['a'].emitted] == [0, 200]

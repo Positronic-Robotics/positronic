@@ -141,7 +141,8 @@ class Clock(ABC):
 
 class SystemClock(Clock):
     def time(self) -> Time:
-        return Time(wall=self.now_ns())
+        now = self.now_ns()
+        return Time(wall=now, world=now)
 
     def now(self) -> float:
         return time.monotonic()

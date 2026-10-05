@@ -124,13 +124,15 @@ class _Playback:
                 raise ValueError(f'Requested output {name!r} is static and cannot be emitted')
             selected.append(episode.signals[name])
         timeline = select_timeline(
-            set.intersection(*(set(signal.timelines) for signal in selected)), timeline=command.timeline
+            (name for signal in selected for name in signal.timelines), timeline=command.timeline
         )
         playback = cls(command, start_clock_ns, timeline)
         start = Time(**{timeline: command.start_ts}) if command.start_ts is not None else None
         end = Time(**{timeline: command.end_ts}) if command.end_ts is not None else None
 
         for name, signal in zip(output_names, selected, strict=True):
+            if timeline not in signal.timelines:
+                raise KeyError(timeline)
             playback.streams[name] = iter(signal if start is None and end is None else signal.time[start:end])
             playback.schedule_next(name)
 

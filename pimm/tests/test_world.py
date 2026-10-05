@@ -76,6 +76,25 @@ def test_producers_cannot_override_framework_time(name):
         assert receiver.read() is None
 
 
+@pytest.mark.parametrize('transport', ['local', 'queue', 'shared_memory'])
+def test_real_world_time_equals_wall_time(transport):
+    with World() as world:
+        if transport == 'local':
+            emitter, receiver = world.local_pipe()
+        else:
+            mode = TransportMode.QUEUE if transport == 'queue' else TransportMode.SHARED_MEMORY
+            emitter, receiver = world.mp_pipes(transport=mode)
+        assert isinstance(receiver, SignalReceiver)
+        emitter.emit(DummySMValue(42) if transport == 'shared_memory' else 42)
+        message = receiver.read()
+        assert message is not None
+        assert message.time[EMITTED_WORLD] == message.time[EMITTED_WALL]
+        assert message.time[RECEIVED_WORLD] == message.time[RECEIVED_WALL]
+        assert message.time[EMITTED_WORLD] <= message.time[RECEIVED_WORLD]
+        cached = receiver.read()
+        assert cached is not None and cached.time == message.time and not cached.updated
+
+
 def test_fanout_preserves_emission_but_stamps_each_receiver(monkeypatch):
     system = DummyControlSystem('source')
 
@@ -99,11 +118,12 @@ def test_fanout_preserves_emission_but_stamps_each_receiver(monkeypatch):
         assert cached is not None and cached.time == first.time
 
 
-def test_background_emission_has_no_world_clock(monkeypatch):
+@pytest.mark.parametrize('virtual_time', [False, True])
+def test_background_endpoints_have_world_time_only_on_hardware(monkeypatch, virtual_time):
     main = DummyControlSystem('main')
     background = DummyControlSystem('background')
     monkeypatch.setattr(World, 'start_in_subprocess', lambda *args: None)
-    with World(virtual_time=True) as world:
+    with World(virtual_time=virtual_time) as world:
         world.connect(background.emitter, main.receiver)
         world.connect(main.emitter, background.receiver)
         world.start(main, background)
@@ -112,8 +132,13 @@ def test_background_emission_has_no_world_clock(monkeypatch):
         received_in_main = main.receiver.read()
         received_in_background = background.receiver.read()
         assert received_in_main is not None and received_in_background is not None
-        assert set(received_in_main.time) == {EMITTED_WALL, RECEIVED_WALL, RECEIVED_WORLD}
-        assert set(received_in_background.time) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL}
+        if virtual_time:
+            assert set(received_in_main.time) == {EMITTED_WALL, RECEIVED_WALL, RECEIVED_WORLD}
+            assert set(received_in_background.time) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL}
+        else:
+            for message in (received_in_main, received_in_background):
+                assert message.time[EMITTED_WORLD] == message.time[EMITTED_WALL]
+                assert message.time[RECEIVED_WORLD] == message.time[RECEIVED_WALL]
 
 
 def test_emitter_wrapper_follows_the_clock_bound_after_its_creation():

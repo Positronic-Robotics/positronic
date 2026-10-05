@@ -52,11 +52,9 @@ class ObservationCodec(Codec):
 
     def _derive_state(self, out_name: str, episode: Episode) -> Signal[Any]:
         state_features = self._state[out_name]
-        return transforms.concat(
-            *[episode[k] for k in state_features],
-            dtype=np.float32,
-            timelines=(select_timeline(set.intersection(*(set(episode[k].timelines) for k in state_features))),),
-        )
+        signals = [episode[k] for k in state_features]
+        timeline = select_timeline(name for signal in signals for name in signal.timelines)
+        return transforms.concat(*signals, dtype=np.float32, timelines=(timeline,))
 
     def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
         input_key, (width, height) = self._image_configs[out_name]

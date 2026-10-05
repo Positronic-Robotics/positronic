@@ -49,7 +49,7 @@ def cmd_lag(
     cmd = episode.signals[cmd_signal]
     ee = episode.signals[state_signal]
     if timelines is None:
-        timelines = (select_timeline(set(cmd.timelines) & set(ee.timelines)),)
+        timelines = (select_timeline(cmd.timelines + ee.timelines),)
 
     def fn(pairs):
         arr = np.array(pairs)  # (batch, 2, dim)

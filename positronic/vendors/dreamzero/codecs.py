@@ -178,9 +178,7 @@ class DreamZeroActionCodec(Codec):
             episode[self._tgt_joints_key],
             episode[self._tgt_grip_key],
             timelines=(
-                select_timeline(
-                    set(episode[self._tgt_joints_key].timelines) & set(episode[self._tgt_grip_key].timelines)
-                ),
+                select_timeline(episode[self._tgt_joints_key].timelines + episode[self._tgt_grip_key].timelines),
             ),
             dtype=np.float32,
         )
