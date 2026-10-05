@@ -24,6 +24,7 @@ from positronic.policy.codec import (
     BinarizeGripTraining,
     ChangeEEFrame,
     Codec,
+    EncodeImages,
     FlipGrip,
     Metadata,
     RestrictImageSize,
@@ -711,6 +712,7 @@ def test_non_deliverable_codec_is_rejected():
 def test_wire_names_match_the_registered_components():
     instances = {
         'chunked_schedule': ChunkedSchedule(fps=10),
+        'encode_images': EncodeImages([['camera']]),
         'stop_on_fault': PauseOnUnavailable(),
         'temporal_stack': TemporalStack(('v',), (0.0,)),
         'binarize_grip_training': BinarizeGripTraining(('grip',)),

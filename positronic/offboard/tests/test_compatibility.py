@@ -281,7 +281,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
     assert len(observations) == 1  # V1 closes the transport without an end-session request.
 
 
-@pytest.mark.parametrize('version', [3, 99])
+@pytest.mark.parametrize('version', [4, 99])
 def test_unknown_protocol_closes_before_any_request(start_server, make_mock_model, monkeypatch, version):
     monkeypatch.setattr(legacy_protocol, 'CURRENT_VERSION', version)
     model = make_mock_model([], {})

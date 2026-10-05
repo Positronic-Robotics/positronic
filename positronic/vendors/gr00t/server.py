@@ -11,9 +11,9 @@ import msgpack_numpy as mnp
 import numpy as np
 import pos3
 import zmq
+from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup

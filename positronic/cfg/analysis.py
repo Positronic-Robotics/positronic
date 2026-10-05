@@ -5,6 +5,7 @@ from functools import partial
 import configuronic as cfn
 import numpy as np
 import pos3
+from positronic_model_server import keys as offboard_keys
 
 import positronic.cfg.ds as base_cfg
 from pimm.logging import init_logging
@@ -14,7 +15,6 @@ from positronic.cfg.eval.real import tasks
 from positronic.dataset.episode import META_CREATED_TS_NS, Episode, select_timeline
 from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
-from positronic.offboard import keys as offboard_keys
 from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig

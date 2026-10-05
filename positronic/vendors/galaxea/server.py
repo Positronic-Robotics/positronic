@@ -10,12 +10,12 @@ import configuronic as cfn
 import msgpack
 import numpy as np
 import pos3
+from positronic_model_server import keys as offboard_keys
 from positronic_model_server.serialization import serialize
 from websockets.sync.client import ClientConnection, connect
 
 from pimm.logging import init_logging
 from positronic import keys
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import wait_for_subprocess_ready, warmup
 from positronic.offboard.spec import Model, PolicyDeployment

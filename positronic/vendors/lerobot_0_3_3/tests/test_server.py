@@ -2,11 +2,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
+from positronic_model_server import keys as offboard_keys
+from positronic_model_server import server_wire, websocket_wire
 from starlette.datastructures import QueryParams
 from starlette.websockets import WebSocketState
 
-from positronic.offboard import keys as offboard_keys
-from positronic.offboard import server_wire, websocket_wire
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy.observation import TASK_FIELD

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from positronic_model_server import keys as offboard_keys
 from positronic_model_server import protocol
 from positronic_wire import grpc, registry, websocket, wire
 
@@ -18,7 +19,6 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Transform3D
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,

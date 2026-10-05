@@ -13,6 +13,7 @@ delegates to ``pack`` / ``unpack`` for the rest.
 import collections.abc as cabc
 import functools
 import io
+from dataclasses import dataclass
 from typing import Any
 
 import msgpack
@@ -30,6 +31,46 @@ _FRAMES = b'frames'
 _NDIM = b'ndim'
 
 DEFAULT_JPEG_QUALITY = 90
+
+
+@dataclass(frozen=True)
+class JpegEncoding:
+    """An explicit mapping/list path to an RGB image; an empty path selects the whole value."""
+
+    path: tuple[str | int, ...]
+    quality: int = DEFAULT_JPEG_QUALITY
+
+    def __post_init__(self) -> None:
+        if any(type(part) not in (str, int) for part in self.path):
+            raise ValueError('Image paths contain only mapping keys and list indices')
+        if type(self.quality) is not int or not 0 <= self.quality <= 100:
+            raise ValueError('JPEG quality must be an integer between 0 and 100')
+
+    def encode(self, value: Any) -> Any:
+        """Copy the selected container path and encode its leaf, preserving unrelated values."""
+
+        def at(node: Any, path: tuple[str | int, ...]) -> Any:
+            if not path:
+                if not isinstance(node, np.ndarray):
+                    raise ValueError(f'JPEG path {self.path!r} does not select an array')
+                return encode_jpeg(node, self.quality)
+            key, *rest = path
+            if isinstance(node, cabc.Mapping):
+                return {**node, key: at(node[key], tuple(rest))}
+            if isinstance(node, list | tuple) and type(key) is int:
+                copy = list(node)
+                copy[key] = at(node[key], tuple(rest))
+                return tuple(copy) if isinstance(node, tuple) else copy
+            raise ValueError(f'JPEG path {self.path!r} does not match the value')
+
+        return at(value, self.path)
+
+
+def encode_images(value: Any, encodings: cabc.Sequence[JpegEncoding]) -> Any:
+    """Encode only the explicitly selected images, in observations or model results."""
+    for encoding in encodings:
+        value = encoding.encode(value)
+    return value
 
 
 def encode_jpeg(image: np.ndarray, quality: int = DEFAULT_JPEG_QUALITY) -> dict[bytes, Any]:

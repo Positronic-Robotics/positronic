@@ -5172,7 +5172,7 @@ dependencies = [
     { name = "plotly" },
     { name = "pos3" },
     { name = "positronic-eval-vocabulary" },
-    { name = "positronic-model-server" },
+    { name = "positronic-model-server", extra = ["grpc", "websocket"] },
     { name = "positronic-platform-client" },
     { name = "positronic-wire", extra = ["grpc", "websocket"] },
     { name = "psutil" },
@@ -5318,7 +5318,7 @@ requires-dist = [
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
     { name = "positronic-eval-vocabulary", editable = "vocabulary" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
-    { name = "positronic-model-server", editable = "model_server" },
+    { name = "positronic-model-server", extras = ["websocket", "grpc"], editable = "model_server" },
     { name = "positronic-platform-client", editable = "client" },
     { name = "positronic-wire", extras = ["websocket", "grpc"], editable = "wire" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
@@ -5394,7 +5394,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/16/45/029c72cffe797d826
 
 [[package]]
 name = "positronic-model-server"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },
@@ -5410,6 +5410,8 @@ grpc = [
 ]
 websocket = [
     { name = "positronic-wire", extra = ["websocket"] },
+    { name = "starlette" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -5420,6 +5422,8 @@ requires-dist = [
     { name = "positronic-wire", editable = "wire" },
     { name = "positronic-wire", extras = ["grpc"], marker = "extra == 'grpc'", editable = "wire" },
     { name = "positronic-wire", extras = ["websocket"], marker = "extra == 'websocket'", editable = "wire" },
+    { name = "starlette", marker = "extra == 'websocket'", specifier = ">=0.37" },
+    { name = "uvicorn", marker = "extra == 'websocket'", specifier = ">=0.35" },
 ]
 provides-extras = ["websocket", "grpc"]
 

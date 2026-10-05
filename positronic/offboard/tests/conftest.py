@@ -7,11 +7,11 @@ from typing import Any, NamedTuple
 from unittest.mock import MagicMock
 
 import pytest
+from positronic_model_server import grpc_wire, server_wire, websocket_wire
 from positronic_wire import wire
 from positronic_wire.grpc import GrpcClientWire
 from positronic_wire.websocket import WebsocketClientWire, WebsocketUnixClientWire
 
-from positronic.offboard import grpc_wire, server_wire, websocket_wire
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.processors import ChunkedSchedule

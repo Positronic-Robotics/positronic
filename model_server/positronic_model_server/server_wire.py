@@ -8,8 +8,6 @@ import dataclasses
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from starlette.datastructures import QueryParams
-
 from . import keys
 
 
@@ -53,7 +51,7 @@ class ServerConnection(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def query_params(self) -> QueryParams:
+    def query_params(self) -> list[tuple[str, str]]:
         """The session params the client asked for."""
 
     @abc.abstractmethod

@@ -8,7 +8,8 @@ from positronic_wire import wire
 
 pytest.importorskip('huggingface_hub')
 
-from positronic.offboard import keys as offboard_keys  # noqa: E402
+from positronic_model_server import keys as offboard_keys  # noqa: E402
+
 from positronic.vendors.dreamzero import roboarena, server  # noqa: E402
 from positronic.vendors.dreamzero.server import (  # noqa: E402
     _checkpoint_id,

@@ -12,10 +12,12 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, WebSocketException, status
 from positronic_wire import wire
-from starlette.datastructures import QueryParams
-from starlette.websockets import WebSocketState
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route, WebSocketRoute
+from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
 from . import keys, server_wire
 
@@ -47,8 +49,8 @@ class WebsocketServerConnection(server_wire.ServerConnection):
         return self._served_address
 
     @property
-    def query_params(self) -> QueryParams:
-        return self._websocket.query_params
+    def query_params(self) -> list[tuple[str, str]]:
+        return self._websocket.query_params.multi_items()
 
     async def send(self, message: bytes) -> None:
         # starlette refuses a send after the close with a bare RuntimeError, which a caller reads as a bug.
@@ -206,7 +208,7 @@ class WebsocketWire(server_wire.Wire):
             # A wire asked for port 0 binds any free one, so what it serves on is known only now.
             bound_port = self._sockets[0].getsockname()[1]
             self._served_address = server_wire.ServedHostPort(host, bound_port)
-        app = FastAPI()
+        app = Starlette()
         self._route_sessions(app, session, authorized)
         self._route_keepalive(app, keepalive, authorized)
         config = uvicorn.Config(
@@ -223,15 +225,12 @@ class WebsocketWire(server_wire.Wire):
         self._server = uvicorn.Server(config)
 
     def _route_sessions(
-        self, app: FastAPI, session: server_wire.SessionHandler, authorized: server_wire.Authorized
+        self, app: Starlette, session: server_wire.SessionHandler, authorized: server_wire.Authorized
     ) -> None:
-        async def require_auth(websocket: WebSocket) -> None:
-            """Refuse before ``accept()``. An unauthorized peer never reaches the session handshake."""
-            if not authorized(websocket.headers):
-                raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
-
         async def serve_model(websocket: WebSocket) -> None:
-            """Serve the server's one model. Every query param is a pipeline override."""
+            if not authorized(websocket.headers):
+                await websocket.close(code=1008)
+                return
             await websocket.accept()
             await session(WebsocketServerConnection(websocket, self.served_address))
             if (
@@ -244,22 +243,20 @@ class WebsocketWire(server_wire.Wire):
                 if websocket.client_state is WebSocketState.CONNECTED:
                     await websocket.close()
 
-        app.websocket(wire.SESSION_PATH, dependencies=[Depends(require_auth)])(serve_model)
+        app.routes.append(WebSocketRoute(wire.SESSION_PATH, serve_model))
 
     @staticmethod
     def _route_keepalive(
-        app: FastAPI, keepalive: server_wire.KeepaliveHandler, authorized: server_wire.Authorized
+        app: Starlette, keepalive: server_wire.KeepaliveHandler, authorized: server_wire.Authorized
     ) -> None:
         """Answer ``POST wire.KEEPALIVE_PATH`` under the credential the session route takes."""
 
-        async def require_auth(request: Request) -> None:
+        async def answer(request: Request) -> JSONResponse:
             if not authorized(request.headers):
-                raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail='Invalid or missing bearer token')
+                return JSONResponse({'detail': 'Invalid or missing bearer token'}, status_code=HTTPStatus.UNAUTHORIZED)
+            return JSONResponse({wire.ALIVE_SECONDS: keepalive()})
 
-        async def answer() -> dict[str, int | None]:
-            return {wire.ALIVE_SECONDS: keepalive()}
-
-        app.post(wire.KEEPALIVE_PATH, dependencies=[Depends(require_auth)])(answer)
+        app.routes.append(Route(wire.KEEPALIVE_PATH, answer, methods=['POST']))
 
     async def serve(self) -> None:
         assert self._server is not None and self._sockets, 'The websocket wire has not started'

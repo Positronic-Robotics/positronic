@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 from fastapi import WebSocket
+from positronic_model_server import server_wire, websocket_wire
 from positronic_model_server.serialization import encode_jpeg
 from positronic_wire import websocket, wire
 from starlette.websockets import WebSocketState
@@ -19,7 +20,6 @@ from positronic.drivers.roboarm.command import (
     to_wire,
 )
 from positronic.geom import Rotation, Transform3D
-from positronic.offboard import server_wire, websocket_wire
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.protocol import deserialise, serialise, typed_commands
 

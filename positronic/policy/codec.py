@@ -19,6 +19,7 @@ from typing import Any, ClassVar, final, overload
 
 import numpy as np
 from PIL import Image as PilImage
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, JpegEncoding, encode_images
 from positronic_model_server.spec import ARGS, NAME, PAR, SEQ, VERSION
 
 from positronic import geom, telemetry, telemetry_keys
@@ -179,6 +180,29 @@ def _merged_meta(left: dict, right: dict) -> dict:
     merge_dicts(result, left)
     merge_dicts(result, right)
     return result
+
+
+class EncodeImages(Codec):
+    """JPEG-encode selected observation paths; decoded native results pass through unchanged."""
+
+    WIRE_NAME = 'encode_images'
+
+    def __init__(self, paths: list[list[str | int]], quality: int = DEFAULT_JPEG_QUALITY):
+        self._images = tuple(JpegEncoding(tuple(path), quality) for path in paths)
+        self._quality = quality
+
+    def encode(self, data: dict) -> dict:
+        return encode_images(data, self._images)
+
+    def decode(self, data: Any) -> Any:
+        return data
+
+    def to_spec(self) -> dict[str, Any]:
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'paths': [list(image.path) for image in self._images], 'quality': self._quality},
+        }
 
 
 class _ComposedCodec(Codec):
