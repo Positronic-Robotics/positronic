@@ -7,8 +7,8 @@ from starlette.websockets import WebSocketDisconnect
 
 from pimm.world import SystemClock
 from positronic.eval import Task
-from positronic.gui.station import Outcome, Station, terminal_payload
-from positronic.gui.web import Action, CameraFeed, StationConsole
+from positronic.gui.station import Outcome, Phase, Station, terminal_payload
+from positronic.gui.web import Action, CameraFeed, EndBody, InstructionBody, StationConsole, Status
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 CONFIGURED = 'put the cup in the tote'
@@ -39,6 +39,11 @@ class _Console:
         app = console.build_app(self.station, {CAMERA: self.feed}, self.actions.append, SystemClock(), self.should_stop)
         self.client = TestClient(app)
 
+    def post(self, path: str, body: EndBody | InstructionBody | None = None) -> Status:
+        response = self.client.post(path, json=None if body is None else body.model_dump(mode='json'))
+        response.raise_for_status()
+        return Status.model_validate(response.json())
+
 
 @pytest.fixture
 def console() -> Iterator[_Console]:
@@ -54,23 +59,21 @@ def test_the_page_and_its_assets_are_served(console):
     assert console.client.get('/static/station.css').status_code == 200
 
 
-def test_the_status_carries_the_run_the_cameras_and_the_policy(console):
+def test_the_status_is_the_json_the_page_reads(console):
     console.feed.push(_frame(1), SystemClock().now())
     status = console.client.get('/status').json()
-    assert status['run']['phase'] == 'ready'
-    assert status['run']['configured'] == CONFIGURED
-    assert status['run']['override'] is None
-    assert status['cameras'] == [
-        {'name': CAMERA, 'label': 'exterior 2', 'live': True, 'fps': 0.0, 'width': 640, 'height': 360}
-    ]
-    assert (status['policy'], status['host']) == ('remote', '127.0.0.1')
+    status['run'].pop('now')
+    assert status == {
+        'run': {'phase': 'ready', 'configured': CONFIGURED, 'override': None, 'override_since': None, 'episodes': []},
+        'cameras': [{'name': CAMERA, 'label': 'exterior 2', 'live': True, 'fps': 0.0, 'width': 640, 'height': 360}],
+        'policy': 'remote',
+        'host': '127.0.0.1',
+    }
 
 
 def test_start_hands_the_trial_to_the_control_loop_once(console):
-    console.client.post('/instruction', json={'override': OVERRIDE})
-    response = console.client.post('/episode/start')
-    assert response.status_code == 200
-    assert response.json()['run']['phase'] == 'running'
+    console.post('/instruction', InstructionBody(override=OVERRIDE))
+    assert console.post('/episode/start').run.phase is Phase.RUNNING
     [task] = console.actions
     assert isinstance(task, Task) and task.instruction == OVERRIDE
 
@@ -81,21 +84,20 @@ def test_start_hands_the_trial_to_the_control_loop_once(console):
 
 
 def test_a_verdict_hands_the_done_payload_to_the_control_loop(console):
-    console.client.post('/episode/start')
-    response = console.client.post('/episode/end', json={'verdict': 'fail'})
-    assert response.json()['run']['phase'] == 'ending'
+    console.post('/episode/start')
+    assert console.post('/episode/end', EndBody(verdict=Outcome.FAIL)).run.phase is Phase.ENDING
     assert console.actions[-1] == terminal_payload(Outcome.FAIL)
 
 
 def test_the_page_offers_only_the_operator_verdicts(console):
-    console.client.post('/episode/start')
-    assert console.client.post('/episode/end', json={'verdict': 'timeout'}).status_code == 422
+    console.post('/episode/start')
+    assert console.client.post('/episode/end', json={'verdict': Outcome.TIMEOUT.value}).status_code == 422
     assert len(console.actions) == 1
 
 
 def test_the_instruction_is_refused_while_an_episode_runs(console):
-    console.client.post('/episode/start')
-    response = console.client.post('/instruction', json={'override': OVERRIDE})
+    console.post('/episode/start')
+    response = console.client.post('/instruction', json=InstructionBody(override=OVERRIDE).model_dump())
     assert response.status_code == 409
     assert console.station.view(now=0.0).override is None
 

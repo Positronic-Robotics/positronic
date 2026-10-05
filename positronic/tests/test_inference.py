@@ -26,6 +26,8 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import keyboard
 from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
+from positronic.gui.station import Episode, Outcome, Phase, Verdict
+from positronic.gui.web import EndBody, InstructionBody, Status
 from positronic.inference import KeyboardOperator, TrialForwarder, real, web
 from positronic.policy import Policy
 from positronic.policy.base import Step
@@ -281,23 +283,23 @@ def _wait_for(condition: Callable[[], Any], what: str, timeout: float = 90.0) ->
     raise AssertionError(f'timed out waiting for {what}')
 
 
-def _status(base: str) -> dict[str, Any] | None:
+def _status(base: str) -> Status | None:
     try:
-        return httpx.get(f'{base}/status', timeout=2.0).json()
+        return Status.model_validate(httpx.get(f'{base}/status', timeout=2.0).json())
     except httpx.TransportError:
         return None
 
 
-def _run_episode(base: str, marks: Path, number: int, verdict: str) -> dict[str, Any]:
+def _run_episode(base: str, marks: Path, number: int, verdict: Verdict) -> Episode:
     httpx.post(f'{base}/episode/start').raise_for_status()
     _wait_for((marks / f'episode-{number}').exists, f'episode {number} to open')
-    httpx.post(f'{base}/episode/end', json={'verdict': verdict}).raise_for_status()
+    httpx.post(f'{base}/episode/end', json=EndBody(verdict=verdict).model_dump(mode='json')).raise_for_status()
 
-    def closed():
+    def closed() -> Status | None:
         status = _status(base)
-        return status if status and status['run']['phase'] == 'ready' else None
+        return status if status and status.run.phase is Phase.READY else None
 
-    return _wait_for(closed, f'episode {number} to close')['run']['episodes'][number - 1]
+    return _wait_for(closed, f'episode {number} to close').run.episodes[number - 1]
 
 
 @pytest.mark.timeout(240.0)
@@ -312,16 +314,17 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     run = multiprocessing.get_context('spawn').Process(target=_serve_station, args=(port, output_dir, marks))
     run.start()
     try:
-        status = _wait_for(lambda: (s := _status(base)) and s['cameras'][0]['live'] and s, 'the camera to be live')
-        assert status['run']['configured'] == 'pick up the cube'
+        status = _wait_for(lambda: (s := _status(base)) and s.cameras[0].live and s, 'the camera to be live')
+        assert status.run.configured == 'pick up the cube'
         with connect(f'ws://127.0.0.1:{port}/video/{keys.WRIST_IMAGE}', open_timeout=10) as tile:
             codec, _init, fragment = (tile.recv(timeout=10) for _ in range(3))
             assert isinstance(codec, str) and codec.startswith('avc1.')
             assert isinstance(fragment, bytes) and fragment[4:8] == b'moof'
 
-        httpx.post(f'{base}/instruction', json={'override': 'pick up the red cube'}).raise_for_status()
-        assert _run_episode(base, marks, 1, 'pass')['outcome'] == 'pass'
-        assert _run_episode(base, marks, 2, 'discarded')['outcome'] == 'discarded'
+        override = InstructionBody(override='pick up the red cube').model_dump()
+        httpx.post(f'{base}/instruction', json=override).raise_for_status()
+        assert _run_episode(base, marks, 1, Outcome.PASS).outcome is Outcome.PASS
+        assert _run_episode(base, marks, 2, Outcome.DISCARDED).outcome is Outcome.DISCARDED
     finally:
         if run.pid is not None and run.is_alive():
             os.kill(run.pid, signal.SIGINT)
