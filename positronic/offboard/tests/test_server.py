@@ -888,8 +888,7 @@ def test_a_token_that_could_never_gate_fails_closed_at_startup(make_mock_model, 
 
 
 def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_server, make_mock_model):
-    """A header carries bytes, and Starlette hands them over latin-1 decoded, so a peer can put a
-    non-ASCII ``str`` in front of the token comparison."""
+    """HTTP header bytes are latin-1 decoded before the token comparison."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:

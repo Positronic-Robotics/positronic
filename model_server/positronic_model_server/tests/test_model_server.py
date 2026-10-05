@@ -4,8 +4,10 @@ import os
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
+from contextlib import closing, suppress
 from dataclasses import dataclass, field
+from http import HTTPStatus
+from http.client import HTTPConnection
 from importlib.util import find_spec
 from typing import Any
 
@@ -16,7 +18,7 @@ from positronic_model_server.server import Model, ModelServer, Session
 from positronic_wire import wire
 
 TRANSPORTS = []
-if find_spec('starlette') is not None and find_spec('uvicorn') is not None and find_spec('websockets') is not None:
+if find_spec('uvicorn') is not None and find_spec('websockets') is not None:
     from positronic_model_server.websocket_wire import WebsocketWire
     from positronic_wire.websocket import WebsocketClientWire
 
@@ -373,6 +375,35 @@ def test_authentication_gates_sessions(start):
     peer = running.session(headers={protocol.AUTH_HEADER: protocol.bearer('secret')})
     assert peer.infer({})[protocol.RESULT]['count'] == 1
     peer.close()
+
+
+@pytest.mark.parametrize(
+    'path,method,token,status',
+    [
+        (wire.KEEPALIVE_PATH, 'POST', 'secret', HTTPStatus.OK),
+        (wire.KEEPALIVE_PATH, 'POST', 'wrong', HTTPStatus.UNAUTHORIZED),
+        (wire.KEEPALIVE_PATH, 'GET', 'secret', HTTPStatus.METHOD_NOT_ALLOWED),
+        ('/missing', 'POST', 'secret', HTTPStatus.NOT_FOUND),
+    ],
+)
+def test_http_routes_preserve_status_and_do_not_prepare_sessions(start, transport_types, path, method, token, status):
+    _, client_type = transport_types
+    if client_type.NAME != 'websocket':
+        pytest.skip('HTTP routes belong to the WebSocket transport')
+    running = start(auth_token='secret')
+    address = running.transport.served_address
+    assert isinstance(address, server_wire.ServedHostPort)
+    with closing(HTTPConnection(address.host, address.port, timeout=5)) as connection:
+        connection.request(method, path, headers={protocol.AUTH_HEADER: protocol.bearer(token)})
+        response = connection.getresponse()
+        assert response.status == status
+        if status == HTTPStatus.METHOD_NOT_ALLOWED:
+            assert response.getheader('Allow') == 'POST'
+        if status == HTTPStatus.OK:
+            assert response.getheader('Content-Type') == 'application/json'
+    assert [name for name, *_ in running.probe.calls] == ['load']
+    endpoint = wire.HostPortAddress(address.host, address.port, wire.SESSION_PATH, '')
+    assert running.client_wire.probe(endpoint, headers=None, open_timeout=5) is None
 
 
 def test_idle_expiry_closes_the_model(start):

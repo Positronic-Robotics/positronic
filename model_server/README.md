@@ -12,8 +12,8 @@ uv pip install "positronic-model-server[grpc]==0.2.0"
 
 The core depends on NumPy, Pillow, msgpack and `positronic-wire`'s dependency-free transport
 definitions. The extras select transport libraries independently; combine them as
-`[websocket,grpc]` when both are needed. WebSocket serving uses Starlette and Uvicorn; gRPC requires
-neither. FastAPI and Pydantic are not dependencies of either installation.
+`[websocket,grpc]` when both are needed. WebSocket serving uses Uvicorn directly; gRPC does not
+require it. Starlette, AnyIO, FastAPI and Pydantic are not dependencies of either installation.
 In a checkout, install the workspace packages together: `uv pip install ./wire ./model_server`.
 
 ## Serving and lifetime

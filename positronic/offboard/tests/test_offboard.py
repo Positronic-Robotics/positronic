@@ -4,11 +4,9 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
-from fastapi import WebSocket
 from positronic_model_server import server_wire, websocket_wire
 from positronic_model_server.serialization import encode_jpeg
 from positronic_wire import websocket, wire
-from starlette.websockets import WebSocketState
 
 from positronic import keys
 from positronic.drivers.roboarm.command import (
@@ -57,28 +55,62 @@ def test_connections_reuse_the_loaded_model(inference_server, mock_model):
     mock_model.close.assert_not_called()
 
 
-def _server_connection(state: WebSocketState) -> websocket_wire.WebsocketServerConnection:
-    scope = {'type': 'websocket', 'path': wire.SESSION_PATH, 'headers': [], 'client': ('10.0.0.1', 4321)}
-    socket = WebSocket(scope, receive=AsyncMock(), send=AsyncMock())
-    socket.application_state = state
-    return websocket_wire.WebsocketServerConnection(socket, server_wire.ServedHostPort('localhost', 8000))
+def _server_connection(send: AsyncMock, receive: AsyncMock) -> websocket_wire.WebsocketServerConnection:
+    return websocket_wire.WebsocketServerConnection(
+        {
+            'type': 'websocket',
+            'asgi': {'version': '3.0', 'spec_version': '2.4'},
+            'http_version': '1.1',
+            'scheme': 'ws',
+            'path': wire.SESSION_PATH,
+            'raw_path': wire.SESSION_PATH.encode(),
+            'query_string': b'',
+            'root_path': '',
+            'headers': [],
+            'client': ('10.0.0.1', 4321),
+            'server': ('localhost', 8000),
+            'subprotocols': [],
+        },
+        receive,
+        send,
+        server_wire.ServedHostPort('localhost', 8000),
+    )
 
 
 def test_a_send_after_the_session_closed_says_the_peer_is_gone():
-    conn = _server_connection(WebSocketState.DISCONNECTED)
+    sent = AsyncMock()
+    conn = _server_connection(sent, AsyncMock())
+    asyncio.run(conn.refuse('Session refused'))
 
     with pytest.raises(wire.PeerDisconnected):
         asyncio.run(conn.send(b'a frame nobody is there to read'))
+    sent.assert_awaited_once_with({'type': 'websocket.close', 'code': 1008, 'reason': 'Session refused'})
 
 
 def test_a_send_on_a_live_session_goes_out():
-    conn = _server_connection(WebSocketState.CONNECTED)
     sent = AsyncMock()
-    conn._websocket.send_bytes = sent
+    conn = _server_connection(sent, AsyncMock())
 
     asyncio.run(conn.send(b'a frame'))
 
-    sent.assert_awaited_once_with(b'a frame')
+    sent.assert_awaited_once_with({'type': 'websocket.send', 'bytes': b'a frame'})
+
+
+def test_a_transport_send_failure_marks_the_session_closed():
+    sent = AsyncMock(side_effect=OSError('connection lost'))
+    conn = _server_connection(sent, AsyncMock())
+    for _ in range(2):
+        with pytest.raises(wire.PeerDisconnected):
+            asyncio.run(conn.send(b'a frame'))
+    assert sent.await_count == 1
+
+
+def test_a_disconnect_event_closes_the_session():
+    conn = _server_connection(AsyncMock(), AsyncMock(return_value={'type': 'websocket.disconnect', 'code': 1000}))
+    with pytest.raises(wire.PeerDisconnected):
+        asyncio.run(conn.receive())
+    with pytest.raises(wire.PeerDisconnected):
+        asyncio.run(conn.send(b'a frame'))
 
 
 def test_wire_serialisation_accepts_mappingproxy():

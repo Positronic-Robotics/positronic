@@ -1,11 +1,9 @@
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
-from fastapi import WebSocketDisconnect
 from positronic_model_server import keys as offboard_keys
-from positronic_model_server import server_wire, websocket_wire
-from starlette.datastructures import QueryParams
-from starlette.websockets import WebSocketState
+from positronic_model_server import server_wire
+from positronic_wire import wire
 
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
@@ -34,31 +32,6 @@ def _act_config() -> ACTConfig:
         },
         output_features={'action': PolicyFeature(type=FeatureType.ACTION, shape=(7,))},
     )
-
-
-class _DummyWebSocket:
-    def __init__(self):
-        self.client = ('test', 0)
-        self.query_params = QueryParams()
-        # Read by the wire to tell a closed session from a bug, as on starlette's own `WebSocket`.
-        self.application_state = WebSocketState.CONNECTED
-        self.accept = AsyncMock()
-        self._send_bytes = AsyncMock()
-        self._close = AsyncMock()
-
-    async def receive_bytes(self):
-        raise WebSocketDisconnect()
-
-    async def send_bytes(self, payload):
-        await self._send_bytes(payload)
-
-    async def close(self, **kwargs):
-        self.application_state = WebSocketState.DISCONNECTED
-        await self._close(**kwargs)
-
-    def as_connection(self) -> websocket_wire.WebsocketServerConnection:
-        """What the websocket wire hands the server for one session it has accepted."""
-        return websocket_wire.WebsocketServerConnection(self, server_wire.ServedHostPort('localhost', 8000))
 
 
 def test_handshake_metadata_names_the_loaded_checkpoint(monkeypatch):
@@ -113,10 +86,16 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
     monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path: ['41', '42'])
     server, _build = _make_server(monkeypatch, checkpoint='42')
     server._load()
-    websocket = _DummyWebSocket()
-    await server._serve_session(websocket.as_connection())
+    connection = MagicMock(
+        spec=server_wire.ServerConnection,
+        peer='test',
+        query_params=[],
+        served_address=server_wire.ServedHostPort('localhost', 8000),
+    )
+    connection.receive.side_effect = wire.PeerDisconnected('Session ended')
+    await server._serve_session(connection)
 
-    ready = deserialise(websocket._send_bytes.await_args_list[0].args[0])
+    ready = deserialise(connection.send.await_args_list[0].args[0])
     assert ready['status'] == 'ready'
     assert ready['meta'][offboard_keys.CHECKPOINT_ID] == '42'
 
