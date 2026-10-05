@@ -8,8 +8,9 @@
 #       -f docker/Dockerfile.serve-molmoact2-droid -t docker.io/<you>/molmoact2-droid:v1 --push .
 #   docker run --rm --network none docker.io/<you>/molmoact2-droid:v1        # the offline pre-flight
 #
-# The layers go from the least often changed to the most: base, dependencies, source. The weights
-# come last through `COPY --link`, so a source change reuses the cached weights layer without pulling it.
+# The layers go from the least often changed to the most: base, dependencies, source, weights. The
+# source and the weights come in through `COPY --link`, and no step runs after them, so a source change
+# builds one new layer and pulls no cached layer.
 #
 # The base is a Python 3.13 image with a compiler and uv: MolmoAct2 has no vendor stack. The CUDA
 # runtime comes in with the PyPI torch wheels.
@@ -36,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgl1 && rm -r
 ENV HF_HOME=/opt/hf \
     MOLMOACT2_MODEL=${MODEL} \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/positronic \
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server \
     UV_PROJECT_ENVIRONMENT=/positronic/.venv \
     VIRTUAL_ENV=/positronic/.venv \
     UV_PYTHON_DOWNLOADS=never \
@@ -51,8 +52,20 @@ COPY wire/pyproject.toml wire/
 COPY model_server/pyproject.toml model_server/
 RUN uv sync --locked --python 3.13 --extra molmoact2 --no-dev --no-install-workspace && uv cache clean
 
-COPY . /positronic
+# The workspace installs from its manifests and package stubs, which records each package's metadata.
+# The source then lands with no step after it: the packages import from PYTHONPATH.
+COPY README.md LICENSE ./
+COPY client/README.md client/
+COPY wire/README.md wire/
+COPY model_server/README.md model_server/
+COPY positronic/__init__.py positronic/
+COPY pimm/__init__.py pimm/
+COPY client/platform_client/py.typed client/platform_client/
+COPY wire/positronic_wire/py.typed wire/positronic_wire/
+COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
 RUN uv sync --locked --python 3.13 --extra molmoact2 --no-dev && uv cache clean
+
+COPY --link . /positronic
 
 # For a fine-tuned checkpoint of your own, `COPY` its directory instead and set MOLMOACT2_MODEL to it.
 COPY --link --from=weights /opt/hf /opt/hf
