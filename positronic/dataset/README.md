@@ -382,26 +382,26 @@ Lifecycle
 - `STOP_EPISODE`: finalizes the episode (applies static data then closes).
 - `ABORT_EPISODE`: aborts and discards the episode directory.
 
-Notes
-- Use `CLOCK` when building training datasets: it aligns updates with the recorder’s processing timeline so downstream sampling matches what was actually ready for learning.
-- Use `MESSAGE` when logging inference or diagnosis runs: it keeps the source timestamps untouched so you can line up events across control systems and measure propagation delays.
-
 ## `DsPlayerAgent` (dataset player)
 
 `DsPlayerAgent` replays recorded `Episode` objects back into a live `pimm` world by streaming signal values on demand. It mirrors the lifecycle style of `DsWriterAgent`, making it easy to pipe existing datasets through simulators, robots, or other consumers.
 
 Component layout
 - Outputs are dynamically declared via `player.outputs[name]` before playback begins; every declared name must map to a dynamic signal in the episode. Static-only items raise `ValueError`, and missing signals raise `KeyError` so wiring mistakes surface immediately.
-- `command` receives control messages. `DsPlayerStartCommand(episode, start_ts=None, end_ts=None, timeline=RECORDED_TIME)`
+- `command` receives control messages. `DsPlayerStartCommand(episode, start_ts=None, end_ts=None, timeline=None)`
   starts playback on the selected timeline, optionally restricting the time window.
   `DsPlayerAbortCommand()` stops immediately without emitting `finished`.
 - `finished` emits the originating `DsPlayerStartCommand` once all scheduled samples have been streamed.
-- `poll_hz` (default `100 Hz`) governs how frequently the agent checks for new work. Emission timestamps are aligned to the episode timeline: the first emitted sample anchors the playback and later samples preserve their original relative offsets.
+- `poll_hz` (default `100 Hz`) governs how frequently the agent checks for new work.
 
 Playback semantics
-- `timeline` selects the nanosecond clock used for scheduling and command bounds; it defaults to `recorded`.
-  Every requested output must expose that timeline. Window selection uses the dataset's carry-back semantics.
-- Emitted timestamps are shifted so that the first sample appears at the clock time the agent received the `START` command. This keeps real-time consumers synchronized with the world clock while preserving inter-sample spacing from the dataset.
+- `timeline` selects the nanosecond clock used for scheduling and command bounds. When omitted,
+  playback selects `received.world` from the requested outputs, or `recorded` for legacy data.
+  Other timelines require an explicit name. Every requested output must expose the selected
+  timeline. Window selection uses the dataset's carry-back semantics.
+- Playback anchors the first sample to the world clock when `START` is handled and preserves
+  inter-sample spacing. Messages carry this scheduled time as `playback.scheduled`; pimm stamps
+  their actual emission and first delivery times.
 
 Typical use cases
 - Driving robots or simulators from a stored episode while optionally recording the run again. See [`positronic/replay_record.py`](../../positronic/replay_record.py) where `DsPlayerAgent` feeds a Mujoco simulation and simultaneously streams into a `DsWriterAgent` to capture the replay.
