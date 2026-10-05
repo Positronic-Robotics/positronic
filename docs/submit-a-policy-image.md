@@ -88,31 +88,6 @@ docker exec policy /opt/flux-action/.venv/bin/python -c "import urllib.request a
   print(u.urlopen(u.Request('http://127.0.0.1:8000/healthz', headers={'Authorization': 'Bearer test'})).read())"
 ```
 
-#### The FLUX 3 Action licence
-
-The weights are under the
-[FLUX Kommunity License v1.0](https://huggingface.co/black-forest-labs/flux-3-action-droid/blob/3d0887bdc7acee1686b19afac267125d519ff4f1/LICENSE.md)
-of Black Forest Labs. Read it before you use the image. Its main terms:
-
-- Use the model for non-commercial purposes only: research, testing and evaluation outside
-  production. Commercial or production use needs a licence from Black Forest Labs. The one exception:
-  a user with less than US$5 million revenue a year may use the outputs commercially.
-- Do not use the outputs of the model to improve another model that does a similar job. A recorded
-  episode is an output.
-- Black Forest Labs grants the rights to use the model to you directly, under the licence.
-- To distribute the model, or an image that holds it, include a copy of the licence and the
-  Attribution Notice below. For a modified model, say that you modified it. Do not imply that Black
-  Forest Labs endorses it.
-
-The image holds the licence at `/opt/flux3_action/LICENSE.md` and the notice at
-`/opt/flux3_action/NOTICE`. Black Forest Labs' serving code and the Qwen3-VL-4B-Instruct text
-encoder are under the Apache License 2.0. The Attribution Notice:
-
-> This FLUX Model is licensed by Black Forest Labs Inc. under the FLUX Kommunity License. Copyright
-> Black Forest Labs Inc. IN NO EVENT SHALL BLACK FOREST LABS INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR
-> OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-> CONNECTION WITH USE OF THIS MODEL.
-
 ### Build and push
 
 - `--platform linux/amd64` names the architecture the platform runs. Both `positro/*` bases
