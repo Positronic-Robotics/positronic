@@ -122,9 +122,8 @@ before it dials, and names both in the refusal.
 
 `keepalive` answers it, and `probe` answers it where a server serves no keepalive call. Each one's
 timeout is one wall-clock deadline over the name lookup, every address the name resolves to, and every
-read, so a server the caller did not write cannot hold the call past it. Where the environment names a
-proxy for the address, `probe` lets `websockets` connect through it, as `dial` does, with the time left
-as its open timeout.
+read, so a server the caller did not write cannot hold the call past it. Both open their own socket, so
+they ignore a proxy the environment names, where `dial` goes through it.
 
 | What came back | Means |
 |---|---|

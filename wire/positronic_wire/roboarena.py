@@ -8,9 +8,7 @@ from typing import Self
 from positronic_wire import wire
 from positronic_wire.websocket import WebsocketClientConnection, connected_socket, refusal_of
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
-from websockets.proxy import get_proxy
 from websockets.sync.client import connect
-from websockets.uri import parse_uri
 
 
 @dataclasses.dataclass(frozen=True)
@@ -108,9 +106,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
         """
         deadline = time.monotonic() + open_timeout
         try:
-            # A proxy the environment names takes the connect, under the time left.
-            proxied = get_proxy(parse_uri(self.session_url(address))) is not None
-            sock = None if proxied else connected_socket(address.host, address.port, open_timeout)
+            sock = connected_socket(address.host, address.port, open_timeout)
             # The probe has nothing to finish, so it does not wait for the server's close.
             connection = self._open(address, headers, max(0.0, deadline - time.monotonic()), sock=sock, close_timeout=0)
         except OSError as e:

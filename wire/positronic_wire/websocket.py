@@ -19,10 +19,8 @@ from typing import Any, ClassVar, Generic
 
 from positronic_wire import wire
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidMessage, InvalidStatus
-from websockets.proxy import get_proxy
 from websockets.sync.client import connect, unix_connect
 from websockets.sync.connection import Connection
-from websockets.uri import parse_uri
 
 
 class WebsocketClientConnection(wire.ClientConnection):
@@ -110,10 +108,6 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
     @abc.abstractmethod
     def _api_connection(self, address: wire.AddressT, deadline: float) -> HTTPConnection:
         """An unopened connection to the server's HTTP API, which opens its socket before ``deadline``."""
-
-    def _reached_through_proxy(self, address: wire.AddressT) -> bool:
-        """Whether ``websockets`` dials ``address`` through a proxy the environment names."""
-        return False
 
     # The most of the keepalive answer's body the call reads: a JSON object of one key fits in it many times.
     _MAX_KEEPALIVE_BODY_BYTES = 16 * 1024
@@ -231,9 +225,9 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
         root = address.at_root()
         deadline = time.monotonic() + open_timeout
         try:
-            # A proxy the environment names takes the connect, under the time left. websockets closes `sock` where
-            # the handshake fails, and caps the answer it reads. The probe does not wait for the server's close.
-            sock = None if self._reached_through_proxy(root) else self._open_socket(root, open_timeout)
+            # websockets closes `sock` where the handshake fails, and caps the answer it reads. The probe does not
+            # wait for the server's close.
+            sock = self._open_socket(root, open_timeout)
             websocket = self._connect(
                 root,
                 sock=sock,
@@ -332,9 +326,6 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
 
     def _open_socket(self, address: wire.HostPortAddress, timeout: float) -> socket.socket:
         return connected_socket(address.host, address.port, timeout)
-
-    def _reached_through_proxy(self, address: wire.HostPortAddress) -> bool:
-        return get_proxy(parse_uri(self.handshake_url(address))) is not None
 
     def _api_connection(self, address: wire.HostPortAddress, deadline: float) -> HTTPConnection:
         return _HTTPConnectionOn(wire.netloc(address, self.DEFAULT_PORT), partial(self._open_socket, address), deadline)

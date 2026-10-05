@@ -108,8 +108,7 @@ def test_a_dial_negotiates_no_deflate_with_a_server_that_offers_it():
 
 @pytest.fixture
 def opened(monkeypatch) -> Iterator[MagicMock]:
-    """Stands in for the socket a probe opens, so the handshake a test patches runs on it. No proxy applies."""
-    monkeypatch.setenv('no_proxy', '*')
+    """Stands in for the socket a probe opens, so the handshake a test patches runs on it."""
     with patch('positronic_wire.websocket.connected_socket') as connected_socket:
         yield connected_socket
 
@@ -573,40 +572,10 @@ def test_a_probe_asks_the_root_for_an_upgrade_with_the_callers_headers():
     assert f'{_HEADER[0]}: {_HEADER[1]}\r\n'.encode() in asked[0]
 
 
-# ─── a proxy the environment names ───────────────────────────────────────────
-
-
-def _tunnelling(asked: list[bytes], head: bytes):
-    """A proxy handler: it opens the tunnel a ``CONNECT`` asks for, and answers the request in it with ``head``."""
-
-    def handler(conn: socket.socket) -> None:
-        asked.append(conn.recv(4096))
-        conn.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
-        asked.append(conn.recv(4096))
-        conn.sendall(head + b'\r\ncontent-length: 0\r\n\r\n')
-
-    return handler
-
-
-def test_a_probe_goes_through_the_proxy_the_environment_names(monkeypatch):
-    """``dial`` reaches a server through that proxy, so the probe takes the same route."""
-    asked: list[bytes] = []
-    proxy_host, proxy_port = _served(_tunnelling(asked, b'HTTP/1.1 403 Forbidden'))
-    host, port = _unbound()
-    monkeypatch.setenv('ws_proxy', f'http://{proxy_host}:{proxy_port}')
-    monkeypatch.setenv('no_proxy', 'unrelated.invalid')
-    assert _WEBSOCKET.probe(_at(host, port), None, 5.0) is None
-    assert asked[0].startswith(f'CONNECT {host}:{port} HTTP/1.1\r\n'.encode())
-    assert asked[1].startswith(b'GET / HTTP/1.1\r\n')
-
-
-def test_a_probe_of_a_host_the_proxy_does_not_serve_opens_its_own_bounded_socket(monkeypatch):
+def test_a_probe_ignores_a_proxy_the_environment_names(monkeypatch):
     via_proxy: list[bytes] = []
-    proxy_host, proxy_port = _served(_tunnelling(via_proxy, b'HTTP/1.1 403 Forbidden'))
+    proxy_host, proxy_port = _served(_answering(b'HTTP/1.1 502 Bad Gateway', via_proxy))
     host, port = _served(_answering(b'HTTP/1.1 403 Forbidden', []))
     monkeypatch.setenv('ws_proxy', f'http://{proxy_host}:{proxy_port}')
-    monkeypatch.setenv('no_proxy', host)
-    with patch('positronic_wire.websocket.connected_socket', wraps=websocket.connected_socket) as connected_socket:
-        assert _WEBSOCKET.probe(_at(host, port), None, 5.0) is None
-    connected_socket.assert_called_once()
+    assert _WEBSOCKET.probe(_at(host, port), None, 5.0) is None
     assert via_proxy == []

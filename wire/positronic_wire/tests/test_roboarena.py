@@ -25,8 +25,7 @@ def _refused_upgrade(status: HTTPStatus) -> InvalidStatus:
 
 @pytest.fixture
 def opened(monkeypatch) -> Iterator[MagicMock]:
-    """Stands in for the socket a probe opens, so the handshake a test patches runs on it. No proxy applies."""
-    monkeypatch.setenv('no_proxy', '*')
+    """Stands in for the socket a probe opens, so the handshake a test patches runs on it."""
     with patch('positronic_wire.roboarena.connected_socket') as connected_socket:
         yield connected_socket
 
@@ -258,36 +257,3 @@ def test_a_server_that_announces_itself_answers_the_probe(roboarena_on):
 def test_a_server_that_announces_a_failure_in_text_raises_it(roboarena_on):
     with pytest.raises(roboarena.TextAnswer, match='the policy failed to load'):
         roboarena.RoboarenaClientWire().probe(roboarena_on(_announcing('the policy failed to load')), None, 5.0)
-
-
-def _tunnelling_proxy(asked: list[bytes]) -> str:
-    """A loopback proxy that opens one tunnel and refuses the upgrade sent in it with 401. Returns its URL."""
-    listener = socket.socket()
-    listener.bind(('127.0.0.1', 0))
-    listener.listen(1)
-
-    def tunnel() -> None:
-        with listener, listener.accept()[0] as conn:
-            asked.append(conn.recv(4096))
-            conn.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
-            asked.append(conn.recv(4096))
-            conn.sendall(b'HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n')
-
-    threading.Thread(target=tunnel, daemon=True).start()
-    host, port = listener.getsockname()
-    return f'http://{host}:{port}'
-
-
-def test_a_probe_goes_through_the_proxy_the_environment_names(monkeypatch):
-    """Nothing listens on the target; only the proxy, which refuses the upgrade as an edge would."""
-    asked: list[bytes] = []
-    listener = socket.socket()
-    listener.bind(('127.0.0.1', 0))
-    host, port = listener.getsockname()
-    listener.close()
-    monkeypatch.setenv('ws_proxy', _tunnelling_proxy(asked))
-    monkeypatch.setenv('no_proxy', 'unrelated.invalid')
-    assert roboarena.RoboarenaClientWire().probe(roboarena.RoboarenaAddress(host, port), None, 5.0) is (
-        wire.Refusal.FINAL
-    )
-    assert asked[0].startswith(f'CONNECT {host}:{port} HTTP/1.1\r\n'.encode())
