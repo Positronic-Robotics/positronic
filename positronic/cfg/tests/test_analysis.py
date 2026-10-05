@@ -7,6 +7,7 @@ from positronic.cfg.analysis import ckpt
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import app_state_restored, configure_tables
 
 
@@ -37,7 +38,7 @@ def test_every_server_group_key_and_filter_is_a_flat_table_column(flat, groups):
         )
 
 
-RECORDED_PREFIXES = pytest.mark.parametrize('prefix', ['policy', 'inference.policy'])
+RECORDED_PREFIXES = pytest.mark.parametrize('prefix', policy_keys.POLICY_META_PREFIXES)
 
 
 @RECORDED_PREFIXES
