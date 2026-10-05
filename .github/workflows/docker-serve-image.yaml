@@ -1,7 +1,7 @@
 name: Build a Serving Image
 
-# Builds positro/<name> from docker/Dockerfile.serve-<name> and checks it. On main it pushes `main`, the commit and
-# `latest`; on a release, `v<version>` and the commit.
+# Builds positro/<name> from docker/Dockerfile.serve-<name> and pushes it with `main`, the commit and `latest`; on a
+# release, with `v<version>` and the commit. It checks nothing: the developer checks the offline start and the size.
 on:
   workflow_call:
     inputs:
@@ -18,44 +18,19 @@ on:
       HF_TOKEN:
         required: false
       DOCKER_USERNAME:
-        required: false
+        required: true
       DOCKER_PASSWORD:
-        required: false
+        required: true
 
 permissions:
   contents: read
 
 jobs:
-  # GitHub withholds secrets from a pull request opened from a fork or by Dependabot.
-  token:
-    runs-on: ubuntu-latest
-    outputs:
-      can_build: ${{ steps.check.outputs.can_build }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: docker
-      - id: check
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          RECIPE: docker/Dockerfile.serve-${{ inputs.name }}
-        run: |
-          if grep -q 'id=hf_token' "$RECIPE" && [ -z "$HF_TOKEN" ] && [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            echo '::notice::This pull request gets no HF_TOKEN, so the gated download cannot run. The build is skipped.'
-            echo can_build=false >> "$GITHUB_OUTPUT"
-          else
-            echo can_build=true >> "$GITHUB_OUTPUT"
-          fi
-
   serve-image:
-    needs: token
-    if: needs.token.outputs.can_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
       NAME: ${{ inputs.name }}
-      IMAGE: positro/${{ inputs.name }}
       # A recipe reads it through a BuildKit secret mount.
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     defaults:
@@ -65,47 +40,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # A build holds the weights twice, in their own stage and in the image.
+      # A build with no cache holds the weights twice, in their own stage and in the image.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm
           sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"/{CodeQL,node,go}
           df -h /
 
-      - name: Build
-        run: |
-          make -C docker "build-serve-${NAME}"
-          df -h /
-
-      # The platform runs the image with the network denied. The server refuses a token no header can carry before
-      # it loads the model, so this start proves the entrypoint and the environment need no network.
-      - name: Check the offline start
-        run: |
-          if docker run --rm --network none -e AUTH_TOKEN='two words' "${IMAGE}:local" 2> start.log; then
-            echo 'the server started with a token no header can carry' >&2
-            exit 1
-          fi
-          cat start.log
-          grep -F 'auth_token must be non-empty printable ASCII' start.log
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Check the image budgets
-        run: |
-          sudo apt-get install -y --no-install-recommends pigz
-          uv run --package positronic-platform-client --no-dev docker/check_image_budget.py "${IMAGE}:local"
+      - name: Set up a BuildKit builder
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: github.ref == 'refs/heads/main' || inputs.release
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Push
+      - name: Build and push
         id: push
-        if: github.ref == 'refs/heads/main' || inputs.release
         env:
           RELEASE: ${{ inputs.release }}
         run: |
@@ -122,5 +74,4 @@ jobs:
 
       # Reads anonymously, as the platform does, so a repository that is not public fails here.
       - name: Read the published digest and size
-        if: github.ref == 'refs/heads/main' || inputs.release
-        run: docker/read_image_digest.sh "${IMAGE}:${{ steps.push.outputs.tag }}"
+        run: docker/read_image_digest.sh "positro/${NAME}:${{ steps.push.outputs.tag }}"

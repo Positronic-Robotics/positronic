@@ -8,8 +8,8 @@
 #       -f docker/Dockerfile.serve-pi05-droid -t docker.io/<you>/pi05-droid:v1 --push .
 #   docker run --rm --network none docker.io/<you>/pi05-droid:v1        # the offline pre-flight
 #
-# The layers go from the least often changed to the most: base, weights, dependencies, source. A
-# source commit rebuilds and pushes the source layer only.
+# The layers go from the least often changed to the most: base, dependencies, source. The weights
+# come last through `COPY --link`, so a source change reuses the cached weights layer without pulling it.
 
 ARG BASE_IMAGE=positro/openpi-base:latest
 ARG CLOUD_SDK_IMAGE=google/cloud-sdk:slim
@@ -32,8 +32,6 @@ FROM ${BASE_IMAGE}
 # record of it, and nss-myhostname resolves it to a local address.
 RUN apt-get update && apt-get install -y --no-install-recommends libnss-myhostname \
  && rm -rf /var/lib/apt/lists/* && grep -E '^hosts:.*myhostname' /etc/nsswitch.conf
-COPY --from=assets /assets/checkpoints /opt/positronic/checkpoints/pi05_droid_jointpos
-COPY --from=assets /assets/openpi-data /opt/positronic/openpi-data
 
 ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
     OPENPI_DATA_HOME=/opt/positronic/openpi-data \
@@ -55,6 +53,9 @@ RUN uv sync --locked --python 3.13 --extra openpi --no-dev --no-install-workspac
 
 COPY . /positronic
 RUN uv sync --locked --python 3.13 --extra openpi --no-dev && uv cache clean
+
+COPY --link --from=assets /assets/checkpoints /opt/positronic/checkpoints/pi05_droid_jointpos
+COPY --link --from=assets /assets/openpi-data /opt/positronic/openpi-data
 
 # A fetch the build did not make fails at once on the denied network.
 ENV UV_PROJECT_ENVIRONMENT=/.venv \

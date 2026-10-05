@@ -155,31 +155,22 @@ SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid
 # The GR00T backbone is gated on the Hub. BuildKit reads the token from HF_TOKEN, and it enters no layer.
 SERVE_BUILD_FLAGS_gr00t-n17-droid := --secret id=hf_token,env=HF_TOKEN
 
+# `push-serve-<name>` builds and pushes in one BuildKit run, which needs a docker-container builder
+# (`docker buildx create --use`). The cache at positro/<name>:buildcache holds every stage, so a rebuild
+# reuses the base, the weights and any unchanged layer.
+SERVE_TAGS = $(sort $(IMAGE_TAG) $(GIT_SHA) $(if $(CI),latest) $(if $(PUBLISH_RELEASE),v$(VERSION)))
+
 define SERVE_IMAGE
-.PHONY: build-serve-$(1) tag-serve-$(1) push-serve-$(1)
+.PHONY: build-serve-$(1) push-serve-$(1)
 
 build-serve-$(1):
 	docker build --platform linux/amd64 $$(SERVE_BUILD_FLAGS_$(1)) -f Dockerfile.serve-$(1) -t positro/$(1):local ..
 
-tag-serve-$(1): build-serve-$(1)
-	docker tag positro/$(1):local positro/$(1):$$(IMAGE_TAG)
-	docker tag positro/$(1):local positro/$(1):$$(GIT_SHA)
-ifdef CI
-	docker tag positro/$(1):local positro/$(1):latest
-endif
-ifdef PUBLISH_RELEASE
-	docker tag positro/$(1):local positro/$(1):v$$(VERSION)
-endif
-
-push-serve-$(1): tag-serve-$(1)
-	docker push positro/$(1):$$(IMAGE_TAG)
-	docker push positro/$(1):$$(GIT_SHA)
-ifdef CI
-	docker push positro/$(1):latest
-endif
-ifdef PUBLISH_RELEASE
-	docker push positro/$(1):v$$(VERSION)
-endif
+push-serve-$(1):
+	docker buildx build --platform linux/amd64 --provenance=false --sbom=false $$(SERVE_BUILD_FLAGS_$(1)) \
+		--cache-from type=registry,ref=positro/$(1):buildcache \
+		--cache-to type=registry,ref=positro/$(1):buildcache,mode=max \
+		$$(foreach tag,$$(SERVE_TAGS),-t positro/$(1):$$(tag)) --push -f Dockerfile.serve-$(1) ..
 endef
 
 $(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name))))
@@ -365,7 +356,7 @@ clean:
 	-docker rmi $(IMAGE_NAME_COSMOS3_NANO):local
 	-docker rmi $(IMAGE_NAME_COSMOS3_NANO):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_COSMOS3_NANO):$(GIT_SHA)
-	-for name in $(SERVE_IMAGES); do docker rmi positro/$$name:local positro/$$name:$(IMAGE_TAG) positro/$$name:$(GIT_SHA); done
+	-for name in $(SERVE_IMAGES); do docker rmi positro/$$name:local; done
 	@echo "Image cleanup attempts complete. Check the output for removal errors."
 
 prune:

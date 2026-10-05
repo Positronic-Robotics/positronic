@@ -8,8 +8,8 @@
 #       -f docker/Dockerfile.serve-gr00t-n17-droid -t docker.io/<you>/gr00t-n17-droid:v1 --push .
 #   docker run --rm --network none docker.io/<you>/gr00t-n17-droid:v1        # the offline pre-flight
 #
-# The layers go from the least often changed to the most: base, weights, dependencies, source. A
-# source commit rebuilds and pushes the source layer only.
+# The layers go from the least often changed to the most: base, dependencies, source. The weights
+# come last through `COPY --link`, so a source change reuses the cached weights layer without pulling it.
 #
 # The Hugging Face token is for `nvidia/Cosmos-Reason2-2B`, the backbone every N1.7 checkpoint
 # loads: the repository is gated, and NVIDIA grants access on the form. The token enters no layer.
@@ -39,10 +39,6 @@ FROM ${BASE_IMAGE}
 ARG MODEL
 RUN apt-get update && apt-get install -y --no-install-recommends libturbojpeg && rm -rf /var/lib/apt/lists/*
 
-# For a fine-tuned checkpoint of your own, `COPY` its `checkpoint-<step>` directories instead and
-# set GROOT_MODEL_SOURCE to their parent directory. The backbone still comes from the weights stage.
-COPY --from=weights /opt/hf /opt/hf
-
 # The server loads GROOT_MODEL_SOURCE, so the model this build caches is the model the image serves.
 ENV HF_HOME=/opt/hf \
     GROOT_MODEL_SOURCE=hf://${MODEL} \
@@ -63,6 +59,10 @@ RUN uv sync --locked --python 3.13 --no-dev --no-install-workspace && uv cache c
 
 COPY . /positronic
 RUN uv sync --locked --python 3.13 --no-dev && uv cache clean
+
+# For a fine-tuned checkpoint of your own, `COPY` its `checkpoint-<step>` directories instead and
+# set GROOT_MODEL_SOURCE to their parent directory. The backbone still comes from the weights stage.
+COPY --link --from=weights /opt/hf /opt/hf
 
 # GROOT_PATCH_MISTRAL: transformers asks the Hub about the backbone's tokenizer on every load, with
 # no cache fallback, and the patch answers that question locally. Without it the offline load fails;

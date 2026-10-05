@@ -16,7 +16,8 @@ The openpi and GR00T recipes build on a `positro/<vendor>-base` image on Docker 
 the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: MolmoAct2 has no
 vendor stack. These three recipes add the weights, the positronic source with an offline
 environment, `EXPOSE 8000` and a start command. Their layers go from the least often changed to the
-most: base, weights, dependencies, source. A source change rebuilds and pushes the source layer only.
+most: base, dependencies, source. The weights come last through `COPY --link`, so a source change
+reuses the weights layer from a cache and does not rebuild it.
 The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves. CI publishes all five
 images to Docker Hub. Build from the root of a positronic checkout:
 
@@ -29,8 +30,10 @@ images to Docker Hub. Build from the root of a positronic checkout:
 | Cosmos3-Nano DROID | [`docker/Dockerfile.cosmos3-nano`](../docker/Dockerfile.cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
 
 CI builds each image when its recipe or its vendor code changes, and tags each build `main`, `latest`
-and the commit. A release also tags the three serving images `v<version>`. Read the digest of a published image with
-`docker/read_image_digest.sh positro/<image>:main`, and pin it.
+and the commit. A release also tags the three serving images `v<version>`. CI does not test an
+image: run the checks in [Test the image before you submit](#test-the-image-before-you-submit).
+Read the digest of a published image with `docker/read_image_digest.sh positro/<image>:main`, and
+pin it.
 
 The header of each recipe gives its build command. The comments in each recipe say where a
 checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM
