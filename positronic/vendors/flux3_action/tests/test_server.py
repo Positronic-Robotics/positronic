@@ -6,6 +6,7 @@ import urllib.request
 
 import pytest
 import websockets.asyncio.client
+from platform_client.policy_container import AUTH_TOKEN_ENV
 from websockets.exceptions import InvalidStatus
 
 from positronic.offboard import protocol
@@ -80,7 +81,7 @@ def test_a_bad_token_fails_before_the_model_loads(monkeypatch):
 
 
 def test_the_gate_reads_the_variable_and_header_of_positronics_servers():
-    assert (server.AUTH_TOKEN_ENV, server.AUTH_HEADER) == (protocol.AUTH_TOKEN_ENV, protocol.AUTH_HEADER)
+    assert (server.AUTH_TOKEN_ENV, server.AUTH_HEADER) == (AUTH_TOKEN_ENV, protocol.AUTH_HEADER)
 
 
 def test_positronics_roboarena_client_reads_the_config_through_the_gate():
