@@ -51,6 +51,9 @@ class ChangeEEFrame(Codec):
     def _decode_single(self, data: dict) -> dict:
         return self._apply(data, self._transform.inv)
 
+    def encode_commands(self, commands):
+        return [self._apply(dict(c), self._transform) for c in commands]
+
     @property
     def training_encoder(self) -> EpisodeTransform:
         return training.ChangeEEFrame(self._transform, self._keys)

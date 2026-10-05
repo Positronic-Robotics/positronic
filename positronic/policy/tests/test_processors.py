@@ -18,6 +18,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, JointPosition, PositionControl
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Answer, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
@@ -355,7 +356,8 @@ class SlowModel:
         self.prefixes: list[list] = []
         self._pending: Future | None = None
 
-    def submit(self, function, obs, prefix=()):
+    def submit(self, function, obs):
+        prefix = obs.get(policy_keys.ACTION_PREFIX, ())
         self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
         self.prefixes.append(list(prefix))
         self._pending = Future()
@@ -397,9 +399,9 @@ class ObservingModel(SlowModel):
         super().__init__(runtime)
         self.seen: list = []
 
-    def submit(self, function, obs, prefix=()):
+    def submit(self, function, obs):
         self.seen.append(obs[POSITION])
-        return super().submit(function, obs, prefix)
+        return super().submit(function, obs)
 
 
 @pytest.mark.parametrize('status', list(RobotStatus))
@@ -1195,6 +1197,8 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48, Resample.AREA)),
         ChunkedSchedule(fps=10, record_stats=False),
+        Sequential(PauseOnUnavailable(), RTCSchedule(fps=15, call_after_sec=0.3, prefix_duration=DelayEstimate.mean())),
+        RTCSchedule(10, 0.0, DelayEstimate.max(last=2, max_sec=0.2), PrefixSampling.INTERPOLATE),
     ],
 )
 def test_stack_specs_round_trip(definition):
@@ -1223,6 +1227,7 @@ def test_wire_names_match_the_registered_components():
     instances = {
         'chunked_schedule': ChunkedSchedule(fps=10),
         'encode_images': EncodeImages([['camera']]),
+        'rtc_schedule': RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=DelayEstimate.mean()),
         'stop_on_fault': PauseOnUnavailable(),
         'end_on_field': EndOnField(),
         'end_command': EndCommand(),

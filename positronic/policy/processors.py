@@ -546,11 +546,12 @@ class RTCSchedule(Policy):
     its observation + i / `fps`. The policy executes each action when its due time comes.
 
     `call_after_sec` after T0, the policy takes the observation T1 and calls `infer`.
-    The call also gets a prefix: the old chunk read at the new chunk's due times T1,
-    T1 + 1 / `fps`, ..., for the duration estimated by `prefix_duration`, and not past
-    the end of the old chunk. The prefix tells the model what the robot does while the model
-    computes. Its length is the delay estimate: the server reads it as the number of
-    prefix actions / `fps`. The server decides how to use the prefix.
+    The observation also holds a prefix under `ACTION_PREFIX`: the old chunk read at
+    the new chunk's due times T1, T1 + 1 / `fps`, ..., for the duration estimated by
+    `prefix_duration`, and not past the end of the old chunk. The prefix tells the model
+    what the robot does while the model computes. Its length is the delay estimate: the
+    server reads it as the number of prefix actions / `fps`. The server decides how to use
+    the prefix.
 
     When T1 falls between two old due times, each new due time falls between two old
     actions. `prefix_sampling` decides which value the prefix holds there; see
@@ -566,13 +567,20 @@ class RTCSchedule(Policy):
     The first call has no old chunk, so its prefix is empty, and the robot executes no
     action until its answer arrives (-- in the drawing).
 
-    `infer` gets the observation and the prefix, in the command format that `infer`
-    returns, and converts both to the model's format.
+    The prefix is in the command format that `infer` returns. `infer` converts it to the
+    model's format with the rest of the observation.
 
     Only a model with absolute actions works with this policy. No codec converts a
     command back to a relative model action, so the prefix cannot be given to a
     model with relative actions.
     """
+
+    WIRE_NAME = 'rtc_schedule'
+    WIRE_VERSION = 1
+    FPS_ARG = 'fps'
+    CALL_AFTER_SEC_ARG = 'call_after_sec'
+    PREFIX_DURATION_ARG = 'prefix_duration'
+    PREFIX_SAMPLING_ARG = 'prefix_sampling'
 
     def __init__(
         self,
@@ -586,11 +594,12 @@ class RTCSchedule(Policy):
         if not isfinite(call_after_sec) or call_after_sec < 0:
             raise ValueError('call_after_sec must be finite and not negative')
         self._fps = fps
+        self._call_after_sec = call_after_sec
         self._call_after_ns = round(call_after_sec * 1e9)
         self._prefix_duration = prefix_duration
         self._prefix_sampling = prefix_sampling
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         duration = self._prefix_duration.run()
         prefix_sec = 0.0
         answer: Answer[Sequence[Commands]] | None = None
@@ -614,7 +623,7 @@ class RTCSchedule(Policy):
                     if chunk is not None:
                         prefix = chunk.prefix(now_ns, prefix_sec, self._prefix_sampling)
                     called_at_ns = now_ns
-                    answer = runtime.submit(infer, obs, prefix)
+                    answer = runtime.submit(infer, {**obs, policy_keys.ACTION_PREFIX: prefix})
 
                 commands = {} if chunk is None else chunk.take_due(now_ns)
                 next_due_ns = None if chunk is None else chunk.next_due_ns()
@@ -632,6 +641,21 @@ class RTCSchedule(Policy):
 
     def meta(self) -> dict[str, Any]:
         return {ACTION_FPS: self._fps}
+
+    def to_spec(self) -> dict[str, Any]:
+        args = {
+            self.FPS_ARG: self._fps,
+            self.CALL_AFTER_SEC_ARG: self._call_after_sec,
+            self.PREFIX_DURATION_ARG: self._prefix_duration.to_spec(),
+            self.PREFIX_SAMPLING_ARG: self._prefix_sampling.value,
+        }
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+
+    @classmethod
+    def from_spec_args(cls, **args: Any) -> Self:
+        args[cls.PREFIX_DURATION_ARG] = DurationEstimate.from_spec(args[cls.PREFIX_DURATION_ARG])
+        args[cls.PREFIX_SAMPLING_ARG] = PrefixSampling(args.get(cls.PREFIX_SAMPLING_ARG, PrefixSampling.PREVIOUS.value))
+        return cls(**args)
 
 
 class _StackedObs(Mapping[str, Any]):

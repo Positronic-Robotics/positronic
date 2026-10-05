@@ -152,6 +152,9 @@ class RestrictImageSize(Codec):
     def decode(self, data):
         return data
 
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
+
     @property
     def training_encoder(self) -> EpisodeTransform:
         raise NotImplementedError(
