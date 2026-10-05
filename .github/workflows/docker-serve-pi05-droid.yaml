@@ -1,0 +1,39 @@
+name: Build and Push the pi0.5 DROID Serving Image
+
+# A pull request builds and checks positro/pi05-droid; main also pushes it. Main republishes only on a change to the
+# recipe, its vendor code or a workflow, because each publish uploads the weights again; run it by hand otherwise.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.serve-pi05-droid
+      - positronic/vendors/openpi/**
+      - .github/workflows/docker-serve-pi05-droid.yaml
+      - .github/workflows/docker-serve-image.yaml
+      - docker/check_image_budget.py
+      - docker/Makefile
+      - .dockerignore
+  push:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.serve-pi05-droid
+      - positronic/vendors/openpi/**
+      - .github/workflows/docker-serve-pi05-droid.yaml
+      - .github/workflows/docker-serve-image.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: serve-pi05-droid-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  serve-image:
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: pi05-droid
+    secrets: inherit

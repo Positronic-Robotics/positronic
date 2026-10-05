@@ -56,6 +56,7 @@ help:
 	@echo "  make build-galaxea   Build the internal non-commercial evaluation image"
 	@echo "  make build-flux3-action  Build the FLUX 3 Action image (about 36 GB on disk)"
 	@echo "  make build-cosmos3-nano  Build the Cosmos3-Nano image"
+	@echo "  make build-serve-<name>  Build a serving image: $(SERVE_IMAGES)"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
 	@echo "  make tag-training    Tag the training image (depends on build-training)"
@@ -148,6 +149,40 @@ push-cosmos3-nano: tag-cosmos3-nano
 ifdef CI
 	docker push $(IMAGE_NAME_COSMOS3_NANO):latest
 endif
+# One serving image per checkpoint, the weights inside, starting with no network: positro/<name>, from
+# Dockerfile.serve-<name>. Not in `build` or `push`: CI builds each in a workflow of its own.
+SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid
+# The GR00T backbone is gated on the Hub. BuildKit reads the token from HF_TOKEN, and it enters no layer.
+SERVE_BUILD_FLAGS_gr00t-n17-droid := --secret id=hf_token,env=HF_TOKEN
+
+define SERVE_IMAGE
+.PHONY: build-serve-$(1) tag-serve-$(1) push-serve-$(1)
+
+build-serve-$(1):
+	docker build --platform linux/amd64 $$(SERVE_BUILD_FLAGS_$(1)) -f Dockerfile.serve-$(1) -t positro/$(1):local ..
+
+tag-serve-$(1): build-serve-$(1)
+	docker tag positro/$(1):local positro/$(1):$$(IMAGE_TAG)
+	docker tag positro/$(1):local positro/$(1):$$(GIT_SHA)
+ifdef CI
+	docker tag positro/$(1):local positro/$(1):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker tag positro/$(1):local positro/$(1):v$$(VERSION)
+endif
+
+push-serve-$(1): tag-serve-$(1)
+	docker push positro/$(1):$$(IMAGE_TAG)
+	docker push positro/$(1):$$(GIT_SHA)
+ifdef CI
+	docker push positro/$(1):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker push positro/$(1):v$$(VERSION)
+endif
+endef
+
+$(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name))))
 
 build: build-training build-openpi build-groot build-dreamzero build-robolab
 
@@ -330,6 +365,7 @@ clean:
 	-docker rmi $(IMAGE_NAME_COSMOS3_NANO):local
 	-docker rmi $(IMAGE_NAME_COSMOS3_NANO):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_COSMOS3_NANO):$(GIT_SHA)
+	-for name in $(SERVE_IMAGES); do docker rmi positro/$$name:local positro/$$name:$(IMAGE_TAG) positro/$$name:$(GIT_SHA); done
 	@echo "Image cleanup attempts complete. Check the output for removal errors."
 
 prune:

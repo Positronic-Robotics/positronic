@@ -17,16 +17,20 @@ the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: Mo
 vendor stack. These three recipes add the weights, the positronic source with an offline
 environment, `EXPOSE 8000` and a start command. Their layers go from the least often changed to the
 most: base, weights, dependencies, source. A source change rebuilds and pushes the source layer only.
-The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves, and CI publishes each
-image. Build from the root of a positronic checkout:
+The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves. CI publishes all five
+images to Docker Hub. Build from the root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
-| openpi π0.5 DROID | [`docker/Dockerfile.submit-openpi`](../docker/Dockerfile.submit-openpi) | `positro/openpi-base` | `pi05_droid_jointpos`, the public checkpoint |
-| GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
-| MolmoAct2 DROID | [`docker/Dockerfile.submit-molmoact2`](../docker/Dockerfile.submit-molmoact2) | `ghcr.io/astral-sh/uv:python3.13-bookworm` | `allenai/MolmoAct2-DROID` at a pinned revision |
+| openpi π0.5 DROID | [`docker/Dockerfile.serve-pi05-droid`](../docker/Dockerfile.serve-pi05-droid), published as `positro/pi05-droid` | `positro/openpi-base` | `pi05_droid_jointpos`, the public checkpoint |
+| GR00T N1.7 DROID | [`docker/Dockerfile.serve-gr00t-n17-droid`](../docker/Dockerfile.serve-gr00t-n17-droid), published as `positro/gr00t-n17-droid` | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
+| MolmoAct2 DROID | [`docker/Dockerfile.serve-molmoact2-droid`](../docker/Dockerfile.serve-molmoact2-droid), published as `positro/molmoact2-droid` | `ghcr.io/astral-sh/uv:python3.13-bookworm` | `allenai/MolmoAct2-DROID` at a pinned revision |
 | FLUX 3 Action DROID | [`docker/Dockerfile.flux3-action`](../docker/Dockerfile.flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
 | Cosmos3-Nano DROID | [`docker/Dockerfile.cosmos3-nano`](../docker/Dockerfile.cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
+
+CI builds each image when its recipe or its vendor code changes. It tags each build `main`, `latest`
+and the commit, and a release adds `v<version>`. Read the digest of a published image with
+`docker/read_image_digest.sh positro/<image>:main`, and pin it.
 
 The header of each recipe gives its build command. The comments in each recipe say where a
 checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM
@@ -34,8 +38,9 @@ before anything reaches the GPU.
 
 The GR00T recipe downloads `nvidia/GR00T-N1.7-DROID` (6.9 GB) and its backbone
 `nvidia/Cosmos-Reason2-2B` (4.9 GB). The backbone repository is gated: accept NVIDIA's terms on its
-Hub page, then put a read token in `$HOME/.hf_token`. The build reads the token through a secret
-mount, and it enters no layer.
+Hub page, then put a read token in `$HOME/.hf_token`, or in `HF_TOKEN` for
+`make -C docker build-serve-gr00t-n17-droid`. The build reads the token through a secret mount, and
+it enters no layer.
 
 The MolmoAct2 recipe downloads `allenai/MolmoAct2-DROID` (21.8 GB in float32). The build needs no
 token: the repository is not gated. The image is 24.4 GB compressed.

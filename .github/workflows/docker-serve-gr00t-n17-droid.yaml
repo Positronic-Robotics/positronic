@@ -1,0 +1,39 @@
+name: Build and Push the GR00T N1.7 DROID Serving Image
+
+# A pull request builds and checks positro/gr00t-n17-droid; main also pushes it. Main republishes only on a change to the
+# recipe, its vendor code or a workflow, because each publish uploads the weights again; run it by hand otherwise.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.serve-gr00t-n17-droid
+      - positronic/vendors/gr00t/**
+      - .github/workflows/docker-serve-gr00t-n17-droid.yaml
+      - .github/workflows/docker-serve-image.yaml
+      - docker/check_image_budget.py
+      - docker/Makefile
+      - .dockerignore
+  push:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.serve-gr00t-n17-droid
+      - positronic/vendors/gr00t/**
+      - .github/workflows/docker-serve-gr00t-n17-droid.yaml
+      - .github/workflows/docker-serve-image.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: serve-gr00t-n17-droid-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  serve-image:
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: gr00t-n17-droid
+    secrets: inherit
