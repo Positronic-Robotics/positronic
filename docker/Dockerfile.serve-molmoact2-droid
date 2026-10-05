@@ -32,6 +32,8 @@ RUN hf download "$MODEL" --revision "$MODEL_REVISION" > /dev/null \
 
 FROM ${BASE_IMAGE}
 ARG MODEL
+# robosuite, a positronic dependency, pulls in opencv-python, and its cv2 loads libGL at import.
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 && rm -rf /var/lib/apt/lists/*
 
 # For a fine-tuned checkpoint of your own, `COPY` its directory instead and set MOLMOACT2_MODEL to it.
 COPY --from=weights /opt/hf /opt/hf
