@@ -41,7 +41,7 @@ class Tariff(BaseModel):
 class QuoteLine(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
 
-    task_pos: int = Field(strict=True, ge=0)
+    task_pos: int = Field(strict=True, ge=0, le=MAX_UNITS)
     endpoint: str = Field(min_length=1)
     count: int = Field(strict=True, ge=1, le=MAX_UNITS)
     cap_ns: int = Field(strict=True, ge=1, le=MAX_UNITS)

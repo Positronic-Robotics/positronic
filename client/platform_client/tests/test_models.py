@@ -902,6 +902,11 @@ def test_billing_units_reject_coercion_and_overflow(units):
         Tariff.for_rates(units, 0)
 
 
+def test_billing_task_positions_reject_storage_overflow():
+    with pytest.raises(ValidationError, match='task_pos'):
+        QuoteLine(task_pos=MAX_UNITS + 1, endpoint='candidate', count=1, cap_ns=1, max_units=0)
+
+
 def test_billing_modes_require_the_matching_hold_state():
     with pytest.raises(ValidationError, match='quote'):
         RequestBilling(mode=BillingMode.prepaid, state=BillingState.held)
