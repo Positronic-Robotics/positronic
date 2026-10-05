@@ -230,8 +230,8 @@ class ConnectOutcome(Enum):
 class ConnectRetries:
     """The retry policy over one run of refused connect attempts.
 
-    A ``FORBIDDEN`` refusal means a cold backend or a refused credential, and gets ``MAX_FORBIDDEN_ATTEMPTS``
-    attempts.
+    ``COLD`` and ``SILENT`` retry to the deadline. A ``FORBIDDEN`` refusal means a cold backend or a refused
+    credential, and gets ``MAX_FORBIDDEN_ATTEMPTS`` attempts.
     """
 
     MAX_FORBIDDEN_ATTEMPTS = 3
@@ -245,7 +245,7 @@ class ConnectRetries:
             self._forbidden_attempts += 1
             again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
         else:
-            again = refusal is wire.Refusal.COLD
+            again = refusal in (wire.Refusal.COLD, wire.Refusal.SILENT)
         return ConnectOutcome.RETRY if again else ConnectOutcome.SURFACE
 
 

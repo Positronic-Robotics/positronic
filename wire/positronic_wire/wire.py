@@ -98,6 +98,8 @@ class Refusal(Enum):
     COLD = 'cold'  # a backend still starting; retry to the deadline
     FORBIDDEN = 'forbidden'  # a cold backend, or a refused credential; a few attempts, then surface
     FINAL = 'final'  # a permanent refusal; surface at once
+    # Nothing answered: no connection, or none before the timeout or the close. Retry to the deadline.
+    SILENT = 'silent'
 
 
 class ConnectRefused(Exception):
@@ -143,7 +145,7 @@ class ClientWire(abc.ABC, Generic[AddressT]):
 
         Returns the seconds the server stays alive after the call, or ``None`` for a server with no idle
         timeout. ``timeout`` bounds the whole call. Raises ``KeepaliveUnsupported`` where the server serves
-        sessions but not the call, and ``ConnectRefused`` where it answers nothing.
+        sessions but not the call, and ``ConnectRefused`` otherwise, in the terms ``probe`` uses.
         """
 
     @abc.abstractmethod
@@ -152,9 +154,9 @@ class ClientWire(abc.ABC, Generic[AddressT]):
 
         ``headers`` are the ones ``dial`` sends: an edge that authenticates on them lets the probe through to
         the server behind it, so the probe wakes what a session would reach. ``None`` when a server answers.
-        A ``Refusal`` says why none did, in the terms ``dial`` uses: ``COLD`` for a backend still starting or
-        a port nothing answers on, ``FORBIDDEN`` for a credential the edge refused, ``FINAL`` for a refusal
-        no retry reaches.
+        A ``Refusal`` says why none did, in the terms ``dial`` uses: ``COLD`` for a backend still starting,
+        ``SILENT`` for a port nothing answers on, ``FORBIDDEN`` for a credential the edge refused, ``FINAL`` for
+        a refusal no retry reaches.
         """
 
 

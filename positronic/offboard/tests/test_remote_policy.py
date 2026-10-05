@@ -208,8 +208,9 @@ class TestNewSessionRetriesRefusedConnects:
         assert len(fake.dials) == 1
         assert refused.value.refusal is wire.Refusal.FINAL
 
-    def test_a_cold_refusal_retries_to_the_deadline(self):
-        fake = _FakeWire(_refused(wire.Refusal.COLD))
+    @pytest.mark.parametrize('refusal', [wire.Refusal.COLD, wire.Refusal.SILENT])
+    def test_a_server_not_up_yet_retries_to_the_deadline(self, refusal):
+        fake = _FakeWire(_refused(refusal))
         with (
             patch('positronic.offboard.client.InferenceSession'),
             patch('positronic.offboard.client.time.sleep'),

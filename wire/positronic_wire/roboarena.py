@@ -1,11 +1,12 @@
 """The client side of the roboarena wire: each frame carried as bytes, on a websocket at the root."""
 
 import dataclasses
+import time
 from collections.abc import Mapping
 from typing import Self
 
 from positronic_wire import wire
-from positronic_wire.websocket import WebsocketClientConnection, refusal_of
+from positronic_wire.websocket import WebsocketClientConnection, connected_socket, refusal_of
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 from websockets.sync.client import connect
 
@@ -68,7 +69,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
         raise wire.KeepaliveUnsupported(f"{self.NAME} carries a partner's frames alone and answers no keepalive")
 
     def _open(
-        self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
+        self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float, **settings
     ) -> RoboarenaClientConnection:
         """One opened connection on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
         url = self.session_url(address)
@@ -81,6 +82,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
                 ping_interval=self.PING_INTERVAL_S,
                 ping_timeout=self.PING_TIMEOUT_S,
                 max_size=wire.MAX_MESSAGE_BYTES,
+                **settings,
             )
         except (OSError, InvalidHandshake, ConnectionClosed) as e:
             raise wire.ConnectRefused(refusal_of(e), f'{e} (connecting to {url})') from e
@@ -98,14 +100,23 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
     def probe(
         self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
-        """Whether a server announces itself at ``address``. Raises ``TextAnswer`` when it answers in text."""
+        """Whether a server announces itself at ``address``. Raises ``TextAnswer`` when it answers in text.
+
+        ``open_timeout`` bounds the whole call: the name lookup, the handshake and the announcement.
+        """
+        deadline = time.monotonic() + open_timeout
         try:
-            connection = self._open(address, headers, open_timeout)
+            sock = connected_socket(address.host, address.port, open_timeout)
+            # The probe has nothing to finish, so it does not wait for the server's close.
+            connection = self._open(address, headers, max(0.0, deadline - time.monotonic()), sock=sock, close_timeout=0)
+        except OSError as e:
+            return refusal_of(e)
         except wire.ConnectRefused as e:
             return e.refusal
         try:
-            connection.recv(timeout=open_timeout)
+            connection.recv(timeout=max(0.0, deadline - time.monotonic()))
         except (TimeoutError, wire.PeerDisconnected):
+            # The server upgraded and announced nothing: a backend still starting.
             return wire.Refusal.COLD
         finally:
             connection.close()
