@@ -1,7 +1,7 @@
 name: Build a Serving Image
 
 # Builds positro/<name> from docker/Dockerfile.serve-<name> and pushes it with `main`, the commit and `latest`; on a
-# release, with `v<version>` and the commit. It checks nothing: the developer checks the offline start and the size.
+# release, with `v<version>` and the commit.
 on:
   workflow_call:
     inputs:
