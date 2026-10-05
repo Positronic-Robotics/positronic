@@ -1,4 +1,5 @@
 import numpy as np
+from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom, keys
 from positronic.dataset import transforms
@@ -7,7 +8,6 @@ from positronic.dataset.signal import RECORDED_TIME, Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
-from positronic.policy.base import ARGS, NAME, VERSION
 from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_action
 
 RotRep = geom.Rotation.Representation

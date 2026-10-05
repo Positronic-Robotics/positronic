@@ -3,6 +3,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image as PilImage
+from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
 from positronic.dataset import Signal, transforms
@@ -10,7 +11,6 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
-from positronic.policy.base import ARGS, NAME, VERSION
 from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
 
 # The encoded observation's language prompt, under the name LeRobot training and its policies both use. It

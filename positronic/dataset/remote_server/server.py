@@ -10,6 +10,7 @@ import pos3
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from positronic_model_server.serialization import serialize
 from pydantic import BaseModel, StrictInt
 
 import positronic.cfg.ds
@@ -25,7 +26,6 @@ from positronic.dataset.remote import (
 )
 from positronic.dataset.signal import TIMELINES_KEY, SupportsEncodedRepresentation
 from positronic.dataset.time import Time, validate_timelines
-from positronic.utils.serialization import serialize
 
 _dataset: Dataset | None = None
 _app = FastAPI(title='Positronic Dataset Server', version='1.0.0')

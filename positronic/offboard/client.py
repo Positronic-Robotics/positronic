@@ -7,13 +7,14 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
+from positronic_model_server import protocol
 from positronic_wire import wire
 from positronic_wire.wire import ClientWire
 
 from positronic import telemetry, telemetry_keys
+from positronic.offboard import protocol as legacy_protocol
 from positronic.utils.versions import resolve_version
 
-from . import protocol
 from .protocol import deserialise, serialise, typed_commands
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,9 @@ class InferenceSession:
         self._infer_timeout = infer_timeout
         self._reopen = reopen
         ready = self._handshake(ready_by)
-        self._protocol = resolve_version(protocol.VERSIONS, ready.get(protocol.PROTOCOL_VERSION, 1), 'policy protocol')
+        self._protocol = resolve_version(
+            legacy_protocol.VERSIONS, ready.get(protocol.PROTOCOL_VERSION, 1), 'policy protocol'
+        )
         self._metadata = ready[protocol.META]
         self._session_id = ready[protocol.SESSION_ID] if self._protocol is protocol.ProtocolVersion.V2 else None
         self._closed = False

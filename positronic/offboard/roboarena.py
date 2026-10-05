@@ -5,11 +5,11 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
+from positronic_model_server.serialization import deserialize, serialize
 from positronic_wire import registry, wire
 from positronic_wire import roboarena as roboarena_wire
 
 from positronic.offboard.client import ConnectOutcome, ConnectRetries
-from positronic.utils.serialization import deserialize, serialize
 
 logger = logging.getLogger(__name__)
 

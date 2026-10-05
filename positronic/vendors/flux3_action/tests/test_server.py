@@ -7,11 +7,11 @@ import urllib.request
 import pytest
 import websockets.asyncio.client
 from platform_client.policy_container import AUTH_TOKEN_ENV
+from positronic_model_server import protocol
+from positronic_model_server.serialization import serialize
 from websockets.exceptions import InvalidStatus
 
-from positronic.offboard import protocol
 from positronic.offboard.roboarena import RoboarenaClient
-from positronic.utils.serialization import serialize
 from positronic.vendors.flux3_action import server
 
 TOKEN = 'run-token'

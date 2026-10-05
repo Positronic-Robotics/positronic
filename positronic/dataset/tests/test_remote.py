@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
+from positronic_model_server.serialization import deserialize
 
 from positronic.dataset.edits import EditedEpisode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -23,7 +24,6 @@ from positronic.dataset.signal import RECORDED_TIME, TIMELINE_METADATA_KEY, TIME
 from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.utilities.migrate_remote import migrate_dataset, migrate_remote_dataset
 from positronic.dataset.video import VIDEO_ENCODING_V1, VIDEO_ENCODING_V2, VideoSignal, VideoSignalWriter
-from positronic.utils.serialization import deserialize
 
 
 @pytest.fixture

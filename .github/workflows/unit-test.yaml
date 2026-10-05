@@ -81,8 +81,35 @@ jobs:
       - name: Install as package and verify imports
         run: |
           uv venv --python ${{ matrix.python }} /tmp/pkg-test
-          uv pip install --python /tmp/pkg-test . jinja2
+          uv pip install --python /tmp/pkg-test ./client ./wire ./model_server . jinja2
           /tmp/pkg-test/bin/python utilities/check_packaging.py
+
+  model-server-packaging:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+        transport:
+          - {extra: '', wires: ''}
+          - {extra: '[websocket]', wires: 'websocket websocket_tls websocket_unix roboarena'}
+          - {extra: '[grpc]', wires: 'grpc grpc_tls'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build independent wheels
+        run: |
+          uv build --package positronic-wire --out-dir /tmp/model-wheels
+          uv build --package positronic-model-server --out-dir /tmp/model-wheels
+      - name: Install the selected transport without Positronic
+        run: |
+          uv venv --python ${{ matrix.python }} /tmp/model-package
+          uv pip install --python /tmp/model-package --no-index --find-links /tmp/model-wheels --no-deps positronic-wire positronic-model-server
+          uv pip install --python /tmp/model-package --find-links /tmp/model-wheels "positronic-model-server${{ matrix.transport.extra }}" 'numpy==1.26.4' pytest
+      - name: Check installed imports and serialization
+        run: |
+          /tmp/model-package/bin/python -I utilities/check_model_server_package.py --wire ${{ matrix.transport.wires }}
+          /tmp/model-package/bin/python -I -m pytest -p no:cacheprovider -c /dev/null --import-mode=importlib model_server/positronic_model_server/tests
 
   lerobot:
     runs-on: ubuntu-latest

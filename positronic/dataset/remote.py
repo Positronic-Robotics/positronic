@@ -8,8 +8,7 @@ from typing import Any, TypeVar
 
 import httpx
 import numpy as np
-
-from positronic.utils.serialization import deserialize
+from positronic_model_server.serialization import deserialize
 
 from .dataset import Dataset
 from .episode import Episode, _EpisodeTimeIndexer

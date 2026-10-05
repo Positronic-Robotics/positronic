@@ -52,7 +52,7 @@ repos:
         # member out of step: its shipped directory, its manifest, and the root's pin.
         entry: uv run --locked python3 utilities/check_workspace_version_bump.py
         language: system
-        files: '^(client/.*|wire/.*|pyproject\.toml)$'
+        files: '^(client/.*|wire/.*|model_server/.*|pyproject\.toml)$'
         pass_filenames: false
         stages: [pre-commit]
       - id: basedpyright-baseline-ratchet
