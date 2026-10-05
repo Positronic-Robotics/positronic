@@ -5,6 +5,7 @@ import pathlib
 import threading
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -541,7 +542,9 @@ def test_wrong_session_id_closes_only_the_requesting_session(served, transport, 
     try:
         assert first.session_id != second.session_id
         assert protocol.SESSION_ID not in first.metadata
-        first._conn.send(protocol.serialise({protocol.SESSION_ID: second.session_id, **payload}))
+        # The server answers this frame by ending the call, which can come before gRPC confirms the write.
+        with suppress(wire.PeerDisconnected):
+            first._conn.send(protocol.serialise({protocol.SESSION_ID: second.session_id, **payload}))
         response = protocol.deserialise(first._conn.recv(timeout=5))
         # A drop now must not reconnect: the server answered on the session's connection, past ``infer``.
         first._answered = True
