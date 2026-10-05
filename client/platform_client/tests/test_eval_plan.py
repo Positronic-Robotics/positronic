@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 import pytest
-from platform_client.enums import EndpointKind, Placement, RequestType, RigShape, Wire
+from platform_client.enums import EndpointKind, Placement, RequestType, RigShape, StartPose, Wire
 from platform_client.eval_plan import (
     _ENDPOINT_OVERRIDES,
     _PER_TASK_ONLY,
@@ -162,6 +162,7 @@ A_PER_TASK_VALUE = {
     'camera_vantage': 'phail',
     'external_cameras': {'side': 'left'},
     'clutter': {'count_min': 1, 'count_max': 2},
+    'start_pose': 'droid_reset',
 }
 
 
@@ -195,6 +196,19 @@ def test_a_scene_is_flat_on_every_level():
     assert sent['tote_placement'] == 'random'
     assert sent['camera_vantage'] == 'phail'
     assert sent['external_cameras'] == {'side': 'left'}
+
+
+def test_a_plan_and_a_task_each_state_a_start_pose():
+    plan = a_plan(start_pose='droid_reset', tasks=[SPOONS, {'task_id': MUG, 'start_pose': 'nominal'}])
+    assert plan.start_pose is StartPose.droid_reset
+    assert plan.tasks[0].start_pose is None
+    assert plan.tasks[1].start_pose is StartPose.nominal
+    sent = plan.model_dump(mode='json')
+    assert sent['start_pose'] == 'droid_reset'
+    assert sent['tasks'][1]['start_pose'] == 'nominal'
+    assert EvalPlan.model_validate(sent) == plan
+    with pytest.raises(ValidationError):
+        a_plan(start_pose='home')
 
 
 def test_a_scene_value_outside_the_closed_set_is_refused():

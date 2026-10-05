@@ -18,6 +18,7 @@ from platform_client.enums import (
     Placement,
     QuotaSubject,
     ReasonCode,
+    StartPose,
     SubmissionStatus,
     Wire,
 )
@@ -135,6 +136,7 @@ ASK = EvalPlan.model_validate({
             'tote_placement': 'random',
             'camera_vantage': 'phail',
             'external_cameras': {'side': 'left'},
+            'start_pose': 'droid_reset',
             'endpoints': [
                 'baseline',
                 {
@@ -190,6 +192,7 @@ RESOLVED_TASK = ResolvedTask(
     cap_per_episode_sec=90,
     policy_preset='example_candidate',
     tote_placement=Placement.left,
+    start_pose=StartPose.droid_reset,
     camera_vantage=CameraVantage.phail,
     external_cameras={'side': Placement.right},
     clutter=Clutter(count_min=2, count_max=6),
