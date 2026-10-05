@@ -186,7 +186,7 @@ def test_a_readiness_poll_waits_far_less_than_a_handshake():
     client = roboarena.RoboarenaClient('a-partner-host', 8000)
     with patch.object(client, '_wire') as client_wire:
         client_wire.probe.return_value = None
-        assert client.probe() is roboarena.ProbeOutcome.READY
+        assert client.probe() is None
     assert client_wire.probe.call_args.args[2] == roboarena.READY_PROBE_TIMEOUT_S
 
 
@@ -194,7 +194,7 @@ def test_readiness_raises_the_text_a_server_answers_in():
     """A backend that reports a failure is not a backend still starting, so a readiness poll does not retry it."""
     client = roboarena.RoboarenaClient('a-partner-host', 8000)
 
-    with patch('positronic_wire.roboarena.connect') as connect:
+    with patch('positronic_wire.roboarena.connected_socket'), patch('positronic_wire.roboarena.connect') as connect:
         connect.return_value.recv.return_value = 'CUDA out of memory'
         with pytest.raises(roboarena_wire.TextAnswer, match='CUDA out of memory'):
             client.probe()
@@ -203,9 +203,9 @@ def test_readiness_raises_the_text_a_server_answers_in():
 def test_a_peer_that_closes_before_announcing_is_not_ready():
     client = roboarena.RoboarenaClient('a-partner-host', 8000)
 
-    with patch('positronic_wire.roboarena.connect') as connect:
+    with patch('positronic_wire.roboarena.connected_socket'), patch('positronic_wire.roboarena.connect') as connect:
         connect.return_value.recv.side_effect = ConnectionClosedError(None, None)
-        assert client.probe() is roboarena.ProbeOutcome.NOT_READY
+        assert client.probe() is wire.Refusal.COLD
 
 
 def test_readiness_raises_a_final_refusal():
@@ -225,16 +225,17 @@ def test_readiness_raises_a_forbidden_refusal_once_its_attempts_are_spent():
     with patch.object(client, '_wire') as client_wire:
         client_wire.probe.return_value = wire.Refusal.FORBIDDEN
         for _ in range(ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1):
-            assert client.probe() is roboarena.ProbeOutcome.NOT_READY
+            assert client.probe() is wire.Refusal.FORBIDDEN
         with pytest.raises(wire.ConnectRefused) as refused:
             client.probe()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
 
 
-def test_a_cold_backend_stays_not_ready_past_the_forbidden_attempts():
+@pytest.mark.parametrize('refusal', [wire.Refusal.COLD, wire.Refusal.SILENT])
+def test_a_backend_not_up_yet_stays_not_ready_past_the_forbidden_attempts(refusal):
     client = roboarena.RoboarenaClient('a-partner-host', 8000)
 
     with patch.object(client, '_wire') as client_wire:
-        client_wire.probe.return_value = wire.Refusal.COLD
+        client_wire.probe.return_value = refusal
         for _ in range(ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 1):
-            assert client.probe() is roboarena.ProbeOutcome.NOT_READY
+            assert client.probe() is refusal
