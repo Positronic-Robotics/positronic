@@ -18,7 +18,6 @@ from positronic.drivers.roboarm import command
 from positronic.utils import serialization
 from positronic.utils.versions import Version
 
-AUTH_TOKEN_ENV = 'AUTH_TOKEN'
 AUTH_HEADER = 'Authorization'
 
 
