@@ -63,10 +63,13 @@ def console() -> Iterator[_Console]:
     console.feed.stream.close()
 
 
-def test_the_page_and_its_assets_are_served(console):
-    assert 'Station console' in console.client.get('/').text
-    assert console.client.get('/static/station.js').status_code == 200
-    assert console.client.get('/static/station.css').status_code == 200
+def test_the_page_and_every_asset_it_links_are_served(console):
+    page = console.client.get('/')
+    assert 'Station console' in page.text
+    assets = [link for link in re.findall(r'(?:href|src)="([^"]+)"', page.text) if not link.startswith('data:')]
+    assert sorted(assets) == ['station.css', 'station.js']
+    for asset in assets:
+        assert console.client.get(f'/{asset}').status_code == 200
 
 
 def test_the_status_is_the_json_the_page_reads(console):

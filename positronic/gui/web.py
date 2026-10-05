@@ -17,7 +17,6 @@ import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.requests import HTTPConnection
@@ -196,7 +195,6 @@ class StationConsole(pimm.ControlSystem):
     ) -> FastAPI:
         """The console's HTTP surface. ``submit`` hands a trial or a ``done`` payload to the control loop."""
         app = FastAPI()
-        app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
 
         def sent_from_another_site(connection: HTTPConnection) -> bool:
             """A browser sends ``Origin`` with each cross-site POST and each WebSocket handshake. A client that sends
@@ -219,10 +217,6 @@ class StationConsole(pimm.ControlSystem):
             now = clock.now()
             cameras = [feed.view(name, now) for name, feed in feeds.items()]
             return Status(run=station.view(now), cameras=cameras, policy=self._policy, host=self._host)
-
-        @app.get('/')
-        async def index():
-            return FileResponse(STATIC_DIR / 'station.html')
 
         @app.get('/status')
         async def get_status() -> Status:
@@ -253,6 +247,8 @@ class StationConsole(pimm.ControlSystem):
             await websocket.accept()
             await _stream(websocket, feed.stream, should_stop)
 
+        # A mount at the root takes every path that reaches it, so it comes after the routes.
+        app.mount('/', StaticFiles(directory=STATIC_DIR, html=True))
         return app
 
 
