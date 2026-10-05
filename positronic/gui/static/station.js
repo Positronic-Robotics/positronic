@@ -4,6 +4,15 @@
 const POLL_MS = 500;
 const EDIT_DELAY_MS = 300;
 
+// The routes that StationConsole.build_app serves.
+const ROUTES = {
+  status: '/status',
+  instruction: '/instruction',
+  start: '/episode/start',
+  end: '/episode/end',
+  video: '/video',
+};
+
 const ICON = {
   check:
     '<svg class="i" viewBox="0 0 16 16"><path d="M3 8.5l3.2 3.2L13 4.8" fill="none" stroke="currentColor" ' +
@@ -79,7 +88,7 @@ async function sendEdit() {
   if (!editing) return;
   const text = textarea.value;
   try {
-    await post('/instruction', { override: text });
+    await post(ROUTES.instruction, { override: text });
   } catch (error) {
     window.alert(`The console refused the instruction: ${error.message}`);
   }
@@ -88,7 +97,7 @@ async function sendEdit() {
 
 async function poll() {
   try {
-    const response = await fetch('/status', { cache: 'no-store' });
+    const response = await fetch(ROUTES.status, { cache: 'no-store' });
     if (!response.ok) throw new Error(response.statusText);
     offline = false;
     render(await response.json());
@@ -240,7 +249,7 @@ function makeTile(grid, camera) {
   grid.appendChild(figure);
   const state = figure.querySelector('.tile-state');
   const wait = figure.querySelector('.tile-wait');
-  startStream(figure.querySelector('video'), `/video/${encodeURIComponent(camera.name)}`, wait);
+  startStream(figure.querySelector('video'), `${ROUTES.video}/${encodeURIComponent(camera.name)}`, wait);
   return { figure, state, stateText: state.lastElementChild, meta: figure.querySelector('.tile-meta') };
 }
 
@@ -356,16 +365,16 @@ textarea.addEventListener('input', () => {
 $('reset').addEventListener('click', () => {
   clearTimeout(editTimer);
   editing = false;
-  act('/instruction', { override: null });
+  act(ROUTES.instruction, { override: null });
 });
 
 $('start').addEventListener('click', async () => {
   await sendEdit();
-  await act('/episode/start');
+  await act(ROUTES.start);
 });
 
 for (const button of verdictButtons) {
-  button.addEventListener('click', () => act('/episode/end', { verdict: button.dataset.verdict }));
+  button.addEventListener('click', () => act(ROUTES.end, { verdict: button.dataset.verdict }));
 }
 
 poll();
