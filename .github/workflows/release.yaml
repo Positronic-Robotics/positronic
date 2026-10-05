@@ -191,3 +191,16 @@ jobs:
           unset CI
           VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
           make push IMAGE_TAG=v${VERSION}
+
+  # Each serving image holds its weights, so each builds on a runner of its own.
+  publish-serve-images:
+    needs: publish-pypi
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [pi05-droid, gr00t-n17-droid, molmoact2-droid]
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: ${{ matrix.name }}
+      release: true
+    secrets: inherit

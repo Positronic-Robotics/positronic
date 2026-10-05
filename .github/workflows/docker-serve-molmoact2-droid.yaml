@@ -1,0 +1,39 @@
+name: Build and Push the MolmoAct2 DROID Serving Image
+
+# Main republishes positro/molmoact2-droid on a change to its recipe, its build,
+# or the packages and manifests it installs.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.serve-molmoact2-droid
+      - docker/Makefile
+      - .dockerignore
+      - pyproject.toml
+      - uv.lock
+      - README.md
+      - LICENSE
+      - positronic/**
+      - pimm/**
+      - client/**
+      - wire/**
+      - model_server/**
+      - .github/workflows/docker-serve-molmoact2-droid.yaml
+      - .github/workflows/docker-serve-image.yaml
+      - '!**/tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: serve-molmoact2-droid-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  serve-image:
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: molmoact2-droid
+    secrets: inherit
