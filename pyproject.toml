@@ -47,7 +47,7 @@ dependencies = [
     # a released `positronic` resolves it from the index, so it is published first, and it is pinned
     # exactly for the same reason the client is (wire/README.md).
     "positronic-wire[websocket,grpc]==0.12.0",
-    "positronic-model-server==0.1.0",
+    "positronic-model-server==0.1.1",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
