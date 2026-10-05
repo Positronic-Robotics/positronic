@@ -13,6 +13,9 @@ from enum import IntEnum
 import pytest
 from platform_client.enums import (
     TERMINAL_STATUSES,
+    BillingMode,
+    BillingRole,
+    BillingState,
     BoardVisibility,
     CameraVantage,
     EndpointKind,
@@ -42,6 +45,7 @@ ERROR_CODE_VALUES = {
     'upstream_unavailable': 8,
     'eval_unavailable': 9,
     'internal_error': 10,
+    'insufficient_credits': 11,
 }
 
 REASON_CODE_VALUES = {
@@ -99,6 +103,9 @@ REQUEST_TYPE_VALUES = {'INVALID': 0, 'nebius_competition': 1, 'private_eval': 2}
 RIG_SHAPE_VALUES = {'INVALID': 0, 'franka': 1, 'yam': 2, 'sim': 3}
 
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
+    (BillingMode, {'INVALID': 0, 'legacy': 1, 'prepaid': 2}),
+    (BillingRole, {'INVALID': 0, 'none': 1, 'spender': 2}),
+    (BillingState, {'INVALID': 0, 'held': 1, 'settled': 2, 'review': 3}),
     (ErrorCode, ERROR_CODE_VALUES),
     (ReasonCode, REASON_CODE_VALUES),
     (SubmissionStatus, SUBMISSION_STATUS_VALUES),

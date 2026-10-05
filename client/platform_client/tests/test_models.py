@@ -7,8 +7,19 @@ from typing import get_args
 
 import pytest
 from platform_client import config, eval_plan, requests
+from platform_client.billing import (
+    CREDIT_SCALE,
+    MAX_UNITS,
+    CreditBalance,
+    CreditQuote,
+    QuoteLine,
+    RequestBilling,
+    Tariff,
+)
 from platform_client.boards import BoardRef
 from platform_client.enums import (
+    BillingMode,
+    BillingState,
     BoardVisibility,
     CameraVantage,
     EndpointKind,
@@ -860,3 +871,41 @@ def test_a_view_from_a_gateway_that_sends_no_outcome_reads_as_none():
     """The fields are additive: a payload that carries none of them still validates."""
     view = FinishedSubmissionView.model_validate({'id': '1f', 'status': 'finished', 'artifacts': {'result': 's3://b/'}})
     assert view.replay is None and view.outcome is None
+
+
+def test_billing_terms_round_trip_with_exact_integer_units():
+    terms = Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE)
+    line = QuoteLine(task_pos=0, endpoint='candidate', count=2, cap_ns=1, max_units=2 * (CREDIT_SCALE // 6 + 1))
+    quote = CreditQuote(terms=terms, lines=(line,), total_units=line.max_units)
+    accepted = RequestBilling(mode=BillingMode.prepaid, quote=quote, state=BillingState.held)
+    assert RequestBilling.model_validate_json(accepted.model_dump_json()) == accepted
+    balance = CreditBalance(posted_units=12, reserved_units=10)
+    assert balance.model_dump()['available_units'] == 2
+
+
+def test_billing_terms_reject_wrong_versions_and_inconsistent_quotes():
+    with pytest.raises(ValidationError, match='version'):
+        Tariff(version='incorrect', episode_units=1, minute_units=1)
+    terms = Tariff.for_rates(CREDIT_SCALE, CREDIT_SCALE)
+    line = QuoteLine(task_pos=0, endpoint='candidate', count=1, cap_ns=CREDIT_SCALE, max_units=2 * CREDIT_SCALE)
+    with pytest.raises(ValidationError, match='total'):
+        CreditQuote(terms=terms, lines=(line,), total_units=1)
+    with pytest.raises(ValidationError, match='repeats'):
+        CreditQuote(terms=terms, lines=(line, line), total_units=4 * CREDIT_SCALE)
+    with pytest.raises(ValidationError, match='tariff'):
+        CreditQuote(terms=Tariff.for_rates(0, 0), lines=(line,), total_units=line.max_units)
+
+
+@pytest.mark.parametrize('units', [True, 1.0, '1', -1, MAX_UNITS + 1])
+def test_billing_units_reject_coercion_and_overflow(units):
+    with pytest.raises(ValidationError):
+        Tariff.for_rates(units, 0)
+
+
+def test_billing_modes_require_the_matching_hold_state():
+    with pytest.raises(ValidationError, match='quote'):
+        RequestBilling(mode=BillingMode.prepaid, state=BillingState.held)
+    with pytest.raises(ValidationError, match='holds no credits'):
+        RequestBilling(mode=BillingMode.legacy, state=BillingState.held)
+    with pytest.raises(ValidationError, match='exceed'):
+        CreditBalance(posted_units=10, reserved_units=11)

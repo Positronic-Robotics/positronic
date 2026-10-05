@@ -31,6 +31,29 @@ class ErrorCode(IntEnum):
     # whose details carry the evals this platform does offer.
     eval_unavailable = 9
     internal_error = 10
+    insufficient_credits = 11
+
+
+@unique
+class BillingMode(IntEnum):
+    INVALID = 0
+    legacy = 1
+    prepaid = 2
+
+
+@unique
+class BillingRole(IntEnum):
+    INVALID = 0
+    none = 1
+    spender = 2
+
+
+@unique
+class BillingState(IntEnum):
+    INVALID = 0
+    held = 1
+    settled = 2
+    review = 3
 
 
 @unique
