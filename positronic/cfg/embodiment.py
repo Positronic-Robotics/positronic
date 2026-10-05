@@ -149,11 +149,12 @@ def yam_bimanual(
 
 # The yambox station. Its CAN chains carry the names udev gives the two adapters, because `can0` and `can1`
 # there are the onboard controllers and reach no arm.
-# TODO: `mounts` still holds the sim-scene values the default carries. Survey where this station's arm bases
-# sit and put the measured pose here, or `ee_pose` reaches the world frame wrong.
 yam_bimanual_yambox = yam_bimanual.override(
     left_channel='can_follower_l',
     right_channel='can_follower_r',
+    # Measured on this station: the bases sit 0.61 m apart, in line and parallel, directly on the table top.
+    # The sim scene puts them on a 0.011 plate, so only z differs from the default.
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.30], keys.RIGHT_ARM: [0.30, -0.305, 0.30]},
     # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
     # are sent, which is past the driver's 20 mrad arrival tolerance, so every park reports ERROR. These park
     # both arms with about 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
