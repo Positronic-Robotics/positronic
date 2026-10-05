@@ -11,10 +11,12 @@ import pytest
 import rerun.blueprint as rrb
 import rerun.recording as rr_recording
 
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset import Time
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
 from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
@@ -162,6 +164,62 @@ def _null_drainer() -> dataset_utils._BinaryStreamDrainer:
     return dataset_utils._BinaryStreamDrainer(dataset_utils.rr.RecordingStream('test').binary_stream(), min_bytes=1)
 
 
+@pytest.mark.parametrize('selected', [None, 'tick'])
+def test_numeric_pose_and_video_samples_keep_their_coordinates_after_thinning(tmp_path, monkeypatch, selected):
+    sent = {}
+    send = dataset_utils.rr.send_columns
+
+    def send_columns(path, indexes, columns):
+        sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
+        send(path, indexes=indexes, columns=columns)
+
+    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
+    root = tmp_path / 'ds'
+    with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
+        writer.set_static(eval_keys.POSE_SIGNALS, ['pose'])
+        for i in range(6):
+            ts = Time(**{RECEIVED_WORLD: i * 10_000_000, RECEIVED_WALL: 2**53 + i + 1, 'tick': i})
+            writer.append('pose', np.array([i, 0, 0, 0, 0, 0, 1], dtype=float), ts)
+            writer.append('camera', np.full((16, 16, 3), i * 30, dtype=np.uint8), ts)
+            writer.append('other', i, Time(device=i))
+    rrd = tmp_path / 'ep.rrd'
+    rrd.write_bytes(b''.join(stream_episode_rrd(LocalDataset(root), 0, max_hz=30, timeline=selected)))
+
+    kept = {RECEIVED_WORLD: [0, 40_000_000], RECEIVED_WALL: [2**53 + 1, 2**53 + 5], 'tick': [0, 4]}
+    assert sent['/signals/pose/0'] == kept
+    assert sent['/3d/pose'] == kept
+    assert sent['camera'] == kept
+    assert sent['/signals/other'] == {'device': list(range(6))}
+    schema = rr_recording.load_recording(str(rrd)).schema()
+    assert {column.name for column in schema.index_columns()} == {*kept, 'device'}
+
+
+def test_timeline_kinds_preserve_integer_precision():
+    names = [EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, RECORDED_TIME, 'tick']
+    values = np.array([2**53 + 1, 2**53 + 3], dtype=np.int64)
+    indexes = dataset_utils._rerun_indexes(dict.fromkeys(names, values))
+    for index in indexes:
+        array = index.as_arrow_array()
+        assert array.cast(pa.int64()).to_pylist() == values.tolist()
+        assert array.type == (pa.int64() if index.timeline_name() == 'tick' else pa.duration('ns'))
+
+
+@pytest.mark.parametrize(
+    'names, expected',
+    [
+        ((RECORDED_TIME,), RECORDED_TIME),
+        ((EMITTED_WALL, RECEIVED_WORLD, RECORDED_TIME), RECEIVED_WORLD),
+        (('tick',), 'tick'),
+    ],
+)
+def test_initial_timeline_uses_world_then_legacy_clock_then_an_available_axis(tmp_path, names, expected):
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        writer.append('value', 1, Time(**dict.fromkeys(names, 1)))
+    ep = DiskEpisode(tmp_path / 'ep')
+    blueprint = _build_blueprint(_collect_signal_groups(ep), ep, None)
+    assert blueprint.time_panel.timeline == expected
+
+
 def test_a_text_signal_is_logged_where_its_value_changes(tmp_path, monkeypatch):
     sent: dict[str, tuple[list[int], list[Any]]] = {}
     styles: dict[str, Any] = {}
@@ -185,7 +243,7 @@ def test_a_text_signal_is_logged_where_its_value_changes(tmp_path, monkeypatch):
     assert names == ['0 floating, 1 reaching, 2 contact, 3 at-target']
 
 
-def test_a_text_log_entry_carries_its_time_from_the_start_of_the_recording(tmp_path, monkeypatch):
+def test_a_text_log_entry_keeps_all_its_coordinates(tmp_path, monkeypatch):
     sent: dict[str, dict[str, list[int]]] = {}
 
     def send_columns(path, indexes, columns):
@@ -196,16 +254,24 @@ def test_a_text_log_entry_carries_its_time_from_the_start_of_the_recording(tmp_p
     machine_clock = 1_011_234_567_890_123  # nanoseconds since boot, far from the epoch
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         writer.append('robot.q', np.zeros(2), Time(**{RECORDED_TIME: machine_clock}))
-        writer.append('progress.state', 'floating', Time(**{RECORDED_TIME: machine_clock + 1_503_456_789}))
-        writer.append('progress.state', 'reaching', Time(**{RECORDED_TIME: machine_clock + 62_250_000_000}))
+        writer.append(
+            'progress.state', 'floating', Time(**{RECEIVED_WALL: machine_clock, RECEIVED_WORLD: 1000, 'tick': 4})
+        )
+        writer.append(
+            'progress.state', 'reaching', Time(**{RECEIVED_WALL: machine_clock + 1000, RECEIVED_WORLD: 2000, 'tick': 5})
+        )
     ep = DiskEpisode(tmp_path / 'ep')
 
     list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
 
-    assert sent['/text/progress.state'][dataset_utils._TIME_FROM_START] == [1_500_000_000, 62_250_000_000]
+    assert sent['/text/progress.state'] == {
+        RECEIVED_WALL: [machine_clock, machine_clock + 1000],
+        RECEIVED_WORLD: [1000, 2000],
+        'tick': [4, 5],
+    }
 
 
-def test_a_signal_the_recording_leaves_out_does_not_move_the_text_log_origin(tmp_path, monkeypatch):
+def test_disjoint_text_timelines_are_exported(tmp_path, monkeypatch):
     sent: dict[str, dict[str, list[int]]] = {}
 
     def send_columns(path, indexes, columns):
@@ -214,23 +280,19 @@ def test_a_signal_the_recording_leaves_out_does_not_move_the_text_log_origin(tmp
     monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
-        writer.append('words', np.array(['a', 'b']), Time(**{RECORDED_TIME: 1_000_000_000}))
-        writer.append('robot.q', np.zeros(2), Time(**{RECORDED_TIME: 3_000_000_000}))
         writer.append('progress.state', 'floating', Time(**{RECORDED_TIME: 4_000_000_000}))
+        writer.append('device.state', 'ready', Time(device=7))
     ep = DiskEpisode(tmp_path / 'ep')
 
     list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
 
-    assert sent['/text/progress.state'][dataset_utils._TIME_FROM_START] == [1_000_000_000]
+    assert sent['/text/progress.state'] == {RECORDED_TIME: [4_000_000_000]}
+    assert sent['/text/device.state'] == {'device': [7]}
 
 
-def test_a_text_log_shows_its_time_from_the_start_and_not_the_clock_time():
+def test_a_text_log_displays_all_timelines():
     columns = dataset_utils._text_log_view('progress.state').properties['TextLogColumns']
-    assert isinstance(columns, rrb.TextLogColumns) and columns.timeline_columns is not None
-    timelines = columns.timeline_columns.as_arrow_array().to_pylist()
-
-    shown = [column['timeline'] for column in timelines if column['visible']]
-    assert shown == [dataset_utils._TIME_FROM_START]
+    assert isinstance(columns, rrb.TextLogColumns) and columns.timeline_columns is None
 
 
 def _signals_with_cameras(aspects: list[float], with_3d: bool) -> dataset_utils.EpisodeSignals:
@@ -451,43 +513,37 @@ def test_a_signal_below_the_cap_keeps_every_sample():
     assert len(_decimation_indices(np.array([], dtype='datetime64[ns]'), max_hz=30)) == 0
 
 
-class _RawFrameSignal:
-    timelines = (RECORDED_TIME,)
-
-    def __init__(self, frames: list[np.ndarray], times: list[int]):
-        self._frames = frames
-        self._times = [Time(**{RECORDED_TIME: ts}) for ts in times]
-
-    def __getitem__(self, index):
-        return self._frames[index], self._times[index]
-
-    def __iter__(self):
-        return iter(zip(self._frames, self._times, strict=True))
-
-    def timestamps(self, timelines):
-        return [ts[timelines] for ts in self._times]
-
-
 def test_every_encoded_frame_keeps_its_own_episode_time(monkeypatch):
     times = [i * 33_000_000 for i in range(12)]
     frames = [np.full((64, 64, 3), i * 20 % 256, dtype=np.uint8) for i in range(12)]
-    logged: list[int] = []
-    monkeypatch.setattr(dataset_utils, 'set_timeline_time', lambda _timeline, ts: logged.append(ts))
+    logged = []
+
+    def send_columns(path, indexes, columns):
+        logged.append({index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes})
+
+    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    signal = DummySignal(list(zip(times, range(12), strict=True)), frames, timelines=(RECORDED_TIME, 'tick'))
+    dataset_utils._encode_frames_as_video('/video', signal, max_resolution=640, max_hz=0)
+    dataset_utils._encode_frames_as_video(
+        '/other', DummySignal([7], frames[:1], timelines=('device',)), max_resolution=640, max_hz=0
+    )
 
-    dataset_utils._encode_frames_as_video('/video', _RawFrameSignal(frames, times), max_resolution=640, max_hz=0)
-
-    assert logged == times
+    assert logged == [{RECORDED_TIME: [ts], 'tick': [i]} for i, ts in enumerate(times)] + [{'device': [7]}]
 
 
 def test_frames_past_the_rate_cap_are_left_out_of_the_encoding(monkeypatch):
     times = [i * 10_000_000 for i in range(12)]
     frames = [np.full((64, 64, 3), i * 20 % 256, dtype=np.uint8) for i in range(12)]
     logged: list[int] = []
-    monkeypatch.setattr(dataset_utils, 'set_timeline_time', lambda _timeline, ts: logged.append(ts))
+    monkeypatch.setattr(
+        dataset_utils.rr,
+        'send_columns',
+        lambda path, indexes, columns: logged.extend(indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()),
+    )
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
 
-    dataset_utils._encode_frames_as_video('/video', _RawFrameSignal(frames, times), max_resolution=640, max_hz=30)
+    dataset_utils._encode_frames_as_video('/video', DummySignal(times, frames), max_resolution=640, max_hz=30)
 
     kept = _decimation_indices(np.asarray(times, dtype='datetime64[ns]'), max_hz=30)
     assert 1 < len(kept) < len(times)
