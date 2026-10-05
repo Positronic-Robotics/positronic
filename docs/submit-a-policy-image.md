@@ -50,9 +50,6 @@ Other models:
 
 ### Three traps in the `positro/*` bases
 
-The openpi, GR00T and MolmoAct2 recipes handle the first two. The third applies to openpi only, and
-the openpi recipe handles it.
-
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
 `/positronic` and no environment for it. The repository's `docker/docker-compose.yml` starts every
 server with `uv run`, which builds that environment at container start. With the network denied
