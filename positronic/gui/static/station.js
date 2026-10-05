@@ -120,11 +120,18 @@ async function post(path, body) {
     const detail = errorDetail(answer);
     throw new Error(typeof detail === 'string' ? detail : response.statusText);
   }
+  showRefusal(null);
   render(readStatus(answer));
 }
 
+// What the console refused last, on the page until the next request it accepts. `null` clears it.
+function showRefusal(error) {
+  $('refusal').textContent = error === null ? '' : `The console refused: ${error.message}`;
+  $('refusal').hidden = error === null;
+}
+
 // The last instruction request in the queue. Each waits for the one before it, so the console applies the edits and
-// the reset in the order the operator made them, and Start waits for all of them.
+// the reset in the order the operator made them, and Start waits for all of them. It never rejects.
 let instructionQueue = Promise.resolve();
 
 function postInstruction(text) {
@@ -139,23 +146,21 @@ async function act(send) {
   try {
     await send();
   } catch (error) {
-    window.alert(`The console refused: ${error.message}`);
+    showRefusal(error);
   } finally {
     busy = false;
     renderButtons();
   }
 }
 
+// Send the text in the field, if the console does not have it. A refused text stays in the field and stays unsent,
+// so the next Start sends it again or refuses.
 async function sendEdit() {
   clearTimeout(editTimer);
   editTimer = null;
   if (!editing) return;
   const text = textarea.value;
-  try {
-    await postInstruction(text);
-  } catch (error) {
-    window.alert(`The console refused the instruction: ${error.message}`);
-  }
+  await postInstruction(text);
   if (textarea.value === text) editing = false;
 }
 
@@ -423,7 +428,7 @@ function startStream(video, path, wait) {
 textarea.addEventListener('input', () => {
   editing = true;
   clearTimeout(editTimer);
-  editTimer = setTimeout(sendEdit, EDIT_DELAY_MS);
+  editTimer = setTimeout(() => sendEdit().catch(showRefusal), EDIT_DELAY_MS);
   if (current) renderInstruction(current);
 });
 
@@ -433,13 +438,14 @@ $('reset').addEventListener('click', () => {
   act(() => postInstruction(null));
 });
 
-$('start').addEventListener('click', async () => {
-  await sendEdit();
-  await act(async () => {
+// Start runs only once the console has the text in the field: a refused instruction stops it in READY.
+$('start').addEventListener('click', () =>
+  act(async () => {
     await instructionQueue;
+    await sendEdit();
     await post(ROUTES.start);
-  });
-});
+  }),
+);
 
 for (const [button, verdict] of verdictButtons) {
   button.addEventListener('click', () => act(() => post(ROUTES.end, REQUEST.end(verdict))));
