@@ -4,6 +4,7 @@ import pytest
 
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
+from positronic.gui import station as station_module
 from positronic.gui.station import Outcome, Phase, Refused, Station, outcome_of, terminal_payload
 
 CONFIGURED = 'put the cup in the tote'
@@ -145,3 +146,32 @@ def test_a_later_trial_whose_instruction_is_known_only_after_its_reset_is_refuse
     view = station.view(now=2.0)
     assert view.phase is Phase.READY
     assert view.episodes == []
+
+
+def test_each_change_advances_the_generation_and_a_view_does_not():
+    station = Station(_trials())
+    generations = [station.view(now=0.0).generation]
+
+    def note():
+        generations.append(station.view(now=0.0).generation)
+
+    station.set_override(OVERRIDE)
+    note()
+    station.start(now=1.0)
+    note()
+    station.end(Outcome.PASS)
+    note()
+    station.close(Outcome.PASS, now=2.0)
+    note()
+    note()
+    assert generations == sorted(generations)
+    assert len(set(generations)) == 5
+
+
+def test_a_restarted_console_starts_above_the_generation_of_the_one_before_it(monkeypatch):
+    monkeypatch.setattr(station_module.time, 'time_ns', lambda: 1_000_000_000_000)
+    before = Station(_trials())
+    for _ in range(1000):
+        before.set_override(OVERRIDE)
+    monkeypatch.setattr(station_module.time, 'time_ns', lambda: 1_001_000_000_000)
+    assert Station(_trials()).view(now=0.0).generation > before.view(now=0.0).generation

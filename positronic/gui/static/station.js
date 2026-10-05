@@ -1,6 +1,6 @@
 'use strict';
 
-// The page holds no state of its own: it draws each answer of GET /status, and a reloaded tab draws the same.
+// The page holds no state of its own: it draws the newest answer of the console, and a reloaded tab draws the same.
 const POLL_MS = 500;
 const EDIT_DELAY_MS = 300;
 
@@ -30,6 +30,7 @@ function readStatus(answer) {
     configured: run.configured,
     override: run.override,
     overrideSince: run.override_since,
+    generation: run.generation,
     now: run.now,
     episodes: run.episodes.map((e) => ({
       number: e.number,
@@ -176,9 +177,11 @@ async function poll() {
   }
 }
 
+// A poll and a request can cross, so an answer older than the one on the page is dropped.
 function render(status) {
-  current = status;
   $('offline').hidden = !offline;
+  if (current !== null && status.generation < current.generation) return;
+  current = status;
   $('policy').textContent = status.policy;
   $('host').textContent = status.host;
   $('cameras-live').textContent = `${status.cameras.filter((c) => c.live).length} / ${status.cameras.length} live`;

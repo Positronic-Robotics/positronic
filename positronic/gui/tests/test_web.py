@@ -77,6 +77,7 @@ def test_the_status_is_the_json_the_page_reads(console):
     console.feed.push(_frame(1), SystemClock().now())
     status = console.client.get('/status').json()
     status['run'].pop('now')
+    assert isinstance(status['run'].pop('generation'), int)
     assert status == {
         'run': {'phase': 'ready', 'configured': CONFIGURED, 'override': None, 'override_since': None, 'episodes': []},
         'cameras': [{'name': CAMERA, 'label': 'exterior 2', 'live': True, 'fps': 0.0, 'width': 640, 'height': 360}],
@@ -201,3 +202,9 @@ def test_the_page_calls_the_routes_the_server_serves(console):
     video = routes.pop('video')
     assert set(routes.values()) <= served
     assert f'{video}/{{name}}' in served
+
+
+def test_a_status_taken_before_a_change_is_older_than_the_answer_to_the_change(console):
+    before = Status.model_validate(console.client.get('/status').json())
+    after = console.post('/instruction', InstructionBody(override=OVERRIDE))
+    assert after.run.generation > before.run.generation

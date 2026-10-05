@@ -2,6 +2,7 @@
 override, and each episode so far."""
 
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from enum import StrEnum
@@ -65,6 +66,8 @@ class RunView(BaseModel):
     # The first episode that sent the override in force. ``None`` until an episode sends it.
     override_since: int | None
     episodes: list[Episode]
+    # Rises with each change to the run, so the page drops an answer older than one it has drawn.
+    generation: int
     now: float
 
 
@@ -86,6 +89,8 @@ class Station:
         self._override_since: int | None = None
         self._episodes: list[Episode] = []
         self._ending = False
+        # Starts at the wall clock in microseconds, so a restarted console starts above the one before it.
+        self._generation = time.time_ns() // 1000
         self._lock = threading.Lock()
 
     def _draw(self) -> Task:
@@ -106,6 +111,7 @@ class Station:
             override = None if text == self._trial.instruction else text
             if override != self._override:
                 self._override, self._override_since = override, None
+            self._generation += 1
 
     def start(self, now: float) -> Task:
         """Open the next episode and return its trial, with the override and the episode's number applied."""
@@ -122,6 +128,7 @@ class Station:
             overridden = override is not None
             episode = Episode(number=number, instruction=trial.instruction, overridden=overridden, started_at=now)
             self._episodes.append(episode)
+            self._generation += 1
             meta = {**trial.meta, eval_keys.TRIAL_INDEX: number - 1, eval_keys.INSTRUCTION_OVERRIDDEN: overridden}
             return replace(trial, meta=meta)
 
@@ -131,6 +138,7 @@ class Station:
             if not self._is_open() or self._ending:
                 raise Refused('no episode is running')
             self._ending = True
+            self._generation += 1
             return terminal_payload(verdict)
 
     def close(self, outcome: Outcome, now: float) -> None:
@@ -139,6 +147,7 @@ class Station:
             episode = self._episodes[-1]
             episode.ended_at, episode.outcome = now, outcome
             self._ending = False
+            self._generation += 1
 
     def view(self, now: float) -> RunView:
         with self._lock:
@@ -149,5 +158,6 @@ class Station:
                 override=self._override,
                 override_since=self._override_since,
                 episodes=[episode.model_copy() for episode in self._episodes],
+                generation=self._generation,
                 now=now,
             )
