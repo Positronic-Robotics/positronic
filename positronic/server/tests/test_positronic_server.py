@@ -15,6 +15,7 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset.episode import META_PATH, META_UID, EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
@@ -833,16 +834,17 @@ def flat_with_hidden(monkeypatch):
     return TestClient(app)
 
 
-@pytest.mark.parametrize('with_recorded', [False, True])
-def test_episode_table_handles_disjoint_timelines(flat_with_hidden, monkeypatch, with_recorded):
-    signals = {'world_value': DummySignal([100, 200], [1, 2], timelines=('world',))}
-    if with_recorded:
-        signals['recorded_value'] = DummySignal([0, 2_000_000_000], [1, 2], timelines=(RECORDED_TIME,))
+@pytest.mark.parametrize('axis', [RECEIVED_WORLD, RECORDED_TIME])
+def test_episode_table_handles_disjoint_timelines(flat_with_hidden, monkeypatch, axis):
+    signals = {
+        'device_value': DummySignal([100, 200], [1, 2], timelines=('device',)),
+        'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(axis,)),
+    }
     monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
     monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
-    assert response.json()['episodes'] == [[0, [2.0 if with_recorded else 0.0]]]
+    assert response.json()['episodes'] == [[0, [2.0]]]
 
 
 def test_the_flat_table_carries_a_hidden_column_value_to_the_page(flat_with_hidden):

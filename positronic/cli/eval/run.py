@@ -18,7 +18,6 @@ from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import unset
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
-from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.eval import Embodiment, Eval, Observation, Task
 from positronic.policy import Policy
 from positronic.policy.harness import Harness, Rollout
@@ -112,11 +111,8 @@ def run_world(
     episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
     """
     harness = Harness(embodiment)
-    time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     with pimm.World(virtual_time=embodiment.simulated) as world:
-        ds_agent = wire.wire_embodiment(
-            world, harness, embodiment, time_mode, record=record, privileged=privileged, done=done
-        )
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, record=record, privileged=privileged, done=done)
         world.connect(driver.perform_task, harness.perform_task)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)

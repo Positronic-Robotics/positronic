@@ -21,6 +21,7 @@ from .core import (
     Sleep,
     Yield,
 )
+from .time import Time
 from .utils import RateLimiter, map, read_updated, value_updated
 from .world import World
 
@@ -49,6 +50,7 @@ __all__ = [
     'SignalEmitter',
     'SignalReceiver',
     'Sleep',
+    'Time',
     'value_updated',
     'World',
     'Yield',

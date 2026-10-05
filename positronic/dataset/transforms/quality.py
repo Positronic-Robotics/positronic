@@ -8,7 +8,7 @@ Derivative timelines must measure nanoseconds.
 import numpy as np
 
 from positronic import keys
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.episode import select_timeline
 
 from .signals import Elementwise, Join, diff, norm, view
 
@@ -17,14 +17,11 @@ _DT_SEC = 1 / 15
 
 
 def idle_mask(
-    episode,
-    signal=keys.JOINTS,
-    velocity_threshold=0.015,
-    dt_sec=_DT_SEC,
-    *,
-    timelines: tuple[str, ...] = (RECORDED_TIME,),
+    episode, signal=keys.JOINTS, velocity_threshold=0.015, dt_sec=_DT_SEC, *, timelines: tuple[str, ...] | None = None
 ):
     """Per-frame bool: True where joint speed < threshold (rad/s)."""
+    if timelines is None:
+        timelines = (select_timeline(episode.signals[signal].timelines),)
     speed = norm(diff(episode.signals[signal], dt_sec, timelines=timelines))
 
     def fn(vals):
@@ -33,8 +30,10 @@ def idle_mask(
     return Elementwise(speed, fn)
 
 
-def jerk(episode, signal=keys.JOINTS, dt_sec=_DT_SEC, *, timelines: tuple[str, ...] = (RECORDED_TIME,)):
+def jerk(episode, signal=keys.JOINTS, dt_sec=_DT_SEC, *, timelines: tuple[str, ...] | None = None):
     """Per-frame joint acceleration magnitude (rad/s^2)."""
+    if timelines is None:
+        timelines = (select_timeline(episode.signals[signal].timelines),)
     return norm(diff(episode.signals[signal], dt_sec, order=2, timelines=timelines))
 
 
@@ -44,11 +43,13 @@ def cmd_lag(
     state_signal=keys.EE_POSE,
     components=_TRANSLATION,
     *,
-    timelines: tuple[str, ...] = (RECORDED_TIME,),
+    timelines: tuple[str, ...] | None = None,
 ):
     """Per-frame distance between commanded and actual pose (meters)."""
     cmd = episode.signals[cmd_signal]
     ee = episode.signals[state_signal]
+    if timelines is None:
+        timelines = (select_timeline(cmd.timelines + ee.timelines),)
 
     def fn(pairs):
         arr = np.array(pairs)  # (batch, 2, dim)
@@ -63,7 +64,9 @@ def cmd_velocity(
     components=_TRANSLATION,
     dt_sec=_DT_SEC,
     *,
-    timelines: tuple[str, ...] = (RECORDED_TIME,),
+    timelines: tuple[str, ...] | None = None,
 ):
     """Per-frame command translation velocity (m/s). Spikes = tracking glitches."""
+    if timelines is None:
+        timelines = (select_timeline(episode.signals[signal].timelines),)
     return norm(diff(view(episode.signals[signal], components), dt_sec, timelines=timelines))

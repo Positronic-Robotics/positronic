@@ -1,9 +1,10 @@
 import operator
+import pickle
 
 import numpy as np
 import pytest
 
-from positronic.dataset.time import Time
+from pimm import Time
 
 
 class TestTime:
@@ -127,3 +128,11 @@ class TestTime:
         assert (left + right) - right == left
         assert left == {'world': 100, 'tick': 2}
         assert right == {'tick': 3, 'world': 20}
+
+
+def test_time_pickle_preserves_coordinates_and_immutability():
+    time = Time(**{'camera.capture': 42, 'emitted.wall': 100})
+    restored = pickle.loads(pickle.dumps(time))
+    assert restored == time
+    with pytest.raises(TypeError):
+        operator.setitem(restored, 'camera.capture', 99)

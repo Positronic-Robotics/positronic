@@ -38,9 +38,8 @@ import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
-from positronic.dataset.episode import META_PATH, META_UID
+from positronic.dataset.episode import META_PATH, META_UID, select_timeline
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
@@ -715,8 +714,8 @@ async def api_episodes(request: Request):
 
     def table_row(i: int, ep: Episode) -> dict:
         duration = 0.0
-        if any(RECORDED_TIME in signal.timelines for signal in ep.signals.values()):
-            first, last = ep.bounds(RECORDED_TIME)
+        if ep.signals:
+            first, last = ep.bounds(select_timeline(ep.timelines))
             duration = (last - first) / 1e9
         return {'__episode_index__': i, '__meta__': ep.meta, '__duration__': duration, **ep.static}
 

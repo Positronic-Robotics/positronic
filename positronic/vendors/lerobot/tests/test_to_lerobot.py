@@ -35,6 +35,8 @@ class _MockTimeIndex:
 
 
 class _MockEpisode:
+    timelines = (RECORDED_TIME,)
+
     def __init__(self, num_frames, fps):
         self._bounds = (Time(**{RECORDED_TIME: 0}), Time(**{RECORDED_TIME: int(num_frames * 1e9 / fps)}))
         data = {

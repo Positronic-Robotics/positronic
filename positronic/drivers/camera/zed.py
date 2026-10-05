@@ -7,6 +7,7 @@ import numpy as np
 import pimm
 from pimm.shared_memory import NumpySMAdapter
 from positronic.drivers import vendor_import
+from positronic.drivers.camera import CAPTURE_TIME
 from positronic.drivers.camera.device_open_lock import device_open_lock
 
 with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
@@ -197,7 +198,7 @@ class SLCamera(pimm.ControlSystem):
                 self.recovery_start_time = None
 
             image = sl.Mat()
-            ts_s = zed.get_timestamp(TIME_REF_IMAGE).get_nanoseconds() / 1e9
+            capture_time = pimm.Time(**{CAPTURE_TIME: zed.get_timestamp(TIME_REF_IMAGE).get_nanoseconds()})
             if zed.retrieve_image(image, view) == SUCCESS:
                 # The images are in BGRA format, convert to RGB
                 np_image = image.get_data()[:, :, [2, 1, 0]]
@@ -206,7 +207,7 @@ class SLCamera(pimm.ControlSystem):
                 # Note: For side-by-side, we emit the full (H, W*2, 3) image
                 # Consumer is responsible for splitting if needed
                 self._frame_adapter = NumpySMAdapter.lazy_init(np_image, self._frame_adapter)
-                self.frame.emit(self._frame_adapter, ts=ts_s)
+                self.frame.emit(self._frame_adapter, time=capture_time)
 
                 # Handle depth if enabled and connected
                 if depth_mode != sl.DEPTH_MODE.NONE:
@@ -224,7 +225,7 @@ class SLCamera(pimm.ControlSystem):
                                 self._depth_mask_adapter = NumpySMAdapter.lazy_init(
                                     depth_mask.astype(np.uint8)[..., np.newaxis], self._depth_mask_adapter
                                 )
-                                self.depth_mask.emit(self._depth_mask_adapter, ts=ts_s)
+                                self.depth_mask.emit(self._depth_mask_adapter, time=capture_time)
 
                             # Process and emit depth if connected
                             if self.depth.num_bound > 0:
@@ -235,7 +236,7 @@ class SLCamera(pimm.ControlSystem):
                                 depth_uint8 = depth_data.astype(np.uint8)[..., np.newaxis]
 
                                 self._depth_adapter = NumpySMAdapter.lazy_init(depth_uint8, self._depth_adapter)
-                                self.depth.emit(self._depth_adapter, ts=ts_s)
+                                self.depth.emit(self._depth_adapter, time=capture_time)
 
             fps_counter.tick()
             yield pimm.Sleep(0.01)

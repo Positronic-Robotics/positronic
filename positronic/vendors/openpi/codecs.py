@@ -25,8 +25,7 @@ from PIL import Image as PilImage
 from positronic import geom, keys
 from positronic.cfg import codecs
 from positronic.dataset import Signal, transforms
-from positronic.dataset.episode import Episode
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.episode import Episode, select_timeline
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
@@ -68,9 +67,9 @@ class ObservationCodec(Codec):
         }
 
     def _derive_state(self, episode: Episode) -> Signal[Any]:
-        return transforms.concat(
-            *[episode[key] for key in self._state_features], timelines=(RECORDED_TIME,), dtype=np.float32
-        )
+        signals = [episode[key] for key in self._state_features]
+        timeline = select_timeline(name for signal in signals for name in signal.timelines)
+        return transforms.concat(*signals, timelines=(timeline,), dtype=np.float32)
 
     def _derive_image(self, input_key: str, episode: Episode) -> Signal[Any]:
         w, h = self._image_size

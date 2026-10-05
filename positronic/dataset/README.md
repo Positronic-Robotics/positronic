@@ -102,6 +102,7 @@ repeated indices, and boolean masks are rejected.
 
 ```python
 signal.timelines                              # tuple[str, ...]
+episode.timelines                             # union of its signals' timeline names
 value, original_time = signal[0]
 values = signal.values()                     # Sequence[T]
 world_times = signal.timestamps("world")     # Sequence[int]
@@ -343,7 +344,7 @@ Each line of `edits.jsonl` is one JSON record carrying its op. `{"op": "set_stat
 
 ## `DsWriterAgent` (streaming recorder)
 
-`DsWriterAgent` is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends any updated inputs with timestamps from the provided clock.
+`DsWriterAgent` is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends updated inputs with their `pimm.Message.time` timestamps.
 
 Key ideas
 - Inputs are registered explicitly through `DsWriterAgent.add_signal(name, serializer=None)`.
@@ -351,10 +352,10 @@ Key ideas
 - The agent polls inputs at a configurable rate and appends only on updates.
 - Recording is best effort, and this is a deliberate trade rather than an oversight. Each input arrives over a one-slot `pimm` signal where a new value overwrites one still unread, so a recorder that stalls for longer than the gap between two samples loses the older one — commands exactly as much as camera frames or arm state. An episode is what the recorder managed to observe, not a guaranteed-complete log of what happened; treat a missing sample as possible in any analysis that counts them.
 - A separate `command` channel controls episode lifecycle.
-- `time_mode` selects the `recorded` timestamp: `CLOCK`
-  (default) uses the clock when the agent reads the sample; `MESSAGE` uses the timestamp supplied
-  with the message. The recorder also saves `message` and `system`, plus `world` when the supplied
-  clock differs from the system clock. All recorded coordinates follow the same ordering rules.
+- Every message coordinate is saved: emission, first delivery, and optional producer timelines.
+  Policy joins, viewing, and playback use `received.world`: wall time on hardware and simulation
+  time in simulation. Legacy datasets use `recorded` without conversion or renaming.
+  Viewing and playback also accept an explicit timeline.
 
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
 - A serializer receives the latest value for the input and can return:
@@ -381,26 +382,26 @@ Lifecycle
 - `STOP_EPISODE`: finalizes the episode (applies static data then closes).
 - `ABORT_EPISODE`: aborts and discards the episode directory.
 
-Notes
-- Use `CLOCK` when building training datasets: it aligns updates with the recorder’s processing timeline so downstream sampling matches what was actually ready for learning.
-- Use `MESSAGE` when logging inference or diagnosis runs: it keeps the source timestamps untouched so you can line up events across control systems and measure propagation delays.
-
 ## `DsPlayerAgent` (dataset player)
 
 `DsPlayerAgent` replays recorded `Episode` objects back into a live `pimm` world by streaming signal values on demand. It mirrors the lifecycle style of `DsWriterAgent`, making it easy to pipe existing datasets through simulators, robots, or other consumers.
 
 Component layout
 - Outputs are dynamically declared via `player.outputs[name]` before playback begins; every declared name must map to a dynamic signal in the episode. Static-only items raise `ValueError`, and missing signals raise `KeyError` so wiring mistakes surface immediately.
-- `command` receives control messages. `DsPlayerStartCommand(episode, start_ts=None, end_ts=None, timeline=RECORDED_TIME)`
+- `command` receives control messages. `DsPlayerStartCommand(episode, start_ts=None, end_ts=None, timeline=None)`
   starts playback on the selected timeline, optionally restricting the time window.
   `DsPlayerAbortCommand()` stops immediately without emitting `finished`.
 - `finished` emits the originating `DsPlayerStartCommand` once all scheduled samples have been streamed.
-- `poll_hz` (default `100 Hz`) governs how frequently the agent checks for new work. Emission timestamps are aligned to the episode timeline: the first emitted sample anchors the playback and later samples preserve their original relative offsets.
+- `poll_hz` (default `100 Hz`) governs how frequently the agent checks for new work.
 
 Playback semantics
-- `timeline` selects the nanosecond clock used for scheduling and command bounds; it defaults to `recorded`.
-  Every requested output must expose that timeline. Window selection uses the dataset's carry-back semantics.
-- Emitted timestamps are shifted so that the first sample appears at the clock time the agent received the `START` command. This keeps real-time consumers synchronized with the world clock while preserving inter-sample spacing from the dataset.
+- `timeline` selects the nanosecond clock used for scheduling and command bounds. When omitted,
+  playback selects `received.world` from the requested outputs, or `recorded` for legacy data.
+  Other timelines require an explicit name. Every requested output must expose the selected
+  timeline. Window selection uses the dataset's carry-back semantics.
+- Playback anchors the first sample to the world clock when `START` is handled and preserves
+  inter-sample spacing. Messages carry this scheduled time as `playback.scheduled`; pimm stamps
+  their actual emission and first delivery times.
 
 Typical use cases
 - Driving robots or simulators from a stored episode while optionally recording the run again. See [`positronic/replay_record.py`](../../positronic/replay_record.py) where `DsPlayerAgent` feeds a Mujoco simulation and simultaneously streams into a `DsWriterAgent` to capture the replay.

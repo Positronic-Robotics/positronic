@@ -15,13 +15,13 @@ import pytest
 
 import pimm
 from pimm.tests.testing import Passive, wire_call
+from pimm.time import EMITTED_WORLD
 from pimm.world import VirtualClock
 from positronic import keys, telemetry, telemetry_keys, wire
-from positronic.dataset.ds_writer_agent import DsWriterCommandType, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterCommandType
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.video import LibavEncoder
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -111,10 +111,10 @@ class Trace(pimm.SignalEmitter):
         self.forward = forward
         self.values = []
 
-    def emit(self, data, ts=-1):
+    def _emit(self, data, time: pimm.Time):
         self.values.append((self.clock.now_ns(), data))
         if self.forward is not None:
-            self.forward.emit(data, ts)
+            self.forward._emit(data, time)
 
 
 @pytest.fixture
@@ -148,8 +148,8 @@ def observed_harness():
         for name, receiver in harness.observations.items():
             emitters[name], physical_receiver = world.local_pipe()
             receiver._bind(physical_receiver)
-        harness.ds_command._bind(Trace(world.clock))
-        harness.deadline_ns._bind(Trace(world.clock))
+        harness.ds_command._bind(Trace(world.clock), clock=world.clock)
+        harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
         step = partial(harness._step, Task('test', None), runtime, policy_run, None)
@@ -284,9 +284,9 @@ def episode_harness():
             deadlines=Trace(world.clock),
             commands=Trace(world.clock),
         )
-        harness.ds_command._bind(ports.records)
-        harness.deadline_ns._bind(ports.deadlines)
-        harness.commands[MOTOR]._bind(ports.commands)
+        harness.ds_command._bind(ports.records, clock=world.clock)
+        harness.deadline_ns._bind(ports.deadlines, clock=world.clock)
+        harness.commands[MOTOR]._bind(ports.commands, clock=world.clock)
         try:
             yield ports
         finally:
@@ -317,7 +317,8 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
 
     h.manual.emit({MOTOR: 99})
     overlapping = h.caller(Rollout(Task('overlapping', None), Observe(), None))
-    h.done.emit({'success': True}, ts=5_000_000)
+    h.world.clock.advance_to_ns(5_000_000)
+    h.done.emit({'success': True})
     h.world.clock.advance_to_ns(12_000_000)
     next(h.loop)
     assert not first.done()  # The recorder gets a turn before the caller is answered.
@@ -364,7 +365,8 @@ def test_episode_deadline_uses_the_done_signal_timestamp(episode_harness, done_a
     h.observation.emit(1)
     answer = h.caller(Rollout(Task('test', 0.01), Wait(), None))
     next(h.loop)
-    h.done.emit({'success': True}, ts=done_at_ns)
+    h.world.clock.advance_to_ns(done_at_ns)
+    h.done.emit({'success': True})
     h.world.clock.advance_to_ns(12_000_000)
     next(h.loop)
     next(h.loop)
@@ -418,9 +420,9 @@ def policy_world(policy, *, simulated=True, charged=False):
         world.pair(harness.manual_command)
         world.pair(harness.done)
         commands = Trace(world.clock)
-        harness.commands[MOTOR]._bind(commands)
-        harness.ds_command._bind(Trace(world.clock))
-        harness.deadline_ns._bind(Trace(world.clock))
+        harness.commands[MOTOR]._bind(commands, clock=world.clock)
+        harness.ds_command._bind(Trace(world.clock), clock=world.clock)
+        harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         loop = world.start([harness, timer])
         caller(Rollout(Task('test', None, charge_inference_time=charged), policy, None))
         try:
@@ -595,12 +597,12 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
         world.pair(harness.manual_command)
         world.pair(harness.done)
         observations = world.pair(harness.observations[POSITION])
-        motion.position._bind(observations)
+        motion.position._bind(observations, clock=world.clock)
         commands = Trace(world.clock, world.pair(motion.command))
-        harness.commands[MOTOR]._bind(commands)
+        harness.commands[MOTOR]._bind(commands, clock=world.clock)
         records = Trace(world.clock)
-        harness.ds_command._bind(records)
-        harness.deadline_ns._bind(Trace(world.clock))
+        harness.ds_command._bind(records, clock=world.clock)
+        harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         world.connect(harness.prepare[RESET], motion.reset)
         loop = world.start([harness, motion])
         observations.emit(0)
@@ -909,7 +911,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
             simulated=True,
         )
         harness = Harness(embodiment)
-        recorder = wire.wire_embodiment(world, harness, embodiment, TimeMode.MESSAGE)
+        recorder = wire.wire_embodiment(world, harness, embodiment)
         assert recorder is not None
         world.connect(harness.ds_command, recorder.command)
         caller = world.pair(harness.perform_task)
@@ -928,9 +930,9 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     assert isinstance(episode, Episode)
     commands = episode[MOTOR]
     assert list(commands.values()) == [1, 2, 1]
-    np.testing.assert_array_equal(np.diff(commands.timestamps(RECORDED_TIME)), [100_000_000, 100_000_000])
+    np.testing.assert_array_equal(np.diff(commands.timestamps(EMITTED_WORLD)), [100_000_000, 100_000_000])
     positions = episode[POSITION]
-    recorded = dict(zip(positions.timestamps(RECORDED_TIME), positions.values(), strict=True))
+    recorded = dict(zip(positions.timestamps(EMITTED_WORLD), positions.values(), strict=True))
     assert recorded
     assert all(recorded[ns] == value for ns, value in motion.positions if ns in recorded)
     assert 1 in np.diff(list(positions.values()))
@@ -959,7 +961,7 @@ def test_recorder_refuses_an_encoder_this_host_cannot_run():
             video_encoder=AbsentEncoder(),
         )
         with pytest.raises(RuntimeError, match='no such encoder here'):
-            wire.wire_embodiment(world, Harness(embodiment), embodiment, TimeMode.MESSAGE)
+            wire.wire_embodiment(world, Harness(embodiment), embodiment)
 
 
 def test_cartesian_delta_wire_roundtrip():
@@ -1064,8 +1066,8 @@ def test_robot_observation_serialization_and_typed_command_emission():
         emitter, receiver = world.local_pipe()
         harness.observations[keys.ROBOT_STATE]._bind(receiver)
         emitted = Trace(world.clock)
-        harness.commands[keys.ROBOT_COMMAND]._bind(emitted)
-        harness.commands[keys.TARGET_GRIP]._bind(Trace(world.clock))
+        harness.commands[keys.ROBOT_COMMAND]._bind(emitted, clock=world.clock)
+        harness.commands[keys.TARGET_GRIP]._bind(Trace(world.clock), clock=world.clock)
         state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         emitter.emit(state)
         policy = StubPolicy()

@@ -7,8 +7,7 @@ from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
 from positronic.dataset import Signal, transforms
-from positronic.dataset.episode import Episode
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.episode import Episode, select_timeline
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
@@ -53,7 +52,9 @@ class ObservationCodec(Codec):
 
     def _derive_state(self, out_name: str, episode: Episode) -> Signal[Any]:
         state_features = self._state[out_name]
-        return transforms.concat(*[episode[k] for k in state_features], dtype=np.float32, timelines=(RECORDED_TIME,))
+        signals = [episode[k] for k in state_features]
+        timeline = select_timeline(name for signal in signals for name in signal.timelines)
+        return transforms.concat(*signals, dtype=np.float32, timelines=(timeline,))
 
     def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
         input_key, (width, height) = self._image_configs[out_name]

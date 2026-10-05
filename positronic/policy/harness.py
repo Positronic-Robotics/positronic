@@ -9,6 +9,7 @@ import numpy as np
 from opentelemetry.trace import Span
 
 import pimm
+from pimm.time import EMITTED_WALL, EMITTED_WORLD
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
@@ -210,9 +211,11 @@ class Harness(pimm.ControlSystem):
         return started_at_ns + round(period_sec * 1e9)
 
     @staticmethod
-    def _trial_terminal(done: pimm.Message[dict] | None, now_ns: int, deadline_ns: int | None) -> dict[str, Any] | None:
+    def _trial_terminal(
+        done: pimm.Message[dict] | None, now_ns: int, deadline_ns: int | None, timeline: str
+    ) -> dict[str, Any] | None:
         """A done signal timestamped after the deadline counts as a timeout, not a success."""
-        if done is not None and done.data and (deadline_ns is None or done.ts <= deadline_ns):
+        if done is not None and done.data and (deadline_ns is None or done.time[timeline] <= deadline_ns):
             return {**done.data, eval_keys.TERMINATED: True}
         if deadline_ns is not None and now_ns >= deadline_ns:
             return {eval_keys.TERMINATED: False}
@@ -276,7 +279,12 @@ class Harness(pimm.ControlSystem):
                 if call := next(self.perform_task.incoming(), None):
                     call.set_exception(RuntimeError('An episode is already running'))
                 pimm.read_updated(self.manual_command)
-                payload = self._trial_terminal(pimm.read_updated(self.done), runtime.time_ns, deadline_ns)
+                payload = self._trial_terminal(
+                    pimm.read_updated(self.done),
+                    runtime.time_ns,
+                    deadline_ns,
+                    EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL,
+                )
             self.deadline_ns.emit(None)
             self.ds_command.emit(
                 DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})

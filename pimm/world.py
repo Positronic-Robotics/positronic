@@ -10,14 +10,13 @@ import sys
 import time
 import traceback
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.managers import ValueProxy
-from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
-from queue import Empty, Full
-from typing import TypeVar, overload
+from queue import Empty, Full, Queue
+from typing import TypeVar, cast, overload
 
 from .calls import ControlSystemCaller, ControlSystemHandler, handlers_of
 from .core import (
@@ -37,6 +36,7 @@ from .core import (
 )
 from .logging import component_log_levels, configure_process_logging
 from .shared_memory import SMCompliant
+from .time import SystemClock, Time, VirtualClock
 from .utils import identity
 
 logger = logging.getLogger(__name__)
@@ -58,19 +58,18 @@ class TransportMode(IntEnum):
 
 
 class QueueEmitter(SignalEmitter[T]):
-    def __init__(self, queue: mp.Queue, clock: Clock):
+    def __init__(self, queue: Queue, clock: Clock):
         self._queue = queue
         self._clock = clock
 
-    def emit(self, data: T, ts: int = -1):
-        ts = ts if ts >= 0 else self._clock.now_ns()
+    def _emit(self, data: T, time: Time):
         try:
-            self._queue.put_nowait(Message(data, ts))
+            self._queue.put_nowait(Message(data, time))
         except Full:
             # Queue is full, try to remove old message and try again
             try:
                 self._queue.get_nowait()
-                self._queue.put_nowait(Message(data, ts))
+                self._queue.put_nowait(Message(data, time))
             except (Empty, Full):
                 pass
 
@@ -91,7 +90,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
         queues: list[Queue],
         mode_value: mp.Value,
         lock: mp.Lock,
-        ts_value: mp.Value,
+        time_value: ValueProxy[Time | None],
         up_values: list[ValueProxy[bool]],
         sm_queues: list[Queue],
         *,
@@ -106,7 +105,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
         # Shared memory state
         self._data_type: type[SMCompliant] | None = None
         self._lock = lock
-        self._ts_value = ts_value
+        self._time_value = time_value
         self._up_values = up_values
         self._sm_queues = sm_queues
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
@@ -140,8 +139,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
             self._set_mode(TransportMode.QUEUE)
         return self._mode
 
-    def _emit_queue(self, data: T, ts: int) -> bool:
-        msg = Message(data, ts)
+    def _emit_queue(self, data: T, time: Time) -> bool:
+        msg = Message(data, time)
         success = False
 
         for q in self._queues:
@@ -158,7 +157,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
         return success
 
-    def _emit_shared_memory(self, data: SMCompliant, ts: int) -> bool:
+    def _emit_shared_memory(self, data: SMCompliant, time: Time) -> bool:
         if self._data_type is None:
             self._data_type = type(data)
         elif not isinstance(data, self._data_type):
@@ -182,23 +181,22 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
         with self._lock:
             data.set_to_buffer(self._sm.buf)
-            self._ts_value.value = ts
+            self._time_value.value = time
             for up_value in self._up_values:
                 up_value.value = True
 
         return True
 
-    def emit(self, data: T, ts: int = -1):
-        ts = ts if ts >= 0 else self._clock.now_ns()
+    def _emit(self, data: T, time: Time):
         mode = self._ensure_mode(data)
 
         if mode is TransportMode.SHARED_MEMORY:
             if not isinstance(data, SMCompliant):
                 raise TypeError('Shared memory transport selected; data must implement SMCompliant')
-            self._emit_shared_memory(data, ts)
+            self._emit_shared_memory(data, time)
             return
 
-        self._emit_queue(data, ts)
+        self._emit_queue(data, time)
 
     def close(self) -> None:
         if self._closed:
@@ -223,31 +221,31 @@ class MultiprocessEmitter(SignalEmitter[T]):
 class MultiprocessReceiver(SignalReceiver[T]):
     """Signal receiver companion for :class:`MultiprocessEmitter`.
 
-    The receiver lazily initialises shared-memory views when the transport mode
-    switches and keeps the last queue message as a fallback. Weak references
-    back to the emitter let the receiver clear the emitter's cleanup hook on
-    close without introducing cycles or non-picklable state.
+    Shared-memory views are initialized on first delivery. Cached reads retain
+    that receiver's receipt coordinates until another value arrives.
     """
 
     def __init__(
         self,
-        queue: mp.Queue,
+        queue: Queue,
+        clock: Clock,
         mode_value: mp.Value,
         lock: mp.Lock,
-        ts_value: mp.Value,
+        time_value: ValueProxy[Time | None],
         up_value: mp.Value,
-        sm_queue: mp.Queue,
+        sm_queue: Queue,
         *,
         forced_mode: TransportMode | None = None,
     ):
         self._queue = queue
+        self._clock = clock
         self._mode_value = mode_value
         self._forced_mode = forced_mode
         self._mode = forced_mode or TransportMode.UNDECIDED
 
         # Shared memory state
         self._lock = lock
-        self._ts_value = ts_value
+        self._time_value = time_value
         self._up_value = up_value
         self._sm_queue = sm_queue
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
@@ -255,6 +253,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
         self._readonly_buffer: memoryview | None = None
 
         self._last_queue_message: Message[T] | None = None
+        self._last_shared_message: Message[T] | None = None
         self._closed = False
         if forced_mode is not None:
             self._mode_value.value = int(forced_mode)
@@ -275,7 +274,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
         except Empty:
             message = None
         else:
-            self._last_queue_message = Message(message.data, message.ts, True)
+            self._last_queue_message = message._received(self._clock)
             if self._mode is TransportMode.UNDECIDED:
                 self._mode = TransportMode.QUEUE
             return self._last_queue_message
@@ -283,7 +282,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
         if self._last_queue_message is None:
             return None
 
-        return Message(self._last_queue_message.data, self._last_queue_message.ts, False)
+        return Message(self._last_queue_message.data, self._last_queue_message.time, False)
 
     def _ensure_shared_memory_initialized(self) -> bool:
         if self._out_value is not None:
@@ -314,23 +313,23 @@ class MultiprocessReceiver(SignalReceiver[T]):
         return True
 
     def _read_shared_memory(self) -> Message[T] | None:
-        with self._lock:
-            if self._ts_value.value == -1:
-                return None
-
         if not self._ensure_shared_memory_initialized():
             return None
 
         with self._lock:
-            if self._ts_value.value == -1:
+            time = self._time_value.value
+            if time is None:
                 return None
 
             assert self._readonly_buffer is not None
             assert self._out_value is not None
-            self._out_value.read_from_buffer(self._readonly_buffer)
-            updated = self._up_value.value
-            self._up_value.value = False
-            return Message(data=self._out_value, ts=self._ts_value.value, updated=updated)  # instead of True
+            if self._up_value.value:
+                self._out_value.read_from_buffer(self._readonly_buffer)
+                self._last_shared_message = Message(cast(T, self._out_value), time)._received(self._clock)
+                self._up_value.value = False
+                return self._last_shared_message
+            assert self._last_shared_message is not None
+            return Message(self._last_shared_message.data, self._last_shared_message.time, False)
 
     def read(self) -> Message[T] | None:
         mode = self.transport_mode
@@ -376,73 +375,42 @@ class LocalQueueEmitter(SignalEmitter[T]):
         self._queue = queue
         self._clock = clock
 
-    def emit(self, data: T, ts: int = -1):
-        self._queue.append(Message(data, ts if ts >= 0 else self._clock.now_ns()))
+    def _emit(self, data: T, time: Time):
+        self._queue.append(Message(data, time))
 
 
 class LocalQueueReceiver(SignalReceiver[T]):
-    def __init__(self, queue: deque):
+    def __init__(self, queue: deque, clock: Clock | None = None):
         """Reader that allows to read messages from deque.
 
         Args:
             queue: (deque) Queue to read from.
         """
         self._queue = queue
-        self._last_value = None
+        self._clock = clock if clock is not None else SystemClock()
+        self._last_value: Message[T] | None = None
 
     def read(self) -> Message[T] | None:
-        if len(self._queue) > 0:
-            self._last_value = self._queue.popleft()
-            if self._last_value is not None:
-                self._last_value.updated = True
-        elif self._last_value is not None:
-            self._last_value.updated = False
-        return self._last_value
+        if self._queue:
+            self._last_value = self._queue.popleft()._received(self._clock)
+            return self._last_value
+        if self._last_value is None:
+            return None
+        return Message(self._last_value.data, self._last_value.time, False)
 
 
 class EventReceiver(SignalReceiver[bool]):
     def __init__(self, event: EventClass, clock: Clock):
         self._event = event
         self._clock = clock
-        self._last_value = None
+        self._last_value: Message[bool] | None = None
 
     def read(self) -> Message[bool] | None:
         value = self._event.is_set()
-        updated = self._last_value is None or value != self._last_value
-        self._last_value = value
-        return Message(data=value, ts=self._clock.now_ns(), updated=updated)
-
-
-class SystemClock(Clock):
-    def now(self) -> float:
-        return time.monotonic()
-
-    def now_ns(self) -> int:
-        return time.monotonic_ns()
-
-
-class VirtualClock(Clock):
-    """Simulated-time clock owned and advanced by the World.
-
-    Time does not pass on its own. As the scheduler works through its timeline it
-    moves this clock forward to the next scheduled event, so simulated time runs as
-    fast as the machine allows and is decoupled from any engine's internal time.
-    The clock is kept in integer nanoseconds — the resolution recorded timestamps use —
-    so the scheduler reasons on one exact grid. Only the World advances it; control
-    systems just read ``now()``/``now_ns()``.
-    """
-
-    def __init__(self):
-        self._time_ns = 0
-
-    def now(self) -> float:
-        return self._time_ns / 1e9
-
-    def now_ns(self) -> int:
-        return self._time_ns
-
-    def advance_to_ns(self, target_ns: int) -> None:
-        self._time_ns = max(self._time_ns, target_ns)
+        if self._last_value is None or value != self._last_value.data:
+            self._last_value = Message(value)._received(self._clock)
+            return self._last_value
+        return Message(value, self._last_value.time, False)
 
 
 class _CallAnsweringLoop:
@@ -493,6 +461,13 @@ def _bg_wrapper(
         # the one every other control system reads, in this process and in the parent.
         logger.info(f'Stopping background process by {name}')
         stop_event.set()
+
+
+class _WallOnlyClock(SystemClock):
+    """A host clock without access to the world's time."""
+
+    def time(self) -> Time:
+        return Time(wall=self.now_ns())
 
 
 class World:
@@ -551,6 +526,10 @@ class World:
     def clock(self) -> Clock:
         """The clock this world schedules against (wall or virtual)."""
         return self._clock
+
+    @property
+    def _background_clock(self) -> Clock:
+        return _WallOnlyClock() if isinstance(self._clock, VirtualClock) else self._clock
 
     @property
     def should_stop(self) -> bool:
@@ -790,7 +769,7 @@ class World:
         local_cs = set(in_process)
         all_cs = local_cs | set(spawned)
 
-        system_clock = SystemClock()
+        background_clock = self._background_clock
         local_connections, mp_connections = [], []
         for emitter, receiver, emitter_wrp, receiver_wrp in self._connections:
             if emitter.owner in local_cs and receiver.owner in local_cs:
@@ -800,13 +779,13 @@ class World:
             elif receiver.owner not in all_cs:
                 raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
-                clock = None if emitter.owner in local_cs else system_clock
+                clock = self._clock if emitter.owner in local_cs else background_clock
                 mp_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, clock))
 
         for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, _clock in local_connections:
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             em, re = self.local_pipe(**kwargs)
-            emitter._bind(emitter_wrp(em))
+            emitter._bind(emitter_wrp(em), clock=self._clock)
             # Wrap the underlying transport receiver before binding it into the logical receiver.
             receiver._bind(receiver_wrp(re))
 
@@ -816,8 +795,7 @@ class World:
             grouped_mp_connections[emitter].append((emitter_wrp, receiver_wrp, receiver, maxsize, clock))
 
         for emitter_logical, receivers_logical in grouped_mp_connections.items():
-            # When emitter lives in a different process, we use system clock to timestamp messages, otherwise we will
-            # have to serialise our local clock to the other process, which is not what we want.
+            # Simulation time is shared only by endpoints in the main process.
             num_receivers = len(receivers_logical)
             emitter_wrp, _, _, maxsize, clock = receivers_logical[0]  # parameters the same for all receivers
 
@@ -831,9 +809,17 @@ class World:
                     )
 
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
-            emitter_physical, receivers_physical = self.mp_pipes(clock=clock, num_receivers=num_receivers, **kwargs)
+            emitter_physical, receivers_physical = self.mp_pipes(
+                clock=clock,
+                num_receivers=num_receivers,
+                receiver_clocks=[
+                    self._clock if receiver.owner in local_cs else background_clock
+                    for _, _, receiver, _, _ in receivers_logical
+                ],
+                **kwargs,
+            )
 
-            emitter_logical._bind(emitter_wrp(emitter_physical))
+            emitter_logical._bind(emitter_wrp(emitter_physical), clock=clock)
 
             if not isinstance(receivers_physical, list):
                 receivers_physical = [receivers_physical]
@@ -878,10 +864,9 @@ class World:
                 name = f'{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}'
             else:
                 name = getattr(bg_loop, '__name__', 'anonymous')
-            # TODO: now we allow only real clock, change clock to a Emitter?
             p = self._mp_ctx.Process(
                 target=_bg_wrapper,
-                args=(bg_loop, self._stop_event, SystemClock(), name, parent_component_levels),
+                args=(bg_loop, self._stop_event, self._background_clock, name, parent_component_levels),
                 daemon=True,
                 name=name,
             )
@@ -912,7 +897,7 @@ class World:
             Tuple of (emitter, reader) for local communication
         """
         q = deque(maxlen=maxsize or None)
-        return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
+        return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q, self._clock)
 
     @functools.cached_property
     def _manager(self):
@@ -926,6 +911,7 @@ class World:
         clock: Clock | None = None,
         *,
         num_receivers: int = 1,
+        receiver_clocks: Sequence[Clock] | None = None,
         transport: TransportMode = TransportMode.UNDECIDED,
     ) -> tuple[SignalEmitter[T], SignalReceiver[T] | list[SignalReceiver[T]]]:
         """Create an inter-process channel with optional transport override.
@@ -942,6 +928,7 @@ class World:
             clock: Optional clock override for timestamp generation when the
                 emitter lives in another process.
             num_receivers: number of receivers to emit. i.e broadcast if > 1
+            receiver_clocks: Clock at each receiving endpoint; defaults to this world clock.
             transport: Transport override. ``TransportMode.UNDECIDED`` enables
                 adaptive selection; ``TransportMode.QUEUE`` or
                 ``TransportMode.SHARED_MEMORY`` pins the transport.
@@ -955,9 +942,13 @@ class World:
         forced_mode: TransportMode | None
         forced_mode = transport if transport in (TransportMode.QUEUE, TransportMode.SHARED_MEMORY) else None
 
+        receiver_clocks = receiver_clocks if receiver_clocks is not None else [self._clock] * num_receivers
+        if len(receiver_clocks) != num_receivers:
+            raise ValueError('Each receiver needs one clock')
+
         message_queues = [self._manager.Queue(maxsize=maxsize) for _ in range(num_receivers)]
         lock = self._manager.Lock()
-        ts_value = self._manager.Value('Q', -1)
+        time_value: ValueProxy[Time | None] = self._manager.Value('O', None)
         up_values = [self._manager.Value('b', False) for _ in range(num_receivers)]
         sm_queues = [self._manager.Queue() for _ in range(num_receivers)]
         initial_mode = forced_mode or TransportMode.UNDECIDED
@@ -965,13 +956,15 @@ class World:
 
         emitter_clock = clock or self._clock
         emitter = MultiprocessEmitter(
-            emitter_clock, message_queues, mode_value, lock, ts_value, up_values, sm_queues, forced_mode=forced_mode
+            emitter_clock, message_queues, mode_value, lock, time_value, up_values, sm_queues, forced_mode=forced_mode
         )
 
         receivers = []
-        for m_queue, up_value, sm_queue in zip(message_queues, up_values, sm_queues, strict=True):
+        for m_queue, up_value, sm_queue, receiver_clock in zip(
+            message_queues, up_values, sm_queues, receiver_clocks, strict=True
+        ):
             receiver = MultiprocessReceiver(
-                m_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
+                m_queue, receiver_clock, mode_value, lock, time_value, up_value, sm_queue, forced_mode=forced_mode
             )
             receivers.append(receiver)
 
