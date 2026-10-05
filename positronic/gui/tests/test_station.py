@@ -65,9 +65,9 @@ def test_the_instruction_is_locked_while_an_episode_runs():
         station.set_override(OVERRIDE)
 
 
-def test_each_attempt_takes_the_next_number_and_a_discarded_one_keeps_its_own():
+def test_each_attempt_takes_the_next_number():
     station = Station(_trials())
-    for outcome in (Outcome.DISCARDED, Outcome.PASS):
+    for outcome in (Outcome.FAIL, Outcome.PASS):
         station.start(now=1.0)
         station.end(outcome)
         station.close(outcome, now=2.0)
@@ -111,7 +111,7 @@ def test_a_trial_source_that_fails_leaves_the_station_as_it_was():
     assert view.episodes == []
 
 
-@pytest.mark.parametrize('verdict', [Outcome.PASS, Outcome.FAIL, Outcome.DISCARDED])
+@pytest.mark.parametrize('verdict', [Outcome.PASS, Outcome.FAIL])
 def test_the_outcome_reads_back_the_verdict_from_the_harness_answer(verdict):
     assert outcome_of({**terminal_payload(verdict), eval_keys.TERMINATED: True}) is verdict
 
@@ -122,7 +122,4 @@ def test_a_verdict_that_arrives_after_the_budget_reads_as_a_timeout():
 
 def test_the_verdicts_record_who_ended_the_episode():
     assert terminal_payload(Outcome.PASS) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True}
-    assert terminal_payload(Outcome.DISCARDED) == {
-        eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR,
-        eval_keys.DISCARDED: True,
-    }
+    assert terminal_payload(Outcome.FAIL) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: False}

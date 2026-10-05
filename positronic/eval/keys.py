@@ -26,9 +26,6 @@ CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
 # Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
 ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
-# True on a trial the operator threw away. The episode stays recorded; a reader leaves it out of a score and
-# defaults the key to False where it is absent.
-DISCARDED = 'eval.discarded'
 # True when the operator replaced the trial's own instruction. The episode's ``keys.TASK`` holds the text that
 # the policy got.
 INSTRUCTION_OVERRIDDEN = 'eval.instruction_overridden'

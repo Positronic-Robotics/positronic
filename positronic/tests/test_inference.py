@@ -324,7 +324,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
         override = InstructionBody(override='pick up the red cube').model_dump()
         httpx.post(f'{base}/instruction', json=override).raise_for_status()
         assert _run_episode(base, marks, 1, Outcome.PASS).outcome is Outcome.PASS
-        assert _run_episode(base, marks, 2, Outcome.DISCARDED).outcome is Outcome.DISCARDED
+        assert _run_episode(base, marks, 2, Outcome.FAIL).outcome is Outcome.FAIL
     finally:
         if run.pid is not None and run.is_alive():
             os.kill(run.pid, signal.SIGINT)
@@ -339,8 +339,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     assert first[eval_keys.SUCCESS] is True
     assert first[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_OPERATOR
     assert second[eval_keys.TRIAL_INDEX] == 1
-    assert second[eval_keys.DISCARDED] is True
-    assert eval_keys.SUCCESS not in second
+    assert second[eval_keys.SUCCESS] is False
 
 
 class _PageOperator(pimm.ControlSystem):

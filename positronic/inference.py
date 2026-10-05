@@ -138,8 +138,8 @@ def web(
 ):
     """Run one hardware embodiment attended from a browser, at ``http://{host}:{port}/``.
 
-    The page shows each camera, starts an episode on the trial ``next_task`` makes, and ends it with a verdict or a
-    discard. The run ends on Ctrl-C. The policy's metadata is read once before the page opens, so a policy that
+    The page shows each camera, starts an episode on the trial ``next_task`` makes, and ends it with a pass or fail
+    verdict. The run ends on Ctrl-C. The policy's metadata is read once before the page opens, so a policy that
     cannot answer stops the run there.
     """
     if embodiment.simulated:

@@ -16,13 +16,12 @@ const ICON = {
 const OUTCOME_LABEL = {
   pass: `${ICON.check}Pass`,
   fail: `${ICON.cross}Fail`,
-  discarded: 'Discarded',
   timeout: 'Timed out',
   error: 'Error',
   running: '<span class="dot"></span>Running',
   ending: 'Ending',
 };
-const OUTCOME_TEXT = { pass: 'pass', fail: 'fail', discarded: 'discarded', timeout: 'timed out', error: 'error' };
+const OUTCOME_TEXT = { pass: 'pass', fail: 'fail', timeout: 'timed out', error: 'error' };
 
 const $ = (id) => document.getElementById(id);
 const textarea = $('instruction');
@@ -189,7 +188,6 @@ function renderEpisodes(run) {
   let sum = '<span>0 episodes</span>';
   if (episodes.length > 0) {
     sum = `<span class="n-pass">${count('pass')} pass</span><span class="n-fail">${count('fail')} fail</span>`;
-    sum += `<span>${count('discarded')} discarded</span>`;
     if (count('timeout')) sum += `<span>${count('timeout')} timed out</span>`;
     if (count('error')) sum += `<span>${count('error')} error</span>`;
   }
@@ -202,7 +200,6 @@ function row(episode, run) {
   const state = episode.outcome ?? run.phase;
   const classes = ['ep'];
   if (episode.outcome === null) classes.push('is-open');
-  if (episode.outcome === 'discarded') classes.push('is-discarded');
   if (!episode.overridden) classes.push('is-configured');
   const tag = episode.overridden ? '<span class="tag">override</span>' : '';
   return (
@@ -368,15 +365,7 @@ $('start').addEventListener('click', async () => {
 });
 
 for (const button of verdictButtons) {
-  button.addEventListener('click', () => {
-    const verdict = button.dataset.verdict;
-    const episode = current && openEpisode(current.run);
-    if (verdict === 'discarded' && episode) {
-      const question = `Discard episode ${episode.number}? The recording stays, marked as discarded.`;
-      if (!window.confirm(question)) return;
-    }
-    act('/episode/end', { verdict });
-  });
+  button.addEventListener('click', () => act('/episode/end', { verdict: button.dataset.verdict }));
 }
 
 poll();

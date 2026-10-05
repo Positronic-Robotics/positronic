@@ -14,22 +14,19 @@ from positronic.eval import keys as eval_keys
 
 
 class Outcome(StrEnum):
-    """How an episode ended. The operator gives the first three, and the harness gives the others."""
+    """How an episode ended. The operator gives the first two, and the harness gives the others."""
 
     PASS = 'pass'
     FAIL = 'fail'
-    DISCARDED = 'discarded'
     TIMEOUT = 'timeout'
     ERROR = 'error'
 
 
-Verdict = Literal[Outcome.PASS, Outcome.FAIL, Outcome.DISCARDED]
+Verdict = Literal[Outcome.PASS, Outcome.FAIL]
 
 
 def terminal_payload(verdict: Verdict) -> dict[str, Any]:
     """The ``done`` payload that ends an episode with ``verdict``. The harness records it in the episode's statics."""
-    if verdict is Outcome.DISCARDED:
-        return {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.DISCARDED: True}
     return {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: verdict is Outcome.PASS}
 
 
@@ -37,8 +34,6 @@ def outcome_of(result: dict[str, Any]) -> Outcome:
     """The outcome that the harness's answer to an episode carries."""
     if not result[eval_keys.TERMINATED]:
         return Outcome.TIMEOUT
-    if result.get(eval_keys.DISCARDED, False):
-        return Outcome.DISCARDED
     return Outcome.PASS if result[eval_keys.SUCCESS] else Outcome.FAIL
 
 
@@ -50,7 +45,7 @@ class Phase(StrEnum):
 
 
 class Episode(BaseModel):
-    """One attempt. The operator's Starts number the attempts from 1, and a discarded attempt keeps its number."""
+    """One attempt. The operator's Starts number the attempts from 1."""
 
     number: int
     instruction: str
