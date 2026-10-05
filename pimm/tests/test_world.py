@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+import pimm.world
 from pimm.core import (
     ControlSystem,
     ControlSystemEmitter,
@@ -26,7 +27,15 @@ from pimm.core import (
 from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
-from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
+from pimm.world import (
+    EventReceiver,
+    LocalQueueEmitter,
+    MultiprocessReceiver,
+    QueueEmitter,
+    SystemClock,
+    VirtualClock,
+    World,
+)
 
 
 def dummy_process(stop_reader, clock):
@@ -97,6 +106,63 @@ class DummySMValue(SMCompliant):
 
     def read_from_buffer(self, buffer: memoryview | bytes) -> None:
         self.value = struct.unpack('d', buffer[:8])[0]
+
+
+def test_an_interrupt_taken_inside_a_send_is_what_stops_the_process(monkeypatch):
+    """Nothing installs a handler in a process for it: the transport it interrupts is what records it.
+
+    A main-process control system reaches the same transports a background one does, so an interrupt that
+    tears a connection has to be noted where the tearing happens.
+    """
+    monkeypatch.setattr(pimm.world, '_interrupted', False)
+
+    def torn(data, ts):
+        raise KeyboardInterrupt
+
+    with World() as world:
+        emitter, receiver = world.mp_pipes()
+        assert not isinstance(receiver, list)
+        emitter.emit('before', ts=1)
+        assert receiver.read() is not None
+
+        monkeypatch.setattr(emitter, '_emit_queue', torn)
+        with pytest.raises(KeyboardInterrupt):
+            emitter.emit('torn', ts=2)
+
+        assert pimm.world._interrupted, 'the interrupt went unrecorded'
+        assert receiver.read() is None
+
+
+def test_a_process_that_took_an_interrupt_stops_talking_to_the_manager(monkeypatch):
+    """An interrupt can land inside a call to the manager, and that connection then holds half a message.
+
+    Reading it again returns what another call asked for, so a reader takes a value off a channel it never
+    subscribed to. A process that has taken one neither reads nor sends after it.
+    """
+    with World() as world:
+        emitter, receiver = world.mp_pipes()
+        assert not isinstance(receiver, list)
+        emitter.emit('before', ts=1)
+        assert receiver.read() is not None
+
+        monkeypatch.setattr(pimm.world, '_interrupted', True)
+
+        emitter.emit('after', ts=2)  # dropped, not sent
+        assert receiver.read() is None
+
+
+def test_a_queue_that_answers_with_anything_but_a_message_says_the_connection_is_torn():
+    """A connection torn by an interrupt answers with what another call asked for, of whatever type that
+    call wanted -- a float as readily as nothing. Reading `.data` off it would hide the interrupt."""
+    with World() as world:
+        emitter, receiver = world.mp_pipes()
+        assert isinstance(receiver, MultiprocessReceiver)
+        emitter.emit('before', ts=1)  # settles the channel on the queue transport
+        assert receiver.read() is not None
+        receiver._queue.put(0.5)  # what the torn connection hands back
+
+        with pytest.raises(ConnectionError, match='tore its connection'):
+            receiver.read()
 
 
 class TestQueueEmitter:
