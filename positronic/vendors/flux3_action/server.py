@@ -1,128 +1,142 @@
-"""Serve FLUX 3 Action's DROID policy over the roboarena wire, behind the run's bearer token.
+"""Serve FLUX 3 Action's DROID policy over positronic's session protocol.
 
-It runs in Black Forest Labs' own environment, so it imports nothing from positronic. It answers each
-session with BFL's handler, and adds the whole roboarena config to the handshake and a `/healthz` route.
+The policy runs in Black Forest Labs' own interpreter, as `backend.py`, behind BFL's server on this machine.
+`droid` sends one exterior view to the policy twice, and `droid_3cam` sends both exterior views.
 
 Usage
-  python server.py --checkpoint black-forest-labs/flux-3-action-droid --revision <commit> \
-      --subfolder variants/gd [--port 8000]
+  python -m positronic.vendors.flux3_action.server droid --model.flux_python=<BFL's python> \
+      --model.checkpoint=black-forest-labs/flux-3-action-droid --model.revision=<commit> \
+      --model.subfolder=variants/gd
 """
 
-from __future__ import annotations
-
-import argparse
-import asyncio
-import functools
-import hmac
-import http
-import json
-import os
-from collections.abc import Awaitable, Callable, Mapping
+import subprocess
+from functools import partial
+from pathlib import Path
 from typing import Any
 
-import websockets.asyncio.server
-import websockets.http11
+import configuronic as cfn
+import numpy as np
+from platform_client.policy_container import PROVISIONING_DEADLINE_S
 
-# rules-allow: hardcoded-keys — positronic is not installed where this file runs; tests/test_server.py pins
-# each name to positronic's own.
-AUTH_TOKEN_ENV = 'AUTH_TOKEN'
-AUTH_HEADER = 'Authorization'
-HEALTH_PATH = '/healthz'
+from pimm.logging import init_logging
+from positronic import keys
+from positronic.offboard import keys as offboard_keys
+from positronic.offboard.roboarena import ProbeOutcome, RoboarenaClient
+from positronic.offboard.server import serve
+from positronic.offboard.server_utils import wait_for_subprocess_ready, warmup
+from positronic.offboard.spec import Model, PolicyDeployment
+from positronic.policy import Sequential
+from positronic.policy import keys as policy_keys
+from positronic.policy.base import Obs
+from positronic.policy.codec import ACTION, Codec, RestrictImageSize
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.vendors import flux3_action
+from positronic.vendors.flux3_action import codecs
 
-# What a roboarena client reads on connect. The client encodes each view at this (height, width), and BFL
-# composes the wrist view above the two exteriors at half size into the 540x640 frame it pads to its canvas.
-# rules-allow: hardcoded-keys — the roboarena wire's own field names, and positronic is not installed where
-# this file runs.
-SERVER_CONFIG: dict[str, Any] = {
-    'image_resolution': [360, 640],
-    'needs_wrist_camera': True,
-    'n_external_cameras': 2,
-    'needs_stereo_camera': False,
-    'needs_session_id': False,
-    # Seven absolute joint positions in radians and a gripper closed fraction.
-    'action_space': 'joint_position',
-}
-
-Handle = Callable[[websockets.asyncio.server.ServerConnection], Awaitable[None]]
+BACKEND_SCRIPT = Path(__file__).with_name('backend.py')
 
 
-def run_token(environ: Mapping[str, str]) -> str | None:
-    """The token the server checks, or None to serve open.
+class Flux3ActionModel(Model):
+    """FLUX 3 Action behind BFL's server in a child process, which this model owns."""
 
-    Refuses a set token that an `Authorization` header cannot carry, as positronic's server does.
+    def __init__(self, backend: subprocess.Popen, port: int, meta: dict[str, Any]):
+        self._backend = backend
+        self._client = RoboarenaClient(port=port)
+        self._meta = meta
+
+    def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
+        return [{ACTION: action} for action in self._client.infer(obs)[flux3_action.ACTIONS]]
+
+    def meta(self) -> dict[str, Any]:
+        return self._meta
+
+    def close(self) -> None:
+        self._client.close()
+        self._backend.terminate()
+        try:
+            self._backend.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self._backend.kill()
+            self._backend.wait()
+
+
+def _exit_status(process: subprocess.Popen) -> tuple[bool, int | None]:
+    code = process.poll()
+    return code is not None, code
+
+
+def _warm_observation() -> dict[str, Any]:
+    """Black views, the arm at zero and the gripper open, as `codecs.droid` encodes them."""
+    width, height = codecs.VIEW_SIZE
+    view = np.zeros((height, width, 3), dtype=np.uint8)
+    return codecs.droid.instantiate().encode({
+        keys.WRIST_IMAGE: view,
+        keys.EXTERIOR_IMAGE: view,
+        keys.JOINTS: np.zeros(7),
+        keys.GRIP: 0.0,
+        keys.TASK: '',
+    })
+
+
+@cfn.config(revision=None, subfolder=None, backend_port=9000)
+def flux3_action_model(
+    checkpoint: str, revision: str | None, subfolder: str | None, flux_python: str, backend_port: int
+) -> Model:
+    """The policy package at `checkpoint`, served by `backend.py` in BFL's interpreter `flux_python`.
+
+    `checkpoint` is a Hugging Face repository id, with a `revision` and a `subfolder`, or a local directory with
+    neither.
     """
-    token = environ.get(AUTH_TOKEN_ENV)
-    if token is None:
-        return None
-    if not (token and all('!' <= c <= '~' for c in token)):
-        raise ValueError(f'{AUTH_TOKEN_ENV} must be non-empty printable ASCII without spaces; unset it to serve open')
-    return token
+    # `-P` keeps this directory off the module path, so a positronic module here cannot shadow one of BFL's.
+    command: list[str | Path] = [
+        Path(flux_python),
+        '-P',
+        BACKEND_SCRIPT,
+        '--checkpoint',
+        checkpoint,
+        '--port',
+        str(backend_port),
+    ]
+    for flag, value in (('--revision', revision), ('--subfolder', subfolder)):
+        if value is not None:
+            command += [flag, value]
+    backend = subprocess.Popen(command)
+    meta = {
+        offboard_keys.CHECKPOINT_ID: checkpoint,
+        policy_keys.TYPE: 'flux3_action',
+        'revision': revision,
+        'subfolder': subfolder,
+    }
+    model = Flux3ActionModel(backend, backend_port, meta)
+    try:
+        probe = RoboarenaClient(port=backend_port)
+        wait_for_subprocess_ready(
+            lambda: probe.probe() is ProbeOutcome.READY,
+            partial(_exit_status, backend),
+            'FLUX 3 Action backend',
+            max_wait=PROVISIONING_DEADLINE_S,
+        )
+        warmup(model, _warm_observation())
+    except Exception:
+        model.close()
+        raise
+    return model
 
 
-def carries_token(headers: Mapping[str, str], token: str | None) -> bool:
-    if token is None:
-        return True
-    presented = headers.get(AUTH_HEADER) or ''
-    return hmac.compare_digest(presented.encode(), f'Bearer {token}'.encode())
-
-
-def server(handle: Handle, host: str, port: int, token: str | None):
-    """The server behind `token`, with the transport settings of BFL's `serve_async`. It binds only when entered."""
-
-    def answer_before_handshake(
-        connection: websockets.asyncio.server.ServerConnection, request: websockets.http11.Request
-    ) -> websockets.http11.Response | None:
-        if not carries_token(request.headers, token):
-            return connection.respond(http.HTTPStatus.UNAUTHORIZED, 'Invalid or missing bearer token\n')
-        if request.path == HEALTH_PATH:
-            return connection.respond(http.HTTPStatus.OK, 'OK\n')
-        return None
-
-    return websockets.asyncio.server.serve(
-        handle, host, port, compression=None, max_size=None, process_request=answer_before_handshake
+@cfn.config(codec=codecs.droid)
+def pipeline(codec: Codec) -> PolicyDeployment:
+    """The client plays each chunk whole, as BFL's DROID settings do, and `codec` runs on this server."""
+    return PolicyDeployment(
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(codecs.FPS), RestrictImageSize(*codecs.VIEW_SIZE)), codec
     )
 
 
-async def serve_forever(handle: Handle, host: str, port: int, token: str | None) -> None:
-    async with server(handle, host, port, token) as bound:
-        await bound.serve_forever()
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Serve FLUX 3 Action's DROID policy over the roboarena wire.")
-    parser.add_argument('--checkpoint', required=True, help='a Hugging Face repository id or a local directory')
-    parser.add_argument('--revision', help='the repository commit')
-    parser.add_argument('--subfolder', help='the policy package in the repository, e.g. variants/gd')
-    parser.add_argument('--host', default='0.0.0.0')
-    parser.add_argument('--port', type=int, default=8000)
-    args = parser.parse_args(argv)
-    # Read before the model loads, so a bad token fails in seconds, not minutes.
-    token = run_token(os.environ)
-
-    # Only the image's environment has BFL's package and torch.
-    import torch  # noqa: PLC0415
-    from flux_action.serving import robolab  # noqa: PLC0415
-
-    # FOOTGUN: without this capture the warm-up dies on "Inplace update to inference tensor outside
-    # InferenceMode" as it captures the DiT's CUDA graph, in `serve-robolab` too. The graph lives for the run.
-    first_graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(first_graph):
-        torch.zeros(1, device='cuda')
-
-    # The defaults of `serve-robolab`: DiT in bfloat16, compiled, one warm-up request before the bind.
-    policy = robolab.load_serving_policy(
-        args.checkpoint, revision=args.revision, subfolder=args.subfolder, device='cuda', dtype='bfloat16'
-    )
-    adapter = robolab.RoboLabPolicy(policy)
-    metadata = {**SERVER_CONFIG, 'serving_setup': policy.serving_setup}
-    print(
-        json.dumps({'serving': args.checkpoint, 'revision': args.revision, 'subfolder': args.subfolder, **metadata}),
-        flush=True,
-    )
-    handle = functools.partial(robolab._handle, adapter=adapter, metadata=metadata)
-    # The port binds after the warm-up, so `HEALTH_PATH` answers only once the model can serve.
-    asyncio.run(serve_forever(handle, args.host, args.port, token))
+COMMANDS = {
+    'droid': serve.override(model=flux3_action_model, pipeline=pipeline),
+    'droid_3cam': serve.override(model=flux3_action_model, pipeline=pipeline.override(codec=codecs.droid_3cam)),
+}
 
 
 if __name__ == '__main__':
-    main()
+    init_logging()
+    cfn.cli(COMMANDS)
