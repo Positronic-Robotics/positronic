@@ -384,7 +384,7 @@ def main_sim(
         _wire(world, ds_agent, data_collection, webxr, sim, sound)
         world.connect(data_collection.redraw_scene, sim.env_reset)
 
-        sim_iter = world.start([sim, data_collection], [webxr, gui, ds_agent, sound])
+        sim_iter = world.start([sim, data_collection, ds_agent], [webxr, gui, sound])
         sim_iter = iter(sim_iter)
 
         # VR teleop is live, so pace virtual time to wall time: only step the sim when it has fallen behind.

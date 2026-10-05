@@ -7,6 +7,7 @@ import numpy as np
 import pimm
 from pimm.shared_memory import NumpySMAdapter
 from positronic.drivers import vendor_import
+from positronic.drivers.camera import CAPTURE_TIME
 from positronic.drivers.camera.device_open_lock import device_open_lock
 
 with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
@@ -197,7 +198,7 @@ class SLCamera(pimm.ControlSystem):
                 self.recovery_start_time = None
 
             image = sl.Mat()
-            capture_time = pimm.Time(**{'camera.capture': zed.get_timestamp(TIME_REF_IMAGE).get_nanoseconds()})
+            capture_time = pimm.Time(**{CAPTURE_TIME: zed.get_timestamp(TIME_REF_IMAGE).get_nanoseconds()})
             if zed.retrieve_image(image, view) == SUCCESS:
                 # The images are in BGRA format, convert to RGB
                 np_image = image.get_data()[:, :, [2, 1, 0]]
