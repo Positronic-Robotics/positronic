@@ -60,6 +60,7 @@ MERGE_EXPANSION_MSG = (
     ' into further arguments, which can select a repository the authorization never named.'
 )
 AMEND_MSG = 'BLOCKED: Never amend commits, create new ones instead.'
+GH_MERGE_MSG = 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
 MCP_MERGE_MSG = 'BLOCKED: {tool} is not allowed.' + DENY_TAIL + MERGE_ESCAPE
 MCP_UNNUMBERED_MSG = (
     'BLOCKED: {tool} names no pull request — an authorization names one pull request, so a merge'
@@ -81,6 +82,11 @@ MCP_UNREADABLE_MSG = (
 STACKED_MERGE_MSG = (
     'BLOCKED: #{number} is in a GitHub stack, so its merge also merges {below}. A named human authorizes each'
     ' pull request the merge takes from chat with `!allow_merge <pr>`. Not authorized: {missing}.'
+)
+MERGE_NOT_ALONE_MSG = (
+    'BLOCKED: run `gh pr merge` alone in its Bash call, with nothing beside it but `cd`. The guard'
+    ' reads the stack before the call runs, and another command in the call can change the stack'
+    ' before the merge does.'
 )
 STACK_LOOKUP_MSG = (
     'BLOCKED: the guard cannot tell which pull requests the merge of #{number} takes: {reason}.'
@@ -481,66 +487,6 @@ def consume_merge_allow(
     return True
 
 
-# Membership is a shape read off the call, not a list of tool names. A call carrying a commit
-# `message` and no `branch` commits to the default branch. A tool whose name carries `branch` and
-# names a pull request merges the base into the head, which can be the guarded branch.
-GITHUB_MCP_PREFIX = 'mcp__github__'
-MERGE_VERB = 'merge'
-BRANCH_VERB = 'branch'
-MCP_OWNER = 'owner'
-MCP_REPO = 'repo'
-MCP_BRANCH = 'branch'
-MCP_MESSAGE = 'message'
-MCP_PULL_NUMBER = 'pullNumber'
-
-
-def _mcp_slug(arguments: dict) -> str:
-    """`owner/repo` the call names, casefolded; '' when it names neither."""
-    owner, repo = str(arguments.get(MCP_OWNER) or ''), str(arguments.get(MCP_REPO) or '')
-    return f'{owner}/{repo}'.casefold() if owner and repo else ''
-
-
-def _mcp_pull_number(arguments: dict) -> int | None:
-    """The pull request the call names, or None when it names none.
-
-    A bool is an `int` to Python and names no pull request; an integral float is JSON's spelling of an int.
-    """
-    number = arguments.get(MCP_PULL_NUMBER)
-    if isinstance(number, bool):
-        return None
-    if isinstance(number, int):
-        return number
-    if isinstance(number, float) and number.is_integer():
-        return int(number)
-    return int(number) if isinstance(number, str) and number.isdigit() else None
-
-
-def analyze_mcp(tool: str, arguments: dict, guarded_slug: str, allow_merge=consume_merge_allow) -> str | None:
-    """The deny message for a GitHub MCP call, or None to allow it."""
-    if not tool.startswith(GITHUB_MCP_PREFIX):
-        return None
-    verb = tool.removeprefix(GITHUB_MCP_PREFIX)
-    guarded_slug, slug = guarded_slug.casefold(), _mcp_slug(arguments)
-    if MERGE_VERB in verb:
-        number = _mcp_pull_number(arguments)
-        if number is None:
-            return MCP_UNNUMBERED_MSG.format(tool=tool)
-        # The receipt is consulted last: consulting it spends it.
-        if not guarded_slug or slug != guarded_slug or not allow_merge(number, guarded_slug):
-            return MCP_MERGE_MSG.format(tool=tool)
-        return None
-    # A write the guard cannot place — no repository named, or none to compare it against — is
-    # treated as a write onto this repository.
-    if slug and guarded_slug and slug != guarded_slug:
-        return None
-    branch = str(arguments.get(MCP_BRANCH) or '')
-    if branch == GUARDED_BRANCH or (not branch and MCP_MESSAGE in arguments):
-        return MCP_BRANCH_WRITE_MSG.format(tool=tool, branch=GUARDED_BRANCH)
-    if BRANCH_VERB in verb and MCP_PULL_NUMBER in arguments:
-        return MCP_UPDATE_BRANCH_MSG.format(tool=tool, branch=GUARDED_BRANCH)
-    return None
-
-
 # The whole stack lookup, every `gh api` call together, finishes inside the hook's own timeout in
 # `.claude/settings.json`: a hook killed at its deadline returns no verdict.
 STACK_LOOKUP_BUDGET_S = 25
@@ -590,6 +536,73 @@ def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[
     if number not in chain:
         raise StackLookupError(f'the open pull requests of the stack of #{number} do not form one chain from its base')
     return chain[: chain.index(number)]
+
+
+# Membership is a shape read off the call, not a list of tool names. A call carrying a commit
+# `message` and no `branch` commits to the default branch. A tool whose name carries `branch` and
+# names a pull request merges the base into the head, which can be the guarded branch.
+GITHUB_MCP_PREFIX = 'mcp__github__'
+MERGE_VERB = 'merge'
+BRANCH_VERB = 'branch'
+MCP_OWNER = 'owner'
+MCP_REPO = 'repo'
+MCP_BRANCH = 'branch'
+MCP_MESSAGE = 'message'
+MCP_PULL_NUMBER = 'pullNumber'
+
+
+def _mcp_slug(arguments: dict) -> str:
+    """`owner/repo` the call names, casefolded; '' when it names neither."""
+    owner, repo = str(arguments.get(MCP_OWNER) or ''), str(arguments.get(MCP_REPO) or '')
+    return f'{owner}/{repo}'.casefold() if owner and repo else ''
+
+
+def _mcp_pull_number(arguments: dict) -> int | None:
+    """The pull request the call names, or None when it names none.
+
+    A bool is an `int` to Python and names no pull request; an integral float is JSON's spelling of an int.
+    """
+    number = arguments.get(MCP_PULL_NUMBER)
+    if isinstance(number, bool):
+        return None
+    if isinstance(number, int):
+        return number
+    if isinstance(number, float) and number.is_integer():
+        return int(number)
+    return int(number) if isinstance(number, str) and number.isdigit() else None
+
+
+def analyze_mcp(
+    tool: str,
+    arguments: dict,
+    guarded_slug: str,
+    allow_merge=consume_merge_allow,
+    authorized=merge_authorized,
+    stack_below=merged_along_with,
+) -> str | None:
+    """The deny message for a GitHub MCP call, or None to allow it."""
+    if not tool.startswith(GITHUB_MCP_PREFIX):
+        return None
+    verb = tool.removeprefix(GITHUB_MCP_PREFIX)
+    guarded_slug, slug = guarded_slug.casefold(), _mcp_slug(arguments)
+    if MERGE_VERB in verb:
+        number = _mcp_pull_number(arguments)
+        if number is None:
+            return MCP_UNNUMBERED_MSG.format(tool=tool)
+        refused = MCP_MERGE_MSG.format(tool=tool)
+        if not guarded_slug or slug != guarded_slug:
+            return refused
+        return _authorize_merge(number, guarded_slug, allow_merge, authorized, stack_below, refused)
+    # A write the guard cannot place — no repository named, or none to compare it against — is
+    # treated as a write onto this repository.
+    if slug and guarded_slug and slug != guarded_slug:
+        return None
+    branch = str(arguments.get(MCP_BRANCH) or '')
+    if branch == GUARDED_BRANCH or (not branch and MCP_MESSAGE in arguments):
+        return MCP_BRANCH_WRITE_MSG.format(tool=tool, branch=GUARDED_BRANCH)
+    if BRANCH_VERB in verb and MCP_PULL_NUMBER in arguments:
+        return MCP_UPDATE_BRANCH_MSG.format(tool=tool, branch=GUARDED_BRANCH)
+    return None
 
 
 def _carries_substitution(cmd: str) -> bool:
@@ -947,7 +960,7 @@ def analyze(  # noqa: C901
             if pending_merge is not None:
                 return MULTIPLE_MERGES_MSG
             if _gh_repo(target, inv.dir, git, cmd, gh_repo_env) != guarded_slug:
-                return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
+                return GH_MERGE_MSG
             # Spending it here would pay for a merge a later invocation in the same command can
             # still block, so the authorization is consulted once everything else has passed.
             pending_merge = number
@@ -989,14 +1002,34 @@ def analyze(  # noqa: C901
                 return deny
 
     if pending_merge is not None:
-        return _authorize_merge(pending_merge, guarded_slug, allow_merge, authorized, stack_below)
+        if not _merge_runs_alone(cmd):
+            return MERGE_NOT_ALONE_MSG
+        return _authorize_merge(pending_merge, guarded_slug, allow_merge, authorized, stack_below, GH_MERGE_MSG)
     return None
 
 
-def _authorize_merge(number: int, guarded_slug: str, allow_merge, authorized, stack_below) -> str | None:
+def _merge_runs_alone(cmd: str) -> bool:
+    """Whether every simple command in `cmd` is the one gh invocation or a `cd`.
+
+    A substitution may only `cat` files, which is how a token reaches `GH_TOKEN=$(cat …)`.
+    """
+    cmd = _strip_heredoc_bodies(cmd)
+    try:
+        for body in _substitution_bodies(cmd):
+            if [os.path.basename(s[0]) for s in _segments(body)] != ['cat']:
+                return False
+            cmd = cmd.replace(f'$({body})', SUBST).replace(f'`{body}`', SUBST)
+        segments = _segments(cmd)
+    except ValueError:
+        return False
+    gh_segments = [s for s in segments if _find_tool(s)[1] == 'gh']
+    return len(gh_segments) == 1 and all(s in gh_segments or os.path.basename(s[0]) == 'cd' for s in segments)
+
+
+def _authorize_merge(number: int, guarded_slug: str, allow_merge, authorized, stack_below, refused: str) -> str | None:
     """The deny message for a merge of `number`, or None after spending one authorization per pull request it takes."""
     if not authorized(number, guarded_slug):
-        return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
+        return refused
     try:
         below = stack_below(number, guarded_slug)
     except StackLookupError as e:
@@ -1005,7 +1038,7 @@ def _authorize_merge(number: int, guarded_slug: str, allow_merge, authorized, st
     if missing:
         return STACKED_MERGE_MSG.format(number=number, below=_pr_list(below), missing=_pr_list(missing))
     if not all(allow_merge(n, guarded_slug) for n in [*below, number]):
-        return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
+        return refused
     return None
 
 

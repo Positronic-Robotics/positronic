@@ -349,12 +349,6 @@ def test_a_quoted_dollar_is_a_literal_the_shell_never_builds(git):
         assert verdict(git, cmd, allow_merge=lambda *_: True) is None, cmd
 
 
-def test_an_expansion_beside_the_merge_cannot_reach_its_arguments(git):
-    """A separator ends the command, so a later word is never one of gh's."""
-    cmd = f'gh pr merge 566 --repo {GUARDED} --squash && echo $HOME'
-    assert verdict(git, cmd, allow_merge=lambda *_: True) is None
-
-
 def test_a_merge_reading_its_token_from_a_substitution_still_passes(git):
     """The assignment prefix expands into the environment, not into gh's arguments."""
     cmd = f'GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 566 --repo {GUARDED} --squash'
@@ -459,6 +453,27 @@ def test_a_stacked_merge_names_the_pull_requests_below_it_with_no_authorization(
     )
     assert denial is not None and 'Not authorized: #101.' in denial and '#101, #102' in denial
     assert spent == []
+
+
+@pytest.mark.parametrize(
+    'cmd',
+    ['gh pr reopen 101 && gh pr merge 103', 'gh pr merge 103 && echo done', 'python3 edit_stack.py; gh pr merge 103'],
+)
+def test_a_merge_beside_another_command_is_refused_and_spends_nothing(git, cmd):
+    """The other command can change the stack after the guard has read it."""
+    spent = []
+    denial = verdict(git, cmd, allow_merge=lambda n, slug: spent.append(n) or True)
+    assert denial == gmm.MERGE_NOT_ALONE_MSG
+    assert spent == []
+
+
+def test_a_substitution_beside_a_merge_may_only_read_a_file():
+    assert gmm._merge_runs_alone('GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 103')
+    assert not gmm._merge_runs_alone('GH_TOKEN=$(gh pr reopen 101; cat ~/tokens/gh) gh pr merge 103')
+
+
+def test_a_merge_after_a_cd_into_this_repository_goes_through(git):
+    assert verdict(git, f'cd {CLONE} && gh pr merge 103', allow_merge=lambda *_: True) is None
 
 
 def test_a_merge_whose_stack_cannot_be_read_is_refused_and_spends_nothing(git):
@@ -705,8 +720,15 @@ GUARDED_REPO_ARGS = {'owner': 'Positronic-Robotics', 'repo': 'positronic'}
 OTHER_REPO_ARGS = {'owner': 'someone', 'repo': 'agent_infra'}
 
 
-def mcp_verdict(tool, arguments, guarded=GUARDED, allow_merge=no_allow):
-    return gmm.analyze_mcp(tool, arguments, guarded, allow_merge=allow_merge)
+def mcp_verdict(tool, arguments, guarded=GUARDED, allow_merge=no_allow, authorized=None, stack_below=None):
+    return gmm.analyze_mcp(
+        tool,
+        arguments,
+        guarded,
+        allow_merge=allow_merge,
+        authorized=authorized or (lambda *_: True),
+        stack_below=stack_below or (lambda *_: []),
+    )
 
 
 def merge_args(number=566, **overrides):
@@ -735,6 +757,31 @@ def test_both_halves_spend_one_authorization(tmp_path, as_root, git):
 
     assert mcp_verdict(MERGE_TOOL, merge_args(), allow_merge=allow) is None
     assert verdict(git, 'gh pr merge 566', allow_merge=allow) is not None
+
+
+def test_a_stacked_mcp_merge_spends_an_authorization_for_each_pull_request_it_takes():
+    spent = []
+    denial = mcp_verdict(
+        MERGE_TOOL,
+        merge_args(103),
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        stack_below=lambda *_: [101, 102],
+    )
+    assert denial is None
+    assert spent == [101, 102, 103]
+
+
+def test_a_stacked_mcp_merge_names_the_pull_requests_below_it_with_no_authorization():
+    spent = []
+    denial = mcp_verdict(
+        MERGE_TOOL,
+        merge_args(103),
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        authorized=lambda n, slug: n != 101,
+        stack_below=lambda *_: [101, 102],
+    )
+    assert denial is not None and 'Not authorized: #101.' in denial
+    assert spent == []
 
 
 def test_an_mcp_merge_of_another_repository_is_refused_without_consulting_any_authorization():
