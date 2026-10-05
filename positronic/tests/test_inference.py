@@ -231,7 +231,7 @@ class _Camera(pimm.ControlSystem):
         count = 0
         while not should_stop.value:
             adapter = NumpySMAdapter.lazy_init(np.full((120, 160, 3), count % 256, dtype=np.uint8), adapter)
-            self.frame.emit(adapter, clock.now_ns())
+            self.frame.emit(adapter)
             count += 1
             yield pimm.Sleep(1 / 15)
 

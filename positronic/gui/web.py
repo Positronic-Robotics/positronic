@@ -119,9 +119,9 @@ class StationConsole(pimm.ControlSystem):
         self.cameras = pimm.ReceiverDict(self)
         self.run_trial = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
-        # The open episode's answer, and the operator's verdict on it with the time it was given.
+        # The open episode's answer, and the ``done`` payload of the operator's verdict on it.
         self._episode: pimm.calls.Answer[dict[str, Any]] | None = None
-        self._verdict: tuple[dict[str, Any], int] | None = None
+        self._verdict: dict[str, Any] | None = None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         station = Station(self._next_task)
@@ -169,12 +169,12 @@ class StationConsole(pimm.ControlSystem):
             if isinstance(action, Task):
                 self._episode = self.run_trial(action)
             else:
-                self._verdict = (action, clock.now_ns())
+                self._verdict = action
         if self._episode is None:
             return
         if not self._episode.done():
             if self._verdict is not None:
-                self.done.emit(*self._verdict)
+                self.done.emit(self._verdict)
             return
         episode, self._episode, self._verdict = self._episode, None, None
         try:  # rules-allow: swallowed-error — the page shows the episode as an error, and the log says why
