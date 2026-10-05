@@ -13,6 +13,9 @@ IMAGE_NAME_ROBOLAB := positro/robolab
 IMAGE_NAME_GALAXEA := positro/galaxea
 IMAGE_NAME_FLUX3_ACTION := positro/flux3-action
 IMAGE_NAME_COSMOS3_NANO := positro/cosmos3-nano
+# One serving image per checkpoint, the weights inside, starting with no network: positro/<name>, from
+# Dockerfile.serve-<name>. Not in `build` or `push`.
+SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid
 
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
 
@@ -149,9 +152,7 @@ push-cosmos3-nano: tag-cosmos3-nano
 ifdef CI
 	docker push $(IMAGE_NAME_COSMOS3_NANO):latest
 endif
-# One serving image per checkpoint, the weights inside, starting with no network: positro/<name>, from
-# Dockerfile.serve-<name>. Not in `build` or `push`.
-SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid
+
 # The GR00T backbone is gated on the Hub. BuildKit reads the token from HF_TOKEN, and it enters no layer.
 SERVE_BUILD_FLAGS_gr00t-n17-droid := --secret id=hf_token,env=HF_TOKEN
 

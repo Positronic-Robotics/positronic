@@ -69,9 +69,11 @@ jobs:
           elif [ "$GITHUB_REF" = refs/heads/main ]; then
             tag=main
           else
-            # A dispatch from another ref pushes under that ref's name, and moves neither `main` nor `latest`.
+            # Any other ref, a branch or a tag, pushes `ref-<name>` and the commit. No `main`, `latest` or release
+            # tag starts with `ref-`.
             unset CI
-            tag="${GITHUB_REF_NAME//\//-}"
+            tag="ref-$(printf %s "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9_.-' -)"
+            tag="${tag:0:128}"
           fi
           make -C docker "push-serve-${NAME}" IMAGE_TAG="$tag"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
