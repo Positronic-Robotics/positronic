@@ -150,7 +150,7 @@ ifdef CI
 	docker push $(IMAGE_NAME_COSMOS3_NANO):latest
 endif
 # One serving image per checkpoint, the weights inside, starting with no network: positro/<name>, from
-# Dockerfile.serve-<name>. Not in `build` or `push`: CI builds each in a workflow of its own.
+# Dockerfile.serve-<name>. Not in `build` or `push`.
 SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid
 # The GR00T backbone is gated on the Hub. BuildKit reads the token from HF_TOKEN, and it enters no layer.
 SERVE_BUILD_FLAGS_gr00t-n17-droid := --secret id=hf_token,env=HF_TOKEN

@@ -1,7 +1,7 @@
 name: Build a Serving Image
 
 # Builds positro/<name> from docker/Dockerfile.serve-<name> and checks it. On main it pushes `main`, the commit and
-# `latest`; on a release, `v<version>` and the commit. The callers are docker-serve-<name>.yaml and release.yaml.
+# `latest`; on a release, `v<version>` and the commit.
 on:
   workflow_call:
     inputs:
@@ -14,18 +14,49 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      HF_TOKEN:
+        required: false
+      DOCKER_USERNAME:
+        required: false
+      DOCKER_PASSWORD:
+        required: false
 
 permissions:
   contents: read
 
 jobs:
+  # GitHub withholds secrets from a pull request opened from a fork or by Dependabot.
+  token:
+    runs-on: ubuntu-latest
+    outputs:
+      can_build: ${{ steps.check.outputs.can_build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: docker
+      - id: check
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          RECIPE: docker/Dockerfile.serve-${{ inputs.name }}
+        run: |
+          if grep -q 'id=hf_token' "$RECIPE" && [ -z "$HF_TOKEN" ] && [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            echo '::notice::This pull request gets no HF_TOKEN, so the gated download cannot run. The build is skipped.'
+            echo can_build=false >> "$GITHUB_OUTPUT"
+          else
+            echo can_build=true >> "$GITHUB_OUTPUT"
+          fi
+
   serve-image:
+    needs: token
+    if: needs.token.outputs.can_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
       NAME: ${{ inputs.name }}
       IMAGE: positro/${{ inputs.name }}
-      # Only the GR00T recipe reads it, through a BuildKit secret mount.
+      # A recipe reads it through a BuildKit secret mount.
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     defaults:
       run:

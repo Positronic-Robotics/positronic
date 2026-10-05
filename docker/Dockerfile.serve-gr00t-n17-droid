@@ -2,8 +2,6 @@
 # A policy image the platform can run: GR00T N1.7 DROID on top of `positro/gr00t-base`.
 # docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
 #
-# CI publishes the image as `positro/gr00t-n17-droid` on Docker Hub.
-#
 # Usage (from the repository root)
 #   HF_TOKEN=<a read token> make -C docker build-serve-gr00t-n17-droid        # positro/gr00t-n17-droid:local
 #   docker buildx build --platform linux/amd64 --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \

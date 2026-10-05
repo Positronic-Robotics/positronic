@@ -2,8 +2,6 @@
 # A policy image the platform can run: openpi pi05_droid_jointpos on top of `positro/openpi-base`.
 # docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
 #
-# CI publishes the image as `positro/pi05-droid` on Docker Hub.
-#
 # Usage (from the repository root)
 #   make -C docker build-serve-pi05-droid        # positro/pi05-droid:local
 #   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \

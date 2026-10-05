@@ -28,8 +28,8 @@ images to Docker Hub. Build from the root of a positronic checkout:
 | FLUX 3 Action DROID | [`docker/Dockerfile.flux3-action`](../docker/Dockerfile.flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
 | Cosmos3-Nano DROID | [`docker/Dockerfile.cosmos3-nano`](../docker/Dockerfile.cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
 
-CI builds each image when its recipe or its vendor code changes. It tags each build `main`, `latest`
-and the commit, and a release adds `v<version>`. Read the digest of a published image with
+CI builds each image when its recipe or its vendor code changes, and tags each build `main`, `latest`
+and the commit. A release also tags the three serving images `v<version>`. Read the digest of a published image with
 `docker/read_image_digest.sh positro/<image>:main`, and pin it.
 
 The header of each recipe gives its build command. The comments in each recipe say where a

@@ -2,8 +2,6 @@
 # A policy image the platform can run: MolmoAct2 DROID, served from Hugging Face `transformers`.
 # docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
 #
-# CI publishes the image as `positro/molmoact2-droid` on Docker Hub.
-#
 # Usage (from the repository root)
 #   make -C docker build-serve-molmoact2-droid        # positro/molmoact2-droid:local
 #   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
