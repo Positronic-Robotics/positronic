@@ -19,7 +19,7 @@ from platform_client.policy_container import PROVISIONING_DEADLINE_S
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard.roboarena import ProbeOutcome, RoboarenaClient
+from positronic.offboard.roboarena import RoboarenaClient
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import wait_for_subprocess_ready, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
@@ -95,7 +95,7 @@ def cosmos3_model(checkpoint: str, revision: str | None, nvidia_python: str, bac
     try:
         probe = RoboarenaClient(BACKEND_HOST, backend_port)
         wait_for_subprocess_ready(
-            lambda: probe.probe() is ProbeOutcome.READY,
+            lambda: probe.probe() is None,
             partial(_exit_status, backend),
             'Cosmos3 backend',
             max_wait=PROVISIONING_DEADLINE_S,
