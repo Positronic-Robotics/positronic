@@ -15,6 +15,7 @@ from positronic.gui.web import (
     CameraFeed,
     CameraView,
     EndBody,
+    EndTrial,
     InstructionBody,
     StationConsole,
     Status,
@@ -96,10 +97,10 @@ def test_start_hands_the_trial_to_the_control_loop_once(console):
     assert len(console.actions) == 1
 
 
-def test_a_verdict_hands_the_done_payload_to_the_control_loop(console):
+def test_a_verdict_hands_the_end_of_the_trial_to_the_control_loop(console):
     console.post('/episode/start')
     assert console.post('/episode/end', EndBody(verdict=Outcome.FAIL)).run.phase is Phase.ENDING
-    assert console.actions[-1] == terminal_payload(Outcome.FAIL)
+    assert console.actions[-1] == EndTrial(terminal_payload(Outcome.FAIL))
 
 
 def test_the_page_offers_only_the_operator_verdicts(console):

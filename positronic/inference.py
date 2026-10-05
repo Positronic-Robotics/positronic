@@ -4,6 +4,7 @@ the ``sim`` and ``stats`` aliases over ``cli.eval.run``."""
 import logging
 from collections import Counter
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -19,11 +20,12 @@ from pimm.logging import init_logging
 from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run, run_world, scoped_env_var
+from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
-from positronic.gui.web import StationConsole
+from positronic.gui.web import EndTrial, StationConsole
 from positronic.policy import Policy
 from positronic.policy import keys as policy_keys
 from positronic.policy.harness import Harness, Rollout
@@ -100,30 +102,89 @@ real_cfg = cfn.Config(
 # The lag between a Start and the harness taking the trial, and between the harness's answer and the console.
 FORWARD_POLL_S = 0.02
 
+TrialCall = pimm.calls.Call[Task | EndTrial, dict[str, Any]]
+
+
+@dataclass
+class _OpenTrial:
+    """The trial the harness holds, and the verdict that waits for the harness to start it."""
+
+    call: TrialCall
+    answer: pimm.calls.Answer[dict[str, Any]]
+    started: bool = False
+    stopped: bool = False
+    verdict: dict[str, Any] | None = None
+    delivered: bool = False
+    # The calls that ended this trial. Each gets the trial's answer.
+    ends: list[TrialCall] = field(default_factory=list)
+
+    def take_verdict(self, call: TrialCall, payload: dict[str, Any]) -> None:
+        self.ends.append(call)
+        if self.verdict is None and not self.delivered:
+            self.verdict = payload
+
+    def observe(self, command: DsWriterCommand) -> None:
+        if command.type is DsWriterCommandType.START_EPISODE:
+            self.started = True
+        else:
+            self.stopped = True
+
+    def deliver(self, done: pimm.SignalEmitter[dict[str, Any]]) -> None:
+        if self.started and not self.stopped and self.verdict is not None:
+            done.emit(self.verdict)
+            self.verdict, self.delivered = None, True
+
+    def close(self) -> None:
+        for call in (self.call, *self.ends):
+            with pimm.calls.raise_to(call):
+                call.set_result(self.answer.result())
+
 
 class TrialForwarder(pimm.ControlSystem):
-    """Asks the harness to perform each trial that ``run_trial`` receives, as the rollout ``rollout_of`` makes, and
-    answers the call with the harness's answer.
+    """Runs the trials and verdicts that ``trials`` receives: a ``Task`` as the rollout ``rollout_of`` makes, and an
+    ``EndTrial`` as one ``done`` to the harness.
 
-    It runs beside the harness for a caller in another process, which cannot hand the harness a policy.
+    It runs beside the harness for a caller in another process, which cannot hand the harness a policy. One trial
+    runs at a time. A verdict reaches the harness once, after the harness's recorder command shows that the harness
+    started that trial, and never after the trial stops: the harness drops a ``done`` that reaches it while idle.
+    Connect ``recorder`` to the harness's ``ds_command`` and ``done`` to its ``done``.
     """
 
     def __init__(self, rollout_of: Callable[[Task], Rollout]):
         self._rollout_of = rollout_of
-        self.run_trial = pimm.calls.ControlSystemHandler[Task, dict[str, Any]](self)
+        self.trials = pimm.calls.ControlSystemHandler[Task | EndTrial, dict[str, Any]](self)
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self.recorder = pimm.ControlSystemReceiver[DsWriterCommand](self)
+        self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        pending: list[tuple[pimm.calls.Call[Task, dict[str, Any]], pimm.calls.Answer[dict[str, Any]]]] = []
+        trial: _OpenTrial | None = None
         while not should_stop.value:
-            for call in self.run_trial.incoming():
-                pending.append((call, self.perform_task(self._rollout_of(call.request))))
-            for call, answer in pending:
-                if answer.done():
-                    with pimm.calls.raise_to(call):
-                        call.set_result(answer.result())
-            pending = [(call, answer) for call, answer in pending if not answer.done()]
+            # Read before the new calls: a recorder command read here belongs to a trial taken in an earlier round.
+            command = pimm.value_updated(self.recorder)
+            if trial is not None and command is not None:
+                trial.observe(command)
+            for call in self.trials.incoming():
+                trial = self._receive(call, trial)
+            if trial is not None:
+                trial.deliver(self.done)
+                if trial.answer.done():
+                    trial.close()
+                    trial = None
             yield pimm.Sleep(FORWARD_POLL_S)
+
+    def _receive(self, call: TrialCall, trial: _OpenTrial | None) -> _OpenTrial | None:
+        request = call.request
+        if isinstance(request, Task):
+            if trial is not None:
+                call.set_exception(RuntimeError('a trial is already running'))
+                return trial
+            return _OpenTrial(call, self.perform_task(self._rollout_of(request)))
+        if trial is None:
+            call.set_exception(RuntimeError('the trial ended before its verdict arrived'))
+            return None
+        trial.take_verdict(call, request.payload)
+        return trial
 
 
 @scoped_env_var(ENV_TELEMETRY_DIR)
@@ -151,9 +212,10 @@ def web(
     forwarder = TrialForwarder(partial(Rollout, policy=policy, output_path=output_path))
     harness = Harness(embodiment)
     with pimm.World() as world:
-        ds_agent = wire.wire_embodiment(world, harness, embodiment, record=output_path is not None, done=console.done)
-        world.connect(console.run_trial, forwarder.run_trial)
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, record=output_path is not None, done=forwarder.done)
+        world.connect(console.trials, forwarder.trials)
         world.connect(forwarder.perform_task, harness.perform_task)
+        world.connect(harness.ds_command, forwarder.recorder)
         for name, observation in embodiment.observations.items():
             if name.startswith(keys.IMAGE_PREFIX):
                 world.connect(observation.source, console.cameras[name])

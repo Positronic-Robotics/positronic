@@ -21,13 +21,14 @@ from websockets.sync.client import connect
 import pimm
 from pimm.shared_memory import NumpySMAdapter
 from positronic import keys, wire
+from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import keyboard
 from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.station import Episode, Outcome, Phase, Verdict
-from positronic.gui.web import EndBody, InstructionBody, StationConsole, Status
+from positronic.gui.web import EndBody, EndTrial, InstructionBody, StationConsole, Status
 from positronic.inference import KeyboardOperator, TrialForwarder, real, web
 from positronic.policy import Policy
 from positronic.policy.base import Step
@@ -55,22 +56,27 @@ class _IdlePolicy(Policy):
 
 
 class _ReadyDevices(pimm.ControlSystem):
-    """The arm and fingers of a rig that is already wherever it is asked to go."""
+    """The arm and fingers of a rig that reaches wherever it is asked to go ``move_s`` after it is asked."""
 
-    def __init__(self):
+    def __init__(self, move_s: float = 0.0):
+        self._move_s = move_s
         self.arm = pimm.calls.ControlSystemHandler[Any, None](self)
         self.gripper = pimm.calls.ControlSystemHandler[Any, None](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        moving: list[tuple[pimm.calls.Call[Any, None], float]] = []
         while not should_stop.value:
+            now = clock.now()
             for handler in (self.arm, self.gripper):
-                for call in handler.incoming():
-                    call.set_result(None)
+                moving.extend((call, now + self._move_s) for call in handler.incoming())
+            for call, _ in [(call, at) for call, at in moving if at <= now]:
+                call.set_result(None)
+            moving = [(call, at) for call, at in moving if at > now]
             yield pimm.Sleep(0.01)
 
 
-def _embodiment(simulated: bool = False) -> Embodiment:
-    devices = _ReadyDevices()
+def _embodiment(simulated: bool = False, move_s: float = 0.0) -> Embodiment:
+    devices = _ReadyDevices(move_s)
     return Embodiment(
         descriptor='stub',
         observations={},
@@ -179,45 +185,117 @@ def test_the_web_console_refuses_a_simulated_embodiment():
         web(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), next_task=_trial())
 
 
+class _ForwarderBench:
+    """A ``TrialForwarder`` with the console's caller, the harness's handler, the harness's recorder command and the
+    harness's ``done`` paired to it in a virtual-time world. Each step of a script acts on them."""
+
+    PAYLOAD = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True}
+
+    def __init__(self):
+        self.policy = _IdlePolicy()
+        self.forwarder = TrialForwarder(partial(Rollout, policy=self.policy, output_path=None))
+        self.task = Task(instruction_source='pick', timeout_sec=None)
+        self.rollouts: list[Rollout] = []
+        self.harness_calls: list[pimm.calls.Call] = []
+        self.answers: list[pimm.calls.Answer] = []
+        self.done: list[dict] = []
+
+    def run(self, *steps: Callable[[], None]) -> None:
+        with pimm.World(virtual_time=True) as world:
+            self._trials = world.pair(self.forwarder.trials)
+            self._harness = world.pair(self.forwarder.perform_task)
+            self._recorder = world.pair(self.forwarder.recorder)
+            self._done = world.pair(self.forwarder.done)
+            script = [(step, 0.05) for step in (*steps, self.watch, self.watch, self.watch)]
+            drive_scheduler(world.start([self.forwarder, scripted_driver(*script)]))
+
+    def watch(self) -> None:
+        """Take what reached the harness: the calls it is asked, and each ``done``."""
+        for call in self._harness.incoming():
+            self.rollouts.append(call.request)
+            self.harness_calls.append(call)
+        if (message := pimm.read_updated(self._done)) is not None:
+            self.done.append(message.data)
+
+    def ask(self) -> None:
+        self.answers.append(self._trials(self.task))
+
+    def end(self) -> None:
+        self.answers.append(self._trials(EndTrial(self.PAYLOAD)))
+
+    def record(self, command: DsWriterCommand) -> Callable[[], None]:
+        return lambda: self._recorder.emit(command)
+
+    def answer(self, result: dict) -> None:
+        for call in self.harness_calls:
+            call.set_result(result)
+        self.harness_calls.clear()
+
+
 def test_the_forwarder_runs_each_trial_as_its_rollout_and_returns_the_harness_answer():
-    policy = _IdlePolicy()
-    forwarder = TrialForwarder(partial(Rollout, policy=policy, output_path=None))
-    task = Task(instruction_source='pick', timeout_sec=None)
-    rollouts, answers = [], []
-    with pimm.World(virtual_time=True) as world:
-        trials = world.pair(forwarder.run_trial)
-        harness = world.pair(forwarder.perform_task)
-
-        def ask():
-            answers.append(trials(task))
-
-        def perform():
-            for call in harness.incoming():
-                rollouts.append(call.request)
-                call.set_result({eval_keys.TERMINATED: True})
-
-        drive_scheduler(world.start([forwarder, scripted_driver((ask, 0.05), (perform, 0.05), (None, 0.05))]))
-        assert answers[0].result() == {eval_keys.TERMINATED: True}
-    assert rollouts == [Rollout(task, policy, None)]
+    bench = _ForwarderBench()
+    bench.run(bench.ask, bench.watch, lambda: bench.answer({eval_keys.TERMINATED: True}))
+    assert bench.answers[0].result() == {eval_keys.TERMINATED: True}
+    assert bench.rollouts == [Rollout(bench.task, bench.policy, None)]
 
 
 def test_the_forwarder_hands_a_failed_episode_back_to_its_caller():
-    forwarder = TrialForwarder(partial(Rollout, policy=_IdlePolicy(), output_path=None))
-    answers = []
-    with pimm.World(virtual_time=True) as world:
-        trials = world.pair(forwarder.run_trial)
-        harness = world.pair(forwarder.perform_task)
+    bench = _ForwarderBench()
 
-        def refuse():
-            for call in harness.incoming():
-                call.set_exception(RuntimeError('endpoint down'))
+    def refuse():
+        for call in bench.harness_calls:
+            call.set_exception(RuntimeError('endpoint down'))
 
-        def ask():
-            answers.append(trials(Task(instruction_source='pick', timeout_sec=None)))
+    bench.run(bench.ask, bench.watch, refuse)
+    with pytest.raises(RuntimeError, match='endpoint down'):
+        bench.answers[0].result()
 
-        drive_scheduler(world.start([forwarder, scripted_driver((ask, 0.05), (refuse, 0.05), (None, 0.05))]))
-        with pytest.raises(RuntimeError, match='endpoint down'):
-            answers[0].result()
+
+def test_a_verdict_reaches_the_harness_once_after_the_harness_starts_its_trial():
+    bench = _ForwarderBench()
+    start = bench.record(DsWriterCommand.START(None))
+    before_start: list[int] = []
+    bench.run(
+        bench.ask,
+        bench.watch,
+        bench.end,
+        bench.watch,
+        bench.watch,
+        lambda: before_start.append(len(bench.done)),
+        start,
+        bench.watch,
+        bench.watch,
+    )
+    assert before_start == [0]
+    assert bench.done == [_ForwarderBench.PAYLOAD]
+
+
+def test_a_verdict_for_a_trial_that_stopped_on_its_own_never_reaches_the_harness():
+    bench = _ForwarderBench()
+    start, stop = bench.record(DsWriterCommand.START(None)), bench.record(DsWriterCommand.STOP())
+    timeout = {eval_keys.TERMINATED: False}
+    bench.run(
+        bench.ask,
+        bench.watch,
+        start,
+        bench.watch,
+        stop,
+        bench.watch,
+        bench.end,
+        bench.watch,
+        lambda: bench.answer(timeout),
+    )
+    assert bench.done == []
+    assert [answer.result() for answer in bench.answers] == [timeout, timeout]
+
+
+def test_a_verdict_after_its_trial_was_answered_is_refused():
+    bench = _ForwarderBench()
+    finished = {eval_keys.TERMINATED: True}
+    bench.run(bench.ask, bench.watch, lambda: bench.answer(finished), bench.watch, bench.end)
+    assert bench.done == []
+    with pytest.raises(RuntimeError, match='ended before its verdict'):
+        bench.answers[1].result()
 
 
 class _Camera(pimm.ControlSystem):
@@ -363,20 +441,23 @@ def _wait(condition: Callable[[], Any], clock: pimm.Clock, seconds: float = 5.0)
     return True
 
 
-def _run_attended(marks: Path, script: Callable[[str, pimm.Clock], Iterator[pimm.Command]]) -> None:
-    """The world ``web`` composes, in one process: the station console, the forwarder and the harness, with
-    ``script`` pressing the page's buttons."""
+def _run_attended(
+    marks: Path, script: Callable[[str, pimm.Clock], Iterator[pimm.Command]], move_s: float = 0.0
+) -> None:
+    """The world ``web`` composes, with the station console in a process of its own and ``script`` pressing the
+    page's buttons from beside the harness. The rig takes ``move_s`` for each move."""
     port = _free_port()
     console = StationConsole(_trial('pick up the cube'), policy='stub', host='127.0.0.1', port=port)
     forwarder = TrialForwarder(partial(Rollout, policy=_MarkingPolicy(marks), output_path=None))
-    embodiment = _embodiment()
+    embodiment = _embodiment(move_s=move_s)
     harness = Harness(embodiment)
     operator = _PageOperator(partial(script, f'http://127.0.0.1:{port}'))
     with pimm.World() as world:
-        wire.wire_embodiment(world, harness, embodiment, record=False, done=console.done)
-        world.connect(console.run_trial, forwarder.run_trial)
+        wire.wire_embodiment(world, harness, embodiment, record=False, done=forwarder.done)
+        world.connect(console.trials, forwarder.trials)
         world.connect(forwarder.perform_task, harness.perform_task)
-        world.run([operator, console, forwarder, harness, *embodiment.control_systems])
+        world.connect(harness.ds_command, forwarder.recorder)
+        world.run([operator, forwarder, harness, *embodiment.control_systems], [console])
 
 
 def _post(base: str, path: str, body: EndBody | None = None) -> int:
@@ -389,7 +470,7 @@ def _phase(base: str) -> Phase | None:
     return status.run.phase if status else None
 
 
-@pytest.mark.timeout(60.0)
+@pytest.mark.timeout(120.0)
 def test_a_verdict_given_before_the_harness_takes_the_trial_still_ends_it(tmp_path):
     """Start and Finish reach the console in one round, so the verdict leaves before the trial reaches the
     harness, which drops a done signal while it is idle."""
@@ -397,7 +478,7 @@ def test_a_verdict_given_before_the_harness_takes_the_trial_still_ends_it(tmp_pa
     statuses: list[Status | None] = []
 
     def script(base: str, clock: pimm.Clock):
-        yield from _wait(lambda: _status(base) is not None, clock)
+        yield from _wait(lambda: _status(base) is not None, clock, seconds=60.0)
         presses.append(_post(base, '/episode/start'))
         presses.append(_post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
         yield from _wait(lambda: _phase(base) is Phase.READY, clock)
@@ -411,7 +492,7 @@ def test_a_verdict_given_before_the_harness_takes_the_trial_still_ends_it(tmp_pa
     assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS]
 
 
-@pytest.mark.timeout(60.0)
+@pytest.mark.timeout(120.0)
 def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     phases: list[Phase | None] = []
     statuses: list[Status | None] = []
@@ -419,7 +500,7 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
-        yield from _wait(lambda: _status(base) is not None, clock)
+        yield from _wait(lambda: _status(base) is not None, clock, seconds=60.0)
         for number, verdict in verdicts:
             _post(base, '/episode/start')
             yield from _wait((tmp_path / f'episode-{number}').exists, clock)
@@ -430,6 +511,33 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
         statuses.append(_status(base))
 
     _run_attended(tmp_path, script)
+
+    assert phases == [Phase.RUNNING, Phase.RUNNING]
+    [status] = statuses
+    assert status is not None
+    assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
+
+
+@pytest.mark.timeout(120.0)
+def test_a_verdict_does_not_end_the_next_trial_after_a_slow_move_back(tmp_path):
+    """The rig takes a second for each move, so the harness answers each trial a second after its verdict. The next
+    trial still runs until its own verdict."""
+    phases: list[Phase | None] = []
+    statuses: list[Status | None] = []
+    verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
+
+    def script(base: str, clock: pimm.Clock):
+        yield from _wait(lambda: _status(base) is not None, clock, seconds=60.0)
+        for number, verdict in verdicts:
+            _post(base, '/episode/start')
+            yield from _wait((tmp_path / f'episode-{number}').exists, clock, seconds=10.0)
+            yield pimm.Sleep(0.5)
+            phases.append(_phase(base))
+            _post(base, '/episode/end', EndBody(verdict=verdict))
+            yield from _wait(lambda: _phase(base) is Phase.READY, clock, seconds=10.0)
+        statuses.append(_status(base))
+
+    _run_attended(tmp_path, script, move_s=1.0)
 
     assert phases == [Phase.RUNNING, Phase.RUNNING]
     [status] = statuses

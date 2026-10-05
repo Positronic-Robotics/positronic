@@ -9,6 +9,7 @@ import queue
 import threading
 from collections import deque
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -39,7 +40,15 @@ TILE_KEYFRAME_INTERVAL = 8
 TILE_BITRATE = 1_000_000
 CAMERA_STALE_AFTER_S = 1.0
 
-Action = Task | dict[str, Any]
+
+@dataclass(frozen=True)
+class EndTrial:
+    """Ends the open trial with ``payload`` as its ``done``."""
+
+    payload: dict[str, Any]
+
+
+Action = Task | EndTrial
 
 
 class CameraView(BaseModel):
@@ -101,9 +110,9 @@ class CameraFeed:
 class StationConsole(pimm.ControlSystem):
     """Serves the station page and turns its presses into episodes.
 
-    Connect each camera to ``cameras``, ``run_trial`` to a handler that runs a trial as an episode, and ``done`` to
-    the harness. Schedule it as a background control system, so the harness never waits for the encoders or the
-    web server. ``next_task`` makes the trials, and the page names the policy with ``policy``.
+    Connect each camera to ``cameras`` and ``trials`` to a ``TrialForwarder``, which runs each trial and its verdict.
+    Schedule it as a background control system, so the harness never waits for the encoders or the web server.
+    ``next_task`` makes the trials, and the page names the policy with ``policy``.
     """
 
     def __init__(self, next_task: Callable[[], Task], *, policy: str, host: str, port: int):
@@ -112,11 +121,9 @@ class StationConsole(pimm.ControlSystem):
         self._host = host
         self._port = port
         self.cameras = pimm.ReceiverDict(self)
-        self.run_trial = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
-        self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
-        # The open episode's answer, and the ``done`` payload of the operator's verdict on it.
+        self.trials = pimm.calls.ControlSystemCaller[Action, dict[str, Any]](self)
+        # The open episode's answer.
         self._episode: pimm.calls.Answer[dict[str, Any]] | None = None
-        self._verdict: dict[str, Any] | None = None
 
     @staticmethod
     def _raise_if_stopped(server_thread: threading.Thread) -> None:
@@ -156,27 +163,18 @@ class StationConsole(pimm.ControlSystem):
             server_thread.join()
 
     def _drive_episode(self, station: Station, actions: queue.SimpleQueue[Action], clock: pimm.Clock) -> None:
-        """Send what the page asked for, and record the episode once the harness answers it.
-
-        The verdict goes out again each round until that answer: the harness drops a ``done`` that reaches it
-        before the trial does.
-        """
+        """Send what the page asked for, in order, and record the episode once the harness answers it."""
         while True:
             try:
                 action = actions.get_nowait()
             except queue.Empty:
                 break
+            answer = self.trials(action)
             if isinstance(action, Task):
-                self._episode = self.run_trial(action)
-            else:
-                self._verdict = action
-        if self._episode is None:
+                self._episode = answer
+        if self._episode is None or not self._episode.done():
             return
-        if not self._episode.done():
-            if self._verdict is not None:
-                self.done.emit(self._verdict)
-            return
-        episode, self._episode, self._verdict = self._episode, None, None
+        episode, self._episode = self._episode, None
         try:  # rules-allow: swallowed-error — the page shows the episode as an error, and the log says why
             result = episode.result()
         except Exception:
@@ -193,7 +191,7 @@ class StationConsole(pimm.ControlSystem):
         clock: pimm.Clock,
         should_stop: pimm.SignalReceiver,
     ) -> FastAPI:
-        """The console's HTTP surface. ``submit`` hands a trial or a ``done`` payload to the control loop."""
+        """The console's HTTP surface. ``submit`` hands a trial or its end to the control loop."""
         app = FastAPI()
 
         def sent_from_another_site(connection: HTTPConnection) -> bool:
@@ -234,7 +232,7 @@ class StationConsole(pimm.ControlSystem):
 
         @app.post('/episode/end')
         async def end(body: EndBody) -> Status:
-            submit(station.end(body.verdict))
+            submit(EndTrial(station.end(body.verdict)))
             return status()
 
         @app.websocket('/video/{name}')
