@@ -15,8 +15,9 @@ from urllib.parse import urlparse
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.requests import HTTPConnection
@@ -207,12 +208,12 @@ class StationConsole(pimm.ControlSystem):
         async def refuse_foreign_origins(request: Request, call_next):
             """A page on another site cannot start or end an episode."""
             if request.method != 'GET' and sent_from_another_site(request):
-                return JSONResponse({'detail': 'cross-origin request refused'}, status_code=403)
+                return await http_exception_handler(request, HTTPException(403, 'cross-origin request refused'))
             return await call_next(request)
 
         @app.exception_handler(Refused)
         async def conflict(request: Request, exc: Refused):
-            return JSONResponse({'detail': str(exc)}, status_code=409)
+            return await http_exception_handler(request, HTTPException(409, str(exc)))
 
         def status() -> Status:
             now = clock.now()

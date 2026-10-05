@@ -1,3 +1,4 @@
+import re
 from collections.abc import Iterator
 
 import numpy as np
@@ -7,8 +8,17 @@ from starlette.websockets import WebSocketDisconnect
 
 from pimm.world import SystemClock
 from positronic.eval import Task
-from positronic.gui.station import Outcome, Phase, Station, terminal_payload
-from positronic.gui.web import Action, CameraFeed, EndBody, InstructionBody, StationConsole, Status
+from positronic.gui.station import Episode, Outcome, Phase, RunView, Station, terminal_payload
+from positronic.gui.web import (
+    STATIC_DIR,
+    Action,
+    CameraFeed,
+    CameraView,
+    EndBody,
+    InstructionBody,
+    StationConsole,
+    Status,
+)
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 CONFIGURED = 'put the cup in the tote'
@@ -149,3 +159,41 @@ def test_a_camera_reads_live_with_its_rate_until_its_frames_stop():
     assert not stale.live and stale.fps == 0.0
     assert (stale.width, stale.height) == (640, 360)
     feed.stream.close()
+
+
+SCRIPT = (STATIC_DIR / 'station.js').read_text()
+
+
+def _script_part(pattern: str, flags: re.RegexFlag) -> str:
+    match = re.search(pattern, SCRIPT, flags)
+    assert match is not None, f'the page script has no {pattern}'
+    return match.group(1)
+
+
+def _script_object(name: str) -> str:
+    """The body of ``const <name> = {...};`` in the page script."""
+    return _script_part(rf'const {name} = {{(.*?)}};', re.DOTALL)
+
+
+def test_the_page_names_the_phases_and_outcomes_the_server_sends():
+    assert set(re.findall(r"'([^']*)'", _script_object('PHASE'))) == {phase.value for phase in Phase}
+    assert set(re.findall(r"'([^']*)'", _script_object('OUTCOME'))) == {outcome.value for outcome in Outcome}
+
+
+def test_the_page_sends_the_request_fields_the_server_reads():
+    sent = set(re.findall(r'\(\{ (\w+):', _script_object('REQUEST')))
+    assert sent == set(InstructionBody.model_fields) | set(EndBody.model_fields)
+
+
+def test_the_page_reads_every_status_field_the_server_sends():
+    reader = _script_part(r'^function readStatus\(answer\) \{(.*?)^\}$', re.MULTILINE | re.DOTALL)
+    read = set(re.findall(r'\b(?:answer|run|e|c)\.(\w+)', reader))
+    assert read == {field for model in (Status, RunView, Episode, CameraView) for field in model.model_fields}
+
+
+def test_the_page_calls_the_routes_the_server_serves(console):
+    served = {route.path for route in console.client.app.routes}
+    routes = dict(re.findall(r"(\w+): '([^']*)'", _script_object('ROUTES')))
+    video = routes.pop('video')
+    assert set(routes.values()) <= served
+    assert f'{video}/{{name}}' in served

@@ -4,7 +4,9 @@
 const POLL_MS = 500;
 const EDIT_DELAY_MS = 300;
 
-// The routes that StationConsole.build_app serves.
+// Every name this page shares with the console's server, and the only place the page spells one. The server's
+// side is the routes of StationConsole.build_app, the models Status, RunView, Episode, CameraView, InstructionBody
+// and EndBody, the enums Phase and Outcome, and the `detail` of a FastAPI error answer.
 const ROUTES = {
   status: '/status',
   instruction: '/instruction',
@@ -12,6 +14,43 @@ const ROUTES = {
   end: '/episode/end',
   video: '/video',
 };
+const PHASE = { ready: 'ready', running: 'running', ending: 'ending' };
+const OUTCOME = { pass: 'pass', fail: 'fail', timeout: 'timeout', error: 'error' };
+const REQUEST = {
+  instruction: (text) => ({ override: text }),
+  end: (verdict) => ({ verdict: verdict }),
+};
+const errorDetail = (answer) => answer.detail;
+
+// The page's copy of an answer of GET /status.
+function readStatus(answer) {
+  const run = answer.run;
+  return {
+    phase: run.phase,
+    configured: run.configured,
+    override: run.override,
+    overrideSince: run.override_since,
+    now: run.now,
+    episodes: run.episodes.map((e) => ({
+      number: e.number,
+      instruction: e.instruction,
+      overridden: e.overridden,
+      startedAt: e.started_at,
+      endedAt: e.ended_at,
+      outcome: e.outcome,
+    })),
+    cameras: answer.cameras.map((c) => ({
+      name: c.name,
+      label: c.label,
+      live: c.live,
+      fps: c.fps,
+      width: c.width,
+      height: c.height,
+    })),
+    policy: answer.policy,
+    host: answer.host,
+  };
+}
 
 const ICON = {
   check:
@@ -22,19 +61,30 @@ const ICON = {
     'stroke-width="2" stroke-linecap="round"/></svg>',
 };
 
-const OUTCOME_LABEL = {
-  pass: `${ICON.check}Pass`,
-  fail: `${ICON.cross}Fail`,
-  timeout: 'Timed out',
-  error: 'Error',
-  running: '<span class="dot"></span>Running',
-  ending: 'Ending',
+// How the page draws each phase and each outcome: `css` names the style in station.css.
+const PHASE_VIEW = {
+  [PHASE.ready]: { text: 'Ready', css: 'ready' },
+  [PHASE.running]: { text: 'Running', css: 'running', doing: 'recording' },
+  [PHASE.ending]: { text: 'Ending', css: 'ending', doing: 'ending' },
 };
-const OUTCOME_TEXT = { pass: 'pass', fail: 'fail', timeout: 'timed out', error: 'error' };
+const OUTCOME_VIEW = {
+  [OUTCOME.pass]: { label: `${ICON.check}Pass`, text: 'pass', css: 'pass' },
+  [OUTCOME.fail]: { label: `${ICON.cross}Fail`, text: 'fail', css: 'fail' },
+  [OUTCOME.timeout]: { label: 'Timed out', text: 'timed out', css: 'timeout' },
+  [OUTCOME.error]: { label: 'Error', text: 'error', css: 'error' },
+};
+// An open episode's row shows the phase in place of an outcome.
+const OPEN_VIEW = {
+  [PHASE.running]: { label: '<span class="dot"></span>Running', css: 'running' },
+  [PHASE.ending]: { label: 'Ending', css: 'ending' },
+};
 
 const $ = (id) => document.getElementById(id);
 const textarea = $('instruction');
-const verdictButtons = [...document.querySelectorAll('[data-verdict]')];
+const verdictButtons = [
+  [$('finish-pass'), OUTCOME.pass],
+  [$('finish-fail'), OUTCOME.fail],
+];
 
 let current = null;
 let offline = false;
@@ -54,9 +104,10 @@ function clock(seconds) {
   return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-const openEpisode = (run) => (run.phase === 'ready' ? null : run.episodes[run.episodes.length - 1]);
-const nextNumber = (run) => run.episodes.length + 1;
-const duration = (episode, run) => (episode.ended_at ?? run.now) - episode.started_at;
+const openEpisode = (status) =>
+  status.phase === PHASE.ready ? null : status.episodes[status.episodes.length - 1];
+const nextNumber = (status) => status.episodes.length + 1;
+const duration = (episode, status) => (episode.endedAt ?? status.now) - episode.startedAt;
 
 async function post(path, body) {
   const response = await fetch(path, {
@@ -65,8 +116,11 @@ async function post(path, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const answer = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof answer.detail === 'string' ? answer.detail : response.statusText);
-  render(answer);
+  if (!response.ok) {
+    const detail = errorDetail(answer);
+    throw new Error(typeof detail === 'string' ? detail : response.statusText);
+  }
+  render(readStatus(answer));
 }
 
 async function act(path, body) {
@@ -88,7 +142,7 @@ async function sendEdit() {
   if (!editing) return;
   const text = textarea.value;
   try {
-    await post(ROUTES.instruction, { override: text });
+    await post(ROUTES.instruction, REQUEST.instruction(text));
   } catch (error) {
     window.alert(`The console refused the instruction: ${error.message}`);
   }
@@ -100,7 +154,7 @@ async function poll() {
     const response = await fetch(ROUTES.status, { cache: 'no-store' });
     if (!response.ok) throw new Error(response.statusText);
     offline = false;
-    render(await response.json());
+    render(readStatus(await response.json()));
   } catch (error) {
     offline = true;
     $('offline').hidden = false;
@@ -112,51 +166,50 @@ async function poll() {
 
 function render(status) {
   current = status;
-  const run = status.run;
   $('offline').hidden = !offline;
   $('policy').textContent = status.policy;
   $('host').textContent = status.host;
   $('cameras-live').textContent = `${status.cameras.filter((c) => c.live).length} / ${status.cameras.length} live`;
-  renderTiles(status.cameras, run.phase);
-  renderStatusRow(run);
-  renderInstruction(run);
+  renderTiles(status);
+  renderStatusRow(status);
+  renderInstruction(status);
   renderButtons();
-  renderEpisodes(run);
+  renderEpisodes(status);
 }
 
-function renderStatusRow(run) {
-  const episode = openEpisode(run);
-  $('status-row').className = `status-row is-${run.phase}`;
-  $('status').className = `status status--${run.phase}`;
-  $('status-text').textContent = { ready: 'Ready', running: 'Running', ending: 'Ending' }[run.phase];
+function renderStatusRow(status) {
+  const episode = openEpisode(status);
+  const view = PHASE_VIEW[status.phase];
+  $('status-row').className = `status-row is-${view.css}`;
+  $('status').className = `status status--${view.css}`;
+  $('status-text').textContent = view.text;
   $('elapsed').hidden = episode === null;
   $('counters').hidden = episode !== null;
   if (episode) {
-    const doing = run.phase === 'running' ? 'recording' : 'ending';
-    $('status-detail').innerHTML = `Episode <b>${episode.number}</b> · ${doing}`;
-    $('elapsed-value').textContent = clock(duration(episode, run));
+    $('status-detail').innerHTML = `Episode <b>${episode.number}</b> · ${view.doing}`;
+    $('elapsed-value').textContent = clock(duration(episode, status));
     return;
   }
-  $('status-detail').innerHTML = `Episode <b>${nextNumber(run)}</b> starts on Start`;
-  const last = run.episodes[run.episodes.length - 1];
+  $('status-detail').innerHTML = `Episode <b>${nextNumber(status)}</b> starts on Start`;
+  const last = status.episodes[status.episodes.length - 1];
   $('counters').textContent = last
-    ? `Last: #${last.number} ${OUTCOME_TEXT[last.outcome]} · ${clock(duration(last, run))}`
+    ? `Last: #${last.number} ${OUTCOME_VIEW[last.outcome].text} · ${clock(duration(last, status))}`
     : 'No episodes in this run';
 }
 
-function renderInstruction(run) {
-  const episode = openEpisode(run);
+function renderInstruction(status) {
+  const episode = openEpisode(status);
   const locked = episode !== null;
   textarea.readOnly = locked;
   if (locked) textarea.value = episode.instruction;
-  else if (!editing) textarea.value = run.override ?? run.configured;
-  const overridden = locked ? episode.overridden : textarea.value !== run.configured;
+  else if (!editing) textarea.value = status.override ?? status.configured;
+  const overridden = locked ? episode.overridden : textarea.value !== status.configured;
   const source = overridden ? 'override' : 'configured';
 
-  $('instr-badge').className = `badge badge--${overridden ? 'override' : 'configured'}`;
+  $('instr-badge').className = `badge badge--${source}`;
   $('instr-badge').textContent = overridden ? 'Overridden' : 'Configured';
   $('cfg-bar').hidden = !overridden;
-  $('cfg-text').textContent = run.configured;
+  $('cfg-text').textContent = status.configured;
   $('field').className = `field${overridden ? ' is-override' : ''}${locked ? ' is-locked' : ''}`;
   $('field-k').hidden = !overridden;
   $('lock').hidden = !locked;
@@ -167,8 +220,8 @@ function renderInstruction(run) {
   let aside = 'An override stays until you reset it';
   if (locked) aside = `Unlocks when episode ${episode.number} ends`;
   else if (!overridden) hint = 'From the run configuration. Type here to override it.';
-  else if (run.override === textarea.value && run.override_since !== null)
-    aside = `Override in use since episode ${run.override_since}`;
+  else if (status.override === textarea.value && status.overrideSince !== null)
+    aside = `Override in use since episode ${status.overrideSince}`;
   else aside = 'No episode has used this override yet';
   $('instr-hint').textContent = hint;
   $('instr-aside').textContent = aside;
@@ -177,56 +230,58 @@ function renderInstruction(run) {
   $('sends').classList.toggle('is-running', locked);
   $('sends-text').innerHTML = locked
     ? `Episode <b>${episode.number}</b> received the ${named} text at Start.`
-    : `Start sends the ${named} text to the policy as episode <b>${nextNumber(run)}</b>.`;
+    : `Start sends the ${named} text to the policy as episode <b>${nextNumber(status)}</b>.`;
 }
 
 function renderButtons() {
-  const phase = current ? current.run.phase : null;
+  const phase = current ? current.phase : null;
   const idle = !offline && !busy;
-  $('start').disabled = !(idle && phase === 'ready');
-  for (const button of verdictButtons) button.disabled = !(idle && phase === 'running');
+  $('start').disabled = !(idle && phase === PHASE.ready);
+  for (const [button] of verdictButtons) button.disabled = !(idle && phase === PHASE.running);
 }
 
-function renderEpisodes(run) {
-  const episodes = [...run.episodes].reverse();
-  const count = (outcome) => run.episodes.filter((e) => e.outcome === outcome).length;
+function renderEpisodes(status) {
+  const episodes = [...status.episodes].reverse();
+  const count = (outcome) => status.episodes.filter((e) => e.outcome === outcome).length;
   $('ep-empty').hidden = episodes.length > 0;
   $('ep-list').hidden = episodes.length === 0;
   $('ep-order').hidden = episodes.length === 0;
   $('ep-legend').hidden = episodes.length === 0;
   let sum = '<span>0 episodes</span>';
   if (episodes.length > 0) {
-    sum = `<span class="n-pass">${count('pass')} pass</span><span class="n-fail">${count('fail')} fail</span>`;
-    if (count('timeout')) sum += `<span>${count('timeout')} timed out</span>`;
-    if (count('error')) sum += `<span>${count('error')} error</span>`;
+    sum = `<span class="n-pass">${count(OUTCOME.pass)} pass</span>`;
+    sum += `<span class="n-fail">${count(OUTCOME.fail)} fail</span>`;
+    if (count(OUTCOME.timeout)) sum += `<span>${count(OUTCOME.timeout)} timed out</span>`;
+    if (count(OUTCOME.error)) sum += `<span>${count(OUTCOME.error)} error</span>`;
   }
   $('ep-sum').innerHTML = sum;
-  const rows = episodes.map((episode) => row(episode, run)).join('');
+  const rows = episodes.map((episode) => row(episode, status)).join('');
   if ($('ep-list').innerHTML !== rows) $('ep-list').innerHTML = rows;
 }
 
-function row(episode, run) {
-  const state = episode.outcome ?? run.phase;
+function row(episode, status) {
+  const view = episode.outcome === null ? OPEN_VIEW[status.phase] : OUTCOME_VIEW[episode.outcome];
   const classes = ['ep'];
   if (episode.outcome === null) classes.push('is-open');
   if (!episode.overridden) classes.push('is-configured');
   const tag = episode.overridden ? '<span class="tag">override</span>' : '';
   return (
     `<li class="${classes.join(' ')}"><span class="ep-n">#${episode.number}</span>` +
-    `<span class="out out--${state}">${OUTCOME_LABEL[state]}</span>` +
-    `<span class="ep-dur">${clock(duration(episode, run))}</span>` +
+    `<span class="out out--${view.css}">${view.label}</span>` +
+    `<span class="ep-dur">${clock(duration(episode, status))}</span>` +
     `<span class="ep-text"><span class="t">${escapeHtml(episode.instruction)}</span>${tag}</span></li>`
   );
 }
 
-function renderTiles(cameras, phase) {
+function renderTiles(status) {
   const grid = $('cams');
+  const cameras = status.cameras;
   if (tiles.size === 0) {
     grid.style.gridTemplateColumns = `repeat(${Math.max(1, cameras.length)}, minmax(0, 1fr))`;
     if (cameras.length === 0) grid.innerHTML = '<div class="cams-empty">This embodiment has no cameras.</div>';
     for (const camera of cameras) tiles.set(camera.name, makeTile(grid, camera));
   }
-  const recording = phase !== 'ready';
+  const recording = status.phase !== PHASE.ready;
   for (const camera of cameras) {
     const tile = tiles.get(camera.name);
     if (!tile) continue;
@@ -359,13 +414,13 @@ textarea.addEventListener('input', () => {
   editing = true;
   clearTimeout(editTimer);
   editTimer = setTimeout(sendEdit, EDIT_DELAY_MS);
-  if (current) renderInstruction(current.run);
+  if (current) renderInstruction(current);
 });
 
 $('reset').addEventListener('click', () => {
   clearTimeout(editTimer);
   editing = false;
-  act(ROUTES.instruction, { override: null });
+  act(ROUTES.instruction, REQUEST.instruction(null));
 });
 
 $('start').addEventListener('click', async () => {
@@ -373,8 +428,8 @@ $('start').addEventListener('click', async () => {
   await act(ROUTES.start);
 });
 
-for (const button of verdictButtons) {
-  button.addEventListener('click', () => act(ROUTES.end, { verdict: button.dataset.verdict }));
+for (const [button, verdict] of verdictButtons) {
+  button.addEventListener('click', () => act(ROUTES.end, REQUEST.end(verdict)));
 }
 
 poll();
