@@ -1,0 +1,17 @@
+This FLUX Model is licensed by Black Forest Labs Inc. under the FLUX Kommunity License. Copyright Black Forest Labs Inc. IN NO EVENT SHALL BLACK FOREST LABS INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH USE OF THIS MODEL.
+
+The image that docker/Dockerfile.flux3-action builds contains the FLUX 3 Action DROID policy and the
+video VAE of FLUX 3 Action Base, from Black Forest Labs Inc. The FLUX Kommunity License v1.0 governs
+them. The image holds a copy of the licence at /opt/flux3_action/LICENSE.md. The same text is at
+https://huggingface.co/black-forest-labs/flux-3-action-droid/blob/3d0887bdc7acee1686b19afac267125d519ff4f1/LICENSE.md.
+Black Forest Labs Inc. grants any rights to use the FLUX Model directly to you, under that licence.
+
+Positronic packaged the FLUX Model with a serving entry point of its own, server.py. Positronic did
+not change the model weights. This image is not an official product of Black Forest Labs Inc. Black
+Forest Labs Inc. did not endorse, approve or validate it.
+
+The image also contains:
+- Black Forest Labs' FLUX Action code, under the Apache License 2.0: /opt/flux-action/LICENSE and
+  /opt/flux-action/NOTICE.
+- Qwen3-VL-4B-Instruct, the text encoder, as an unmodified copy under the Apache License 2.0. Its model
+  card is text_encoder/README.md in the FLUX 3 Action Base snapshot under /opt/hf-home.
