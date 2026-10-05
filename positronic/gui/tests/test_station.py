@@ -123,3 +123,25 @@ def test_a_verdict_that_arrives_after_the_budget_reads_as_a_timeout():
 def test_the_verdicts_record_who_ended_the_episode():
     assert terminal_payload(Outcome.PASS) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True}
     assert terminal_payload(Outcome.FAIL) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: False}
+
+
+def _known_after_reset() -> str:
+    return CONFIGURED
+
+
+def test_a_trial_whose_instruction_is_known_only_after_its_reset_is_refused_at_startup():
+    with pytest.raises(TypeError, match='string'):
+        Station(lambda: Task(instruction_source=_known_after_reset, timeout_sec=None))
+
+
+def test_a_later_trial_whose_instruction_is_known_only_after_its_reset_is_refused_at_start():
+    draws = iter([
+        Task(instruction_source=CONFIGURED, timeout_sec=None),
+        Task(instruction_source=_known_after_reset, timeout_sec=None),
+    ])
+    station = Station(lambda: next(draws))
+    with pytest.raises(TypeError, match='string'):
+        station.start(now=1.0)
+    view = station.view(now=2.0)
+    assert view.phase is Phase.READY
+    assert view.episodes == []

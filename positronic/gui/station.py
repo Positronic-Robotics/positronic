@@ -76,16 +76,23 @@ class Station:
     """The console's record of one run. Each method takes a lock, so the web server and the control loop share it.
 
     ``next_task`` makes a trial before it is needed, so the page shows the instruction that the next Start sends.
+    A trial must carry that instruction as a string: one known only after the trial's reset has nothing to show.
     """
 
     def __init__(self, next_task: Callable[[], Task]):
         self._next_task = next_task
-        self._trial = next_task()
+        self._trial = self._draw()
         self._override: str | None = None
         self._override_since: int | None = None
         self._episodes: list[Episode] = []
         self._ending = False
         self._lock = threading.Lock()
+
+    def _draw(self) -> Task:
+        trial = self._next_task()
+        if not isinstance(trial.instruction_source, str):
+            raise TypeError('the station console shows the instruction before Start, so it must be a string')
+        return trial
 
     def _is_open(self) -> bool:
         return bool(self._episodes) and self._episodes[-1].outcome is None
@@ -105,7 +112,7 @@ class Station:
         with self._lock:
             if self._is_open():
                 raise Refused('an episode is already running')
-            trial, self._trial = self._trial, self._next_task()
+            trial, self._trial = self._trial, self._draw()
             number = len(self._episodes) + 1
             override = self._override
             if override is not None:
