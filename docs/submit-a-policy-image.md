@@ -48,9 +48,7 @@ Other models:
 - **A model of your own.** Write an inference server ([Connect your model](connect-your-model.md))
   and hold the image to the rules in [Life of a submission](#life-of-a-submission).
 
-### Two traps in the `positro/*` bases
-
-The openpi, GR00T and MolmoAct2 recipes handle both traps.
+### Three traps in the `positro/*` bases
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
 `/positronic` and no environment for it. The repository's `docker/docker-compose.yml` starts every
@@ -66,6 +64,13 @@ more variable, `GROOT_PATCH_MISTRAL=1`, because `transformers` also asks the Hub
 backbone's tokenizer with no cache fallback. The offline variables alone fail at once with
 `OfflineModeIsEnabled`. The patch alone times out after 600 s of retried HEAD requests. Both
 together load the model in 151 s.
+
+**openpi resolves the container's hostname.** openpi's `scripts/serve_policy.py` calls
+`gethostbyname` on the hostname before it serves. Under `--network none`, Docker writes no record
+of the hostname into `/etc/hosts`, and the server dies with `socket.gaierror: Temporary failure in
+name resolution`. A Docker network with no egress has the record, so only `--network none` shows
+the trap. The openpi recipe installs `libnss-myhostname`, which resolves the hostname to a local
+address.
 
 ### FLUX 3 Action
 
@@ -208,11 +213,10 @@ Run it with the network denied. This reproduces the platform's own conditions an
 docker run --rm --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
 ```
 
-In a correct image, the server pins its checkpoint, starts the model process, reads the weights
-from the image, and then fails on the missing GPU. For the openpi recipe that is jax on CPU
-reading the checkpoint under `/opt/positronic/checkpoints`. For the GR00T recipe it is
-`Flash Attention 2 is not available on CPU`. The MolmoAct2 recipe loads the model on the CPU and
-serves. Everything you control is then correct. The run must not print `NameResolutionError`,
+In a correct image, the server pins its checkpoint, starts the model process, and reads the
+weights from the image. The GR00T recipe then fails on the missing GPU with
+`Flash Attention 2 is not available on CPU`. The openpi and MolmoAct2 recipes load the model on the
+CPU and serve. Everything you control is then correct. The run must not print `NameResolutionError`,
 `dns error` or `OfflineModeIsEnabled`, and it must not hang. albumentations prints a `UserWarning`
 about fetching its version; ignore it. MolmoAct2 prints `A new version of the following files was
 downloaded` when `transformers` copies the model's code into its module cache; no download occurs.

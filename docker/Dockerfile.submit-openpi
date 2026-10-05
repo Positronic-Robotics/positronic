@@ -27,6 +27,10 @@ RUN mkdir -p /assets/openpi-data/big_vision \
  && curl -fsSL "${TOKENIZER_URL}" -o /assets/openpi-data/big_vision/paligemma_tokenizer.model
 
 FROM ${BASE_IMAGE}
+# openpi's `serve_policy.py` resolves the container's hostname. Under `--network none`, /etc/hosts has no
+# record of it, and nss-myhostname resolves it to a local address.
+RUN apt-get update && apt-get install -y --no-install-recommends libnss-myhostname \
+ && rm -rf /var/lib/apt/lists/* && grep -E '^hosts:.*myhostname' /etc/nsswitch.conf
 COPY --from=assets /assets/checkpoints /opt/positronic/checkpoints/pi05_droid_jointpos
 COPY --from=assets /assets/openpi-data /opt/positronic/openpi-data
 
