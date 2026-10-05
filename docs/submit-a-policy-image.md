@@ -165,9 +165,8 @@ uv run positronic eval run --eval=<eval> \
    server's start share one provisioning deadline of 1800 s. A 25 GB image takes about 10 minutes
    to pull.
 6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token.
-7. It fails the run with `policy_setup_crash` if a route serves a caller without the token, or
-   refuses the run's own token. The vendor servers read `AUTH_TOKEN` and check it; a server of
-   your own must do the same.
+7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
+   servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
 8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM. The container runs under the
    limits in [The container](#the-container).
 
@@ -245,7 +244,8 @@ docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; 
   print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', headers={'Authorization': 'Bearer test'})).read())"
 ```
 
-The route answers `{"alive_seconds": ...}` with the token once the model has loaded and warmed, and `401` without it.
+The route answers `{"alive_seconds": ...}` with the token once the model has loaded and warmed.
+A server that checks the token answers `401` without it.
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
@@ -346,7 +346,6 @@ log cannot:
   "serving": false,
   "served_on_boot": 0,
   "token_rejected": false,
-  "serving_unauthenticated": false,
   "startup_log": "..."
 }
 ```
@@ -383,7 +382,7 @@ fault is not.
 |---|---|---|
 | `image_unpullable` | caller | is the image public, or does your credential read it? Is the digest right? |
 | `image_too_large` | caller | the compressed size, against 50 GB |
-| `policy_setup_crash` | caller | `policy_log`: the server did not come up, or served without the token |
+| `policy_setup_crash` | caller | `policy_log`: the server did not come up, or refused the run's own token |
 | `policy_inference_crash` | caller | `policy_log`: the server died after it served |
 | `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against the 40448 MiB slice |
 | `latency_budget_exceeded` | caller | inference time per step |
