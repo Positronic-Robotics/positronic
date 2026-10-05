@@ -1,5 +1,6 @@
 """Native model lifecycle over independently installed transports, without Positronic."""
 
+import asyncio
 import os
 import socket
 import threading
@@ -245,6 +246,46 @@ def test_shared_warmup_precedes_binding_and_shutdown_is_not_lost(start):
     running.thread.join(5)
     assert not running.thread.is_alive()
     assert [name for name, *_ in probe.calls] == ['load', 'close_model']
+
+
+def test_shutdown_before_the_event_loop_starts_is_not_lost(start, monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    run = asyncio.run
+
+    def delayed_run(coro):
+        entered.set()
+        assert release.wait(5)
+        return run(coro)
+
+    monkeypatch.setattr(asyncio, 'run', delayed_run)
+    running = start(wait=False)
+    try:
+        assert entered.wait(5)
+        running.server.shutdown()
+    finally:
+        release.set()
+    running.thread.join(5)
+
+    assert not running.thread.is_alive()
+    assert not running.ready.is_set()
+    assert [name for name, *_ in running.probe.calls] == ['load', 'close_model']
+
+
+def test_a_server_can_serve_again_after_shutdown(transport_types):
+    probe = Probe()
+    server = ModelServer(probe.load)
+    transport_type, _ = transport_types
+
+    def ready():
+        probe.record('ready')
+        server.shutdown()
+        server.shutdown()
+
+    for _ in range(2):
+        server.serve([transport_type(server_wire.ServedHostPort('127.0.0.1', 0))], ready)
+
+    assert [name for name, *_ in probe.calls] == ['load', 'ready', 'close_model'] * 2
 
 
 def test_partial_listener_startup_releases_all_ports_and_model(transport_types, monkeypatch):

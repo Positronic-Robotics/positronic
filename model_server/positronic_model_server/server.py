@@ -7,7 +7,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -74,8 +74,7 @@ class ModelServer:
         self._idle_seconds = None if idle_timeout_min is None else idle_timeout_min * 60
         self._model: Model | None = None
         self._worker: ThreadPoolExecutor | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._stop: asyncio.Event | None = None
+        self._stop: Future[None] = Future()
         self._sessions: set[asyncio.Task] = set()
         self._last_activity = time.monotonic()
 
@@ -225,21 +224,20 @@ class ModelServer:
         spec.resolve_params(self._model.parameters, {})
 
     async def _run(self, wires: Sequence[server_wire.Wire], on_ready: Callable[[], None] | None) -> None:
-        self._loop, self._stop = asyncio.get_running_loop(), asyncio.Event()
         started: list[server_wire.Wire] = []
         serving: list[asyncio.Task] = []
-        ending: list[asyncio.Task] = []
+        ending: list[asyncio.Future] = []
 
         try:
             await self._call(self._load)
-            if self._stop.is_set():
+            if self._stop.cancelled():
                 return
             for transport in wires:
                 started.append(transport)
                 await transport.start(self._serve_session, self._keepalive, self._authorized)
             self._last_activity = time.monotonic()
             serving = [asyncio.create_task(transport.serve()) for transport in started]
-            ending = [asyncio.create_task(self._stop.wait())]
+            ending = [asyncio.wrap_future(self._stop)]
             if self._idle_seconds is not None:
                 ending.append(asyncio.create_task(self._idle_watchdog()))
             if on_ready is not None:
@@ -268,7 +266,7 @@ class ModelServer:
         except Exception as error:
             failures.append(error)
         finally:
-            self._model, self._loop, self._stop = None, None, None
+            self._model = None
         for error in failures[1:]:
             logger.error('Additional shutdown failure', exc_info=error)
         if failures:
@@ -288,9 +286,8 @@ class ModelServer:
                 logger.info('Server interrupted')
             finally:
                 self._worker = None
+                self._stop = Future()
 
     def shutdown(self) -> None:
         """Request shutdown from any thread; running model work finishes before cleanup."""
-        loop, stop = self._loop, self._stop
-        if loop is not None and stop is not None:
-            loop.call_soon_threadsafe(stop.set)
+        self._stop.cancel()
