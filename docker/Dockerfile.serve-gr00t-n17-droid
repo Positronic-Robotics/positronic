@@ -63,6 +63,8 @@ RUN uv sync --locked --python 3.13 --no-dev && uv cache clean
 # For a fine-tuned checkpoint of your own, `COPY` its `checkpoint-<step>` directories instead and
 # set GROOT_MODEL_SOURCE to their parent directory. The backbone still comes from the weights stage.
 COPY --link --from=weights /opt/hf /opt/hf
+# The NVIDIA Open Model License requires each copy of the models to carry the agreement and this notice.
+COPY --link positronic/vendors/gr00t/NOTICE positronic/vendors/gr00t/LICENSE-NVIDIA-Open-Model-License.txt /opt/gr00t/
 
 # GROOT_PATCH_MISTRAL: transformers asks the Hub about the backbone's tokenizer on every load, with
 # no cache fallback, and the patch answers that question locally. Without it the offline load fails;

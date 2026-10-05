@@ -1,7 +1,6 @@
 name: Build and Push the MolmoAct2 DROID Serving Image
 
 # Main republishes positro/molmoact2-droid on a change to its recipe, its vendor code or a workflow.
-# Run it by hand otherwise.
 on:
   push:
     branches:

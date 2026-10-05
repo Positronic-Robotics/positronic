@@ -1,7 +1,6 @@
 name: Build and Push the GR00T N1.7 DROID Serving Image
 
 # Main republishes positro/gr00t-n17-droid on a change to its recipe, its vendor code or a workflow.
-# Run it by hand otherwise.
 on:
   push:
     branches:

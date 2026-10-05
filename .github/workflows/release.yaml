@@ -192,7 +192,7 @@ jobs:
           VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
           make push IMAGE_TAG=v${VERSION}
 
-  # Each serving image holds its weights, so each builds on a runner of its own, apart from publish-docker.
+  # Each serving image holds its weights, so each builds on a runner of its own.
   publish-serve-images:
     needs: publish-pypi
     strategy:

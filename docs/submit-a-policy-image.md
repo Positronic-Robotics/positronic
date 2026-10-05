@@ -45,6 +45,10 @@ Hub page, then put a read token in `$HOME/.hf_token`, or in `HF_TOKEN` for
 `make -C docker build-serve-gr00t-n17-droid`. The build reads the token through a secret mount, and
 it enters no layer.
 
+Both GR00T models are under the NVIDIA Open Model License. `positro/gr00t-n17-droid` is Built on
+NVIDIA Cosmos. The image carries the agreement and its notice in `/opt/gr00t`, as the licence
+requires of each copy of the models.
+
 The MolmoAct2 recipe downloads `allenai/MolmoAct2-DROID` (21.8 GB in float32). The build needs no
 token: the repository is not gated. The image is 24.4 GB compressed.
 
