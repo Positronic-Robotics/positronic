@@ -94,9 +94,6 @@ let editing = false;
 let editTimer = null;
 const tiles = new Map();
 
-const escapeHtml = (text) =>
-  text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-
 function clock(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
@@ -273,6 +270,9 @@ function renderEpisodes(status) {
   const rows = episodes.map((episode) => row(episode, status)).join('');
   if ($('ep-list').innerHTML !== rows) $('ep-list').innerHTML = rows;
 }
+
+const escapeHtml = (text) =>
+  text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 function row(episode, status) {
   const view = episode.outcome === null ? OPEN_VIEW[status.phase] : OUTCOME_VIEW[episode.outcome];
