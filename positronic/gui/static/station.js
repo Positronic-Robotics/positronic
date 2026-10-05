@@ -123,11 +123,21 @@ async function post(path, body) {
   render(readStatus(answer));
 }
 
-async function act(path, body) {
+// The last instruction request in the queue. Each waits for the one before it, so the console applies the edits and
+// the reset in the order the operator made them, and Start waits for all of them.
+let instructionQueue = Promise.resolve();
+
+function postInstruction(text) {
+  const sent = instructionQueue.then(() => post(ROUTES.instruction, REQUEST.instruction(text)));
+  instructionQueue = sent.catch(() => {});
+  return sent;
+}
+
+async function act(send) {
   busy = true;
   renderButtons();
   try {
-    await post(path, body);
+    await send();
   } catch (error) {
     window.alert(`The console refused: ${error.message}`);
   } finally {
@@ -142,7 +152,7 @@ async function sendEdit() {
   if (!editing) return;
   const text = textarea.value;
   try {
-    await post(ROUTES.instruction, REQUEST.instruction(text));
+    await postInstruction(text);
   } catch (error) {
     window.alert(`The console refused the instruction: ${error.message}`);
   }
@@ -420,16 +430,19 @@ textarea.addEventListener('input', () => {
 $('reset').addEventListener('click', () => {
   clearTimeout(editTimer);
   editing = false;
-  act(ROUTES.instruction, REQUEST.instruction(null));
+  act(() => postInstruction(null));
 });
 
 $('start').addEventListener('click', async () => {
   await sendEdit();
-  await act(ROUTES.start);
+  await act(async () => {
+    await instructionQueue;
+    await post(ROUTES.start);
+  });
 });
 
 for (const [button, verdict] of verdictButtons) {
-  button.addEventListener('click', () => act(ROUTES.end, REQUEST.end(verdict)));
+  button.addEventListener('click', () => act(() => post(ROUTES.end, REQUEST.end(verdict))));
 }
 
 poll();
