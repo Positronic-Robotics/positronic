@@ -9,11 +9,12 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from positronic_model_server import protocol
 from positronic_wire import wire
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.offboard import protocol
+from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
@@ -23,7 +24,7 @@ from positronic.policy.base import Step
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
 from positronic.utils import flatten_dict
 from positronic.utils.versions import Deprecation, Version
@@ -242,14 +243,16 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
     )
 
     async def v1_session(server, conn):
-        await conn.send(protocol.serialise({'status': 'ready', 'meta': {'local_stack': declared, 'action_fps': 10}}))
+        await conn.send(
+            legacy_protocol.serialise({'status': 'ready', 'meta': {'local_stack': declared, 'action_fps': 10}})
+        )
         try:
             while True:
-                observation = protocol.deserialise(await conn.receive())
+                observation = legacy_protocol.deserialise(await conn.receive())
                 assert 'session_id' not in observation
                 observations.append(observation)
                 await asyncio.to_thread(first_sent.wait, 5)  # the first send returns before the answer lands
-                await conn.send(protocol.serialise({'result': actions}))
+                await conn.send(legacy_protocol.serialise({'result': actions}))
         except wire.PeerDisconnected:
             disconnected.set()
 
@@ -278,11 +281,12 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
     assert len(observations) == 1  # V1 closes the transport without an end-session request.
 
 
-def test_unknown_protocol_closes_before_any_request(start_server, make_mock_model, monkeypatch):
-    monkeypatch.setattr(protocol, 'CURRENT_VERSION', 99)
+@pytest.mark.parametrize('version', [3, 99])
+def test_unknown_protocol_closes_before_any_request(start_server, make_mock_model, monkeypatch, version):
+    monkeypatch.setattr(legacy_protocol, 'CURRENT_VERSION', version)
     model = make_mock_model([], {})
     served = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)))
-    with pytest.raises(ValueError, match='Unsupported policy protocol version 99'):
+    with pytest.raises(ValueError, match=f'Unsupported policy protocol version {version}'):
         InferenceClient(*served.ws()).new_session()
     model.assert_not_called()
 
@@ -325,14 +329,17 @@ def test_deprecated_component_warns_once_per_stack_and_removed_one_fails(monkeyp
 
 def test_deprecated_protocol_warns_and_keeps_raw_observations(monkeypatch):
     notice = Deprecation(date(2020, 1, 1), date(2020, 7, 1), 'Upgrade the server to protocol v2.')
-    monkeypatch.setitem(protocol.VERSIONS, 1, Version(protocol.ProtocolVersion.V1, notice))
+    monkeypatch.setitem(legacy_protocol.VERSIONS, 1, Version(protocol.ProtocolVersion.V1, notice))
     conn = MagicMock(spec=wire.ClientConnection)
-    conn.recv.side_effect = [protocol.serialise({'status': 'ready', 'meta': {}}), protocol.serialise({'result': []})]
+    conn.recv.side_effect = [
+        legacy_protocol.serialise({'status': 'ready', 'meta': {}}),
+        legacy_protocol.serialise({'result': []}),
+    ]
     with pytest.warns(FutureWarning, match='policy protocol v1.*2020-07-01'):
         session = InferenceSession(conn)
     assert session.session_id is None
     session.infer({'value': 42})
     session.close()
-    assert protocol.deserialise(conn.send.call_args.args[0]) == {'value': 42}
+    assert legacy_protocol.deserialise(conn.send.call_args.args[0]) == {'value': 42}
     assert conn.send.call_count == 1
     conn.close.assert_called_once()

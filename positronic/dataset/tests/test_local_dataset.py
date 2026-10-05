@@ -15,6 +15,8 @@ from positronic.dataset.local_dataset import (
     load_all_datasets,
     load_dataset,
 )
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import Time
 
 from .test_dataset import build_dataset_with_signal, episode_ids
 
@@ -26,7 +28,7 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
         for i in range(3):
             with w.new_episode() as ew:
                 ew.set_static('id', i)
-                ew.append('a', i, 1000 + i)
+                ew.append('a', i, Time(**{RECORDED_TIME: 1000 + i}))
 
     # Structure exists (12-digit zero-padded ids)
     assert (root / '000000000000' / '000000000000').exists()
@@ -38,7 +40,7 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
     ep0 = ds[0]
     assert isinstance(ep0, Episode)
     assert ep0['id'] == 0
-    assert ep0['a'][0] == (0, 1000)
+    assert ep0['a'][0] == (0, Time(**{RECORDED_TIME: 1000}))
 
     # Restart writer and keep appending
     with LocalDatasetWriter(root) as w2:
@@ -55,11 +57,11 @@ def test_local_dataset_writer_appends_existing(tmp_path):
 
     writer = LocalDatasetWriter(root)
     with writer.new_episode() as episode:
-        episode.append('test_signal', np.array([1.0], dtype=np.float32), ts_ns=1)
+        episode.append('test_signal', np.array([1.0], dtype=np.float32), Time(**{RECORDED_TIME: 1}))
 
     writer = LocalDatasetWriter(root)
     with writer.new_episode() as episode:
-        episode.append('test_signal', np.array([2.0], dtype=np.float32), ts_ns=2)
+        episode.append('test_signal', np.array([2.0], dtype=np.float32), Time(**{RECORDED_TIME: 2}))
 
     ds = LocalDataset(root)
     assert len(ds) == 2

@@ -18,6 +18,9 @@ RUN uv venv --python 3.13
 ENV VIRTUAL_ENV=/.venv
 ENV PATH=/$VIRTUAL_ENV/bin:$PATH
 COPY pyproject.toml uv.lock ./
+COPY client/ client/
+COPY wire/ wire/
+COPY model_server/ model_server/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project
 COPY . /positronic

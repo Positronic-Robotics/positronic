@@ -2,17 +2,18 @@
 
 The client side of the transports a Positronic inference session runs over: websockets, gRPC, and a
 partner's own protocol. It carries the facts both ends of a wire share. It is one distribution,
-installable on its own, with `grpcio` and `websockets` as its only dependencies.
+installable on its own. The core has no third-party dependencies; the `grpc` and `websocket` extras
+install `grpcio` and `websockets` independently.
 
 > **Alpha, under rapid development.** Names and behaviour change without notice, and nothing here is
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire==0.10.0"
-uv add "positronic-wire @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
+uv add "positronic-wire[websocket,grpc]==0.11.0"
+uv add "positronic-wire[websocket,grpc] @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
-The package is not on PyPI yet. Until it is, use the second line, pinned to a tag or a commit.
+For an unpublished revision, use the Git installation pinned to a tag or commit.
 
 `positronic_wire` never imports `positronic`. `positronic` depends on it: each server side in
 `positronic.offboard` imports the facts from here, and `InferenceClient` dials through the wires
@@ -40,7 +41,7 @@ serves it, and this package holds the client end alone.
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, and `refusal_of(raised)`, which reads a failed handshake as a `Refusal` |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
-| `positronic_wire.registry` | `CLIENT_WIRES`, every member by its `NAME`, and `client_wire(name)` |
+| `positronic_wire.registry` | `CLIENT_WIRES`, every installed member by its `NAME`, and `client_wire(name)` |
 
 `positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,
 `websocket_wire.WebsocketWire`, `grpc_wire.GrpcWire`, the session protocol, `InferenceClient` and
@@ -77,7 +78,11 @@ leaves out on the members that carry one.
   `KeepaliveUnsupported` where the server does not serve the call, and `ConnectRefused` where the
   server answers nothing. `roboarena` always raises `KeepaliveUnsupported`.
 
-`registry.client_wire(name)` is the one lookup, and it refuses a name no wire carries.
+`registry.client_wire(name)` selects an installed transport. `CLIENT_WIRES` includes only families
+whose libraries are installed; requesting an unavailable transport raises with installation guidance.
+Use `[websocket]` for WebSocket and Roboarena, `[grpc]` for gRPC, or `[websocket,grpc]` for all wires.
+Importing the core registry without either extra produces an empty registry. Broken imports from an
+installed transport surface as errors.
 
 **Each wire declares the address it dials, and takes no other.** `ClientWire.ADDRESS` names that
 type, and every verb above takes it. `websocket`, `websocket_tls`, `grpc` and `grpc_tls` take a
@@ -117,8 +122,8 @@ before it dials, and names both in the refusal.
 | Consumer | Needs | Installs |
 |---|---|---|
 | A rig client, and `positronic` itself | Every verb, the session protocol, the policy stack | `positronic`, which pins `positronic-wire` exactly |
-| A coordinator that probes an endpoint and warms it | `registry.client_wire`, `probe`, `PROBE_PATH`, the routes | `positronic-wire` alone: `grpcio`, `websockets` and nothing else |
-| A service that validates an endpoint record | `registry.CLIENT_WIRES` | `positronic-wire` alone |
+| A coordinator that probes an endpoint and warms it | `registry.client_wire`, `probe`, `PROBE_PATH`, the routes | `positronic-wire[websocket,grpc]`, or just the required transport extra |
+| A service that validates an endpoint record | `registry.CLIENT_WIRES` | `positronic-wire` with the transport extras it accepts |
 | A server | The server side | `positronic` |
 
 A consumer whose lockfile already carries `grpcio` (through a cloud SDK) and `websockets` (through
@@ -171,7 +176,7 @@ raise a constant naming the version that first dialled it.
 
 A consumer moves onto the wire in this order, each step green on its own:
 
-1. Depend on `positronic-wire`. Import the routes, the probe path and the registry; delete the
+1. Depend on `positronic-wire` with the required transport extras. Import the routes, the probe path and the registry; delete the
    local copies, the tables keyed by scheme, and every read of a URL scheme. **An endpoint record
    names its wire, then that wire's address** — the fields `ClientWire.ADDRESS` declares, which differ
    per wire. Report the registry's names in the deploy handshake and retire any per-transport version
@@ -185,8 +190,7 @@ A consumer moves onto the wire in this order, each step green on its own:
 ## What is not shared
 
 - The server side of each offboard wire, which serves through `fastapi`, `uvicorn` and `grpc.aio`.
-- The session protocol and the policy stack, which shape an observation and need `numpy` and the
-  codecs. A consumer that warms an endpoint with a real observation runs that in an environment
-  carrying `positronic`.
+- Model message definitions and value serialization live in `positronic-model-server`. The policy
+  stack and robotics codecs live in `positronic`. Neither is a dependency of `positronic-wire`.
 - A transport this package does not implement. A consumer that owns one writes it as a `ClientWire`
   of its own.

@@ -29,29 +29,40 @@ _SHAPE = b'shape'
 _FRAMES = b'frames'
 _NDIM = b'ndim'
 
-# JPEG quality for images on the wire. A single HD frame — and especially a (T, H, W, 3) stack — is many
-# MB raw, over the ~2 MB websocket message cap of a Modal-fronted endpoint. Per-frame JPEG keeps a
-# 25-frame two-camera stack around 1-2 MB and cuts upload latency; q=90 is visually lossless here.
 DEFAULT_JPEG_QUALITY = 90
 
 
 def encode_jpeg(image: np.ndarray, quality: int = DEFAULT_JPEG_QUALITY) -> dict[bytes, Any]:
-    """JPEG-encode a single ``(H, W, 3)`` image or a ``(T, H, W, 3)`` stack to a compact wire marker.
+    """JPEG-encode RGB images shaped ``(..., H, W, 3)``, casting pixels to uint8.
 
-    Sends one JPEG per frame plus the original ``ndim`` so ``unpack`` restores the exact shape.
+    Nonempty 3D/4D inputs use the v1/v2 marker. Extra leading dimensions and empty batches carry
+    their full shape. JPEG changes pixels; ordinary arrays passed to ``serialise`` stay lossless.
     """
-    frames = image if image.ndim == 4 else image[None]
+    if image.ndim < 3 or image.shape[-1] != 3 or min(image.shape[-3:-1]) < 1:
+        raise ValueError('JPEG images must have shape (..., H, W, 3) with positive height and width')
+    if type(quality) is not int or not 0 <= quality <= 100:
+        raise ValueError('JPEG quality must be an integer between 0 and 100')
+    frames = image.reshape((-1, *image.shape[-3:]))
     bufs = []
     for frame in frames:
         buf = io.BytesIO()
         PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(buf, format='JPEG', quality=quality)
         bufs.append(buf.getvalue())
+    if image.ndim > 4 or not bufs:
+        return {_JPEG: True, _FRAMES: bufs, _SHAPE: image.shape}
     return {_JPEG: True, _FRAMES: bufs, _NDIM: int(image.ndim)}
 
 
 def _decode_jpeg(marker: dict) -> np.ndarray:
     """Inverse of ``encode_jpeg``: decode per-frame JPEGs and restore the original shape."""
+    if _SHAPE in marker and not marker[_FRAMES]:
+        shape = tuple(marker[_SHAPE])
+        if len(shape) < 4 or shape[-1] != 3 or min(shape[-3:-1]) < 1 or 0 not in shape[:-3]:
+            raise ValueError('An empty JPEG batch must have an empty leading dimension')
+        return np.empty(shape, dtype=np.uint8)
     frames = np.stack([np.asarray(PilImage.open(io.BytesIO(buf))) for buf in marker[_FRAMES]])
+    if _SHAPE in marker:
+        return frames.reshape(marker[_SHAPE])
     return frames if marker[_NDIM] == 4 else frames[0]
 
 

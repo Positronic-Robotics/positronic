@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from functools import partial
 from multiprocessing.context import SpawnProcess
 from queue import Empty, Full
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -36,6 +37,8 @@ from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
 from pimm.tests.sigterm_probe import CHILD_PID_FILE, SHUT_DOWN_FILE
 from pimm.tests.testing import MockClock
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, Time
+from pimm.utils import map as pimm_map
 from pimm.world import (
     EventReceiver,
     LocalQueueEmitter,
@@ -43,10 +46,136 @@ from pimm.world import (
     MultiprocessReceiver,
     QueueEmitter,
     SystemClock,
+    TransportMode,
     VirtualClock,
     World,
     _stop_when_orphaned,
 )
+
+
+@pytest.mark.parametrize('transport', ['local', 'queue', 'shared_memory'])
+def test_message_times_are_snapshots_of_emission_and_first_delivery(transport):
+    with World(virtual_time=True) as world:
+        if transport == 'local':
+            emitter, receiver = world.local_pipe()
+        else:
+            from_mode = TransportMode.QUEUE if transport == 'queue' else TransportMode.SHARED_MEMORY
+            emitter, receiver = world.mp_pipes(transport=from_mode)
+        assert isinstance(receiver, SignalReceiver)
+        clock = world.clock
+        assert isinstance(clock, VirtualClock)
+        clock.advance_to_ns(10)
+        emitter.emit(DummySMValue(42) if transport == 'shared_memory' else 42, time=Time(capture=7))
+        clock.advance_to_ns(20)
+        first = receiver.read()
+        assert first is not None
+        assert first.time[EMITTED_WORLD] == 10
+        assert first.time[RECEIVED_WORLD] == 20
+        assert first.time['capture'] == 7
+        assert first.time[EMITTED_WALL] <= first.time[RECEIVED_WALL]
+
+        clock.advance_to_ns(30)
+        cached = receiver.read()
+        assert cached is not None
+        assert cached.time == first.time
+        assert not cached.updated
+        assert first.updated
+        untyped_message: Any = first
+        with pytest.raises(AttributeError):
+            untyped_message.time = Time(other=0)
+        untyped_time: Any = first.time
+        with pytest.raises(TypeError):
+            untyped_time['capture'] = 0
+
+
+@pytest.mark.parametrize('name', [EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, 'emitted.device'])
+def test_producers_cannot_override_framework_time(name):
+    with World() as world:
+        emitter, receiver = world.local_pipe()
+        with pytest.raises(ValueError, match='belong to pimm'):
+            emitter.emit(42, time=Time(**{name: 1}))
+        assert receiver.read() is None
+
+
+@pytest.mark.parametrize('transport', ['local', 'queue', 'shared_memory'])
+def test_real_world_time_equals_wall_time(transport):
+    with World() as world:
+        if transport == 'local':
+            emitter, receiver = world.local_pipe()
+        else:
+            mode = TransportMode.QUEUE if transport == 'queue' else TransportMode.SHARED_MEMORY
+            emitter, receiver = world.mp_pipes(transport=mode)
+        assert isinstance(receiver, SignalReceiver)
+        emitter.emit(DummySMValue(42) if transport == 'shared_memory' else 42)
+        message = receiver.read()
+        assert message is not None
+        assert message.time[EMITTED_WORLD] == message.time[EMITTED_WALL]
+        assert message.time[RECEIVED_WORLD] == message.time[RECEIVED_WALL]
+        assert message.time[EMITTED_WORLD] <= message.time[RECEIVED_WORLD]
+        cached = receiver.read()
+        assert cached is not None and cached.time == message.time and not cached.updated
+
+
+def test_fanout_preserves_emission_but_stamps_each_receiver(monkeypatch):
+    system = DummyControlSystem('source')
+
+    def increment(value: int) -> int:
+        return value + 1
+
+    wall = iter(range(100, 200))
+    monkeypatch.setattr('pimm.time.time.monotonic_ns', lambda: next(wall))
+    with World(virtual_time=True) as world:
+        first_receiver = world.pair(system.emitter, emitter_wrapper=pimm_map(increment))
+        second_receiver = world.pair(system.emitter)
+        world.start(system)
+        system.emitter.emit(42)
+        first = first_receiver.read()
+        second = second_receiver.read()
+        assert first is not None and second is not None
+        assert first.data == 43 and second.data == 42
+        assert first.time[(EMITTED_WALL, EMITTED_WORLD)] == second.time[(EMITTED_WALL, EMITTED_WORLD)]
+        assert first.time[RECEIVED_WALL] < second.time[RECEIVED_WALL]
+        cached = first_receiver.read()
+        assert cached is not None and cached.time == first.time
+
+
+@pytest.mark.parametrize('virtual_time', [False, True])
+def test_background_endpoints_have_world_time_only_on_hardware(monkeypatch, virtual_time):
+    main = DummyControlSystem('main')
+    background = DummyControlSystem('background')
+    monkeypatch.setattr(World, 'start_in_subprocess', lambda *args, **kwargs: None)
+    with World(virtual_time=virtual_time) as world:
+        world.connect(background.emitter, main.receiver)
+        world.connect(main.emitter, background.receiver)
+        world.start(main, background)
+        background.emitter.emit(42)
+        main.emitter.emit(7)
+        received_in_main = main.receiver.read()
+        received_in_background = background.receiver.read()
+        assert received_in_main is not None and received_in_background is not None
+        if virtual_time:
+            assert set(received_in_main.time) == {EMITTED_WALL, RECEIVED_WALL, RECEIVED_WORLD}
+            assert set(received_in_background.time) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL}
+        else:
+            for message in (received_in_main, received_in_background):
+                assert message.time[EMITTED_WORLD] == message.time[EMITTED_WALL]
+                assert message.time[RECEIVED_WORLD] == message.time[RECEIVED_WALL]
+
+
+def test_emitter_wrapper_follows_the_clock_bound_after_its_creation():
+    system = DummyControlSystem('source')
+
+    def identity(value: int) -> int:
+        return value
+
+    wrapped = pimm_map(identity)(system.emitter)
+    with World(virtual_time=True) as world:
+        receiver = world.pair(system.emitter)
+        world.start(system)
+        wrapped.emit(42)
+        message = receiver.read()
+        assert message is not None
+        assert message.time[EMITTED_WORLD] == 0
 
 
 def dummy_process(stop_reader, clock):
@@ -132,7 +261,7 @@ class TestQueueEmitter:
         message = queue.get_nowait()
         assert isinstance(message, Message)
         assert message.data == 'test_data'
-        assert isinstance(message.ts, int)
+        assert isinstance(message.time[EMITTED_WALL], int)
 
     def test_queue_emitter_emit_with_timestamp(self):
         """Test emission with explicit timestamp."""
@@ -140,11 +269,12 @@ class TestQueueEmitter:
         emitter = QueueEmitter(queue, SystemClock())
         timestamp = 1234567890
 
-        emitter.emit('test_data', ts=timestamp)
+        emitter.emit('test_data', time=Time(source=timestamp))
 
         message = queue.get_nowait()
         assert message.data == 'test_data'
-        assert message.ts == timestamp
+        assert message is not None
+        assert message.time['source'] == timestamp
 
     def test_queue_emitter_full_queue_removes_old_message(self):
         """Test that full queue removes old message before adding new one."""
@@ -189,7 +319,7 @@ class TestEventReceiver:
         result = reader.read()
         assert isinstance(result, Message)
         assert result.data is False
-        assert isinstance(result.ts, int)
+        assert isinstance(result.time[RECEIVED_WALL], int)
 
     def test_event_reader_set_event(self):
         """Test reading from a set event."""
@@ -200,7 +330,7 @@ class TestEventReceiver:
         result = reader.read()
         assert isinstance(result, Message)
         assert result.data is True
-        assert isinstance(result.ts, int)
+        assert isinstance(result.time[RECEIVED_WALL], int)
 
     def test_event_reader_uses_clock(self):
         """Test that EventReceiver uses clocks for timestamps."""
@@ -210,7 +340,8 @@ class TestEventReceiver:
         reader = EventReceiver(event, clk)
 
         result = reader.read()
-        assert result.ts == 987654321
+        assert result is not None
+        assert result.time[RECEIVED_WORLD] == 987654321
 
     def test_event_reader_updated_flag(self):
         """EventReceiver should toggle updated when event state changes."""
@@ -399,12 +530,13 @@ class TestWorld:
         with World() as world:
             emitter, reader = world.mp_pipes()
 
-            emitter.emit('hello', ts=123)
+            emitter.emit('hello', time=Time(source=123))
 
             message = reader.read()
             assert message is not None
             assert message.data == 'hello'
-            assert message.ts == 123
+            assert message is not None
+            assert message.time['source'] == 123
             assert message.updated is True
             assert hasattr(emitter, 'uses_shared_memory') and not emitter.uses_shared_memory
             assert hasattr(reader, 'uses_shared_memory') and not reader.uses_shared_memory
@@ -418,13 +550,14 @@ class TestWorld:
             emitter, reader = world.mp_pipes()
 
             payload = DummySMValue(3.14)
-            emitter.emit(payload, ts=456)
+            emitter.emit(payload, time=Time(source=456))
 
             message = reader.read()
             assert message is not None
             assert isinstance(message.data, DummySMValue)
             assert message.data.value == pytest.approx(3.14)
-            assert message.ts == 456
+            assert message is not None
+            assert message.time['source'] == 456
             assert message.updated is True
             assert emitter.uses_shared_memory
             assert reader.uses_shared_memory
@@ -457,7 +590,8 @@ class TestWorldControlSystems:
             with pytest.raises(AssertionError):
                 world.connect(producer.emitter, consumer.receiver)
 
-    def test_mirror_from_emitter_creates_receiver_and_applies_wrapper(self):
+    @pytest.mark.parametrize('wrapped_first', [False, True])
+    def test_mirror_from_emitter_creates_receiver_and_applies_wrapper(self, wrapped_first):
         system = DummyControlSystem('loop')
         captured: dict[str, SignalEmitter] = {}
 
@@ -466,9 +600,9 @@ class TestWorldControlSystems:
                 self.downstream = downstream
                 self.payloads: list[tuple[str, int]] = []
 
-            def emit(self, data: str, ts: int = -1):
-                self.payloads.append((data, ts))
-                self.downstream.emit(f'wrapped-{data}', ts)
+            def _emit(self, data: str, time: Time):
+                self.payloads.append((data, time['source']))
+                self.downstream._emit(f'wrapped-{data}', time)
 
         def wrapper(emitter: SignalEmitter[str]) -> SignalEmitter[str]:
             captured['transport'] = emitter
@@ -477,17 +611,30 @@ class TestWorldControlSystems:
             return recording
 
         with World(virtual_time=True) as world:
-            mirrored = world.pair(system.emitter, emitter_wrapper=wrapper)
+            if wrapped_first:
+                mirrored = world.pair(system.emitter, emitter_wrapper=wrapper)
+                unwrapped = world.pair(system.emitter)
+            else:
+                unwrapped = world.pair(system.emitter)
+                mirrored = world.pair(system.emitter, emitter_wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemReceiver)
 
             world.start(system)
+            assert isinstance(world.clock, VirtualClock)
+            world.clock.advance_to_ns(100)
             sent_ts = 987_654_321
-            system.emitter.emit('payload', ts=sent_ts)
+            system.emitter.emit('payload', time=Time(source=sent_ts))
             message = mirrored.read()
             assert message is not None
             assert message.data == 'wrapped-payload'
-            assert message.ts == sent_ts
+            assert message is not None
+            assert message.time['source'] == sent_ts
+            assert message.time[EMITTED_WORLD] == 100
+            plain_message = unwrapped.read()
+            assert plain_message is not None
+            assert plain_message.data == 'payload'
+            assert plain_message.time[(EMITTED_WALL, EMITTED_WORLD)] == message.time[(EMITTED_WALL, EMITTED_WORLD)]
 
             assert isinstance(captured['transport'], LocalQueueEmitter)
             assert captured['transport'] is not system.emitter
@@ -510,11 +657,12 @@ class TestWorldControlSystems:
             assert isinstance(wrapped_receiver, SignalReceiver)
 
             sent_ts = 123_456_789
-            mirrored.emit('payload', ts=sent_ts)
+            mirrored.emit('payload', time=Time(source=sent_ts))
             message = system.receiver.read()
             assert message is not None
             assert message.data == 'payload'
-            assert message.ts == sent_ts
+            assert message is not None
+            assert message.time['source'] == sent_ts
 
     def test_mirror_rejects_unknown_connector(self):
         with World() as world:
@@ -533,7 +681,8 @@ class TestWorldControlSystems:
             result = consumer.receiver.read()
             assert result is not None
             assert result.data == 'payload'
-            assert result.ts == 0
+            assert result is not None
+            assert result.time[EMITTED_WORLD] == 0
 
             sleeps = list(scheduler)
             assert sleeps == [Yield()]
@@ -612,13 +761,14 @@ class TestWorldControlSystems:
 
             scheduler = world.start(main_process=main_cs, background=background_cs)
 
-            main_cs.emitter.emit('payload', ts=11_000)
+            main_cs.emitter.emit('payload', time=Time(source=11_000))
             result = background_cs.receiver.read()
             assert result is not None
             assert result.data == 'payload'
-            assert result.ts == 11_000
+            assert result is not None
+            assert result.time['source'] == 11_000
 
-            assert captured_clocks == [None]
+            assert captured_clocks == [world.clock]
             assert [loop.cs for (loop,) in started_background] == [background_cs]
 
             sleeps = list(scheduler)
@@ -1037,7 +1187,7 @@ class TestFakeConnectors:
             scheduler = world.start([producer, consumer])
 
             # Emit data from real emitter
-            producer.emitter.emit('test_message', ts=123)
+            producer.emitter.emit('test_message', time=Time(source=123))
 
             list(scheduler)
 
@@ -1083,7 +1233,7 @@ class TestFakeConnectors:
             scheduler = world.start([producer1, producer2, consumer1, consumer2])
 
             # Send data through real connection
-            producer2.emitter.emit('real_data', ts=456)
+            producer2.emitter.emit('real_data', time=Time(source=456))
 
             list(scheduler)
 
@@ -1091,7 +1241,8 @@ class TestFakeConnectors:
             result = consumer2.receiver.read()
             assert result is not None
             assert result.data == 'real_data'
-            assert result.ts == 456
+            assert result is not None
+            assert result.time['source'] == 456
 
             # Fake connections should not deliver data
             assert consumer1.receiver.read() is None

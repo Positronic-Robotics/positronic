@@ -6,11 +6,11 @@ from unittest.mock import Mock
 import msgpack
 import numpy as np
 import pytest
+from positronic_model_server.serialization import deserialize
 from websockets.sync.server import serve
 
 from positronic import keys
 from positronic.policy import keys as policy_keys
-from positronic.utils.serialization import deserialize
 from positronic.vendors.galaxea import codecs, protocol, server
 
 

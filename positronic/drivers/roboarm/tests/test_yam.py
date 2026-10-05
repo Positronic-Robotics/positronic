@@ -69,9 +69,9 @@ class Site(Enum):
 
     CHAIN_READ = ('vendor', 'get_observations')
     CHAIN_COMMAND = ('vendor', 'command_joint_pos')
-    META_EMIT = ('robot_meta', 'emit')
-    STATE_EMIT = ('state', 'emit')
-    GRIP_EMIT = ('grip', 'emit')
+    META_EMIT = ('robot_meta', '_emit')
+    STATE_EMIT = ('state', '_emit')
+    GRIP_EMIT = ('grip', '_emit')
     COMMANDS_READ = ('commands', 'read')
     TARGET_GRIP_READ = ('target_grip', 'read')
 
@@ -135,12 +135,12 @@ class Rig:
             park_tuning=park_tuning,
             move_tuning=move_tuning,
         )
+        self.clock = MockClock()
         self.driver.commands._bind(ports['commands'])
         self.driver.target_grip._bind(ports['target_grip'])
-        self.driver.state._bind(ports['state'])
-        self.driver.grip._bind(ports['grip'])
-        self.driver.robot_meta._bind(ports['robot_meta'])
-        self.clock = MockClock()
+        self.driver.state._bind(ports['state'], clock=self.clock)
+        self.driver.grip._bind(ports['grip'], clock=self.clock)
+        self.driver.robot_meta._bind(ports['robot_meta'], clock=self.clock)
         self.stop = StopFlag()
         self.loop = self.driver.run(self.stop, self.clock)
 
@@ -1031,10 +1031,10 @@ def test_a_fault_that_prevents_a_verified_park_keeps_the_arm_powered(caplog, sit
 class SettledStateFails(RecordingEmitter):
     """Refuses every state that reports the arm settled; the reports while the arm moves still go out."""
 
-    def emit(self, data, ts=-1):
+    def _emit(self, data, time: pimm.Time):
         if data.status is not RobotStatus.BUSY:
             raise OSError('state transport closed')
-        super().emit(data, ts)
+        super()._emit(data, time)
 
 
 class FailsOnceStopped(RecordingEmitter):
@@ -1044,10 +1044,10 @@ class FailsOnceStopped(RecordingEmitter):
         super().__init__()
         self.stop = stop
 
-    def emit(self, data, ts=-1):
+    def _emit(self, data, time: pimm.Time):
         if self.stop.stopped:
             raise OSError('transport closed')
-        super().emit(data, ts)
+        super()._emit(data, time)
 
 
 def test_a_shutdown_with_every_publish_failing_still_parks_and_releases(caplog):

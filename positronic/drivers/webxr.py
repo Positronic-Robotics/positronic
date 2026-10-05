@@ -179,7 +179,7 @@ class WebXR(pimm.ControlSystem):
             logger.info('Video WebSocket connection accepted')
             try:
                 fps = pimm.utils.RateCounter('Video Stream')
-                last_sent_ts = None
+                last_sent_time = None
                 while not should_stop.value:
                     await asyncio.sleep(1 / 60)
 
@@ -188,9 +188,9 @@ class WebXR(pimm.ControlSystem):
                     if msg is None:
                         continue
 
-                    if last_sent_ts is not None and last_sent_ts == msg.ts:
+                    if last_sent_time is not None and last_sent_time == msg.time:
                         continue
-                    last_sent_ts = msg.ts
+                    last_sent_time = msg.time
                     base64_frame = encode_frame(msg.data)
                     await websocket.send_text(base64_frame)
                     fps.tick()
@@ -217,11 +217,10 @@ class WebXR(pimm.ControlSystem):
                             if transform is not None:
                                 controller_positions[side].translation *= self.sensitivity
 
-                        ts = clock.now_ns()
                         if controller_positions['left'] is not None or controller_positions['right'] is not None:
-                            self.controller_positions.emit(controller_positions, ts)
+                            self.controller_positions.emit(controller_positions)
                         if buttons['left'] is not None or buttons['right'] is not None:
-                            self.buttons.emit(buttons, ts)
+                            self.buttons.emit(buttons)
                         fps.tick()
                     except TimeoutError:
                         # Timeout is normal, just continue to check should_stop

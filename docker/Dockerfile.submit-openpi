@@ -1,13 +1,16 @@
 # syntax=docker/dockerfile:1.7
-# A policy image the platform can run: openpi pi05_droid_jointpos on top of `positro/openpi`.
+# A policy image the platform can run: openpi pi05_droid_jointpos on top of `positro/openpi-base`.
 # docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
 #
-# Usage
+# Usage (from the repository root)
 #   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-#       -f docker/Dockerfile.submit-openpi -t docker.io/<you>/pi05-droid:v1 --push docker
+#       -f docker/Dockerfile.submit-openpi -t docker.io/<you>/pi05-droid:v1 --push .
 #   docker run --rm --network none docker.io/<you>/pi05-droid:v1        # the offline pre-flight
+#
+# The layers go from the least often changed to the most: base, weights, dependencies, source. A
+# source commit rebuilds and pushes the source layer only.
 
-ARG BASE_IMAGE=positro/openpi:latest
+ARG BASE_IMAGE=positro/openpi-base:latest
 ARG CLOUD_SDK_IMAGE=google/cloud-sdk:slim
 
 # The weights come in through a stage of their own, so the served image carries no cloud SDK and no
@@ -24,26 +27,33 @@ RUN mkdir -p /assets/openpi-data/big_vision \
  && curl -fsSL "${TOKENIZER_URL}" -o /assets/openpi-data/big_vision/paligemma_tokenizer.model
 
 FROM ${BASE_IMAGE}
-ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
-    OPENPI_DATA_HOME=/opt/positronic/openpi-data \
-    PYTHONUNBUFFERED=1
-
-# The base image carries the positronic tree at /positronic and no environment for it: `uv run`
-# would build one at container start, and the platform runs the container with no network.
-WORKDIR /positronic
-RUN uv sync --locked --python 3.13 --extra openpi --no-dev && uv cache clean
-
-# The server starts openpi's own `serve_policy.py` through `uv run --project /openpi`, which reads
-# the project environment named here. The base resolved openpi into /.venv, so sync into that one:
-# left to its default, uv builds a second copy at /openpi/.venv.
-ENV UV_PROJECT_ENVIRONMENT=/.venv
-RUN uv sync --frozen --project /openpi && uv cache clean
-
 COPY --from=assets /assets/checkpoints /opt/positronic/checkpoints/pi05_droid_jointpos
 COPY --from=assets /assets/openpi-data /opt/positronic/openpi-data
 
+ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
+    OPENPI_DATA_HOME=/opt/positronic/openpi-data \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/positronic:/openpi
+
+# The server starts openpi's own `serve_policy.py` through `uv run --project /openpi`, which reads
+# the environment the base resolved openpi into, /.venv. Left to its default, uv builds a second
+# copy at /openpi/.venv.
+RUN UV_PROJECT_ENVIRONMENT=/.venv uv sync --frozen --project /openpi && uv cache clean
+
+# The dependencies install from the lock alone, so a source change does not reinstall them.
+WORKDIR /positronic
+COPY pyproject.toml uv.lock ./
+COPY client/pyproject.toml client/
+COPY wire/pyproject.toml wire/
+COPY model_server/pyproject.toml model_server/
+RUN uv sync --locked --python 3.13 --extra openpi --no-dev --no-install-workspace && uv cache clean
+
+COPY . /positronic
+RUN uv sync --locked --python 3.13 --extra openpi --no-dev && uv cache clean
+
 # A fetch the build did not make fails at once on the denied network.
-ENV UV_OFFLINE=1 \
+ENV UV_PROJECT_ENVIRONMENT=/.venv \
+    UV_OFFLINE=1 \
     UV_NO_SYNC=1 \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1

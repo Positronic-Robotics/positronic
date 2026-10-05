@@ -8,9 +8,10 @@ import pos3
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import Episode
-from positronic.dataset.episode import META_CREATED_TS_NS
+from positronic.dataset.episode import META_CREATED_TS_NS, select_timeline
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.eval import keys as eval_keys
+from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import main as server_main
@@ -44,11 +45,28 @@ def eval_table():
     }
 
 
+# The arm's state as tabs, the target grip beside the grip, and each command.
+single_arm_replay_layout = cfn.Config(
+    ReplayLayout,
+    row_shares=(3, 1),
+    top_shares=(1, 3),
+    charts={
+        'Robot State/Joints': [keys.JOINTS],
+        'Robot State/End Effector': [keys.EE_POSE],
+        'Robot State/Joints Vel': [keys.JOINT_VEL],
+        'Grip': {'Target': keys.TARGET_GRIP, 'Current': keys.GRIP},
+        'Robot Commands – Joints': [keys.TARGET_JOINTS],
+        'Robot Commands – End Effector': [keys.TARGET_EE_POSE],
+    },
+)
+
+
 def uph(ep: Episode) -> float | None:
     items = ep['units']
     if items == 0:
         return None
-    return items / (ep.duration_ns / 1e9 / 3600)
+    first, last = ep.bounds(select_timeline(ep.timelines))
+    return items / ((last - first) / 1e9 / 3600)
 
 
 finetune_ds = ds.transform.override(
@@ -110,7 +128,8 @@ def finetune_group_by_task():
     def group_fn(episodes: list[Episode]):
         duration, units = 0, 0
         for ep in episodes:
-            duration += ep.duration_ns / 1e9 / 3600
+            first, last = ep.bounds(select_timeline(ep.timelines))
+            duration += (last - first) / 1e9 / 3600
             units += ep['units']
 
         result = {'task': episodes[0][keys.TASK]}

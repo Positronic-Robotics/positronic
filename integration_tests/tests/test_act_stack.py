@@ -20,8 +20,10 @@ from integration_tests.act_stack import (
 )
 from positronic import keys
 from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
+from positronic.dataset import Time
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.signal import RECORDED_TIME
 
 
 @pytest.fixture
@@ -31,16 +33,16 @@ def recorded_signals(monkeypatch, tmp_path):
         for name in RECORDED_SIGNALS:
             sample_times = times[::10] if name in (keys.TARGET_EE_POSE, keys.TARGET_GRIP) else times
             for timestamp in sample_times:
-                writer.append(name, 0.0, int(timestamp))
+                writer.append(name, 0.0, Time(**{RECORDED_TIME: int(timestamp)}))
     signals = DiskEpisode(tmp_path / 'episode').signals
     monkeypatch.setattr(
         act_stack,
         'cube_trace',
         lambda episode: {
             CUBE_POSES: np.zeros((len(times), 2, 7)),
-            CUBE_POSES + TIME_SUFFIX: times - episode.start_ts,
+            CUBE_POSES + TIME_SUFFIX: times - episode.bounds(RECORDED_TIME).start,
             SUPPORTED: np.ones(len(times), dtype=bool),
-            SUPPORTED + TIME_SUFFIX: times - episode.start_ts,
+            SUPPORTED + TIME_SUFFIX: times - episode.bounds(RECORDED_TIME).start,
         },
     )
     monkeypatch.setattr(act_stack, 'read_episode', lambda output, seed: EpisodeContainer(signals))

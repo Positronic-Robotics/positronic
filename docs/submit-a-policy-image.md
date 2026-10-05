@@ -12,13 +12,20 @@ test that the image starts with the network denied before you submit:
 
 ## Example images
 
-Every `positro/<vendor>` image on Docker Hub carries a vendor stack and an inference server for it.
-Each recipe below adds the weights, an offline environment, `EXPOSE 8000` and a start command:
+The openpi and GR00T recipes build on a `positro/<vendor>-base` image on Docker Hub, which carries
+the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: MolmoAct2 has no
+vendor stack. These three recipes add the weights, the positronic source with an offline
+environment, `EXPOSE 8000` and a start command. Their layers go from the least often changed to the
+most: base, weights, dependencies, source. A source change rebuilds and pushes the source layer only.
+The FLUX 3 Action recipe builds the vendor stack itself, and CI publishes the image. Build from the
+root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
-| openpi π0.5 DROID | [`docker/Dockerfile.submit-openpi`](../docker/Dockerfile.submit-openpi) | `positro/openpi` | `pi05_droid_jointpos`, the public checkpoint |
-| GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t` | `nvidia/GR00T-N1.7-DROID` |
+| openpi π0.5 DROID | [`docker/Dockerfile.submit-openpi`](../docker/Dockerfile.submit-openpi) | `positro/openpi-base` | `pi05_droid_jointpos`, the public checkpoint |
+| GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
+| MolmoAct2 DROID | [`docker/Dockerfile.submit-molmoact2`](../docker/Dockerfile.submit-molmoact2) | `ghcr.io/astral-sh/uv:python3.13-bookworm` | `allenai/MolmoAct2-DROID` at a pinned revision |
+| FLUX 3 Action DROID | [`docker/Dockerfile.flux3-action`](../docker/Dockerfile.flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
 
 The header of each recipe gives its build command. The comments in each recipe say where a
 checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM
@@ -29,10 +36,13 @@ The GR00T recipe downloads `nvidia/GR00T-N1.7-DROID` (6.9 GB) and its backbone
 Hub page, then put a read token in `$HOME/.hf_token`. The build reads the token through a secret
 mount, and it enters no layer.
 
+The MolmoAct2 recipe downloads `allenai/MolmoAct2-DROID` (21.8 GB in float32). The build needs no
+token: the repository is not gated. The image is 24.4 GB compressed.
+
 Other models:
 
 - **DreamZero.** The public `GEAR-Dreams/DreamZero-DROID` checkpoint is 65 GB on the Hub, and the
-  `positro/dreamzero` base is 20 GB compressed. Together they exceed the 30 GB budget. Serve
+  `positro/dreamzero` base is 20 GB compressed. Together they exceed the 50 GB budget. Serve
   DreamZero on your own GPU and file an eval plan with a `remote` endpoint
   ([Eval plans](../client/README.md#eval-plans)).
 - **A model of your own.** Write an inference server ([Connect your model](connect-your-model.md))
@@ -40,7 +50,7 @@ Other models:
 
 ### Two traps in the `positro/*` bases
 
-Both recipes handle both traps.
+The openpi, GR00T and MolmoAct2 recipes handle both traps.
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
 `/positronic` and no environment for it. The repository's `docker/docker-compose.yml` starts every
@@ -56,6 +66,33 @@ more variable, `GROOT_PATCH_MISTRAL=1`, because `transformers` also asks the Hub
 backbone's tokenizer with no cache fallback. The offline variables alone fail at once with
 `OfflineModeIsEnabled`. The patch alone times out after 600 s of retried HEAD requests. Both
 together load the model in 151 s.
+
+### FLUX 3 Action
+
+`positro/flux3-action` holds FLUX 3 Action DROID, Black Forest Labs' serving code, and every weight
+the server loads. It needs no network at start and no arguments. CI builds it when its recipe
+changes, and tags each build with the commit. Read its digest with
+`docker/read_image_digest.sh positro/flux3-action:main`.
+
+The image serves the roboarena wire, not the session protocol:
+
+- `GET /healthz` answers 200 once the model is loaded and warm. A session opens on the root, `/`.
+- On connect, the server sends its config: three 360x640 views, the wrist view included, and
+  `joint_position` actions.
+- With `AUTH_TOKEN` set, every request must carry `Authorization: Bearer <token>`, `/healthz`
+  included. With it unset, the server serves open.
+- The server compiles the model for about 140 s before it binds port 8000. Its GPU memory peaks at
+  about 33 000 MiB.
+
+The platform runs a submitted image over the `websocket` wire only
+([Eval plans](../client/README.md#eval-plans)), so it does not run this image as a submission. Use
+the image as a reference: copy the recipe, or run the image on your own GPU. Start it as the
+[test below](#test-the-image-before-you-submit) does, then call `/healthz`:
+
+```bash
+docker exec policy /opt/flux-action/.venv/bin/python -c "import urllib.request as u; \
+  print(u.urlopen(u.Request('http://127.0.0.1:8000/healthz', headers={'Authorization': 'Bearer test'})).read())"
+```
 
 ### Build and push
 
@@ -99,8 +136,9 @@ uv run positronic eval run --eval=<eval> \
 1. The platform resolves your image reference to a digest at submission and records it as
    `policy_image_digest`. The run uses those bytes.
 2. It refuses an image it cannot pull — anonymously, or with the credential you named
-   (`image_unpullable`) — and one whose compressed size, config and layers summed, is over 30 GB
-   (`image_too_large`). Both are charged to your quota.
+   (`image_unpullable`) — and one whose compressed size, config and layers summed, is over 50 GB
+   (`image_too_large`). Both are charged to your quota. The image has two more budgets, in
+   [The container](#the-container).
 3. It runs the image on a GPU VM with **no arguments**. Your `CMD` or `ENTRYPOINT` starts the
    server. The platform passes no flags and no secrets. It sets one variable, `AUTH_TOKEN`, the
    run's bearer token. An image with no start command runs the base image's `CMD ["bash"]`, which
@@ -114,7 +152,53 @@ uv run positronic eval run --eval=<eval> \
 7. It fails the run with `policy_setup_crash` if a route serves a caller without the token, or
    refuses the run's own token. The vendor servers read `AUTH_TOKEN` and check it; a server of
    your own must do the same.
-8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM.
+8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM. The container runs under the
+   limits in [The container](#the-container).
+
+## The container
+
+[`client/platform_client/policy_container.py`](../client/platform_client/policy_container.py)
+holds each value below. The platform runs every image under them.
+
+| Limit | Value | Constant |
+|---|---|---|
+| The port the server listens on | 8000 | `POLICY_PORT` |
+| The one variable the platform sets | `AUTH_TOKEN` | `AUTH_TOKEN_ENV` |
+| The deadline for VM boot, the pull and the server's start | 1800 s | `PROVISIONING_DEADLINE_S` |
+| The GPU slice | `3g.40gb` | `MIG_PROFILE` |
+| VRAM | 40448 MiB | `VRAM_MIB` |
+| The compressed image | 50 GB | `COMPRESSED_IMAGE_BYTES` |
+| The unpacked image | 55 GB | `UNPACKED_IMAGE_BYTES` |
+| The files in the image | 3,300,000 | `IMAGE_FILES` |
+| The block an unpacked entry is counted in | 4096 bytes | `IMAGE_BLOCK_BYTES` |
+| The image store | 120 GiB | `IMAGE_STORE_BYTES` |
+| Memory, with no swap | 150 GiB | `MEMORY_BYTES` |
+| CPUs | 14 | `CPUS` |
+| Processes and threads | 4,096 | `PIDS` |
+| The container log | 200 MiB | `LOG_BYTES` |
+| Disk reads | 500 MiB/s | `DISK_READ_BYTES_PER_S` |
+| Disk writes | 100 MiB/s | `DISK_WRITE_BYTES_PER_S` |
+| Disk read operations | 2,000/s | `DISK_READ_IOPS` |
+| Disk write operations | 1,000/s | `DISK_WRITE_IOPS` |
+| The send rate | 500 Mbit/s | `SEND_BITS_PER_S` |
+| The send burst | 5 MiB | `SEND_BURST_BYTES` |
+
+- The container has no Linux capabilities and runs with `no-new-privileges`. It has no route out,
+  and a name lookup gets no answer. `docker_limit_flags(disk)` gives the `docker run` flags that set
+  the limits. The send rate is a policer on the host, and a packet above it is dropped.
+- The compressed size is the config blob and every layer, as the registry stores them
+  (`ImageManifest.compressed_size`).
+- The unpacked size counts every entry of every layer: its size rounded up to a whole 4096-byte
+  block, and at least one block. The file count counts every entry of every layer: files,
+  directories, links and deletions. A file that a later layer replaces or deletes counts in each
+  layer that carries it.
+- The image store is an ext4 filesystem. Its metadata and the 5% that ext4 keeps for root leave
+  119.78 GB that any writer can use. It holds the compressed layers beside the unpacked ones, the
+  writable layer of the container and its log, so an image inside both budgets leaves the writable
+  layer about 14.5 GB. A process that runs as root in the container can also use the 6 GiB reserve.
+- An image over a budget fails with `image_too_large`, charged. A container over its memory is
+  killed, and the run fails with `policy_oom`. The other limits slow the server, or stop it with
+  `policy_setup_crash` or `policy_inference_crash`.
 
 ## Test the image before you submit
 
@@ -127,9 +211,11 @@ docker run --rm --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
 In a correct image, the server pins its checkpoint, starts the model process, reads the weights
 from the image, and then fails on the missing GPU. For the openpi recipe that is jax on CPU
 reading the checkpoint under `/opt/positronic/checkpoints`. For the GR00T recipe it is
-`Flash Attention 2 is not available on CPU`. Everything you control is then correct. The run must
-not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it must not hang.
-albumentations prints a `UserWarning` about fetching its version; ignore it.
+`Flash Attention 2 is not available on CPU`. The MolmoAct2 recipe loads the model on the CPU and
+serves. Everything you control is then correct. The run must not print `NameResolutionError`,
+`dns error` or `OfflineModeIsEnabled`, and it must not hang. albumentations prints a `UserWarning`
+about fetching its version; ignore it. MolmoAct2 prints `A new version of the following files was
+downloaded` when `transformers` copies the model's code into its module cache; no download occurs.
 
 On a machine with a GPU, serve it with the network denied and call the keepalive route from inside
 the container with the token:
@@ -153,7 +239,7 @@ docker/read_image_digest.sh <you>/<image>:v1
 [`docker/read_image_digest.sh`](../docker/read_image_digest.sh) prints the `docker-content-digest`
 header, which names the manifest the registry served. Pin that digest. The `config.digest` inside
 the manifest names the config blob, and the registry refuses a reference to it. The size adds the layers and the config blob, which is the count the platform makes against
-the 30 GB budget. The platform sees the same `401` or `404`: the image is not public, or the name
+the 50 GB budget. The platform sees the same `401` or `404`: the image is not public, or the name
 is wrong.
 
 The script reads a public image only. For a private image, log in with the credential you give
@@ -278,7 +364,7 @@ fault is not.
 | reason_code | fault | first thing to check |
 |---|---|---|
 | `image_unpullable` | caller | is the image public, or does your credential read it? Is the digest right? |
-| `image_too_large` | caller | the compressed size, against 30 GB |
+| `image_too_large` | caller | the compressed size, against 50 GB |
 | `policy_setup_crash` | caller | `policy_log`: the server did not come up, or served without the token |
 | `policy_inference_crash` | caller | `policy_log`: the server died after it served |
 | `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against the 40448 MiB slice |

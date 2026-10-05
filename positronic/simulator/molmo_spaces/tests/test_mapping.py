@@ -75,10 +75,10 @@ def test_unpack_wire_pose_rejects_wrong_width():
         mapping.unpack_wire_pose(np.zeros(7))
 
 
-def test_compose_world_delta_adds_translation_and_left_multiplies_rotation():
+def test_compose_reference_delta_adds_translation_and_left_multiplies_rotation():
     cur_rot = np.eye(3)
     delta_rot = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-    pos, rot = mapping.compose_world_delta([1.0, 0.0, 0.0], cur_rot, [0.0, 2.0, 0.0], delta_rot)
+    pos, rot = mapping.compose_reference_delta([1.0, 0.0, 0.0], cur_rot, [0.0, 2.0, 0.0], delta_rot)
     assert np.allclose(pos, [1.0, 2.0, 0.0])
     assert np.allclose(rot, delta_rot)
 

@@ -62,7 +62,7 @@ jobs:
       # env the baseline is generated against, so no `--exact` is needed here.
       run: uv run --locked basedpyright
     - name: Check each workspace member's version and the root's pin on it
-      # The release publishes each member with `skip-existing`, so a change to `client/` or `wire/`
+      # The release publishes each member with `skip-existing`, so a change to a workspace member
       # that reuses its version silently keeps the old wheel and the root then ships depending on
       # it. Judged against the PR base sha for the same reason as the ratchet below.
       env:

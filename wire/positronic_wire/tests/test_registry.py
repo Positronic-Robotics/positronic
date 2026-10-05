@@ -44,7 +44,7 @@ def test_a_name_selects_its_member(name, kind):
 
 
 def test_a_name_no_wire_carries_is_refused_naming_every_wire():
-    with pytest.raises(ValueError, match='websocket, websocket_tls, websocket_unix, grpc, grpc_tls, roboarena'):
+    with pytest.raises(ValueError, match='websocket, websocket_tls, websocket_unix, roboarena, grpc, grpc_tls'):
         registry.client_wire('ws')
 
 

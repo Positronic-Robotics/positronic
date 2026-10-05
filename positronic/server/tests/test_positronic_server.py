@@ -15,9 +15,13 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
-from positronic.dataset.episode import META_PATH, META_UID
+from positronic.dataset.episode import META_PATH, META_UID, EpisodeContainer
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.tests.utils import DummySignal
 from positronic.server import positronic_server
+from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.positronic_server import (
     _PAGE_CONFIG_KEY,
     API_FILE_SUFFIX,
@@ -181,8 +185,8 @@ def rrd_cache(tmp_path, monkeypatch):
     monkeypatch.setitem(app_state, 'cache_dir', str(tmp_path))
     monkeypatch.setitem(app_state, 'root', str(tmp_path))
 
-    def path_under(max_hz: float, max_resolution: int) -> Path:
-        return _get_rrd_cache_path(0, max_hz, max_resolution)
+    def path_under(max_hz: float, max_resolution: int, layout: ReplayLayout | None = None) -> Path:
+        return _get_rrd_cache_path(0, max_hz, max_resolution, layout)
 
     return path_under
 
@@ -197,17 +201,36 @@ def test_the_same_caps_reach_the_same_cached_rrd(rrd_cache):
     assert rrd_cache(30.0, 640) == rrd_cache(30.0, 640)
 
 
+_GRIP_LAYOUT = ReplayLayout(row_shares=(3, 1), top_shares=(1, 3), charts={'Grip': [keys.GRIP]})
+
+
+def test_a_cached_rrd_built_under_another_layout_is_not_served(rrd_cache):
+    reordered = {'Joints': [keys.JOINTS], 'Grip': [keys.GRIP]}
+    assert rrd_cache(30.0, 640) != rrd_cache(30.0, 640, _GRIP_LAYOUT)
+    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, show_unnamed_signals=False))
+    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, row_shares=(3, 2)))
+    assert rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, charts={'Grip': [keys.GRIP], 'Joints': [keys.JOINTS]})) != (
+        rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, charts=reordered))
+    )
+
+
+def test_an_equal_layout_reaches_the_same_cached_rrd(rrd_cache):
+    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) == rrd_cache(
+        30.0, 640, replace(_GRIP_LAYOUT, charts={'Grip': [keys.GRIP]})
+    )
+
+
 def test_a_uid_carrying_a_separator_stays_in_the_cache_directory(rrd_cache, monkeypatch):
     inside = rrd_cache(30.0, 640).parent
     monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset('../../etc/ep-uid'))
 
-    assert _get_rrd_cache_path(0, 30.0, 640).parent == inside
+    assert _get_rrd_cache_path(0, 30.0, 640, None).parent == inside
 
 
 def test_two_uids_that_differ_reach_different_cached_rrds(rrd_cache, monkeypatch):
     def path_for(uid: str) -> Path:
         monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset(uid))
-        return _get_rrd_cache_path(0, 30.0, 640)
+        return _get_rrd_cache_path(0, 30.0, 640, None)
 
     assert path_for('camera/left') != path_for('camera_left')
     assert path_for('a%2Fb') != path_for('a/b')
@@ -230,7 +253,7 @@ def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch)
     monkeypatch.setitem(app_state, 'max_hz', 30.0)
     monkeypatch.setitem(app_state, 'max_resolution', 640)
 
-    def _dies_partway(ds, episode_id, *, max_hz, max_resolution):
+    def _dies_partway(ds, episode_id, *, max_hz, max_resolution, layout):
         yield b'half an episode'
         raise RuntimeError('encoder died')
 
@@ -495,6 +518,7 @@ def test_reconfiguring_the_tables_drops_a_cached_table_response(grouped):
             home_page=None,
             max_resolution=64,
             max_hz=0,
+            layout=None,
         )
         after = grouped.get('/api/groups/by_task').json()
 
@@ -658,7 +682,7 @@ class _Statics:
     def __getitem__(self, index: int) -> SimpleNamespace:
         if index >= len(self):
             raise IndexError(index)
-        return SimpleNamespace(static=self._statics[index], meta={}, duration_ns=0)
+        return SimpleNamespace(static=self._statics[index], meta={}, signals={})
 
 
 ASSISTED = 'assisted'
@@ -732,6 +756,7 @@ def _configure(ep_table_cfg, group_tables):
         home_page=None,
         max_resolution=64,
         max_hz=0,
+        layout=None,
     )
 
 
@@ -807,6 +832,19 @@ def flat_with_hidden(monkeypatch):
     monkeypatch.setitem(app_state, 'episode_table_cfg', ep_table_cfg)
     monkeypatch.setattr(positronic_server, '_api_cache', {})
     return TestClient(app)
+
+
+@pytest.mark.parametrize('axis', [RECEIVED_WORLD, RECORDED_TIME])
+def test_episode_table_handles_disjoint_timelines(flat_with_hidden, monkeypatch, axis):
+    signals = {
+        'device_value': DummySignal([100, 200], [1, 2], timelines=('device',)),
+        'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(axis,)),
+    }
+    monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    response = flat_with_hidden.get('/api/episodes')
+    assert response.status_code == 200
+    assert response.json()['episodes'] == [[0, [2.0]]]
 
 
 def test_the_flat_table_carries_a_hidden_column_value_to_the_page(flat_with_hidden):

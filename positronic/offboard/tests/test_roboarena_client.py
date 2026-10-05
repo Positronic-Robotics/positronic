@@ -3,13 +3,13 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from positronic_model_server.serialization import deserialize, serialize
 from positronic_wire import roboarena as roboarena_wire
 from positronic_wire import wire
 from websockets.exceptions import ConnectionClosedError
 
 from positronic.offboard import roboarena
 from positronic.offboard.client import ConnectRetries
-from positronic.utils.serialization import deserialize, serialize
 
 
 def _client(connection) -> roboarena.RoboarenaClient:

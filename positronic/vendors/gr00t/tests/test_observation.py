@@ -8,7 +8,9 @@ from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.time import Time
 from positronic.drivers.roboarm import models
 from positronic.policy.codec import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
 from positronic.vendors import gr00t
@@ -55,7 +57,7 @@ def test_training_episode_materializes_without_requiring_a_recorded_task(observa
     if task is not None:
         fields[keys.TASK] = task
     training = droid().training_encoder(EpisodeContainer(fields))
-    frame = training.time[np.array([0], dtype=np.int64)]
+    frame = training.time[[Time(**{RECORDED_TIME: 0})]]
     assert frame[keys.TASK] == (task or '')
 
 

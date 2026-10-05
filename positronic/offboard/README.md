@@ -12,7 +12,9 @@ processors and codecs, with an optional codec around the server call.
 The protocol is a sequence of msgpack frames, and two wires carry them. Both carry the same frames in
 the same order. The client side of each wire, and the facts both ends share, ship as the
 `positronic-wire` distribution ([wire/README.md](../../wire/README.md)); this package holds the
-server side.
+server side. Shared message fields, pipeline descriptions and neutral value serialization live in
+[`positronic-model-server`](../../model_server/README.md). Robot-command encoding and protocol
+v1/v2 support remain in `positronic.offboard.protocol`.
 
 | Wire | `--policy.wire` | Where it answers |
 |---|---|---|
@@ -339,7 +341,7 @@ from positronic.offboard.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.codec import RestrictImageSize
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 
 pipeline = PolicyDeployment(
     local=Sequential(
@@ -412,6 +414,9 @@ action = session.infer(observation)
 cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
 answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
 exception of the WebSocket or gRPC library.
+
+A session recovers a connection that drops before the server's first answer. A later drop raises
+`wire.PeerDisconnected`.
 
 ## Vendor Implementations
 

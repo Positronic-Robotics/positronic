@@ -1,5 +1,6 @@
 import io
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,11 +12,15 @@ import rerun.blueprint as rrb
 import rerun.recording as rr_recording
 
 from positronic import keys
+from positronic.dataset import Time
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
+from positronic.dataset.signal import RECORDED_TIME
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
+    ReplayLayout,
     _build_blueprint,
     _collect_signal_groups,
     _decimation_indices,
@@ -30,8 +35,8 @@ from positronic.server.dataset_utils import (
 def _episode(ep_dir, widths: dict[str, int], static: dict[str, Any] | None = None) -> DiskEpisode:
     with DiskEpisodeWriter(ep_dir) as writer:
         for name, width in widths.items():
-            writer.append(name, np.zeros(width, dtype=np.float32), 1000)
-            writer.append(name, np.ones(width, dtype=np.float32), 2000)
+            writer.append(name, np.zeros(width, dtype=np.float32), Time(**{RECORDED_TIME: 1000}))
+            writer.append(name, np.ones(width, dtype=np.float32), Time(**{RECORDED_TIME: 2000}))
         for name, value in (static or {}).items():
             writer.set_static(name, value)
     return DiskEpisode(ep_dir)
@@ -109,7 +114,7 @@ def _text_episode(ep_dir, texts: dict[str, list[Any]]) -> DiskEpisode:
     with DiskEpisodeWriter(ep_dir) as writer:
         for name, values in texts.items():
             for i, value in enumerate(values):
-                writer.append(name, value, 1_000_000_000 * (i + 1))
+                writer.append(name, value, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
     return DiskEpisode(ep_dir)
 
 
@@ -143,7 +148,7 @@ def test_a_text_signal_reaches_the_recording_as_a_plot_and_a_text_log(tmp_path):
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as dataset_writer, dataset_writer.new_episode() as writer:
         for i, state in enumerate(_STATES):
-            writer.append('progress.state', state, 1_000_000_000 * (i + 1))
+            writer.append('progress.state', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
     rrd = tmp_path / 'ep.rrd'
     rrd.write_bytes(b''.join(stream_episode_rrd(LocalDataset(root), 0)))
 
@@ -190,9 +195,9 @@ def test_a_text_log_entry_carries_its_time_from_the_start_of_the_recording(tmp_p
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
     machine_clock = 1_011_234_567_890_123  # nanoseconds since boot, far from the epoch
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
-        writer.append('robot.q', np.zeros(2), machine_clock)
-        writer.append('progress.state', 'floating', machine_clock + 1_503_456_789)
-        writer.append('progress.state', 'reaching', machine_clock + 62_250_000_000)
+        writer.append('robot.q', np.zeros(2), Time(**{RECORDED_TIME: machine_clock}))
+        writer.append('progress.state', 'floating', Time(**{RECORDED_TIME: machine_clock + 1_503_456_789}))
+        writer.append('progress.state', 'reaching', Time(**{RECORDED_TIME: machine_clock + 62_250_000_000}))
     ep = DiskEpisode(tmp_path / 'ep')
 
     list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
@@ -209,9 +214,9 @@ def test_a_signal_the_recording_leaves_out_does_not_move_the_text_log_origin(tmp
     monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
-        writer.append('words', np.array(['a', 'b']), 1_000_000_000)
-        writer.append('robot.q', np.zeros(2), 3_000_000_000)
-        writer.append('progress.state', 'floating', 4_000_000_000)
+        writer.append('words', np.array(['a', 'b']), Time(**{RECORDED_TIME: 1_000_000_000}))
+        writer.append('robot.q', np.zeros(2), Time(**{RECORDED_TIME: 3_000_000_000}))
+        writer.append('progress.state', 'floating', Time(**{RECORDED_TIME: 4_000_000_000}))
     ep = DiskEpisode(tmp_path / 'ep')
 
     list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
@@ -265,15 +270,116 @@ def _tabs(container: Any) -> list[rrb.Tabs]:
 def test_a_tab_group_opens_on_its_text_signal(tmp_path):
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for i, state in enumerate(_STATES):
-            writer.append('progress.delivered', float(i), 1_000_000_000 * (i + 1))
-            writer.append('progress.state', state, 1_000_000_000 * (i + 1))
-            writer.append('robot.q', np.zeros(2), 1_000_000_000 * (i + 1))
-            writer.append('robot.dq', np.zeros(2), 1_000_000_000 * (i + 1))
+            writer.append('progress.delivered', float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append('progress.state', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append('robot.q', np.zeros(2), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append('robot.dq', np.zeros(2), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
     ep = DiskEpisode(tmp_path / 'ep')
 
-    tabs = {tab.name: tab.active_tab for tab in _tabs(_build_blueprint(_collect_signal_groups(ep), ep).root_container)}
+    blueprint = _build_blueprint(_collect_signal_groups(ep), ep, None)
+    tabs = {tab.name: tab.active_tab for tab in _tabs(blueprint.root_container)}
 
     assert tabs == {'progress': 1, 'robot': None}
+
+
+def _layout(charts: dict[str, list[str] | dict[str, str]], show_unnamed_signals: bool = True) -> ReplayLayout:
+    return ReplayLayout(row_shares=(3, 1), top_shares=(1, 3), charts=charts, show_unnamed_signals=show_unnamed_signals)
+
+
+def _root(signals: dataset_utils.EpisodeSignals, ep: DiskEpisode, layout: ReplayLayout) -> Any:
+    return _build_blueprint(signals, ep, layout).root_container
+
+
+def _bottom_row(ep: DiskEpisode, layout: ReplayLayout) -> list[Any]:
+    return _root(_collect_signal_groups(ep), ep, layout).contents[-1].contents
+
+
+_GRIP: dict[str, list[str] | dict[str, str]] = {'Grip': {'Target': keys.TARGET_GRIP, 'Current': keys.GRIP}}
+
+
+def test_a_layout_puts_the_3d_view_left_of_the_cameras_at_its_shares_over_the_charts(tmp_path):
+    ep = _episode(tmp_path / 'ep', {keys.EE_POSE: 7, keys.GRIP: 1}, {eval_keys.POSE_SIGNALS: [keys.EE_POSE]})
+    signals = replace(_collect_signal_groups(ep), videos=['camera'], camera_aspects={'camera': 16 / 9})
+
+    root = _root(signals, ep, _layout(_GRIP))
+
+    top, bottom = root.contents
+    assert list(root.row_shares) == [3, 1]
+    assert [type(view) for view in top.contents] == [rrb.Spatial3DView, rrb.Grid]
+    assert list(top.column_shares) == [1, 3]
+    assert isinstance(bottom, rrb.Horizontal)
+
+
+def test_a_top_view_with_no_signal_to_show_is_left_out(tmp_path):
+    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1})
+
+    assert [type(row) for row in _root(_collect_signal_groups(ep), ep, _layout(_GRIP)).contents] == [rrb.Horizontal]
+
+
+def test_a_group_shows_its_charts_as_tabs_under_its_name_where_it_first_appears(tmp_path):
+    ep = _episode(tmp_path / 'ep', {keys.JOINTS: 7, keys.JOINT_VEL: 7, keys.GRIP: 1, keys.TARGET_GRIP: 1})
+    charts = {'Robot State/Joints': [keys.JOINTS], **_GRIP, 'Robot State/Joints Vel': [keys.JOINT_VEL]}
+
+    group, grip = _bottom_row(ep, _layout(charts, show_unnamed_signals=False))
+
+    (named,) = group.contents
+    assert named.name == 'Robot State'
+    assert [chart.name for chart in named.contents] == ['Joints', 'Joints Vel']
+    assert isinstance(grip, rrb.TimeSeriesView)
+    assert grip.name == 'Grip'
+
+
+def _line_names(view: Any) -> dict[str, list[str]]:
+    return {str(path): lines.names.as_arrow_array().to_pylist() for path, lines in view.visualizer_overrides.items()}
+
+
+def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):
+    static = {eval_keys.JOINT_SIGNALS: [keys.JOINTS], roboarm_keys.JOINT_NAMES: ['j1', 'j2']}
+    widths = {keys.GRIP: 1, keys.TARGET_GRIP: 1, keys.JOINTS: 2, keys.TARGET_JOINTS: 2}
+    ep = _episode(tmp_path / 'ep', widths, static)
+    charts = {
+        'Labelled': {'Current': keys.GRIP, 'State': keys.JOINTS},
+        'Listed': [keys.TARGET_GRIP, keys.TARGET_JOINTS],
+    }
+
+    labelled, listed = _bottom_row(ep, _layout(charts, show_unnamed_signals=False))
+
+    assert _line_names(labelled) == {
+        f'/signals/{keys.GRIP}': ['Current'],
+        f'/signals/{keys.JOINTS}/0': ['State j1'],
+        f'/signals/{keys.JOINTS}/1': ['State j2'],
+    }
+    assert _line_names(listed) == {f'/signals/{keys.TARGET_GRIP}': [keys.TARGET_GRIP]}
+
+
+def test_a_chart_plots_the_signals_the_episode_records_and_a_chart_with_none_is_left_out(tmp_path):
+    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1})
+    charts = {'Commands/Joints': [keys.TARGET_JOINTS], **_GRIP}
+
+    (view,) = _bottom_row(ep, _layout(charts, show_unnamed_signals=False))
+
+    assert view.contents == [f'/signals/{keys.GRIP}/**']
+
+
+def test_the_signals_no_chart_plots_follow_the_charts_by_prefix(tmp_path):
+    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.TARGET_GRIP: 1, 'progress.delivered': 1, 'progress.placed': 1})
+
+    assert [view.name for view in _bottom_row(ep, _layout(_GRIP))] == ['Grip', 'progress']
+
+
+def test_with_unnamed_signals_off_only_the_charts_show(tmp_path):
+    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.TARGET_GRIP: 1, 'progress.delivered': 1, 'wide': 33})
+
+    assert [view.name for view in _bottom_row(ep, _layout(_GRIP, show_unnamed_signals=False))] == ['Grip']
+
+
+def test_a_text_signal_a_chart_names_still_shows_as_without_a_layout(tmp_path):
+    ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
+
+    views = _bottom_row(ep, _layout({'Progress/State': ['progress.state']}))
+
+    assert [type(view) for view in views] == [rrb.TimeSeriesView, rrb.TextLogView]
+    assert views[0].origin == '/signals/progress.state'
 
 
 def test_a_text_signal_holds_its_last_value_to_the_last_sample(tmp_path, monkeypatch):
@@ -346,8 +452,11 @@ def test_a_signal_below_the_cap_keeps_every_sample():
 
 
 class _RawFrameSignal:
+    timelines = (RECORDED_TIME,)
+
     def __init__(self, frames: list[np.ndarray], times: list[int]):
-        self._frames, self._times = frames, times
+        self._frames = frames
+        self._times = [Time(**{RECORDED_TIME: ts}) for ts in times]
 
     def __getitem__(self, index):
         return self._frames[index], self._times[index]
@@ -355,8 +464,8 @@ class _RawFrameSignal:
     def __iter__(self):
         return iter(zip(self._frames, self._times, strict=True))
 
-    def keys(self):
-        return np.asarray(self._times, dtype=np.int64)
+    def timestamps(self, timelines):
+        return [ts[timelines] for ts in self._times]
 
 
 def test_every_encoded_frame_keeps_its_own_episode_time(monkeypatch):

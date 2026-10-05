@@ -70,6 +70,7 @@ positronic-franka = false
 [manifest]
 members = [
     "positronic",
+    "positronic-model-server",
     "positronic-platform-client",
     "positronic-wire",
 ]
@@ -5169,8 +5170,9 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "plotly" },
     { name = "pos3" },
+    { name = "positronic-model-server" },
     { name = "positronic-platform-client" },
-    { name = "positronic-wire" },
+    { name = "positronic-wire", extra = ["grpc", "websocket"] },
     { name = "psutil" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -5313,8 +5315,9 @@ requires-dist = [
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-google'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
+    { name = "positronic-model-server", editable = "model_server" },
     { name = "positronic-platform-client", editable = "client" },
-    { name = "positronic-wire", editable = "wire" },
+    { name = "positronic-wire", extras = ["websocket", "grpc"], editable = "wire" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
     { name = "psutil" },
     { name = "pyarrow" },
@@ -5382,8 +5385,39 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/16/45/029c72cffe797d8265328405552f3f4d7dae76ee900ca811095200e471f4/positronic_franka-0.7.0.tar.gz", hash = "sha256:b9381ffa52d9fa9c998619bc40bb568733ceb2b7bd86d5c407483ae29ec08c2e", size = 1809759, upload-time = "2026-08-03T22:29:36.532Z" }
 
 [[package]]
+name = "positronic-model-server"
+version = "0.1.0"
+source = { editable = "model_server" }
+dependencies = [
+    { name = "msgpack" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra != 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam') or (extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam')" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra != 'extra-10-positronic-yam'" },
+    { name = "pillow" },
+    { name = "positronic-wire" },
+]
+
+[package.optional-dependencies]
+grpc = [
+    { name = "positronic-wire", extra = ["grpc"] },
+]
+websocket = [
+    { name = "positronic-wire", extra = ["websocket"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "msgpack", specifier = ">=1" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pillow", specifier = ">=10" },
+    { name = "positronic-wire", editable = "wire" },
+    { name = "positronic-wire", extras = ["grpc"], marker = "extra == 'grpc'", editable = "wire" },
+    { name = "positronic-wire", extras = ["websocket"], marker = "extra == 'websocket'", editable = "wire" },
+]
+provides-extras = ["websocket", "grpc"]
+
+[[package]]
 name = "positronic-platform-client"
-version = "0.16.0"
+version = "0.17.0"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
@@ -5400,18 +5434,23 @@ requires-dist = [
 
 [[package]]
 name = "positronic-wire"
-version = "0.10.0"
+version = "0.11.0"
 source = { editable = "wire" }
-dependencies = [
+
+[package.optional-dependencies]
+grpc = [
     { name = "grpcio" },
+]
+websocket = [
     { name = "websockets" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "grpcio" },
-    { name = "websockets", specifier = ">=15.0.1" },
+    { name = "grpcio", marker = "extra == 'grpc'" },
+    { name = "websockets", marker = "extra == 'websocket'", specifier = ">=15.0.1" },
 ]
+provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "prometheus-client"
