@@ -118,6 +118,9 @@ class StationConsole(pimm.ControlSystem):
         self.cameras = pimm.ReceiverDict(self)
         self.run_trial = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
+        # The open episode's answer, and the operator's verdict on it with the time it was given.
+        self._episode: pimm.calls.Answer[dict[str, Any]] | None = None
+        self._verdict: tuple[dict[str, Any], int] | None = None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         station = Station(self._next_task)
@@ -132,7 +135,6 @@ class StationConsole(pimm.ControlSystem):
         server = uvicorn.Server(config)
         server_thread = threading.Thread(target=server.run, daemon=True)
         server_thread.start()
-        episode: pimm.calls.Answer[dict[str, Any]] | None = None
         try:
             while not server.started:
                 _raise_if_stopped(server_thread)
@@ -144,7 +146,7 @@ class StationConsole(pimm.ControlSystem):
                 for name, feed in feeds.items():
                     if (frame := pimm.value_updated(self.cameras[name])) is not None:
                         feed.push(frame.array, clock.now())
-                episode = self._drive_episode(station, actions, episode, clock)
+                self._drive_episode(station, actions, clock)
                 yield limiter.wait()
         finally:
             for feed in feeds.values():
@@ -152,25 +154,28 @@ class StationConsole(pimm.ControlSystem):
             server.should_exit = True
             server_thread.join()
 
-    def _drive_episode(
-        self,
-        station: Station,
-        actions: queue.SimpleQueue[Action],
-        episode: pimm.calls.Answer[dict[str, Any]] | None,
-        clock: pimm.Clock,
-    ) -> pimm.calls.Answer[dict[str, Any]] | None:
-        """Send what the page asked for, in order, and record the episode once the harness answers it."""
+    def _drive_episode(self, station: Station, actions: queue.SimpleQueue[Action], clock: pimm.Clock) -> None:
+        """Send what the page asked for, and record the episode once the harness answers it.
+
+        The verdict goes out again each round until that answer: the harness drops a ``done`` that reaches it
+        before the trial does.
+        """
         while True:
             try:
                 action = actions.get_nowait()
             except queue.Empty:
                 break
             if isinstance(action, Task):
-                episode = self.run_trial(action)
+                self._episode = self.run_trial(action)
             else:
-                self.done.emit(action, clock.now_ns())
-        if episode is None or not episode.done():
-            return episode
+                self._verdict = (action, clock.now_ns())
+        if self._episode is None:
+            return
+        if not self._episode.done():
+            if self._verdict is not None:
+                self.done.emit(*self._verdict)
+            return
+        episode, self._episode, self._verdict = self._episode, None, None
         try:  # rules-allow: swallowed-error — the page shows the episode as an error, and the log says why
             result = episode.result()
         except Exception:
@@ -178,7 +183,6 @@ class StationConsole(pimm.ControlSystem):
             station.close(Outcome.ERROR, clock.now())
         else:
             station.close(outcome_of(result), clock.now())
-        return None
 
     def build_app(
         self,

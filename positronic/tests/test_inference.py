@@ -6,7 +6,7 @@ import signal
 import socket
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
@@ -20,18 +20,18 @@ from websockets.sync.client import connect
 
 import pimm
 from pimm.shared_memory import NumpySMAdapter
-from positronic import keys
+from positronic import keys, wire
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import keyboard
 from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.station import Episode, Outcome, Phase, Verdict
-from positronic.gui.web import EndBody, InstructionBody, Status
+from positronic.gui.web import EndBody, InstructionBody, StationConsole, Status
 from positronic.inference import KeyboardOperator, TrialForwarder, real, web
 from positronic.policy import Policy
 from positronic.policy.base import Step
-from positronic.policy.harness import Rollout
+from positronic.policy.harness import Harness, Rollout
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 
 
@@ -341,3 +341,98 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     assert second[eval_keys.TRIAL_INDEX] == 1
     assert second[eval_keys.DISCARDED] is True
     assert eval_keys.SUCCESS not in second
+
+
+class _PageOperator(pimm.ControlSystem):
+    """Presses the station page's buttons over HTTP from inside the world, as ``script`` says. Its return ends
+    the world."""
+
+    def __init__(self, script: Callable[[pimm.Clock], Iterator[pimm.Command]]):
+        self._script = script
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        yield from self._script(clock)
+
+
+def _wait(condition: Callable[[], Any], clock: pimm.Clock, seconds: float = 5.0) -> Iterator[pimm.Command]:
+    """Yield until ``condition`` holds or ``seconds`` pass on ``clock``, and return whether it held."""
+    deadline = clock.now() + seconds
+    while not condition():
+        if clock.now() > deadline:
+            return False
+        yield pimm.Sleep(0.02)
+    return True
+
+
+def _run_attended(marks: Path, script: Callable[[str, pimm.Clock], Iterator[pimm.Command]]) -> None:
+    """The world ``web`` composes, in one process: the station console, the forwarder and the harness, with
+    ``script`` pressing the page's buttons."""
+    port = _free_port()
+    console = StationConsole(_trial('pick up the cube'), policy='stub', host='127.0.0.1', port=port)
+    forwarder = TrialForwarder(partial(Rollout, policy=_MarkingPolicy(marks), output_path=None))
+    embodiment = _embodiment()
+    harness = Harness(embodiment)
+    operator = _PageOperator(partial(script, f'http://127.0.0.1:{port}'))
+    with pimm.World() as world:
+        wire.wire_embodiment(world, harness, embodiment, record=False, done=console.done)
+        world.connect(console.run_trial, forwarder.run_trial)
+        world.connect(forwarder.perform_task, harness.perform_task)
+        world.run([operator, console, forwarder, harness, *embodiment.control_systems])
+
+
+def _post(base: str, path: str, body: EndBody | None = None) -> int:
+    """The HTTP status of the press. A press the console refuses must not raise inside the world."""
+    return httpx.post(f'{base}{path}', json=None if body is None else body.model_dump(mode='json')).status_code
+
+
+def _phase(base: str) -> Phase | None:
+    status = _status(base)
+    return status.run.phase if status else None
+
+
+@pytest.mark.timeout(60.0)
+def test_a_verdict_given_before_the_harness_takes_the_trial_still_ends_it(tmp_path):
+    """Start and Finish reach the console in one round, so the verdict leaves before the trial reaches the
+    harness, which drops a done signal while it is idle."""
+    presses: list[int] = []
+    statuses: list[Status | None] = []
+
+    def script(base: str, clock: pimm.Clock):
+        yield from _wait(lambda: _status(base) is not None, clock)
+        presses.append(_post(base, '/episode/start'))
+        presses.append(_post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
+        yield from _wait(lambda: _phase(base) is Phase.READY, clock)
+        statuses.append(_status(base))
+
+    _run_attended(tmp_path, script)
+
+    assert presses == [200, 200]
+    [status] = statuses
+    assert status is not None
+    assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
+    phases: list[Phase | None] = []
+    statuses: list[Status | None] = []
+
+    verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
+
+    def script(base: str, clock: pimm.Clock):
+        yield from _wait(lambda: _status(base) is not None, clock)
+        for number, verdict in verdicts:
+            _post(base, '/episode/start')
+            yield from _wait((tmp_path / f'episode-{number}').exists, clock)
+            yield pimm.Sleep(0.5)
+            phases.append(_phase(base))
+            _post(base, '/episode/end', EndBody(verdict=verdict))
+            yield from _wait(lambda: _phase(base) is Phase.READY, clock)
+        statuses.append(_status(base))
+
+    _run_attended(tmp_path, script)
+
+    assert phases == [Phase.RUNNING, Phase.RUNNING]
+    [status] = statuses
+    assert status is not None
+    assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
