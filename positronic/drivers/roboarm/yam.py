@@ -14,7 +14,6 @@ import math
 from collections import deque
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
-from enum import Enum, auto
 from typing import Any
 
 import mujoco as mj
@@ -24,7 +23,7 @@ import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, grip_setpoint, log_failure
+from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
@@ -280,16 +279,11 @@ class _Arm(DriverRun[command.CommandType]):
         self.command_target((1 - fraction) * start + fraction * target, grip)
         self.publish(obs, RobotStatus.BUSY)
 
-    class _Rest(Enum):
-        """Where the chain rests after a settle pass."""
-
-        ON_GOAL = auto()
-        SHORT_OF_GOAL = auto()
-
     def _come_to_rest(
         self, reference: np.ndarray, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool
-    ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], _Rest] | None]:
-        """Ramp to ``reference``, wait until the chain is still, and return the reading and where it rests.
+    ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], MoveStatus] | None]:
+        """Ramp to ``reference``, wait until the chain is still, and return the reading and how the pass ended:
+        ARRIVED on ``goal``, or GAVE_UP still and short of it.
 
         The chain is still when each joint's position spans at most ``still_position_rad`` over ``still_time_s``.
         The velocity readings are not used: a real chain reports speed spikes at rest. Return None on a stop.
@@ -317,9 +311,9 @@ class _Arm(DriverRun[command.CommandType]):
                     window.popleft()
                 if self._still(window, elapsed, tuning):
                     if all(on_goal for _, _, on_goal in window):
-                        return obs, self._Rest.ON_GOAL
+                        return obs, MoveStatus.ARRIVED
                     if not window[-1][2]:
-                        return obs, self._Rest.SHORT_OF_GOAL
+                        return obs, MoveStatus.GAVE_UP
 
             self._ramp(start, reference, grip, elapsed / travel_s, obs)
             yield self.limiter.wait()
@@ -346,8 +340,8 @@ class _Arm(DriverRun[command.CommandType]):
                 rest = yield from self._come_to_rest(reference, goal, grip, tuning, interrupt_on_stop=interrupt_on_stop)
                 if rest is None:
                     return None
-                obs, rests = rest
-                if rests is self._Rest.ON_GOAL:
+                obs, ended = rest
+                if ended is MoveStatus.ARRIVED:
                     self.command_target(reference, grip)
                     self.moves.errored = False
                     return reference
@@ -368,16 +362,11 @@ class _Arm(DriverRun[command.CommandType]):
             self.moves.errored = True
             raise
 
-    class _Park(Enum):
-        """How a park ended."""
-
-        PARKED = auto()
-        HELD_WHERE_IT_STOPPED = auto()
-
     def park(
         self, grip: float, *, interrupt_on_stop: bool = True
-    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float, _Park]]:
-        """Settle onto the parking pose; return the joints and grip to hold, and how the park ended."""
+    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float, MoveStatus]]:
+        """Settle onto the parking pose; return the joints and grip to hold, and how the park ended: ARRIVED
+        parked, or GAVE_UP held where it stopped."""
         logger.info('Moving the arm to the parking pose')
         try:
             reference = yield from self._settle_onto(
@@ -386,12 +375,12 @@ class _Arm(DriverRun[command.CommandType]):
             if reference is not None:
                 logger.info('Arm parked')
                 self._report_parked()
-                return reference, grip, self._Park.PARKED
+                return reference, grip, MoveStatus.ARRIVED
         # rules-allow: swallowed-error — an arm that will not park reads ERROR; the run goes on
         except Exception as exc:
             self.moves.errored = True
             logger.error(f'The arm did not reach the parking pose: {exc}')
-        return *self.hold_where_it_stopped(), self._Park.HELD_WHERE_IT_STOPPED
+        return *self.hold_where_it_stopped(), MoveStatus.GAVE_UP
 
     def _report_parked(self) -> None:
         """Publish the parked state; a failure is logged, because the park is verified already."""
@@ -406,7 +395,7 @@ class _Arm(DriverRun[command.CommandType]):
         hold_target = None
         try:
             joints, grip, ended = yield from self.park(self.read_grip(self.observations()), interrupt_on_stop=False)
-            if ended is self._Park.PARKED:
+            if ended is MoveStatus.ARRIVED:
                 return
             hold_target = joints, grip
         # rules-allow: swallowed-error — a failure before a verified park keeps the torque on
@@ -523,7 +512,7 @@ class _Serving:
     q_target: np.ndarray
     grip_target: float
     idle_since: float | None = None
-    parking: Generator[pimm.Command, None, tuple[np.ndarray, float, _Arm._Park]] | None = None
+    parking: Generator[pimm.Command, None, tuple[np.ndarray, float, MoveStatus]] | None = None
 
 
 class Robot(pimm.ControlSystem):
