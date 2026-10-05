@@ -17,6 +17,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, Impedance, Joi
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import codec as codec_module
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
 from positronic.policy.base import Policy, Step
@@ -307,7 +308,8 @@ class SlowModel:
         self.prefixes: list[list] = []
         self._pending: Future | None = None
 
-    def submit(self, function, obs, prefix):
+    def submit(self, function, obs):
+        prefix = obs[policy_keys.ACTION_PREFIX]
         self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
         self.prefixes.append(list(prefix))
         self._pending = Future()
@@ -515,6 +517,11 @@ def test_prefix_durations_refuse_a_negative_cap(duration):
 )
 def test_prefix_durations_read_the_last_delays_and_cap_them(prefix_duration, expected):
     assert prefix_duration([0.9, 0.1, 0.3]) == pytest.approx(expected)
+
+
+def test_rtc_with_a_free_prefix_duration_has_no_wire_spec():
+    with pytest.raises(ValueError, match='DelayEstimate'):
+        RTCSchedule(fps=10, call_after_sec=0.3, prefix_duration=lambda delays: 0.1).to_spec()
 
 
 IMPEDANCE = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
@@ -740,6 +747,8 @@ class TestEncodeImages:
         ChunkedSchedule(fps=10, record_stats=False),
         ObservationCodec(state={'state': {'grip': 1}}, images={}) & AbsolutePositionAction('pose', 'grip'),
         FlipGrip() | (BinarizeGripInference() & AbsoluteJointsAction('joints', 'grip')),
+        Sequential(PauseOnUnavailable(), RTCSchedule(fps=15, call_after_sec=0.3, prefix_duration=mean_delay())),
+        RTCSchedule(10, 0.0, max_delay(last=2, max_sec=0.2), PrefixSampling.INTERPOLATE),
     ],
 )
 def test_stack_and_codec_specs_round_trip(definition):
@@ -773,6 +782,7 @@ def test_wire_names_match_the_registered_components():
     instances = {
         'chunked_schedule': ChunkedSchedule(fps=10),
         'encode_images': EncodeImages([['camera']]),
+        'rtc_schedule': RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=mean_delay()),
         'stop_on_fault': PauseOnUnavailable(),
         'temporal_stack': TemporalStack(('v',), (0.0,)),
         'binarize_grip_training': BinarizeGripTraining(('grip',)),

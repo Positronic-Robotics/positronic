@@ -20,7 +20,7 @@ from positronic.policy.codec import (
     RestrictImageSize,
 )
 from positronic.policy.observation import ObservationCodec
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, RTCSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
@@ -31,6 +31,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     for component in (
         ChunkedSchedule,
         EncodeImages,
+        RTCSchedule,
         PauseOnUnavailable,
         TemporalStack,
         BinarizeGripTraining,
