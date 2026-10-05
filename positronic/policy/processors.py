@@ -396,20 +396,18 @@ class RTCSchedule(Policy):
         self,
         fps: float,
         call_after_sec: float,
-        prefix_duration: PrefixDuration | Mapping[str, Any],
-        prefix_sampling: PrefixSampling | str = PrefixSampling.PREVIOUS,
+        prefix_duration: PrefixDuration,
+        prefix_sampling: PrefixSampling = PrefixSampling.PREVIOUS,
     ) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
         if not isfinite(call_after_sec) or call_after_sec < 0:
             raise ValueError('call_after_sec must be finite and not negative')
-        if isinstance(prefix_duration, Mapping):  # a wire spec carries a `DelayEstimate` as its spec
-            prefix_duration = DelayEstimate.from_spec(prefix_duration)
         self._fps = fps
         self._call_after_sec = call_after_sec
         self._call_after_ns = round(call_after_sec * 1e9)
         self._prefix_duration = prefix_duration
-        self._prefix_sampling = PrefixSampling(prefix_sampling)
+        self._prefix_sampling = prefix_sampling
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         delays: list[float] = []
@@ -463,6 +461,16 @@ class RTCSchedule(Policy):
             self.PREFIX_SAMPLING_ARG: self._prefix_sampling.value,
         }
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+
+    @classmethod
+    def from_spec_args(
+        cls,
+        fps: float,
+        call_after_sec: float,
+        prefix_duration: Mapping[str, Any],
+        prefix_sampling: str = PrefixSampling.PREVIOUS.value,
+    ) -> 'RTCSchedule':
+        return cls(fps, call_after_sec, DelayEstimate.from_spec(prefix_duration), PrefixSampling(prefix_sampling))
 
 
 class _StackedObs(Mapping[str, Any]):

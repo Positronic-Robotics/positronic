@@ -27,24 +27,26 @@ from positronic.utils.versions import Version, resolve_version
 ComponentFactory = Callable[..., Processor | Codec]
 
 COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
-    component.WIRE_NAME: {component.WIRE_VERSION: Version(component)}
-    for component in (
-        ChunkedSchedule,
-        EncodeImages,
-        RTCSchedule,
-        PauseOnUnavailable,
-        TemporalStack,
-        BinarizeGripTraining,
-        BinarizeGripInference,
-        FlipGrip,
-        Metadata,
-        RestrictImageSize,
-        ChangeEEFrame,
-        ObservationCodec,
-        AbsolutePositionAction,
-        AbsoluteJointsAction,
-        JointDeltaAction,
-    )
+    **{
+        component.WIRE_NAME: {component.WIRE_VERSION: Version(component)}
+        for component in (
+            ChunkedSchedule,
+            EncodeImages,
+            PauseOnUnavailable,
+            TemporalStack,
+            BinarizeGripTraining,
+            BinarizeGripInference,
+            FlipGrip,
+            Metadata,
+            RestrictImageSize,
+            ChangeEEFrame,
+            ObservationCodec,
+            AbsolutePositionAction,
+            AbsoluteJointsAction,
+            JointDeltaAction,
+        )
+    },
+    RTCSchedule.WIRE_NAME: {RTCSchedule.WIRE_VERSION: Version(RTCSchedule.from_spec_args)},
 }
 
 
