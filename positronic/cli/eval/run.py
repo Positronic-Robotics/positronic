@@ -302,6 +302,9 @@ def run(
     org: str | None = None,
     registry_username: str | None = None,
     registry_password_file: str | None = None,
+    sample_count: int | None = None,
+    sample_percent: int | None = None,
+    sample_seed: int | None = None,
 ) -> SubmissionCreateResponse | None:
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
@@ -316,7 +319,9 @@ def run(
     with ``--policy-image`` it makes a private run instead of a `nebius_competition` one. A filed run —
     the platform's and the rig's — answers a submission id, which ``positronic eval status`` reads; a
     run here answers the dataset it wrote. ``--registry-username`` and ``--registry-password-file``
-    open a registry that serves ``--policy-image`` to no anonymous caller.
+    open a registry that serves ``--policy-image`` to no anonymous caller. ``--sample-count`` or
+    ``--sample-percent`` runs a random subset of the eval's trials on the platform, and
+    ``--sample-seed`` picks the draw: the same seed draws the same trials.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
@@ -333,7 +338,13 @@ def run(
         '--charge-inference-time': None if charge_inference_time else False,
         '--timing': timing or None,
     }
-    platform_only = {'--registry-username': registry_username, '--registry-password-file': registry_password_file}
+    platform_only = {
+        '--registry-username': registry_username,
+        '--registry-password-file': registry_password_file,
+        '--sample-count': sample_count,
+        '--sample-percent': sample_percent,
+        '--sample-seed': sample_seed,
+    }
     source = plan_source(eval, from_file)
 
     if isinstance(eval, Eval) or policy is not None:
@@ -376,6 +387,9 @@ def run(
             org=org,
             registry_username=registry_username,
             registry_password_file=registry_password_file,
+            sample_count=sample_count,
+            sample_percent=sample_percent,
+            sample_seed=sample_seed,
         )
 
     if source is not None:

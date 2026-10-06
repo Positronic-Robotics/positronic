@@ -404,6 +404,27 @@ class PrivateEval(BaseModel):
 PlanRequestType = Annotated[NebiusCompetition | PrivateEval, Field(discriminator='type')]
 
 
+class Sample(BaseModel):
+    """A random subset of the trials of the eval a plan names.
+
+    `count` is the number of trials the run takes, and `percent` the share of the eval's trials,
+    rounded up. A sample states one of the two. The same seed draws the same trials, and the run
+    takes them in the eval's own order. A sampled run ranks on no board.
+    """
+
+    model_config = INPUT_MODEL_CONFIG
+
+    count: int | None = Field(default=None, ge=1)
+    percent: int | None = Field(default=None, ge=1, le=100)
+    seed: int = Field(default=0, ge=0)
+
+    @model_validator(mode='after')
+    def _states_one_size(self) -> Self:
+        if (self.count is None) == (self.percent is None):
+            raise ValueError('a sample states its size in `count` or in `percent`: exactly one of the two')
+        return self
+
+
 class TaskNode(Cascade, Generic[Credential]):
     """One task of a plan, by its catalogue id, and what this plan changes for it.
 
@@ -453,6 +474,8 @@ class EvalPlan(Cascade, Generic[Credential]):
     max_cap_per_episode_sec: int | None = Field(default=None, ge=1)
     # A present key must be non-empty: an empty string is a client bug.
     transaction_key: TransactionKey | None = Field(default=None, min_length=1)
+    # The trials of the named eval this run takes. None runs every trial.
+    sample: Sample | None = None
 
     @property
     def names_an_eval(self) -> bool:
@@ -477,6 +500,14 @@ class EvalPlan(Cascade, Generic[Credential]):
             raise ValueError(
                 f'the plan names the eval {str(self.eval)!r} and the {slug_of(self.rig_shape)} rig shape: an eval runs '
                 'on the embodiment it pins, and `rig_shape` names the embodiment of a plan that states its tasks'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _a_sample_draws_from_a_named_eval(self) -> Self:
+        if self.sample is not None and not self.names_an_eval:
+            raise ValueError(
+                'the plan states its tasks and a sample: a sample draws from the trials of the eval a plan names'
             )
         return self
 
@@ -613,13 +644,15 @@ def plan_of_image(
     transaction_key: TransactionKey | None = None,
     credential: RegistryCredential | None = None,
     org: OrgSlug | None = None,
+    sample: Sample | None = None,
 ) -> EvalPlan:
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
     The endpoint names the websocket wire: the platform opens every image session over the websocket.
     The catalogue expands the eval name into tasks and the count each takes, so such a plan states
     neither. `credential` opens the registry when `image` is not public. The plan is a
-    `nebius_competition` run, or a private run for `org` where one is given.
+    `nebius_competition` run, or a private run for `org` where one is given. `sample` runs a random
+    subset of the eval's trials.
     """
     return EvalPlan(
         request_type=NebiusCompetition() if org is None else PrivateEval(org=org),
@@ -635,4 +668,5 @@ def plan_of_image(
         ],
         alias=alias,
         transaction_key=transaction_key,
+        sample=sample,
     )
