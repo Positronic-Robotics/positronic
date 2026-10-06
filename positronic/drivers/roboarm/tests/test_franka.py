@@ -1608,7 +1608,7 @@ def test_a_move_waiting_on_an_erroring_arm_is_refused_after_the_grace(desk, worl
 
     with pytest.raises(franka.MoveRefused) as refused:
         answer.result()
-    assert refused.value.reasons == '[cartesian_reflex]'
+    assert refused.value.error_message == '[cartesian_reflex]'
     assert refused.value.moved_rad == 0.0  # nothing commanded the arm, so it did not move
 
 
