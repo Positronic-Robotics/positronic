@@ -48,6 +48,9 @@ dependencies = [
     # exactly for the same reason the client is (wire/README.md).
     "positronic-wire[websocket,grpc]==0.12.0",
     "positronic-model-server==0.1.1",
+    # The words an attended rollout records, which the rollouts viewer colours and counts. A floor
+    # rather than a pin: a reader built against fewer words still reads every recording.
+    "positronic-eval-vocabulary>=0.1",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
@@ -154,7 +157,7 @@ dev = [
 
 [tool.uv.workspace]
 # Each member builds an independently installable distribution.
-members = ["client", "wire", "model_server"]
+members = ["client", "wire", "model_server", "vocabulary"]
 
 [tool.uv]
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
@@ -198,6 +201,7 @@ positronic-franka = false
 positronic-platform-client = { workspace = true }
 positronic-wire = { workspace = true }
 positronic-model-server = { workspace = true }
+positronic-eval-vocabulary = { workspace = true }
 # ZED SDK ships one ABI-specific wheel per CPython version; pick by interpreter.
 pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", marker = "python_full_version < '3.12'" },
@@ -209,7 +213,7 @@ i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb3
 
 [tool.pytest.ini_options]
 # Search roots, not a list of suites, so a new `tests/` directory is collected without being registered
-testpaths = ["client", "model_server", "pimm", "positronic", "utilities", "wire"]
+testpaths = ["client", "model_server", "pimm", "positronic", "utilities", "vocabulary", "wire"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
     # The suite waits on spawned processes and sockets about as much as it computes, so it scales with cores.
