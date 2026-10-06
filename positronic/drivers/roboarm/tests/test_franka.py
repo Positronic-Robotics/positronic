@@ -1354,7 +1354,7 @@ def test_a_ready_call_answers_the_fault_that_stays_and_the_run_serves_the_next_o
 
 
 def test_a_ready_call_answers_the_release_instruction_while_the_emergency_stop_is_pressed(desk, world):
-    """Before the arm is asked to move, so the instruction reaches the asker and not a refused move."""
+    """The ready call refuses before the arm moves, so the asker gets the instruction and not a refused move."""
     arm = FakeArm(PARK)
     desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
     driver = _driver(arm)
@@ -1396,7 +1396,7 @@ def test_the_arm_state_carries_the_release_instruction_once_while_the_emergency_
 
 @pytest.mark.parametrize('stop', ['AcknowledgeRequired', 'Invalid'])
 def test_an_emergency_stop_desk_does_not_read_as_pressed_leaves_the_arm_state_alone(desk, stop):
-    """Those levels hold the arm too, but releasing the button is not what clears them."""
+    """Those levels hold the arm too, and a release of the button does not clear them."""
     assert all(isinstance(data, franka.FrankaState) for data in _shipped(desk, stop))
 
 

@@ -303,12 +303,14 @@ class _Arm(DriverRun[command.CommandType]):
         return self.safe_inputs.level(EMERGENCY_STOP_INPUT) is _SafeInputLevel.INACTIVE
 
     def emit_state(self) -> None:
-        """Emit ``self.state``, or the emergency stop's error in its place while the stop is pressed."""
+        """Emit ``self.state``, or the emergency stop's error once in its place while the stop is pressed.
+
+        Once, because a reader keeps the last value and the link queues every error it carries.
+        """
         if not self.stop_pressed:
             self._stop_emitted = False
             self.out.emit(self.state)
         elif not self._stop_emitted:
-            # Once per press: a reader keeps the last value, and the link queues every error it carries.
             # The Message types do not name the SignalError that any message can carry.
             self.out.emit(cast(FrankaState, pimm.SignalError(EMERGENCY_STOP_PRESSED)))
             self._stop_emitted = True
