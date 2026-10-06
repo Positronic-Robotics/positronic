@@ -47,6 +47,7 @@ def test_a_value_that_could_never_name_a_scorer_is_refused_here(value: str):
         ScorerRef(value)
 
 
+BOARD = EvalRef('molmo.franka_pick_mini')
 SMOKE = EvalRef('molmo.franka_pick_mini_smoke')
 
 
@@ -55,6 +56,14 @@ def test_the_smoke_eval_runs_the_first_five_benchmark_episodes_once_each():
 
     assert definition.config == '.sim.molmo.benchmarks'
     assert (definition.args['episodes'], definition.args['trial_count']) == ([0, 1, 2, 3, 4], 1)
+    assert definition.time_limit_s == 7200
+
+
+def test_the_board_eval_runs_the_first_twenty_benchmark_episodes_once_each():
+    definition = public_eval(BOARD)
+
+    assert definition.config == '.sim.molmo.benchmarks'
+    assert (definition.args['episodes'], definition.args['trial_count']) == (list(range(20)), 1)
     assert definition.time_limit_s == 7200
 
 

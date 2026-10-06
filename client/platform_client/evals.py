@@ -65,7 +65,7 @@ class EvalDefinition(BaseModel):
     # The config's `--eval.<name>=` overrides, which expand to `tasks`.
     args: dict[str, JsonValue]
     tasks: list[EvalTask] = Field(min_length=1)
-    # The wall-clock limit of one run.
+    # The wall-clock limit of one platform run. A local run does not stop at it.
     time_limit_s: PositiveInt
     scorer: ScorerRef
     # The positronic commit the platform runs the config at.
@@ -102,7 +102,8 @@ def _franka_pick_mini(episodes: list[int]) -> EvalDefinition:
 
 
 _PUBLIC_EVALS: dict[EvalRef, EvalDefinition] = {
-    EvalRef('molmo.franka_pick_mini_smoke'): _franka_pick_mini([0, 1, 2, 3, 4])
+    EvalRef('molmo.franka_pick_mini'): _franka_pick_mini(list(range(20))),
+    EvalRef('molmo.franka_pick_mini_smoke'): _franka_pick_mini([0, 1, 2, 3, 4]),
 }
 
 PUBLIC_EVALS: tuple[EvalRef, ...] = tuple(_PUBLIC_EVALS)
