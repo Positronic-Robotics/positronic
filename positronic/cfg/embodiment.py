@@ -175,8 +175,8 @@ yam_bimanual_yambox = yam_bimanual.override(
     # The sim scene's plate is 0.011, so only z differs from the default.
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.322], keys.RIGHT_ARM: [0.30, -0.305, 0.322]},
     # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
-    # are sent, which is past the driver's 20 mrad arrival tolerance, so every park reports ERROR. These park
-    # both arms with about 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
+    # are sent, past the 20 mrad tolerance of a blocking move. These bring both arms inside it with about
+    # 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
     gravity_comp_factor=dict.fromkeys(keys.BIMANUAL_ARMS, [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]),
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
