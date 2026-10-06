@@ -223,6 +223,7 @@ def test_create_submission_sends_a_registry_password_the_platform_can_use(tmp_pa
 
 def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
     resolved = {
+        'rig_shape': 'franka',
         'episodes_total': 2,
         'tasks': [
             {
