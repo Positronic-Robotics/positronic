@@ -247,6 +247,7 @@ services:
 
   # Galaxea model use is restricted to internal, non-commercial evaluation; see vendors/galaxea/NOTICE.
   galaxea-server:
+    # The name `make build-serve-galaxea` tags: GALAXEA_REPO and NEBIUS_REGISTRY in docker/Makefile.
     image: ${GALAXEA_REPO:-cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz/galaxea}:${IMAGE_TAG:-local}
     init: true
     shm_size: 8g
