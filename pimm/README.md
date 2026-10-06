@@ -34,7 +34,7 @@ class SineSensor(pimm.ControlSystem):
         while not should_stop.value:
             now = clock.now()            # monotonic seconds supplied by the World
             sample = math.sin(2 * math.pi * self._hz * now)
-            self.signal.emit(sample, ts=clock.now_ns())
+            self.signal.emit(sample)
             yield pimm.Sleep(0.02)
 
 
@@ -125,6 +125,23 @@ For data transformation, Pimm provides:
   returns `None`, the value is filtered: receivers return the last valid message
   while emitters skip emission entirely. This enables conditional filtering like
   `lambda x: x if x > 0 else None`.
+
+### Message time
+
+`msg.time` is a read-only `pimm.Time`: integer coordinates on named clocks.
+Pimm stamps `emitted.wall` before forwarding data and `received.wall` on the receiver's
+first delivery. Reading the cached value keeps its time. Each receiver has its own receipt time.
+`wall` uses a monotonic clock in nanoseconds; it is elapsed time, not a UTC date.
+
+`world` is the application's clock: wall time on hardware and simulated time in simulation.
+On hardware, `emitted.world` equals `emitted.wall`, and `received.world` equals `received.wall`.
+Background simulation endpoints have no access to simulation time and supply only wall coordinates.
+A receiver in the simulation process stamps `received.world` even for background emissions.
+
+Producers can attach extra timelines with `emitter.emit(data, time=pimm.Time(**{"camera.capture": capture_ns}))`.
+The `emitted.*` and `received.*` namespaces are reserved. Device coordinates must obey the
+same ordering rules when recorded: every coordinate is non-decreasing and at least one increases.
+Otherwise, put them in the payload.
 
 ### Optional Connectors for Duck Typing
 

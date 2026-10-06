@@ -2,9 +2,11 @@ import numpy as np
 import pytest
 
 import positronic.drivers.roboarm.command as cmd_module
+from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys as obs_keys
 from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
@@ -47,6 +49,31 @@ def test_observation_encode_missing_state_inputs_raise():
     enc = ObservationCodec(state={'observation.state': ['missing']}, images={})
     with pytest.raises(KeyError):
         enc.encode({})
+
+
+@pytest.mark.parametrize('axis', [RECEIVED_WORLD, RECORDED_TIME])
+def test_training_observations_align_on_world_receipt_or_legacy_recorded_time(axis):
+    episode = EpisodeContainer({
+        'a': DummySignal([[0, 100], [10, 200]], [[1], [2]], timelines=(axis, RECEIVED_WALL)),
+        'b': DummySignal([[0, 150], [10, 250]], [[3], [4]], timelines=(axis, RECEIVED_WALL)),
+    })
+    codec = ObservationCodec(state={'state': {'a': 1, 'b': 1}}, images={})
+    state = codec.training_encoder(episode)['state']
+    assert state.timelines == (axis,)
+    assert list(state.timestamps(axis)) == [0, 10]
+    np.testing.assert_array_equal(state.values(), [[1, 3], [2, 4]])
+
+
+def test_training_observations_require_world_receipt_for_each_input():
+    episode = EpisodeContainer({
+        'a': DummySignal([[0, 100], [10, 200]], [[1], [2]], timelines=(RECEIVED_WORLD, RECORDED_TIME)),
+        'b': DummySignal([100, 200], [[3], [4]], timelines=(RECORDED_TIME,)),
+    })
+    codec = ObservationCodec(state={'state': {'a': 1, 'b': 1}}, images={})
+    with pytest.raises(ValueError, match='Failed to apply transform') as error:
+        codec.training_encoder(episode)['state']
+    assert isinstance(error.value.__cause__, KeyError)
+    assert error.value.__cause__.args == (RECEIVED_WORLD,)
 
 
 def test_observation_encode_task():

@@ -17,16 +17,20 @@ from typing import Any
 from uuid import uuid4
 
 import configuronic as cfn
+from platform_client.policy_container import AUTH_TOKEN_ENV
+from positronic_model_server import protocol
+from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_wire import wire
 from starlette.datastructures import QueryParams
 
 from positronic import telemetry
 from positronic.offboard import keys as offboard_keys
+from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.base import Obs
 
-from . import grpc_wire, protocol, server_wire, websocket_wire
-from .protocol import AUTH_HEADER, AUTH_TOKEN_ENV, bearer, deserialise, serialise
+from . import grpc_wire, server_wire, websocket_wire
+from .protocol import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +244,7 @@ class PolicyServer:
                 await conn.send(
                     serialise({
                         protocol.STATUS: protocol.ServerStatus.READY,
-                        protocol.PROTOCOL_VERSION: protocol.CURRENT_VERSION,
+                        protocol.PROTOCOL_VERSION: legacy_protocol.CURRENT_VERSION,
                         protocol.META: meta,
                         protocol.SESSION_ID: session_id,
                     })

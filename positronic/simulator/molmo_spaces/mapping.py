@@ -104,8 +104,8 @@ MOLMO_OBS_QPOS = 'qpos'  # MolmoSpaces joint positions, grouped by robot move gr
 
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'
-OBS_EEF_POS = 'eef_pos'  # World coordinates, metres.
-OBS_EEF_QUAT = 'eef_quat'  # World orientation, wxyz.
+OBS_EEF_POS = 'eef_pos'  # Position in the robot base frame, metres.
+OBS_EEF_QUAT = 'eef_quat'  # Orientation in the robot base frame, wxyz.
 OBS_GRIP = 'grip'  # Closure in [0, 1].
 OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
 
@@ -139,8 +139,10 @@ def unpack_wire_pose(vector: Any) -> tuple[np.ndarray, np.ndarray]:
     return vec[:3].copy(), vec[3:].reshape(3, 3).copy()
 
 
-def compose_world_delta(cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any) -> tuple[np.ndarray, np.ndarray]:
-    """Apply a world-frame translation and rotation delta to a measured pose."""
+def compose_reference_delta(
+    cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply a reference-frame translation and rotation delta to a measured pose."""
     return (
         np.asarray(cur_pos, dtype=np.float64).reshape(3) + np.asarray(delta_pos, dtype=np.float64).reshape(3),
         np.asarray(delta_rot, dtype=np.float64).reshape(3, 3) @ np.asarray(cur_rot, dtype=np.float64).reshape(3, 3),
@@ -154,7 +156,7 @@ def wire_command_to_arm_action(
     ik: Callable[[np.ndarray, np.ndarray], Any],
     current_eef: tuple[Any, Any],
 ) -> np.ndarray:
-    """Absolute arm joint targets; ``ik`` and ``current_eef`` use world-frame grasp-site poses."""
+    """Absolute arm joint targets; ``ik`` and ``current_eef`` use robot-frame grasp-site poses."""
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
     match command[protocol.COMMAND_TYPE]:
         case protocol.JOINT_POS:
@@ -170,7 +172,7 @@ def wire_command_to_arm_action(
             target = np.asarray(ik(*unpack_wire_pose(command[protocol.COMMAND_POSE])), dtype=np.float32).reshape(-1)
         case protocol.CARTESIAN_DELTA:
             delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            target_pos, target_rot = compose_world_delta(*current_eef, delta_pos, delta_rot)
+            target_pos, target_rot = compose_reference_delta(*current_eef, delta_pos, delta_rot)
             target = np.asarray(ik(target_pos, target_rot), dtype=np.float32).reshape(-1)
         case other:
             raise ValueError(

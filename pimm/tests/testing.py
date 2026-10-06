@@ -75,5 +75,5 @@ def wire_call(world: World, caller: ControlSystemCaller, handler: ControlSystemH
     """
     for emitter, receiver in ((caller.requests, handler.requests), (handler.replies, caller.replies)):
         physical_emitter, physical_receiver = world.local_pipe(maxsize=0)
-        emitter._bind(physical_emitter)
+        emitter._bind(physical_emitter, clock=world.clock)
         receiver._bind(physical_receiver)

@@ -3,8 +3,10 @@
 from collections.abc import Generator
 from typing import Any
 
+from positronic_model_server.spec import SEQ
+
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.policy.base import SEQ, InputT, OutputT, Processor, ProcessorRun, Runtime
+from positronic.policy.base import InputT, OutputT, Processor, ProcessorRun, Runtime
 from positronic.policy.codec import Codec
 from positronic.utils import flatten_dict
 

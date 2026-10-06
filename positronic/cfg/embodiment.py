@@ -91,6 +91,7 @@ def yam(robot_arm, cameras, video_encoder):
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.311], keys.RIGHT_ARM: [0.30, -0.305, 0.311]},
+    gravity_comp_factor=None,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
@@ -102,6 +103,7 @@ def yam_bimanual(
     left_channel: str,
     right_channel: str,
     mounts: dict[str, list[float]],
+    gravity_comp_factor: dict[str, list[float]] | None,
     cameras,
     video_encoder,
     park_after_idle_s: float | None,
@@ -114,7 +116,8 @@ def yam_bimanual(
     ``robot_state.{side}.q/.dq/.ee_pose`` on record and commands are ``robot_command.{side}`` +
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
-    signal that drives it.
+    signal that drives it. ``gravity_comp_factor[side]`` is that arm's i2rt gravity compensation; None keeps
+    i2rt's own factors on both arms.
     """
     from positronic import geom
     from positronic.drivers.roboarm import yam as yam_driver
@@ -123,6 +126,7 @@ def yam_bimanual(
         side: yam_driver.Robot(
             channel,
             base_pose=geom.Transform3D(mounts[side]),
+            gravity_comp_factor=None if gravity_comp_factor is None else gravity_comp_factor[side],
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning[side],
             move_tuning=move_tuning[side],
@@ -160,6 +164,28 @@ def yam_bimanual(
         simulated=False,
         video_encoder=video_encoder,
     )
+
+
+# The yambox station. Its CAN chains carry the names udev gives the two adapters, because `can0` and `can1`
+# there are the onboard controllers and reach no arm.
+yam_bimanual_yambox = yam_bimanual.override(
+    left_channel='can_follower_l',
+    right_channel='can_follower_r',
+    # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 0.022 plate.
+    # The sim scene's plate is 0.011, so only z differs from the default.
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.322], keys.RIGHT_ARM: [0.30, -0.305, 0.322]},
+    # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
+    # are sent, past the 20 mrad tolerance of a blocking move. These bring both arms inside it with about
+    # 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
+    gravity_comp_factor=dict.fromkeys(keys.BIMANUAL_ARMS, [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]),
+    cameras={
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
+        keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
+        keys.WRIST_RIGHT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_right.override(
+            resolution='svga', fps=30
+        ),
+    },
+)
 
 
 def mujoco_franka(sim, camera_dict):

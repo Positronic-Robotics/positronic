@@ -5,6 +5,7 @@ from typing import Generic, TypeVar, overload
 
 from pimm import Message, SignalEmitter, SignalReceiver
 from pimm.core import Clock, Command, Sleep, Yield
+from pimm.time import Time
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +56,9 @@ class MapSignalReceiver(SignalReceiver[U], Generic[T, U]):
             if self.last_message is None:
                 return None
             # Return a fresh stale copy, not the cached mutable Message, so earlier callers' references don't flip.
-            return Message(self.last_message.data, self.last_message.ts, False)
+            return Message(self.last_message.data, self.last_message.time, False)
 
-        self.last_message = Message(transformed_data, orig_message.ts, orig_message.updated)
+        self.last_message = Message(transformed_data, orig_message.time, orig_message.updated)
         return self.last_message
 
     def _bind(self, receiver: SignalReceiver[T]):
@@ -77,10 +78,14 @@ class MapSignalEmitter(SignalEmitter[T], Generic[T, U]):
         self.emitter = emitter
         self.func = func
 
-    def emit(self, data: T, ts: int = -1):
+    @property
+    def _emission_clock(self) -> Clock:
+        return self.emitter._emission_clock
+
+    def _emit(self, data: T, time: Time):
         transformed_data = self.func(data)
         if transformed_data is not None:
-            self.emitter.emit(transformed_data, ts)
+            self.emitter._emit(transformed_data, time)
 
 
 class SignalMapWrapper(Generic[T, U]):

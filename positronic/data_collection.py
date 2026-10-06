@@ -20,7 +20,7 @@ import positronic.cfg.video_encoder
 import positronic.cfg.webxr
 from pimm.logging import init_logging
 from positronic import geom, keys, utils, wire
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
@@ -380,11 +380,11 @@ def main_sim(
     dataset_factory = LocalDatasetWriter if output_path is not None else None
     with pimm.World(virtual_time=True) as world:
         # The sim carries both the arm and the gripper ports, so it fills both slots.
-        ds_agent = wire.wire(world, data_collection, dataset_factory, cameras, sim, sim, gui, TimeMode.MESSAGE)
+        ds_agent = wire.wire(world, data_collection, dataset_factory, cameras, sim, sim, gui)
         _wire(world, ds_agent, data_collection, webxr, sim, sound)
         world.connect(data_collection.redraw_scene, sim.env_reset)
 
-        sim_iter = world.start([sim, data_collection], [webxr, gui, ds_agent, sound])
+        sim_iter = world.start([sim, data_collection, ds_agent], [webxr, gui, sound])
         sim_iter = iter(sim_iter)
 
         # VR teleop is live, so pace virtual time to wall time: only step the sim when it has fallen behind.

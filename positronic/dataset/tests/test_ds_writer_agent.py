@@ -4,13 +4,13 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pyarrow.parquet as pq
 import pytest
 
 import pimm
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys, telemetry, telemetry_keys
-from positronic.dataset import DatasetWriter, EpisodeWriter
-from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand, TimeMode
+from positronic.dataset import DatasetWriter, EpisodeWriter, Time
+from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
@@ -31,12 +31,12 @@ def world():
 class FakeEpisodeWriter(EpisodeWriter[Any]):
     def __init__(self) -> None:
         self.statics: dict[str, Any] = {}
-        self.appends: list[tuple[str, Any, int, dict[str, int] | None]] = []
+        self.appends: list[tuple[str, Any, Time]] = []
         self.exited = False
         self.aborted = False
 
-    def append(self, signal_name: str, data: Any, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
-        self.appends.append((signal_name, data, int(ts_ns), extra_ts))
+    def append(self, signal_name: str, data: Any, timestamps: Time) -> None:
+        self.appends.append((signal_name, data, timestamps))
 
     def set_static(self, name: str, data: Any) -> None:
         self.statics[name] = data
@@ -73,13 +73,7 @@ class FakeDatasetWriter(DatasetWriter):
         return False
 
 
-def build_agent_with_pipes(
-    signals_spec: dict[str, Any],
-    dataset_factory: DatasetFactory,
-    world: pimm.World,
-    *,
-    time_mode: TimeMode = TimeMode.CLOCK,
-):
+def build_agent_with_pipes(signals_spec: dict[str, Any], dataset_factory: DatasetFactory, world: pimm.World):
     """Build agent with given signals spec and wire it using ``world.pair``.
 
     - signals_spec maps input name -> serializer (or None for pass-through).
@@ -89,7 +83,7 @@ def build_agent_with_pipes(
         * return None to drop the sample (not recorded at all).
     Returns (agent, cmd_emitter, emitters_by_name).
     """
-    agent = DsWriterAgent(dataset_factory, time_mode=time_mode)
+    agent = DsWriterAgent(dataset_factory)
     for name, serializer in signals_spec.items():
         agent.add_signal(name, serializer)
     emitters: dict[str, pimm.SignalEmitter[Any]] = {name: world.pair(agent.inputs[name]) for name in signals_spec}
@@ -115,7 +109,7 @@ def test_start_stop_happy_path(world):
     assert len(ds.created) == 1
     w = ds.created[-1]
     assert w.statics.get('user') == 'alice'
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1), ('b', 2)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('a', 1), ('b', 2)]
     assert w.exited is True
     assert w.statics.get('done') is True
 
@@ -133,7 +127,7 @@ def test_episode_finalizes_when_run_stops(world):
 
     assert len(ds.created) == 1
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 42)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('a', 42)]
     assert w.exited is True
 
 
@@ -172,7 +166,7 @@ def test_abort_flow_then_restart(world):
     assert len(ds.created) == 2
     w1, w2 = ds.created[0], ds.created[1]
     assert w1.aborted is True and w1.exited is True
-    assert [(s, v) for (s, v, _, _) in w2.appends] == [('s', 10), ('s', 11)]  # 10 is what the channel held
+    assert [(s, v) for (s, v, _) in w2.appends] == [('s', 10), ('s', 11)]  # 10 is what the channel held
 
 
 def test_appends_only_on_updates_and_timestamps_from_clock(world):
@@ -190,7 +184,10 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world):
 
     w = ds.created[-1]
     assert len(w.appends) == 2
-    assert w.appends[1][2] > w.appends[0][2]
+    assert w.appends[1][2][RECEIVED_WORLD] > w.appends[0][2][RECEIVED_WORLD]
+    for _, _, timestamps in w.appends:
+        assert set(timestamps) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD}
+        assert timestamps[RECEIVED_WORLD] >= timestamps[EMITTED_WORLD]
 
 
 def test_records_what_the_inputs_hold_when_the_episode_opens(world):
@@ -209,28 +206,28 @@ def test_records_what_the_inputs_hold_when_the_episode_opens(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 99), ('a', 7)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('a', 99), ('a', 7)]
 
 
-def test_time_mode_message_uses_signal_timestamp(world):
+def test_records_producer_timeline(world):
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world, time_mode=TimeMode.MESSAGE)
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
     ts_first = 123_000_000
     ts_second = 456_000_000
 
     script = [
         (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
-        (partial(emitters['a'].emit, 1, ts=ts_first), 0.001),
-        (partial(emitters['a'].emit, 2, ts=ts_second), 0.001),
+        (partial(emitters['a'].emit, 1, time=pimm.Time(source=ts_first)), 0.001),
+        (partial(emitters['a'].emit, 2, time=pimm.Time(source=ts_second)), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
 
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 1), ('a', 2)]
-    assert [ts for (_, _, ts, _) in w.appends] == [ts_first, ts_second]
+    assert [(s, v) for (s, v, _) in w.appends] == [('a', 1), ('a', 2)]
+    assert [timestamps['source'] for (_, _, timestamps) in w.appends] == [ts_first, ts_second]
 
 
 def test_integration_with_local_dataset_writer(tmp_path, world):
@@ -254,11 +251,12 @@ def test_integration_with_local_dataset_writer(tmp_path, world):
     assert len(a) == 1 and len(b) == 1
     assert a[0][0] == 10 and b[0][0] == 20
 
-    # Verify extra timelines are in the parquet files
-    table_a = pq.read_table(ep._dir / 'a.parquet')
-    assert 'ts_ns.message' in table_a.column_names
-    assert 'ts_ns.system' in table_a.column_names
-    assert 'ts_ns.world' in table_a.column_names
+    for signal in (a, b):
+        assert set(signal.timelines) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD}
+        timestamps = signal[0][1]
+        assert timestamps[RECEIVED_WORLD] >= timestamps[EMITTED_WORLD]
+        assert timestamps[EMITTED_WALL] > 0
+        assert timestamps[RECEIVED_WALL] > 0
 
 
 def test_each_episode_records_into_the_dataset_its_start_names(tmp_path, world):
@@ -346,7 +344,7 @@ def test_serializer_scalar_transform(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('x', 6)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('x', 6)]
 
 
 def test_serializer_dict_expansion(world):
@@ -369,7 +367,7 @@ def test_serializer_dict_expansion(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    names_and_vals = [(s, v) for (s, v, _, _) in w.appends]
+    names_and_vals = [(s, v) for (s, v, _) in w.appends]
     assert ('img', 10) in names_and_vals
     assert ('img.extra', 11) in names_and_vals
 
@@ -394,7 +392,7 @@ def test_serializer_none_drops_sample(world):
 
     w = ds.created[-1]
     # Only the positive value should be recorded
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('x', 3)]
+    assert [(s, v) for (s, v, _) in w.appends] == [('x', 3)]
 
 
 def test_transform_3d_serializer(world):
@@ -414,7 +412,7 @@ def test_transform_3d_serializer(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    names_vals = [(s, v) for (s, v, _, _) in w.appends]
+    names_vals = [(s, v) for (s, v, _) in w.appends]
     assert len(names_vals) == 1 and names_vals[0][0] == 'pose'
     np.testing.assert_allclose(names_vals[0][1][:3], t)
     np.testing.assert_allclose(names_vals[0][1][3:], q.as_quat)
@@ -440,7 +438,7 @@ def test_robot_state_serializer_records_a_busy_arm_beside_its_pose(world):
 
     w = ds.created[-1]
     by_name = {}
-    for name, val, _, _ in w.appends:
+    for name, val, _ in w.appends:
         by_name.setdefault(name, []).append(val)
     expected = {keys.JOINTS: q, keys.JOINT_VEL: dq, keys.EE_POSE: np.concatenate([t, geom.Rotation.identity.as_quat])}
     assert set(by_name) == {keys.ROBOT_STATUS, *expected}
@@ -474,7 +472,7 @@ def test_robot_command_serializer_variants(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    items = {name: val for (name, val, _, _) in w.appends}
+    items = {name: val for (name, val, _) in w.appends}
     np.testing.assert_allclose(items['cmd.pose'], np.concatenate([pose.translation, pose.rotation.as_quat]))
     np.testing.assert_allclose(items['cmd.pose_delta'], np.concatenate([delta.translation, delta.rotation.as_quat]))
     np.testing.assert_allclose(
@@ -486,42 +484,22 @@ def test_robot_command_serializer_variants(world):
     # name has no shape to fix it at.
     assert items['cmd.mode.position_control'] == 1
     np.testing.assert_allclose(items['cmd.mode.position_control.stiffness'], [100.0] * 7)
-    mode_appends = [name for (name, _, _, _) in w.appends if '.mode' in name]
+    mode_appends = [name for (name, _, _) in w.appends if '.mode' in name]
     assert len(mode_appends) == 6, 'a command pinning nothing records no mode'
 
 
-def test_multiple_timelines_recorded(world):
-    """Test that DsWriterAgent records message, system, and world timelines."""
-    ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
+def test_recording_rejects_decreasing_producer_timestamps(tmp_path, world):
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, LocalDatasetWriter, world)
 
     script = [
-        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
-        (partial(emitters['a'].emit, 42), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(tmp_path)), 0.001),
+        (partial(emitters['a'].emit, 42, time=pimm.Time(source=1000)), 0.001),
+        (partial(emitters['a'].emit, 43, time=pimm.Time(source=500)), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
 
-    run_scripted_agent(agent, script, world=world)
-
-    w = ds.created[-1]
-    assert len(w.appends) == 1
-    name, value, _primary_ts, extra_ts = w.appends[0]
-
-    assert name == 'a'
-    assert value == 42
-    assert extra_ts is not None
-
-    # Should have message and system timelines
-    assert 'message' in extra_ts
-    assert 'system' in extra_ts
-
-    # The virtual-time world drives a simulated clock, so 'world' is present too
-    assert 'world' in extra_ts
-
-    # All timestamps should be positive integers
-    assert isinstance(extra_ts['message'], int) and extra_ts['message'] > 0
-    assert isinstance(extra_ts['system'], int) and extra_ts['system'] > 0
-    assert isinstance(extra_ts['world'], int) and extra_ts['world'] > 0
+    with pytest.raises(ValueError, match='no coordinate may decrease'):
+        run_scripted_agent(agent, script, world=world)
 
 
 def test_pickles_with_every_constructor_argument_filled():
@@ -530,7 +508,6 @@ def test_pickles_with_every_constructor_argument_filled():
     agent = DsWriterAgent(
         FakeDatasetWriter(),
         poll_hz=500.0,
-        time_mode=TimeMode.MESSAGE,
         virtual_time=True,
         telemetry_span=partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
     )
@@ -560,4 +537,4 @@ def test_serializer_plain_list_value(world):
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('v', [1, 2, 3])]
+    assert [(s, v) for (s, v, _) in w.appends] == [('v', [1, 2, 3])]

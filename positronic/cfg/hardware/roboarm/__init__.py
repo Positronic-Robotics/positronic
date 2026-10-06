@@ -22,11 +22,6 @@ DROID_IMPEDANCE = command.Impedance(
 )
 
 
-def droid_start_pose() -> command.JointPosition:
-    """The command a DROID trial opens with: joints drawn afresh around the Franka's nominal, under DROID's gains."""
-    return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD, DROID_IMPEDANCE)
-
-
 @cfn.config(
     ip='172.168.0.2',
     relative_dynamics_factor=0.2,
@@ -84,6 +79,7 @@ yam_move_tuning = cfn.Config(SettleTuning, **dataclasses.asdict(MOVE_SETTLE))
     channel='can0',
     sim=False,
     base_pose=None,
+    gravity_comp_factor=None,
     park_after_idle_s=60.0,
     park_tuning=yam_park_tuning,
     move_tuning=yam_move_tuning,
@@ -92,6 +88,7 @@ def yam(
     channel: str,
     sim: bool,
     base_pose,
+    gravity_comp_factor,
     park_after_idle_s: float | None,
     park_tuning: SettleTuning,
     move_tuning: SettleTuning,
@@ -102,6 +99,7 @@ def yam(
         channel,
         base_pose=base_pose,
         sim=sim,
+        gravity_comp_factor=gravity_comp_factor,
         park_after_idle_s=park_after_idle_s,
         park_tuning=park_tuning,
         move_tuning=move_tuning,
