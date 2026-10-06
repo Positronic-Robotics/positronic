@@ -109,10 +109,10 @@ PUBLIC_SCORERS: Mapping[ScorerRef, Scorer] = MappingProxyType({MOLMO_SCORER: mol
 
 def score(scorer: ScorerRef, episodes: Iterable[Path], scorers: Mapping[ScorerRef, Scorer] = PUBLIC_SCORERS) -> Scores:
     """The scores of `episodes` under `scorer`, or LookupError when `scorers` does not hold it."""
-    outcome = scorers.get(scorer)
-    if outcome is None:
+    outcome_of = scorers.get(scorer)
+    if outcome_of is None:
         raise LookupError(f'no scorer {scorer!r}; the scorers are {", ".join(sorted(scorers))}')
-    return tally(map(outcome, episodes))
+    return tally(map(outcome_of, episodes))
 
 
 def tally(outcomes: Iterable[Outcome | None]) -> Scores:

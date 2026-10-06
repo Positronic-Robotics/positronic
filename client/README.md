@@ -297,8 +297,7 @@ episode and gives its outcome: the task, the success, and a graded score where t
 and a board ranks on it. An episode that recorded no outcome counts in `unscored`, not as a failure.
 
 `PUBLIC_SCORERS` holds the scorer of each public eval, under the name the definition gives as its
-`scorer`. The platform scores a public eval with the same scorer. The platform also scores evals
-that it does not publish, with scorers that it does not publish: it passes them to `score` beside
+`scorer`. A caller with scorers of its own passes `score` a table that holds them beside
 `PUBLIC_SCORERS`.
 
 ## From the command line
