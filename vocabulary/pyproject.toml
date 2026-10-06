@@ -7,9 +7,7 @@ description = "The vocabulary an attended rollout records: the operator's verdic
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-# None. A reader of a recording installs this alone — the coordinator that reads episodes without a
-# robot, the report, the console on the rig — so it must not pull in the robotics stack, a web stack
-# or pydantic.
+# None, so a reader of a recording installs this alone and pulls in no robotics or web stack.
 dependencies = []
 
 [build-system]
