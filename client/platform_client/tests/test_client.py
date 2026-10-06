@@ -262,7 +262,7 @@ def test_me_sends_the_bearer_token_and_parses_every_limit():
 
 @pytest.mark.parametrize('prepaid', [False, True])
 def test_create_submission_sends_the_run_defining_fields(prepaid):
-    body = {'submission_id': '1f', 'status': 'pending', 'policy_image_digest': 'sha256:abc'}
+    body: dict[str, object] = {'submission_id': '1f', 'status': 'pending', 'policy_image_digest': 'sha256:abc'}
     quote = {
         'terms': Tariff.for_rates(1, CREDIT_SCALE).model_dump(),
         'lines': [{'task_pos': 0, 'endpoint': 'candidate', 'count': 1, 'cap_ns': 1, 'max_units': 2}],
