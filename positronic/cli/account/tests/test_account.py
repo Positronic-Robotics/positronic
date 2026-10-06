@@ -179,6 +179,14 @@ def test_buy_refuses_invalid_input_before_http(field, platform, run_command):
     assert platform.seen is None
 
 
+@pytest.mark.parametrize('field', ['package_id', 'transaction_key'])
+def test_buy_without_an_org_refuses_invalid_input_before_http(field, platform, run_command):
+    args = {'package_id': 'package', 'transaction_key': 'retry-key', field: ''}
+    with pytest.raises(SystemExit, match=f'^{field} must not be empty$'):
+        run_command(buy, **args)
+    assert platform.seen is None
+
+
 @pytest.mark.parametrize('field', ['org', 'package_id', 'transaction_key'])
 def test_buy_explains_how_to_quote_numeric_text_before_http(field, platform, run_command):
     args = {'org': 'acme', 'package_id': 'package', 'transaction_key': 'retry-key', field: 20261005}
