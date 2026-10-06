@@ -130,9 +130,14 @@ observations or model results, including returned images.
 `serialization.JpegEncoding(path, quality)` selects a nested mapping/list value, with an empty path
 selecting the whole result. Supply these selectors through `Session.output_images` for returned
 images. `serialization.encode_images` applies the same selections to observations without changing
-the source containers. A missing path fails instead of silently skipping compression. The client
-component `encode_images` accepts `paths` and `quality`; its result decoding leaves native values
-unchanged. V3 does not infer image fields from array dimensions.
+the source containers. A missing path fails instead of silently skipping compression.
+
+The client component `encode_images` defaults to recursively JPEG-encoding `uint8` arrays shaped
+`(..., H, W, 3)` with positive height and width, including batches, inside mappings, lists and tuples.
+Supply `paths` to encode only selected values; `paths=[]` disables compression. `quality` sets the
+JPEG quality. Automatic detection is a heuristic: float images are left lossless, and unrelated
+`uint8` arrays matching the image shape are compressed. Its result decoding leaves native values
+unchanged. The wire serializer itself does not infer image fields.
 
 Nonempty 3D and 4D images retain the v1/v2 JPEG representation. Extra leading dimensions and empty
 batches carry a full-shape marker; send those only to receivers supporting it. NumPy object,

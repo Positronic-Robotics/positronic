@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from positronic_model_server import serialization
 
 import pimm
 from pimm.world import VirtualClock
@@ -670,6 +671,65 @@ class TestRestrictImageSize:
         rebuilt = spec.from_spec(RestrictImageSize(64, 48).to_spec())
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
+
+
+class TestEncodeImages:
+    @pytest.mark.parametrize('shape', [(8, 12, 3), (2, 8, 12, 3), (2, 3, 8, 12, 3), (0, 8, 12, 3)])
+    def test_automatic_encoding_reaches_nested_images_and_preserves_dimensions(self, shape):
+        image = np.full(shape, 140, dtype=np.uint8)
+        obs = {'video': {'cameras': [image]}, 'frames': (image,), 'task': 'pick cube'}
+        encoded = EncodeImages().encode(obs)
+
+        assert isinstance(encoded['video']['cameras'][0], dict)
+        assert isinstance(encoded['frames'], tuple)
+        assert isinstance(encoded['frames'][0], dict)
+        restored = serialization.deserialise(serialization.serialise(encoded))
+        for decoded in (restored['video']['cameras'][0], restored['frames'][0]):
+            assert decoded.shape == image.shape
+            np.testing.assert_allclose(decoded, image, atol=2)
+        assert restored['task'] == obs['task']
+        assert obs['video']['cameras'][0] is image
+        assert obs['frames'][0] is image
+
+    @pytest.mark.parametrize(
+        'value',
+        [
+            np.ones((8, 12, 3), dtype=np.float32),
+            np.ones((8, 12, 3), dtype=np.uint16),
+            np.ones((3, 8, 12), dtype=np.uint8),
+            np.ones((8, 12, 4), dtype=np.uint8),
+            np.ones((8, 12), dtype=np.uint8),
+            np.ones(3, dtype=np.uint8),
+            np.ones((0, 12, 3), dtype=np.uint8),
+            b'image bytes',
+        ],
+        ids=['float', 'uint16', 'channels-first', 'rgba', 'grayscale', 'vector', 'empty-height', 'bytes'],
+    )
+    def test_automatic_encoding_preserves_values_outside_the_image_rule(self, value):
+        assert EncodeImages().encode({'state': value})['state'] is value
+
+    @pytest.mark.parametrize('paths, compressed', [(None, {'camera'}), ([['selected', 0]], {'selected'}), ([], set())])
+    def test_selection_and_quality_survive_the_component_spec(self, paths, compressed):
+        codec = EncodeImages(paths, quality=73)
+        rebuilt = spec.from_spec(codec.to_spec())
+        assert isinstance(rebuilt, EncodeImages)
+        assert rebuilt.to_spec() == codec.to_spec()
+        image = np.full((8, 12, 3), 140, dtype=np.uint8)
+        selected = image.astype(np.float32)
+        obs = {'camera': image, 'selected': [selected]}
+        encoded = rebuilt.encode(obs)
+        assert isinstance(encoded['camera'], dict) == ('camera' in compressed)
+        assert isinstance(encoded['selected'][0], dict) == ('selected' in compressed)
+        restored = serialization.deserialise(serialization.serialise(encoded))
+        np.testing.assert_allclose(restored['camera'], image, atol=2)
+        np.testing.assert_allclose(restored['selected'][0], selected, atol=2)
+        assert obs['selected'][0] is selected
+        assert rebuilt.decode(obs) is obs
+
+    @pytest.mark.parametrize('quality', [-1, 101, True, 1.5])
+    def test_invalid_quality_is_rejected_before_encoding(self, quality):
+        with pytest.raises(ValueError, match='JPEG quality'):
+            EncodeImages(quality=quality)
 
 
 @pytest.mark.parametrize(

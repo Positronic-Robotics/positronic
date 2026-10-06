@@ -65,12 +65,12 @@ def test_v3_client_preserves_native_markers_in_metadata_and_results(serving):
             session.close()
 
 
-def test_images_use_explicit_paths_in_both_directions(serving):
+@pytest.mark.parametrize('image_args', [{}, {'paths': [['video', 'camera']]}], ids=['automatic', 'explicit'])
+def test_images_use_client_selection_and_explicit_output_paths(serving, image_args):
     image = np.full((2, 3, 8, 12, 3), 140, dtype=np.uint8)
     state = np.full(image.shape, 1.25, dtype=np.float32)
     description = spec.sequence(
-        spec.component('chunked_schedule', version=2, fps=20),
-        spec.component('encode_images', paths=[['video', 'camera']], quality=95),
+        spec.component('chunked_schedule', version=2, fps=20), spec.component('encode_images', quality=95, **image_args)
     )
     seen = []
 
