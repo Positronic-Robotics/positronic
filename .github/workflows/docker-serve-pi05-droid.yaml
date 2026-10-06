@@ -1,0 +1,40 @@
+name: Build and Push the pi0.5 DROID Serving Image
+
+# Main republishes positro/pi05-droid on a change to its recipe, its build,
+# or the packages and manifests it installs.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.serve-pi05-droid
+      - docker/Makefile
+      - .dockerignore
+      - pyproject.toml
+      - uv.lock
+      - README.md
+      - LICENSE
+      - positronic/**
+      - pimm/**
+      - client/**
+      - wire/**
+      - model_server/**
+      - vocabulary/**
+      - .github/workflows/docker-serve-pi05-droid.yaml
+      - .github/workflows/docker-serve-image.yaml
+      - '!**/tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: serve-pi05-droid-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  serve-image:
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: pi05-droid
+    secrets: inherit

@@ -5,6 +5,7 @@ import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
 import pimm
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.cli.eval.run import TaskDriver, run_world
 from positronic.dataset.episode import Episode
@@ -128,7 +129,8 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         assert episode[eval_keys.TERMINATED] is False
         assert eval_keys.ENDED_BY not in episode
         assert eval_keys.SUCCESS not in episode
-        assert episode.duration_ns / 1e9 == pytest.approx(task.timeout_sec, abs=0.1)
+        first, last = episode.bounds(RECEIVED_WORLD)
+        assert (last - first) / 1e9 == pytest.approx(task.timeout_sec, abs=0.1)
         assert episode[f'{policy_keys.POLICY_META}.stop_reason'] == ending
         assert episode[f'{policy_keys.POLICY_META}.hindsight'] == 'Small move observed.'
         transcript = episode.static[f'{policy_keys.POLICY_META}.transcript']

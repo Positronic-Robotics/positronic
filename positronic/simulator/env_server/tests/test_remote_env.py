@@ -16,6 +16,7 @@ from websockets.sync.client import connect as websocket_connect
 from websockets.sync.server import serve as websocket_serve
 
 import pimm
+from pimm.time import EMITTED_WORLD
 from positronic import geom, keys
 from positronic.cfg.eval import number_trials
 from positronic.cfg.eval.sim import libero as libero_cfg
@@ -732,7 +733,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
         main(policy=policy, evals=[replace(ev, tasks=partial(iter, [trial]))], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']
-    executed = [(float(v), int(ts)) for v, ts in (grip[i] for i in range(len(grip)))]
+    executed = [(float(value), ts[EMITTED_WORLD]) for value, ts in grip]
     values = [v for v, _ in executed]  # every sample is a chunk action: nothing else commands this channel
     complete_chunks = raw.chunks - 1  # the deadline cuts the last chunk short
     assert complete_chunks >= 2

@@ -6,7 +6,7 @@ import pytest
 
 from utilities import check_workspace_version_bump as gate
 
-CLIENT, WIRE = gate.MEMBERS
+CLIENT, WIRE, MODEL_SERVER, VOCABULARY = gate.MEMBERS
 
 
 def test_a_later_version_is_later():
@@ -150,3 +150,10 @@ def test_a_change_under_one_member_is_that_members_alone():
 
 def test_a_sibling_directory_sharing_the_prefix_is_not_the_member():
     assert gate.shipped_changes([PurePosixPath('wireless/x.py'), PurePosixPath('wire.py')], WIRE) == []
+
+
+def test_model_server_changes_require_its_own_version_and_pin():
+    source = PurePosixPath('model_server/positronic_model_server/serialization.py')
+    assert gate.shipped_changes([source], MODEL_SERVER) == [source]
+    assert gate.shipped_changes([source], WIRE) == []
+    assert gate.pinned_version(manifest('positronic-model-server==0.1.0'), MODEL_SERVER.distribution) == '0.1.0'

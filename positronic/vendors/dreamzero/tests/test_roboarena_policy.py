@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from positronic_model_server.serialization import serialize
 from positronic_wire.roboarena import RoboarenaAddress
 
 from positronic import keys as rig
@@ -12,7 +13,6 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy.codec import ACTION
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.utils.serialization import serialize
 from positronic.vendors.dreamzero import roboarena as wire
 from positronic.vendors.dreamzero import roboarena_policy
 

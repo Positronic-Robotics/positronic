@@ -8,8 +8,11 @@ import pytest
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
+from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
+from positronic.dataset.vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder
 from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, vcs_wheel
 
@@ -17,10 +20,10 @@ from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, 
 def test_episode_writer_and_reader_basic(tmp_path):
     ep_dir = tmp_path / 'ep1'
     with DiskEpisodeWriter(ep_dir) as w:
-        w.append('a', 1, 1000)
-        w.append('a', 2, 2000)
-        w.append('b', 10, 1500)
-        w.append('b', 20, 2500)
+        w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+        w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
+        w.append('b', 10, Time(**{RECORDED_TIME: 1500}))
+        w.append('b', 20, Time(**{RECORDED_TIME: 2500}))
 
     # Files written
     assert (ep_dir / 'a.parquet').exists()
@@ -35,38 +38,37 @@ def test_episode_writer_and_reader_basic(tmp_path):
     b = ep['b']
     assert len(a) == 2
     assert len(b) == 2
-    assert a[0] == (1, 1000)
-    assert b[1] == (20, 2500)
+    assert a[0] == (1, Time(**{RECORDED_TIME: 1000}))
+    assert b[1] == (20, Time(**{RECORDED_TIME: 2500}))
 
 
-def test_episode_start_last_ts(tmp_path):
+def test_episode_bounds(tmp_path):
     ep_dir = tmp_path / 'ep2'
     with DiskEpisodeWriter(ep_dir) as w:
         # a: starts 1000, last 2000
-        w.append('a', 1, 1000)
-        w.append('a', 2, 2000)
+        w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+        w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
         # b: starts 1500, last 2500
-        w.append('b', 10, 1500)
-        w.append('b', 20, 2500)
+        w.append('b', 10, Time(**{RECORDED_TIME: 1500}))
+        w.append('b', 20, Time(**{RECORDED_TIME: 2500}))
 
     ep = DiskEpisode(ep_dir)
-    # Current Episode implementation uses max of starts and max of lasts
-    assert ep.start_ts == 1500
-    assert ep.last_ts == 2500
+    assert ep.bounds(RECORDED_TIME).start == 1500
+    assert ep.bounds(RECORDED_TIME).finish == 2500
 
 
 def test_episode_getitem_returns_signal(tmp_path):
     ep_dir = tmp_path / 'ep3'
     with DiskEpisodeWriter(ep_dir) as w:
-        w.append('x', np.array([1, 2]), 1000)
-        w.append('x', np.array([3, 4]), 2000)
+        w.append('x', np.array([1, 2]), Time(**{RECORDED_TIME: 1000}))
+        w.append('x', np.array([3, 4]), Time(**{RECORDED_TIME: 2000}))
 
     ep = DiskEpisode(ep_dir)
     x = ep['x']
     assert len(x) == 2
     v0, t0 = x[0]
     v1, t1 = x[1]
-    assert t0 == 1000 and t1 == 2000
+    assert t0 == Time(**{RECORDED_TIME: 1000}) and t1 == Time(**{RECORDED_TIME: 2000})
     # vector contents preserved
     assert list(v0) == [1, 2]
     assert list(v1) == [3, 4]
@@ -81,8 +83,8 @@ def test_episode_static_items_json(tmp_path):
         w.set_static('params', {'speed': 0.5})
         w.set_static('tags', ['demo', 'test'])
         # also write a dynamic signal
-        w.append('a', 42, 1000)
-        w.append('a', 43, 2000)
+        w.append('a', 42, Time(**{RECORDED_TIME: 1000}))
+        w.append('a', 43, Time(**{RECORDED_TIME: 2000}))
 
     # Files written
     assert (ep_dir / 'static.json').exists()
@@ -101,14 +103,14 @@ def test_episode_static_items_json(tmp_path):
     # dynamic access still returns a Signal
     a = ep['a']
     assert len(a) == 2
-    assert a[0] == (42, 1000)
+    assert a[0] == (42, Time(**{RECORDED_TIME: 1000}))
 
 
 def test_episode_meta_written_and_exposed(tmp_path):
     ep_dir = tmp_path / 'ep_meta'
     with DiskEpisodeWriter(ep_dir) as w:
         # also write a dynamic signal and static
-        w.append('a', 1, 1000)
+        w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
         w.set_static('user_key', 'value')
 
     # Files present
@@ -142,7 +144,7 @@ def test_each_episode_records_its_own_video_encoder(tmp_path):
     writers = [DiskEpisodeWriter(tmp_path / str(i), video_encoder=e) for i, e in enumerate(encoders)]
     for w in writers:
         with w:
-            w.append('a', 1, 1000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
 
     recorded = [DiskEpisode(w.path).meta['writer'][META_WRITER_VIDEO_ENCODER] for w in writers]
     assert recorded == [repr(e) for e in encoders]
@@ -155,7 +157,7 @@ def test_episode_written_by_an_installed_wheel_records_that_wheel_revision(tmp_p
     _cached_env_writer_info.cache_clear()
     try:
         with DiskEpisodeWriter(tmp_path / 'ep') as w:
-            w.append('a', 1, 1000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
     finally:
         _cached_env_writer_info.cache_clear()
 
@@ -255,7 +257,7 @@ def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
     ep_dir = tmp_path / 'ep_abort'
     with DiskEpisodeWriter(ep_dir) as w:
         # Append some data to create resources
-        w.append('a', 1, 1000)
+        w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
         w.set_static('k', 1)
         assert ep_dir.exists()
 
@@ -264,7 +266,7 @@ def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
         assert not ep_dir.exists()
 
         with pytest.raises(RuntimeError):
-            w.append('a', 2, 2000)
+            w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
         with pytest.raises(RuntimeError):
             w.set_static('z', 2)
 
@@ -273,7 +275,7 @@ def test_episode_writer_context_aborts_on_exception(tmp_path):
     ep_dir = tmp_path / 'ep_context_abort'
     with pytest.raises(RuntimeError, match='boom'):
         with DiskEpisodeWriter(ep_dir) as w:
-            w.append('a', 1, 1000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
             raise RuntimeError('boom')
     assert not ep_dir.exists()
 
@@ -293,14 +295,14 @@ def test_episode_writer_prevents_signal_name_conflicting_with_static(tmp_path):
         w.set_static('conflict_key', {'foo': 1})
         # Appending a signal with the same name should raise
         with np.testing.assert_raises_regex(ValueError, "Static item 'conflict_key' already set"):
-            w.append('conflict_key', 123, 1000)
+            w.append('conflict_key', 123, Time(**{RECORDED_TIME: 1000}))
 
 
 def test_episode_writer_prevents_static_name_conflicting_with_signal(tmp_path):
     ep_dir = tmp_path / 'ep_conflict_signal_then_static'
     with DiskEpisodeWriter(ep_dir) as w:
         # Write a signal first
-        w.append('conflict_key', 1, 1000)
+        w.append('conflict_key', 1, Time(**{RECORDED_TIME: 1000}))
         # Setting a static item with the same name should raise
         with np.testing.assert_raises_regex(ValueError, "Signal 'conflict_key' already exists"):
             w.set_static('conflict_key', {'foo': 2})
@@ -314,7 +316,7 @@ class TestEpisodeVideoIntegration:
             frames = [create_frame(30), create_frame(120), create_frame(200)]
             ts = [1000, 2000, 4000]
             for f, t in zip(frames, ts, strict=False):
-                w.append('cam', f, t)
+                w.append('cam', f, Time(**{RECORDED_TIME: t}))
 
         # Files created for a video signal
         assert (ep_dir / 'cam.mp4').exists()
@@ -328,25 +330,25 @@ class TestEpisodeVideoIntegration:
         # Retrieve frames back and compare approximately (accounting for compression)
         for i in range(3):
             frame, t = cam[i]
-            assert t == ts[i]
+            assert t == Time(**{RECORDED_TIME: ts[i]})
             assert_frames_equal(frame, frames[i], tolerance=25)
 
     def test_episode_mixed_vector_and_video(self, tmp_path):
         ep_dir = tmp_path / 'ep_mixed'
         with DiskEpisodeWriter(ep_dir) as w:
             # Vector signal
-            w.append('a', 1, 1000)
-            w.append('a', 2, 2000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
             # Video signal
-            w.append('cam', create_frame(10), 1500)
-            w.append('cam', create_frame(20), 2500)
+            w.append('cam', create_frame(10), Time(**{RECORDED_TIME: 1500}))
+            w.append('cam', create_frame(20), Time(**{RECORDED_TIME: 2500}))
 
         ep = DiskEpisode(ep_dir)
         # Keys include both signals
         assert set(ep.keys()) == {'a', 'cam'}
 
         # Time snapshot merges both; dynamic values only
-        snap = ep.time[2000]
+        snap = ep.time[Time(**{RECORDED_TIME: 2000})]
         assert snap['a'] == 2
         cam_frame = snap['cam']
         assert_frames_equal(cam_frame, create_frame(10), tolerance=25)
@@ -363,53 +365,53 @@ class TestCoreEpisodeTime:
             w.set_static('params', {'k': 1})
             # Dynamic signals
             # a: 1000->1, 2000->2, 3000->3
-            w.append('a', 1, 1000)
-            w.append('a', 2, 2000)
-            w.append('a', 3, 3000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
+            w.append('a', 3, Time(**{RECORDED_TIME: 3000}))
             # b: 1500->5, 2500->7, 3500->9
-            w.append('b', 5, 1500)
-            w.append('b', 7, 2500)
-            w.append('b', 9, 3500)
+            w.append('b', 5, Time(**{RECORDED_TIME: 1500}))
+            w.append('b', 7, Time(**{RECORDED_TIME: 2500}))
+            w.append('b', 9, Time(**{RECORDED_TIME: 3500}))
         self.ep = DiskEpisode(ep_dir)
 
     def test_int_includes_static(self):
-        snap = self.ep.time[2000]
+        snap = self.ep.time[Time(**{RECORDED_TIME: 2000})]
         expected = {'task': 'stack', 'version': 2, 'params': {'k': 1}, 'a': 2, 'b': 5}
         assert snap == expected
 
     def test_array_preserves_static_and_samples(self):
         ts = [1500, 2500, 3000]
-        sub = self.ep.time[ts]
+        sub = self.ep.time[[Time(**{RECORDED_TIME: t}) for t in ts]]
         expected = {'task': 'stack', 'version': 2, 'params': {'k': 1}, 'a': [1, 2, 3], 'b': [5, 7, 7]}
         sub_norm = {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in sub.items()}
         assert sub_norm == expected
 
     def test_no_step_slice_raises_keyerror(self):
         with pytest.raises(KeyError):
-            _ = self.ep.time[1500:3000]
+            _ = self.ep.time[Time(**{RECORDED_TIME: 1500}) : Time(**{RECORDED_TIME: 3000})]
 
     def test_stepped_slice_without_end_defaults_to_episode_last_ts(self):
-        start = self.ep.start_ts
+        start = self.ep.bounds(RECORDED_TIME).start
         step = 500
-        sub = self.ep.time[start::step]
+        sub = self.ep.time[Time(**{RECORDED_TIME: start}) :: Time(**{RECORDED_TIME: step})]
         a_vals = sub['a']
         b_vals = sub['b']
-        expected_len = len(np.arange(start, self.ep.last_ts + 1, step))
+        expected_len = len(np.arange(start, self.ep.bounds(RECORDED_TIME).finish + 1, step))
         assert len(a_vals) == len(b_vals) == expected_len
 
 
 def test_disk_episode_implements_abc(tmp_path):
     ep_dir = tmp_path / 'ep_abc'
     with DiskEpisodeWriter(ep_dir) as w:
-        w.append('a', 1, 1000)
-        w.append('a', 2, 2000)
+        w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+        w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
         w.set_static('task', 'stack')
 
     ep = DiskEpisode(ep_dir)
 
     assert isinstance(ep, Episode)
 
-    view = ep.time[1000:3000:1000]
+    view = ep.time[Time(**{RECORDED_TIME: 1000}) : Time(**{RECORDED_TIME: 3000}) : Time(**{RECORDED_TIME: 1000})]
     assert isinstance(view, dict)
 
 
@@ -418,82 +420,77 @@ def test_episode_writer_with_extra_timelines(tmp_path):
 
     ep_dir = tmp_path / 'ep_extra_timelines'
     with DiskEpisodeWriter(ep_dir) as w:
-        w.append('state', np.array([1.0, 2.0]), 1000, extra_ts={'producer': 900, 'consumer': 1100})
-        w.append('state', np.array([3.0, 4.0]), 2000, extra_ts={'producer': 1900, 'consumer': 2100})
-        w.append('image', create_frame(50), 1500, extra_ts={'producer': 1400, 'consumer': 1600})
-        w.append('image', create_frame(100), 2500, extra_ts={'producer': 2400, 'consumer': 2600})
+        w.append('state', np.array([1.0, 2.0]), Time(**{RECORDED_TIME: 1000}, producer=900, consumer=1100))
+        w.append('state', np.array([3.0, 4.0]), Time(**{RECORDED_TIME: 2000}, producer=1900, consumer=2100))
+        w.append('image', create_frame(50), Time(**{RECORDED_TIME: 1500}, producer=1400, consumer=1600))
+        w.append('image', create_frame(100), Time(**{RECORDED_TIME: 2500}, producer=2400, consumer=2600))
 
     # Verify vector signal has extra timelines
     state_table = pq.read_table(ep_dir / 'state.parquet')
-    assert {'timestamp', 'ts_ns.producer', 'ts_ns.consumer'} <= set(state_table.column_names)
-    assert state_table['ts_ns.producer'].to_pylist() == [900, 1900]
-    assert state_table['ts_ns.consumer'].to_pylist() == [1100, 2100]
+    assert {f'ts.{RECORDED_TIME}', 'ts.producer', 'ts.consumer'} <= set(state_table.column_names)
+    assert state_table['ts.producer'].to_pylist() == [900, 1900]
+    assert state_table['ts.consumer'].to_pylist() == [1100, 2100]
 
     # Verify video signal has extra timelines
     frames_table = pq.read_table(ep_dir / 'image.frames.parquet')
-    assert {'ts_ns', 'ts_ns.producer', 'ts_ns.consumer'} == set(frames_table.column_names)
-    assert frames_table['ts_ns.producer'].to_pylist() == [1400, 2400]
-    assert frames_table['ts_ns.consumer'].to_pylist() == [1600, 2600]
+    assert {f'ts.{RECORDED_TIME}', 'ts.producer', 'ts.consumer'} == set(frames_table.column_names)
+    assert frames_table['ts.producer'].to_pylist() == [1400, 2400]
+    assert frames_table['ts.consumer'].to_pylist() == [1600, 2600]
 
 
 class TestLazyMetaProperties:
     """Tests for lazy computation of expensive meta properties."""
 
-    def test_duration_ns_stored_in_meta_json(self, tmp_path):
-        """Test that duration_ns is written to meta.json on episode close."""
+    def test_duration_is_derived_from_named_bounds(self, tmp_path):
+        """Bounds describe the selected timelines without an unnamed cached duration."""
 
         ep_dir = tmp_path / 'ep_duration'
         with DiskEpisodeWriter(ep_dir) as w:
-            w.append('a', 1, 1000)
-            w.append('a', 2, 2000)
-            w.append('b', 10, 1500)
-            w.append('b', 20, 5000)  # last timestamp
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
+            w.append('b', 10, Time(**{RECORDED_TIME: 1500}))
+            w.append('b', 20, Time(**{RECORDED_TIME: 5000}))  # last timestamp
 
-        # Verify meta.json contains duration_ns
+        # Timeline spans are derived from signal bounds.
         with (ep_dir / 'meta.json').open('r') as f:
             stored_meta = json.load(f)
-        assert 'duration_ns' in stored_meta
-        assert stored_meta['duration_ns'] == 5000 - 1500  # max(last_ts) - max(start_ts)
+        assert 'duration_ns' not in stored_meta
 
-    def test_duration_ns_read_from_meta(self, tmp_path):
-        """Test that duration_ns uses cached value from meta.json (fast path)."""
+    def test_span_is_not_episode_metadata(self, tmp_path):
         ep_dir = tmp_path / 'ep_duration_read'
         with DiskEpisodeWriter(ep_dir) as w:
-            w.append('a', 1, 1000)
-            w.append('a', 2, 3000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            w.append('a', 2, Time(**{RECORDED_TIME: 3000}))
 
         ep = DiskEpisode(ep_dir)
-        # duration_ns should come from meta.json cache, not compute from signals
-        assert ep.duration_ns == 2000
-        # But duration_ns is NOT exposed through meta (it's a first-class Episode property)
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 2000
         assert 'duration_ns' not in ep.meta
 
-    def test_duration_ns_fallback_for_old_episodes(self, tmp_path):
-        """Test that duration_ns falls back to computing from signals for old episodes."""
+    def test_bounds_ignore_legacy_duration_cache(self, tmp_path):
 
         ep_dir = tmp_path / 'ep_old'
         with DiskEpisodeWriter(ep_dir) as w:
-            w.append('a', 1, 1000)
-            w.append('a', 2, 4000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            w.append('a', 2, Time(**{RECORDED_TIME: 4000}))
 
-        # Remove duration_ns from meta.json to simulate old episode
+        # An unnamed legacy duration cache cannot describe bounds on named timelines.
         meta_path = ep_dir / 'meta.json'
         with meta_path.open('r') as f:
             meta = json.load(f)
-        del meta['duration_ns']
+        meta['duration_ns'] = 999999
         with meta_path.open('w') as f:
             json.dump(meta, f)
 
         # Read episode - should compute duration from signals
         ep = DiskEpisode(ep_dir)
-        assert ep.duration_ns == 3000  # 4000 - 1000
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 3000  # 4000 - 1000
 
     def test_size_mb_computed_lazily(self, tmp_path):
         """Test that size_mb is only computed when accessed."""
         ep_dir = tmp_path / 'ep_lazy_size'
         with DiskEpisodeWriter(ep_dir) as w:
-            w.append('a', 1, 1000)
-            w.append('a', 2, 2000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
 
         ep = DiskEpisode(ep_dir)
 
@@ -512,8 +509,8 @@ class TestLazyMetaProperties:
 
         ep_dir = tmp_path / 'ep_lazy_copy'
         with DiskEpisodeWriter(ep_dir) as w:
-            w.append('a', 1, 1000)
-            w.append('a', 2, 2000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
 
         ep = DiskEpisode(ep_dir)
         # Get a copy of meta
@@ -525,15 +522,14 @@ class TestLazyMetaProperties:
 
         # Accessing size_mb should work
         assert meta_copy['size_mb'] > 0
-        # duration_ns is accessed as an Episode property
-        assert ep.duration_ns == 1000  # 2000 - 1000
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 1000  # 2000 - 1000
 
     def test_multiple_meta_accesses_cache_lazy_values(self, tmp_path):
         """Test that lazy values are cached after first computation."""
         ep_dir = tmp_path / 'ep_cache'
         with DiskEpisodeWriter(ep_dir) as w:
-            w.append('a', 1, 1000)
-            w.append('a', 2, 2000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
 
         ep = DiskEpisode(ep_dir)
 
@@ -553,13 +549,12 @@ class TestLazyMetaProperties:
         original_ts = 1234567890123456789
 
         with DiskEpisodeWriter(ep_dir, created_ts_ns=original_ts) as w:
-            w.append('a', 1, 1000)
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
 
         ep = DiskEpisode(ep_dir)
         assert ep.meta['created_ts_ns'] == original_ts
 
-    def test_duration_computed_from_scanned_files(self, tmp_path):
-        """Test that duration is computed by scanning parquet files for raw writes."""
+    def test_bounds_from_legacy_scalar_file(self, tmp_path):
         ep_dir = tmp_path / 'ep_scan'
 
         with DiskEpisodeWriter(ep_dir):
@@ -568,12 +563,10 @@ class TestLazyMetaProperties:
             table = pa.table({'timestamp': timestamps, 'value': [1, 2, 3]})
             pq.write_table(table, ep_dir / 'signal.parquet')
 
-        # Duration should be computed from scanned file
         ep = DiskEpisode(ep_dir)
-        assert ep.duration_ns == 4000  # 5000 - 1000
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 4000  # 5000 - 1000
 
-    def test_duration_computed_from_frames_parquet(self, tmp_path):
-        """Test that duration is computed from .frames.parquet files (video signals)."""
+    def test_bounds_from_legacy_frame_index(self, tmp_path):
         ep_dir = tmp_path / 'ep_video_scan'
 
         with DiskEpisodeWriter(ep_dir):
@@ -585,13 +578,13 @@ class TestLazyMetaProperties:
             (ep_dir / 'cam.mp4').write_bytes(b'dummy')
 
         ep = DiskEpisode(ep_dir)
-        assert ep.duration_ns == 6000  # 8000 - 2000
+        assert (ep.bounds(RECORDED_TIME).finish - ep.bounds(RECORDED_TIME).start) == 6000  # 8000 - 2000
 
 
 def test_get_returns_value_or_default(tmp_path):
     ep_dir = tmp_path / 'ep'
     with DiskEpisodeWriter(ep_dir) as w:
-        w.append('a', 1, 1000)
+        w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
         w.set_static('task', 'pick up cube')
 
     ep = DiskEpisode(ep_dir)
@@ -609,7 +602,7 @@ def test_group_first_transform_takes_precedence(tmp_path):
 
     ep_dir = tmp_path / 'ep'
     with DiskEpisodeWriter(ep_dir) as w:
-        w.append('sig', 1, 1000)
+        w.append('sig', 1, Time(**{RECORDED_TIME: 1000}))
         w.set_static('existing', 'original')
 
     ep = DiskEpisode(ep_dir)
@@ -623,3 +616,81 @@ def test_group_first_transform_takes_precedence(tmp_path):
     result = Group(Derive(existing=FromValue('overwritten'), missing=FromValue('filled')), Identity())(ep)
     assert result['existing'] == 'overwritten'
     assert result['missing'] == 'filled'
+
+
+@pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
+@pytest.mark.parametrize('timestamps, error', [({'world': 10}, TypeError), (Time(world=2**63), OverflowError)])
+def test_writer_rejects_invalid_timestamps_without_recording(tmp_path, data, timestamps, error):
+    path = tmp_path / 'episode'
+    with DiskEpisodeWriter(path) as writer:
+        with pytest.raises(error):
+            writer.append('signal', data, timestamps)
+        writer.append('signal', data, Time(world=10, wall=20))
+    signal = DiskEpisode(path)['signal']
+    assert len(signal) == 1
+    assert [time['world'] for time in signal.timestamps(('world',))] == [10]
+
+
+@pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
+def test_failed_first_append_leaves_no_signal(tmp_path, data):
+    path = tmp_path / 'episode'
+    with DiskEpisodeWriter(path) as writer:
+        with pytest.raises(OverflowError):
+            writer.append('rejected', data, Time(world=2**63))
+        writer.append('valid', 1, Time(world=20))
+    episode = DiskEpisode(path)
+    assert set(episode.signals) == {'valid'}
+    assert episode.bounds(('world',))[0]['world'] == 20
+    assert episode.bounds(('world',))[1]['world'] == 20
+    assert not list(path.glob('rejected.*'))
+
+
+@pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
+def test_failed_first_append_does_not_reserve_name(tmp_path, data):
+    path = tmp_path / 'episode'
+    with DiskEpisodeWriter(path) as writer:
+        with pytest.raises(OverflowError):
+            writer.append('rejected', data, Time(world=2**63))
+        writer.set_static('rejected', 'no samples')
+    episode = DiskEpisode(path)
+    assert episode['rejected'] == 'no samples'
+    assert not episode.signals
+
+
+@pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
+def test_writer_records_immutable_timestamps(tmp_path, data):
+    path = tmp_path / 'episode'
+    coordinates = {'world': 10, 'wall': 20}
+    timestamps = Time(**coordinates)
+    with DiskEpisodeWriter(path) as writer:
+        writer.append('signal', data, timestamps)
+        coordinates.update(world=30, wall=40)
+        assert timestamps == {'world': 10, 'wall': 20}
+        writer.append('signal', data + 1, Time(**coordinates))
+    signal = DiskEpisode(path)['signal']
+    assert [time['world'] for time in signal.timestamps(('world',))] == [10, 30]
+    index = 'signal.frames.parquet' if isinstance(data, np.ndarray) else 'signal.parquet'
+    table = pq.read_table(path / index)
+    assert table['ts.wall'].to_pylist() == [20, 40]
+    assert table.schema.metadata[SIGNAL_VERSION_KEY] == SIGNAL_VERSION
+
+
+@pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
+def test_timestamp_values_preserve_storage_and_named_queries(tmp_path, data):
+    path = tmp_path / 'episode'
+    with DiskEpisodeWriter(path) as writer:
+        writer.append('signal', data, Time(world=10, wall=200))
+        writer.append('signal', data + 1, Time(wall=300, world=30))
+    signal = DiskEpisode(path)['signal']
+    assert signal.timelines == ('world', 'wall')
+    assert [time['world'] for time in signal.timestamps(('world',))] == [10, 30]
+    value, timestamp = signal.time[Time(**{'world': 20})]
+    assert timestamp == Time(world=10, wall=200)
+    np.testing.assert_array_equal(value, data)
+    video = isinstance(data, np.ndarray)
+    table = pq.read_table(path / ('signal.frames.parquet' if video else 'signal.parquet'))
+    main_column = 'ts.world'
+    assert set(table.column_names) == {main_column, 'ts.wall'} | (set() if video else {'value'})
+    assert table[main_column].to_pylist() == [10, 30]
+    assert table['ts.wall'].to_pylist() == [200, 300]
+    assert table.schema.metadata[SIGNAL_VERSION_KEY] == SIGNAL_VERSION

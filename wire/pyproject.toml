@@ -1,16 +1,15 @@
 [project]
 name = "positronic-wire"
-version = "0.10.0"
+version = "0.12.0"
 description = "The client side of the transports a Positronic inference session runs over"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-# The two transport libraries and nothing else: a coordinator that probes an endpoint installs this
-# subdirectory alone (`git+…#subdirectory=wire`) and must not pull the robotics stack in behind it.
-dependencies = [
-    "grpcio",
-    "websockets>=15.0.1",
-]
+dependencies = []
+
+[project.optional-dependencies]
+websocket = ["websockets>=15.0.1"]
+grpc = ["grpcio"]
 
 [build-system]
 requires = ["hatchling"]

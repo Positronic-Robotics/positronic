@@ -10,6 +10,7 @@ import configuronic as cfn
 import msgpack
 import numpy as np
 import pos3
+from positronic_model_server.serialization import serialize
 from websockets.sync.client import ClientConnection, connect
 
 from pimm.logging import init_logging
@@ -23,7 +24,6 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
-from positronic.utils.serialization import serialize
 from positronic.vendors.galaxea import codecs, protocol
 
 PYTHONPATH = 'PYTHONPATH'

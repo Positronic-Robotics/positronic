@@ -127,7 +127,7 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         episodeInput.select();
     });
 
-    // URL params: ?t=<seconds_from_start> or ?ts_ns=<absolute_nanoseconds> to seek on load
+    // Seek links use the episode's preferred nanosecond clock, when present.
     window.addEventListener('load', () => {
         const viewerIframe = document.getElementById('viewer-iframe');
         const rrdUrl = appUrl({{ rrd_path | tojson }});
@@ -135,8 +135,12 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         viewerUrl.searchParams.set('url', rrdUrl);
         viewerUrl.searchParams.set('hide_welcome_screen', '');
         const params = new URLSearchParams(window.location.search);
-        if (params.has('ts_ns')) viewerUrl.searchParams.set('seek_ts_ns', params.get('ts_ns'));
-        else if (params.has('t')) viewerUrl.searchParams.set('seek_t', params.get('t'));
+        const seekTimeline = {{ seek_timeline | tojson }};
+        if (seekTimeline !== null) {
+            viewerUrl.searchParams.set('seek_timeline', seekTimeline);
+            if (params.has('ts_ns')) viewerUrl.searchParams.set('seek_ts_ns', params.get('ts_ns'));
+            else if (params.has('t')) viewerUrl.searchParams.set('seek_t', params.get('t'));
+        }
         viewerIframe.src = viewerUrl;
     });
 </script>

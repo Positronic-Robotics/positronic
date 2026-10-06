@@ -1,5 +1,4 @@
-"""The offboard wire's contract: its message keys, the shared msgpack encoding, and the robot command
-this boundary carries.
+"""Legacy v1/v2 encoding and robot-command interpretation.
 
 A served command arrives either inside the ``__cmd__`` envelope or as the bare ``to_wire`` mapping at a
 command channel, and nothing but the channel tells that mapping from any other dict.
@@ -7,78 +6,19 @@ command channel, and nothing but the channel tells that mapping from any other d
 
 import collections.abc as cabc
 import functools
-from enum import IntEnum, StrEnum
 from typing import Any
 
 import msgpack
 import numpy as np
+from positronic_model_server import serialization
+from positronic_model_server.protocol import ProtocolVersion
 
 from positronic import keys
 from positronic.drivers.roboarm import command
-from positronic.utils import serialization
 from positronic.utils.versions import Version
 
-AUTH_TOKEN_ENV = 'AUTH_TOKEN'
-AUTH_HEADER = 'Authorization'
-
-
-def bearer(token: str) -> str:
-    """The authorization header value for a bearer token."""
-    return f'Bearer {token}'
-
-
-# The top-level keys of every server-to-client message: ``STATUS`` until the server reports itself ready
-# and hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference.
-STATUS = 'status'
-MESSAGE = 'message'
-META = 'meta'
-RESULT = 'result'
-ERROR = 'error'
-# The ready handshake issues an ID. Requests carry it beside the observation, and an end request
-# is acknowledged with the same ID after the model releases the session's state.
-SESSION_ID = 'session_id'
-OBSERVATION = 'observation'
-END_SESSION = 'end_session'
-PROTOCOL_VERSION = 'protocol_version'
-
-
-class ProtocolVersion(IntEnum):
-    V1 = 1
-    V2 = 2
-
-
 CURRENT_VERSION = ProtocolVersion.V2
-VERSIONS = {version.value: Version(version) for version in ProtocolVersion}
-
-
-# What the server spent on one inference, beside the ``RESULT`` it answers with: durations in
-# milliseconds on the server's own clock. A server that sends none leaves the round trip undivided.
-TIMING = 'timing'
-
-# The phases ``TIMING`` reports. `SERVED` brackets the others: it opens on the observation
-# arriving and closes before the answer is encoded.
-TIMING_SERVED = 'served_ms'
-TIMING_DECODE = 'decode_ms'
-TIMING_INFER = 'infer_ms'
-# Time the observation waited for the inference slot, inside `SERVED`.
-TIMING_QUEUED = 'queued_ms'
-
-
-def timing_key(name: str) -> str:
-    return f'{name}_ms'
-
-
-# The loaded model's call, excluding codec conversions.
-MODEL_CALL = 'model'
-# Time the model's own call took, inside `INFER`.
-TIMING_MODEL = timing_key(MODEL_CALL)
-
-
-class ServerStatus(StrEnum):
-    READY = 'ready'
-    WAITING = 'waiting'
-    LOADING = 'loading'
-    ERROR = 'error'
+VERSIONS = {version.value: Version(version) for version in (ProtocolVersion.V1, ProtocolVersion.V2)}
 
 
 _CMD = b'__cmd__'

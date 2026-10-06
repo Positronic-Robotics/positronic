@@ -12,6 +12,7 @@ import tqdm
 
 import pimm
 import positronic.cfg.simulator
+from pimm.time import EMITTED_WORLD
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials
 from positronic.cfg.eval.sim.positronic import stack_cubes
@@ -131,7 +132,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     first_pose, _first_pose_ts = pose_samples[0]
     np.testing.assert_allclose(first_pose[:3], np.array([0.4, 0.5, 0.6], dtype=np.float32))
     np.testing.assert_allclose(first_pose[3:], np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
-    assert np.all(np.diff([ts for _, ts in pose_samples]) > 0) or len(pose_samples) == 1
+    assert np.all(np.diff([ts[EMITTED_WORLD] for _, ts in pose_samples]) > 0) or len(pose_samples) == 1
 
     grip_signal = signals['target_grip']
     grip_samples = list(grip_signal)
@@ -140,7 +141,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     # Nothing but the policy commands this channel, so the stream starts with its first commanded grip
     # (0.33) — consistent with ``robot_command.pose`` above.
     assert grip_values[0] == pytest.approx(0.33, rel=1e-2, abs=1e-2)
-    assert np.all(np.diff([ts for _, ts in grip_samples]) > 0) or len(grip_samples) == 1
+    assert np.all(np.diff([ts[EMITTED_WORLD] for _, ts in grip_samples]) > 0) or len(grip_samples) == 1
 
     assert policy.observations, 'Policy did not receive any observations'
     last_obs = policy.observations[-1]

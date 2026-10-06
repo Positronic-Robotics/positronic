@@ -14,6 +14,9 @@ from unittest.mock import MagicMock, patch
 
 import configuronic as cfn
 import pytest
+from platform_client.policy_container import AUTH_TOKEN_ENV
+from positronic_model_server import protocol
+from positronic_model_server.spec import ARGS
 from positronic_wire import registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
@@ -23,15 +26,14 @@ from websockets.http11 import Response
 from websockets.sync.client import connect, unix_connect
 
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard import protocol, server_wire, websocket_wire
+from positronic.offboard import server_wire, websocket_wire
 from positronic.offboard.client import ConnectRetries, InferenceClient, InferenceSession
 from positronic.offboard.protocol import deserialise, serialise
-from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
+from positronic.offboard.server import AUTH_HEADER, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import Served
 from positronic.policy import Codec
-from positronic.policy.base import ARGS
 from positronic.policy.processors import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
@@ -457,12 +459,12 @@ def test_a_probe_over_a_socket_answers_for_the_server_that_bound_it(unix_stub_se
     assert client_wire.probe(address, None, 5.0) is None
 
 
-def test_a_probe_of_a_socket_nothing_has_bound_is_cold(socket_path):
+def test_a_probe_of_a_socket_nothing_has_bound_is_no_answer(socket_path):
     """A path no server has bound yet can still become one, so the probe says to wait rather than refuse."""
     client_wire = registry.client_wire('websocket_unix')
     address = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.SESSION_PATH, '')
 
-    assert client_wire.probe(address, None, 1.0) is wire.Refusal.COLD
+    assert client_wire.probe(address, None, 1.0) is wire.Refusal.SILENT
 
 
 def test_a_socket_path_that_reads_as_a_url_is_dialled_as_the_filename_it_is(start_server, socket_path, make_mock_model):
@@ -1030,7 +1032,7 @@ class TestKeepalive:
         [
             (InvalidStatus(Response(404, 'Not Found', Headers())), wire.Refusal.FINAL),
             (InvalidStatus(Response(503, 'Service Unavailable', Headers())), wire.Refusal.COLD),
-            (ConnectionRefusedError(111, 'Connection refused'), wire.Refusal.COLD),
+            (TimeoutError('timed out while waiting for handshake response'), wire.Refusal.SILENT),
         ],
     )
     def test_a_404_where_no_session_server_answers_refuses_as_the_probe_reads_it(
@@ -1039,7 +1041,12 @@ class TestKeepalive:
         """An address that serves something else answers 404 to the call and no upgrade to the probe."""
         host, port, *_ = stub_server
         monkeypatch.setattr(wire, 'KEEPALIVE_PATH', f'{wire.API_PATH}/no-such-call')
-        monkeypatch.setattr(client_websocket.WebsocketClientWire, '_connect', MagicMock(side_effect=raised))
+
+        def upgrade_refused(*_args, sock: socket.socket, **_settings):
+            sock.close()
+            raise raised
+
+        monkeypatch.setattr(client_websocket, 'connect', upgrade_refused)
         with pytest.raises(wire.ConnectRefused) as refused:
             _ws_client(host, port).keepalive()
         assert refused.value.refusal is refusal

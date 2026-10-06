@@ -28,7 +28,7 @@ _START_POSE_TOL = 0.001  # metres; a reset places the joints, it does not servo 
 
 
 def _message(payload):
-    return pimm.Message(payload, ts=0, updated=True)
+    return pimm.Message(payload)
 
 
 def _observe(adapter: AbcAdapter, frame: dict) -> dict:

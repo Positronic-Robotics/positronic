@@ -16,7 +16,7 @@ from positronic_wire import wire
 
 from pimm.logging import init_logging
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard.roboarena import ProbeOutcome, RoboarenaClient
+from positronic.offboard.roboarena import RoboarenaClient
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.offboard.spec import Model, PolicyDeployment
@@ -117,7 +117,7 @@ class DreamZeroSubprocess:
         self._launch()
         client = RoboarenaClient(port=self.roboarena_port)
         wait_for_subprocess_ready(
-            check_ready=lambda: client.probe() is ProbeOutcome.READY,
+            check_ready=lambda: client.probe() is None,
             check_crashed=self._check_crashed,
             description='DreamZero subprocess',
             max_wait=1200.0,

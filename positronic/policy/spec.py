@@ -5,8 +5,10 @@ from functools import reduce
 from operator import and_, or_
 from typing import Any, cast
 
+from positronic_model_server.spec import ARGS, NAME, PAR, SEQ, VERSION
+
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
-from positronic.policy.base import ARGS, NAME, PAR, SEQ, VERSION, Processor
+from positronic.policy.base import Processor
 from positronic.policy.codec import (
     BinarizeGripInference,
     BinarizeGripTraining,

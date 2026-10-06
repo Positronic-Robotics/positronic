@@ -11,6 +11,8 @@ CONFIG_NAME = 'config_name'
 ACTION_FPS = 'action_fps'
 ACTION_HORIZON_SEC = 'action_horizon_sec'
 JPEG_QUALITY = 'jpeg_quality'
+# The name of the endpoint that served the episode.
+LABEL = 'label'
 SERVER = 'server'
 
 POLICY_META = 'inference.policy'

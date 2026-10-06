@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import subprocess
@@ -8,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import guard_main_merge as gmm  # noqa: E402
+import hook_payload  # noqa: E402
 
 POSITRONIC_URL = 'git@github.com:Positronic-Robotics/positronic.git'
 INFRA_URL = 'git@gh-infra:someone/agent_infra.git'
@@ -77,9 +79,17 @@ def no_allow(number, guarded_slug):
     return False
 
 
-def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env=''):
+def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorized=None, stack_below=None):
     return gmm.analyze(
-        cmd, cwd, GUARDED, git, path_exists=fake_path_exists, allow_merge=allow_merge, gh_repo_env=gh_repo_env
+        cmd,
+        cwd,
+        GUARDED,
+        git,
+        path_exists=fake_path_exists,
+        allow_merge=allow_merge,
+        gh_repo_env=gh_repo_env,
+        authorized=authorized or (lambda *_: True),
+        stack_below=stack_below or (lambda *_: []),
     )
 
 
@@ -339,12 +349,6 @@ def test_a_quoted_dollar_is_a_literal_the_shell_never_builds(git):
         assert verdict(git, cmd, allow_merge=lambda *_: True) is None, cmd
 
 
-def test_an_expansion_beside_the_merge_cannot_reach_its_arguments(git):
-    """A separator ends the command, so a later word is never one of gh's."""
-    cmd = f'gh pr merge 566 --repo {GUARDED} --squash && echo $HOME'
-    assert verdict(git, cmd, allow_merge=lambda *_: True) is None
-
-
 def test_a_merge_reading_its_token_from_a_substitution_still_passes(git):
     """The assignment prefix expands into the environment, not into gh's arguments."""
     cmd = f'GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 566 --repo {GUARDED} --squash'
@@ -424,6 +428,140 @@ def test_a_command_merging_two_pull_requests_is_refused(git):
     )
     assert verdict is not None and 'one pull request per command' in verdict
     assert asked == []
+
+
+def test_a_stacked_merge_spends_an_authorization_for_each_pull_request_it_takes(git):
+    spent = []
+    denial = verdict(
+        git,
+        'gh pr merge 103',
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        stack_below=lambda n, slug: [101, 102],
+    )
+    assert denial is None
+    assert spent == [101, 102, 103]
+
+
+def test_a_stacked_merge_names_the_pull_requests_below_it_with_no_authorization(git):
+    spent = []
+    denial = verdict(
+        git,
+        'gh pr merge 103',
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        authorized=lambda n, slug: n != 101,
+        stack_below=lambda n, slug: [101, 102],
+    )
+    assert denial is not None and 'Not authorized: #101.' in denial and '#101, #102' in denial
+    assert spent == []
+
+
+@pytest.mark.parametrize(
+    'cmd',
+    ['gh pr reopen 101 && gh pr merge 103', 'gh pr merge 103 && echo done', 'python3 edit_stack.py; gh pr merge 103'],
+)
+def test_a_merge_beside_another_command_is_refused_and_spends_nothing(git, cmd):
+    """The other command can change the stack after the guard has read it."""
+    spent = []
+    denial = verdict(git, cmd, allow_merge=lambda n, slug: spent.append(n) or True)
+    assert denial == gmm.MERGE_NOT_ALONE_MSG
+    assert spent == []
+
+
+def test_a_substitution_beside_a_merge_may_only_read_a_file():
+    assert gmm._merge_runs_alone('GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 103')
+    assert not gmm._merge_runs_alone('GH_TOKEN=$(gh pr reopen 101; cat ~/tokens/gh) gh pr merge 103')
+
+
+def test_a_merge_after_a_cd_into_this_repository_goes_through(git):
+    assert verdict(git, f'cd {CLONE} && gh pr merge 103', allow_merge=lambda *_: True) is None
+
+
+def test_a_merge_whose_stack_cannot_be_read_is_refused_and_spends_nothing(git):
+    spent = []
+
+    def unreadable(number, slug):
+        raise gmm.StackLookupError('`gh api` failed')
+
+    denial = verdict(
+        git, 'gh pr merge 103', allow_merge=lambda n, slug: spent.append(n) or True, stack_below=unreadable
+    )
+    assert denial is not None and 'cannot tell which pull requests' in denial
+    assert spent == []
+
+
+def test_an_unauthorized_merge_is_refused_before_its_stack_is_read(git):
+    read = []
+    denial = verdict(
+        git,
+        'gh pr merge 103',
+        allow_merge=lambda n, slug: True,
+        authorized=lambda n, slug: False,
+        stack_below=lambda n, slug: read.append(n) or [],
+    )
+    assert denial is not None
+    assert read == []
+
+
+def fake_github(stack_members, bases, stack_base='main'):
+    """A `gh api` stand-in serving one stack: members as (number, head ref, state), and each base ref."""
+
+    def gh_json(path, deadline):
+        if '/stacks?' in path:
+            if stack_members is None:
+                return []
+            prs = [{'number': n, 'head': {'ref': h}, 'state': st} for n, h, st in stack_members]
+            return [{'number': 1, 'base': {'ref': stack_base}, 'pull_requests': prs}]
+        return {'base': {'ref': bases[int(path.rpartition('/')[2])]}}
+
+    return gh_json
+
+
+STACK_TOP_FIRST = [(103, 'c', 'open'), (101, 'a', 'open'), (102, 'b', 'open')]
+STACK_BASES = {101: 'main', 102: 'a', 103: 'b'}
+
+
+def test_a_pull_request_outside_any_stack_merges_alone():
+    assert gmm.merged_along_with(566, GUARDED, gh_json=fake_github(None, {})) == []
+
+
+def test_a_stacked_merge_takes_the_open_pull_requests_below_it_in_base_order():
+    assert gmm.merged_along_with(103, GUARDED, gh_json=fake_github(STACK_TOP_FIRST, STACK_BASES)) == [101, 102]
+
+
+def test_a_stacked_merge_does_not_take_the_pull_requests_above_it():
+    gh = fake_github(STACK_TOP_FIRST, STACK_BASES)
+    assert gmm.merged_along_with(102, GUARDED, gh_json=gh) == [101]
+    assert gmm.merged_along_with(101, GUARDED, gh_json=gh) == []
+
+
+def test_a_merged_layer_is_not_taken_again():
+    members = [(101, 'a', 'closed'), (102, 'b', 'open'), (103, 'c', 'open')]
+    assert gmm.merged_along_with(103, GUARDED, gh_json=fake_github(members, {102: 'main', 103: 'b'})) == [102]
+
+
+def test_a_stack_whose_open_layers_form_no_chain_is_unreadable():
+    with pytest.raises(gmm.StackLookupError):
+        gmm.merged_along_with(103, GUARDED, gh_json=fake_github(STACK_TOP_FIRST, {101: 'main', 102: 'x', 103: 'b'}))
+
+
+def test_a_stack_lookup_out_of_time_is_unreadable_without_running_gh(monkeypatch):
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('gh ran past the deadline'))
+    with pytest.raises(gmm.StackLookupError):
+        gmm._gh_json('repos/o/r/pulls/1', deadline=0)
+
+
+def test_the_stack_lookup_finishes_inside_the_hook_timeout():
+    settings = json.loads((Path(__file__).parents[3] / '.claude' / 'settings.json').read_text())
+    hooks = [h for entry in settings['hooks'][hook_payload.PRE_TOOL_USE] for h in entry['hooks']]
+    (guard,) = [h for h in hooks if h['command'].endswith('guard_main_merge.py"')]
+    assert gmm.STACK_LOOKUP_BUDGET_S < guard['timeout']
+
+
+def test_merge_authorized_does_not_spend_the_receipt(tmp_path, as_root):
+    write_allow(tmp_path, 566)
+    assert gmm.merge_authorized(566, GUARDED, tmp_path, tmp_path / 'spent', now=1_000_060)
+    assert consume(566, tmp_path)
+    assert not gmm.merge_authorized(566, GUARDED, tmp_path, tmp_path / 'spent', now=1_000_060)
 
 
 def test_a_quoted_gh_repo_assignment_is_read_as_the_shell_reads_it(git):
@@ -572,3 +710,220 @@ def test_end_to_end_subprocess(tmp_path):
     assert r.returncode == 2 and 'BLOCKED' in r.stderr
     assert run(f'cd {infra} && git push', clone).returncode == 0
     assert run('ls', clone).returncode == 0
+
+
+MERGE_TOOL = 'mcp__github__merge_pull_request'
+UPDATE_BRANCH_TOOL = 'mcp__github__update_pull_request_branch'
+# Each is pinned by name beside the shape test, so a shape that stops covering one of them fails.
+BRANCH_WRITE_TOOLS = ['mcp__github__create_or_update_file', 'mcp__github__push_files', 'mcp__github__delete_file']
+GUARDED_REPO_ARGS = {'owner': 'Positronic-Robotics', 'repo': 'positronic'}
+OTHER_REPO_ARGS = {'owner': 'someone', 'repo': 'agent_infra'}
+
+
+def mcp_verdict(tool, arguments, guarded=GUARDED, allow_merge=no_allow, authorized=None, stack_below=None):
+    return gmm.analyze_mcp(
+        tool,
+        arguments,
+        guarded,
+        allow_merge=allow_merge,
+        authorized=authorized or (lambda *_: True),
+        stack_below=stack_below or (lambda *_: []),
+    )
+
+
+def merge_args(number=566, **overrides):
+    return {**GUARDED_REPO_ARGS, 'pullNumber': number, 'merge_method': 'squash', **overrides}
+
+
+def test_an_mcp_merge_without_an_authorization_is_refused():
+    assert mcp_verdict(MERGE_TOOL, merge_args()) is not None
+
+
+def test_an_authorized_mcp_merge_goes_through():
+    assert mcp_verdict(MERGE_TOOL, merge_args(), allow_merge=lambda number, slug: True) is None
+
+
+def test_the_mcp_asks_about_the_pull_request_being_merged():
+    asked = []
+    mcp_verdict(MERGE_TOOL, merge_args(571), allow_merge=lambda number, slug: asked.append((number, slug)) or True)
+    assert asked == [(571, GUARDED.casefold())]
+
+
+def test_both_halves_spend_one_authorization(tmp_path, as_root, git):
+    write_allow(tmp_path, 566)
+
+    def allow(number, slug):
+        return gmm.consume_merge_allow(number, slug, tmp_path, tmp_path / 'spent', now=1_000_060)
+
+    assert mcp_verdict(MERGE_TOOL, merge_args(), allow_merge=allow) is None
+    assert verdict(git, 'gh pr merge 566', allow_merge=allow) is not None
+
+
+def test_a_stacked_mcp_merge_spends_an_authorization_for_each_pull_request_it_takes():
+    spent = []
+    denial = mcp_verdict(
+        MERGE_TOOL,
+        merge_args(103),
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        stack_below=lambda *_: [101, 102],
+    )
+    assert denial is None
+    assert spent == [101, 102, 103]
+
+
+def test_a_stacked_mcp_merge_names_the_pull_requests_below_it_with_no_authorization():
+    spent = []
+    denial = mcp_verdict(
+        MERGE_TOOL,
+        merge_args(103),
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        authorized=lambda n, slug: n != 101,
+        stack_below=lambda *_: [101, 102],
+    )
+    assert denial is not None and 'Not authorized: #101.' in denial
+    assert spent == []
+
+
+def test_an_mcp_merge_of_another_repository_is_refused_without_consulting_any_authorization():
+    def allow(number, slug):
+        raise AssertionError('the authorization must not be spent on a merge refused anyway')
+
+    assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, 'pullNumber': 566}, allow_merge=allow) is not None
+
+
+@pytest.mark.parametrize('number', [None, 'abc', '', True, 1.5, {'n': 1}])
+def test_an_mcp_merge_naming_no_pull_request_says_to_name_one(number):
+    assert 'names no pull request' in mcp_verdict(MERGE_TOOL, merge_args(number))
+
+
+def test_a_pull_request_number_json_wrote_as_a_float_is_the_same_number():
+    assert mcp_verdict(MERGE_TOOL, merge_args(566.0), allow_merge=lambda number, slug: number == 566) is None
+
+
+def test_an_mcp_merge_whose_repository_cannot_be_established_is_refused():
+    assert mcp_verdict(MERGE_TOOL, {'pullNumber': 566}) is not None
+    assert mcp_verdict(MERGE_TOOL, merge_args(), guarded='') is not None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_an_mcp_commit_onto_main_is_refused(tool):
+    assert mcp_verdict(tool, {**GUARDED_REPO_ARGS, 'branch': 'main', 'message': 'm'}) is not None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_an_mcp_commit_onto_another_branch_is_untouched(tool):
+    assert mcp_verdict(tool, {**GUARDED_REPO_ARGS, 'branch': 'feature-x', 'message': 'm'}) is None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_another_repository_runs_its_own_branch_contract(tool):
+    assert mcp_verdict(tool, {**OTHER_REPO_ARGS, 'branch': 'main', 'message': 'm'}) is None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_a_commit_onto_main_is_refused_when_the_guarded_repository_cannot_be_read(tool):
+    assert mcp_verdict(tool, {**GUARDED_REPO_ARGS, 'branch': 'main', 'message': 'm'}, guarded='') is not None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_a_commit_that_names_no_branch_is_refused(tool):
+    assert mcp_verdict(tool, {**GUARDED_REPO_ARGS, 'path': 'x', 'message': 'm'}) is not None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_a_commit_that_names_no_branch_on_another_repository_is_untouched(tool):
+    assert mcp_verdict(tool, {**OTHER_REPO_ARGS, 'path': 'x', 'message': 'm'}) is None
+
+
+@pytest.mark.parametrize('tool', BRANCH_WRITE_TOOLS)
+def test_a_commit_onto_main_that_names_no_repository_is_refused(tool):
+    assert mcp_verdict(tool, {'branch': 'main', 'message': 'm'}) is not None
+
+
+def test_a_pull_request_branch_update_of_this_repository_is_refused():
+    assert mcp_verdict(UPDATE_BRANCH_TOOL, {**GUARDED_REPO_ARGS, 'pullNumber': 566}) is not None
+
+
+def test_a_pull_request_branch_update_of_another_repository_is_untouched():
+    assert mcp_verdict(UPDATE_BRANCH_TOOL, {**OTHER_REPO_ARGS, 'pullNumber': 566}) is None
+
+
+def test_a_later_tool_of_the_same_shape_is_caught_without_being_named():
+    assert mcp_verdict('mcp__github__replace_branch_contents', {**GUARDED_REPO_ARGS, 'branch': 'main'}) is not None
+    assert mcp_verdict('mcp__github__merge_branch', {**GUARDED_REPO_ARGS, 'base': 'main'}) is not None
+    assert mcp_verdict('mcp__github__sync_pull_request_branch', {**GUARDED_REPO_ARGS, 'pullNumber': 566}) is not None
+
+
+@pytest.mark.parametrize(
+    'tool,arguments',
+    [
+        ('mcp__github__get_file_contents', {**GUARDED_REPO_ARGS, 'path': 'x'}),
+        ('mcp__github__list_pull_requests', GUARDED_REPO_ARGS),
+        ('mcp__github__create_pull_request', {**GUARDED_REPO_ARGS, 'base': 'main', 'head': 'feature-x'}),
+        ('mcp__github__update_pull_request', {**GUARDED_REPO_ARGS, 'pullNumber': 566, 'base': 'main'}),
+        ('mcp__github__list_branches', GUARDED_REPO_ARGS),
+        ('mcp__github__create_branch', {**GUARDED_REPO_ARGS, 'branch': 'feature-y', 'from_branch': 'main'}),
+        ('mcp__tracker__create_ticket', {'title': 'merge the branch onto main'}),
+        ('Bash', {'command': 'gh pr merge 566'}),
+    ],
+)
+def test_a_call_that_cannot_land_a_commit_on_main_is_untouched(tool, arguments):
+    assert mcp_verdict(tool, arguments) is None
+
+
+def run_hook(payload, cwd, project_dir, script=None):
+    script = script or Path(__file__).resolve().parents[1] / 'guard_main_merge.py'
+    env = {**os.environ, 'CLAUDE_PROJECT_DIR': str(project_dir)}
+    body = payload if isinstance(payload, str) else json.dumps({**payload, 'cwd': str(cwd)})
+    return subprocess.run([sys.executable, str(script)], input=body, env=env, capture_output=True, text=True)
+
+
+@pytest.fixture
+def guarded_clone(tmp_path):
+    clone = tmp_path / 'positronic'
+    _init_repo(clone, POSITRONIC_URL)
+    return clone
+
+
+def test_the_mcp_merge_is_refused_end_to_end(guarded_clone):
+    r = run_hook({'tool_name': MERGE_TOOL, 'tool_input': merge_args()}, guarded_clone, guarded_clone)
+    assert r.returncode == 2 and 'BLOCKED' in r.stderr and '!allow_merge' in r.stderr
+
+
+def test_an_mcp_commit_onto_main_is_refused_end_to_end(guarded_clone):
+    arguments = {**GUARDED_REPO_ARGS, 'branch': 'main', 'files': [{'path': 'x', 'content': 'y'}], 'message': 'm'}
+    r = run_hook({'tool_name': 'mcp__github__push_files', 'tool_input': arguments}, guarded_clone, guarded_clone)
+    assert r.returncode == 2 and 'BLOCKED' in r.stderr
+
+
+def test_an_mcp_read_is_allowed_end_to_end(guarded_clone):
+    arguments = {**GUARDED_REPO_ARGS, 'path': 'README.md'}
+    payload = {'tool_name': 'mcp__github__get_file_contents', 'tool_input': arguments}
+    assert run_hook(payload, guarded_clone, guarded_clone).returncode == 0
+
+
+@pytest.mark.parametrize('arguments,expected', [({'command': 'git push'}, 2), ({'command': 'ls'}, 0), ({}, 0)])
+def test_a_bash_payload_is_judged_as_a_command_end_to_end(arguments, expected, guarded_clone):
+    payload = {'tool_name': 'Bash', 'tool_input': arguments}
+    assert run_hook(payload, guarded_clone, guarded_clone).returncode == expected
+
+
+@pytest.mark.parametrize(
+    'body,expected',
+    [
+        ('{not json', 0),
+        ('[]', 0),
+        ('{"tool_name": "mcp__github__merge_pull_request", "tool_input": {', 2),
+        ('null mcp__github__push_files', 2),
+    ],
+)
+def test_a_payload_the_guard_cannot_read_refuses_only_where_a_merge_could_hide(body, expected, guarded_clone):
+    assert run_hook(body, guarded_clone, guarded_clone).returncode == expected
+
+
+def test_a_gate_that_cannot_answer_refuses(monkeypatch, capsys, guarded_clone):
+    monkeypatch.setattr(gmm, 'analyze_mcp', lambda *a, **k: 1 / 0)
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(guarded_clone))
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({'tool_name': MERGE_TOOL, 'tool_input': merge_args()})))
+    assert gmm.main() == 2
+    assert 'BLOCKED' in capsys.readouterr().err

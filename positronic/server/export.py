@@ -30,7 +30,7 @@ import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_UID
-from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, get_dataset_root
+from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, ReplayLayout, get_dataset_root
 from positronic.server.positronic_server import (
     API_FILE_SUFFIX,
     API_ROUTE,
@@ -487,6 +487,7 @@ def export_static(
     home_page: str | None = None,
     max_resolution: int = DEFAULT_MAX_RESOLUTION,
     max_hz: float = DEFAULT_MAX_HZ,
+    layout: ReplayLayout | None = None,
     base_href: str = '/',
     title: str = '',
     show_paths: bool = False,
@@ -536,6 +537,7 @@ def export_static(
             home_page=home_page,
             max_resolution=max_resolution,
             max_hz=max_hz,
+            layout=layout,
         )
         configure_pages(
             base_href=base_href,
@@ -575,6 +577,7 @@ def main(
     ep_table_cfg: TableConfig | None,
     max_resolution: int = DEFAULT_MAX_RESOLUTION,
     max_hz: float = DEFAULT_MAX_HZ,
+    layout: ReplayLayout | None = None,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
     base_href: str = '/',
@@ -593,6 +596,7 @@ def main(
         ep_table_cfg: Columns of the episode table, by static key
         max_resolution: Long side an episode's videos are re-encoded down to
         max_hz: Rate an episode's videos and numeric signals are thinned to; 0 keeps every frame and sample
+        layout: Where an episode's replay shows its views; None keeps the default replay
         group_tables: Grouped tables, by name
         home_page: The group table served at the root, or None for the episodes
         base_href: Path at the host root the export is served under
@@ -611,6 +615,7 @@ def main(
         home_page=home_page,
         max_resolution=max_resolution,
         max_hz=max_hz,
+        layout=layout,
         base_href=base_href,
         title=title,
         show_paths=show_paths,

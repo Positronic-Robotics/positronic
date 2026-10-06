@@ -171,10 +171,7 @@ def test_an_arm_holds_its_last_command_and_the_other_arm_is_untouched():
     right = keys.arm_channel(keys.ROBOT_COMMAND, 'right')
     pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]))
 
-    action = adapter.action({
-        left: pimm.Message(roboarm_command.CartesianPosition(pose), ts=0, updated=True),
-        right: None,
-    })
+    action = adapter.action({left: pimm.Message(roboarm_command.CartesianPosition(pose)), right: None})
     assert action[left][protocol.COMMAND_TYPE] == protocol.CARTESIAN
     assert action[right][protocol.COMMAND_TYPE] == protocol.HOLD
 

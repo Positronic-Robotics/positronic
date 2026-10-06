@@ -1,14 +1,17 @@
 import dataclasses
 import http.server
 import json
+import logging
 import pathlib
 import threading
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from positronic_model_server import protocol
 from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
@@ -16,7 +19,7 @@ from positronic.cfg import codecs
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Transform3D
 from positronic.offboard import keys as offboard_keys
-from positronic.offboard import protocol
+from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
@@ -206,8 +209,9 @@ class TestNewSessionRetriesRefusedConnects:
         assert len(fake.dials) == 1
         assert refused.value.refusal is wire.Refusal.FINAL
 
-    def test_a_cold_refusal_retries_to_the_deadline(self):
-        fake = _FakeWire(_refused(wire.Refusal.COLD))
+    @pytest.mark.parametrize('refusal', [wire.Refusal.COLD, wire.Refusal.SILENT])
+    def test_a_server_not_up_yet_retries_to_the_deadline(self, refusal):
+        fake = _FakeWire(_refused(refusal))
         with (
             patch('positronic.offboard.client.InferenceSession'),
             patch('positronic.offboard.client.time.sleep'),
@@ -287,7 +291,7 @@ class TestNewSessionRetriesRefusedConnects:
 
 
 def _ready(session_id: str, meta: dict | None = None) -> bytes:
-    return protocol.serialise({
+    return legacy_protocol.serialise({
         protocol.STATUS: protocol.ServerStatus.READY,
         protocol.PROTOCOL_VERSION: 2,
         protocol.META: meta if meta is not None else {'model_name': 'test'},
@@ -296,7 +300,7 @@ def _ready(session_id: str, meta: dict | None = None) -> bytes:
 
 
 def _answer(result) -> bytes:
-    return protocol.serialise({protocol.RESULT: result})
+    return legacy_protocol.serialise({protocol.RESULT: result})
 
 
 def _connection(*received: bytes | Exception) -> MagicMock:
@@ -309,7 +313,7 @@ def _connection(*received: bytes | Exception) -> MagicMock:
 def _observations_sent(conn: MagicMock) -> list:
     return [
         request[protocol.OBSERVATION]
-        for request in (protocol.deserialise(call.args[0]) for call in conn.send.call_args_list)
+        for request in (legacy_protocol.deserialise(call.args[0]) for call in conn.send.call_args_list)
         if protocol.OBSERVATION in request
     ]
 
@@ -327,7 +331,7 @@ class TestADroppedConnectionReconnects:
 
         dropped.close.assert_called_once()
         assert _observations_sent(reopened) == [{'image': 'test'}]
-        assert protocol.deserialise(reopened.send.call_args.args[0])[protocol.SESSION_ID] == 'second'
+        assert legacy_protocol.deserialise(reopened.send.call_args.args[0])[protocol.SESSION_ID] == 'second'
         assert session.session_id == 'second'
 
     def test_a_drop_after_an_answer_reaches_the_caller(self):
@@ -366,7 +370,7 @@ class TestADroppedConnectionReconnects:
 
     def test_a_new_session_that_declares_other_metadata_is_refused(self):
         """The caller built its stack from the first handshake, and the episode records it."""
-        end_ack = protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
         reopened = _connection(_ready('second', {'model_name': 'another'}), end_ack)
         fake = _FakeWire(_connection(_ready('first'), wire.PeerDisconnected('dropped')), reopened)
         session = InferenceClient(fake, _ADDRESS).new_session()
@@ -393,7 +397,10 @@ class TestADroppedConnectionReconnects:
     def test_the_reconnect_deadline_bounds_a_handshake_that_never_reaches_ready(self):
         """A server that sends status updates while it loads keeps the arm waiting only for the deadline."""
         clock = [0.0]
-        loading = protocol.serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: 'loading'})
+        loading = legacy_protocol.serialise({
+            protocol.STATUS: protocol.ServerStatus.LOADING,
+            protocol.MESSAGE: 'loading',
+        })
 
         def recv_loading(timeout: float | None = None) -> bytes:
             clock[0] += 5.0
@@ -541,8 +548,10 @@ def test_wrong_session_id_closes_only_the_requesting_session(served, transport, 
     try:
         assert first.session_id != second.session_id
         assert protocol.SESSION_ID not in first.metadata
-        first._conn.send(protocol.serialise({protocol.SESSION_ID: second.session_id, **payload}))
-        response = protocol.deserialise(first._conn.recv(timeout=5))
+        # The server answers this frame by ending the call, which can come before gRPC confirms the write.
+        with suppress(wire.PeerDisconnected):
+            first._conn.send(legacy_protocol.serialise({protocol.SESSION_ID: second.session_id, **payload}))
+        response = legacy_protocol.deserialise(first._conn.recv(timeout=5))
         # A drop now must not reconnect: the server answered on the session's connection, past ``infer``.
         first._answered = True
         assert response[protocol.STATUS] == protocol.ServerStatus.ERROR
@@ -569,13 +578,16 @@ def test_wrong_session_id_closes_only_the_requesting_session(served, transport, 
 def test_fatal_server_error_closes_client_without_masking_the_error():
     conn = MagicMock(spec=wire.ClientConnection)
     conn.recv.side_effect = [
-        protocol.serialise({
+        legacy_protocol.serialise({
             protocol.STATUS: protocol.ServerStatus.READY,
             protocol.META: {},
             protocol.SESSION_ID: 's',
             protocol.PROTOCOL_VERSION: 2,
         }),
-        protocol.serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: 'session ID mismatch'}),
+        legacy_protocol.serialise({
+            protocol.STATUS: protocol.ServerStatus.ERROR,
+            protocol.ERROR: 'session ID mismatch',
+        }),
     ]
     session = InferenceSession(conn)
     with pytest.raises(RuntimeError, match='session ID mismatch'):
@@ -589,7 +601,7 @@ def test_fatal_server_error_closes_client_without_masking_the_error():
 def test_failed_round_trip_closes_without_sending_end_on_the_broken_connection(failure):
     conn = MagicMock(spec=wire.ClientConnection)
     conn.recv.side_effect = [
-        protocol.serialise({
+        legacy_protocol.serialise({
             protocol.STATUS: protocol.ServerStatus.READY,
             protocol.META: {},
             protocol.SESSION_ID: 's',
@@ -609,15 +621,15 @@ def test_failed_round_trip_closes_without_sending_end_on_the_broken_connection(f
     'response, error',
     [
         (wire.PeerDisconnected('no acknowledgement'), wire.PeerDisconnected),
-        (protocol.serialise({protocol.SESSION_ID: 'wrong', protocol.END_SESSION: True}), RuntimeError),
-        (protocol.serialise({protocol.ERROR: 'cleanup failed'}), RuntimeError),
+        (legacy_protocol.serialise({protocol.SESSION_ID: 'wrong', protocol.END_SESSION: True}), RuntimeError),
+        (legacy_protocol.serialise({protocol.ERROR: 'cleanup failed'}), RuntimeError),
     ],
     ids=['no-ack', 'wrong-session', 'cleanup-error'],
 )
 def test_close_still_requires_a_valid_ack_when_the_final_write_reports_disconnect(response, error):
     conn = MagicMock(spec=wire.ClientConnection)
     conn.recv.side_effect = [
-        protocol.serialise({
+        legacy_protocol.serialise({
             protocol.STATUS: protocol.ServerStatus.READY,
             protocol.META: {},
             protocol.SESSION_ID: 's',
@@ -717,7 +729,7 @@ def test_training_metadata_does_not_change_inference_data():
     assert len(trained) == 50
     for actual, reference in zip(decoded, trained, strict=True):
         assert 'timestamp' not in actual
-        assert protocol.serialise(actual) == protocol.serialise(reference)
+        assert legacy_protocol.serialise(actual) == legacy_protocol.serialise(reference)
     assert training_codec.training_encoder.meta[policy_keys.ACTION_FPS] == 15
     rebuilt = from_spec(data_codec.to_spec())
     assert isinstance(rebuilt, Codec)
@@ -758,8 +770,8 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
             completed = run.send(obs)
             assert isinstance(completed, Step)
-            outputs.append(protocol.serialise(dict(first.commands) | dict(completed.commands)))
-            inputs.append(protocol.serialise(model.observations[0]))
+            outputs.append(legacy_protocol.serialise(dict(first.commands) | dict(completed.commands)))
+            inputs.append(legacy_protocol.serialise(model.observations[0]))
         finally:
             runtime.close()
             run.close()
@@ -820,6 +832,39 @@ def test_stack_failure_finishes_active_inference_before_closing_session(runtime)
         runtime.close()
         run.close()
     assert order == ['inference finished', 'session closed']
+
+
+def test_a_failed_session_close_reaches_the_caller(runtime):
+    failure = RuntimeError('Unexpected end-session response')
+    policy, session = _mock_remote_policy(CHUNKED_STACK)
+    session.close.side_effect = failure
+    run = runtime.start(policy)
+    with pytest.raises(RuntimeError) as raised:
+        run.close()
+    assert raised.value is failure
+
+
+def test_a_session_close_past_the_bound_lets_the_run_end_and_logs_a_late_failure(runtime, monkeypatch, caplog):
+    monkeypatch.setattr('positronic.policy.remote._CLOSE_TIMEOUT_S', 0.05)
+    release = threading.Event()
+    late_failure = TimeoutError('No end-session acknowledgement')
+    policy, session = _mock_remote_policy(CHUNKED_STACK)
+
+    def close():
+        assert release.wait(5), 'the close was not released'
+        raise late_failure
+
+    session.close.side_effect = close
+    run = runtime.start(policy)
+    threads_before = set(threading.enumerate())
+    with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
+        run.close()
+        assert 'did not answer the session close' in caplog.text
+        release.set()
+        for closer in set(threading.enumerate()) - threads_before:
+            closer.join(5)
+    assert 'The session close failed after the run continued' in caplog.text
+    assert str(late_failure) in caplog.text
 
 
 @pytest.mark.parametrize('compressed', [False, True])
