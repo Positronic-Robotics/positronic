@@ -474,7 +474,8 @@ class RankingRow(BaseModel):
     carry the same one. `tag` is what tells them apart, and is what lets a user find their own row;
     it is stable for a user across boards. Render them together (`ateam#0ddba7`).
 
-    The value the board ranks on is `scores.primary`.
+    The value the board ranks on is `scores.primary`. `replay` plays back the camera video of the
+    submission's episodes, and it is absent until the platform has built the page.
     """
 
     rank: int
@@ -483,6 +484,7 @@ class RankingRow(BaseModel):
     scores: Scores = Field(default_factory=Scores)
     submission_id: SubmissionId
     submitted_at: AwareDatetime
+    replay: ReplayLink | None = None
 
 
 class BoardSummary(BaseModel):

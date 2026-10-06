@@ -267,6 +267,10 @@ A board row reads `<display name>#<tag>`. The name is an alias and is not unique
 it altogether — so the tag is what tells two rows apart, and it is how you find your own: it is the
 same on every board you appear on.
 
+Each row carries `replay`, a page that plays back the camera video of the row's submission, with the
+task and outcome of each episode. The page opens without a key, and `replay` is absent until the
+platform has built it.
+
 ## From Python
 
 ```python
