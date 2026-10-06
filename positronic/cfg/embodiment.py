@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import configuronic as cfn
 
 import positronic.cfg.hardware.camera
@@ -8,6 +10,9 @@ from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
+
+if TYPE_CHECKING:
+    from positronic.drivers.roboarm.yam.settle import SettleTuning
 
 
 @cfn.config(
@@ -33,6 +38,7 @@ def droid(robot_arm, gripper, cameras):
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: gripper.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
+        ready_handlers={eval_keys.ARM: robot_arm.ready},
         control_systems=(*cameras.values(), robot_arm, gripper),
         simulated=False,
     )
@@ -78,6 +84,15 @@ def yam(robot_arm, cameras, video_encoder):
 @cfn.config(
     left_channel='can0',
     right_channel='can1',
+    park_after_idle_s=60.0,
+    park_tuning={
+        keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_park_tuning,
+        keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_park_tuning,
+    },
+    move_tuning={
+        keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
+        keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
+    },
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.311], keys.RIGHT_ARM: [0.30, -0.305, 0.311]},
@@ -96,6 +111,9 @@ def yam_bimanual(
     gravity_comp_factor: dict[str, list[float]] | None,
     cameras,
     video_encoder,
+    park_after_idle_s: float | None,
+    park_tuning: dict[str, 'SettleTuning'],
+    move_tuning: dict[str, 'SettleTuning'],
 ):
     """Real bimanual i2rt YAM on two CAN chains.
 
@@ -107,13 +125,16 @@ def yam_bimanual(
     i2rt's own factors on both arms.
     """
     from positronic import geom
-    from positronic.drivers.roboarm import yam as yam_driver
+    from positronic.drivers.roboarm.yam import driver as yam_driver
 
     arms = {
         side: yam_driver.Robot(
             channel,
             base_pose=geom.Transform3D(mounts[side]),
             gravity_comp_factor=None if gravity_comp_factor is None else gravity_comp_factor[side],
+            park_after_idle_s=park_after_idle_s,
+            park_tuning=park_tuning[side],
+            move_tuning=move_tuning[side],
         )
         for side, channel in zip(keys.BIMANUAL_ARMS, (left_channel, right_channel), strict=True)
     }
@@ -159,8 +180,8 @@ yam_bimanual_yambox = yam_bimanual.override(
     # The sim scene's plate is 0.011, so only z differs from the default.
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.322], keys.RIGHT_ARM: [0.30, -0.305, 0.322]},
     # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
-    # are sent, which is past the driver's 20 mrad arrival tolerance, so every park reports ERROR. These park
-    # both arms with about 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
+    # are sent, past the 20 mrad tolerance of a blocking move. These bring both arms inside it with about
+    # 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
     gravity_comp_factor=dict.fromkeys(keys.BIMANUAL_ARMS, [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]),
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),

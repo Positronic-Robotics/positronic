@@ -154,9 +154,7 @@ class StationConsole(pimm.ControlSystem):
             limiter = pimm.RateLimiter(clock, hz=TILE_FPS)
             while not should_stop.value:
                 self._raise_if_stopped(server_thread)
-                for name, feed in feeds.items():
-                    if (frame := pimm.value_updated(self.cameras[name])) is not None:
-                        feed.push(frame.array, clock.now())
+                self._push_frames(feeds, clock)
                 self._drive_episode(station, actions, clock)
                 if station.run_ended:
                     logger.info('The operator ended the run')
@@ -167,6 +165,16 @@ class StationConsole(pimm.ControlSystem):
                 feed.stream.close()
             server.should_exit = True
             server_thread.join()
+
+    def _push_frames(self, feeds: dict[str, CameraFeed], clock: pimm.Clock) -> None:
+        """Push each camera's new frame to its tile. A camera with no data keeps its last frame.
+
+        The harness fails the episode on a camera's ``pimm.SignalError``, so the console skips it and keeps serving.
+        """
+        for name, feed in feeds.items():
+            message = pimm.read_updated(self.cameras[name])
+            if message is not None and not isinstance(message.data, pimm.SignalError):
+                feed.push(message.data.array, clock.now())
 
     def _drive_episode(self, station: Station, actions: queue.SimpleQueue[Action], clock: pimm.Clock) -> None:
         """Send what the page asked for, in order, and record the episode once the harness answers it."""

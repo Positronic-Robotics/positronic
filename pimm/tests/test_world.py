@@ -1,9 +1,16 @@
 import logging
 import multiprocessing as mp
+import os
 import re
+import signal
 import struct
+import subprocess
+import sys
+import threading
 import time
+from collections.abc import Iterator
 from functools import partial
+from multiprocessing.context import SpawnProcess
 from queue import Empty, Full
 from typing import Any
 from unittest.mock import Mock, patch
@@ -11,6 +18,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from pimm.core import (
+    Command,
     ControlSystem,
     ControlSystemEmitter,
     ControlSystemReceiver,
@@ -19,17 +27,32 @@ from pimm.core import (
     FakeReceiver,
     Message,
     ReceiverDict,
+    ShutdownPolicy,
     SignalEmitter,
+    SignalError,
     SignalReceiver,
     Sleep,
     Yield,
 )
 from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
+from pimm.tests.sigterm_probe import CHILD_PID_FILE, SHUT_DOWN_FILE
 from pimm.tests.testing import MockClock
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, Time
 from pimm.utils import map as pimm_map
-from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, TransportMode, VirtualClock, World
+from pimm.world import (
+    EventReceiver,
+    LocalQueueEmitter,
+    MultiprocessEmitter,
+    MultiprocessReceiver,
+    QueueEmitter,
+    SystemClock,
+    TransportMode,
+    VirtualClock,
+    World,
+    _bg_wrapper,
+    _stop_when_orphaned,
+)
 
 
 @pytest.mark.parametrize('transport', ['local', 'queue', 'shared_memory'])
@@ -122,7 +145,7 @@ def test_fanout_preserves_emission_but_stamps_each_receiver(monkeypatch):
 def test_background_endpoints_have_world_time_only_on_hardware(monkeypatch, virtual_time):
     main = DummyControlSystem('main')
     background = DummyControlSystem('background')
-    monkeypatch.setattr(World, 'start_in_subprocess', lambda *args: None)
+    monkeypatch.setattr(World, 'start_in_subprocess', lambda *args, **kwargs: None)
     with World(virtual_time=virtual_time) as world:
         world.connect(background.emitter, main.receiver)
         world.connect(main.emitter, background.receiver)
@@ -556,6 +579,89 @@ class TestWorld:
             with pytest.raises(TypeError, match='Shared memory transport selected'):  # type: ignore[arg-type]
                 emitter.emit('not-compatible')
 
+    @staticmethod
+    def _one_mp_pipe(
+        world: World, transport: TransportMode = TransportMode.UNDECIDED
+    ) -> tuple[MultiprocessEmitter, MultiprocessReceiver]:
+        emitter, reader = world.mp_pipes(transport=transport)
+        assert isinstance(emitter, MultiprocessEmitter) and isinstance(reader, MultiprocessReceiver)
+        return emitter, reader
+
+    @staticmethod
+    def _read(reader: SignalReceiver) -> Message:
+        message = reader.read()
+        assert message is not None
+        return message
+
+    def test_mp_pipes_carry_a_signal_error_beside_shared_memory(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit(DummySMValue(1.0), time=Time(capture=1))
+            assert self._read(reader).data.value == pytest.approx(1.0)
+
+            error = SignalError('camera lost')
+            emitter.emit(error, time=Time(capture=2))
+
+            message = self._read(reader)
+            assert (message.data.args, message.time['capture'], message.updated) == (error.args, 2, True)
+            with pytest.raises(SignalError, match='camera lost'):
+                _ = reader.value
+            assert self._read(reader).updated is False
+
+            emitter.emit(DummySMValue(3.0), time=Time(capture=3))
+            message = self._read(reader)
+            assert (message.data.value, message.time['capture'], message.updated) == (pytest.approx(3.0), 3, True)
+            assert emitter.uses_shared_memory and reader.uses_shared_memory
+
+    def test_mp_pipes_give_the_newest_of_errors_and_shared_memory_payloads(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit(DummySMValue(1.0), time=Time(capture=1))
+            emitter.emit(SignalError('lost'), time=Time(capture=2))
+            emitter.emit(DummySMValue(3.0), time=Time(capture=3))
+
+            message = self._read(reader)
+            assert (message.data.value, message.time['capture']) == (pytest.approx(3.0), 3)
+
+            emitter.emit(SignalError('lost again'), time=Time(capture=4))
+            message = self._read(reader)
+            assert (message.data.args, message.time['capture']) == (('lost again',), 4)
+
+    def test_a_signal_error_does_not_choose_the_transport(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit(SignalError('camera absent'), time=Time(capture=1))
+
+            assert self._read(reader).data.args == ('camera absent',)
+            assert not emitter.uses_shared_memory and not reader.uses_shared_memory
+
+            emitter.emit(DummySMValue(2.0), time=Time(capture=2))
+            message = self._read(reader)
+            assert (message.data.value, message.time['capture']) == (pytest.approx(2.0), 2)
+            assert emitter.uses_shared_memory and reader.uses_shared_memory
+
+    def test_a_shared_memory_receiver_reads_a_signal_error_before_the_first_payload(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world, TransportMode.SHARED_MEMORY)
+            emitter.emit(SignalError('camera absent'), time=Time(capture=1))
+            assert self._read(reader).data.args == ('camera absent',)
+
+            emitter.emit(DummySMValue(2.0), time=Time(capture=2))
+            message = self._read(reader)
+            assert (message.data.value, message.time['capture']) == (pytest.approx(2.0), 2)
+
+    def test_mp_pipes_carry_a_signal_error_on_a_queue_transport(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit('hello', time=Time(capture=1))
+            assert self._read(reader).data == 'hello'
+
+            emitter.emit(SignalError('lost'), time=Time(capture=2))
+            assert self._read(reader).data.args == ('lost',)
+
+            emitter.emit('again', time=Time(capture=3))
+            assert self._read(reader).data == 'again'
+
 
 class TestWorldControlSystems:
     """Tests exercising ControlSystem wiring and scheduling."""
@@ -690,7 +796,7 @@ class TestWorldControlSystems:
 
         started_background = []
 
-        def fake_start_in_subprocess(self, *loops):
+        def fake_start_in_subprocess(self, *loops, shutdown_policy):
             started_background.append(loops)
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
@@ -730,7 +836,7 @@ class TestWorldControlSystems:
 
         started_background = []
 
-        def fake_start_in_subprocess(self, *loops):
+        def fake_start_in_subprocess(self, *loops, shutdown_policy):
             started_background.append(loops)
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
@@ -762,7 +868,7 @@ class TestWorldControlSystems:
 
         started_background = []
 
-        def fake_start_in_subprocess(self, *loops):
+        def fake_start_in_subprocess(self, *loops, shutdown_policy):
             started_background.append(loops)
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
@@ -807,8 +913,7 @@ class TestWorldControlSystems:
 
 # Integration tests
 class TestAnyControlSystemEndsTheWorld:
-    """Either group stops the world. The docs said only the main-process one did, and a console
-    built on that would wait for a finish its own producer had already triggered."""
+    """Either foreground or background completion stops the world."""
 
     def test_a_main_process_loop_returning_stops_the_world(self):
         seen = mp.Value('i', 0)
@@ -1542,3 +1647,469 @@ class TestChildLogging:
 
         assert CHILD_LINE in err, err
         assert LIBRARY_LINE not in err, err
+
+
+class ShutdownWaiter(ControlSystem):
+    shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+    def __init__(self, ready, holding, release, closed):
+        self.ready, self.holding, self.release, self.closed = ready, holding, release, closed
+
+    def run(self, should_stop, clock):
+        self.ready.set()
+        while not should_stop.value:
+            yield Sleep(0.01)
+        self.holding.set()
+        while not self.release.is_set():
+            yield Sleep(0.01)
+        self.closed.set()
+
+
+def test_world_waits_for_device_shutdown_and_ctrl_c_does_not_interrupt_it(monkeypatch):
+    ctx = mp.get_context('spawn')
+    ready, holding, release, closed = (ctx.Event() for _ in range(4))
+    waiter = ShutdownWaiter(ready, holding, release, closed)
+    with World() as world:
+        world.start([], waiter)
+        process = world.background_processes[0]
+        join = process.join
+
+        def wait_for_device(timeout):
+            try:
+                assert timeout is None
+                assert holding.wait(5)
+                assert process.is_alive()
+                assert not closed.is_set()
+            finally:
+                release.set()
+                join(timeout=5)
+
+        monkeypatch.setattr(process, 'join', wait_for_device)
+        assert ready.wait(5)
+        os.kill(process.pid, signal.SIGINT)
+        time.sleep(0.05)
+        assert process.is_alive()
+        assert not world.should_stop
+    assert closed.is_set()
+
+
+def test_a_signal_while_a_protected_child_spawns_still_registers_and_joins_it(monkeypatch):
+    ctx = mp.get_context('spawn')
+    ready, holding, release, closed = (ctx.Event() for _ in range(4))
+    release.set()
+    start = SpawnProcess.start
+
+    def interrupted_start(process):
+        start(process)
+        signal.raise_signal(signal.SIGINT)
+
+    monkeypatch.setattr(SpawnProcess, 'start', interrupted_start)
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    world = World()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            with world:
+                world.start([], ShutdownWaiter(ready, holding, release, closed))
+        assert len(world.background_processes) == 1
+        assert not ready.is_set()  # born stopped, so its loop never ran
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_world_keeps_the_timeout_for_ordinary_control_systems(monkeypatch):
+    with World() as world:
+        world.start([], Finisher(1))
+        process = world.background_processes[0]
+        join = Mock(wraps=process.join)
+        monkeypatch.setattr(process, 'join', join)
+    join.assert_called_once_with(timeout=90.0)
+
+
+def test_world_finishes_protected_foreground_shutdown_on_context_exit():
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    with World(virtual_time=True) as world:
+        loop = world.start(ShutdownWaiter(ready, holding, release, closed))
+        next(loop)
+        assert ready.is_set()
+        assert not closed.is_set()
+    assert holding.is_set()
+    assert closed.is_set()
+
+
+@pytest.mark.parametrize('failure', [RuntimeError('sibling failed'), KeyboardInterrupt()])
+def test_sibling_failure_does_not_discard_protected_foreground_shutdown(failure):
+    class Failing(ControlSystem):
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            raise failure
+
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    with pytest.raises(type(failure)):
+        with World(virtual_time=True) as world:
+            world.run([ShutdownWaiter(ready, holding, release, closed), Failing()])
+    assert ready.is_set()
+    assert holding.is_set()
+    assert closed.is_set()
+
+
+@pytest.mark.parametrize('error_type', [RuntimeError, KeyboardInterrupt, SystemExit])
+def test_foreground_shutdown_failure_still_finishes_other_devices_and_cleans_up(monkeypatch, error_type):
+    class FailingShutdown(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                yield Sleep(0.01)
+            raise error_type('shutdown failed')
+
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    waiter = ShutdownWaiter(ready, holding, release, closed)
+    join, close, emitter_close, receiver_close = (Mock() for _ in range(4))
+    with pytest.raises(error_type, match='shutdown failed'):
+        with World(virtual_time=True) as world:
+            loop = world.start([FailingShutdown(), waiter], Finisher(1))
+            next(loop)
+            process = world.background_processes[0]
+            join.side_effect = process.join
+            close.side_effect = process.close
+            monkeypatch.setattr(process, 'join', join)
+            monkeypatch.setattr(process, 'close', close)
+            emitter, receivers = world.mp_pipes()
+            assert isinstance(emitter, MultiprocessEmitter)
+            assert isinstance(receivers, MultiprocessReceiver)
+            emitter_close.side_effect = emitter.close
+            receiver_close.side_effect = receivers.close
+            monkeypatch.setattr(emitter, 'close', emitter_close)
+            monkeypatch.setattr(receivers, 'close', receiver_close)
+    assert holding.is_set() and closed.is_set()
+    join.assert_called_once_with(timeout=90.0)
+    close.assert_called_once()
+    emitter_close.assert_called_once()
+    receiver_close.assert_called_once()
+
+
+def test_foreground_shutdown_reports_multiple_base_exceptions_after_draining():
+    class FailingShutdown(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def __init__(self, error):
+            self.error = error
+
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                yield Sleep(0.01)
+            raise self.error
+
+    errors = [KeyboardInterrupt(), SystemExit(1)]
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    with pytest.raises(BaseExceptionGroup) as raised:
+        with World(virtual_time=True) as world:
+            loop = world.start([
+                *(FailingShutdown(error) for error in errors),
+                ShutdownWaiter(ready, holding, release, closed),
+            ])
+            next(loop)
+    assert list(raised.value.exceptions) == errors
+    assert holding.is_set() and closed.is_set()
+
+
+def test_unstarted_protected_foreground_loop_is_not_run_on_exit():
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    with World(virtual_time=True) as world:
+        world.start(ShutdownWaiter(ready, holding, release, closed))
+    assert not ready.is_set()
+    assert not holding.is_set()
+    assert not closed.is_set()
+
+
+@pytest.mark.parametrize('body_error', [None, ValueError('body failed')])
+def test_world_reports_errors_from_every_cleanup_phase(monkeypatch, body_error):
+    errors = [RuntimeError('foreground failed'), KeyboardInterrupt(), OSError('receiver close failed')]
+    emitter_close = Mock()
+    receiver_close = Mock(side_effect=errors[2])
+    with pytest.raises(BaseExceptionGroup) as raised:
+        with World() as world:
+            monkeypatch.setattr(world, '_finish_foreground_shutdown', Mock(side_effect=errors[0]))
+            monkeypatch.setattr(world, '_join_background_processes', Mock(side_effect=errors[1]))
+            emitter, receiver = world.mp_pipes()
+            monkeypatch.setattr(receiver, 'close', receiver_close)
+            monkeypatch.setattr(emitter, 'close', emitter_close)
+            if body_error is not None:
+                raise body_error
+    expected = errors if body_error is None else [body_error, *errors]
+    assert list(raised.value.exceptions) == expected
+    receiver_close.assert_called_once()
+    emitter_close.assert_called_once()
+
+
+@pytest.mark.parametrize('signal_count', [1, 2])
+def test_signals_during_a_protected_park_do_not_interrupt_it(signal_count):
+    closed = []
+
+    class InterruptedShutdown(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                yield Sleep(0.01)
+            for _ in range(signal_count):
+                signal.raise_signal(signal.SIGINT)
+                yield Sleep(0.01)
+            closed.append(self)
+
+    device = InterruptedShutdown()
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            with World(virtual_time=True) as world:
+                next(world.start(device))
+        assert closed == [device]
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+@pytest.mark.parametrize('signum', [signal.SIGINT, signal.SIGTERM])
+def test_an_earlier_handler_runs_after_protected_shutdown_and_is_restored(signum):
+    closed = []
+    handled = []
+
+    class InterruptedShutdown(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                yield Sleep(0.01)
+            signal.raise_signal(signum)
+            assert not handled
+            closed.append(self)
+
+    def handler(signum, frame):
+        assert closed
+        handled.append(signum)
+
+    previous = signal.signal(signum, handler)
+    try:
+        with World(virtual_time=True) as world:
+            next(world.start(InterruptedShutdown()))
+        assert handled == [signum]
+        assert signal.getsignal(signum) is handler
+    finally:
+        signal.signal(signum, previous)
+
+
+def test_an_earlier_sigterm_handler_runs_in_an_unprotected_world_in_place_of_the_exit():
+    handled = []
+
+    class Ordinary(ControlSystem):
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            signal.raise_signal(signal.SIGTERM)
+            yield Sleep(0.01)
+
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: handled.append(signum))
+    try:
+        with World(virtual_time=True) as world:
+            world.run(Ordinary())
+        assert handled == [signal.SIGTERM]
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_a_device_failure_is_raised_in_place_of_the_signal_that_came_with_it():
+    class FailingDevice(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            signal.raise_signal(signal.SIGINT)
+            raise ValueError('device failed')
+
+    ready, holding, release, closed = (threading.Event() for _ in range(4))
+    release.set()
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with pytest.raises(ValueError, match='device failed'):
+            with World(virtual_time=True) as world:
+                world.run([FailingDevice(), ShutdownWaiter(ready, holding, release, closed)])
+        assert closed.is_set()
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+@pytest.mark.parametrize(('signum', 'effect'), [(signal.SIGINT, KeyboardInterrupt), (signal.SIGTERM, SystemExit)])
+def test_a_signal_stops_a_protected_world_and_takes_effect_after_the_park(monkeypatch, signum, effect):
+    stopped_by = []
+    request_stop = World.request_stop
+
+    def record_stop(world):
+        stopped_by.append(threading.current_thread())
+        request_stop(world)
+
+    monkeypatch.setattr(World, 'request_stop', record_stop)
+    saw_stop, parked = [], []
+
+    class Device(ControlSystem):
+        shutdown_policy = ShutdownPolicy.WAIT_FOR_COMPLETION
+
+        def run(self, should_stop, clock):
+            signal.raise_signal(signum)
+            for _ in range(500):
+                if should_stop.value:
+                    break
+                yield Sleep(0.01)
+            saw_stop.append(should_stop.value)
+            for _ in range(3):
+                yield Sleep(0.01)
+            parked.append(self)
+
+    device = Device()
+    previous = signal.signal(signum, signal.default_int_handler if signum == signal.SIGINT else signal.SIG_DFL)
+    try:
+        with pytest.raises(effect):
+            with World() as world:
+                world.run(device)
+        assert saw_stop == [True]
+        assert parked == [device]
+        # The handler may interrupt the main thread inside the stop event's lock, so another thread sets it.
+        assert stopped_by[0] is not threading.main_thread()
+    finally:
+        signal.signal(signum, previous)
+
+
+@pytest.mark.parametrize(('signum', 'effect'), [(signal.SIGINT, KeyboardInterrupt), (signal.SIGTERM, SystemExit)])
+def test_a_signal_interrupts_an_unprotected_world_at_once(signum, effect):
+    reached = []
+
+    class Ordinary(ControlSystem):
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            signal.raise_signal(signum)
+            reached.append(self)
+            yield Sleep(0.01)
+
+    previous = signal.signal(signum, signal.default_int_handler if signum == signal.SIGINT else signal.SIG_DFL)
+    try:
+        with pytest.raises(effect):
+            with World(virtual_time=True) as world:
+                world.run(Ordinary())
+        assert reached == []
+    finally:
+        signal.signal(signum, previous)
+
+
+def _gone(pid: int) -> bool:
+    try:
+        with open(f'/proc/{pid}/stat') as stat:
+            return stat.read().split(')')[-1].split()[0] == 'Z'
+    except FileNotFoundError:
+        return True
+
+
+def _wait_for_probe_child(parent: subprocess.Popen, directory) -> int:
+    child_pid_file = directory / CHILD_PID_FILE
+    deadline = time.monotonic() + 60
+    while not child_pid_file.exists():
+        assert time.monotonic() < deadline and parent.poll() is None, 'the child never started'
+        time.sleep(0.05)
+    return int(child_pid_file.read_text())
+
+
+def _wait_until_gone(pid: int) -> None:
+    deadline = time.monotonic() + 30
+    while not _gone(pid):
+        assert time.monotonic() < deadline, 'the child outlived its parent'
+        time.sleep(0.05)
+
+
+@pytest.mark.skipif(not os.path.isdir('/proc'), reason='reads child state from /proc')
+@pytest.mark.parametrize('parent_signal', [signal.SIGTERM, signal.SIGKILL])
+def test_a_signalled_parent_leaves_no_child_running(tmp_path, parent_signal):
+    parent = subprocess.Popen([sys.executable, '-m', 'pimm.tests.sigterm_probe', str(tmp_path)])
+    child = _wait_for_probe_child(parent, tmp_path)
+    parent.send_signal(parent_signal)
+    parent.wait(timeout=30)
+    _wait_until_gone(child)
+    assert (tmp_path / SHUT_DOWN_FILE).exists()
+
+
+@pytest.mark.skipif(not os.path.isdir('/proc'), reason='reads child state from /proc')
+def test_a_sigterm_to_the_process_group_still_runs_the_protected_child_shutdown(tmp_path):
+    parent = subprocess.Popen([sys.executable, '-m', 'pimm.tests.sigterm_probe', str(tmp_path)], start_new_session=True)
+    child = _wait_for_probe_child(parent, tmp_path)
+    os.killpg(parent.pid, signal.SIGTERM)
+    parent.wait(timeout=30)
+    _wait_until_gone(child)
+    assert (tmp_path / SHUT_DOWN_FILE).exists()
+
+
+def test_a_child_whose_parent_is_already_gone_stops_at_once():
+    stop = mp.get_context('spawn').Event()
+    _stop_when_orphaned(stop, 'probe', parent_pid=os.getpid())
+    assert stop.wait(5)
+
+
+def test_a_child_whose_parent_is_alive_keeps_running():
+    stop = mp.get_context('spawn').Event()
+    _stop_when_orphaned(stop, 'probe', parent_pid=os.getppid())
+    try:
+        assert not stop.wait(1.0)
+    finally:
+        stop.set()
+
+
+def _mark_started(marker, should_stop, clock) -> Iterator[Command]:
+    marker.touch()
+    yield Yield()
+
+
+def _run_wrapper_in_a_child(tmp_path, parent_pid: int, *, stopped: bool = False):
+    """Run `_bg_wrapper` in a spawned child that names `parent_pid` as its parent; return the marker and stop event."""
+    ctx = mp.get_context('spawn')
+    stop, marker = ctx.Event(), tmp_path / 'started'
+    if stopped:
+        stop.set()
+    args = (partial(_mark_started, marker), stop, SystemClock(), 'probe', {}, ShutdownPolicy.BEST_EFFORT, parent_pid)
+    child = ctx.Process(target=_bg_wrapper, args=args)
+    child.start()
+    child.join(timeout=30)
+    assert child.exitcode == 0
+    return marker, stop
+
+
+def test_a_child_whose_parent_is_gone_before_it_starts_never_runs_its_loop(tmp_path):
+    # The child's real parent is this process, so any other pid reads as a parent that is gone.
+    marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getppid())
+    assert not marker.exists()
+    assert stop.is_set()
+
+
+def test_a_child_whose_world_stopped_before_it_starts_never_runs_its_loop(tmp_path):
+    marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getpid(), stopped=True)
+    assert not marker.exists()
+    assert stop.is_set()
+
+
+def test_a_child_whose_parent_is_alive_runs_its_loop(tmp_path):
+    marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getpid())
+    assert marker.exists()
+    assert stop.is_set()
+
+
+class YieldsNone(ControlSystem):
+    def __init__(self, policy):
+        self.shutdown_policy = policy
+
+    def run(self, should_stop, clock) -> Iterator[Command]:
+        yield None  # pyright: ignore[reportReturnType]
+
+
+@pytest.mark.parametrize('policy', list(ShutdownPolicy))
+def test_a_foreground_loop_that_yields_none_fails_under_either_policy(policy):
+    with World() as world, pytest.raises(AttributeError):
+        world.run([YieldsNone(policy)])

@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Generator, Iterable, Iterator
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Generic, TypeAlias, TypeVar, final
 
 from .time import EMITTED_PREFIX, EMITTED_WALL, RECEIVED_PREFIX, Clock, SystemClock, Time
@@ -12,6 +13,10 @@ P = TypeVar('P')
 
 class NoValueException(Exception):
     pass
+
+
+class SignalError(Exception):
+    """The value an emitter sends in place of data while its signal has no valid value."""
 
 
 @dataclass(init=False)
@@ -35,6 +40,14 @@ class Message(Generic[T]):
 
     def _received(self, clock: Clock) -> 'Message[T]':
         return Message(self.data, Time(**self.time, **{f'{RECEIVED_PREFIX}{k}': v for k, v in clock.time().items()}))
+
+
+def _message_value(msg: Message[T]) -> T:
+    """The data of ``msg``. Raises the data when it is a ``SignalError``."""
+    if isinstance(msg.data, SignalError):
+        # A signal returns one instance on many reads, and each raise adds to its traceback. So start a new one.
+        raise msg.data.with_traceback(None)
+    return msg.data
 
 
 class SignalEmitter(ABC, Generic[T]):
@@ -76,11 +89,11 @@ class SignalReceiver(ABC, Generic[T]):
     @final
     @property
     def value(self) -> T:
-        """Returns the current value of the signal."""
+        """Returns the current value of the signal. Raises the ``SignalError`` that the signal carries."""
         msg = self.read()
         if msg is None:
             raise NoValueException
-        return msg.data
+        return _message_value(msg)
 
 
 class NoOpEmitter(SignalEmitter[T]):
@@ -133,6 +146,16 @@ Run: TypeAlias = Generator[Command, None, T]
 ControlLoop = Callable[[SignalReceiver, Clock], Iterator[Command]]
 
 
+class ShutdownPolicy(Enum):
+    """How the runtime stops a control system."""
+
+    # A foreground loop stops at once. A background process gets 90 s, then is terminated.
+    BEST_EFFORT = auto()
+    # The World runs the shutdown to its end, with no timeout. While one runs, SIGINT and SIGTERM only stop the
+    # World, and take effect after its shutdown. A background process ignores both signals.
+    WAIT_FOR_COMPLETION = auto()
+
+
 class ControlSystem(ABC):
     """Composable unit of runtime that cooperates with the world scheduler.
 
@@ -146,6 +169,8 @@ class ControlSystem(ABC):
     Implementations must advance their internal work by yielding ``Sleep`` or
     ``Yield``, allowing the ``World`` interleaver to sequence multiple systems.
     """
+
+    shutdown_policy = ShutdownPolicy.BEST_EFFORT
 
     @abstractmethod
     def run(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Command]:

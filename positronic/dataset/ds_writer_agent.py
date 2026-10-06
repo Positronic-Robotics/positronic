@@ -164,6 +164,7 @@ class DsWriterAgent(pimm.ControlSystem):
     timestamped after STOP — whatever the next trial's prepare moves, or sensor
     data the async real path queues — are dropped, and ABORT discards the
     episode. Invalid or out-of-order commands are ignored with a log message.
+    An input that carries a ``pimm.SignalError`` records nothing.
 
     ``virtual_time`` makes the recorder yield to ride the producer's clock — sim lockstep, where the
     simulator is the sole time-master — instead of pacing itself at ``poll_hz`` (real/background).
@@ -221,7 +222,9 @@ class DsWriterAgent(pimm.ControlSystem):
         """
         for name, reader in self._inputs.items():
             msg = reader.read() if opening else pimm.read_updated(reader)
-            if msg is not None and (before is None or msg.time[EMITTED_WALL] <= before[EMITTED_WALL]):
+            if msg is None or isinstance(msg.data, pimm.SignalError):
+                continue
+            if before is None or msg.time[EMITTED_WALL] <= before[EMITTED_WALL]:
                 self._record(ep_writer, name, msg)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):

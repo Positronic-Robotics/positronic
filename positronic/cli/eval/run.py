@@ -65,12 +65,17 @@ def scoped_env_var(name: str) -> Iterator[None]:
             os.environ[name] = previous
 
 
+MAX_ATTEMPTS_PER_TASK = 2
+
+
 class TaskDriver(pimm.ControlSystem):
     """Walks a plan of tasks, asking for each as an episode through ``perform_task``, and returns —
     stopping the world — once the last has ended.
 
     It makes the plan on its first turn and submits one task at a time. The harness owns each episode's
-    policy run and cleanup; every episode records into ``output_path``.
+    policy run and cleanup; every episode records into ``output_path``. A task whose episode fails on a
+    ``pimm.SignalError`` runs again, and the run raises when one task fails so ``MAX_ATTEMPTS_PER_TASK`` times in
+    a row. Any other failed episode ends the run.
     """
 
     def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, output_path: Path | None):
@@ -81,13 +86,21 @@ class TaskDriver(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
-            rollout = Rollout(task, self._policy, self._output_path)
-            answer = self.perform_task(rollout)
-            while not answer.done():
-                if should_stop.value:
-                    return
-                yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
-            answer.result()  # a failed episode raises here, and that ends the run
+            for attempt in range(1, MAX_ATTEMPTS_PER_TASK + 1):
+                answer = self.perform_task(Rollout(task, self._policy, self._output_path))
+                while not answer.done():
+                    if should_stop.value:
+                        return
+                    yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
+                # rules-allow: swallowed-error — a device gave no data, and the next ask makes it ready first; the
+                # last attempt raises.
+                try:
+                    answer.result()  # any other failed episode raises here, and that ends the run
+                    break
+                except pimm.SignalError as e:
+                    if attempt == MAX_ATTEMPTS_PER_TASK:
+                        raise
+                    logger.warning(f'A device gave no data, so the task runs again: {e}')
         # Let the recorder commit the final episode before this return brings the world down.
         yield pimm.Sleep(0.5)
 

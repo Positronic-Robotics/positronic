@@ -2,6 +2,7 @@
 
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
@@ -43,6 +44,8 @@ from positronic.policy.sequential import Sequential
 MOTOR = 'motor'
 POSITION = 'position'
 RESET = 'reset'
+CAMERA = 'camera'
+ARM = 'arm'
 
 
 class StubPolicy(Policy):
@@ -243,12 +246,14 @@ def test_observation_conversion_errors_propagate(observed_harness):
     assert len(calls) == 1
 
 
-@pytest.fixture
-def episode_harness():
+@contextmanager
+def _episode_ports(devices: tuple[str, ...] = ()):
+    """A harness whose loop the test drives, with a ready handler for each of ``devices``."""
     with pimm.World(virtual_time=True) as world:
         source = Passive()
         serializer = Mock(side_effect=lambda value: value)
         preparation = {name: pimm.calls.ControlSystemHandler(source) for name in (RESET, eval_keys.SCENE)}
+        readiness = {name: pimm.calls.ControlSystemHandler[None, None](source) for name in devices}
         embodiment = Embodiment(
             descriptor='test',
             observations={POSITION: Observation(pimm.ControlSystemEmitter(source), serializer)},
@@ -256,9 +261,12 @@ def episode_harness():
             prepare_handlers=preparation,
             static_meta={},
             meta_source=None,
+            ready_handlers=readiness,
             simulated=True,
         )
         harness = Harness(embodiment)
+        for name, handler in readiness.items():
+            wire_call(world, harness.ready[name], handler)
         for name, handler in preparation.items():
             wire_call(world, harness.prepare[name], handler)
         caller = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](source)
@@ -273,6 +281,7 @@ def episode_harness():
             world=world,
             harness=harness,
             embodiment=embodiment,
+            ready=readiness,
             prepare=preparation,
             loop=harness.run(world.should_stop_reader(), world.clock),
             caller=caller,
@@ -292,6 +301,18 @@ def episode_harness():
         finally:
             world.request_stop()
             list(ports.loop)
+
+
+@pytest.fixture
+def episode_harness():
+    with _episode_ports() as ports:
+        yield ports
+
+
+@pytest.fixture
+def ready_harness():
+    with _episode_ports(devices=(CAMERA, ARM)) as ports:
+        yield ports
 
 
 def test_episode_completion_then_shutdown_with_fresh_observations(episode_harness):
@@ -431,6 +452,83 @@ def test_an_episode_that_does_not_fail_on_its_own_answers_handler_stopped(episod
             next(h.loop)
     with pytest.raises(pimm.calls.HandlerStopped):
         answer.result()
+
+
+class Positions(Policy):
+    """Record the position each step observes."""
+
+    def __init__(self):
+        self.seen = []
+        self.closed = False
+
+    def run(self, runtime):
+        try:
+            obs = yield
+            while True:
+                self.seen.append(obs[POSITION])
+                obs = yield Step({}, runtime.time_ns + 100_000_000)
+        finally:
+            self.closed = True
+
+
+@pytest.mark.parametrize('lost', [True, False])
+def test_an_observation_error_discards_the_episode_and_an_old_value_does_not(episode_harness, lost):
+    h = episode_harness
+    h.harness._embodiment = replace(h.embodiment, simulated=False)
+    policy = Positions()
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('move', None), policy, None))
+    next(h.loop)
+    error = pimm.SignalError('camera lost')
+    if lost:
+        h.observation.emit(error)
+    h.world.clock.advance_to_ns(5_000_000_000)  # no new data for 5 s either way
+    next(h.loop)
+    records = [command.type for _, command in h.records.values]
+    if not lost:
+        assert not answer.done()
+        assert policy.seen == [1, 1]
+        assert records == [DsWriterCommandType.START_EPISODE]
+        return
+    with pytest.raises(pimm.SignalError) as raised:
+        answer.result()
+    assert raised.value is error
+    assert policy.seen == [1]
+    assert policy.closed
+    assert records == [DsWriterCommandType.START_EPISODE, DsWriterCommandType.ABORT_EPISODE]
+    assert h.deadlines.values[-1][1] is None
+    assert isinstance(next(h.loop), pimm.Sleep)
+
+
+def test_an_ask_while_an_observation_carries_an_error_is_refused_and_the_next_one_runs(episode_harness):
+    h = episode_harness
+    policy = Positions()
+    h.observation.emit(pimm.SignalError('camera absent'))
+    refused = h.caller(Rollout(Task('move', None), policy, None))
+    next(h.loop)
+    with pytest.raises(pimm.SignalError, match='camera absent'):
+        refused.result()
+    assert policy.seen == []
+
+    h.observation.emit(1)
+    accepted = h.caller(Rollout(Task('move', None), policy, None))
+    next(h.loop)
+    assert policy.seen == [1]
+    assert not accepted.done()
+
+
+def test_each_ask_refused_on_one_error_starts_a_new_traceback(episode_harness):
+    h = episode_harness
+    error = pimm.SignalError('camera absent')
+    h.observation.emit(error)
+    depths = []
+    for _ in range(3):
+        refused = h.caller(Rollout(Task('move', None), Positions(), None))
+        next(h.loop)
+        with pytest.raises(pimm.SignalError):
+            refused.result()
+        depths.append(len(traceback.extract_tb(error.__traceback__)))
+    assert depths[0] == depths[-1]
 
 
 @contextmanager
@@ -796,6 +894,50 @@ def test_preparation_errors_and_failed_return(episode_harness, failure, caplog):
             assert 'return failed' in caplog.text
             return
     assert h.records.values == []
+
+
+def test_every_device_is_asked_to_be_ready_before_each_episode_and_before_its_preparation(ready_harness):
+    h = ready_harness
+    task = Task('move', 0.01, prepare_args={RESET: 'home'})
+    for episode in range(2):
+        answer = h.caller(Rollout(task, Hold(), None))
+        next(h.loop)
+        asked = [next(handler.incoming()) for handler in h.ready.values()]
+        assert [call.request for call in asked] == [None, None]
+        assert list(h.prepare[RESET].incoming()) == []
+        for call in asked:
+            call.set_result(None)
+        next(h.loop)
+        next(h.prepare[RESET].incoming()).set_result(None)
+        start_ns = (episode + 1) * 1_000_000_000
+        h.world.clock.advance_to_ns(start_ns)
+        next(h.loop)
+        h.world.clock.advance_to_ns(start_ns + 10_000_000)
+        next(h.loop)
+        next(h.loop)
+        next(h.prepare[RESET].incoming()).set_result(None)
+        next(h.loop)
+        assert answer.result() == {eval_keys.TERMINATED: False}
+
+
+@pytest.mark.parametrize('error', [pimm.SignalError('camera lost'), RuntimeError('the arm holds a fault')])
+def test_a_device_that_answers_ready_with_an_error_fails_the_ask_and_is_asked_again(ready_harness, error):
+    h = ready_harness
+    task = Task('move', None, prepare_args={RESET: 'home'})
+    refused = h.caller(Rollout(task, Hold(), None))
+    next(h.loop)
+    next(h.ready[CAMERA].incoming()).set_exception(error)
+    next(h.ready[ARM].incoming()).set_result(None)
+    next(h.loop)
+    with pytest.raises(type(error)) as raised:
+        refused.result()
+    assert raised.value is error
+    assert list(h.prepare[RESET].incoming()) == []
+    assert h.records.values == []
+
+    h.caller(Rollout(task, Hold(), None))
+    next(h.loop)
+    assert [call.request for handler in h.ready.values() for call in handler.incoming()] == [None, None]
 
 
 def test_idle_manual_commands_pass_through(episode_harness):
