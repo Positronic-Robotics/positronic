@@ -16,16 +16,24 @@ The openpi and GR00T recipes build on a `positro/<vendor>-base` image on Docker 
 the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: MolmoAct2 has no
 vendor stack. These three recipes add the weights, the positronic source with an offline
 environment, `EXPOSE 8000` and a start command. Their layers go from the least often changed to the
-most: base, weights, dependencies, source. A source change rebuilds and pushes the source layer only.
-The FLUX 3 Action recipe builds the vendor stack itself, and CI publishes the image. Build from the
-root of a positronic checkout:
+most: base, dependencies, source, weights. The source and the weights come in through `COPY --link`
+with no step after them, so a source change builds one new layer and reuses the rest from a cache.
+The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves. CI publishes all five
+images to Docker Hub. Build from the root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
-| openpi π0.5 DROID | [`docker/Dockerfile.submit-openpi`](../docker/Dockerfile.submit-openpi) | `positro/openpi-base` | `pi05_droid_jointpos`, the public checkpoint |
-| GR00T N1.7 DROID | [`docker/Dockerfile.submit-gr00t`](../docker/Dockerfile.submit-gr00t) | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
-| MolmoAct2 DROID | [`docker/Dockerfile.submit-molmoact2`](../docker/Dockerfile.submit-molmoact2) | `ghcr.io/astral-sh/uv:python3.13-bookworm` | `allenai/MolmoAct2-DROID` at a pinned revision |
+| openpi π0.5 DROID | [`docker/Dockerfile.serve-pi05-droid`](../docker/Dockerfile.serve-pi05-droid), published as `positro/pi05-droid` | `positro/openpi-base` | `pi05_droid_jointpos`, the public checkpoint |
+| GR00T N1.7 DROID | [`docker/Dockerfile.serve-gr00t-n17-droid`](../docker/Dockerfile.serve-gr00t-n17-droid), published as `positro/gr00t-n17-droid` | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
+| MolmoAct2 DROID | [`docker/Dockerfile.serve-molmoact2-droid`](../docker/Dockerfile.serve-molmoact2-droid), published as `positro/molmoact2-droid` | `ghcr.io/astral-sh/uv:python3.13-bookworm` | `allenai/MolmoAct2-DROID` at a pinned revision |
 | FLUX 3 Action DROID | [`docker/Dockerfile.flux3-action`](../docker/Dockerfile.flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
+| Cosmos3-Nano DROID | [`docker/Dockerfile.cosmos3-nano`](../docker/Dockerfile.cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
+
+CI builds each image when its recipe or the code it installs changes, and tags each build `main`, `latest`
+and the commit. A release also tags the three serving images `v<version>`. CI does not test an
+image: run the checks in [Test the image before you submit](#test-the-image-before-you-submit).
+Read the digest of a published image with `docker/read_image_digest.sh positro/<image>:main`, and
+pin it.
 
 The header of each recipe gives its build command. The comments in each recipe say where a
 checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM
@@ -33,8 +41,13 @@ before anything reaches the GPU.
 
 The GR00T recipe downloads `nvidia/GR00T-N1.7-DROID` (6.9 GB) and its backbone
 `nvidia/Cosmos-Reason2-2B` (4.9 GB). The backbone repository is gated: accept NVIDIA's terms on its
-Hub page, then put a read token in `$HOME/.hf_token`. The build reads the token through a secret
-mount, and it enters no layer.
+Hub page, then put a read token in `$HOME/.hf_token`, or in `HF_TOKEN` for
+`make -C docker build-serve-gr00t-n17-droid`. The build reads the token through a secret mount, and
+it enters no layer.
+
+Both GR00T models are under the NVIDIA Open Model License. `positro/gr00t-n17-droid` is Built on
+NVIDIA Cosmos. The image carries the agreement and its notice in `/opt/gr00t`, as the licence
+requires of each copy of the models.
 
 The MolmoAct2 recipe downloads `allenai/MolmoAct2-DROID` (21.8 GB in float32). The build needs no
 token: the repository is not gated. The image is 24.4 GB compressed.
@@ -48,9 +61,7 @@ Other models:
 - **A model of your own.** Write an inference server ([Connect your model](connect-your-model.md))
   and hold the image to the rules in [Life of a submission](#life-of-a-submission).
 
-### Two traps in the `positro/*` bases
-
-The openpi, GR00T and MolmoAct2 recipes handle both traps.
+### Three traps in the `positro/*` bases
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
 `/positronic` and no environment for it. The repository's `docker/docker-compose.yml` starts every
@@ -67,32 +78,49 @@ backbone's tokenizer with no cache fallback. The offline variables alone fail at
 `OfflineModeIsEnabled`. The patch alone times out after 600 s of retried HEAD requests. Both
 together load the model in 151 s.
 
+**openpi resolves the container's hostname.** openpi's `scripts/serve_policy.py` calls
+`gethostbyname` on the hostname before it serves. Under `--network none`, Docker writes no record
+of the hostname into `/etc/hosts`, and the server dies with `socket.gaierror: Temporary failure in
+name resolution`. A Docker network with no egress has the record, so only `--network none` shows
+the trap. The openpi recipe installs `libnss-myhostname`, which resolves the hostname to a local
+address.
+
 ### FLUX 3 Action
 
-`positro/flux3-action` holds FLUX 3 Action DROID, Black Forest Labs' serving code, and every weight
-the server loads. It needs no network at start and no arguments. CI builds it when its recipe
+`positro/flux3-action` holds FLUX 3 Action DROID, the serving code of Black Forest Labs (BFL), and
+every weight the server loads. It serves the session protocol, and the platform runs the published image as a
+submission. CI builds it when its recipe changes, and tags each build with the commit. Read its digest
+with `docker/read_image_digest.sh positro/flux3-action:main`.
+
+- The image holds two Python environments. positronic's server answers on port 8000. It starts BFL's
+  own server in BFL's environment, on port 9000 inside the container, and sends it each observation.
+- The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
+  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
+  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
+  `droid_3cam` in the recipe's `ENTRYPOINT`.
+- BFL's server compiles the model for about 140 s, and port 8000 binds after it. The GPU memory peaks
+  at about 33 000 MiB.
+
+### Cosmos3-Nano
+
+`positro/cosmos3-nano` holds Cosmos3-Nano-Policy-DROID, NVIDIA's action server with its environment,
+and the Wan2.2 VAE the model loads. It serves the session protocol, and the platform runs the
+published image as a submission. CI builds it when its recipe or the positronic source it installs
 changes, and tags each build with the commit. Read its digest with
-`docker/read_image_digest.sh positro/flux3-action:main`.
+`docker/read_image_digest.sh positro/cosmos3-nano:main`.
 
-The image serves the roboarena wire, not the session protocol:
-
-- `GET /healthz` answers 200 once the model is loaded and warm. A session opens on the root, `/`.
-- On connect, the server sends its config: three 360x640 views, the wrist view included, and
-  `joint_position` actions.
-- With `AUTH_TOKEN` set, every request must carry `Authorization: Bearer <token>`, `/healthz`
-  included. With it unset, the server serves open.
-- The server compiles the model for about 140 s before it binds port 8000. Its GPU memory peaks at
-  about 33 000 MiB.
-
-The platform runs a submitted image over the `websocket` wire only
-([Eval plans](../client/README.md#eval-plans)), so it does not run this image as a submission. Use
-the image as a reference: copy the recipe, or run the image on your own GPU. Start it as the
-[test below](#test-the-image-before-you-submit) does, then call `/healthz`:
-
-```bash
-docker exec policy /opt/flux-action/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/healthz', headers={'Authorization': 'Bearer test'})).read())"
-```
+- The image holds two Python environments. positronic's server answers on port 8000. It starts
+  NVIDIA's server in NVIDIA's environment, on port 9000 inside the container, and sends it each
+  observation.
+- The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
+  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
+  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
+  `droid_3cam` in the recipe's `ENTRYPOINT`.
+- The client plays each chunk of 32 actions in full, and a gripper value above 0.5 closes the
+  gripper, as in NVIDIA's RoboLab client.
+- The guardrails are off. Their model repository is gated, and they serve only the video and text
+  generation paths, which the action server does not use.
+- The GPU memory peaks at about 32 500 MiB.
 
 ### Build and push
 
@@ -149,9 +177,8 @@ uv run positronic eval run --eval=<eval> \
    server's start share one provisioning deadline of 1800 s. A 25 GB image takes about 10 minutes
    to pull.
 6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token.
-7. It fails the run with `policy_setup_crash` if a route serves a caller without the token, or
-   refuses the run's own token. The vendor servers read `AUTH_TOKEN` and check it; a server of
-   your own must do the same.
+7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
+   servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
 8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM. The container runs under the
    limits in [The container](#the-container).
 
@@ -208,14 +235,16 @@ Run it with the network denied. This reproduces the platform's own conditions an
 docker run --rm --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
 ```
 
-In a correct image, the server pins its checkpoint, starts the model process, reads the weights
-from the image, and then fails on the missing GPU. For the openpi recipe that is jax on CPU
-reading the checkpoint under `/opt/positronic/checkpoints`. For the GR00T recipe it is
-`Flash Attention 2 is not available on CPU`. The MolmoAct2 recipe loads the model on the CPU and
-serves. Everything you control is then correct. The run must not print `NameResolutionError`,
-`dns error` or `OfflineModeIsEnabled`, and it must not hang. albumentations prints a `UserWarning`
-about fetching its version; ignore it. MolmoAct2 prints `A new version of the following files was
-downloaded` when `transformers` copies the model's code into its module cache; no download occurs.
+In a correct image, the server pins its checkpoint, starts the model process, and reads the
+weights from the image. The GR00T recipe then fails on the missing GPU with
+`Flash Attention 2 is not available on CPU`. The openpi and MolmoAct2 recipes load the model on the
+CPU and serve. For the FLUX 3 Action recipe, BFL's server exits on the missing GPU, and the server
+reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano recipe, NVIDIA's server exits
+the same way, and the server reports `Cosmos3 backend exited with code 1`. Everything you control is then
+correct. The run must not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it
+must not hang. albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2
+prints `A new version of the following files was downloaded` when `transformers` copies the model's code
+into its module cache; no download occurs.
 
 On a machine with a GPU, serve it with the network denied and call the keepalive route from inside
 the container with the token:
@@ -227,7 +256,8 @@ docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; 
   print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', headers={'Authorization': 'Bearer test'})).read())"
 ```
 
-The route answers `{"alive_seconds": ...}` with the token once the model has loaded and warmed, and `401` without it.
+The route answers `{"alive_seconds": ...}` with the token once the model has loaded and warmed.
+A server that checks the token answers `401` without it.
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
@@ -328,7 +358,6 @@ log cannot:
   "serving": false,
   "served_on_boot": 0,
   "token_rejected": false,
-  "serving_unauthenticated": false,
   "startup_log": "..."
 }
 ```
@@ -365,7 +394,7 @@ fault is not.
 |---|---|---|
 | `image_unpullable` | caller | is the image public, or does your credential read it? Is the digest right? |
 | `image_too_large` | caller | the compressed size, against 50 GB |
-| `policy_setup_crash` | caller | `policy_log`: the server did not come up, or served without the token |
+| `policy_setup_crash` | caller | `policy_log`: the server did not come up, or refused the run's own token |
 | `policy_inference_crash` | caller | `policy_log`: the server died after it served |
 | `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against the 40448 MiB slice |
 | `latency_budget_exceeded` | caller | inference time per step |

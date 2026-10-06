@@ -1,7 +1,7 @@
 name: Build and Push the FLUX 3 Action Image
 
-# A pull request builds and checks the image; main also pushes it. Main republishes only on a change to the
-# recipe, because each publish uploads 25 GB of new layers; run the workflow by hand after a Makefile change.
+# A pull request builds and checks the image, and main pushes it. Each push uploads 25 GB of new layers, so
+# after another change to the positronic code the image bakes in, run the workflow by hand.
 on:
   pull_request:
     branches:
@@ -9,16 +9,20 @@ on:
     paths:
       - docker/Dockerfile.flux3-action
       - positronic/vendors/flux3_action/**
+      - '!positronic/vendors/flux3_action/tests/**'
       - .github/workflows/docker-flux3-action.yaml
       - docker/Makefile
       - .dockerignore
+      - model_server/**
   push:
     branches:
       - main
     paths:
       - docker/Dockerfile.flux3-action
       - positronic/vendors/flux3_action/**
+      - '!positronic/vendors/flux3_action/tests/**'
       - .github/workflows/docker-flux3-action.yaml
+      - model_server/**
   workflow_dispatch:
 
 permissions:
@@ -57,19 +61,34 @@ jobs:
             echo 'the server started with a token no header can carry' >&2
             exit 1
           fi
-          grep -F AUTH_TOKEN refusal.log
+          grep -F 'auth_token must be non-empty printable ASCII' refusal.log
+          # With the run's token and no GPU, the entry point starts BFL's interpreter offline, and the GPU is missing.
+          if docker run --rm --network none -e AUTH_TOKEN=test "$image" 2> start.log; then
+            echo 'the server started with no GPU' >&2
+            exit 1
+          fi
+          grep -F 'FLUX 3 Action backend exited with code' start.log
+          if grep -E 'NameResolutionError|OfflineModeIsEnabled|ModuleNotFoundError' start.log; then
+            exit 1
+          fi
           docker run --rm --entrypoint cat "$image" /opt/flux3_action/NOTICE \
             | grep -F 'This FLUX Model is licensed by Black Forest Labs Inc. under the FLUX Kommunity License.'
           docker run --rm --entrypoint cat "$image" /opt/flux3_action/LICENSE.md | grep -F 'FLUX Kommunity License'
 
-      # The budget is the one docs/submit-a-policy-image.md states. A push compresses each layer with gzip at its
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # The budget is the platform's published contract value. A push compresses each layer with gzip at its
       # default level, and level 1 compresses less, so this sum is an upper estimate of the size the platform counts.
       - name: Estimate the compressed size
         run: |
+          budget=$(uv run --locked --no-dev --package positronic-platform-client python -c \
+            'from platform_client.policy_container import COMPRESSED_IMAGE_BYTES; print(COMPRESSED_IMAGE_BYTES)')
           sudo apt-get install -y --no-install-recommends pigz
           bytes=$(docker save positro/flux3-action:local | pigz -1 | wc -c)
-          echo "compressed bytes, upper estimate: ${bytes}"
-          awk -v b="$bytes" 'BEGIN { printf "compressed GB, upper estimate: %.2f\n", b / 1e9; exit !(b <= 30e9) }'
+          echo "compressed bytes, upper estimate: ${bytes}; budget: ${budget}"
+          awk -v b="$bytes" -v budget="$budget" \
+            'BEGIN { printf "compressed GB, upper estimate: %.2f\n", b / 1e9; exit !(b <= budget) }'
 
       - name: Log in to Docker Hub
         if: github.ref == 'refs/heads/main'

@@ -26,6 +26,9 @@ CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
 # Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
 ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
+# True when the operator replaced the trial's own instruction. The episode's ``keys.TASK`` holds the text that
+# the policy got.
+INSTRUCTION_OVERRIDDEN = 'eval.instruction_overridden'
 
 # The conditions the trial ran under, stamped into its episode's statics. ``UNIVERSE`` is ``'sim'`` or
 # ``'real'``; ``TIMEOUT`` is absent from an episode whose task set no budget.

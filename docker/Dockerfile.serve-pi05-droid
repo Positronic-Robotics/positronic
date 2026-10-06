@@ -3,12 +3,14 @@
 # docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
 #
 # Usage (from the repository root)
+#   make -C docker build-serve-pi05-droid        # positro/pi05-droid:local
 #   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-#       -f docker/Dockerfile.submit-openpi -t docker.io/<you>/pi05-droid:v1 --push .
+#       -f docker/Dockerfile.serve-pi05-droid -t docker.io/<you>/pi05-droid:v1 --push .
 #   docker run --rm --network none docker.io/<you>/pi05-droid:v1        # the offline pre-flight
 #
-# The layers go from the least often changed to the most: base, weights, dependencies, source. A
-# source commit rebuilds and pushes the source layer only.
+# The layers go from the least often changed to the most: base, dependencies, source, weights. The
+# source and the weights come in through `COPY --link`, and no step runs after them, so a source change
+# builds one new layer and pulls no cached layer.
 
 ARG BASE_IMAGE=positro/openpi-base:latest
 ARG CLOUD_SDK_IMAGE=google/cloud-sdk:slim
@@ -27,13 +29,15 @@ RUN mkdir -p /assets/openpi-data/big_vision \
  && curl -fsSL "${TOKENIZER_URL}" -o /assets/openpi-data/big_vision/paligemma_tokenizer.model
 
 FROM ${BASE_IMAGE}
-COPY --from=assets /assets/checkpoints /opt/positronic/checkpoints/pi05_droid_jointpos
-COPY --from=assets /assets/openpi-data /opt/positronic/openpi-data
+# openpi's `serve_policy.py` resolves the container's hostname. Under `--network none`, /etc/hosts has no
+# record of it, and nss-myhostname resolves it to a local address.
+RUN apt-get update && apt-get install -y --no-install-recommends libnss-myhostname \
+ && rm -rf /var/lib/apt/lists/* && grep -E '^hosts:.*myhostname' /etc/nsswitch.conf
 
 ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
     OPENPI_DATA_HOME=/opt/positronic/openpi-data \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/positronic:/openpi
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary:/openpi
 
 # The server starts openpi's own `serve_policy.py` through `uv run --project /openpi`, which reads
 # the environment the base resolved openpi into, /.venv. Left to its default, uv builds a second
@@ -46,10 +50,28 @@ COPY pyproject.toml uv.lock ./
 COPY client/pyproject.toml client/
 COPY wire/pyproject.toml wire/
 COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
 RUN uv sync --locked --python 3.13 --extra openpi --no-dev --no-install-workspace && uv cache clean
 
-COPY . /positronic
+# The workspace installs from its manifests and package stubs, which records each package's metadata.
+# The source then lands with no step after it: the packages import from PYTHONPATH.
+COPY README.md LICENSE ./
+COPY client/README.md client/
+COPY wire/README.md wire/
+COPY model_server/README.md model_server/
+COPY vocabulary/README.md vocabulary/
+COPY positronic/__init__.py positronic/
+COPY pimm/__init__.py pimm/
+COPY client/platform_client/py.typed client/platform_client/
+COPY wire/positronic_wire/py.typed wire/positronic_wire/
+COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
+COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
 RUN uv sync --locked --python 3.13 --extra openpi --no-dev && uv cache clean
+
+COPY --link . /positronic
+
+COPY --link --from=assets /assets/checkpoints /opt/positronic/checkpoints/pi05_droid_jointpos
+COPY --link --from=assets /assets/openpi-data /opt/positronic/openpi-data
 
 # A fetch the build did not make fails at once on the denied network.
 ENV UV_PROJECT_ENVIRONMENT=/.venv \

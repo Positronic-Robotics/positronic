@@ -20,6 +20,7 @@ from platform_client.enums import (
     Placement,
     QuotaSubject,
     ReasonCode,
+    StartPose,
     SubmissionStatus,
     Wire,
 )
@@ -206,6 +207,7 @@ class ResolvedTask(BaseModel):
     policy_preset: str = Field(min_length=1)
     # `none` where the task has no tote.
     tote_placement: Slugged[Placement]
+    start_pose: Slugged[StartPose]
     # None where no external camera watches the task.
     camera_vantage: Slugged[CameraVantage] | None = None
     # Per external camera, keyed by its mount name.
@@ -472,7 +474,8 @@ class RankingRow(BaseModel):
     carry the same one. `tag` is what tells them apart, and is what lets a user find their own row;
     it is stable for a user across boards. Render them together (`ateam#0ddba7`).
 
-    The value the board ranks on is `scores.primary`.
+    The value the board ranks on is `scores.primary`. `replay` plays back the camera video of the
+    submission's episodes, and it is absent until the platform has built the page.
     """
 
     rank: int
@@ -481,6 +484,7 @@ class RankingRow(BaseModel):
     scores: Scores = Field(default_factory=Scores)
     submission_id: SubmissionId
     submitted_at: AwareDatetime
+    replay: ReplayLink | None = None
 
 
 class BoardSummary(BaseModel):

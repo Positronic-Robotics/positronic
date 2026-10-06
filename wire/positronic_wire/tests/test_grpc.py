@@ -17,9 +17,14 @@ from positronic_wire import wire
     ('code', 'details', 'refusal'),
     [
         (grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token', wire.Refusal.FORBIDDEN),
-        (grpc.StatusCode.UNAVAILABLE, 'connection refused', wire.Refusal.COLD),
+        (grpc.StatusCode.UNAVAILABLE, 'upstream connect error', wire.Refusal.COLD),
         (grpc.StatusCode.RESOURCE_EXHAUSTED, '', wire.Refusal.COLD),
-        (grpc.StatusCode.DEADLINE_EXCEEDED, '', wire.Refusal.COLD),
+        (grpc.StatusCode.DEADLINE_EXCEEDED, 'Deadline Exceeded', wire.Refusal.SILENT),
+        (
+            grpc.StatusCode.UNAVAILABLE,
+            'failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:1: Connection refused',
+            wire.Refusal.SILENT,
+        ),
         (grpc.StatusCode.UNAVAILABLE, 'Cannot check peer: missing selected ALPN property', wire.Refusal.FINAL),
         (grpc.StatusCode.UNAVAILABLE, 'CERTIFICATE_VERIFY_FAILED', wire.Refusal.FINAL),
         (
@@ -35,7 +40,7 @@ from positronic_wire import wire
         (
             grpc.StatusCode.UNAVAILABLE,
             'address lookup failed for gpu-host:443: Timeout while contacting DNS servers',
-            wire.Refusal.COLD,
+            wire.Refusal.SILENT,
         ),
         (
             grpc.StatusCode.RESOURCE_EXHAUSTED,
@@ -118,7 +123,7 @@ def test_a_probe_the_server_answers_unimplemented_reads_as_the_server(monkeypatc
     ('code', 'refusal'),
     [
         (grpc.StatusCode.UNAVAILABLE, wire.Refusal.COLD),
-        (grpc.StatusCode.DEADLINE_EXCEEDED, wire.Refusal.COLD),
+        (grpc.StatusCode.DEADLINE_EXCEEDED, wire.Refusal.SILENT),
         (grpc.StatusCode.PERMISSION_DENIED, wire.Refusal.FORBIDDEN),
         (grpc.StatusCode.INTERNAL, wire.Refusal.FINAL),
     ],
@@ -137,11 +142,11 @@ def test_a_probe_carries_the_headers_as_metadata_and_closes_the_channel(monkeypa
     channel.close.assert_called_once()
 
 
-def test_a_port_that_never_answers_is_cold():
+def test_a_port_that_never_answers_is_no_answer():
     """Nothing listens on port 1; the call never reaches a server."""
     assert (
         client_grpc.GrpcClientWire().probe(dataclasses.replace(_ADDRESS, host='localhost', port=1), None, 0.2)
-        is wire.Refusal.COLD
+        is wire.Refusal.SILENT
     )
 
 

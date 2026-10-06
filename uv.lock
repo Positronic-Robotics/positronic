@@ -70,6 +70,7 @@ positronic-franka = false
 [manifest]
 members = [
     "positronic",
+    "positronic-eval-vocabulary",
     "positronic-model-server",
     "positronic-platform-client",
     "positronic-wire",
@@ -5170,6 +5171,7 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "plotly" },
     { name = "pos3" },
+    { name = "positronic-eval-vocabulary" },
     { name = "positronic-model-server" },
     { name = "positronic-platform-client" },
     { name = "positronic-wire", extra = ["grpc", "websocket"] },
@@ -5314,6 +5316,7 @@ requires-dist = [
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-anthropic'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-google'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
+    { name = "positronic-eval-vocabulary", editable = "vocabulary" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
     { name = "positronic-model-server", editable = "model_server" },
     { name = "positronic-platform-client", editable = "client" },
@@ -5374,6 +5377,11 @@ dev = [
 ]
 
 [[package]]
+name = "positronic-eval-vocabulary"
+version = "0.1.0"
+source = { editable = "vocabulary" }
+
+[[package]]
 name = "positronic-franka"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5386,7 +5394,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/16/45/029c72cffe797d826
 
 [[package]]
 name = "positronic-model-server"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },
@@ -5417,7 +5425,7 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.17.0"
+version = "0.19.0"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
@@ -5434,7 +5442,7 @@ requires-dist = [
 
 [[package]]
 name = "positronic-wire"
-version = "0.11.0"
+version = "0.12.0"
 source = { editable = "wire" }
 
 [package.optional-dependencies]

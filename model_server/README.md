@@ -5,9 +5,9 @@ environments. Install it without Positronic, Torch or JAX. The package contains 
 it does not provide a server entrypoint or session lifecycle.
 
 ```bash
-uv pip install "positronic-model-server==0.1.0"
-uv pip install "positronic-model-server[websocket]==0.1.0"
-uv pip install "positronic-model-server[grpc]==0.1.0"
+uv pip install "positronic-model-server==0.1.1"
+uv pip install "positronic-model-server[websocket]==0.1.1"
+uv pip install "positronic-model-server[grpc]==0.1.1"
 ```
 
 The core depends on NumPy, Pillow, msgpack and `positronic-wire`'s dependency-free transport

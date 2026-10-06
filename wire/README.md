@@ -9,7 +9,7 @@ install `grpcio` and `websockets` independently.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire[websocket,grpc]==0.11.0"
+uv add "positronic-wire[websocket,grpc]==0.12.0"
 uv add "positronic-wire[websocket,grpc] @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -38,7 +38,7 @@ serves it, and this package holds the client end alone.
 | Module | Holds |
 |---|---|
 | `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
-| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, and `refusal_of(raised)`, which reads a failed handshake as a `Refusal` |
+| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, `refusal_of(raised)`, which reads a failed handshake as a `Refusal`, and `connected_socket(host, port, timeout)`, a TCP connect whose timeout covers the name lookup and every address |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every installed member by its `NAME`, and `client_wire(name)` |
@@ -61,8 +61,8 @@ leaves out on the members that carry one.
   target instead.
 - `dial(address, headers, open_timeout)` — a client's end of one session. It raises
   `ConnectRefused` when the session does not open, whatever refused it. The `refusal` on the
-  exception says what the caller does next: `COLD` retries, `FORBIDDEN` retries a few times,
-  `FINAL` surfaces at once.
+  exception says what the caller does next: `COLD` (a backend still starting) and `SILENT`
+  (nothing answered) retry, `FORBIDDEN` retries a few times, `FINAL` surfaces at once.
 - `probe(address, headers, open_timeout)` — whether a server answers at the address, without opening
   a session. It carries the same `headers` as `dial`, so an edge that authenticates on them lets the
   probe through to the server behind it: the probe wakes what a session would reach. `None` when a
@@ -75,8 +75,9 @@ leaves out on the members that carry one.
   returns the seconds the server stays alive after the call, or `None` for a server with no idle
   timeout. `timeout` bounds the whole call. The websocket members send `POST` to `KEEPALIVE_PATH`, and
   the gRPC members call `KEEPALIVE_METHOD_PATH`. `keepalive` raises
-  `KeepaliveUnsupported` where the server does not serve the call, and `ConnectRefused` where the
-  server answers nothing. `roboarena` always raises `KeepaliveUnsupported`.
+  `KeepaliveUnsupported` where the server serves sessions but not the call, and `ConnectRefused`
+  otherwise, in the terms `probe` uses: a 200 that does not carry the keepalive answer is `FINAL`.
+  `roboarena` always raises `KeepaliveUnsupported`, and dials nothing.
 
 `registry.client_wire(name)` selects an installed transport. `CLIENT_WIRES` includes only families
 whose libraries are installed; requesting an unavailable transport raises with installation guidance.
@@ -95,27 +96,51 @@ that wire's fields, never a URL, and no address carries a field a wire ignores.
 the network. The address refuses a relative path when it is built, because a relative one names a
 different socket to each caller. It names no host and no port, because a socket has neither: the
 handshake carries `localhost` as a stand-in the server never resolves. A socket is same-machine by
-construction, so no TLS member sits beside it. An absent path is `COLD`: the client cannot tell a
+construction, so no TLS member sits beside it. An absent path is `SILENT`: the client cannot tell a
 misspelt path from a socket nobody has bound yet, so it retries either to its deadline. A refusal
-from a socket a server is restarting on is `COLD` too. A path holding something that is not a
+from a socket a server is restarting on is `SILENT` too. A path holding something that is not a
 socket, and a refused permission, are `FINAL`, because no retry reaches them. A handshake that timed
 out or was reset reached the socket, so the server rather than the path was not ready, and it reads
-`COLD` as it does on a port.
+`SILENT` as it does on a port.
 
 `roboarena` is a partner's own protocol: msgpack frames on a websocket at the bare root of a port the
 partner publishes. The server closes any other path, and it routes on a key inside each frame, so the
 address names no route and no query. It publishes no default port either, so every address states one.
 The server announces its configuration as the first frame of every connection: `dial` leaves that frame
-for the caller's codec, and `probe` reads it and closes. A port that accepts a connection and announces
-nothing is a backend still starting, so it reads `COLD`. The server reports a failure in a text frame
-and serves nothing more on that connection, so `recv` and `probe` raise `TextAnswer`, which carries the
-text: a retry does not change it. The protocol names no URL scheme and the port is plain, so no TLS
-member sits beside this wire; a partner who terminates TLS in front of it refuses a handshake in the
-terms the websocket members already read.
+for the caller's codec, and `probe` reads it and closes. A server that upgrades the connection and
+announces nothing is a backend still starting, so it reads `COLD`. The server reports a failure in a
+text frame and serves nothing more on that connection, so `recv` and `probe` raise `TextAnswer`, which
+carries the text: a retry does not change it. The protocol names no URL scheme and the port is plain,
+so no TLS member sits beside this wire; a partner who terminates TLS in front of it refuses a handshake
+in the terms the websocket members already read.
 
 Typing carries the split: a wire handed the other wire's address is a type error at the call site.
 `registry.client_wire(name)` answers by name and cannot, so `InferenceClient` checks `ADDRESS` once,
 before it dials, and names both in the refusal.
+
+## Whether a policy server is up
+
+`keepalive` answers it, and `probe` answers it where a server serves no keepalive call. Each one's
+timeout is one wall-clock deadline over the name lookup, every address the name resolves to, and every
+read, so a server the caller did not write cannot hold the call past it. Both open their own socket, so
+they ignore a proxy the environment names, where `dial` goes through it.
+
+| What came back | Means |
+|---|---|
+| `keepalive` returns | a policy server admitted the headers |
+| `KeepaliveUnsupported`, then `probe` returns `None` | a server answers and serves no keepalive call |
+| `FORBIDDEN` | an answer that refused the credential |
+| `COLD` | an answer that asks for a retry: a 5xx, a 429 |
+| `FINAL` | an answer no retry changes: any other status, a 200 without the keepalive answer, a host with no address |
+| `SILENT` | no answer: no connection, or none before the timeout or the close |
+
+`COLD` and `SILENT` mean the server is not up yet. `roboarena` raises `KeepaliveUnsupported` without a
+dial, and its `probe` raises `TextAnswer` where the server announces a failure. The gRPC members read
+`SILENT` off the details gRPC writes for a connect nothing answered, and off `DEADLINE_EXCEEDED`.
+
+The libraries cap what a call reads: `websockets` reads at most 128 headers of 8 KiB and 1 MiB of a
+refused upgrade's body, and `http.client` at most 100 headers of 64 KiB. The websocket members read at
+most 16 KiB of a keepalive body, and the roboarena member one frame of at most `MAX_MESSAGE_BYTES`.
 
 ## What each consumer pays
 
@@ -124,6 +149,7 @@ before it dials, and names both in the refusal.
 | A rig client, and `positronic` itself | Every verb, the session protocol, the policy stack | `positronic`, which pins `positronic-wire` exactly |
 | A coordinator that probes an endpoint and warms it | `registry.client_wire`, `probe`, `PROBE_PATH`, the routes | `positronic-wire[websocket,grpc]`, or just the required transport extra |
 | A service that validates an endpoint record | `registry.CLIENT_WIRES` | `positronic-wire` with the transport extras it accepts |
+| A host that runs a policy server and waits for it before it sends sessions | `keepalive`, `probe` | `positronic-wire[websocket,grpc]`, or just the required transport extra |
 | A server | The server side | `positronic` |
 
 A consumer whose lockfile already carries `grpcio` (through a cloud SDK) and `websockets` (through

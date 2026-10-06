@@ -38,12 +38,13 @@ import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
-from positronic.dataset.episode import META_PATH, META_UID, select_timeline
+from positronic.dataset.episode import META_PATH, META_UID
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
     ReplayLayout,
+    duration_timeline,
     get_dataset_root,
     get_episodes_list,
     stream_episode_rrd,
@@ -148,7 +149,7 @@ def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int, lay
     # The uid, because an episode's position is view-dependent.
     uid = _path_component(str(cast(Episode, ds[episode_id]).meta[META_UID]))
     layout_suffix = '' if layout is None else '-' + hashlib.sha256(json.dumps(asdict(layout)).encode()).hexdigest()[:16]
-    return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px{layout_suffix}.rrd'
+    return episode_cache_dir / f'v2-{uid}-{max_hz!r}hz-{max_resolution}px{layout_suffix}.rrd'
 
 
 @asynccontextmanager
@@ -194,7 +195,9 @@ def asset_link(name: str) -> str:
 async def cache_rerun_assets(request: Request, call_next):
     response = await call_next(request)
     if request.url.path.startswith(asset_link(f'{VIEWER_DIR}/')):
-        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        response.headers['Cache-Control'] = (
+            'no-cache' if request.url.path.endswith('/index.html') else 'public, max-age=31536000, immutable'
+        )
     return response
 
 
@@ -561,7 +564,8 @@ async def episode_viewer(request: Request, episode_id: int):
             'num_episodes': len(ds),
             'prev_link': episode_link((episode_id - 1) % len(ds)),
             'next_link': episode_link((episode_id + 1) % len(ds)),
-            'viewer_path': asset_link(f'{VIEWER_DIR}/{rr.__version__}/index.html'),
+            'viewer_path': asset_link(f'{VIEWER_DIR}/{rr.__version__}/index.html') + '?v=2',
+            'seek_timeline': duration_timeline(episode.timelines),
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': episode_rrd_link(episode_id),
             'episode_path': meta.get(META_PATH),
@@ -713,9 +717,10 @@ async def api_episodes(request: Request):
         return all(filter_spelling(ep.static.get(k)) == v for k, v in filters.items())
 
     def table_row(i: int, ep: Episode) -> dict:
-        duration = 0.0
-        if ep.signals:
-            first, last = ep.bounds(select_timeline(ep.timelines))
+        duration = None
+        timeline = duration_timeline(ep.timelines) if ep.signals else None
+        if timeline is not None:
+            first, last = ep.bounds(timeline)
             duration = (last - first) / 1e9
         return {'__episode_index__': i, '__meta__': ep.meta, '__duration__': duration, **ep.static}
 
@@ -1054,7 +1059,7 @@ def configure_tables(
     `ep_table_cfg` maps an episode's static keys to the columns of the episode table. `group_tables` holds
     each grouped table by name, and `home_page` names the one served at the root, or None for the episodes.
     A recording's videos are re-encoded down to `max_resolution` on the long side, and its videos and its
-    numeric signals are thinned to `max_hz`; 0 keeps every frame and every sample. It shows its views as
+    numeric signals with a known nanosecond clock are thinned to `max_hz`; 0 disables thinning. It shows its views as
     `layout` places them, or as `stream_episode_rrd` places them without one. `root` is the dataset
     path the pages report, and the recordings are cached under `cache_dir`. A table response cached under
     the previous settings is dropped.
@@ -1112,14 +1117,17 @@ def main(
 ):
     """Visualize a Dataset with Rerun.
 
-    Episode viewer URL params:
+    Each signal retains its timeline names. Known nanosecond clocks use durations; other names use integer sequences.
+    The initial timeline is `received.world`, `recorded`, another known clock, or the first available name.
+
+    Episode viewer URL params (require a known nanosecond clock):
         /episode/<id>?t=<seconds>      — open paused at seconds from episode start
         /episode/<id>?ts_ns=<nanos>    — open paused at absolute nanosecond timestamp
 
     Args:
         dataset: Dataset to visualize
         max_resolution: Long side an episode RRD's videos are re-encoded down to
-        max_hz: Rate an episode RRD's videos and numeric signals are thinned to; 0 keeps every frame and sample
+        max_hz: Rate cap for videos and numeric signals with a known nanosecond clock; 0 disables thinning
         cache_dir: Directory to cache generated RRD files
         host: Server host
         port: Server port

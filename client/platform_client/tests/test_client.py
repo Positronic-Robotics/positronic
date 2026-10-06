@@ -239,6 +239,7 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
                 'cap_per_episode_sec': 90,
                 'policy_preset': 'example_preset',
                 'tote_placement': 'none',
+                'start_pose': 'nominal',
                 'episode_order': ['a', 'a'],
             }
         ],
@@ -670,6 +671,7 @@ def test_create_submission_posts_a_whole_plan_and_parses_the_id():
         'camera_vantage': None,
         'external_cameras': {},
         'clutter': None,
+        'start_pose': None,
     }
     assert body['episodes_per_endpoint'] == 10 and body['transaction_key'] is None
 
