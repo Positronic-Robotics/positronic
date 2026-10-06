@@ -364,8 +364,14 @@ function startStream(video, path, wait) {
   let backoff = 500;
   let lastActivity = 0;
 
+  // A new load on reconnect rejects play() with AbortError. The tile shows any other rejection.
   const ensurePlaying = () => {
-    if (video.paused) video.play().catch(() => {});
+    if (!video.paused) return;
+    video.play().catch((error) => {
+      if (error.name === 'AbortError') return;
+      wait.hidden = false;
+      wait.textContent = `This browser did not play the stream: ${error.message}`;
+    });
   };
   video.addEventListener('canplay', ensurePlaying);
   video.addEventListener('playing', () => {
