@@ -58,6 +58,7 @@ COPY pyproject.toml uv.lock ./
 COPY client/ client/
 COPY wire/ wire/
 COPY model_server/ model_server/
+COPY vocabulary/ vocabulary/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --extra hardware --no-install-project
 
