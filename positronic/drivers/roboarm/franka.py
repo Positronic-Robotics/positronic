@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Generator, Iterator, Mapping
 from enum import Enum, StrEnum, auto
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import numpy as np
 
@@ -106,6 +106,10 @@ _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
 # The field Desk answers the safe inputs in.
 SAFE_INPUT_STATE = 'safeInputState'
+# The safe input the emergency stop is wired to.
+EMERGENCY_STOP_INPUT = 'x31'
+# The error the arm's state carries, and a ready call answers, while the emergency stop is pressed.
+EMERGENCY_STOP_PRESSED = 'Release the emergency stop button'
 
 
 class _SafeInputLevel(StrEnum):
@@ -122,6 +126,7 @@ class _Reading(NamedTuple):
 
     sampled: bool
     triggered: frozenset[str]
+    stop_pressed: bool = False
 
 
 class _SafeInputs:
@@ -134,7 +139,7 @@ class _SafeInputs:
     # ACTIVE releases the emergency stop (x31) and presses an enabling device (x4, guidingEnableButton);
     # x32 and x33 carry no fixed meaning. A level or an input not listed here counts as triggered.
     _CLEAR_STATES: Mapping[str, frozenset[_SafeInputLevel]] = {
-        'x31': frozenset({_SafeInputLevel.ACTIVE}),
+        EMERGENCY_STOP_INPUT: frozenset({_SafeInputLevel.ACTIVE}),
         'x4': frozenset({_SafeInputLevel.INACTIVE}),
         'guidingEnableButton': frozenset({_SafeInputLevel.INACTIVE}),
         'x32': frozenset({_SafeInputLevel.ACTIVE, _SafeInputLevel.INACTIVE}),
@@ -167,6 +172,12 @@ class _SafeInputs:
         """
         reading = self._reading
         return reading.sampled and not reading.triggered
+
+    @property
+    def stop_pressed(self) -> bool:
+        """Whether a reading is in hand and found the emergency stop pressed."""
+        reading = self._reading
+        return reading.sampled and reading.stop_pressed
 
     @staticmethod
     def _level(reading: object) -> _SafeInputLevel | None:
@@ -206,7 +217,7 @@ class _SafeInputs:
 
     def _note(self, state: Mapping[str, object]) -> None:
         """Record a reading, and log a safe input whose state changed."""
-        sampled, was_triggered = self._reading
+        sampled, was_triggered, _ = self._reading
         if not sampled:
             logger.info(f'The control box reports its safe inputs as {dict(state)}')
         self._unreadable = False
@@ -216,7 +227,8 @@ class _SafeInputs:
                 logger.warning(f'The control box prohibits motion: safe inputs {sorted(triggered)} are triggered')
             else:
                 logger.info('The control box permits motion: every safe input is clear')
-        self._reading = _Reading(True, triggered)
+        stop_pressed = self._level(state.get(EMERGENCY_STOP_INPUT)) is _SafeInputLevel.INACTIVE
+        self._reading = _Reading(True, triggered, stop_pressed)
 
     def __enter__(self) -> '_SafeInputs':
         """Take the first reading, then keep it fresh on a thread until the block ends."""
@@ -269,6 +281,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._refusals = 0
         self._refused = False
         self._quiet_at = 0.0
+        self._stop_emitted = False
 
     def __enter__(self) -> '_Arm':
         return self
@@ -283,7 +296,18 @@ class _Arm(DriverRun[command.CommandType]):
         """Ship the arm as it is reported, marked ERROR while it is not where the driver put it."""
         faulted = self.moves.errored or st.error != 0  # the robot reports its own faults; a stall is not one
         self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
-        self.out.emit(self.state)
+        self.emit_state()
+
+    def emit_state(self) -> None:
+        """Emit ``self.state``, or the emergency stop's error in its place while the stop is pressed."""
+        if not self.safe_inputs.stop_pressed:
+            self._stop_emitted = False
+            self.out.emit(self.state)
+        elif not self._stop_emitted:
+            # Once per press: a reader keeps the last value, and the link queues every error it carries.
+            # The Message types do not name the SignalError that any message can carry.
+            self.out.emit(cast(FrankaState, pimm.SignalError(EMERGENCY_STOP_PRESSED)))
+            self._stop_emitted = True
 
     @staticmethod
     def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
@@ -369,6 +393,8 @@ class _Arm(DriverRun[command.CommandType]):
         Answer with the error instead when it stays.
         """
         with pimm.calls.raise_to(call):
+            if self.safe_inputs.stop_pressed:
+                raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
             st = self.robot.state()
             if st.error != 0 and not self.robot.recover_from_errors():
                 raise RuntimeError(f'the arm holds an error that the recovery did not clear: {st.error_message}')
@@ -391,7 +417,7 @@ class _Arm(DriverRun[command.CommandType]):
         """
         # The first emit must not ship an unfilled state.
         self.state.encode(self.robot.state(), RobotStatus.BUSY)
-        self.out.emit(self.state)
+        self.emit_state()
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
 
@@ -410,7 +436,7 @@ class _Arm(DriverRun[command.CommandType]):
             for wait in self.await_goal(should_stop, self.limiter.wait):
                 st = self.robot.state()
                 self.state.encode(st, RobotStatus.BUSY)
-                self.out.emit(self.state)
+                self.emit_state()
                 if st.error != 0 and not at_teardown:
                     self.robot.recover_from_errors()
                 yield wait

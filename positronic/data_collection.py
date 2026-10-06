@@ -220,6 +220,13 @@ class DataCollectionController(pimm.ControlSystem):
             except pimm.NoValueException:
                 yield pimm.Sleep(0.001)
                 continue
+            except pimm.SignalError as e:
+                # Nothing goes to the arm until its state gives data again.
+                in_error, entered_error = _check_error(True, in_error)
+                if entered_error:
+                    logging.error(f'The arm gives no state: {e}')
+                    self.sound.emit(error_wav_path)
+                yield pimm.Sleep(0.001)
 
 
 def controller_positions_serializer(controller_positions: dict[str, geom.Transform3D]) -> dict[str, np.ndarray]:
