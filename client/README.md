@@ -77,7 +77,7 @@ positronic account credits purchases --org=acme
 ```
 
 `users.me` names the caller's personal organization in `personal_org` when the platform keeps one.
-The caller owns that organization alone. `account`, `buy` and `purchases` use it when `--org` is not given.
+The caller owns that organization alone. `account`, `buy` and `purchases` use it when the caller gives no `--org`.
 Each of these commands prints the organization it uses on stderr, for example `org: user-a0 (personal org)`.
 A platform that keeps no personal organization for the caller requires `--org`.
 
