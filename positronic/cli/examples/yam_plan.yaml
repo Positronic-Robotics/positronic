@@ -1,0 +1,12 @@
+# A plan for the bimanual YAM: `rig_shape: yam` runs every task of the plan on a two-arm rig.
+rig_shape: yam
+tasks:
+  - pass-the-cube-across
+  - fold-the-shirt-in-half
+endpoints:
+  - name: candidate
+    wire: websocket_tls
+    address: {host: candidate.example, port: 443, path: /api/v1/session}
+episodes_per_endpoint: 3
+cap_per_episode_sec: 120
+policy_preset: production
