@@ -263,6 +263,13 @@ def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command
     return caller
 
 
+def _readier(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[None, None]:
+    """A caller on ``driver.ready``, for a test that pumps its generator rather than running a World."""
+    caller = pimm.calls.ControlSystemCaller[None, None](driver)
+    wire_call(world, caller, driver.ready)
+    return caller
+
+
 def _recoverer(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[None, franka.RecoveryOutcome]:
     """A caller on ``driver.recover``, for a test that pumps its generator rather than running a World."""
     caller = pimm.calls.ControlSystemCaller[None, franka.RecoveryOutcome](driver)
@@ -1283,6 +1290,67 @@ def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):
     _drive(loop, clock)
 
     assert isinstance(arm.modes[mark], franka.pf.InternalImpedance)
+
+
+def test_a_ready_call_on_an_arm_with_no_fault_is_answered_at_once(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+
+    answer = _readier(world, driver)(None)
+    next(loop)
+
+    assert answer.result() is None
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
+
+
+def test_a_ready_call_clears_the_fault_a_latched_reflex_holds_before_it_answers(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.goal_status = franka.pf.GoalStatus.ABORTED  # a reflex latched: the arm rejects the goal it holds
+    next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+
+    answer = _readier(world, driver)(None)
+    next(loop)
+
+    assert answer.result() is None
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1
+
+
+@pytest.mark.parametrize('fault', ['error', 'safe input'])
+def test_a_ready_call_answers_the_fault_that_stays_and_the_run_serves_the_next_one(desk, world, fault):
+    arm = FakeArm(PARK)
+    if fault == 'safe input':
+        desk.safe_inputs['x31'] = STOPPED  # a person holds the arm, and only they release it
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    ready = _readier(world, driver)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    if fault == 'error':
+        arm.error = 1  # recover_from_errors does not clear it
+    else:
+        arm.goal_status = franka.pf.GoalStatus.ABORTED
+        next(loop)
+
+    for _ in range(2):
+        answer = ready(None)
+        next(loop)
+        with pytest.raises(RuntimeError, match='recovery did not clear' if fault == 'error' else 'safe input'):
+            answer.result()
 
 
 def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):

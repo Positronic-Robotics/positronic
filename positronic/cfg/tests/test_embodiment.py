@@ -3,6 +3,7 @@ import pytest
 from positronic import keys
 from positronic.cfg import embodiment
 from positronic.cfg.hardware import camera, roboarm
+from positronic.eval import keys as eval_keys
 
 
 def test_each_fake_droid_is_built_by_the_droid_factory_over_the_same_cameras():
@@ -17,6 +18,7 @@ def test_the_fake_droid_builds_without_the_vendor_packages():
     built = embodiment.droid_fake.instantiate()
 
     assert set(built.observations) == {keys.ROBOT_STATE, keys.GRIP, *camera.droid}
+    assert set(built.ready_handlers) == {eval_keys.ARM}
 
 
 def test_the_fake_droid_declares_what_the_real_droid_declares():
@@ -28,3 +30,4 @@ def test_the_fake_droid_declares_what_the_real_droid_declares():
     assert {name: obs.serializer for name, obs in fake.observations.items()} == {
         name: obs.serializer for name, obs in real.observations.items()
     }
+    assert set(fake.ready_handlers) == set(real.ready_handlers)

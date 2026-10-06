@@ -82,8 +82,10 @@ class DearpyguiUi(pimm.ControlSystem):
                 self.buttons.emit(pimm.Message(pressed_keys))
 
             for cam_name, camera in self.cameras.items():
-                if (frame := pimm.value_updated(camera)) is not None:
-                    image = frame.array
+                message = pimm.read_updated(camera)
+                # A camera with no data keeps its last frame: the viewer skips its pimm.SignalError.
+                if message is not None and not isinstance(message.data, pimm.SignalError):
+                    image = message.data.array
                     if cam_name not in im_sizes:
                         im_sizes[cam_name] = image.shape[:2]
                         if not init_done and len(im_sizes) == len(self.cameras):
