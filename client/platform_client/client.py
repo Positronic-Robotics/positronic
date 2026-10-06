@@ -19,12 +19,16 @@ from typing import Any, ClassVar, Self, TypeVar
 
 import httpx
 from platform_client import routes
+from platform_client.billing import BillingAccount, PurchaseListResponse, PurchaseView
 from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
-from platform_client.ids import ApiKey, SubmissionId
+from platform_client.ids import ApiKey, OrgSlug, PurchaseId, SubmissionId
 from platform_client.requests import (
+    BillingOrgQuery,
+    BillingPurchaseCreateRequest,
+    BillingPurchaseGetQuery,
     CancelRequest,
     RankingsQuery,
     RegisterRequest,
@@ -163,6 +167,18 @@ class PlatformClient:
 
     def me(self) -> MeResponse:
         return self._get(routes.USERS_ME, MeResponse)
+
+    def billing_account(self, org: OrgSlug) -> BillingAccount:
+        return self._get(routes.BILLING_ACCOUNT, BillingAccount, query=BillingOrgQuery(org=org))
+
+    def create_purchase(self, request: BillingPurchaseCreateRequest) -> PurchaseView:
+        return self._post(routes.BILLING_PURCHASES_CREATE, request, PurchaseView)
+
+    def get_purchase(self, purchase_id: PurchaseId) -> PurchaseView:
+        return self._get(routes.BILLING_PURCHASES_GET, PurchaseView, query=BillingPurchaseGetQuery(id=purchase_id))
+
+    def list_purchases(self, org: OrgSlug) -> PurchaseListResponse:
+        return self._get(routes.BILLING_PURCHASES_LIST, PurchaseListResponse, query=BillingOrgQuery(org=org))
 
     def create_submission(self, plan: EvalPlan) -> SubmissionCreateResponse:
         """Run one plan. A plan that states its own tasks needs a customer grant: a key without one

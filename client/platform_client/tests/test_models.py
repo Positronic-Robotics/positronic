@@ -7,9 +7,24 @@ from typing import get_args
 
 import pytest
 from platform_client import config, eval_plan, requests
+from platform_client.billing import (
+    CREDIT_SCALE,
+    INT64_MAX,
+    BillingAccount,
+    CreditBalance,
+    CreditPackage,
+    CreditQuote,
+    PurchaseView,
+    QuoteLine,
+    RequestBilling,
+    Tariff,
+)
 from platform_client.boards import BoardRef
 from platform_client.catalog import TaskSummary
 from platform_client.enums import (
+    BillingMode,
+    BillingRole,
+    BillingState,
     BoardVisibility,
     CameraVantage,
     EndpointKind,
@@ -19,6 +34,7 @@ from platform_client.enums import (
     Placement,
     QuotaSubject,
     ReasonCode,
+    RigShape,
     StartPose,
     SubmissionStatus,
     Wire,
@@ -35,10 +51,13 @@ from platform_client.eval_plan import (
     plan_of_image,
 )
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, OrgSlug, SubmissionId, TransactionKey, UserId
+from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey, UserId
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
+    BillingOrgQuery,
+    BillingPurchaseCreateRequest,
+    BillingPurchaseGetQuery,
     CancelRequest,
     RankingsQuery,
     RegisterRequest,
@@ -201,7 +220,7 @@ RESOLVED_TASK = ResolvedTask(
     clutter_objects=['cup', 'sponge'],
     episode_order=['pi05', 'baseline', 'baseline'],
 )
-RESOLVED = ResolvedPlan(episodes_total=3, tasks=[RESOLVED_TASK])
+RESOLVED = ResolvedPlan(rig_shape=RigShape.franka, episodes_total=3, tasks=[RESOLVED_TASK])
 
 MODELS: list[BaseModel] = [
     Scores(),
@@ -871,7 +890,27 @@ def test_a_resolved_endpoint_names_a_wire():
 def test_the_resolved_total_is_the_sum_over_the_tasks():
     assert RESOLVED.tasks[0].episodes == 3
     with pytest.raises(ValidationError, match='episodes_total states 4'):
-        ResolvedPlan(episodes_total=4, tasks=[RESOLVED_TASK])
+        ResolvedPlan(rig_shape=RigShape.franka, episodes_total=4, tasks=[RESOLVED_TASK])
+
+
+@pytest.mark.parametrize('shape', [shape for shape in RigShape if shape is not RigShape.INVALID])
+def test_a_resolved_plan_carries_its_rig_shape_as_a_slug(shape: RigShape):
+    plan = ResolvedPlan(episodes_total=3, tasks=[RESOLVED_TASK], rig_shape=shape)
+
+    assert plan.rig_shape is shape
+    assert plan.model_dump(mode='json')['rig_shape'] == slug_of(shape)
+    assert ResolvedPlan.model_validate_json(plan.model_dump_json()) == plan
+
+
+def test_a_resolved_plan_refuses_an_absent_rig_shape():
+    with pytest.raises(ValidationError, match='rig_shape'):
+        ResolvedPlan.model_validate({'episodes_total': 3, 'tasks': [RESOLVED_TASK.model_dump(mode='json')]})
+
+
+@pytest.mark.parametrize('shape', ['unknown', 'invalid', 1, RigShape.INVALID])
+def test_a_resolved_plan_refuses_an_invalid_rig_shape(shape: object):
+    with pytest.raises(ValidationError, match='rig_shape'):
+        ResolvedPlan.model_validate({**RESOLVED.model_dump(mode='json'), 'rig_shape': shape})
 
 
 def test_a_plan_outcome_totals_its_endpoints():
@@ -888,3 +927,110 @@ def test_a_view_from_a_gateway_that_sends_no_outcome_reads_as_none():
     """The fields are additive: a payload that carries none of them still validates."""
     view = FinishedSubmissionView.model_validate({'id': '1f', 'status': 'finished', 'artifacts': {'result': 's3://b/'}})
     assert view.replay is None and view.outcome is None
+
+
+def test_billing_terms_round_trip_with_exact_integer_units():
+    terms = Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE)
+    line = QuoteLine(task_pos=0, endpoint='candidate', count=2, cap_ns=1, max_units=2 * (CREDIT_SCALE // 6 + 1))
+    quote = CreditQuote(terms=terms, lines=(line,), total_units=line.max_units)
+    accepted = RequestBilling(mode=BillingMode.prepaid, quote=quote, state=BillingState.held)
+    assert RequestBilling.model_validate_json(accepted.model_dump_json()) == accepted
+    balance = CreditBalance(posted_units=12, reserved_units=10)
+    assert balance.model_dump()['available_units'] == 2
+
+
+def test_billing_account_and_purchase_keep_exact_package_and_member_identity():
+    package = CreditPackage(
+        id=PackageId('operator-package'), credit_units=CREDIT_SCALE // 6, amount_minor=17, currency='jpy'
+    )
+    account = BillingAccount(
+        org=OrgSlug('acme'),
+        mode=BillingMode.prepaid,
+        billing_role=BillingRole.none,
+        balance=CreditBalance(posted_units=CREDIT_SCALE, reserved_units=CREDIT_SCALE // 6),
+        tariff=Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE),
+        packages=(package,),
+    )
+    assert BillingAccount.model_validate_json(account.model_dump_json()) == account
+    purchase = PurchaseView(
+        id=PurchaseId('opaque-purchase-id'),
+        package=package,
+        initiated_by=USER,
+        created_at=AT,
+        checkout_url='https://checkout.stripe.com/accepted',
+    )
+    assert PurchaseView.model_validate_json(purchase.model_dump_json()) == purchase
+    assert purchase.model_dump(mode='json')['initiated_by'] == USER.to_str()
+
+
+@pytest.mark.parametrize('field', ['credit_units', 'amount_minor'])
+@pytest.mark.parametrize('value', [0, -1, 1.5, True, INT64_MAX + 1])
+def test_purchase_package_refuses_inexact_or_unbounded_credits_and_money(field, value):
+    data = {'id': 'operator-package', 'credit_units': CREDIT_SCALE, 'amount_minor': 17, 'currency': 'jpy'}
+    data[field] = value
+    with pytest.raises(ValidationError):
+        CreditPackage.model_validate(data)
+
+
+@pytest.mark.parametrize('lifecycle', [{'review_reason': 'identity conflict'}, {'granted_at': AT}])
+def test_a_reviewed_or_credited_purchase_cannot_publish_a_payable_link(lifecycle):
+    with pytest.raises(ValidationError):
+        PurchaseView(
+            id=PurchaseId('opaque-purchase-id'),
+            package=CreditPackage(id=PackageId('package'), credit_units=1, amount_minor=17, currency='jpy'),
+            initiated_by=USER,
+            created_at=AT,
+            checkout_url='https://checkout.stripe.com/accepted',
+            **lifecycle,
+        )
+
+
+def test_billing_queries_and_create_request_share_the_input_boundary():
+    models = (
+        BillingOrgQuery(org=OrgSlug('acme')),
+        BillingPurchaseGetQuery(id=PurchaseId('opaque-purchase-id')),
+        BillingPurchaseCreateRequest(
+            org=OrgSlug('acme'), package_id=PackageId('package'), transaction_key=TransactionKey('retry-key')
+        ),
+    )
+    for model in models:
+        assert model.model_config == INPUT_MODEL_CONFIG
+        assert type(model).model_validate_json(model.model_dump_json()) == model
+        with pytest.raises(ValidationError):
+            type(model).model_validate({**model.model_dump(), 'unknown_option': True})
+
+
+def test_billing_terms_reject_wrong_versions_and_inconsistent_quotes():
+    with pytest.raises(ValidationError, match='version'):
+        Tariff(version='incorrect', episode_units=1, minute_units=1)
+    terms = Tariff.for_rates(CREDIT_SCALE, CREDIT_SCALE)
+    line = QuoteLine(task_pos=0, endpoint='candidate', count=1, cap_ns=CREDIT_SCALE, max_units=2 * CREDIT_SCALE)
+    with pytest.raises(ValidationError, match='total'):
+        CreditQuote(terms=terms, lines=(line,), total_units=1)
+    with pytest.raises(ValidationError, match='repeats'):
+        CreditQuote(terms=terms, lines=(line, line), total_units=4 * CREDIT_SCALE)
+    with pytest.raises(ValidationError, match='tariff'):
+        CreditQuote(terms=Tariff.for_rates(0, 0), lines=(line,), total_units=line.max_units)
+
+
+@pytest.mark.parametrize('units', [True, 1.0, '1', -1, INT64_MAX + 1])
+def test_billing_units_reject_coercion_and_overflow(units):
+    with pytest.raises(ValidationError):
+        Tariff.for_rates(units, 0)
+
+
+def test_billing_task_positions_reject_storage_overflow():
+    with pytest.raises(ValidationError, match='task_pos'):
+        QuoteLine(task_pos=INT64_MAX + 1, endpoint='candidate', count=1, cap_ns=1, max_units=0)
+
+
+def test_billing_modes_require_the_matching_hold_state():
+    with pytest.raises(ValidationError, match='quote'):
+        RequestBilling(mode=BillingMode.prepaid, state=BillingState.held)
+    with pytest.raises(ValidationError, match='holds no credits'):
+        RequestBilling(mode=BillingMode.legacy, state=BillingState.held)
+
+
+def test_a_credit_balance_refuses_reserved_credits_above_posted_credits():
+    with pytest.raises(ValidationError, match='exceed'):
+        CreditBalance(posted_units=10, reserved_units=11)

@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.19.0"
+uv add "positronic-platform-client==0.20.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -48,6 +48,36 @@ Run `platform-register --rotate` to mint a new key on a machine that lost it.
 `--platform-url` and `POSITRONIC_PLATFORM_URL` name a platform other than the default. The command
 refuses a plain `http` platform that is not loopback. Staging has no TLS and is reached over the
 tailnet: pass `--plaintext-http` to reach it.
+
+## Credit accounts
+
+`PlatformClient.billing_account(org)` reads the member's billing role, credit balance, tariff, and configured purchase packages.
+One credit is `60_000_000_000` integer units.
+The account response carries the operator-configured tariff for recorded episodes and duration.
+The gateway freezes the accepted request's quote and reserves its full maximum before execution.
+
+The prepaid balance belongs to the organization. `QuotaLimit` values from `users.me` describe independent limits and use each limit's own `scale`.
+The period credits meter uses six units per credit. Its remaining quota does not describe or fund the prepaid balance.
+Legacy organizations continue with usage invoices. Prepaid organizations spend their frozen request quote against the prepaid balance.
+
+`PlatformClient.create_purchase` takes a `BillingPurchaseCreateRequest` with an organization, package id, and transaction key.
+Reuse the same key to read the same owned purchase after a lost response. A new purchase requires the billing spender role.
+The configured package fixes its credit units, currency, and amount in currency minor units.
+The response carries a Checkout URL only when the initiating member can still pay the purchase.
+Credits appear after the gateway verifies the payment. A browser redirect does not grant credits.
+
+`PlatformClient.get_purchase(id)` and `list_purchases(org)` read purchases without creating another Checkout session.
+An organization member can read purchase history. A reviewed or credited purchase carries no payable URL.
+
+```bash
+positronic account credits account --org=acme
+positronic account credits buy --org=acme --package-id=<configured-package> --transaction-key=<stable-key>
+positronic account credits purchase --id=<purchase-id>
+positronic account credits purchases --org=acme
+```
+
+These commands print typed JSON with exact integer units and configured currency amounts.
+Quote a numeric-looking text argument with inner quotes, for example `--transaction-key='"20261005"'`.
 
 ## Eval plans
 
@@ -171,8 +201,9 @@ the plan lays out that scene and that table, and runs the episodes in that order
 names each task and what it lacks. Name a preset the rig carries: `production` serves each
 episode from one of the plan's endpoints.
 
-`submissions.resolve` takes the same plan and answers with `resolved` alone. It files nothing,
-spends no quota and returns no submission id. A plan with a `transaction_key` draws from that key,
+`submissions.resolve` takes the same plan and answers with `resolved` alone. For a prepaid
+organization, that `ResolvedPlan` carries a `credit_quote`. It files nothing, spends no quota and
+returns no submission id. A plan with a `transaction_key` draws from that key,
 so a dry run shows the draws a submission under the same key then makes. Without a key, the draws
 are an example. From Python, `PlatformClient.resolve_plan` makes the call.
 
@@ -211,6 +242,8 @@ to the entries offered to the grant's client.
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
 `platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
 definition.
+
+`ResolvedPlan.rig_shape` names the plan's rig shape. Missing or invalid shapes fail response validation.
 
 ## From the command line
 
