@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 from typing import Annotated, Self
 
-from platform_client.enums import BillingMode, BillingState
+from platform_client.enums import BillingMode, BillingRole, BillingState
+from platform_client.ids import OrgSlug, UserId
 from platform_client.slug import Slugged
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 CREDIT_SCALE = 60_000_000_000
 MAX_UNITS = (1 << 63) - 1
@@ -101,3 +102,47 @@ class CreditBalance(BaseModel):
         if self.available_units < 0:
             raise ValueError('reserved credits exceed posted credits')
         return self
+
+
+class CreditPackage(BaseModel):
+    model_config = ConfigDict(extra='forbid', frozen=True)
+
+    id: str = Field(min_length=1)
+    credit_units: CreditUnits = Field(gt=0)
+    amount_minor: int = Field(strict=True, gt=0, le=MAX_UNITS)
+    currency: str = Field(pattern=r'^[a-z]{3}$')
+
+
+class BillingAccount(BaseModel):
+    org: OrgSlug
+    mode: Slugged[BillingMode]
+    billing_role: Slugged[BillingRole]
+    balance: CreditBalance
+    tariff: Tariff
+    packages: tuple[CreditPackage, ...]
+
+    @model_validator(mode='after')
+    def _known_mode_and_role(self) -> Self:
+        if self.mode is BillingMode.INVALID or self.billing_role is BillingRole.INVALID:
+            raise ValueError('billing mode and role must be set')
+        return self
+
+
+class PurchaseView(BaseModel):
+    id: str = Field(min_length=1)
+    package: CreditPackage
+    initiated_by: UserId
+    created_at: AwareDatetime
+    checkout_url: str | None = Field(default=None, min_length=1)
+    granted_at: AwareDatetime | None = None
+    review_reason: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _payable_link_matches_lifecycle(self) -> Self:
+        if self.checkout_url is not None and (self.granted_at is not None or self.review_reason is not None):
+            raise ValueError('a reviewed or credited purchase cannot carry a payable link')
+        return self
+
+
+class PurchaseListResponse(BaseModel):
+    purchases: list[PurchaseView]

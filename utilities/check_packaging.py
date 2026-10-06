@@ -6,7 +6,7 @@ against a pip-installed positronic, not the source checkout.
 
 Usage:
     uv venv /tmp/pkg-test --python 3.11
-    uv pip install --python /tmp/pkg-test . jinja2
+    uv pip install --no-sources --python /tmp/pkg-test ./client ./wire ./model_server . jinja2
     /tmp/pkg-test/bin/python utilities/check_packaging.py
 """
 

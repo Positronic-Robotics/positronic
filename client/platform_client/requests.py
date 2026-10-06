@@ -8,7 +8,7 @@ would change what the submission means. `submissions.create` takes an `EvalPlan`
 from __future__ import annotations
 
 from platform_client.boards import BoardRef
-from platform_client.ids import SubmissionId
+from platform_client.ids import OrgSlug, SubmissionId, TransactionKey
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from pydantic import BaseModel, Field
 
@@ -70,3 +70,23 @@ class SubmissionListQuery(BaseModel):
 
     after: SubmissionId | None = None
     limit: int | None = Field(default=None, gt=0)
+
+
+class BillingAccountQuery(BaseModel):
+    model_config = INPUT_MODEL_CONFIG
+
+    org: OrgSlug = Field(min_length=1)
+
+
+class BillingPurchaseGetQuery(BaseModel):
+    model_config = INPUT_MODEL_CONFIG
+
+    id: str = Field(min_length=1)
+
+
+class BillingPurchaseCreateRequest(BaseModel):
+    model_config = INPUT_MODEL_CONFIG
+
+    org: OrgSlug = Field(min_length=1)
+    package_id: str = Field(min_length=1)
+    transaction_key: TransactionKey = Field(min_length=1)

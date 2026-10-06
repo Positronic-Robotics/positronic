@@ -7,6 +7,7 @@ import json
 import httpx
 import pytest
 from platform_client import routes
+from platform_client.billing import CREDIT_SCALE, BillingAccount, PurchaseListResponse, PurchaseView, Tariff
 from platform_client.boards import BoardRef
 from platform_client.client import (
     API_KEY_ENV,
@@ -38,9 +39,9 @@ from platform_client.eval_plan import (
     plan_of_image,
 )
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, OrgSlug, SubmissionId
+from platform_client.ids import ApiKey, OrgSlug, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
-from platform_client.requests import CancelRequest, RegisterRequest
+from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
     ArtifactListResponse,
@@ -86,6 +87,74 @@ class Gateway:
 def make_client(gateway: Gateway, *, api_key: ApiKey | None = KEY) -> PlatformClient:
     transport = httpx.MockTransport(gateway)
     return PlatformClient(client=httpx.Client(base_url=BASE, transport=transport), api_key=api_key)
+
+
+PURCHASE_PACKAGE = {'id': 'configured-package', 'credit_units': CREDIT_SCALE, 'amount_minor': 17, 'currency': 'jpy'}
+PURCHASE_BODY = {
+    'id': 'opaque-purchase-id',
+    'package': PURCHASE_PACKAGE,
+    'initiated_by': 'a0',
+    'created_at': AT,
+    'checkout_url': 'https://checkout.stripe.com/accepted',
+}
+
+
+def test_billing_account_reads_the_member_role_balance_and_explicit_package_money():
+    gateway = Gateway(
+        200,
+        {
+            'org': 'acme',
+            'mode': 'prepaid',
+            'billing_role': 'none',
+            'balance': {'posted_units': 60, 'reserved_units': 12},
+            'tariff': Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE).model_dump(mode='json'),
+            'packages': [PURCHASE_PACKAGE],
+        },
+    )
+    response = make_client(gateway).billing_account(OrgSlug('acme'))
+    assert isinstance(response, BillingAccount)
+    assert response.balance.available_units == 48
+    assert gateway.request().method == 'GET'
+    assert gateway.request().url.path == routes.BILLING_ACCOUNT
+    assert dict(gateway.request().url.params) == {'org': 'acme'}
+    assert gateway.request().headers[AUTH_HEADER] == f'Bearer {KEY}'
+
+
+def test_a_credit_purchase_posts_only_organization_package_and_transaction_identity():
+    gateway = Gateway(200, PURCHASE_BODY)
+    request = BillingPurchaseCreateRequest(
+        org=OrgSlug('acme'), package_id='configured-package', transaction_key=TransactionKey('frozen-retry-key')
+    )
+    response = make_client(gateway).create_purchase(request)
+    assert isinstance(response, PurchaseView)
+    assert gateway.request().method == 'POST'
+    assert gateway.request().url.path == routes.BILLING_PURCHASES_CREATE
+    assert gateway.body() == {'org': 'acme', 'package_id': 'configured-package', 'transaction_key': 'frozen-retry-key'}
+
+
+def test_reading_a_purchase_keeps_its_opaque_identifier_in_the_query():
+    gateway = Gateway(200, PURCHASE_BODY)
+    response = make_client(gateway).get_purchase('opaque-purchase-id')
+    assert response.id == 'opaque-purchase-id'
+    assert gateway.request().method == 'GET'
+    assert gateway.request().url.path == routes.BILLING_PURCHASES_GET
+    assert dict(gateway.request().url.params) == {'id': 'opaque-purchase-id'}
+
+
+def test_purchase_history_uses_the_same_member_organization_query():
+    gateway = Gateway(200, {'purchases': [PURCHASE_BODY]})
+    response = make_client(gateway).list_purchases(OrgSlug('acme'))
+    assert isinstance(response, PurchaseListResponse)
+    assert response.purchases[0].package.amount_minor == 17
+    assert gateway.request().method == 'GET'
+    assert gateway.request().url.path == routes.BILLING_PURCHASES_LIST
+    assert dict(gateway.request().url.params) == {'org': 'acme'}
+
+
+def test_the_client_refuses_a_payable_link_after_a_purchase_enters_review():
+    gateway = Gateway(200, {**PURCHASE_BODY, 'review_reason': 'payment identity conflict'})
+    with pytest.raises(ValidationError, match='payable link'):
+        make_client(gateway).get_purchase('opaque-purchase-id')
 
 
 def test_register_posts_the_body_unauthenticated_and_parses_the_response():
@@ -545,6 +614,10 @@ def test_every_endpoint_has_exactly_one_method():
         'list_boards',
         'catalog_evals',
         'catalog_tasks',
+        'billing_account',
+        'create_purchase',
+        'get_purchase',
+        'list_purchases',
     }
     assert len(declared) == len(methods)
     assert methods <= set(vars(PlatformClient))

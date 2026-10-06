@@ -1,14 +1,18 @@
 """`positronic account register`, over a stub platform transport."""
 
+import json
 import os
 
 import pytest
 from platform_client import config as config_module
 from platform_client import routes
+from platform_client.billing import CREDIT_SCALE, Tariff
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
 from platform_client.ids import ApiKey
 
+from positronic.cli.account import commands
 from positronic.cli.account import gateway as gateway_module
+from positronic.cli.account.credits import account, buy, purchase, purchases
 from positronic.cli.account.register import register
 
 
@@ -130,3 +134,66 @@ def test_register_says_no_key_came_back_for_an_existing_registration(platform, r
     assert 'no key issued' in capsys.readouterr().out
     # A repeat registration mints no key, so no record is written.
     assert read_config(config_dir(os.environ)) is None
+
+
+PACKAGE = {'id': 'package', 'credit_units': CREDIT_SCALE, 'amount_minor': 17, 'currency': 'jpy'}
+PURCHASE = {
+    'id': 'opaque-purchase',
+    'package': PACKAGE,
+    'initiated_by': 'a0',
+    'created_at': '2026-03-04T05:06:07Z',
+    'checkout_url': 'https://checkout.stripe.com/accepted',
+}
+
+
+def test_account_prints_exact_units_and_operator_configured_package_terms(platform, run_command, capsys):
+    body = {
+        'org': 'acme',
+        'mode': 'prepaid',
+        'billing_role': 'spender',
+        'balance': {'posted_units': CREDIT_SCALE, 'reserved_units': 1, 'available_units': CREDIT_SCALE - 1},
+        'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE).model_dump(),
+        'packages': [PACKAGE],
+    }
+    platform.answer(body)
+    run_command(account, org='acme')
+    assert platform.request.url.path == routes.BILLING_ACCOUNT
+    assert platform.request.url.params['org'] == 'acme'
+    assert json.loads(capsys.readouterr().out) == body
+
+
+def test_buy_sends_a_named_retry_key_and_prints_the_owned_checkout(platform, run_command, capsys):
+    platform.answer(PURCHASE)
+    run_command(buy, org='acme', package_id='package', transaction_key='retry-key')
+    assert platform.request.url.path == routes.BILLING_PURCHASES_CREATE
+    assert platform.body == {'org': 'acme', 'package_id': 'package', 'transaction_key': 'retry-key'}
+    assert json.loads(capsys.readouterr().out)['checkout_url'] == PURCHASE['checkout_url']
+
+
+@pytest.mark.parametrize('field', ['org', 'package_id', 'transaction_key'])
+def test_buy_refuses_invalid_input_before_http(field, platform, run_command):
+    args = {'org': 'acme', 'package_id': 'package', 'transaction_key': 'retry-key', field: ''}
+    with pytest.raises(SystemExit):
+        run_command(buy, **args)
+    assert platform.seen is None
+
+
+def test_purchase_reads_an_opaque_id_without_creating_another_checkout(platform, run_command, capsys):
+    platform.answer({**PURCHASE, 'checkout_url': None, 'review_reason': 'payment review'})
+    run_command(purchase, id='opaque-purchase')
+    assert platform.request.method == 'GET'
+    assert platform.request.url.path == routes.BILLING_PURCHASES_GET
+    assert platform.request.url.params['id'] == 'opaque-purchase'
+    assert json.loads(capsys.readouterr().out)['review_reason'] == 'payment review'
+
+
+def test_purchases_reads_the_named_member_account(platform, run_command, capsys):
+    platform.answer({'purchases': [PURCHASE]})
+    run_command(purchases, org='acme')
+    assert platform.request.url.path == routes.BILLING_PURCHASES_LIST
+    assert platform.request.url.params['org'] == 'acme'
+    assert len(json.loads(capsys.readouterr().out)['purchases']) == 1
+
+
+def test_credit_commands_are_in_the_real_account_tree():
+    assert commands['credits'] == {'account': account, 'buy': buy, 'purchase': purchase, 'purchases': purchases}

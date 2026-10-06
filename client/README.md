@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.17.0"
+uv add "positronic-platform-client==0.18.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -48,6 +48,30 @@ Run `platform-register --rotate` to mint a new key on a machine that lost it.
 `--platform-url` and `POSITRONIC_PLATFORM_URL` name a platform other than the default. The command
 refuses a plain `http` platform that is not loopback. Staging has no TLS and is reached over the
 tailnet: pass `--plaintext-http` to reach it.
+
+## Credit accounts
+
+`PlatformClient.billing_account(org)` reads the member's billing role, credit balance, tariff, and configured purchase packages.
+One credit is `60_000_000_000` integer units. The initial tariff is one sixth credit per recorded episode plus one credit per minute.
+The gateway freezes the accepted request's quote and reserves its full maximum before execution.
+
+`PlatformClient.create_purchase` takes a `BillingPurchaseCreateRequest` with an organization, package id, and transaction key.
+Reuse the same key to read the same owned purchase after a lost response. A new purchase requires the billing spender role.
+The configured package fixes its credit units, currency, and amount in currency minor units.
+The response carries a Checkout URL only when the initiating member can still pay the purchase.
+Credits appear after the gateway verifies the payment. A browser redirect does not grant credits.
+
+`PlatformClient.get_purchase(id)` and `list_purchases(org)` read purchases without creating another Checkout session.
+An organization member can read purchase history. A reviewed or credited purchase carries no payable URL.
+
+```bash
+positronic account credits account --org=acme
+positronic account credits buy --org=acme --package-id=<configured-package> --transaction-key=<stable-key>
+positronic account credits purchase --id=<purchase-id>
+positronic account credits purchases --org=acme
+```
+
+These commands print typed JSON with exact integer units and configured currency amounts.
 
 ## Eval plans
 
@@ -159,10 +183,11 @@ the plan lays out that scene and that table, and runs the episodes in that order
 `cap_per_episode_sec` or no `policy_preset` at any level is refused `bad_request`, and the refusal
 names each task and what it lacks.
 
-`submissions.resolve` takes the same plan and answers with `resolved` alone. It files nothing,
+`submissions.resolve` takes the same plan and answers with `resolved` and any prepaid `credit_quote`. It files nothing,
 spends no quota and returns no submission id. A plan with a `transaction_key` draws from that key,
 so a dry run shows the draws a submission under the same key then makes. Without a key, the draws
 are an example. From Python, `PlatformClient.resolve_plan` makes the call.
+
 
 `EvalPlan` refuses unknown fields. `EvalPlan.model_validate(plan)` raises on one before anything
 reaches the platform.

@@ -10,8 +10,11 @@ from platform_client import config, eval_plan, requests
 from platform_client.billing import (
     CREDIT_SCALE,
     MAX_UNITS,
+    BillingAccount,
     CreditBalance,
+    CreditPackage,
     CreditQuote,
+    PurchaseView,
     QuoteLine,
     RequestBilling,
     Tariff,
@@ -19,6 +22,7 @@ from platform_client.billing import (
 from platform_client.boards import BoardRef
 from platform_client.enums import (
     BillingMode,
+    BillingRole,
     BillingState,
     BoardVisibility,
     CameraVantage,
@@ -48,6 +52,9 @@ from platform_client.ids import ApiKey, OrgSlug, SubmissionId, TransactionKey, U
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
+    BillingAccountQuery,
+    BillingPurchaseCreateRequest,
+    BillingPurchaseGetQuery,
     CancelRequest,
     RankingsQuery,
     RegisterRequest,
@@ -881,6 +888,65 @@ def test_billing_terms_round_trip_with_exact_integer_units():
     assert RequestBilling.model_validate_json(accepted.model_dump_json()) == accepted
     balance = CreditBalance(posted_units=12, reserved_units=10)
     assert balance.model_dump()['available_units'] == 2
+
+
+def test_billing_account_and_purchase_keep_exact_package_and_member_identity():
+    package = CreditPackage(id='operator-package', credit_units=CREDIT_SCALE // 6, amount_minor=17, currency='jpy')
+    account = BillingAccount(
+        org=OrgSlug('acme'),
+        mode=BillingMode.prepaid,
+        billing_role=BillingRole.none,
+        balance=CreditBalance(posted_units=CREDIT_SCALE, reserved_units=CREDIT_SCALE // 6),
+        tariff=Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE),
+        packages=(package,),
+    )
+    assert BillingAccount.model_validate_json(account.model_dump_json()) == account
+    purchase = PurchaseView(
+        id='opaque-purchase-id',
+        package=package,
+        initiated_by=USER,
+        created_at=AT,
+        checkout_url='https://checkout.stripe.com/accepted',
+    )
+    assert PurchaseView.model_validate_json(purchase.model_dump_json()) == purchase
+    assert purchase.model_dump(mode='json')['initiated_by'] == USER.to_str()
+
+
+@pytest.mark.parametrize('field', ['credit_units', 'amount_minor'])
+@pytest.mark.parametrize('value', [0, -1, 1.5, True, MAX_UNITS + 1])
+def test_purchase_package_refuses_inexact_or_unbounded_credits_and_money(field, value):
+    data = {'id': 'operator-package', 'credit_units': CREDIT_SCALE, 'amount_minor': 17, 'currency': 'jpy'}
+    data[field] = value
+    with pytest.raises(ValidationError):
+        CreditPackage.model_validate(data)
+
+
+@pytest.mark.parametrize('lifecycle', [{'review_reason': 'identity conflict'}, {'granted_at': AT}])
+def test_a_reviewed_or_credited_purchase_cannot_publish_a_payable_link(lifecycle):
+    with pytest.raises(ValidationError):
+        PurchaseView(
+            id='opaque-purchase-id',
+            package=CreditPackage(id='package', credit_units=1, amount_minor=17, currency='jpy'),
+            initiated_by=USER,
+            created_at=AT,
+            checkout_url='https://checkout.stripe.com/accepted',
+            **lifecycle,
+        )
+
+
+def test_billing_queries_and_create_request_share_the_input_boundary():
+    models = (
+        BillingAccountQuery(org=OrgSlug('acme')),
+        BillingPurchaseGetQuery(id='opaque-purchase-id'),
+        BillingPurchaseCreateRequest(
+            org=OrgSlug('acme'), package_id='package', transaction_key=TransactionKey('retry-key')
+        ),
+    )
+    for model in models:
+        assert model.model_config == INPUT_MODEL_CONFIG
+        assert type(model).model_validate_json(model.model_dump_json()) == model
+        with pytest.raises(ValidationError):
+            type(model).model_validate({**model.model_dump(), 'unknown_option': True})
 
 
 def test_billing_terms_reject_wrong_versions_and_inconsistent_quotes():
