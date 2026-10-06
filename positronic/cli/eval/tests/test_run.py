@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import logging
 import os
 import sys
@@ -166,7 +167,9 @@ def test_a_public_eval_binds_its_arguments_on_the_installed_positronic(name: str
 
     config = run_module._public_eval_config(name)
 
-    assert config.kwargs['eval'].kwargs.items() >= definition.args.items()
+    eval_config = config.kwargs['eval']
+    assert set(definition.args) <= set(inspect.signature(eval_config.target).parameters)
+    assert eval_config.kwargs.items() >= definition.args.items()
     assert isinstance(config.instantiate(), Eval)
 
 
