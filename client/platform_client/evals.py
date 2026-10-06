@@ -3,9 +3,7 @@
 A name is a task suite AND the embodiment that runs it, so there is no second axis to get wrong.
 The platform owns the set, so a name this client has never heard of still reaches the server.
 
-A definition pins what a run of an eval runs: the config, the trials, the time limit and the scorer.
-This module holds the definitions of the public evals, so a run on any machine can read them. The
-platform holds the definitions of the evals it does not publish.
+The platform holds the definitions of the evals it does not publish.
 """
 
 from __future__ import annotations
@@ -64,7 +62,7 @@ class EvalDefinition(BaseModel):
 
     # The positronic eval config, as `positronic eval run --eval=` takes it.
     config: str = Field(pattern=r'^\.[A-Za-z_][A-Za-z0-9_.]*$')
-    # The config's own parameters, as its `--eval.<name>=` overrides take them. They expand to `tasks`.
+    # The config's `--eval.<name>=` overrides, which expand to `tasks`.
     args: dict[str, JsonValue]
     tasks: list[EvalTask] = Field(min_length=1)
     # The wall-clock limit of one run.
