@@ -8,6 +8,7 @@ class FakeSLCamera(pimm.ControlSystem):
 
     def __init__(self) -> None:
         self.frame = pimm.ControlSystemEmitter(self)
+        self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         while not should_stop.value:
