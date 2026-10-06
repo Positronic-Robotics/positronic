@@ -226,7 +226,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: [pi05-droid, gr00t-n17-droid, molmoact2-droid]
+        name: [pi05-droid, gr00t-n17-droid, molmoact2-droid, flux3-action, cosmos3-nano]
     uses: ./.github/workflows/docker-serve-image.yaml
     with:
       name: ${{ matrix.name }}

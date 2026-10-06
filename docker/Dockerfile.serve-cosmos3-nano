@@ -1,0 +1,183 @@
+# syntax=docker/dockerfile:1.7
+# A policy image the platform can run: Cosmos3-Nano-Policy-DROID with NVIDIA's action server, its environment,
+# and the two Hugging Face repositories it loads. It serves positronic's session protocol on port 8000 with no
+# arguments and no network. docs/submit-a-policy-image.md § Cosmos3-Nano says what it serves and its licences.
+#
+# Usage (from the repository root)
+#   make -C docker build-serve-cosmos3-nano        # positro/cosmos3-nano:local
+#   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+#       -f docker/Dockerfile.serve-cosmos3-nano -t docker.io/<you>/cosmos3-nano:v1 --push .
+#   docker run --rm --network none docker.io/<you>/cosmos3-nano:v1        # the offline pre-flight
+#
+# The layers go from the least often changed to the most: base with NVIDIA's environment, positronic's
+# dependencies, source, weights. The source and the weights come in through `COPY --link`, and no step runs
+# after them, so a source change builds one new layer and pulls no cached layer.
+#
+# The build needs no credential: no repository it reads is gated. It downloads 36 GB of weights.
+# FOOTGUN: the platform unpacks at most 55 GB (`UNPACKED_IMAGE_BYTES`), and the image holds about 53 GB.
+
+# The policy repository, and the Wan2.2 VAE at the repository and revision NVIDIA's code names for it.
+ARG POLICY_REPO=nvidia/Cosmos3-Nano-Policy-DROID
+ARG POLICY_REVISION=805c0d6d46196ecdc789213a6de72303c383895b
+ARG VAE_REPO=Wan-AI/Wan2.2-TI2V-5B
+ARG VAE_REVISION=921dbaf3f1674a56f47e83fb80a34bac8a8f203e
+
+# The weight stages do not build on the base, so a new base reuses the downloaded weights. One shard per stage,
+# and so per layer. FOOTGUN: a registry can refuse a 31 GB layer. FOOTGUN: a by-revision download writes no
+# `refs/main`, so the server and the tokenizer's loader name the revision.
+FROM python:3.12-slim AS hub
+ENV HF_HOME=/opt/hf
+RUN pip install --no-cache-dir huggingface_hub==0.35.3
+
+FROM hub AS transformer-1
+ARG POLICY_REPO POLICY_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', allow_patterns=['transformer/*-00001-of-00007*'])"
+
+FROM hub AS transformer-2
+ARG POLICY_REPO POLICY_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', allow_patterns=['transformer/*-00002-of-00007*'])"
+
+FROM hub AS transformer-3
+ARG POLICY_REPO POLICY_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', allow_patterns=['transformer/*-00003-of-00007*'])"
+
+FROM hub AS transformer-4
+ARG POLICY_REPO POLICY_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', allow_patterns=['transformer/*-00004-of-00007*'])"
+
+FROM hub AS transformer-5
+ARG POLICY_REPO POLICY_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', allow_patterns=['transformer/*-00005-of-00007*'])"
+
+FROM hub AS transformer-6
+ARG POLICY_REPO POLICY_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', allow_patterns=['transformer/*-00006-of-00007*'])"
+
+FROM hub AS transformer-7
+ARG POLICY_REPO POLICY_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', allow_patterns=['transformer/*-00007-of-00007*'])"
+
+FROM hub AS vision-encoder
+ARG POLICY_REPO POLICY_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', allow_patterns=['vision_encoder/*'])"
+
+# The rest of the policy: the configs, the tokenizer and the model card. FOOTGUN: take no `allow_patterns` here.
+# The loader skips the hub tokenizer `Qwen/Qwen3-VL-8B-Instruct` only while five root files sit beside the
+# weights: `preprocessor_config.json`, `tokenizer_config.json`, `tokenizer.json`, `vocab.json` and `merges.txt`.
+# `vae/` holds the Wan2.2 VAE again, in the diffusers layout: the loader drops every weight outside
+# `transformer/` and `vision_encoder/` (`inference/model.py`), and the tokenizer loads the Wan2.2 file below.
+# Then the Wan2.2 VAE file the tokenizer loads, and the model card that carries its licence.
+FROM hub AS small-files
+ARG POLICY_REPO POLICY_REVISION VAE_REPO VAE_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', ignore_patterns=['transformer/*', 'vision_encoder/*', 'vae/diffusion_pytorch_model.safetensors'])" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$VAE_REPO', revision='$VAE_REVISION', allow_patterns=['Wan2.2_VAE.pth', 'README.md'])"
+
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+ARG POLICY_REPO POLICY_REVISION
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ffmpeg git git-lfs tree wget \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.12.2 /uv /uvx /usr/local/bin/
+
+# NVIDIA's code at the commit this recipe is read against. The lock pins torch 2.13.0+cu130.
+ARG COSMOS_FRAMEWORK_REV=12c8a7832fb378e0e2cf7f6b7ebe7a82b729764b
+WORKDIR /workspace
+RUN git clone https://github.com/NVIDIA/cosmos-framework.git . \
+ && git checkout "$COSMOS_FRAMEWORK_REV" \
+ && rm -rf .git
+
+# One environment, with the groups the server runs on. The uv cache goes in the same layer.
+RUN uv sync --locked --all-extras --group=cu130-torch213-train --group=policy-server \
+ && uv cache clean
+ENV PATH="/workspace/.venv/bin:$PATH" \
+    TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+
+# FOOTGUN: the server resolves each repository through `uv run … hf download` (`utils/checkpoint_db.py`),
+# which builds a fresh environment from PyPI at every start unless IMAGINAIRE_HF_CLI_ENVIRONMENT names one.
+# With no network that start dies before it serves.
+ENV IMAGINAIRE_HF_CLI_ENVIRONMENT=/opt/hf-cli
+RUN UV_PROJECT_ENVIRONMENT=$IMAGINAIRE_HF_CLI_ENVIRONMENT \
+      uv sync --project cosmos_framework/utils/hf_cli --locked --no-default-groups \
+ && uv cache clean
+
+# The server loads the gated `nvidia/Cosmos-Guardrail1` at setup. Its runners serve only the video and text
+# generation paths; the action server's `infer` reaches neither, so turning them off changes no action.
+RUN sed -i "s/^\(\s*\)guardrails: bool = True/\1guardrails: bool = False/" cosmos_framework/inference/common/args.py \
+ && grep -q "guardrails: bool = False" cosmos_framework/inference/common/args.py
+
+# The licences beside the notice, where a recipient of the image finds them. The OpenMDW-1.1 agreement is the
+# one NVIDIA's repository carries.
+RUN mkdir -p /opt/cosmos3 \
+ && cp /workspace/LICENSE /opt/cosmos3/LICENSE-OpenMDW-1.1 \
+ && curl -fsSL https://www.apache.org/licenses/LICENSE-2.0.txt -o /opt/cosmos3/LICENSE-Apache-2.0
+
+# The start command reads the policy's repository and revision from the environment.
+ENV HF_HOME=/workspace/.cache/huggingface \
+    POLICY_REPO=${POLICY_REPO} \
+    POLICY_REVISION=${POLICY_REVISION} \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary
+
+# positronic's server runs in an environment of its own, beside NVIDIA's. The dependencies install from the lock
+# alone, so a source change does not reinstall them. The server imports none of the skipped packages, which take
+# 1.2 GB of the unpacked budget. opencv-python is robosuite's: its GUI build of `cv2` needs X libraries, and
+# opencv-python-headless gives `cv2`.
+ARG SKIP_UNIMPORTED_PACKAGES="--no-install-package robosuite --no-install-package rerun-sdk \
+--no-install-package numba --no-install-package llvmlite --no-install-package opencv-python"
+WORKDIR /positronic
+COPY pyproject.toml uv.lock ./
+COPY client/pyproject.toml client/
+COPY wire/pyproject.toml wire/
+COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
+RUN uv sync --locked --python 3.13 --no-dev --no-install-workspace $SKIP_UNIMPORTED_PACKAGES && uv cache clean
+
+# The workspace installs from its manifests and package stubs, which records each package's metadata.
+# The source then lands with no step after it: the packages import from PYTHONPATH.
+COPY README.md LICENSE ./
+COPY client/README.md client/
+COPY wire/README.md wire/
+COPY model_server/README.md model_server/
+COPY vocabulary/README.md vocabulary/
+COPY positronic/__init__.py positronic/
+COPY pimm/__init__.py pimm/
+COPY client/platform_client/py.typed client/platform_client/
+COPY wire/positronic_wire/py.typed wire/positronic_wire/
+COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
+COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
+RUN uv sync --locked --python 3.13 --no-dev $SKIP_UNIMPORTED_PACKAGES && uv cache clean
+
+COPY --link . /positronic
+
+COPY --link --from=transformer-1 /opt/hf/hub /workspace/.cache/huggingface/hub
+COPY --link --from=transformer-2 /opt/hf/hub /workspace/.cache/huggingface/hub
+COPY --link --from=transformer-3 /opt/hf/hub /workspace/.cache/huggingface/hub
+COPY --link --from=transformer-4 /opt/hf/hub /workspace/.cache/huggingface/hub
+COPY --link --from=transformer-5 /opt/hf/hub /workspace/.cache/huggingface/hub
+COPY --link --from=transformer-6 /opt/hf/hub /workspace/.cache/huggingface/hub
+COPY --link --from=transformer-7 /opt/hf/hub /workspace/.cache/huggingface/hub
+COPY --link --from=vision-encoder /opt/hf/hub /workspace/.cache/huggingface/hub
+COPY --link --from=small-files /opt/hf/hub /workspace/.cache/huggingface/hub
+COPY --link positronic/vendors/cosmos3/NOTICE /opt/cosmos3/
+
+# A fetch the build did not make fails at once on the denied network. NVIDIA's server runs `uv` at start, so
+# the image sets no `UV_*` variable for it.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
+# NVIDIA's server runs from its own checkout, as NVIDIA's instructions run it.
+WORKDIR /workspace
+EXPOSE 8000
+
+# `exec` makes the server pid 1, so it receives the stop signal. The server starts NVIDIA's interpreter itself.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "exec /positronic/.venv/bin/python -P -m positronic.vendors.cosmos3.server droid \
+   --model.nvidia_python=/workspace/.venv/bin/python --model.checkpoint=\"$POLICY_REPO\" \
+   --model.revision=\"$POLICY_REVISION\" \"$@\"", "--"]
+
+LABEL org.opencontainers.image.title="cosmos3-nano" \
+    org.opencontainers.image.description="Cosmos3-Nano-Policy-DROID and the Wan2.2 VAE it loads, with NVIDIA's action server, served over positronic's session protocol. Guardrails off. OpenMDW-1.1 and Apache-2.0: see /opt/cosmos3/NOTICE." \
+    org.opencontainers.image.licenses="LicenseRef-OpenMDW-1.1 AND Apache-2.0" \
+    org.opencontainers.image.source="https://github.com/Positronic-Robotics/positronic"

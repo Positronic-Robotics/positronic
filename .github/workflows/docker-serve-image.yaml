@@ -28,7 +28,7 @@ permissions:
 jobs:
   serve-image:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       NAME: ${{ inputs.name }}
       # A recipe reads it through a BuildKit secret mount.

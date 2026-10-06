@@ -1,0 +1,150 @@
+# syntax=docker/dockerfile:1.7
+# A policy image the platform can run: FLUX 3 Action DROID with Black Forest Labs' serving code, its encoders
+# and every weight in the image. It serves positronic's session protocol on port 8000 with no arguments and no
+# network. docs/submit-a-policy-image.md § FLUX 3 Action says what it serves.
+#
+# Usage (from the repository root)
+#   make -C docker build-serve-flux3-action        # positro/flux3-action:local
+#   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+#       -f docker/Dockerfile.serve-flux3-action -t docker.io/<you>/flux3-action:v1 --push .
+#   docker run --rm --network none docker.io/<you>/flux3-action:v1        # the offline pre-flight
+#
+# The layers go from the least often changed to the most: base with BFL's environment, positronic's
+# dependencies, source, weights. The source and the weights come in through `COPY --link`, and no step runs
+# after them, so a source change builds one new layer and pulls no cached layer.
+#
+# The build needs no credential: no repository it reads is gated. It downloads 25 GB of weights, and the image
+# is about 36 GB on disk. The weights are under the FLUX Kommunity License v1.0, which allows non-commercial use
+# only. The image carries the licence and the notice it requires (positronic/vendors/flux3_action/NOTICE).
+
+# The policy package the server loads. Offline, a load by `main` finds no ref, so it names the commit.
+ARG FLUX_POLICY_REPO=black-forest-labs/flux-3-action-droid
+ARG FLUX_POLICY_REVISION=3d0887bdc7acee1686b19afac267125d519ff4f1
+ARG FLUX_POLICY_SUBFOLDER=variants/gd
+# The commit of FLUX 3 Action Base that the policy's config names for its encoders.
+ARG FLUX_BASE_REPO=black-forest-labs/flux-3-action-base
+ARG FLUX_BASE_REVISION=62878e2925e59b7a89ec14463ce89932624c490d
+
+# The weight stages do not build on the base, so a new base reuses the downloaded weights. One large file per
+# stage, and so per layer. FOOTGUN: a registry can refuse a layer of 30 GB, and the DiT is one 13.9 GB file that
+# cannot be split. `variants/gd` is the guidance-distilled BF16 package.
+FROM python:3.12-slim AS hub
+ENV HF_HOME=/opt/hf-home
+RUN pip install --no-cache-dir huggingface_hub==0.35.3
+
+FROM hub AS dit
+ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_POLICY_REPO', revision='$FLUX_POLICY_REVISION', allow_patterns=['$FLUX_POLICY_SUBFOLDER/model.safetensors'])"
+
+FROM hub AS video-vae
+ARG FLUX_BASE_REPO FLUX_BASE_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['video_vae.safetensors'])"
+
+FROM hub AS text-encoder-1
+ARG FLUX_BASE_REPO FLUX_BASE_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/model-00001-of-00002.safetensors'])"
+
+FROM hub AS text-encoder-2
+ARG FLUX_BASE_REPO FLUX_BASE_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/model-00002-of-00002.safetensors'])"
+
+# The configs, the tokenizer, the model cards and the licence, which goes beside the notice in /opt/flux3_action.
+FROM hub AS small-files
+ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER FLUX_BASE_REPO FLUX_BASE_REVISION
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_POLICY_REPO', revision='$FLUX_POLICY_REVISION', allow_patterns=['$FLUX_POLICY_SUBFOLDER/*.json', 'LICENSE.md'])" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/*.json', 'text_encoder/*.txt', 'text_encoder/README.md'])" \
+ && mkdir -p /opt/flux3_action \
+ && cp -L "$HF_HOME/hub/models--$(echo "$FLUX_POLICY_REPO" | sed 's|/|--|g')/snapshots/$FLUX_POLICY_REVISION/LICENSE.md" \
+      /opt/flux3_action/LICENSE.md
+
+FROM python:3.12-slim-bookworm
+ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER
+
+# git clones BFL's code. The compiler is for Triton and Inductor, which build their helpers at the first
+# compiled request. positronic's environment installs the GUI build of OpenCV, which loads libxcb, libGL
+# and GLib when it is imported.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential ca-certificates git libgl1 libglib2.0-0 libxcb1 \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /usr/local/bin/uv
+# positronic's environment has a uv of its own: uv 0.8 cannot read positronic's lock.
+COPY --from=ghcr.io/astral-sh/uv:0.11.31 /uv /usr/local/bin/uv-positronic
+
+# BFL's code, Apache-2.0. The lock pins torch 2.10.0+cu128.
+ARG FLUX_ACTION_REV=e2dd1d8dbc5977b54315d61f7548c63c043d6d4f
+WORKDIR /opt/flux-action
+RUN git clone https://github.com/black-forest-labs/flux-action.git . \
+ && git checkout "$FLUX_ACTION_REV" \
+ && uv sync --locked --no-dev --python 3.12 --extra encoders --extra serve
+# The video VAE imports NATTEN at load. Its wheel is built per torch and CUDA, so the lock carries none;
+# this suffix matches the torch above.
+RUN uv pip install --python .venv/bin/python 'natten==0.21.6+torch2100cu128' -f https://whl.natten.org/
+
+# The server reads the policy package from the environment.
+ENV HF_HOME=/opt/hf-home \
+    FLUX_POLICY_REPO=${FLUX_POLICY_REPO} \
+    FLUX_POLICY_REVISION=${FLUX_POLICY_REVISION} \
+    FLUX_POLICY_SUBFOLDER=${FLUX_POLICY_SUBFOLDER} \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary \
+    UV_PROJECT_ENVIRONMENT=/positronic/.venv \
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=600
+
+# positronic's server runs in an environment of its own, beside BFL's. The dependencies install from the lock
+# alone, so a source change does not reinstall them.
+WORKDIR /positronic
+COPY pyproject.toml uv.lock ./
+COPY client/pyproject.toml client/
+COPY wire/pyproject.toml wire/
+COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
+RUN uv-positronic sync --locked --python 3.12 --no-dev --no-install-workspace && uv-positronic cache clean
+
+# The workspace installs from its manifests and package stubs, which records each package's metadata.
+# The source then lands with no step after it: the packages import from PYTHONPATH.
+COPY README.md LICENSE ./
+COPY client/README.md client/
+COPY wire/README.md wire/
+COPY model_server/README.md model_server/
+COPY vocabulary/README.md vocabulary/
+COPY positronic/__init__.py positronic/
+COPY pimm/__init__.py pimm/
+COPY client/platform_client/py.typed client/platform_client/
+COPY wire/positronic_wire/py.typed wire/positronic_wire/
+COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
+COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
+RUN uv-positronic sync --locked --python 3.12 --no-dev && uv-positronic cache clean
+
+COPY --link . /positronic
+
+# For a policy package of your own, `COPY` its directory in place of the `dit` layer and the policy files. In the
+# `ENTRYPOINT`, name that directory as `--model.checkpoint` and pass `--model.revision=None
+# --model.subfolder=None`: BFL's loader refuses a revision for a directory.
+COPY --link --from=dit /opt/hf-home/hub /opt/hf-home/hub
+COPY --link --from=video-vae /opt/hf-home/hub /opt/hf-home/hub
+COPY --link --from=text-encoder-1 /opt/hf-home/hub /opt/hf-home/hub
+COPY --link --from=text-encoder-2 /opt/hf-home/hub /opt/hf-home/hub
+COPY --link --from=small-files /opt/hf-home/hub /opt/hf-home/hub
+# The licence beside the notice, where a recipient of the image finds both.
+COPY --link --from=small-files /opt/flux3_action/LICENSE.md /opt/flux3_action/
+COPY --link positronic/vendors/flux3_action/NOTICE /opt/flux3_action/
+
+# A fetch the build did not make fails at once on the denied network.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    UV_OFFLINE=1 \
+    UV_NO_SYNC=1
+
+EXPOSE 8000
+
+# `exec` makes the server pid 1, so it receives the stop signal. The server starts BFL's interpreter itself.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.flux3_action.server droid \
+   --model.flux_python=/opt/flux-action/.venv/bin/python --model.checkpoint=\"$FLUX_POLICY_REPO\" \
+   --model.revision=\"$FLUX_POLICY_REVISION\" --model.subfolder=\"$FLUX_POLICY_SUBFOLDER\" \"$@\"", "--"]
+
+LABEL org.opencontainers.image.title="flux3-action" \
+    org.opencontainers.image.description="FLUX 3 Action DROID (guidance-distilled BF16), its video VAE and text encoder, served over positronic's session protocol. FLUX Kommunity License v1.0, non-commercial use only: see /opt/flux3_action/NOTICE." \
+    org.opencontainers.image.licenses="LicenseRef-FLUX-Kommunity-1.0 AND Apache-2.0" \
+    org.opencontainers.image.source="https://github.com/Positronic-Robotics/positronic"
