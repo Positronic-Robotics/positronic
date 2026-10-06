@@ -168,7 +168,9 @@ def test_buy_sends_a_named_retry_key_and_prints_the_owned_checkout(platform, run
     run_command(buy, org='acme', package_id='package', transaction_key='retry-key')
     assert platform.request.url.path == routes.BILLING_PURCHASES_CREATE
     assert platform.body == {'org': 'acme', 'package_id': 'package', 'transaction_key': 'retry-key'}
-    assert json.loads(capsys.readouterr().out)['checkout_url'] == PURCHASE['checkout_url']
+    printed = capsys.readouterr()
+    assert json.loads(printed.out)['checkout_url'] == PURCHASE['checkout_url']
+    assert printed.err == 'org: acme (from --org)\n'
 
 
 @pytest.mark.parametrize('field', ['org', 'package_id', 'transaction_key'])
@@ -225,7 +227,9 @@ def test_purchases_reads_the_named_member_account(platform, run_command, capsys)
     run_command(purchases, org='acme')
     assert platform.request.url.path == routes.BILLING_PURCHASES_LIST
     assert platform.request.url.params['org'] == 'acme'
-    assert len(json.loads(capsys.readouterr().out)['purchases']) == 1
+    printed = capsys.readouterr()
+    assert len(json.loads(printed.out)['purchases']) == 1
+    assert printed.err == 'org: acme (from --org)\n'
 
 
 ME_WITHOUT_PERSONAL_ORG = {'user_id': 'a0', 'tenant': 't', 'plan': 'p', 'quota': []}
@@ -248,7 +252,9 @@ ACCOUNT = {
         (purchases, {}, routes.BILLING_PURCHASES_LIST, {'purchases': []}),
     ],
 )
-def test_a_credit_command_without_an_org_uses_the_personal_org(command, args, route, answer, platform, run_command):
+def test_a_credit_command_without_an_org_uses_the_personal_org(
+    command, args, route, answer, platform, run_command, capsys
+):
     platform.answer_by_route({routes.USERS_ME: (ME, 200), route: (answer, 200)})
 
     run_command(command, **args)
@@ -256,6 +262,9 @@ def test_a_credit_command_without_an_org_uses_the_personal_org(command, args, ro
     assert platform.paths == [routes.USERS_ME, route]
     sent = platform.body['org'] if platform.request.method == 'POST' else platform.request.url.params['org']
     assert sent == 'user-a0'
+    printed = capsys.readouterr()
+    assert json.loads(printed.out)
+    assert printed.err == 'org: user-a0 (personal org)\n'
 
 
 def test_a_named_org_is_used_without_asking_for_the_personal_org(platform, run_command):

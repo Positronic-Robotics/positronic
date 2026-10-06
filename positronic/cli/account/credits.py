@@ -1,3 +1,5 @@
+import sys
+
 import configuronic as cfn
 from platform_client.client import PlatformClient
 from platform_client.ids import OrgSlug, PackageId, PurchaseId, TransactionKey
@@ -22,18 +24,21 @@ def _named_org(org: object) -> OrgSlug | None:
 
 
 def _org(client: PlatformClient, named: OrgSlug | None) -> OrgSlug:
-    """`named`, else the caller's personal org."""
+    """`named` or the caller's personal org."""
     if named is not None:
-        return named
-    personal = client.me().personal_org
-    if personal is None:
-        raise SystemExit('name an org with --org: the platform names no personal org for this account')
-    return personal
+        org, source = named, 'from --org'
+    elif (personal := client.me().personal_org) is not None:
+        org, source = personal, 'personal org'
+    else:
+        raise SystemExit('name an org with --org: the platform names no personal org')
+    # On stderr, because stdout carries only the JSON answer.
+    print(f'org: {org} ({source})', file=sys.stderr)
+    return org
 
 
 @cfn.config()
 def account(org: object = None, platform_url: str | None = None):
-    """Print exact credit units, configured tariff rates, and purchase packages of `org`, else of the personal org."""
+    """Print exact credit units, configured tariff rates and purchase packages of `org` or the caller's personal org."""
     named = _named_org(org)
     with gateway(platform_url) as client:
         result = client.billing_account(_org(client, named))
@@ -42,7 +47,7 @@ def account(org: object = None, platform_url: str | None = None):
 
 @cfn.config()
 def buy(package_id: object, transaction_key: object, org: object = None, platform_url: str | None = None):
-    """Create a purchase for `org`, else for the personal org, or read the same purchase by its original retry key."""
+    """Create a purchase for `org` or the caller's personal org. A used retry key reads the same purchase."""
     package, key = _text(package_id, 'package_id'), _text(transaction_key, 'transaction_key')
     named = _named_org(org)
     with gateway(platform_url) as client:
@@ -67,7 +72,7 @@ def purchase(id: object, platform_url: str | None = None):
 
 @cfn.config()
 def purchases(org: object = None, platform_url: str | None = None):
-    """Print the purchase history of `org`, an organization this account belongs to, else of the personal org."""
+    """Print the purchase history of `org` or the caller's personal org. The caller must be a member of the org."""
     named = _named_org(org)
     with gateway(platform_url) as client:
         result = client.list_purchases(_org(client, named))
