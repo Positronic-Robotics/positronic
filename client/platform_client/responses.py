@@ -20,6 +20,7 @@ from platform_client.enums import (
     Placement,
     QuotaSubject,
     ReasonCode,
+    StartPose,
     SubmissionStatus,
     Wire,
 )
@@ -206,6 +207,7 @@ class ResolvedTask(BaseModel):
     policy_preset: str = Field(min_length=1)
     # `none` where the task has no tote.
     tote_placement: Slugged[Placement]
+    start_pose: Slugged[StartPose]
     # None where no external camera watches the task.
     camera_vantage: Slugged[CameraVantage] | None = None
     # Per external camera, keyed by its mount name.

@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.17.0"
+uv add "positronic-platform-client==0.18.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -56,8 +56,8 @@ An eval is a list of tasks. The platform offers named evals, and a customer comp
 episodes each endpoint takes on each task. A plan either states its own `tasks` or names an `eval`
 the catalogue expands into them; both arrive at the same set. The plan states the count once. A task may override it for that task, and an endpoint may
 override it for that endpoint, so a 10 + 10 + 2 round is one plan. The scene fields sit on the
-plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras` and `clutter`. An
-endpoint states only its count. `episodes_total` is a checksum a caller may state.
+plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras`, `clutter` and
+`start_pose`. An endpoint states only its count. `episodes_total` is a checksum a caller may state.
 `max_cap_per_episode_sec` is the upper bound on every task's cap.
 
 `request_type` is required and states the rules a plan runs under. `private_eval` runs for the org
@@ -96,7 +96,13 @@ max_cap_per_episode_sec: 300
 policy_preset: production
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
+start_pose: droid_reset                  # nominal | droid_reset
 ```
+
+`start_pose` names where the arm starts each episode: `nominal`, the rig's own pose, or
+`droid_reset`, the reset pose of the DROID data collection. A plan that names none takes the pose
+of each task's catalogue entry. A `yam` rig opens each episode at its own pose, whatever the plan
+names.
 
 An endpoint states where its policy comes from (`kind`) and the wire a session runs over (`wire`).
 Every kind names its wire. There is no default.

@@ -8,6 +8,7 @@ from typing import get_args
 import pytest
 from platform_client import config, eval_plan, requests
 from platform_client.boards import BoardRef
+from platform_client.catalog import TaskSummary
 from platform_client.enums import (
     BoardVisibility,
     CameraVantage,
@@ -18,6 +19,7 @@ from platform_client.enums import (
     Placement,
     QuotaSubject,
     ReasonCode,
+    StartPose,
     SubmissionStatus,
     Wire,
 )
@@ -135,6 +137,7 @@ ASK = EvalPlan.model_validate({
             'tote_placement': 'random',
             'camera_vantage': 'phail',
             'external_cameras': {'side': 'left'},
+            'start_pose': 'droid_reset',
             'endpoints': [
                 'baseline',
                 {
@@ -190,6 +193,7 @@ RESOLVED_TASK = ResolvedTask(
     cap_per_episode_sec=90,
     policy_preset='example_candidate',
     tote_placement=Placement.left,
+    start_pose=StartPose.droid_reset,
     camera_vantage=CameraVantage.phail,
     external_cameras={'side': Placement.right},
     clutter=Clutter(count_min=2, count_max=6),
@@ -207,6 +211,9 @@ MODELS: list[BaseModel] = [
     ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
     ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL, policy_log=POLICY_LOG_URL),
     RegisterRequest(credential='token', alias='demo', rotate=True),
+    TaskSummary(
+        id=TaskRef('stack-the-cubes'), embodiment='franka', task='Stack the cubes', start_pose=StartPose.droid_reset
+    ),
     PLAN_OF_AN_IMAGE,
     CancelRequest(id=SUB),
     SubmissionGetQuery(id=SUB),
@@ -317,6 +324,11 @@ def test_a_model_round_trips_through_its_json_form(model: BaseModel):
 @pytest.mark.parametrize('model', MODELS, ids=lambda m: type(m).__name__)
 def test_a_model_round_trips_through_a_real_json_string(model: BaseModel):
     assert type(model).model_validate_json(model.model_dump_json()) == model
+
+
+def test_a_task_summary_that_states_no_start_pose_reads_the_nominal():
+    summary = TaskSummary.model_validate({'id': 'stack-the-cubes', 'embodiment': 'franka', 'task': 'Stack the cubes'})
+    assert summary.start_pose is StartPose.nominal
 
 
 def test_ids_and_statuses_leave_as_wire_values():
