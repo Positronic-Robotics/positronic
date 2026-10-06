@@ -61,7 +61,7 @@ FROM hub AS vision-encoder
 ARG POLICY_REPO POLICY_REVISION
 RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', allow_patterns=['vision_encoder/*'])"
 
-# The rest of the policy: the configs, the tokenizer and the model card. FOOTGUN: take no `allow_patterns` here.
+# The rest of the policy: the configs, the tokenizer and the model card, with `transformer/`'s config and shard index. FOOTGUN: take no `allow_patterns` here.
 # The loader skips the hub tokenizer `Qwen/Qwen3-VL-8B-Instruct` only while five root files sit beside the
 # weights: `preprocessor_config.json`, `tokenizer_config.json`, `tokenizer.json`, `vocab.json` and `merges.txt`.
 # `vae/` holds the Wan2.2 VAE again, in the diffusers layout: the loader drops every weight outside
@@ -69,7 +69,7 @@ RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_RE
 # Then the Wan2.2 VAE file the tokenizer loads, and the model card that carries its licence.
 FROM hub AS small-files
 ARG POLICY_REPO POLICY_REVISION VAE_REPO VAE_REVISION
-RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', ignore_patterns=['transformer/*', 'vision_encoder/*', 'vae/diffusion_pytorch_model.safetensors'])" \
+RUN python -c "from huggingface_hub import snapshot_download as d; d('$POLICY_REPO', revision='$POLICY_REVISION', ignore_patterns=['transformer/*-of-00007*', 'vision_encoder/*', 'vae/diffusion_pytorch_model.safetensors'])" \
  && python -c "from huggingface_hub import snapshot_download as d; d('$VAE_REPO', revision='$VAE_REVISION', allow_patterns=['Wan2.2_VAE.pth', 'README.md'])"
 
 FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
