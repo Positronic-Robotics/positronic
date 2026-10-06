@@ -118,6 +118,9 @@ SERVE_BUILD_FLAGS_gr00t-n17-droid := --secret id=hf_token,env=HF_TOKEN
 # `push-serve-<name>` builds and pushes in one BuildKit run, which needs a docker-container builder
 # (`docker buildx create --use`). The cache at positro/<name>:buildcache holds every stage, so a rebuild
 # reuses the base, the weights and any unchanged layer.
+# FOOTGUN: `max` also writes the weight stages compressed, so Cosmos3-Nano's build runs out of a GitHub runner's
+# disk with it. Its cache holds the image's own layers only.
+SERVE_CACHE_MODE_cosmos3-nano := min
 SERVE_TAGS = $(sort $(IMAGE_TAG) $(GIT_SHA) $(if $(CI),latest) $(if $(PUBLISH_RELEASE),v$(VERSION)))
 
 define SERVE_IMAGE
@@ -129,7 +132,7 @@ build-serve-$(1):
 push-serve-$(1):
 	docker buildx build --platform linux/amd64 --provenance=false --sbom=false $$(SERVE_BUILD_FLAGS_$(1)) \
 		--cache-from type=registry,ref=positro/$(1):buildcache \
-		--cache-to type=registry,ref=positro/$(1):buildcache,mode=max \
+		--cache-to type=registry,ref=positro/$(1):buildcache,mode=$$(or $$(SERVE_CACHE_MODE_$(1)),max) \
 		$$(foreach tag,$$(SERVE_TAGS),-t positro/$(1):$$(tag)) --push -f Dockerfile.serve-$(1) ..
 endef
 
