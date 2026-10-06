@@ -330,6 +330,17 @@ def test_a_ready_call_on_a_camera_with_a_recent_frame_is_answered_at_once(zed_mo
     assert len(sdk.cameras) == 1
 
 
+def test_a_ready_call_asked_while_the_camera_opens_is_answered_by_that_open(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER)
+    camera = _camera(zed_module, sdk, frames)
+    answer = _readier(world, camera)(None)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=0.05)
+    assert answer.result() is None
+    assert len(sdk.cameras) == 1
+
+
 def test_a_ready_call_reopens_a_lost_camera_and_answers_once_a_frame_arrives(zed_module, world):
     clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=LISTED_AGAIN_AT)

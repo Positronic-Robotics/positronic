@@ -310,11 +310,12 @@ class SLCamera(pimm.ControlSystem):
 
         yield from self._open_or_hold(should_stop)
         while not should_stop.value:
-            for call in self.ready.incoming():
-                yield from self._make_ready(call, clock, should_stop)
+            # Grab first, so a ready call asked while the camera opened finds the frame that open gave.
             if self._error is None:
                 self._grab_frame(clock)
                 fps_counter.tick()
+            for call in self.ready.incoming():
+                yield from self._make_ready(call, clock, should_stop)
             yield pimm.Sleep(0.01)
         if self._camera is not None:
             self._camera.close()
