@@ -24,8 +24,7 @@ def _row(outcome, stage=NO_STAGE, model='pi05'):
 
 
 def test_the_stage_cell_sorts_by_the_ladder_and_not_by_the_label():
-    """The two orders disagree at the one place an operator reads: a round's best episodes would sit
-    at the bottom of an ascending sort."""
+    """By label, `at the target` sorts first and `reaching` sorts last, which is not the ladder."""
     cells = [cfg_server.highest_rollout_stage(_with_stages(stage.value)) for stage in LADDER]
     ranks = [cell.rank for cell in cells]
     labels = [cell.label for cell in cells]
@@ -56,12 +55,12 @@ def test_an_episode_that_recorded_no_progress_still_sorts_against_the_ladder():
 
 
 def test_a_rung_the_ladder_does_not_carry_is_not_a_stage():
-    """The codes are the platform console's, and it may write one this ladder predates."""
+    """A recording made against a longer ladder carries codes that this ladder does not."""
     assert cfg_server.highest_rollout_stage(_with_stages('teleporting')) == NO_STAGE
 
 
 def test_every_column_of_the_episode_table_is_a_key_the_preset_derives():
-    """A derived name that drifts renders an empty column rather than failing, and this catches it."""
+    """A column keyed by a name that the preset does not derive shows empty and raises nothing."""
     derived = {
         cfg_server.DERIVED_MODEL,
         cfg_server.DERIVED_OUTCOME,
@@ -95,7 +94,6 @@ def test_a_stage_cell_would_spell_itself_into_a_filter_dropdown():
 
 
 def test_the_model_table_counts_a_target_reached_off_the_stage_cell():
-    """The rank lives in the cell and nowhere else, so this reads it there."""
     group = cfg_server.rollouts_by_model.instantiate()
     top = Stage.AT_TARGET
     at_target = _row(Outcome.SUCCESS, StageCell(LADDER.index(top), STAGE_LABELS[top]))
@@ -108,8 +106,7 @@ def test_the_model_table_counts_a_target_reached_off_the_stage_cell():
 
 
 def test_a_rung_above_the_target_still_counts_as_reaching_it():
-    """The skew a floating append-only vocabulary allows: an install whose ladder runs past
-    `AT_TARGET` ranks such an episode higher, and the arm reached the target on its way there."""
+    """The ladder is append-only, and a rung added past `AT_TARGET` passed through it."""
     group = cfg_server.rollouts_by_model.instantiate()
     beyond = LADDER.index(Stage.AT_TARGET) + 1
 
@@ -119,8 +116,6 @@ def test_a_rung_above_the_target_still_counts_as_reaching_it():
 
 
 def test_a_rung_below_the_target_does_not_count_as_reaching_it():
-    """The boundary of the one above. The count is of episodes that reached the target, so widening
-    the comparison must not sweep in the rungs underneath it."""
     group = cfg_server.rollouts_by_model.instantiate()
     below = Stage.CONTROL
 
@@ -130,8 +125,7 @@ def test_a_rung_below_the_target_does_not_count_as_reaching_it():
 
 
 def test_an_episode_nobody_scored_reads_as_unscored():
-    """A console seeds the field with `UNSCORED` and an unattended end leaves it out entirely. Both
-    are the same state, so both reach the page as the one word the badge carries."""
+    """An absent outcome and `UNSCORED` are one state, and the page shows one word for it."""
     assert cfg_server.rollout_outcome(EpisodeContainer({})) == Outcome.UNSCORED
     assert cfg_server.rollout_outcome(EpisodeContainer({OUTCOME: Outcome.UNSCORED})) == Outcome.UNSCORED
 

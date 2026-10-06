@@ -23,8 +23,7 @@ OUTCOME_VARIANT: dict[Outcome, str] = {
     Outcome.DISCARDED: 'default',
 }
 
-# The one word the page spells differently from the wire: a console seeds the field with `UNSCORED`,
-# and a table does not shout.
+# The one word that the page spells differently from the recording.
 LABEL_OVERRIDES: dict[Outcome, str] = {Outcome.UNSCORED: 'Unscored'}
 
 
@@ -32,8 +31,7 @@ def outcome_label(outcome: Outcome) -> str:
     return LABEL_OVERRIDES.get(outcome, outcome.value)
 
 
-# A word this vocabulary does not carry is not listed, and `app.js` then draws it as itself on a
-# neutral badge — a recording from a console one word ahead still reads.
+# `app.js` draws a word that these options do not list as itself, on a neutral badge.
 OUTCOME_BADGE = RendererConfig(
     type='badge',
     options={outcome: {'label': outcome_label(outcome), 'variant': OUTCOME_VARIANT[outcome]} for outcome in Outcome},

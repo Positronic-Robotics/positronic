@@ -150,12 +150,10 @@ def finetune_group_by_task():
     return GroupTableConfig(group_keys='task', group_fn=group_fn, format_table=format_table)
 
 
-# The endpoint that served an episode. `eval_vocabulary` owns the rest an attended rollout records —
-# the verdict, the item counts and the progress ladder — which the console writes and this reads.
+# The endpoint that served an episode.
 POLICY_LABEL = f'{policy_keys.POLICY_META}.label'
 
-# What this preset DERIVES onto each episode. The tables below address these again, so each one is
-# spelled once and the producer and every consumer read the same name.
+# The fields this preset derives onto each episode.
 DERIVED_MODEL = 'model'
 DERIVED_OUTCOME = 'outcome'
 DERIVED_STAGE = 'stage'
@@ -226,8 +224,8 @@ def rollouts_by_model():
         # counted and stays out of the rate.
         scored = [ep for ep in episodes if is_scored(ep[DERIVED_OUTCOME])]
         successes = sum(1 for ep in scored if ep[DERIVED_OUTCOME] == Outcome.SUCCESS)
-        # FOOTGUN: the vocabulary floats and is append-only, so an install can carry a ladder longer
-        # than this release's, and a rung above the target passed through the target.
+        # FOOTGUN: count from the target up. The ladder is append-only, and a rung added past the
+        # target passed through it.
         at_target = LADDER.index(Stage.AT_TARGET)
         return {
             DERIVED_MODEL: episodes[0][DERIVED_MODEL],

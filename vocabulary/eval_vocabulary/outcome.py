@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-# The statics an attended episode carries beside what the harness itself writes. The verdict, and
-# the items the operator counted.
+# The statics that the operator gives an attended episode: the verdict and the item counts. The
+# harness writes the rest.
 OUTCOME = 'eval.outcome'
 SUCCESSFUL_ITEMS = 'eval.successful_items'
 TOTAL_ITEMS = 'eval.total_items'
