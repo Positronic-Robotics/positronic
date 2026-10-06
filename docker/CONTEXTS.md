@@ -26,9 +26,8 @@ publishes each one; `make build-serve-<name>` builds it. See
 
 Build and push all: `make push`
 
-`Dockerfile.serve-galaxea` builds `galaxea` in the same form, but the image is private by
-licence. CI does not build it, and `make push-serve-galaxea` pushes it to `GALAXEA_REPO`, the Nebius
-registry by default. See [the vendor README](../positronic/vendors/galaxea/README.md#docker-setup).
+`Dockerfile.serve-galaxea` builds `galaxea` in the same form, and the image is private by licence.
+See [the vendor README](../positronic/vendors/galaxea/README.md#docker-setup).
 
 ## References
 
