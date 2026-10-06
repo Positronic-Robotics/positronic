@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.17.0"
+uv add "positronic-platform-client==0.18.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -199,6 +199,9 @@ offered to the grant's client.
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
 `platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
 definition.
+
+`ResolvedPlan.rig_shape` names the plan's rig shape. It is `None` when the gateway response omits the shape.
+An absent shape does not name a default rig.
 
 ## From the command line
 
