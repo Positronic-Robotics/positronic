@@ -43,6 +43,8 @@ class Phase(StrEnum):
     RUNNING = 'running'
     # The operator gave a verdict, and the harness has not answered yet.
     ENDING = 'ending'
+    # The operator ended the run. The console stops, and that stops the World.
+    RUN_ENDED = 'run_ended'
 
 
 class Episode(BaseModel):
@@ -91,6 +93,7 @@ class Station:
         self._override_since: int | None = None
         self._episodes: list[Episode] = []
         self._ending = False
+        self._run_ended = False
         # Starts at the wall clock in microseconds, so a restarted console starts above the one before it.
         self._generation = time.time_ns() // 1000
         self._lock = threading.Lock()
@@ -118,6 +121,8 @@ class Station:
     def start(self, now: float) -> Task:
         """Open the next episode and return its trial, with the override and the episode's number applied."""
         with self._lock:
+            if self._run_ended:
+                raise Refused('the run has ended')
             if self._is_open():
                 raise Refused('an episode is already running')
             trial, self._trial = self._trial, self._draw()
@@ -151,11 +156,30 @@ class Station:
             self._ending = False
             self._generation += 1
 
+    def end_run(self) -> None:
+        """End the run. An open episode must end first."""
+        with self._lock:
+            if self._is_open():
+                raise Refused('finish the episode first, then end the run')
+            self._run_ended = True
+            self._generation += 1
+
+    @property
+    def run_ended(self) -> bool:
+        with self._lock:
+            return self._run_ended
+
+    def _phase(self) -> Phase:
+        if self._run_ended:
+            return Phase.RUN_ENDED
+        if self._ending:
+            return Phase.ENDING
+        return Phase.RUNNING if self._is_open() else Phase.READY
+
     def view(self, now: float) -> RunView:
         with self._lock:
-            phase = Phase.ENDING if self._ending else Phase.RUNNING if self._is_open() else Phase.READY
             return RunView(
-                phase=phase,
+                phase=self._phase(),
                 configured=self._trial.instruction,
                 override=self._override,
                 override_since=self._override_since,

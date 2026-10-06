@@ -117,6 +117,15 @@ def test_the_instruction_is_refused_while_an_episode_runs(console):
     assert console.station.view(now=0.0).override is None
 
 
+def test_end_run_is_refused_while_an_episode_runs_and_ends_the_run_after_it(console):
+    console.post('/episode/start')
+    refused = console.client.post('/run/end')
+    assert refused.status_code == 409
+    assert refused.json()['detail'] == 'finish the episode first, then end the run'
+    console.station.close(Outcome.PASS, now=1.0)
+    assert console.post('/run/end').run.phase is Phase.RUN_ENDED
+
+
 def test_a_post_from_another_site_is_refused(console):
     refused = console.client.post('/episode/start', headers={'Origin': 'http://example.com'})
     assert refused.status_code == 403

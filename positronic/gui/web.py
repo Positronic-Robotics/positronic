@@ -1,4 +1,5 @@
-"""The station console: a browser page with a live tile per camera and the controls that start and end episodes.
+"""The station console: a browser page with a live tile per camera, the controls that start and end episodes, and
+the control that ends the run.
 
 ``positronic-inference web`` composes the world around it. The page reads the console through ``GET /status``.
 """
@@ -109,7 +110,8 @@ class CameraFeed:
 
 
 class StationConsole(pimm.ControlSystem):
-    """Serves the station page and turns its presses into episodes.
+    """Serves the station page and turns its presses into episodes. End run on the page returns from its loop, and
+    that stops the World.
 
     Connect each camera to ``cameras`` and ``trials`` to a ``TrialForwarder``, which runs each trial and its verdict.
     Schedule it as a background control system, so the harness never waits for the encoders or the web server.
@@ -156,6 +158,9 @@ class StationConsole(pimm.ControlSystem):
                     if (frame := pimm.value_updated(self.cameras[name])) is not None:
                         feed.push(frame.array, clock.now())
                 self._drive_episode(station, actions, clock)
+                if station.run_ended:
+                    logger.info('The operator ended the run')
+                    return
                 yield limiter.wait()
         finally:
             for feed in feeds.values():
@@ -234,6 +239,11 @@ class StationConsole(pimm.ControlSystem):
         @app.post('/episode/end')
         async def end(body: EndBody) -> Status:
             submit(EndTrial(station.end(body.verdict)))
+            return status()
+
+        @app.post('/run/end')
+        async def end_run() -> Status:
+            station.end_run()
             return status()
 
         @app.websocket('/video/{name}')

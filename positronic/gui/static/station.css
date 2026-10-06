@@ -72,6 +72,11 @@ svg.i { width: 16px; height: 16px; flex: 0 0 auto; }
 .chip-key { color: var(--text-soft); }
 .chip-mono { font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-primary); }
 .chip-offline { color: #fca5a5; border-color: rgba(249, 115, 115, 0.45); background: var(--danger-soft); }
+.end-run {
+  padding: 5px 14px; border-radius: var(--radius-pill); font-size: 0.8rem; font-weight: 600; cursor: pointer;
+  color: #fca5a5; background: var(--danger-soft); border: 1px solid rgba(249, 115, 115, 0.45);
+}
+.end-run:disabled { opacity: 0.38; cursor: not-allowed; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); flex: 0 0 auto; }
 .dot-off { background: var(--danger); }
 
@@ -133,6 +138,8 @@ svg.i { width: 16px; height: 16px; flex: 0 0 auto; }
 .status--running .dot { background: var(--danger); box-shadow: 0 0 10px var(--danger); }
 .status--ending { background: rgba(251, 191, 36, 0.14); color: #fcd34d; border: 1px solid rgba(251, 191, 36, 0.45); }
 .status--ending .dot { background: var(--warning); }
+.status--run-ended { background: rgba(148, 163, 184, 0.12); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
+.status--run-ended .dot { background: var(--text-soft); }
 .status-detail { color: var(--text-secondary); font-size: 1.05rem; }
 .status-detail b { color: var(--text-primary); font-weight: 600; }
 .elapsed {

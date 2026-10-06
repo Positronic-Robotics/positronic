@@ -12,9 +12,10 @@ const ROUTES = {
   instruction: '/instruction',
   start: '/episode/start',
   end: '/episode/end',
+  endRun: '/run/end',
   video: '/video',
 };
-const PHASE = { ready: 'ready', running: 'running', ending: 'ending' };
+const PHASE = { ready: 'ready', running: 'running', ending: 'ending', runEnded: 'run_ended' };
 const OUTCOME = { pass: 'pass', fail: 'fail', timeout: 'timeout', error: 'error' };
 const REQUEST = {
   instruction: (text) => ({ override: text }),
@@ -68,6 +69,7 @@ const PHASE_VIEW = {
   [PHASE.ready]: { text: 'Ready', css: 'ready' },
   [PHASE.running]: { text: 'Running', css: 'running', doing: 'recording' },
   [PHASE.ending]: { text: 'Ending', css: 'ending', doing: 'ending' },
+  [PHASE.runEnded]: { text: 'Run ended', css: 'run-ended' },
 };
 const OUTCOME_VIEW = {
   [OUTCOME.pass]: { label: `${ICON.check}Pass`, text: 'pass', css: 'pass' },
@@ -103,8 +105,9 @@ function clock(seconds) {
   return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-const openEpisode = (status) =>
-  status.phase === PHASE.ready ? null : status.episodes[status.episodes.length - 1];
+const isOpen = (phase) => phase === PHASE.running || phase === PHASE.ending;
+const runHasEnded = () => current !== null && current.phase === PHASE.runEnded;
+const openEpisode = (status) => (isOpen(status.phase) ? status.episodes[status.episodes.length - 1] : null);
 const nextNumber = (status) => status.episodes.length + 1;
 const duration = (episode, status) => (episode.endedAt ?? status.now) - episode.startedAt;
 
@@ -170,11 +173,13 @@ async function poll() {
     offline = false;
     render(readStatus(await response.json()));
   } catch (error) {
+    if (runHasEnded()) return;
     offline = true;
     $('offline').hidden = false;
     renderButtons();
   } finally {
-    setTimeout(poll, POLL_MS);
+    // The console stops once the run ends, so the page stops asking.
+    if (!runHasEnded()) setTimeout(poll, POLL_MS);
   }
 }
 
@@ -207,7 +212,10 @@ function renderStatusRow(status) {
     $('elapsed-value').textContent = clock(duration(episode, status));
     return;
   }
-  $('status-detail').innerHTML = `Episode <b>${nextNumber(status)}</b> starts on Start`;
+  $('status-detail').innerHTML =
+    status.phase === PHASE.runEnded
+      ? 'The program releases the rig and exits. You can close this tab.'
+      : `Episode <b>${nextNumber(status)}</b> starts on Start`;
   const last = status.episodes[status.episodes.length - 1];
   $('counters').textContent = last
     ? `Last: #${last.number} ${OUTCOME_VIEW[last.outcome].text} · ${clock(duration(last, status))}`
@@ -217,7 +225,7 @@ function renderStatusRow(status) {
 function renderInstruction(status) {
   const episode = openEpisode(status);
   const locked = episode !== null;
-  textarea.readOnly = locked;
+  textarea.readOnly = locked || status.phase === PHASE.runEnded;
   if (locked) textarea.value = episode.instruction;
   else if (!editing) textarea.value = status.override ?? status.configured;
   const overridden = locked ? episode.overridden : textarea.value !== status.configured;
@@ -230,7 +238,7 @@ function renderInstruction(status) {
   $('field').className = `field${overridden ? ' is-override' : ''}${locked ? ' is-locked' : ''}`;
   $('field-k').hidden = !overridden;
   $('lock').hidden = !locked;
-  $('reset').disabled = locked || !overridden;
+  $('reset').disabled = locked || !overridden || status.phase === PHASE.runEnded;
   $('reset').classList.toggle('is-live', !locked && overridden);
 
   let hint = '';
@@ -255,6 +263,7 @@ function renderButtons() {
   const idle = !offline && !busy;
   $('start').disabled = !(idle && phase === PHASE.ready);
   for (const [button] of verdictButtons) button.disabled = !(idle && phase === PHASE.running);
+  $('end-run').disabled = !idle || phase === null || phase === PHASE.runEnded;
 }
 
 function renderFailure(status) {
@@ -311,7 +320,7 @@ function renderTiles(status) {
     if (cameras.length === 0) grid.innerHTML = '<div class="cams-empty">This embodiment has no cameras.</div>';
     for (const camera of cameras) tiles.set(camera.name, makeTile(grid, camera));
   }
-  const recording = status.phase !== PHASE.ready;
+  const recording = isOpen(status.phase);
   for (const camera of cameras) {
     const tile = tiles.get(camera.name);
     if (!tile) continue;
@@ -384,7 +393,7 @@ function startStream(video, path, wait) {
 
   // A half-open socket fires no close, so a socket with no fragment for STALL_MS is closed here.
   const scheduleReconnect = () => {
-    if (reconnectTimer) return;
+    if (reconnectTimer || runHasEnded()) return;
     if (watchdog) {
       clearInterval(watchdog);
       watchdog = null;
@@ -465,5 +474,9 @@ $('start').addEventListener('click', () =>
 for (const [button, verdict] of verdictButtons) {
   button.addEventListener('click', () => act(() => post(ROUTES.end, REQUEST.end(verdict))));
 }
+
+$('end-run').addEventListener('click', () => {
+  if (window.confirm('End the run? The program releases the rig and exits.')) act(() => post(ROUTES.endRun));
+});
 
 poll();

@@ -60,11 +60,12 @@ ARM_STOPPED_SHORT = 'the arm stopped short of its target'
 
 class _ReadyDevices(pimm.ControlSystem):
     """The arm and fingers of a rig that reaches wherever it is asked to go ``move_s`` after it is asked. The arm's
-    first ``arm_failures`` moves stop short."""
+    first ``arm_failures`` moves stop short. Its teardown creates ``parked``, when one is given."""
 
-    def __init__(self, move_s: float = 0.0, arm_failures: int = 0):
+    def __init__(self, move_s: float = 0.0, arm_failures: int = 0, parked: Path | None = None):
         self._move_s = move_s
         self._arm_failures = arm_failures
+        self._parked = parked
         self.arm = pimm.calls.ControlSystemHandler[Any, None](self)
         self.gripper = pimm.calls.ControlSystemHandler[Any, None](self)
 
@@ -83,6 +84,8 @@ class _ReadyDevices(pimm.ControlSystem):
                 call.set_result(None)
             moving = [(call, at) for call, at in moving if at > now]
             yield pimm.Sleep(0.01)
+        if self._parked is not None:
+            self._parked.touch()
 
 
 def _embodiment(simulated: bool = False, move_s: float = 0.0, arm_failures: int = 0) -> Embodiment:
@@ -342,7 +345,7 @@ class _MarkingPolicy(Policy):
 
 
 def _serve_station(port: int, output_dir: Path, marks: Path) -> None:
-    camera, devices = _Camera(), _ReadyDevices()
+    camera, devices = _Camera(), _ReadyDevices(parked=marks / 'parked')
     embodiment = Embodiment(
         descriptor='stub',
         observations={keys.WRIST_IMAGE: Observation(camera.frame, Serializers.camera_images)},
@@ -585,3 +588,37 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
     [episode] = failed.run.episodes
     assert (episode.outcome, episode.error) == (Outcome.ERROR, f'RuntimeError: {ARM_STOPPED_SHORT}')
     assert [episode.outcome for episode in retried.run.episodes] == [Outcome.ERROR, Outcome.PASS]
+
+
+@pytest.mark.timeout(240.0)
+def test_end_run_waits_for_the_open_episode_and_then_stops_the_whole_command(tmp_path):
+    """End run stops the World, so each device runs its teardown and the command returns without a signal."""
+    port = _free_port()
+    base = f'http://127.0.0.1:{port}'
+    marks = tmp_path / 'marks'
+    marks.mkdir()
+    run = multiprocessing.get_context('spawn').Process(target=_serve_station, args=(port, tmp_path / 'episodes', marks))
+    run.start()
+    try:
+        _wait_for(lambda: _status(base), 'the console to answer')
+        httpx.post(f'{base}/episode/start').raise_for_status()
+        _wait_for((marks / 'episode-1').exists, 'episode 1 to open')
+        refused = httpx.post(f'{base}/run/end')
+        assert refused.status_code == 409
+        assert 'finish the episode first' in refused.json()['detail']
+
+        verdict = EndBody(verdict=Outcome.PASS).model_dump(mode='json')
+        httpx.post(f'{base}/episode/end', json=verdict).raise_for_status()
+        _wait_for(lambda: (s := _status(base)) and s.run.phase is Phase.READY, 'episode 1 to close')
+        ended = httpx.post(f'{base}/run/end')
+        ended.raise_for_status()
+        assert Status.model_validate(ended.json()).run.phase is Phase.RUN_ENDED
+        run.join(timeout=120)
+        assert run.exitcode == 0
+        assert (marks / 'parked').exists()
+    finally:
+        if run.pid is not None and run.is_alive():
+            os.kill(run.pid, signal.SIGINT)
+        run.join(timeout=120)
+        if run.is_alive():
+            run.kill()

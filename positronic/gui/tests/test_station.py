@@ -100,6 +100,20 @@ def test_a_failed_episode_keeps_its_error_and_the_next_start_opens_the_next_epis
     assert station.start(now=4.0).meta[eval_keys.TRIAL_INDEX] == 1
 
 
+def test_the_run_ends_only_after_the_open_episode_and_then_takes_no_start():
+    station = Station(_trials())
+    station.start(now=1.0)
+    with pytest.raises(Refused, match='finish the episode first'):
+        station.end_run()
+    assert not station.run_ended
+    station.close(Outcome.PASS, now=2.0)
+    station.end_run()
+    assert station.run_ended
+    assert station.view(now=3.0).phase is Phase.RUN_ENDED
+    with pytest.raises(Refused, match='the run has ended'):
+        station.start(now=4.0)
+
+
 def test_one_episode_runs_at_a_time_and_takes_one_verdict():
     station = Station(_trials())
     with pytest.raises(Refused):
