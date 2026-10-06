@@ -48,7 +48,7 @@ _DEFINITION_CONFIG = ConfigDict(extra='forbid', frozen=True)
 
 
 class EvalTask(BaseModel):
-    """One task of an eval, by the config's own name for it, and its trials in run order."""
+    """One task of an eval, and its trials in run order."""
 
     model_config = _DEFINITION_CONFIG
 
