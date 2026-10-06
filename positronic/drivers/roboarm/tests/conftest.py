@@ -71,16 +71,24 @@ def _install_i2rt_stub() -> None:
     def get_yam_robot(*_args, **_kwargs):
         raise RuntimeError('no YAM chain here; a test replaces this factory')
 
+    def motor_interface(*_args, **_kwargs):
+        raise RuntimeError('no CAN interface here; a test replaces this class')
+
     get_robot = types.ModuleType(f'{I2RT}.robots.get_robot')
     get_robot.__dict__.update(get_yam_robot=get_yam_robot)
     utils = types.ModuleType(f'{I2RT}.robots.utils')
     utils.__dict__.update(GripperType=Enum('GripperType', ['LINEAR_4310']))
     robots = types.ModuleType(f'{I2RT}.robots')
     robots.__dict__.update(get_robot=get_robot, utils=utils)
+    dm_driver = types.ModuleType(f'{I2RT}.motor_drivers.dm_driver')
+    dm_driver.__dict__.update(DMSingleMotorCanInterface=motor_interface)
+    motor_drivers = types.ModuleType(f'{I2RT}.motor_drivers')
+    motor_drivers.__dict__.update(dm_driver=dm_driver)
     package = types.ModuleType(I2RT)
-    package.__dict__.update(robots=robots)
+    package.__dict__.update(robots=robots, motor_drivers=motor_drivers)
 
-    sys.modules.update({I2RT: package, robots.__name__: robots, get_robot.__name__: get_robot, utils.__name__: utils})
+    stubs = (package, robots, get_robot, utils, motor_drivers, dm_driver)
+    sys.modules.update({stub.__name__: stub for stub in stubs})
 
 
 # Both are reached for only inside the functions that use them, so an empty module carries the import
