@@ -1,5 +1,7 @@
+import queue
 import re
 from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 import pytest
@@ -208,6 +210,32 @@ def test_a_camera_that_gives_data_again_updates_its_tile():
 
     assert feed.view(CAMERA, now=0.0).width == 640
     feed.stream.close()
+
+
+class _Failed(pimm.calls.Answer[dict[str, Any]]):
+    """An episode answer that the harness failed with ``error``."""
+
+    def __init__(self, error: Exception):
+        self._error = error
+
+    def done(self) -> bool:
+        return True
+
+    def result(self) -> dict[str, Any]:
+        raise self._error
+
+
+def test_an_arm_error_that_fails_an_episode_reaches_the_page_and_is_not_skipped_as_a_frame_is():
+    console = StationConsole(_trial, policy='remote', host='127.0.0.1', port=0)
+    station = Station(_trial)
+    station.start(now=0.0)
+    console._episode = _Failed(pimm.SignalError('Release the emergency stop button'))
+
+    console._drive_episode(station, queue.SimpleQueue(), SystemClock())
+
+    [episode] = station.view(now=0.0).episodes
+    assert episode.outcome is Outcome.ERROR
+    assert episode.error is not None and episode.error.endswith('Release the emergency stop button')
 
 
 SCRIPT = (STATIC_DIR / 'station.js').read_text()
