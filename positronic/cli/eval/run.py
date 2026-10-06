@@ -10,6 +10,7 @@ from typing import Any
 
 import configuronic as cfn
 import pos3
+from platform_client.evals import EvalRef, public_eval
 from platform_client.responses import SubmissionCreateResponse
 
 import pimm
@@ -22,6 +23,7 @@ from positronic.eval import Embodiment, Eval, Observation, Task
 from positronic.policy import Policy
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
+from positronic.utils.git import get_package_git_state
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +246,42 @@ _NO_POLICY_NAMED = (
 )
 
 
+def _warn_on_revision_mismatch(revision: str) -> None:
+    """Warn when the installed positronic is not `revision`, the commit the platform runs the eval at."""
+    installed = get_package_git_state()
+    if installed is None:
+        logger.warning(
+            'The installed positronic has no git revision. The platform runs this eval at positronic %s, '
+            'so the two runs can differ.',
+            revision,
+        )
+    elif installed['commit'] != revision or installed['dirty']:
+        logger.warning(
+            'The installed positronic is at %s%s. The platform runs this eval at positronic %s, '
+            'so the two runs can differ.',
+            installed['commit'],
+            ' with local changes' if installed['dirty'] else '',
+            revision,
+        )
+
+
+# Its default is `run`'s, so a config path resolves here as `--eval=` resolves it.
+@cfn.config(eval=unset)
+def _eval_at(eval: Eval) -> Eval:
+    return eval
+
+
+def _public_eval_config(name: str) -> cfn.Config:
+    """The config of the public eval `name`, on the installed positronic."""
+    try:
+        definition = public_eval(EvalRef(name))
+    except (ValueError, LookupError) as e:
+        raise SystemExit(f'--eval={name!r}: {e}. --policy-image runs an eval on the platform') from None
+    _warn_on_revision_mismatch(definition.positronic_revision)
+    overrides = {f'eval.{arg}': value for arg, value in definition.args.items()}
+    return _eval_at.override(eval=definition.config).override_data(**overrides)
+
+
 def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:
     """Every task the source makes, stamped with the run's inference-time policy."""
     return (replace(task, charge_inference_time=charge) for task in tasks())
@@ -267,7 +305,9 @@ def run(
 ) -> SubmissionCreateResponse | None:
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
-    Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
+    Here by default: ``--eval`` is an eval config, or the name of a public eval, and ``--policy`` the
+    policy that drives it. A public eval runs the config, the arguments and the trials the platform runs
+    under that name, on the installed positronic, and warns when that is not the commit the platform runs.
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
     eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
     since the platform owns the evals it offers. ``--from-file`` files an eval plan for the lab rig,
@@ -310,10 +350,14 @@ def run(
         )
         if policy is None:
             raise SystemExit(_NO_POLICY_NAMED)
-        if not isinstance(eval, Eval):
-            raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
-        eval = replace(eval, tasks=partial(_charged, eval.tasks, charge_inference_time))
-        main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
+        if isinstance(eval, str):
+            chosen: Eval = _public_eval_config(eval).instantiate()
+        elif isinstance(eval, Eval):
+            chosen = eval
+        else:
+            raise SystemExit(f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval')
+        chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge_inference_time))
+        main(policy=policy, evals=[chosen], output_dir=output_dir, timing=timing)
         return None
 
     if policy_image is not None:
