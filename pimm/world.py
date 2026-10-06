@@ -457,12 +457,16 @@ _ORPHAN_POLL_S = 0.5
 _STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
 
+def _parent_is_gone(parent_pid: int) -> bool:
+    return os.getppid() != parent_pid
+
+
 def _stop_when_orphaned(stop_event: EventClass, name: str, parent_pid: int) -> None:
     """Stop this child's World once its parent is gone."""
 
     def watch() -> None:
         while not stop_event.is_set():
-            if os.getppid() != parent_pid:
+            if _parent_is_gone(parent_pid):
                 logger.warning(f'{name}: the parent process {parent_pid} is gone; stopping')
                 stop_event.set()
                 return
@@ -484,11 +488,15 @@ def _bg_wrapper(
         # Stop only on the parent's stop event, so the device finishes its shutdown.
         for signum in _STOP_SIGNALS:
             signal.signal(signum, signal.SIG_IGN)
-    _stop_when_orphaned(stop_event, name, parent_pid)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
         configure_process_logging(parent_component_levels)
+        # The parent can die while this child imports, before the watcher's first check.
+        if _parent_is_gone(parent_pid):
+            logger.warning(f'{name}: the parent process {parent_pid} is gone; not starting')
+            return
+        _stop_when_orphaned(stop_event, name, parent_pid)
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
                 case Sleep(seconds):

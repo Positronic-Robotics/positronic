@@ -50,6 +50,7 @@ from pimm.world import (
     TransportMode,
     VirtualClock,
     World,
+    _bg_wrapper,
     _stop_when_orphaned,
 )
 
@@ -2060,6 +2061,36 @@ def test_a_child_whose_parent_is_alive_keeps_running():
         assert not stop.wait(1.0)
     finally:
         stop.set()
+
+
+def _mark_started(marker, should_stop, clock) -> Iterator[Command]:
+    marker.touch()
+    yield Yield()
+
+
+def _run_wrapper_in_a_child(tmp_path, parent_pid: int):
+    """Run `_bg_wrapper` in a spawned child that names `parent_pid` as its parent; return the marker and stop event."""
+    ctx = mp.get_context('spawn')
+    stop, marker = ctx.Event(), tmp_path / 'started'
+    args = (partial(_mark_started, marker), stop, SystemClock(), 'probe', {}, ShutdownPolicy.BEST_EFFORT, parent_pid)
+    child = ctx.Process(target=_bg_wrapper, args=args)
+    child.start()
+    child.join(timeout=30)
+    assert child.exitcode == 0
+    return marker, stop
+
+
+def test_a_child_whose_parent_is_gone_before_it_starts_never_runs_its_loop(tmp_path):
+    # The child's real parent is this process, so any other pid reads as a parent that is gone.
+    marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getppid())
+    assert not marker.exists()
+    assert stop.is_set()
+
+
+def test_a_child_whose_parent_is_alive_runs_its_loop(tmp_path):
+    marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getpid())
+    assert marker.exists()
+    assert stop.is_set()
 
 
 class YieldsNone(ControlSystem):
