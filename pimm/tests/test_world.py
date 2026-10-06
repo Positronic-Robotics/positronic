@@ -1789,7 +1789,8 @@ def test_signals_during_a_protected_park_do_not_interrupt_it(signal_count):
         signal.signal(signal.SIGINT, previous)
 
 
-def test_custom_sigint_handler_runs_after_protected_shutdown_and_is_restored():
+@pytest.mark.parametrize('signum', [signal.SIGINT, signal.SIGTERM])
+def test_an_earlier_handler_runs_after_protected_shutdown_and_is_restored(signum):
     closed = []
     handled = []
 
@@ -1799,7 +1800,7 @@ def test_custom_sigint_handler_runs_after_protected_shutdown_and_is_restored():
         def run(self, should_stop, clock):
             while not should_stop.value:
                 yield Sleep(0.01)
-            signal.raise_signal(signal.SIGINT)
+            signal.raise_signal(signum)
             assert not handled
             closed.append(self)
 
@@ -1807,14 +1808,32 @@ def test_custom_sigint_handler_runs_after_protected_shutdown_and_is_restored():
         assert closed
         handled.append(signum)
 
-    previous = signal.signal(signal.SIGINT, handler)
+    previous = signal.signal(signum, handler)
     try:
         with World(virtual_time=True) as world:
             next(world.start(InterruptedShutdown()))
-        assert handled == [signal.SIGINT]
-        assert signal.getsignal(signal.SIGINT) is handler
+        assert handled == [signum]
+        assert signal.getsignal(signum) is handler
     finally:
-        signal.signal(signal.SIGINT, previous)
+        signal.signal(signum, previous)
+
+
+def test_an_earlier_sigterm_handler_runs_in_an_unprotected_world_in_place_of_the_exit():
+    handled = []
+
+    class Ordinary(ControlSystem):
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            signal.raise_signal(signal.SIGTERM)
+            yield Sleep(0.01)
+
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: handled.append(signum))
+    try:
+        with World(virtual_time=True) as world:
+            world.run(Ordinary())
+        assert handled == [signal.SIGTERM]
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def test_a_device_failure_is_raised_in_place_of_the_signal_that_came_with_it():
