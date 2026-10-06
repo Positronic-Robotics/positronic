@@ -6,7 +6,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm.settle import SettleTuning
+from positronic.drivers.roboarm.yam.settle import SettleTuning
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 
@@ -120,7 +120,7 @@ def yam_bimanual(
     i2rt's own factors on both arms.
     """
     from positronic import geom
-    from positronic.drivers.roboarm import yam as yam_driver
+    from positronic.drivers.roboarm.yam import driver as yam_driver
 
     arms = {
         side: yam_driver.Robot(

@@ -15,8 +15,9 @@ from pimm.tests.testing import MockClock, wire_call
 from positronic import keys
 from positronic.cfg import video_encoder
 from positronic.cfg.eval.real import yam as yam_eval
-from positronic.drivers.roboarm import RobotStatus, command, yam
+from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm.tests.fakes import StopFlag
+from positronic.drivers.roboarm.yam import driver as yam
 from positronic.eval import Embodiment
 from positronic.eval import keys as eval_keys
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
