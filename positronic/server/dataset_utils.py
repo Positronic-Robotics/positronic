@@ -1,5 +1,6 @@
 """Dataset utilities for Positronic dataset visualization."""
 
+import functools
 import io
 import logging
 import math
@@ -7,7 +8,7 @@ import tempfile
 import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from fractions import Fraction
@@ -18,6 +19,7 @@ import av
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
+import rerun_bindings
 from av.video.stream import VideoStream
 from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
 from rerun.urdf import UrdfTree
@@ -923,6 +925,38 @@ DEFAULT_MAX_HZ = 30.0
 DEFAULT_MAX_RESOLUTION = 640
 
 
+def _releases_orphaned_recordings(stream: Callable[..., Iterator[bytes]]) -> Callable[..., Generator[bytes]]:
+    # rerun keeps a recording's native threads after its Python object dies, until an orphan sweep.
+    # Only `rr.init` sweeps, so a server that streams many recordings must sweep itself.
+    @functools.wraps(stream)
+    def wrapper(*args: Any, **kwargs: Any) -> Generator[bytes]:
+        try:
+            yield from stream(*args, **kwargs)
+        finally:
+            rerun_bindings.flush_and_cleanup_orphaned_recordings()
+
+    return wrapper
+
+
+def _send_blueprint(rec: rr.RecordingStream, blueprint: rrb.Blueprint) -> None:
+    # `rr.send_blueprint` leaves its in-memory blueprint stream connected, and a connected stream keeps its
+    # native threads for the life of the process. Disconnecting the stream ends them.
+    application_id = rec.get_application_id()
+    assert application_id is not None
+    stream = rr.RecordingStream._from_native(
+        rerun_bindings.new_blueprint(
+            application_id=application_id, make_default=False, make_thread_default=False, default_enabled=True
+        )
+    )
+    stream.set_time('blueprint', sequence=0)
+    blueprint._log_to_stream(stream)
+    rerun_bindings.send_blueprint(
+        stream.memory_recording().storage, make_active=True, make_default=True, recording=rec.to_native()
+    )
+    stream.disconnect()
+
+
+@_releases_orphaned_recordings
 @rr.recording_stream.recording_stream_generator_ctx
 def stream_episode_rrd(
     ds: Dataset,
@@ -952,7 +986,7 @@ def stream_episode_rrd(
 
     with rec:
         signals = _collect_signal_groups(ep)
-        rr.send_blueprint(_build_blueprint(signals, ep, layout, timeline))
+        _send_blueprint(rec, _build_blueprint(signals, ep, layout, timeline))
         if signals.unplotted:
             logging.warning(f'Episode {episode_id}: not plotting {signals.unplotted}')
             notice = _unplotted_notice(signals.unplotted)
