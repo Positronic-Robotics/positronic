@@ -4,13 +4,13 @@ import hashlib
 from typing import Annotated, Self
 
 from platform_client.enums import BillingMode, BillingRole, BillingState
+from platform_client.ids import INT64_MAX as INT64_MAX
 from platform_client.ids import OrgSlug, PackageId, PurchaseId, UserId
 from platform_client.slug import Slugged
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 CREDIT_SCALE = 60_000_000_000
 NANOSECONDS_PER_MINUTE = 60_000_000_000
-INT64_MAX = (1 << 63) - 1
 CreditUnits = Annotated[int, Field(strict=True, ge=0, le=INT64_MAX)]
 
 
