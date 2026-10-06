@@ -123,6 +123,69 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
     assert stub.asked == tasks
 
 
+class _ScriptedEpisodes(pimm.ControlSystem):
+    """Stands in for the harness: records each task it is asked for, and answers with the next outcome."""
+
+    def __init__(self, outcomes: list[dict | Exception]):
+        self.asked: list[Task] = []
+        self._outcomes = list(outcomes)
+        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict](self)
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            for call in self.perform_task.incoming():
+                self.asked.append(call.request.task)
+                outcome = self._outcomes.pop(0)
+                if isinstance(outcome, Exception):
+                    call.set_exception(outcome)
+                else:
+                    call.set_result(outcome)
+            yield pimm.Sleep(0.01)
+
+
+def _drive(tasks: list[Task], episodes: _ScriptedEpisodes) -> None:
+    driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
+    with pimm.World(virtual_time=True) as world:
+        world.connect(driver.perform_task, episodes.perform_task)
+        for _ in islice(world.start([driver, episodes]), 200):
+            pass
+
+
+def _tasks(count: int) -> list[Task]:
+    return [Task(instruction_source='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(count)]
+
+
+@pytest.mark.timeout(3.0)
+def test_a_signal_error_runs_its_task_again():
+    """Each task gets its own count: a signal error on the second task after one on the first ends nothing."""
+    tasks = _tasks(2)
+    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), {}, pimm.SignalError('camera lost'), {}])
+    _drive(tasks, episodes)
+
+    assert episodes.asked == [tasks[0], tasks[0], tasks[1], tasks[1]]
+
+
+@pytest.mark.timeout(3.0)
+def test_a_task_failed_by_two_signal_errors_in_a_row_ends_the_run():
+    tasks = _tasks(2)
+    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), pimm.SignalError('camera lost again')])
+    with pytest.raises(pimm.SignalError, match='camera lost again'):
+        _drive(tasks, episodes)
+
+    assert episodes.asked == [tasks[0], tasks[0]]
+
+
+@pytest.mark.timeout(3.0)
+@pytest.mark.parametrize('failure', [pimm.calls.HandlerStopped(), RuntimeError('the arm holds an error')])
+def test_a_failure_other_than_a_signal_error_ends_the_run_at_once(failure):
+    tasks = _tasks(1)
+    episodes = _ScriptedEpisodes([failure])
+    with pytest.raises(type(failure)):
+        _drive(tasks, episodes)
+
+    assert episodes.asked == [tasks[0]]
+
+
 # `positronic.cli.eval` exports a command named `run`, which takes the attribute path to this module.
 run_module = importlib.import_module('positronic.cli.eval.run')
 
