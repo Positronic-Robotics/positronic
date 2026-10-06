@@ -115,7 +115,8 @@ def test_a_station_that_measured_none_leaves_the_vendor_its_own():
     assert _opened_with()['gravity_comp_factor'] is None
 
 
-def test_the_yambox_station_hands_its_gravity_compensation_to_both_chains(monkeypatch):
+def _gravity_by_channel(monkeypatch, rig) -> dict:
+    """Start a bimanual ``rig`` and return the gravity compensation each CAN channel asked i2rt for."""
     factors = {}
 
     def get_yam_robot(channel, gravity_comp_factor, **_):
@@ -123,9 +124,27 @@ def test_the_yambox_station_hands_its_gravity_compensation_to_both_chains(monkey
         return yam._FakeYam()
 
     monkeypatch.setattr(yam, 'get_yam_robot', get_yam_robot)
-    rig = embodiment.yam_bimanual_yambox.override(cameras={}, video_encoder=video_encoder.libx264_veryfast)
     with pimm.World() as world:
-        loop = world.start(list(rig.instantiate().control_systems))
+        loop = world.start(
+            list(rig.override(cameras={}, video_encoder=video_encoder.libx264_veryfast).instantiate().control_systems)
+        )
         _run_until(loop, lambda: len(factors) == 2)
-    for passed in factors.values():
+    return factors
+
+
+def test_the_yambox_station_hands_its_gravity_compensation_to_both_chains(monkeypatch):
+    for passed in _gravity_by_channel(monkeypatch, embodiment.yam_bimanual_yambox).values():
         np.testing.assert_array_equal(passed, STATION_GRAVITY_COMP)
+
+
+def test_each_bimanual_chain_gets_the_gravity_compensation_of_its_own_arm(monkeypatch):
+    left_channel, right_channel = 'can-left', 'can-right'
+    left, right = [1.0, 1.1, 1.4, 1.4, 1.0, 1.0], [1.0, 1.2, 1.3, 1.5, 1.0, 1.0]
+    rig = embodiment.yam_bimanual_yambox.override(
+        left_channel=left_channel,
+        right_channel=right_channel,
+        gravity_comp_factor={keys.LEFT_ARM: left, keys.RIGHT_ARM: right},
+    )
+    factors = _gravity_by_channel(monkeypatch, rig)
+    np.testing.assert_array_equal(factors[left_channel], left)
+    np.testing.assert_array_equal(factors[right_channel], right)

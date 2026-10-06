@@ -93,7 +93,7 @@ def yam_bimanual(
     left_channel: str,
     right_channel: str,
     mounts: dict[str, list[float]],
-    gravity_comp_factor: list[float] | None,
+    gravity_comp_factor: dict[str, list[float]] | None,
     cameras,
     video_encoder,
 ):
@@ -103,14 +103,17 @@ def yam_bimanual(
     ``robot_state.{side}.q/.dq/.ee_pose`` on record and commands are ``robot_command.{side}`` +
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
-    signal that drives it.
+    signal that drives it. ``gravity_comp_factor[side]`` is that arm's i2rt gravity compensation; None keeps
+    i2rt's own factors on both arms.
     """
     from positronic import geom
     from positronic.drivers.roboarm import yam as yam_driver
 
     arms = {
         side: yam_driver.Robot(
-            channel, base_pose=geom.Transform3D(mounts[side]), gravity_comp_factor=gravity_comp_factor
+            channel,
+            base_pose=geom.Transform3D(mounts[side]),
+            gravity_comp_factor=None if gravity_comp_factor is None else gravity_comp_factor[side],
         )
         for side, channel in zip(keys.BIMANUAL_ARMS, (left_channel, right_channel), strict=True)
     }
@@ -158,7 +161,7 @@ yam_bimanual_yambox = yam_bimanual.override(
     # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
     # are sent, which is past the driver's 20 mrad arrival tolerance, so every park reports ERROR. These park
     # both arms with about 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
-    gravity_comp_factor=[1.0, 1.1, 1.4, 1.4, 1.0, 1.0],
+    gravity_comp_factor=dict.fromkeys(keys.BIMANUAL_ARMS, [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]),
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
