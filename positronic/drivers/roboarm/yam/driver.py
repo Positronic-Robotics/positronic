@@ -48,6 +48,8 @@ _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limi
 _IK_ROT_TOL = 1e-2  # radians
 # Joints 2 and 3 rest on their lower mechanical stops at zero.
 _PARK_JOINTS = np.zeros(6)
+# The menagerie "home" keyframe, folded up and back.
+_START_JOINTS = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 _OPEN_GRIP = 0.0  # positronic grip convention: 0 is open
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
@@ -389,6 +391,22 @@ class _Arm(DriverRun[command.CommandType]):
             logger.error(f'The arm did not reach the parking pose: {exc}')
         return *self.hold_where_it_stopped(), MoveStatus.GAVE_UP
 
+    def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
+        """Settle onto the start pose with the gripper open, and return the joints and grip to hold. On a failure
+        or a stop, hold where the arm stopped."""
+        logger.info('Moving the arm to the start pose')
+        # rules-allow: swallowed-error — an arm that will not reach its start pose reads ERROR; the run goes on
+        try:
+            reference = yield from self._settle_onto(
+                _START_JOINTS, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
+            )
+        except Exception as exc:
+            logger.error(f'The arm did not reach the start pose: {exc}')
+            return self.hold_where_it_stopped()
+        if reference is None:
+            return self.hold_where_it_stopped()
+        return reference, _OPEN_GRIP
+
     def _report_parked(self) -> None:
         """Publish the parked state; a failure is logged, because the park is verified already."""
         # rules-allow: swallowed-error — the park is verified; a failed report is logged
@@ -558,7 +576,7 @@ class Robot(pimm.ControlSystem):
             None keeps i2rt's own. A joint that reads a steady offset below where it was sent is under-
             compensated, and the offset is what it carries divided by its position gain.
         :param park_after_idle_s: Park after this many seconds with no arm or gripper command, counted from the
-            end of a blocking move. None disables idle parking; the driver still parks on startup and shutdown.
+            end of a blocking move or of the start. None disables idle parking; the driver still parks on shutdown.
         :param park_tuning: How the park settles on this arm.
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands go to the chain
             unchanged.
@@ -639,9 +657,9 @@ class Robot(pimm.ControlSystem):
     def _serve(
         self, arm: _Arm, should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, None]:
-        """Park on startup, then answer commands and park when idle until ``should_stop``."""
-        joints, grip, _ = yield from arm.park(arm.read_grip(arm.observations()))
-        serving = _Serving(joints, grip)
+        """Move to the start pose, then answer commands and park when idle until ``should_stop``."""
+        joints, grip = yield from arm.go_to_start()
+        serving = _Serving(joints, grip, idle_since=clock.now())
         try:
             with Moves[float](self.sync_grip, self.target_grip) as fingers:
                 while not should_stop.value:
@@ -777,16 +795,16 @@ if __name__ == '__main__':
 
         pump(0.1)
         while state.read() is None or state.value.status == RobotStatus.BUSY:
-            pump(0.1)  # the opening move ramps the arm to the park pose over a couple of seconds
+            pump(0.1)  # the opening move ramps the arm to the start pose over a few seconds
         assert state.value.status == RobotStatus.AVAILABLE, state.value.status
 
         kin = _Kinematics()
 
         if fake is not None:
-            # State round-trip: the parked chain comes back through the driver's FK.
-            assert np.allclose(state.value.q, _PARK_JOINTS, atol=PARK_SETTLE.tolerance_rad), state.value.q
-            park_err = np.linalg.norm(state.value.ee_pose.translation - kin.fk(_PARK_JOINTS).translation)
-            assert park_err < 0.02, park_err
+            # State round-trip: the chain at its start pose comes back through the driver's FK.
+            assert np.allclose(state.value.q, _START_JOINTS, atol=MOVE_SETTLE.tolerance_rad), state.value.q
+            start_err = np.linalg.norm(state.value.ee_pose.translation - kin.fk(_START_JOINTS).translation)
+            assert start_err < 0.02, start_err
 
             # Grip round-trip: polarity inverted on the way out (command) and on the way back (observation).
             target_grip.emit(0.8)
