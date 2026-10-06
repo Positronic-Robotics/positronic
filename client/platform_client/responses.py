@@ -243,7 +243,7 @@ class ResolvedPlan(BaseModel):
 
     episodes_total: int = Field(ge=1)
     tasks: list[ResolvedTask] = Field(min_length=1)
-    rig_shape: Slugged[RigShape] | None = None
+    rig_shape: Slugged[RigShape]
 
     @model_validator(mode='after')
     def _the_total_is_the_sum(self) -> Self:

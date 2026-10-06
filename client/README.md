@@ -200,9 +200,7 @@ From Python, `PlatformClient` takes and answers the models in `platform_client.e
 `platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
 definition.
 
-`ResolvedPlan.rig_shape` names the plan's rig shape. It is `None` when the gateway response omits the shape.
-Gateways that do not implement this response field omit it.
-An absent shape does not name a default rig.
+`ResolvedPlan.rig_shape` names the plan's rig shape. Missing or invalid shapes fail response validation.
 
 ## From the command line
 
