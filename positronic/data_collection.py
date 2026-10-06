@@ -155,7 +155,15 @@ class DataCollectionController(pimm.ControlSystem):
             yield pimm.Sleep(0.001)
         ready.result()
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def _hold_on_error(self, error: pimm.SignalError, was_error: bool, error_wav_path: Path) -> bool:
+        """Log and sound ``error`` once, as the controller enters it. Answer that it is in error."""
+        _, entered_error = _check_error(True, was_error)
+        if entered_error:
+            logging.error(f'The arm gives no state: {error}')
+            self.sound.emit(error_wav_path)
+        return True
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         sounds = Path(package_assets_path('assets/sounds'))
         start_wav_path = sounds / 'recording-has-started.wav'
         end_wav_path = sounds / 'recording-has-stopped.wav'
@@ -222,10 +230,7 @@ class DataCollectionController(pimm.ControlSystem):
                 continue
             except pimm.SignalError as e:
                 # Nothing goes to the arm until its state gives data again.
-                in_error, entered_error = _check_error(True, in_error)
-                if entered_error:
-                    logging.error(f'The arm gives no state: {e}')
-                    self.sound.emit(error_wav_path)
+                in_error = self._hold_on_error(e, in_error, error_wav_path)
                 yield pimm.Sleep(0.001)
 
 
