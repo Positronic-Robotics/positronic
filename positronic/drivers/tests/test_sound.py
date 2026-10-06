@@ -123,7 +123,6 @@ def test_a_drained_wav_is_closed_and_stops_being_mixed(wav: Path, stream: FakeSt
 
 
 def test_a_level_that_carries_a_signal_error_plays_no_tone(wav: Path, stream: FakeStream):
-    """Data collection feeds the arm's state into the level, and a pressed emergency stop puts an error there."""
     system = sound.SoundSystem()
     levels = ManualCommandReceiver()
     levels.push(pimm.SignalError('Release the emergency stop button'))

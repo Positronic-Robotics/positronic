@@ -126,7 +126,7 @@ class _Reading(NamedTuple):
 
     sampled: bool
     triggered: frozenset[str]
-    stop_pressed: bool = False
+    levels: Mapping[str, _SafeInputLevel | None] = {}
 
 
 class _SafeInputs:
@@ -173,11 +173,10 @@ class _SafeInputs:
         reading = self._reading
         return reading.sampled and not reading.triggered
 
-    @property
-    def stop_pressed(self) -> bool:
-        """Whether a reading is in hand and found the emergency stop pressed."""
+    def level(self, name: str) -> _SafeInputLevel | None:
+        """The level the last reading found for the safe input ``name``; None where no reading is in hand."""
         reading = self._reading
-        return reading.sampled and reading.stop_pressed
+        return reading.levels.get(name) if reading.sampled else None
 
     @staticmethod
     def _level(reading: object) -> _SafeInputLevel | None:
@@ -221,14 +220,14 @@ class _SafeInputs:
         if not sampled:
             logger.info(f'The control box reports its safe inputs as {dict(state)}')
         self._unreadable = False
-        triggered = frozenset(name for name, reading in state.items() if self._triggered(name, self._level(reading)))
+        levels = {name: self._level(reading) for name, reading in state.items()}
+        triggered = frozenset(name for name, level in levels.items() if self._triggered(name, level))
         if triggered != was_triggered:
             if triggered:
                 logger.warning(f'The control box prohibits motion: safe inputs {sorted(triggered)} are triggered')
             else:
                 logger.info('The control box permits motion: every safe input is clear')
-        stop_pressed = self._level(state.get(EMERGENCY_STOP_INPUT)) is _SafeInputLevel.INACTIVE
-        self._reading = _Reading(True, triggered, stop_pressed)
+        self._reading = _Reading(True, triggered, levels)
 
     def __enter__(self) -> '_SafeInputs':
         """Take the first reading, then keep it fresh on a thread until the block ends."""
@@ -298,9 +297,14 @@ class _Arm(DriverRun[command.CommandType]):
         self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
         self.emit_state()
 
+    @property
+    def stop_pressed(self) -> bool:
+        """Whether the last reading found the emergency stop pressed."""
+        return self.safe_inputs.level(EMERGENCY_STOP_INPUT) is _SafeInputLevel.INACTIVE
+
     def emit_state(self) -> None:
         """Emit ``self.state``, or the emergency stop's error in its place while the stop is pressed."""
-        if not self.safe_inputs.stop_pressed:
+        if not self.stop_pressed:
             self._stop_emitted = False
             self.out.emit(self.state)
         elif not self._stop_emitted:
@@ -393,7 +397,7 @@ class _Arm(DriverRun[command.CommandType]):
         Answer with the error instead when it stays.
         """
         with pimm.calls.raise_to(call):
-            if self.safe_inputs.stop_pressed:
+            if self.stop_pressed:
                 raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
             st = self.robot.state()
             if st.error != 0 and not self.robot.recover_from_errors():
