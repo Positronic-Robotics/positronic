@@ -98,7 +98,8 @@ class SoundSystem(pimm.ControlSystem):
                 yield pimm.Yield()
                 continue
 
-            master_volume, frequency = self._level_to_frequency(self.level.value)
+            level = self.level.read().data
+            master_volume, frequency = self._level_to_frequency(0.0 if isinstance(level, pimm.SignalError) else level)
 
             # Generate tone chunk
             next_chunk = self.sound_fn(chunk_size, master_volume, frequency)

@@ -1132,7 +1132,7 @@ def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
     driver.state._bind(RecordingEmitter(), clock=clock)
     move = _mover(world, driver)
     watch = _safe_inputs(driver)
-    desk.safe_inputs['x31'] = STOPPED
+    desk.safe_inputs['x4'] = 'Active'  # a held enabling device; a pressed emergency stop refuses before the arm
     watch.sample()
     driving = driver._arm(StopFlag(), clock, watch)
     answer = move(command.JointPosition(JOGGED))
@@ -1144,7 +1144,28 @@ def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
 
     with pytest.raises(RuntimeError, match='stopped short'):
         answer.result()
-    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
+    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x4'] are triggered"]
+
+
+def test_a_sync_move_answers_the_release_instruction_while_the_emergency_stop_is_pressed(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    watch = _safe_inputs(driver)
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    watch.sample()
+    driving = driver._arm(StopFlag(), clock, watch)
+    answer = move(command.JointPosition(JOGGED))
+    asked = driving.moves.next_request()
+    assert isinstance(asked, pimm.calls.Call)
+
+    _drive(driving.sync_move(asked), clock)
+
+    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+        answer.result()
+    assert not arm.targets
 
 
 def test_the_teardown_park_logs_the_move_the_arm_refused(desk, caplog):
@@ -1332,7 +1353,7 @@ def test_a_ready_call_clears_the_fault_a_latched_reflex_holds_before_it_answers(
 def test_a_ready_call_answers_the_fault_that_stays_and_the_run_serves_the_next_one(desk, world, fault):
     arm = FakeArm(PARK)
     if fault == 'safe input':
-        desk.safe_inputs['x31'] = STOPPED  # a person holds the arm, and only they release it
+        desk.safe_inputs['x4'] = 'Active'  # a person holds the enabling device, and only they let it go
     driver = _driver(arm)
     clock = MockClock()
     driver.state._bind(RecordingEmitter(), clock=clock)
@@ -1351,6 +1372,72 @@ def test_a_ready_call_answers_the_fault_that_stays_and_the_run_serves_the_next_o
         next(loop)
         with pytest.raises(RuntimeError, match='recovery did not clear' if fault == 'error' else 'safe input'):
             answer.result()
+
+
+def test_a_ready_call_answers_the_release_instruction_while_the_emergency_stop_is_pressed(desk, world):
+    """The ready call refuses before the arm moves, so the asker gets the release instruction."""
+    arm = FakeArm(PARK)
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    ready = _readier(world, driver)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+
+    answer = ready(None)
+    next(loop)
+
+    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+        answer.result()
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
+
+
+def _shipped(desk: FakeDesk, stop: str) -> list[Any]:
+    """What the arm emits on three publishes, with the emergency stop at ``stop``."""
+    driver = _driver(FakeArm(PARK))
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = stop
+    arm = _arm(driver, clock)
+    for _ in range(3):
+        arm.publish(arm.robot.state())
+    return [data for _, data in states.emitted]
+
+
+def test_the_arm_state_carries_the_release_instruction_once_while_the_emergency_stop_is_pressed(desk):
+    """A reader keeps the last value, and the link queues each error, so one per press is enough."""
+    [error] = _shipped(desk, STOPPED)
+
+    assert isinstance(error, pimm.SignalError) and str(error) == franka.EMERGENCY_STOP_PRESSED
+
+
+@pytest.mark.parametrize('stop', ['AcknowledgeRequired', 'Invalid'])
+def test_an_emergency_stop_desk_does_not_read_as_pressed_leaves_the_arm_state_alone(desk, stop):
+    """Those levels hold the arm too, and a release of the button does not clear them."""
+    assert all(isinstance(data, franka.FrankaState) for data in _shipped(desk, stop))
+
+
+def test_the_arm_state_comes_back_once_the_emergency_stop_is_released(desk):
+    driver = _driver(FakeArm(PARK))
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    arm = _arm(driver, clock)
+    arm.publish(arm.robot.state())
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = CLEAR
+    arm.safe_inputs.sample()
+    arm.publish(arm.robot.state())
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    arm.safe_inputs.sample()
+    arm.publish(arm.robot.state())
+
+    kinds = [type(data) for _, data in states.emitted]
+    assert kinds == [pimm.SignalError, franka.FrankaState, pimm.SignalError]
 
 
 def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):

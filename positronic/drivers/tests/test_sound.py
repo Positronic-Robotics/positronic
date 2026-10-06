@@ -120,3 +120,14 @@ def test_a_drained_wav_is_closed_and_stops_being_mixed(wav: Path, stream: FakeSt
 
     assert [spy.closed for spy in opened] == [True]
     assert _as_samples(stream.written[-1]) == pytest.approx(np.zeros(CHUNK_FRAMES))
+
+
+def test_a_level_that_carries_a_signal_error_plays_no_tone(wav: Path, stream: FakeStream):
+    system = sound.SoundSystem()
+    levels = ManualCommandReceiver()
+    levels.push(pimm.SignalError('Release the emergency stop button'))
+    system.level._bind(levels)
+
+    _play(system, wav, ticks=1)
+
+    assert _as_samples(stream.written[0]) == pytest.approx(np.full(CHUNK_FRAMES, WAV_AMPLITUDE / 32768.0))
