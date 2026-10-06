@@ -85,7 +85,7 @@ def _franka_pick_mini(episodes: list[int]) -> EvalDefinition:
     """`episodes` of the one benchmark the MolmoSpaces evals run, once each."""
     return EvalDefinition(
         config=MOLMO_CONFIG,
-        # Parameters of positronic's `benchmarks` config, which `positronic/cli/eval/tests/test_run.py` checks.
+        # Each key must name a parameter of positronic's `benchmarks` config.
         args={
             'suite': 'molmospaces-bench-v2',
             'scene_dataset': 'procthor-10k',
