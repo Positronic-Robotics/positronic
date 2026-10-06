@@ -392,3 +392,24 @@ attempt = spec.model_copy(update={'artifact_location': moved})
 attempt = spec.model_copy()
 attempt.artifact_location = moved
 ```
+
+### installation-constant
+
+Don't make a value that differs between two deployments of the same code a constant. Take it as
+configuration, with today's value as the default.
+
+A property of the design is a constant: the joint count of a robot model, the field names of a vendor's
+wire. A property of one deployment is configuration: a serial number, a device path, a host, a bucket, a
+calibration offset, a tolerance tuned to one servo.
+
+The test: a second deployment runs the code with no edit.
+
+```python
+# Bad — how far this servo sags is a property of one bench
+_PARK_MAX_CORRECTION_RAD = 0.05
+
+# Good
+@dataclass(frozen=True)
+class SettleTuning:
+    max_correction_rad: float = 0.05
+```
