@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import configuronic as cfn
 
 import positronic.cfg.hardware.camera
@@ -6,9 +8,11 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm.yam.settle import SettleTuning
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
+
+if TYPE_CHECKING:
+    from positronic.drivers.roboarm.yam.settle import SettleTuning
 
 
 @cfn.config(
@@ -108,8 +112,8 @@ def yam_bimanual(
     cameras,
     video_encoder,
     park_after_idle_s: float | None,
-    park_tuning: dict[str, SettleTuning],
-    move_tuning: dict[str, SettleTuning],
+    park_tuning: dict[str, 'SettleTuning'],
+    move_tuning: dict[str, 'SettleTuning'],
 ):
     """Real bimanual i2rt YAM on two CAN chains.
 
