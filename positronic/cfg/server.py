@@ -150,8 +150,7 @@ def finetune_group_by_task():
     return GroupTableConfig(group_keys='task', group_fn=group_fn, format_table=format_table)
 
 
-# The endpoint that served an episode.
-POLICY_LABEL = f'{policy_keys.POLICY_META}.label'
+POLICY_LABEL = f'{policy_keys.POLICY_META}.{policy_keys.LABEL}'
 
 # The fields this preset derives onto each episode.
 DERIVED_MODEL = 'model'
