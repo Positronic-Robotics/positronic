@@ -580,12 +580,13 @@ class World:
                 self.request_stop()
 
     def _deliver_signal(self, signum: int, frame: FrameType | None) -> None:
-        """What the signal does once nothing is left to protect: SIGTERM exits, SIGINT runs the earlier handler."""
-        if signum == signal.SIGTERM:
-            raise SystemExit(128 + signum)
+        """What the signal does once nothing is left to protect: the earlier handler runs. With no earlier handler,
+        SIGTERM exits and SIGINT raises ``KeyboardInterrupt``."""
         previous = self._previous_handlers[signum]
         if callable(previous):
             previous(signum, frame)
+        elif signum == signal.SIGTERM:
+            raise SystemExit(128 + signum)
         else:
             signal.default_int_handler(signum, frame)
 
