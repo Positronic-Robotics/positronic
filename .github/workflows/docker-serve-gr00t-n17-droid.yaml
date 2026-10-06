@@ -19,6 +19,7 @@ on:
       - client/**
       - wire/**
       - model_server/**
+      - vocabulary/**
       - .github/workflows/docker-serve-gr00t-n17-droid.yaml
       - .github/workflows/docker-serve-image.yaml
       - '!**/tests/**'

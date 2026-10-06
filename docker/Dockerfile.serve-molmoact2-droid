@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgl1 && rm -r
 ENV HF_HOME=/opt/hf \
     MOLMOACT2_MODEL=${MODEL} \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server \
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary \
     UV_PROJECT_ENVIRONMENT=/positronic/.venv \
     VIRTUAL_ENV=/positronic/.venv \
     UV_PYTHON_DOWNLOADS=never \
@@ -50,6 +50,7 @@ COPY pyproject.toml uv.lock ./
 COPY client/pyproject.toml client/
 COPY wire/pyproject.toml wire/
 COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
 RUN uv sync --locked --python 3.13 --extra molmoact2 --no-dev --no-install-workspace && uv cache clean
 
 # The workspace installs from its manifests and package stubs, which records each package's metadata.
@@ -58,11 +59,13 @@ COPY README.md LICENSE ./
 COPY client/README.md client/
 COPY wire/README.md wire/
 COPY model_server/README.md model_server/
+COPY vocabulary/README.md vocabulary/
 COPY positronic/__init__.py positronic/
 COPY pimm/__init__.py pimm/
 COPY client/platform_client/py.typed client/platform_client/
 COPY wire/positronic_wire/py.typed wire/positronic_wire/
 COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
+COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
 RUN uv sync --locked --python 3.13 --extra molmoact2 --no-dev && uv cache clean
 
 COPY --link . /positronic

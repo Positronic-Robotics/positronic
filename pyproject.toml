@@ -48,9 +48,8 @@ dependencies = [
     # exactly for the same reason the client is (wire/README.md).
     "positronic-wire[websocket,grpc]==0.12.0",
     "positronic-model-server==0.1.1",
-    # The words an attended rollout records, which the rollouts viewer colours and counts. A floor
-    # rather than a pin: a reader built against fewer words still reads every recording.
-    "positronic-eval-vocabulary>=0.1",
+    # The words an attended rollout records, which the rollouts viewer colours and counts.
+    "positronic-eval-vocabulary==0.1.0",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
