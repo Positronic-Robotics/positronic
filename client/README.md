@@ -201,6 +201,7 @@ From Python, `PlatformClient` takes and answers the models in `platform_client.e
 definition.
 
 `ResolvedPlan.rig_shape` names the plan's rig shape. It is `None` when the gateway response omits the shape.
+Gateways that do not implement this response field omit it.
 An absent shape does not name a default rig.
 
 ## From the command line

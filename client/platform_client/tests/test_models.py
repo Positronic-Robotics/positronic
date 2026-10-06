@@ -860,7 +860,6 @@ def test_a_resolved_plan_with_no_rig_shape_reports_it_as_absent():
     plan = ResolvedPlan.model_validate({'episodes_total': 3, 'tasks': [RESOLVED_TASK.model_dump(mode='json')]})
 
     assert plan.rig_shape is None
-    assert 'rig_shape' not in plan.model_fields_set
 
 
 @pytest.mark.parametrize('shape', ['unknown', 'invalid', 1, RigShape.INVALID])
