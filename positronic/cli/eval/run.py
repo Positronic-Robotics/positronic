@@ -337,9 +337,12 @@ def run(
         )
         if policy is None:
             raise SystemExit(_NO_POLICY_NAMED)
-        if eval is None:
-            raise SystemExit('--eval names what to run: an eval config, or the name of a public eval')
-        chosen: Eval = _public_eval_config(eval).instantiate() if isinstance(eval, str) else eval
+        if isinstance(eval, str):
+            chosen: Eval = _public_eval_config(eval).instantiate()
+        elif isinstance(eval, Eval):
+            chosen = eval
+        else:
+            raise SystemExit(f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval')
         chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge_inference_time))
         main(policy=policy, evals=[chosen], output_dir=output_dir, timing=timing)
         return None

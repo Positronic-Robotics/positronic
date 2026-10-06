@@ -180,6 +180,12 @@ def test_a_local_run_refuses_a_name_the_public_code_does_not_define(run_command,
         run_command(run_module.run, eval=name, policy='a policy')
 
 
+@pytest.mark.parametrize('value', [None, 1])
+def test_a_local_run_refuses_an_eval_that_is_neither_a_config_nor_a_name(run_command, value: object):
+    with pytest.raises(SystemExit, match=f'--eval={value!r} names nothing to run'):
+        run_command(run_module.run, eval=value, policy='a policy')
+
+
 PINNED = public_eval(EvalRef(SMOKE)).positronic_revision
 
 
