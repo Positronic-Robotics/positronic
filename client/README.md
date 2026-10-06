@@ -76,6 +76,10 @@ positronic account credits purchase --id=<purchase-id>
 positronic account credits purchases --org=acme
 ```
 
+`users.me` names the caller's personal org in `personal_org` when the platform keeps one: the org that the
+account owns alone. `account`, `buy` and `purchases` use that org when `--org` is not given, and `account` prints
+its slug. A platform that keeps no personal org for the caller requires `--org`.
+
 These commands print typed JSON with exact integer units and configured currency amounts.
 Quote a numeric-looking text argument with inner quotes, for example `--transaction-key='"20261005"'`.
 

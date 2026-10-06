@@ -220,5 +220,62 @@ def test_purchases_reads_the_named_member_account(platform, run_command, capsys)
     assert len(json.loads(capsys.readouterr().out)['purchases']) == 1
 
 
+ME_WITHOUT_PERSONAL_ORG = {'user_id': 'a0', 'tenant': 't', 'plan': 'p', 'quota': []}
+ME = {**ME_WITHOUT_PERSONAL_ORG, 'personal_org': 'user-a0'}
+ACCOUNT = {
+    'org': 'user-a0',
+    'mode': 'prepaid',
+    'billing_role': 'spender',
+    'balance': {'posted_units': 0, 'reserved_units': 0, 'available_units': 0},
+    'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE).model_dump(),
+    'packages': [PACKAGE],
+}
+
+
+@pytest.mark.parametrize(
+    ('command', 'args', 'route', 'answer'),
+    [
+        (account, {}, routes.BILLING_ACCOUNT, ACCOUNT),
+        (buy, {'package_id': 'package', 'transaction_key': 'retry-key'}, routes.BILLING_PURCHASES_CREATE, PURCHASE),
+        (purchases, {}, routes.BILLING_PURCHASES_LIST, {'purchases': []}),
+    ],
+)
+def test_a_credit_command_without_an_org_uses_the_personal_org(command, args, route, answer, platform, run_command):
+    platform.answer_by_route({routes.USERS_ME: (ME, 200), route: (answer, 200)})
+
+    run_command(command, **args)
+
+    assert platform.paths == [routes.USERS_ME, route]
+    sent = platform.body['org'] if platform.request.method == 'POST' else platform.request.url.params['org']
+    assert sent == 'user-a0'
+
+
+def test_a_named_org_is_used_without_asking_for_the_personal_org(platform, run_command):
+    platform.answer(ACCOUNT)
+
+    run_command(account, org='acme')
+
+    assert platform.paths == [routes.BILLING_ACCOUNT]
+
+
+@pytest.mark.parametrize('command', [account, purchases])
+def test_a_platform_that_names_no_personal_org_requires_an_org(command, platform, run_command):
+    platform.answer({**ME, 'personal_org': None})
+
+    with pytest.raises(SystemExit, match='--org'):
+        run_command(command)
+
+    assert platform.paths == [routes.USERS_ME]
+
+
+def test_a_purchase_for_no_org_is_never_created(platform, run_command):
+    platform.answer(ME_WITHOUT_PERSONAL_ORG)
+
+    with pytest.raises(SystemExit, match='--org'):
+        run_command(buy, package_id='package', transaction_key='retry-key')
+
+    assert platform.paths == [routes.USERS_ME]
+
+
 def test_credit_commands_are_in_the_real_account_tree():
     assert commands['credits'] == {'account': account, 'buy': buy, 'purchase': purchase, 'purchases': purchases}

@@ -252,6 +252,7 @@ MODELS: list[BaseModel] = [
     RegisterResponse(user_id=USER, artifact_location='s3://pp-artifacts/users/a0/', key_status=KeyStatus.existing),
     MeResponse(user_id=USER, alias='demo', tenant='nebius-2026', plan='nebius_competition_2026', quota=[DAILY]),
     MeResponse(user_id=USER, tenant='t', plan='p', quota=[DAILY], client='acme'),
+    MeResponse(user_id=USER, tenant='t', plan='p', quota=[DAILY], personal_org=OrgSlug('user-a0')),
     SubmissionCreateResponse(submission_id=SUB, status=SubmissionStatus.pending, policy_image_digest='sha256:abc'),
     SubmissionCreateResponse(
         submission_id=SUB, status=SubmissionStatus.errored, reason_code=ReasonCode.image_unpullable
@@ -740,6 +741,11 @@ def test_a_limit_is_found_by_its_rule_key():
     me = MeResponse(user_id=USER, tenant='nebius-2026', plan='nebius_competition_2026', quota=[DAILY, CREDITS])
     assert me.quota_for('credits.period') is CREDITS
     assert me.quota_for(QUOTA_SUBMISSIONS_CONCURRENT) is None
+
+
+def test_an_answer_from_a_platform_without_personal_orgs_names_none():
+    answer = {'user_id': 'a0', 'tenant': 't', 'plan': 'p', 'quota': []}
+    assert MeResponse.model_validate(answer).personal_org is None
 
 
 def test_a_quota_refusal_carries_the_whole_rule_that_refused_it():
