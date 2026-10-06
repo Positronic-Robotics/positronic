@@ -220,8 +220,9 @@ class MultiprocessEmitter(SignalEmitter[T]):
             )
 
         with self._lock:
-            data.set_to_buffer(self._sm.buf)
+            # The time goes first: a time too large for the pipe raises before the frame is touched.
             self._time_value.set(time)
+            data.set_to_buffer(self._sm.buf)
             for up_value in self._up_values:
                 up_value.value = True
 

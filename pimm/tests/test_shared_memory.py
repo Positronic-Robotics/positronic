@@ -8,7 +8,7 @@ import pytest
 from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReceiver, Sleep, Yield
 from pimm.shared_memory import NumpySMAdapter
 from pimm.time import EMITTED_WALL, Time
-from pimm.world import MultiprocessReceiver, TransportMode, World
+from pimm.world import MAX_PICKLED_TIME_BYTES, MultiprocessReceiver, TransportMode, World
 
 
 class TestNumpySMAdapter:
@@ -468,6 +468,22 @@ class TestSharedMemoryAcrossProcesses:
                 assert msg is not None and msg.time['capture'] == ts
 
             assert calls == []
+
+    def test_a_time_too_large_for_the_pipe_is_refused_and_leaves_the_last_frame(self):
+        with World() as world:
+            emitter, reader = _single_pipe(world, TransportMode.SHARED_MEMORY)
+            data = NumpySMAdapter((2,), np.dtype(np.float32))
+            data.array[:] = 1.0
+            emitter.emit(data, time=Time(capture=1))
+
+            data.array[:] = 2.0
+            too_large = Time(**{f'timeline_{i}': i for i in range(MAX_PICKLED_TIME_BYTES)})
+            with pytest.raises(ValueError, match=str(MAX_PICKLED_TIME_BYTES)):
+                emitter.emit(data, time=too_large)
+
+            msg = reader.read()
+            assert msg is not None
+            assert msg.time['capture'] == 1 and msg.data.array.tolist() == [1.0, 1.0]
 
 
 class TestBroadcastCommunication:
