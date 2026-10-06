@@ -1,5 +1,7 @@
 import dataclasses
 import logging
+import subprocess
+import sys
 import types
 from collections.abc import Callable, Iterator
 from enum import Enum
@@ -16,6 +18,7 @@ from positronic import keys
 from positronic.cfg import video_encoder
 from positronic.cfg.eval.real import yam as yam_eval
 from positronic.drivers.roboarm import RobotStatus, command
+from positronic.drivers.roboarm import yam as yam_package
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.eval import Embodiment
@@ -1204,3 +1207,17 @@ def test_each_bimanual_chain_gets_the_gravity_compensation_of_its_own_arm(monkey
     factors = _gravity_by_channel(monkeypatch, rig)
     np.testing.assert_array_equal(factors[left_channel], left)
     np.testing.assert_array_equal(factors[right_channel], right)
+
+
+def test_the_yam_package_hands_out_the_driver():
+    assert yam_package.Robot is yam.Robot
+
+
+def test_the_settle_tuning_imports_without_the_driver():
+    loaded = subprocess.run(
+        [sys.executable, '-c', 'import sys, positronic.drivers.roboarm.yam.settle; print(sorted(sys.modules))'],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert 'positronic.drivers.roboarm.yam.driver' not in loaded
