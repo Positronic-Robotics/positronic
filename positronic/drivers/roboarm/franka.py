@@ -491,7 +491,13 @@ class _Arm(DriverRun[command.CommandType]):
         return target
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
-        """Put the arm where ``call`` asks and answer it once the state saying so is out."""
+        """Put the arm where ``call`` asks and answer it once the state saying so is out.
+
+        Answer with the release instruction, and send no target, while the emergency stop is pressed.
+        """
+        if self.stop_pressed:
+            call.set_exception(pimm.SignalError(EMERGENCY_STOP_PRESSED))
+            return
         cmd = call.request
         try:
             if (yield from self.move_to(self.to_joints(cmd), cmd.mode)) is MoveStatus.ARRIVED:

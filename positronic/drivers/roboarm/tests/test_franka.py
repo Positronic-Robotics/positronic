@@ -1132,7 +1132,7 @@ def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
     driver.state._bind(RecordingEmitter(), clock=clock)
     move = _mover(world, driver)
     watch = _safe_inputs(driver)
-    desk.safe_inputs['x31'] = STOPPED
+    desk.safe_inputs['x4'] = 'Active'  # a held enabling device; a pressed emergency stop refuses before the arm
     watch.sample()
     driving = driver._arm(StopFlag(), clock, watch)
     answer = move(command.JointPosition(JOGGED))
@@ -1144,7 +1144,28 @@ def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
 
     with pytest.raises(RuntimeError, match='stopped short'):
         answer.result()
-    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
+    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x4'] are triggered"]
+
+
+def test_a_sync_move_answers_the_release_instruction_while_the_emergency_stop_is_pressed(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    watch = _safe_inputs(driver)
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    watch.sample()
+    driving = driver._arm(StopFlag(), clock, watch)
+    answer = move(command.JointPosition(JOGGED))
+    asked = driving.moves.next_request()
+    assert isinstance(asked, pimm.calls.Call)
+
+    _drive(driving.sync_move(asked), clock)
+
+    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+        answer.result()
+    assert not arm.targets
 
 
 def test_the_teardown_park_logs_the_move_the_arm_refused(desk, caplog):
