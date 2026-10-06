@@ -492,9 +492,12 @@ def _bg_wrapper(
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
         configure_process_logging(parent_component_levels)
-        # The parent can die while this child imports, before the watcher's first check.
+        # The parent can die, or stop the World, while this child imports.
         if _parent_is_gone(parent_pid):
             logger.warning(f'{name}: the parent process {parent_pid} is gone; not starting')
+            return
+        if stop_event.is_set():
+            logger.info(f'{name}: the World stopped before this process started; not starting')
             return
         _stop_when_orphaned(stop_event, name, parent_pid)
         for command in run_func(EventReceiver(stop_event, clock), clock):

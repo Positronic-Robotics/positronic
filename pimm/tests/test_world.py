@@ -1711,7 +1711,7 @@ def test_a_signal_while_a_protected_child_spawns_still_registers_and_joins_it(mo
             with world:
                 world.start([], ShutdownWaiter(ready, holding, release, closed))
         assert len(world.background_processes) == 1
-        assert closed.is_set()
+        assert not ready.is_set()  # born stopped, so its loop never ran
     finally:
         signal.signal(signal.SIGINT, previous)
 
@@ -2068,10 +2068,12 @@ def _mark_started(marker, should_stop, clock) -> Iterator[Command]:
     yield Yield()
 
 
-def _run_wrapper_in_a_child(tmp_path, parent_pid: int):
+def _run_wrapper_in_a_child(tmp_path, parent_pid: int, *, stopped: bool = False):
     """Run `_bg_wrapper` in a spawned child that names `parent_pid` as its parent; return the marker and stop event."""
     ctx = mp.get_context('spawn')
     stop, marker = ctx.Event(), tmp_path / 'started'
+    if stopped:
+        stop.set()
     args = (partial(_mark_started, marker), stop, SystemClock(), 'probe', {}, ShutdownPolicy.BEST_EFFORT, parent_pid)
     child = ctx.Process(target=_bg_wrapper, args=args)
     child.start()
@@ -2083,6 +2085,12 @@ def _run_wrapper_in_a_child(tmp_path, parent_pid: int):
 def test_a_child_whose_parent_is_gone_before_it_starts_never_runs_its_loop(tmp_path):
     # The child's real parent is this process, so any other pid reads as a parent that is gone.
     marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getppid())
+    assert not marker.exists()
+    assert stop.is_set()
+
+
+def test_a_child_whose_world_stopped_before_it_starts_never_runs_its_loop(tmp_path):
+    marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getpid(), stopped=True)
     assert not marker.exists()
     assert stop.is_set()
 
