@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import datetime
 from functools import partial
+from typing import Any
 
 import configuronic as cfn
 import numpy as np
@@ -47,22 +48,28 @@ def _model_label_from_path(model_type: str, checkpoint_path: str) -> str | None:
     return None
 
 
+def _policy_meta(ep: Episode, field: str) -> Any:
+    """The policy metadata ``field`` under the prefix that ``ep`` carries, or ``''``."""
+    for prefix in policy_keys.POLICY_META_PREFIXES:
+        if f'{prefix}.{field}' in ep:
+            return ep[f'{prefix}.{field}']
+    return ''
+
+
 def model(ep: Episode) -> str:
-    policy_type = ep.get(f'{policy_keys.POLICY_META}.{policy_keys.TYPE}', '')
+    policy_type = _policy_meta(ep, policy_keys.TYPE)
 
     if policy_type == 'remote':
-        server_type = ep.get(f'{policy_keys.SERVER_META}.{policy_keys.TYPE}', '')
+        server_type = _policy_meta(ep, f'{policy_keys.SERVER}.{policy_keys.TYPE}')
         path_label = _model_label_from_path(
-            server_type, ep.get(f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_PATH}', '')
+            server_type, _policy_meta(ep, f'{policy_keys.SERVER}.{policy_keys.CHECKPOINT_PATH}')
         )
         if path_label:
             return path_label
         return server_type or ''
 
     if policy_type:
-        path_label = _model_label_from_path(
-            policy_type, ep.get(f'{policy_keys.POLICY_META}.{policy_keys.CHECKPOINT_PATH}', '')
-        )
+        path_label = _model_label_from_path(policy_type, _policy_meta(ep, policy_keys.CHECKPOINT_PATH))
         if path_label:
             return path_label
         return policy_type
@@ -75,7 +82,7 @@ def _split_path(path: str) -> list[str]:
 
 
 def _ckpt_act(ep: Episode) -> str:
-    raw_path = ep[f'{policy_keys.POLICY_META}.{policy_keys.CHECKPOINT_PATH}']
+    raw_path = _policy_meta(ep, policy_keys.CHECKPOINT_PATH)
     parts = _split_path(raw_path)
     chkpt_idxs = [i for i, p in enumerate(parts) if p == 'checkpoints']
     if chkpt_idxs:
@@ -86,10 +93,10 @@ def _ckpt_act(ep: Episode) -> str:
 
 
 def _ckpt_remote(ep: Episode) -> str:
-    checkpoint_id = ep.get(f'{policy_keys.SERVER_META}.{offboard_keys.CHECKPOINT_ID}', '')
+    checkpoint_id = _policy_meta(ep, f'{policy_keys.SERVER}.{offboard_keys.CHECKPOINT_ID}')
     if checkpoint_id:
         return str(checkpoint_id)
-    raw_path = ep.get(f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_PATH}', '')
+    raw_path = _policy_meta(ep, f'{policy_keys.SERVER}.{policy_keys.CHECKPOINT_PATH}')
     if raw_path:
         parts = _split_path(raw_path)
         if parts[-1] == 'pretrained_model' and len(parts) >= 2:
@@ -100,7 +107,7 @@ def _ckpt_remote(ep: Episode) -> str:
 
 def ckpt(ep: Episode) -> str | None:
     try:
-        match ep.get(f'{policy_keys.POLICY_META}.{policy_keys.TYPE}', ''):
+        match _policy_meta(ep, policy_keys.TYPE):
             case 'act':
                 return _ckpt_act(ep)
             case 'remote':
@@ -590,7 +597,7 @@ PHAIL_OUTCOME_BADGE = RendererConfig(
 
 
 def phail_model(ep: Episode) -> str:
-    return PHAIL_MODEL_DISPLAY.get(ep.get(f'{policy_keys.SERVER_META}.{policy_keys.TYPE}', ''), '')
+    return PHAIL_MODEL_DISPLAY.get(_policy_meta(ep, f'{policy_keys.SERVER}.{policy_keys.TYPE}'), '')
 
 
 def phail_status(ep: Episode) -> str:
@@ -626,8 +633,8 @@ def phail_uph(ep: Episode) -> float | None:
 
 
 def phail_variant(ep: Episode) -> str:
-    exp = ep.get(f'{policy_keys.SERVER_META}.{policy_keys.EXPERIMENT_NAME}', '')
-    ckpt = ep.get(f'{policy_keys.SERVER_META}.{offboard_keys.CHECKPOINT_ID}', '')
+    exp = _policy_meta(ep, f'{policy_keys.SERVER}.{policy_keys.EXPERIMENT_NAME}')
+    ckpt = _policy_meta(ep, f'{policy_keys.SERVER}.{offboard_keys.CHECKPOINT_ID}')
     if exp and ckpt:
         return f'{exp}:{ckpt}'
     if exp:
@@ -651,6 +658,12 @@ _phail_derives = Derive(
     started=started,
 )
 
+
+def _policy_meta_keys(*fields: str) -> list[str]:
+    """Every key that a recording can carry these policy metadata fields under."""
+    return [f'{prefix}.{field}' for prefix in policy_keys.POLICY_META_PREFIXES for field in fields]
+
+
 phail_inference = base_cfg.transform.override(
     base=base_cfg.local_all.override(path='s3://inference/phail_final/'),
     transforms=[
@@ -660,16 +673,18 @@ phail_inference = base_cfg.transform.override(
                     'robot_commands.reset',
                     'robot_command.reset',
                     'eval.object',
-                    f'{policy_keys.POLICY_META}.{offboard_keys.PORT}',
-                    f'{policy_keys.POLICY_META}.{offboard_keys.HOST}',
-                    f'{policy_keys.SERVER_META}.{offboard_keys.CHECKPOINT_ID}',
-                    f'{policy_keys.SERVER_META}.{policy_keys.CONFIG_NAME}',
-                    f'{policy_keys.SERVER_META}.{policy_keys.EXPERIMENT_NAME}',
-                    f'{policy_keys.SERVER_META}.{policy_keys.TYPE}',
-                    f'{policy_keys.POLICY_META}.{policy_keys.TYPE}',
+                    *_policy_meta_keys(
+                        offboard_keys.PORT,
+                        offboard_keys.HOST,
+                        f'{policy_keys.SERVER}.{offboard_keys.CHECKPOINT_ID}',
+                        f'{policy_keys.SERVER}.{policy_keys.CONFIG_NAME}',
+                        f'{policy_keys.SERVER}.{policy_keys.EXPERIMENT_NAME}',
+                        f'{policy_keys.SERVER}.{policy_keys.TYPE}',
+                        policy_keys.TYPE,
+                    ),
                 ]
             ),
-            # NOTE: _phail_derives reads inference.policy.server.type from the original episode,
+            # NOTE: _phail_derives reads the server type from the original episode,
             # before Identity(remove=...) strips it. Group applies all transforms to the same input.
             _phail_derives,
             Derive(**{'eval.object': _phail_task_label}),
@@ -750,7 +765,7 @@ phail_episodes = base_cfg.concat_ds.override(datasets=[phail_inference, phail_hu
 
 
 def _raw_model(ep: Episode) -> str:
-    return ep.get(f'{policy_keys.SERVER_META}.{policy_keys.TYPE}', '')
+    return _policy_meta(ep, f'{policy_keys.SERVER}.{policy_keys.TYPE}')
 
 
 phail_inference_release = base_cfg.transform.override(
@@ -766,9 +781,7 @@ phail_inference_release = base_cfg.transform.override(
                 remove=[
                     'robot_commands.reset',
                     'robot_command.reset',
-                    f'{policy_keys.POLICY_META}.{offboard_keys.PORT}',
-                    f'{policy_keys.POLICY_META}.{offboard_keys.HOST}',
-                    f'{policy_keys.POLICY_META}.{policy_keys.TYPE}',
+                    *_policy_meta_keys(offboard_keys.PORT, offboard_keys.HOST, policy_keys.TYPE),
                 ]
             ),
             Derive(model=_raw_model, variant=phail_variant),

@@ -120,6 +120,8 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
     run_world(embodiment, TaskDriver(lambda: [task, task], policy, tmp_path))
     dataset = LocalDataset(tmp_path)
+    # `Sequential` starts its innermost component first, so the LLM policy writes in section 0.
+    section = f'{policy_keys.POLICY_META}.0'
     assert len(dataset) == 2
     assert len(states) == 4
     assert not (tmp_path / 'policy').exists()
@@ -131,9 +133,9 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         assert eval_keys.SUCCESS not in episode
         first, last = episode.bounds(RECEIVED_WORLD)
         assert (last - first) / 1e9 == pytest.approx(task.timeout_sec, abs=0.1)
-        assert episode[f'{policy_keys.POLICY_META}.stop_reason'] == ending
-        assert episode[f'{policy_keys.POLICY_META}.hindsight'] == 'Small move observed.'
-        transcript = episode.static[f'{policy_keys.POLICY_META}.transcript']
+        assert episode[f'{section}.stop_reason'] == ending
+        assert episode[f'{section}.hindsight'] == 'Small move observed.'
+        transcript = episode.static[f'{section}.transcript']
         assert isinstance(transcript, list)
         assert len([e for e in transcript if e['event'] == 'instructions']) == 1
         requests = [e for e in transcript if e['event'] == 'request']

@@ -32,7 +32,7 @@ from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
-from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
+from positronic.policy.remote import WireServer, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 
@@ -84,15 +84,16 @@ def _mock_session(metadata=None):
     return session
 
 
-def _mock_remote_policy(metadata=None, infer_return=None):
-    """A RemotePolicy whose wire client is mocked out; returns (policy, mock_session)."""
+def _mock_server(metadata=None, infer_return=None, jpeg_quality=None):
+    """A WireServer whose wire client is mocked out; returns (server, mock_session)."""
     mock_session = _mock_session(metadata)
     if infer_return is not None:
         mock_session.infer.return_value = infer_return
-    policy = RemotePolicy('websocket', _address('localhost', 0))
-    policy._client = MagicMock()
-    policy._client.new_session.return_value = mock_session
-    return policy, mock_session
+    options = {} if jpeg_quality is None else {'jpeg_quality': jpeg_quality}
+    server = WireServer('websocket', _address('localhost', 0), **options)
+    server._client = MagicMock()
+    server._client.new_session.return_value = mock_session
+    return server, mock_session
 
 
 def _make_image(h, w):
@@ -421,10 +422,10 @@ class TestADroppedConnectionReconnects:
         assert clock[0] - started <= 20.0
 
 
-def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
+def test_a_wire_server_hands_the_wire_the_address_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
-    policy = RemotePolicy('websocket_tls', _address('example.com', 443, query='fps=2.5'), headers=headers)
-    client = policy._client
+    server = WireServer('websocket_tls', _address('example.com', 443, query='fps=2.5'), headers=headers)
+    client = server._client
     assert client.session_url == 'wss://example.com/api/v1/session?fps=2.5'
     assert client.headers == headers
 
@@ -475,16 +476,16 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
         else Sequential(PauseOnUnavailable(), schedule, resize)
     )
     address, model, pipeline = served(local=local, transport=transport)
-    policy = RemotePolicy(transport, address)
-    assert policy.meta()['server.model_name'] == 'fixed'
-    assert policy.meta()['server.action_fps'] == 10
-    assert policy.meta()['server.action_horizon_sec'] == 0.2
+    server = WireServer(transport, address)
+    assert server.meta()['server.model_name'] == 'fixed'
+    assert server.meta()['server.action_fps'] == 10
+    assert server.meta()['server.action_horizon_sec'] == 0.2
     assert len(model.ended_sessions) == 1  # The metadata probe also ends its session.
     obs = {'image': np.zeros((16, 16, 3), dtype=np.uint8)}
     for episode in range(2):
         now = [0]
         runtime = Executor(lambda now=now: now[0], simulated=True, charge_inference_time=False)
-        run = runtime.start(policy)
+        run = runtime.start(server)
         try:
             first = run.send(obs)
             assert isinstance(first, Step)
@@ -523,11 +524,11 @@ def test_a_declared_prompt_is_in_policy_meta_and_the_task_reaches_the_model_unch
     """A ``prompt`` in the handshake appears unchanged in the policy's meta, under the server block. The task an
     episode sends reaches the model unchanged, with no prompt beside it."""
     address, model, _ = served(model=DeclaredPromptModel())
-    policy = RemotePolicy('websocket', address)
-    assert policy.meta()[f'{policy_keys.SERVER}.prompt'] == 'A prompt this deployment declares.'
+    server = WireServer('websocket', address)
+    assert server.meta()[f'{policy_keys.SERVER}.prompt'] == 'A prompt this deployment declares.'
 
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
-    run = runtime.start(policy)
+    run = runtime.start(server)
     try:
         run.send({keys.TASK: 'the task this episode sends'})
         assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
@@ -762,7 +763,7 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
     ):
         address, model, _ = served(model=EchoStateModel(), **placement)
         runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
-        run = runtime.start(RemotePolicy(transport, address))
+        run = runtime.start(WireServer(transport, address))
         try:
             first = run.send(obs)
             assert isinstance(first, Step)
@@ -796,18 +797,19 @@ def runtime():
 @pytest.mark.parametrize('declaration', [None, {'seq': []}, {'name': 'run_arbitrary_code'}, {'name': 'flip_grip'}])
 def test_invalid_declaration_fails_before_inference_and_closes_connection(runtime, declaration):
     metadata = {} if declaration is None else {offboard_keys.LOCAL_STACK: declaration}
-    policy, session = _mock_remote_policy(metadata)
+    server, session = _mock_server(metadata)
     with pytest.raises(ValueError):
-        runtime.start(policy)
+        runtime.start(server)
     session.infer.assert_not_called()
     session.close.assert_called_once()
 
 
-def test_stack_failure_finishes_active_inference_before_closing_session(runtime):
+@pytest.mark.parametrize('ending', ['stack failure', 'run closed'])
+def test_the_runtime_closes_the_session_after_the_call_in_flight_and_the_run_does_not_wait(runtime, ending):
     started, release = threading.Event(), threading.Event()
     order = []
     stack = Sequential(TemporalStack(('image',), (0.0,)), ChunkedSchedule(fps=10))
-    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()})
+    server, session = _mock_server({offboard_keys.LOCAL_STACK: stack.to_spec()})
 
     def infer(obs):
         started.set()
@@ -817,28 +819,33 @@ def test_stack_failure_finishes_active_inference_before_closing_session(runtime)
 
     session.infer.side_effect = infer
     session.close.side_effect = lambda: order.append('session closed')
-    run = runtime.start(policy)
+    run = runtime.start(server)
     releaser = threading.Timer(0.05, release.set)
     try:
         run.send({'image': _make_image(8, 8)})
         assert started.wait(5)
+        if ending == 'stack failure':
+            with pytest.raises(KeyError, match='image'):
+                run.send({})
+        else:
+            run.close()
+        assert order == []
         releaser.start()
-        with pytest.raises(KeyError, match='image'):
-            run.send({})
+        runtime.close()
+        assert order == ['inference finished', 'session closed']
     finally:
         release.set()
         releaser.cancel()
         runtime.close()
         run.close()
-    assert order == ['inference finished', 'session closed']
 
 
 @pytest.mark.parametrize('compressed', [False, True])
 def test_compression_follows_the_handshake(runtime, compressed):
-    policy, session = _mock_remote_policy(
+    server, session = _mock_server(
         {**CHUNKED_STACK, offboard_keys.COMPRESS_IMAGES: compressed}, infer_return=[{'value': 42}]
     )
-    run = runtime.start(policy)
+    run = runtime.start(server)
     try:
         run.send({'image': _make_image(48, 64)})
         assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
@@ -855,12 +862,10 @@ def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
     monkeypatch.setattr(
         'positronic.policy.remote.encode_jpeg', lambda image, quality: qualities.append(quality) or {'jpeg': b''}
     )
-    session = _mock_session({**CHUNKED_STACK, offboard_keys.COMPRESS_IMAGES: True})
-    session.infer.return_value = [{'value': 42}]
-    policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
-    policy._client = MagicMock()
-    policy._client.new_session.return_value = session
-    run = runtime.start(policy)
+    server, _ = _mock_server(
+        {**CHUNKED_STACK, offboard_keys.COMPRESS_IMAGES: True}, infer_return=[{'value': 42}], jpeg_quality=75
+    )
+    run = runtime.start(server)
     try:
         run.send({'image': _make_image(48, 64)})
         assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
@@ -871,11 +876,9 @@ def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
 
 
 @pytest.mark.parametrize('compressed', [False, True])
-def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(compressed):
-    policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
-    policy._client = MagicMock()
-    policy._client.new_session.return_value = _mock_session({offboard_keys.COMPRESS_IMAGES: compressed})
-    meta = policy.meta()
+def test_server_meta_records_the_jpeg_quality_only_when_images_are_compressed(compressed):
+    server, _ = _mock_server({offboard_keys.COMPRESS_IMAGES: compressed}, jpeg_quality=75)
+    meta = server.meta()
     if compressed:
         assert meta[policy_keys.JPEG_QUALITY] == 75
     else:
@@ -915,7 +918,7 @@ def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_
     server = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
     address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'remote-stack'):
-        run = runtime.start(RemotePolicy(transport, address))
+        run = runtime.start(WireServer(transport, address))
         try:
             first = run.send({})
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
@@ -930,12 +933,7 @@ def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_
             run.close()
     spans = {s.span_id: s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
     [span] = [s for s in spans.values() if s.name == telemetry_keys.SPAN_WIRE_RECV]
-    for parent_name in (
-        telemetry_keys.SPAN_POLICY_INFER,
-        telemetry_keys.SPAN_POLICY_SUBMIT,
-        'chunked_schedule',
-        'remote_policy',
-    ):
+    for parent_name in (telemetry_keys.SPAN_POLICY_INFER, telemetry_keys.SPAN_POLICY_SUBMIT, 'chunked_schedule'):
         assert span.parent_id is not None
         span = spans[span.parent_id]
         assert span.name == parent_name
@@ -963,7 +961,7 @@ def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
 
 def test_a_wire_no_registry_member_carries_is_refused():
     with pytest.raises(ValueError, match="No wire is called 'ws'"):
-        RemotePolicy('ws', _address('localhost', 8000))
+        WireServer('ws', _address('localhost', 8000))
 
 
 class _KeepaliveAnswer(http.server.BaseHTTPRequestHandler):

@@ -161,15 +161,15 @@ Upon connection, the server sends a ready packet with metadata:
 
 The client ignores all messages until it sees `status == "ready"` (status updates like `loading`/`waiting` may arrive first).
 
-The session ID belongs to this connection and is separate from model metadata. `RemotePolicy.run()`
-owns the session and includes its ID in each inference request.
+The session ID belongs to this connection and is separate from model metadata. A `WireSession`
+holds the session and includes its ID in each inference request. The runtime opens one per episode.
 
 This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
 - Codec geometry (`image_sizes`) and scheduler cadence (`action_fps`, `action_horizon_sec`).
 - `local_stack` — processors and codecs composed by `"seq"`, with the first outermost.
-  `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
+  `Runtime.start` starts these generators and supplies the session as the inference callable.
   `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits
   the chunk's execution horizon. The harness emits each step's commands immediately.
   A codec outside the scheduler runs on every policy call and decodes each emitted command set,
@@ -179,7 +179,7 @@ This metadata tells the client:
   `positronic.policy.spec`; an unsupported declaration fails before the policy emits commands.
 - `compress_images` — whether the client JPEG-encodes frames before
   sending. It is true unless the deployment sets it false.
-  The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
+  The client sets the quality with `WireServer(jpeg_quality=...)`, 90 by default, and
   records it in the policy metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 

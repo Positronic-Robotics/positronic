@@ -1,4 +1,4 @@
-"""What a roboarena policy sends a server, and what it makes of the answer."""
+"""What a roboarena session sends its server, and what it makes of the answer."""
 
 import threading
 from unittest.mock import MagicMock, patch
@@ -14,7 +14,7 @@ from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy.codec import ACTION
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.dreamzero import roboarena as wire
-from positronic.vendors.dreamzero import roboarena_policy
+from positronic.vendors.dreamzero import roboarena_server
 
 ANNOUNCED = {
     wire.RESOLUTION: [180, 320],
@@ -22,7 +22,7 @@ ANNOUNCED = {
     wire.NUM_EXTERIOR_CAMERAS: 2,
     wire.NEEDS_STEREO_CAMERA: False,
     wire.NEEDS_SESSION_ID: False,
-    wire.ACTION_SPACE: roboarena_policy.JOINT_POSITION_SPACE,
+    wire.ACTION_SPACE: roboarena_server.JOINT_POSITION_SPACE,
 }
 
 # rules-allow: hardcoded-keys — a roboarena server's own spelling, held independent of the code under test:
@@ -87,7 +87,7 @@ class FakeClient(RoboarenaClient):
 
     def infer(self, observation):
         self.sent.append(observation)
-        return {roboarena_policy.ACTIONS_FIELDS[0]: self.chunk}
+        return {roboarena_server.ACTIONS_FIELDS[0]: self.chunk}
 
 
 class Clock:
@@ -112,18 +112,19 @@ class HeldClient(FakeClient):
         return super().infer(observation)
 
 
-def endpoint_over(client, config=None):
-    """The inference one episode submits, built the way the policy builds it."""
-    return roboarena_policy.RoboarenaEndpoint(client, announced() if config is None else config)
+def session_over(client, config=None):
+    """The session one episode holds on `client`, announcing `config`."""
+    return roboarena_server.RoboarenaSession(client, announced() if config is None else config)
 
 
 def start_stack(client, clock: Clock):
     """The stack a run executes, around `client`, on a simulated runtime that reads `clock`.
 
-    Built through `local_stack` rather than here, so the test runs the stack a run executes.
+    Built from the session's own `local_stack`, so the test runs the stack a run executes.
     """
     runtime = Executor(clock, simulated=True, charge_inference_time=False)
-    run = runtime.start(roboarena_policy.local_stack(ANNOUNCED), endpoint_over(client, ANNOUNCED))
+    session = session_over(client, ANNOUNCED)
+    run = runtime.start(session.local_stack, session)
     return runtime, run
 
 
@@ -178,69 +179,69 @@ def websocket_answering(*replies):
 
 class TestWhatTheServerAsksFor:
     def test_the_announced_config_names_exactly_the_keys_that_server_requires(self):
-        assert roboarena_policy.wanted_keys(ANNOUNCED) == frozenset(REQUIRED)
+        assert roboarena_server.wanted_keys(ANNOUNCED) == frozenset(REQUIRED)
 
     def test_a_stateless_server_is_sent_no_session_id(self):
-        assert wire.SESSION_ID not in roboarena_policy.wanted_keys(ANNOUNCED)
+        assert wire.SESSION_ID not in roboarena_server.wanted_keys(ANNOUNCED)
 
     def test_a_server_tracking_sessions_is_sent_one(self):
         stateful = announced(**{wire.NEEDS_SESSION_ID: True})
-        assert wire.SESSION_ID in roboarena_policy.wanted_keys(stateful)
+        assert wire.SESSION_ID in roboarena_server.wanted_keys(stateful)
 
     def test_a_server_wanting_one_exterior_camera_gets_the_first(self):
-        keys = roboarena_policy.wanted_keys(announced(**{wire.NUM_EXTERIOR_CAMERAS: 1}))
+        keys = roboarena_server.wanted_keys(announced(**{wire.NUM_EXTERIOR_CAMERAS: 1}))
         # rules-allow: hardcoded-keys — the wire's own spelling, held independent of the code under test
         assert 'observation/exterior_image_1_left' in keys
         assert 'observation/exterior_image_2_left' not in keys
 
     def test_a_server_wanting_more_exterior_cameras_than_the_codec_writes_is_refused(self):
         with pytest.raises(ValueError, match='exterior cameras'):
-            roboarena_policy.wanted_keys(announced(**{wire.NUM_EXTERIOR_CAMERAS: 3}))
+            roboarena_server.wanted_keys(announced(**{wire.NUM_EXTERIOR_CAMERAS: 3}))
 
     def test_a_server_wanting_no_wrist_camera_gets_none(self):
-        keys = roboarena_policy.wanted_keys(announced(**{wire.NEEDS_WRIST_CAMERA: False}))
+        keys = roboarena_server.wanted_keys(announced(**{wire.NEEDS_WRIST_CAMERA: False}))
         assert wire.WRIST_IMAGE not in keys
 
     def test_a_server_asking_for_stereo_is_refused(self):
         with pytest.raises(ValueError, match='stereo'):
-            roboarena_policy.wanted_keys(announced(**{wire.NEEDS_STEREO_CAMERA: True}))
+            roboarena_server.wanted_keys(announced(**{wire.NEEDS_STEREO_CAMERA: True}))
 
     def test_another_action_space_is_refused_rather_than_decoded_as_joints(self):
         with pytest.raises(ValueError, match='moves the arm wrongly'):
-            roboarena_policy.wanted_keys(announced(**{wire.ACTION_SPACE: 'cartesian_position'}))
+            roboarena_server.wanted_keys(announced(**{wire.ACTION_SPACE: 'cartesian_position'}))
 
     def test_the_wire_counts_exterior_cameras_from_one(self):
         # rules-allow: hardcoded-keys — the wire's own spelling, held independent of the code under test
-        assert roboarena_policy.renaming() == {
+        assert roboarena_server.renaming() == {
             wire.exterior_image(0): 'observation/exterior_image_1_left',
             wire.exterior_image(1): 'observation/exterior_image_2_left',
         }
 
     def test_the_announced_resolution_is_read_as_height_then_width(self):
-        assert roboarena_policy.image_size(ANNOUNCED) == (320, 180)
+        assert roboarena_server.image_size(ANNOUNCED) == (320, 180)
 
     def test_a_server_announcing_no_resolution_is_refused(self):
         with pytest.raises(ValueError, match='no image resolution'):
-            roboarena_policy.image_size(announced(**{wire.RESOLUTION: None}))
+            roboarena_server.image_size(announced(**{wire.RESOLUTION: None}))
 
 
 class TestOneInference:
     def test_the_message_holds_exactly_the_keys_that_server_requires(self):
         client = FakeClient(np.zeros((32, 8), dtype=np.float32))
-        endpoint_over(client)({**encoded(), 'observation/exterior_image_2_left_extra': 1})
+        session_over(client)({**encoded(), 'observation/exterior_image_2_left_extra': 1})
         assert set(client.sent[0]) == REQUIRED
 
     def test_an_observation_missing_a_required_key_is_refused_before_it_is_sent(self):
         client = FakeClient(np.zeros((32, 8), dtype=np.float32))
         short = {key: value for key, value in encoded().items() if key != wire.PROMPT}
         with pytest.raises(ValueError, match='prompt'):
-            endpoint_over(client)(short)
+            session_over(client)(short)
         assert client.sent == []
 
     def test_a_one_camera_server_is_sent_the_first_view_and_not_the_second(self):
         client = FakeClient(np.zeros((32, 8), dtype=np.float32))
         obs = {**encoded(), wire.exterior_image(1): np.full((180, 320, 3), 255, dtype=np.uint8)}
-        endpoint_over(client, announced(**{wire.NUM_EXTERIOR_CAMERAS: 1}))(obs)
+        session_over(client, announced(**{wire.NUM_EXTERIOR_CAMERAS: 1}))(obs)
 
         sent = client.sent[0]
         # rules-allow: hardcoded-keys — the wire's own spelling, held independent of the code under test
@@ -252,14 +253,14 @@ class TestOneInference:
         client = FakeClient(np.zeros((32, 8), dtype=np.float32))
 
         for _ in range(2):
-            endpoint_over(client, stateful)(encoded())
+            session_over(client, stateful)(encoded())
 
         first, second = (sent[wire.SESSION_ID] for sent in client.sent)
         assert first and second and first != second
 
     def test_a_chunk_row_of_another_width_is_refused_and_named(self):
         with pytest.raises(ValueError, match='reaches the arm as joint positions') as refusal:
-            endpoint_over(FakeClient(np.zeros((8, 32), dtype=np.float32)))(encoded())
+            session_over(FakeClient(np.zeros((8, 32), dtype=np.float32)))(encoded())
         assert '(8, 32)' in str(refusal.value)
 
     @pytest.mark.parametrize('bad', [np.nan, np.inf, -np.inf])
@@ -267,26 +268,26 @@ class TestOneInference:
         chunk = np.zeros((32, 8), dtype=np.float32)
         chunk[7, 3] = bad
         with pytest.raises(ValueError, match='not a finite number'):
-            endpoint_over(FakeClient(chunk))(encoded())
+            session_over(FakeClient(chunk))(encoded())
 
     def test_a_chunk_of_no_number_at_all_is_refused_by_the_same_gate(self):
         """`isfinite` raises on a dtype it cannot read, so the gate reads the dtype first."""
         with pytest.raises(ValueError, match='not a finite number'):
-            endpoint_over(FakeClient(np.full((32, 8), 'x')))(encoded())
+            session_over(FakeClient(np.full((32, 8), 'x')))(encoded())
 
     def test_a_large_finite_action_still_reaches_the_codec(self):
         """The joint limits are the arm's to hold, so the gate refuses only what is not a number."""
         chunk = np.full((32, 8), 1e30, dtype=np.float32)
-        assert len(endpoint_over(FakeClient(chunk))(encoded())) == 32
+        assert len(session_over(FakeClient(chunk))(encoded())) == 32
 
     def test_the_chunk_decodes_into_one_entry_per_row_in_order(self):
         chunk = np.arange(32 * 8, dtype=np.float32).reshape(32, 8)
-        answered = endpoint_over(FakeClient(chunk))(encoded())
+        answered = session_over(FakeClient(chunk))(encoded())
         assert [entry[ACTION].tolist() for entry in answered] == chunk.tolist()
 
     def test_a_single_action_is_one_entry(self):
         one = np.arange(8, dtype=np.float32)
-        answered = endpoint_over(FakeClient(one))(encoded())
+        answered = session_over(FakeClient(one))(encoded())
         assert [entry[ACTION].tolist() for entry in answered] == [one.tolist()]
 
 
@@ -299,7 +300,7 @@ class TestTheWire:
         client = RoboarenaClient(ADDRESS.host, ADDRESS.port)
         with patch('positronic_wire.roboarena.connect', return_value=websocket):
             client.connect()
-            assert len(endpoint_over(client)(encoded())) == 32
+            assert len(session_over(client)(encoded())) == 32
 
     def test_a_reply_with_no_chunk_names_the_keys_it_carried(self):
         websocket = websocket_answering(serialize(ANNOUNCED), serialize({'status': 'ok'}))
@@ -307,7 +308,7 @@ class TestTheWire:
         with patch('positronic_wire.roboarena.connect', return_value=websocket):
             client.connect()
             with pytest.raises(ValueError, match="answered \\['status'\\] and no action chunk"):
-                endpoint_over(client)(encoded())
+                session_over(client)(encoded())
 
     def test_a_server_error_names_the_endpoint_and_the_server_s_own_words(self):
         websocket = websocket_answering(serialize(ANNOUNCED), 'CUDA out of memory')
@@ -315,7 +316,7 @@ class TestTheWire:
         with patch('positronic_wire.roboarena.connect', return_value=websocket):
             client.connect()
             with pytest.raises(RuntimeError) as raised:
-                endpoint_over(client)(encoded())
+                session_over(client)(encoded())
 
         assert 'ws://a-server-host:8000' in str(raised.value)
         assert 'CUDA out of memory' in str(raised.value)
@@ -323,25 +324,25 @@ class TestTheWire:
 
     def test_each_episode_opens_its_own_connection_and_closes_it(self):
         sockets = [websocket_answering(serialize(ANNOUNCED)) for _ in range(2)]
-        policy = roboarena_policy.RoboarenaPolicy(ADDRESS)
+        server = roboarena_server.RoboarenaServer(ADDRESS)
 
         with patch('positronic_wire.roboarena.connect', side_effect=sockets):
             for _ in range(2):
                 runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
-                run = runtime.start(policy)
+                run = runtime.start(server)
                 runtime.close()
                 run.close()
 
         for socket in sockets:
             socket.close.assert_called_once()
 
-    def test_each_episode_s_handshake_carries_the_policy_s_headers(self):
+    def test_each_episode_s_handshake_carries_the_server_s_headers(self):
         headers = {'Authorization': 'Bearer run-token'}
-        policy = roboarena_policy.RoboarenaPolicy(ADDRESS, headers)
+        server = roboarena_server.RoboarenaServer(ADDRESS, headers)
 
         with patch('positronic_wire.roboarena.connect', return_value=websocket_answering(serialize(ANNOUNCED))) as dial:
             runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
-            run = runtime.start(policy)
+            run = runtime.start(server)
             runtime.close()
             run.close()
 
@@ -357,13 +358,13 @@ class TestTheWire:
             built.append(config)
             raise StopRun
 
-        monkeypatch.setattr(roboarena_policy, 'local_stack', record)
-        policy = roboarena_policy.RoboarenaPolicy(ADDRESS)
+        monkeypatch.setattr(roboarena_server, 'local_stack', record)
+        server = roboarena_server.RoboarenaServer(ADDRESS)
 
         with patch('positronic_wire.roboarena.connect', side_effect=sockets):
             for _ in range(2):
                 with pytest.raises(StopRun):
-                    Executor(Clock(), simulated=True, charge_inference_time=False).start(policy)
+                    Executor(Clock(), simulated=True, charge_inference_time=False).start(server)
 
         assert [config[wire.RESOLUTION] for config in built] == [[180, 320], [144, 256]]
 

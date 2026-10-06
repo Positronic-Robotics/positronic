@@ -130,12 +130,13 @@ this loop, so the run submits the model call and yields control while it
 executes. The policy can continue to control the robot and acts on the
 answer when it arrives. After the setup, the server only answers these
 calls. A stateless model answers from its arguments alone; a stateful model
-keeps its history in a server session tied to the policy run's lifetime.
+keeps its history in a server session tied to the episode.
 
 The framework records sensor and executed-command signals, along with timing
 logs. Recording inputs and outputs at every policy and inference boundary is
-part of the debugging goal. The episode ends when the framework closes the
-run and its server session. The record remains.
+part of the debugging goal. The episode ends on its deadline or on a done
+signal, and the record remains. An interrupt discards the record. Then the
+framework closes the server session, after the last call, and then the run.
 
 ![The life of an episode](docs/episode.svg)
 
@@ -153,9 +154,10 @@ One algorithm may drive several robots at once.
   its own episode.
 - The runtime starts a run and prepares it to receive input. Each resumption
   supplies an input and gets an output back.
-- The framework receives a complete policy definition, creates one runtime per
-  episode, and starts the policy. The definition resolves its own dependencies;
-  child runs share the runtime and receive their dependencies explicitly.
+- The framework receives a complete policy definition, or a server that declares
+  one, creates one runtime per episode, and starts it. The definition resolves its
+  own dependencies; child runs share the runtime and receive their dependencies
+  explicitly.
 - Whoever starts a run is responsible for closing it and the resources it owns.
   Submitted work must finish before those resources close. Closure happens
   between resumptions, never while the run is processing an input.
@@ -256,7 +258,8 @@ processor can keep state in its run and use the episode clock.
   how often. A custom processor may use several children. Calls at the same
   clock time are allowed; code must not assume a positive time step.
 - Runs share the episode runtime. Each reads the clock when it needs it;
-  real time continues to pass while synchronous code executes.
+  real time continues to pass while synchronous code executes. Each run gets
+  its own view of the runtime, with its own metadata section.
 - A codec is a pair of transforms — encode and decode, as in a video
   codec. Around an inference function, encode converts the arguments and decode
   converts the answer. Around a policy run, encode converts the observations
@@ -272,7 +275,13 @@ Sequential and codecs are offered, not imposed: a policy may always implement
 its run directly.
 
 A processor reports metadata about its definition, and writes episode values into
-`runtime.metadata` as the values change.
+`runtime.metadata` as the values change. `runtime.metadata` is the section of the
+run. The run that the framework starts writes at the top level. A run started by
+another run writes in a section of its parent's, named by its start index: `0`,
+`1`, and so on. The runtime names the sections, and the processor names the keys
+in its own section. So `Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=20))`
+records the schedule's counters as `0.chunked_schedule.dropped`, because the
+sequence starts its innermost component first.
 
 ### Remote policies
 
@@ -292,10 +301,13 @@ whole definition and sends it to the rig as a description.
   [wire compatibility rules](../offboard/README.md#compatibility-and-deprecation)
   define the details.
 
-Each remote run opens a server session and runs the declared client stack
-around an ordinary inference function. The session identifies that run's calls
-and owns any server-side episode state. It ends when the run closes or the
-connection is lost, after outstanding calls finish using its resources.
+The runtime owns every server session. `runtime.start(server)` opens one session
+per episode, before the timed part of the episode. It starts the client stack
+that the session declares, with the session as the stack's inference function.
+The session identifies the episode's calls and owns any server-side episode
+state. At the end of the episode, the runtime waits for the call in flight and
+closes the session. Then the stack closes, so a policy holds no lock and no
+close step for its server.
 
 A session does not require the model to be stateful. Stateless models can serve
 several sessions without keeping episode history. Stateful models must keep
@@ -329,7 +341,7 @@ and should not be added to them.
 ## API
 
 The core interfaces below are abridged from [base.py](base.py),
-[sequential.py](sequential.py), and [codec.py](codec.py).
+[remote.py](remote.py), [sequential.py](sequential.py), and [codec.py](codec.py).
 
 ### The policy step
 
@@ -385,13 +397,33 @@ class Runtime(ABC):
     def tick(self) -> int: ...
 
     def start(
-        self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
+        self, processor: Processor[InputT, OutputT] | Server, /, *args: Any, **kwargs: Any
     ) -> ProcessorRun[InputT, OutputT]: ...
 
     def submit(
         self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
     ) -> Answer[T]: ...
 ```
+
+### Servers and sessions
+
+```python
+class Server(ABC):
+    def open(self) -> Session: ...
+
+    def meta(self) -> dict[str, Any]: ...
+
+
+class Session(ABC):
+    local_stack: Policy
+
+    def __call__(self, obs: Obs) -> Any: ...
+
+    def close(self) -> None: ...
+```
+
+`WireServer` speaks the positronic wire protocol. The DreamZero vendor code has a
+`RoboarenaServer` for a RoboArena server.
 
 ### Processors and policies
 
