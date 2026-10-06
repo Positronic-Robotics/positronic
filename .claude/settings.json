@@ -44,12 +44,12 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__github__.*",
         "hooks": [
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR/utilities/claude_hooks/guard_main_merge.py\"",
-            "timeout": 5
+            "timeout": 30
           }
         ]
       },

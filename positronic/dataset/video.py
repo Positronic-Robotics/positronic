@@ -1,12 +1,12 @@
 import queue
 import struct
 import threading
-from collections import defaultdict, deque
+from collections import deque
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, overload
 
 import av
 import numpy as np
@@ -15,7 +15,9 @@ import pyarrow.parquet as pq
 from av.container import OutputContainer
 from av.video.stream import VideoStream
 
-from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta, SignalWriter, is_realnum_dtype
+from .signal import IndicesLike, Kind, Signal, SignalMeta, SignalWriter
+from .time import Time, TimeBounds
+from .vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY, ParquetTimeIndex, timestamp_table
 
 
 class VideoEncoderSession(Protocol):
@@ -119,6 +121,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
             fps: Frame rate for encoding (default: 100)
         """
+        super().__init__()
         self.video_path = video_path
         self.frames_index_path = frames_index_path
         self.encoder = encoder
@@ -128,13 +131,11 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._finished = False
         self._aborted = False
         self._frame_count = 0
-        self._last_ts = None
 
         self._session: VideoEncoderSession | None = None
         self._width: int | None = None
         self._height: int | None = None
-        self._frame_timestamps: list[int] = []
-        self._extra_timelines: dict[str, list[int]] = defaultdict(list)
+        self._frame_timestamps: dict[str, list[int]] = {}
 
         # One encoder thread per writer; the bound makes ``append`` wait when the encoder falls behind.
         self._frames: queue.Queue[tuple[np.ndarray, int] | None] = queue.Queue(maxsize=8)
@@ -153,13 +154,12 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._height, self._width = height, width
         self._session = self.encoder.open(self.video_path, width, height, self.fps, self.gop_size)
 
-    def append(self, data: np.ndarray, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
+    def append(self, data: np.ndarray, timestamps: Time) -> None:
         """Append a video frame with timestamp.
 
         Args:
             data: Image frame as uint8 numpy array with shape (H, W, 3)
-            ts_ns: Timestamp in nanoseconds (must be strictly increasing)
-            extra_ts: Optional dict of extra timeline names to timestamps
+            timestamps: Named coordinates, non-decreasing on every timeline and increasing on at least one.
 
         Raises:
             RuntimeError: If writer has been finished
@@ -170,9 +170,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         if self._aborted:
             raise RuntimeError('Cannot append to an aborted writer')
 
-        if self._last_ts is not None and ts_ns <= self._last_ts:
-            raise ValueError(f'Timestamp {ts_ns} is not increasing (last was {self._last_ts})')
-
+        self._validate_timestamps(timestamps)
         if self._session is None:
             self._open_encoder(data)
         else:
@@ -181,26 +179,13 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             if data.dtype != np.uint8:
                 raise ValueError(f'Expected uint8 dtype, got {data.dtype}')
 
-        # Validate extra_ts consistency: keys must match across all appends
-        extra_ts = extra_ts or {}
-        extra_ts = {k: int(v) for k, v in extra_ts.items()}
-        current_keys = frozenset(extra_ts.keys())
-        if self._frame_timestamps:  # Not the first append
-            expected_keys = frozenset(self._extra_timelines.keys())
-            if current_keys != expected_keys:
-                raise ValueError(
-                    f'extra_ts keys must be consistent across all appends. '
-                    f'Expected {sorted(expected_keys)}, got {sorted(current_keys)}'
-                )
-
         if self._encoder_error is not None:
             raise RuntimeError('Video encoding failed') from self._encoder_error
 
-        self._frame_timestamps.append(ts_ns)
-
-        # Handle extra timelines using defaultdict
-        for timeline_name, timeline_ts in extra_ts.items():
-            self._extra_timelines[timeline_name].append(timeline_ts)
+        if not self._frame_timestamps:
+            self._frame_timestamps = {name: [] for name in timestamps}
+        for name, coordinate in timestamps.items():
+            self._frame_timestamps[name].append(coordinate)
 
         if self._encoder_thread is None:
             self._encoder_thread = threading.Thread(
@@ -212,7 +197,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._frames.put((data.copy(), self._frame_count))
 
         self._frame_count += 1
-        self._last_ts = ts_ns
+        self._last_time = timestamps
 
     def _encode_loop(self) -> None:
         session = self._session
@@ -253,23 +238,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                 self._session.abort()
                 raise RuntimeError('Video encoding failed') from e
 
-        # Write frame index with primary timestamp and extra timelines
-        data_dict = {'ts_ns': self._frame_timestamps if self._frame_timestamps else []}
-        fields = [('ts_ns', pa.int64())]
-
-        # Add extra timeline columns
-        for timeline_name in sorted(self._extra_timelines.keys()):
-            col_name = f'ts_ns.{timeline_name}'
-            data_dict[col_name] = self._extra_timelines[timeline_name] if self._extra_timelines[timeline_name] else []
-            fields.append((col_name, pa.int64()))
-
-        if self._frame_timestamps:
-            frames_table = pa.table(data_dict)
-        else:
-            schema = pa.schema(fields)
-            frames_table = pa.table(data_dict, schema=schema)
-
-        pq.write_table(frames_table, self.frames_index_path)
+        pq.write_table(timestamp_table(self._frame_timestamps), self.frames_index_path)
 
     def abort(self) -> None:
         """Abort writing and remove any partial outputs."""
@@ -342,6 +311,10 @@ class _VideoNavigator:
         return self._frame_buffer.popleft()
 
 
+VIDEO_ENCODING_V1 = 'positronic.video.v1'
+VIDEO_ENCODING_V2 = 'positronic.video.v2'
+
+
 class VideoSignal(Signal[np.ndarray]):
     """Reader for video signals.
 
@@ -364,14 +337,15 @@ class VideoSignal(Signal[np.ndarray]):
         # TODO: Profile it to find the best default threshold
         self._seek_threshold = seek_threshold or 30
 
-        self._timestamps = None
+        self._time_index = ParquetTimeIndex(frames_index_path, 'ts_ns')
         self._navigator: _VideoNavigator | None = None
 
-    def _load_timestamps(self):
-        """Lazily load timestamps from the index file."""
-        if self._timestamps is None:
-            frames_table = pq.read_table(self.frames_index_path)
-            self._timestamps = frames_table['ts_ns'].to_numpy()
+    @property
+    def timelines(self) -> tuple[str, ...]:
+        return self._time_index.timelines
+
+    def _bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]:
+        return self._time_index.bounds(timelines)
 
     @property
     def _nav(self) -> _VideoNavigator:
@@ -381,25 +355,23 @@ class VideoSignal(Signal[np.ndarray]):
 
     def __len__(self) -> int:
         """Returns the number of frames in the signal."""
-        self._load_timestamps()
-        return len(self._timestamps)
+        return len(self._time_index)
 
     @lru_cache(maxsize=1)  # Access to the same index might be frequent
-    def _get_frame_at_index(self, index: int) -> tuple[np.ndarray, int]:
+    def _get_frame_at_index(self, index: int) -> np.ndarray:
         """Internal method to get a frame at a specific index."""
         index = int(index)
         self._nav.seek_if_needed(index)
         for frame_index, frame in self._nav:
             if frame_index == index:
-                return frame.to_ndarray(format='rgb24'), self._timestamps[index]
+                return frame.to_ndarray(format='rgb24')
             elif frame_index > index:
                 break
 
         raise IndexError(f'Could not decode frame {index}')
 
-    def _ts_at(self, index_or_indices: IndicesLike) -> Sequence[int] | np.ndarray:
-        self._load_timestamps()
-        return self._timestamps[index_or_indices]
+    def _ts_at(self, indices: IndicesLike, timelines: tuple[str, ...]) -> Sequence[Time]:
+        return self._time_index.read(indices, timelines)
 
     class _LazyFrames(Sequence[np.ndarray]):
         """Lazy, indexable sequence of decoded frames for selected indices.
@@ -417,33 +389,30 @@ class VideoSignal(Signal[np.ndarray]):
         def __len__(self) -> int:
             return int(self._indices.shape[0])
 
+        @overload
+        def __getitem__(self, pos: int) -> np.ndarray: ...
+
+        @overload
+        def __getitem__(self, pos: slice) -> Sequence[np.ndarray]: ...
+
         def __getitem__(self, pos: int | slice) -> np.ndarray | Sequence[np.ndarray]:
             if isinstance(pos, slice):
                 return VideoSignal._LazyFrames(self._parent, self._indices[pos])
             idx = int(self._indices[int(pos)])
-            frame, _ts = self._parent._get_frame_at_index(idx)
-            return frame
+            return self._parent._get_frame_at_index(idx)
 
-    def _values_at(self, index_or_indices: IndicesLike) -> Sequence[np.ndarray]:
-        self._load_timestamps()
-        if isinstance(index_or_indices, slice):
-            start, stop, step = index_or_indices.indices(len(self))
+    def _values_at(self, indices: IndicesLike) -> Sequence[np.ndarray]:
+        if isinstance(indices, slice):
+            start, stop, step = indices.indices(len(self))
             idxs = np.arange(start, stop, step, dtype=np.int64)
         else:
-            idxs = np.asarray(index_or_indices, dtype=np.int64)
+            idxs = np.asarray(indices, dtype=np.int64)
         return VideoSignal._LazyFrames(self, idxs)
 
-    def _search_ts(self, ts_or_array: RealNumericArrayLike) -> IndicesLike:
-        self._load_timestamps()
-        req = np.asarray(ts_or_array)
-        if req.size == 0:
-            return np.array([], dtype=np.int64)
-        if not is_realnum_dtype(req.dtype):
-            raise TypeError(f'Invalid timestamp array dtype: {req.dtype}')
-        return np.searchsorted(self._timestamps, req, side='right') - 1
+    def _search_ts(self, queries: Sequence[Time]) -> Sequence[int] | np.ndarray:
+        return self._time_index.search(queries)
 
-    @property
-    @lru_cache(maxsize=1)
+    @cached_property
     def meta(self) -> SignalMeta:
         # Video frames are HWC (height, width, channel); classify as image
         if len(self) == 0:
@@ -456,19 +425,25 @@ class VideoSignal(Signal[np.ndarray]):
     @property
     def encoding_format(self) -> str:
         """Format identifier for video encoded representation."""
-        return 'positronic.video.v1'
+        metadata = pq.read_schema(self.frames_index_path).metadata or {}
+        version = metadata.get(SIGNAL_VERSION_KEY)
+        if version is None:
+            return VIDEO_ENCODING_V1
+        if version != SIGNAL_VERSION:
+            raise ValueError(f'Unsupported signal format version: {version!r}')
+        return VIDEO_ENCODING_V2
 
     def iter_encoded_chunks(self) -> Iterator[bytes]:
         """Stream video + timestamps as a simple container format.
 
-        Format v1:
+        Container framing for both versions:
           - 8 bytes: video file size (uint64 little-endian)
           - N bytes: video file content (raw H.264/MP4)
           - 8 bytes: Arrow IPC size (uint64 little-endian)
           - M bytes: Arrow IPC stream (timestamps table)
 
-        The Arrow table contains 'ts_ns' column and any extra timeline columns.
-        Using Arrow IPC format (not parquet) to decouple from storage format.
+        V1 carries the legacy ``ts_ns`` index; v2 carries named ``ts.<name>`` columns
+        with the signal version marker. Arrow IPC preserves the full schema metadata.
         """
 
         # Stream video file

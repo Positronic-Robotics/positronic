@@ -1,5 +1,8 @@
 """Composition order, metadata, and execution of mixed processor and codec stacks."""
 
+import json
+import subprocess
+import sys
 import threading
 from contextlib import nullcontext
 
@@ -7,10 +10,44 @@ import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Policy, Step
-from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
+from positronic.policy.codec import ChangeEEFrame, Codec, Metadata, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.layers import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.sequential import Sequential
+from positronic.policy.spec import from_spec
+
+
+def test_description_built_without_positronic_resolves_on_the_client():
+    result = subprocess.run(
+        [
+            sys.executable,
+            '-I',
+            '-c',
+            """
+import json
+import sys
+from positronic_model_server.spec import component, parallel, sequence
+
+description = sequence(
+    component('chunked_schedule', version=2, fps=20),
+    parallel(
+        component('restrict_image_size', width=320, height=180),
+        component('metadata', values={'model': 'example'}),
+    ),
+)
+assert not any(name == 'positronic' or name.startswith('positronic.') for name in sys.modules)
+print(json.dumps(description))
+""",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    stack = from_spec(json.loads(result.stdout))
+    assert isinstance(stack, Sequential)
+    expected = Sequential(ChunkedSchedule(fps=20), RestrictImageSize(320, 180) & Metadata({'model': 'example'}))
+    assert stack.meta() == expected.meta()
+    assert stack.to_spec() == expected.to_spec()
 
 
 @pytest.mark.parametrize('nested', [False, True])

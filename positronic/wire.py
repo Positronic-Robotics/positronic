@@ -3,7 +3,7 @@ from collections.abc import Mapping
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys
-from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, TimeMode
+from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers, StatefulSerializer
 from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
@@ -20,7 +20,6 @@ def wire(  # noqa: C901
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
     gui: pimm.ControlSystem | None,
-    time_mode: TimeMode = TimeMode.CLOCK,
 ):
     if robot_arm is not None:
         world.connect(harness.robot_commands, robot_arm.commands)
@@ -39,9 +38,7 @@ def wire(  # noqa: C901
         # A partial, never a lambda: the recorder may be spawned as a background process, and `World`
         # pickles a background control system whole.
         ds_agent = DsWriterAgent(
-            dataset_factory,
-            time_mode=time_mode,
-            telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
+            dataset_factory, telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO)
         )
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
@@ -69,14 +66,13 @@ def wire(  # noqa: C901
 
 
 def _recorder(
-    world: pimm.World, harness: Harness, embodiment: Embodiment, time_mode: TimeMode, privileged: dict[str, Observation]
+    world: pimm.World, harness: Harness, embodiment: Embodiment, privileged: dict[str, Observation]
 ) -> DsWriterAgent:
     """An embodiment's observations, command chunks and privileged ground-truth, recorded into the dataset
     each episode names."""
     embodiment.video_encoder.ensure_available()
     ds_agent = DsWriterAgent(
         functools.partial(LocalDatasetWriter, video_encoder=embodiment.video_encoder),
-        time_mode=time_mode,
         virtual_time=embodiment.simulated,
         telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
     )
@@ -98,7 +94,6 @@ def wire_embodiment(
     world: pimm.World,
     harness: Harness,
     embodiment: Embodiment,
-    time_mode: TimeMode = TimeMode.CLOCK,
     *,
     record: bool = True,
     privileged: dict[str, Observation] | None = None,
@@ -106,18 +101,20 @@ def wire_embodiment(
 ):
     """Wire an embodiment to the Harness for the inference path.
 
-    Connects device observation sources -> ``harness.observations``, ``harness.commands`` -> device
-    receivers, ``harness.prepare`` -> everything a trial readies, and records observations, command chunks,
-    and the eval's privileged ground-truth into the dataset each episode names. ``record`` off leaves the
-    recorder out, so the episode commands reach nobody and the producers keep one consumer each. The ``done``
-    terminating signal, when present, is connected to ``harness.done``. GUI camera wiring stays with the
-    caller — it is a presentation concern, not part of the embodiment contract.
+    Connects device observation sources -> ``harness.observations``, ``harness.commands`` -> device receivers,
+    ``harness.ready`` -> every device that can hold an error, ``harness.prepare`` -> everything a trial readies, and
+    records observations, command chunks, and the eval's privileged ground-truth into the dataset each episode
+    names. ``record`` off leaves the recorder out, so the episode commands reach nobody and the producers keep one
+    consumer each. The ``done`` terminating signal, when present, is connected to ``harness.done``. GUI camera
+    wiring stays with the caller — it is a presentation concern, not part of the embodiment contract.
     """
     privileged = privileged or {}
     for name, obs in embodiment.observations.items():
         world.connect(obs.source, harness.observations[name])
     for name, cmd in embodiment.commands.items():
         world.connect(harness.commands[name], cmd.dest)
+    for name, handler in embodiment.ready_handlers.items():
+        world.connect(harness.ready[name], handler)
     for name, handler in embodiment.prepare_handlers.items():
         world.connect(harness.prepare[name], handler)
     if embodiment.meta_source is not None:
@@ -127,4 +124,4 @@ def wire_embodiment(
 
     if not record:
         return None
-    return _recorder(world, harness, embodiment, time_mode, privileged)
+    return _recorder(world, harness, embodiment, privileged)

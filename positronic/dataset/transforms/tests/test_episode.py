@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import Elementwise, TransformedEpisode
 from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, Rename
 
@@ -193,7 +194,7 @@ def test_concat_helper(sig_simple):
     ep = EpisodeContainer(data={'s1': sig_simple, 's2': sig2})
 
     # Concatenate s1 and s2
-    concat_fn = Concat('s1', 's2')
+    concat_fn = Concat('s1', 's2', timelines=(RECORDED_TIME,))
     result = concat_fn(ep)
 
     # Should be a signal with concatenated arrays at each timestamp
@@ -211,7 +212,7 @@ def test_concat_with_key_func_transform(sig_simple):
     ep = EpisodeContainer(data={'s1': sig_simple, 's2': sig2})
 
     # Use Concat to create a new concatenated signal
-    tf = Derive(combined=Concat('s1', 's2'))
+    tf = Derive(combined=Concat('s1', 's2', timelines=(RECORDED_TIME,)))
     transformed = tf(ep)
 
     assert 'combined' in transformed.keys()

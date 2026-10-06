@@ -19,6 +19,7 @@ from typing import Any, ClassVar, final, overload
 
 import numpy as np
 from PIL import Image as PilImage
+from positronic_model_server.spec import ARGS, NAME, PAR, SEQ, VERSION
 
 from positronic import geom, telemetry, telemetry_keys
 from positronic import keys as obs_keys
@@ -28,7 +29,7 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.policy.base import ARGS, NAME, PAR, SEQ, VERSION, Obs, ProcessorRun, Step
+from positronic.policy.base import Obs, ProcessorRun, Step
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT

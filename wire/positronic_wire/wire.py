@@ -1,6 +1,7 @@
 """The client side of the transports a session runs over, and the facts both ends of a wire share.
 
-A wire carries a protocol's frames as opaque bytes and reads none of them. Nothing here reads a URL:
+A wire carries a protocol's frames as opaque bytes and reads none of them, and encodes the keepalive
+call itself. Nothing here reads a URL:
 a caller names the wire it wants by ``ClientWire.NAME`` (``registry.CLIENT_WIRES``), and the wire alone
 spells whatever its library takes.
 """
@@ -15,10 +16,9 @@ from typing import ClassVar, Generic, Self, TypeVar
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
 SESSION_PATH = f'{API_PATH}/session'
-# The model route under the HTTP API, and the key it answers the server's one checkpoint under.
-MODELS_ROUTE = 'models'
-MODELS_PATH = f'{API_PATH}/{MODELS_ROUTE}'
-MODELS_KEY = 'models'
+# The keepalive route beside the session, and the key its JSON answer carries the seconds under.
+KEEPALIVE_PATH = f'{API_PATH}/keepalive'
+ALIVE_SECONDS = 'alive_seconds'
 
 
 def bracket_ipv6(host: str) -> str:
@@ -88,12 +88,18 @@ class PeerDisconnected(Exception):
     """The peer ended the session."""
 
 
+class KeepaliveUnsupported(Exception):
+    """The server answers sessions but not the keepalive call."""
+
+
 class Refusal(Enum):
     """What a refused connect says about the server."""
 
     COLD = 'cold'  # a backend still starting; retry to the deadline
     FORBIDDEN = 'forbidden'  # a cold backend, or a refused credential; a few attempts, then surface
     FINAL = 'final'  # a permanent refusal; surface at once
+    # Nothing answered: no connection, or none before the timeout or the close. Retry to the deadline.
+    SILENT = 'silent'
 
 
 class ConnectRefused(Exception):
@@ -134,14 +140,23 @@ class ClientWire(abc.ABC, Generic[AddressT]):
         """A client's end of one session on ``address``. Raises ``ConnectRefused`` when it does not open."""
 
     @abc.abstractmethod
+    def keepalive(self, address: AddressT, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+        """Reset the idle timer of the server on ``address``, outside any session.
+
+        Returns the seconds the server stays alive after the call, or ``None`` for a server with no idle
+        timeout. ``timeout`` bounds the whole call. Raises ``KeepaliveUnsupported`` where the server serves
+        sessions but not the call, and ``ConnectRefused`` otherwise, in the terms ``probe`` uses.
+        """
+
+    @abc.abstractmethod
     def probe(self, address: AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> Refusal | None:
         """Whether a server answers at ``address``, without opening a session.
 
         ``headers`` are the ones ``dial`` sends: an edge that authenticates on them lets the probe through to
         the server behind it, so the probe wakes what a session would reach. ``None`` when a server answers.
-        A ``Refusal`` says why none did, in the terms ``dial`` uses: ``COLD`` for a backend still starting or
-        a port nothing answers on, ``FORBIDDEN`` for a credential the edge refused, ``FINAL`` for a refusal
-        no retry reaches.
+        A ``Refusal`` says why none did, in the terms ``dial`` uses: ``COLD`` for a backend still starting,
+        ``SILENT`` for a port nothing answers on, ``FORBIDDEN`` for a credential the edge refused, ``FINAL`` for
+        a refusal no retry reaches.
         """
 
 

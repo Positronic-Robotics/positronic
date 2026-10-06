@@ -3,6 +3,7 @@
 import atexit
 import hashlib
 import ipaddress
+import json
 import logging
 import os
 import shutil
@@ -42,6 +43,8 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
+    ReplayLayout,
+    duration_timeline,
     get_dataset_root,
     get_episodes_list,
     stream_episode_rrd,
@@ -88,6 +91,7 @@ app_state: dict[str, object] = {
     'episode_keys': {},
     'max_resolution': DEFAULT_MAX_RESOLUTION,
     'max_hz': DEFAULT_MAX_HZ,
+    'layout': None,
     'group_tables_cfg': {},
     'home_page': None,  # None = episodes, or group name like 'tasks'
     _PAGE_CONFIG_KEY: PageConfig(),
@@ -135,7 +139,7 @@ def _path_component(value: str) -> str:
     return '=' + hashlib.sha256(value.encode()).hexdigest()
 
 
-def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> Path:
+def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int, layout: ReplayLayout | None) -> Path:
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
         raise RuntimeError('Dataset not loaded')
@@ -144,7 +148,8 @@ def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> 
     episode_cache_dir.mkdir(parents=True, exist_ok=True)
     # The uid, because an episode's position is view-dependent.
     uid = _path_component(str(cast(Episode, ds[episode_id]).meta[META_UID]))
-    return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd'
+    layout_suffix = '' if layout is None else '-' + hashlib.sha256(json.dumps(asdict(layout)).encode()).hexdigest()[:16]
+    return episode_cache_dir / f'v2-{uid}-{max_hz!r}hz-{max_resolution}px{layout_suffix}.rrd'
 
 
 @asynccontextmanager
@@ -190,7 +195,9 @@ def asset_link(name: str) -> str:
 async def cache_rerun_assets(request: Request, call_next):
     response = await call_next(request)
     if request.url.path.startswith(asset_link(f'{VIEWER_DIR}/')):
-        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        response.headers['Cache-Control'] = (
+            'no-cache' if request.url.path.endswith('/index.html') else 'public, max-age=31536000, immutable'
+        )
     return response
 
 
@@ -557,7 +564,8 @@ async def episode_viewer(request: Request, episode_id: int):
             'num_episodes': len(ds),
             'prev_link': episode_link((episode_id - 1) % len(ds)),
             'next_link': episode_link((episode_id + 1) % len(ds)),
-            'viewer_path': asset_link(f'{VIEWER_DIR}/{rr.__version__}/index.html'),
+            'viewer_path': asset_link(f'{VIEWER_DIR}/{rr.__version__}/index.html') + '?v=2',
+            'seek_timeline': duration_timeline(episode.timelines),
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': episode_rrd_link(episode_id),
             'episode_path': meta.get(META_PATH),
@@ -700,20 +708,24 @@ async def api_episodes(request: Request):
     if cache_key in _api_cache:
         return _api_cache[cache_key]
 
-    ds = app_state.get('dataset')
-    config = app_state['episode_table_cfg']
+    ds = cast(Dataset, app_state['dataset'])
+    config = cast(TableConfig, app_state['episode_table_cfg'])
     columns, formatters, defaults = parse_table_cfg(config)
     filters = {k: v for k, v in request.query_params.items() if v}
 
     def matches(ep: Episode) -> bool:
         return all(filter_spelling(ep.static.get(k)) == v for k, v in filters.items())
 
-    ep_it = (
-        {'__episode_index__': i, '__meta__': ep.meta, '__duration__': ep.duration_ns / 1e9, **ep.static}
-        for i, ep in enumerate(ds)
-        if matches(ep)
-    )
-    episodes = get_episodes_list(ep_it, config.keys(), formatters=formatters, defaults=defaults)
+    def table_row(i: int, ep: Episode) -> dict:
+        duration = None
+        timeline = duration_timeline(ep.timelines) if ep.signals else None
+        if timeline is not None:
+            first, last = ep.bounds(timeline)
+            duration = (last - first) / 1e9
+        return {'__episode_index__': i, '__meta__': ep.meta, '__duration__': duration, **ep.static}
+
+    ep_it = (table_row(i, ep) for i, ep in enumerate(ds) if matches(ep))
+    episodes = get_episodes_list(ep_it, list(config), formatters=formatters, defaults=defaults)
     result = {'columns': columns, 'episodes': episodes}
     _api_cache[cache_key] = result
     return result
@@ -853,20 +865,44 @@ async def api_episode_static_field(episode_id: int, field_path: str, request: Re
     raise HTTPException(status_code=400, detail=f'Field {"/".join(key_path)} is not downloadable')
 
 
+@dataclass(frozen=True)
+class _RecordingSettings:
+    """What the app builds each recording from."""
+
+    dataset: Dataset
+    max_hz: float
+    max_resolution: int
+    layout: ReplayLayout | None
+
+
+def _recording_settings() -> _RecordingSettings:
+    return _RecordingSettings(
+        dataset=cast(Dataset, app_state['dataset']),
+        max_hz=cast(float, app_state['max_hz']),
+        max_resolution=cast(int, app_state['max_resolution']),
+        layout=cast(ReplayLayout | None, app_state['layout']),
+    )
+
+
 def _recording_cache_path(episode_id: int) -> Path:
-    return _get_rrd_cache_path(episode_id, cast(float, app_state['max_hz']), cast(int, app_state['max_resolution']))
+    settings = _recording_settings()
+    return _get_rrd_cache_path(episode_id, settings.max_hz, settings.max_resolution, settings.layout)
 
 
-def _recording_chunks_cached(
-    ds: Dataset, episode_id: int, cache_path: Path, *, max_hz: float, max_resolution: int
-) -> Iterator[bytes]:
+def _recording_chunks_cached(settings: _RecordingSettings, episode_id: int, cache_path: Path) -> Iterator[bytes]:
     """The recording's chunks as they are built, written to `cache_path`; the path names a complete file only."""
     fd, name = tempfile.mkstemp(dir=cache_path.parent, prefix=f'{cache_path.name}.', suffix='.partial')
     partial = Path(name)
     published = False
     try:
         with os.fdopen(fd, 'wb') as cache_file:
-            for chunk in stream_episode_rrd(ds, episode_id, max_hz=max_hz, max_resolution=max_resolution):
+            for chunk in stream_episode_rrd(
+                settings.dataset,
+                episode_id,
+                max_hz=settings.max_hz,
+                max_resolution=settings.max_resolution,
+                layout=settings.layout,
+            ):
                 cache_file.write(chunk)
                 yield chunk
         os.replace(partial, cache_path)
@@ -876,20 +912,11 @@ def _recording_chunks_cached(
             partial.unlink(missing_ok=True)
 
 
-def _recording_settings() -> tuple[Dataset, float, int]:
-    return (
-        cast(Dataset, app_state['dataset']),
-        cast(float, app_state['max_hz']),
-        cast(int, app_state['max_resolution']),
-    )
-
-
 def ensure_episode_rrd(episode_id: int) -> Path:
     """Build the recording of `episode_id` into the cache when the cache holds none, and answer its path."""
     cache_path = _recording_cache_path(episode_id)
     if not cache_path.exists():
-        ds, max_hz, max_resolution = _recording_settings()
-        for _ in _recording_chunks_cached(ds, episode_id, cache_path, max_hz=max_hz, max_resolution=max_resolution):
+        for _ in _recording_chunks_cached(_recording_settings(), episode_id, cache_path):
             pass
     return cache_path
 
@@ -901,9 +928,8 @@ async def api_episode_rrd(episode_id: int):
     if cache_path.exists():
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
         return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
-    ds, max_hz, max_resolution = _recording_settings()
     return StreamingResponse(
-        _recording_chunks_cached(ds, episode_id, cache_path, max_hz=max_hz, max_resolution=max_resolution),
+        _recording_chunks_cached(_recording_settings(), episode_id, cache_path),
         media_type='application/octet-stream',
         headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
     )
@@ -1026,13 +1052,15 @@ def configure_tables(
     home_page: str | None,
     max_resolution: int,
     max_hz: float,
+    layout: ReplayLayout | None,
 ) -> None:
     """Set what the tables show and how a recording is built.
 
     `ep_table_cfg` maps an episode's static keys to the columns of the episode table. `group_tables` holds
     each grouped table by name, and `home_page` names the one served at the root, or None for the episodes.
     A recording's videos are re-encoded down to `max_resolution` on the long side, and its videos and its
-    numeric signals are thinned to `max_hz`; 0 keeps every frame and every sample. `root` is the dataset
+    numeric signals with a known nanosecond clock are thinned to `max_hz`; 0 disables thinning. It shows its views as
+    `layout` places them, or as `stream_episode_rrd` places them without one. `root` is the dataset
     path the pages report, and the recordings are cached under `cache_dir`. A table response cached under
     the previous settings is dropped.
     """
@@ -1058,6 +1086,7 @@ def configure_tables(
     app_state['group_tables_cfg'] = group_tables or {}
     app_state['max_resolution'] = max_resolution
     app_state['max_hz'] = max_hz
+    app_state['layout'] = layout
     app_state['home_page'] = home_page
     _api_cache.clear()
 
@@ -1084,17 +1113,21 @@ def main(
     base_href: str = '/',
     title: str = '',
     show_paths: bool = True,
+    layout: ReplayLayout | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
-    Episode viewer URL params:
+    Each signal retains its timeline names. Known nanosecond clocks use durations; other names use integer sequences.
+    The initial timeline is `received.world`, `recorded`, another known clock, or the first available name.
+
+    Episode viewer URL params (require a known nanosecond clock):
         /episode/<id>?t=<seconds>      — open paused at seconds from episode start
         /episode/<id>?ts_ns=<nanos>    — open paused at absolute nanosecond timestamp
 
     Args:
         dataset: Dataset to visualize
         max_resolution: Long side an episode RRD's videos are re-encoded down to
-        max_hz: Rate an episode RRD's videos and numeric signals are thinned to; 0 keeps every frame and sample
+        max_hz: Rate cap for videos and numeric signals with a known nanosecond clock; 0 disables thinning
         cache_dir: Directory to cache generated RRD files
         host: Server host
         port: Server port
@@ -1134,6 +1167,8 @@ def main(
         base_href: Path at the server root that every page link and API call resolves against
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
+        layout: Where an episode's replay shows its views, for example
+            ``positronic.cfg.server.single_arm_replay_layout``. None keeps the default replay
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
@@ -1149,6 +1184,7 @@ def main(
         home_page=home_page,
         max_resolution=max_resolution,
         max_hz=max_hz,
+        layout=layout,
     )
     configure_pages(base_href=base_href, title=title, show_paths=show_paths)
     app_state['loading_state'] = True

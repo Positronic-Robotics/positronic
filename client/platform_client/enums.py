@@ -183,3 +183,22 @@ class CameraVantage(IntEnum):
     INVALID = 0
     droid = 1
     phail = 2
+
+
+@unique
+class RigShape(IntEnum):
+    """The embodiment a rig plan runs on: a single-arm Franka, a bimanual YAM, or a simulation."""
+
+    INVALID = 0
+    franka = 1
+    yam = 2
+    sim = 3
+
+
+@unique
+class StartPose(IntEnum):
+    """Where the arm starts each episode: the rig's own pose, or the reset pose of the DROID data collection."""
+
+    INVALID = 0
+    nominal = 1
+    droid_reset = 2

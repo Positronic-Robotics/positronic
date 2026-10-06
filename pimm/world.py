@@ -8,21 +8,22 @@ import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
 import os
+import pickle
 import signal
 import sys
 import threading
 import time
 import traceback
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from enum import IntEnum
 from multiprocessing import resource_tracker
-from multiprocessing.process import BaseProcess
-from multiprocessing.queues import Queue
+from multiprocessing.context import BaseContext
 from multiprocessing.synchronize import Event as EventClass
 from multiprocessing.synchronize import Lock as LockClass
-from queue import Empty, Full
-from typing import TypeVar, overload
+from queue import Empty, Full, Queue
+from types import FrameType
+from typing import TypeVar, cast, overload
 
 from .calls import ControlSystemCaller, ControlSystemHandler, handlers_of
 from .core import (
@@ -37,12 +38,14 @@ from .core import (
     Message,
     ShutdownPolicy,
     SignalEmitter,
+    SignalError,
     SignalReceiver,
     Sleep,
     Yield,
 )
 from .logging import component_log_levels, configure_process_logging
 from .shared_memory import SMCompliant
+from .time import SystemClock, Time, VirtualClock
 from .utils import identity
 
 logger = logging.getLogger(__name__)
@@ -63,20 +66,47 @@ class TransportMode(IntEnum):
     SHARED_MEMORY = 2
 
 
+MAX_PICKLED_TIME_BYTES = 4096
+
+
+class _SharedTime:
+    """A ``Time | None`` in shared memory, pickled. Read and write it under the pipe's lock."""
+
+    def __init__(self, ctx: BaseContext):
+        self._size = ctx.RawValue(ctypes.c_uint32, 0)
+        self._buffer = ctx.RawArray(ctypes.c_char, MAX_PICKLED_TIME_BYTES)
+
+    @property
+    def is_set(self) -> bool:
+        return self._size.value != 0
+
+    def get(self) -> Time:
+        return pickle.loads(memoryview(self._buffer).cast('B')[: self._size.value])
+
+    def set(self, time: Time | None) -> None:
+        if time is None:
+            self._size.value = 0
+            return
+        payload = pickle.dumps(time, protocol=pickle.HIGHEST_PROTOCOL)
+        if len(payload) > MAX_PICKLED_TIME_BYTES:
+            raise ValueError(f'{time!r} pickles to {len(payload)} bytes; a pipe holds {MAX_PICKLED_TIME_BYTES}')
+        memoryview(self._buffer).cast('B')[: len(payload)] = payload
+        self._size.value = len(payload)
+
+
 class QueueEmitter(SignalEmitter[T]):
-    def __init__(self, queue: mp.Queue, clock: Clock):
+    def __init__(self, queue: Queue, clock: Clock):
         self._queue = queue
         self._clock = clock
 
-    def emit(self, data: T, ts: int = -1):
-        ts = ts if ts >= 0 else self._clock.now_ns()
+    def _emit(self, data: T, time: Time):
         try:
-            self._queue.put_nowait(Message(data, ts))
+            self._queue.put_nowait(Message(data, time))
         except Full:
             # Queue is full, try to remove old message and try again
             try:
                 self._queue.get_nowait()
-                self._queue.put_nowait(Message(data, ts))
+                self._queue.put_nowait(Message(data, time))
             except (Empty, Full):
                 pass
 
@@ -86,7 +116,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
     The emitter owns both the queue transport and (when selected) a
     shared-memory buffer. It defers the transport choice until the first payload
-    unless ``forced_mode`` pins the decision.
+    unless ``forced_mode`` pins the decision. A ``SignalError`` does not choose the transport: it goes on the
+    queue, and it clears the shared-memory time, so a receiver reads the queue until the next payload.
 
     Broadcast emitting is supported by allowing queues, up_values and sm_queues be lists.
     """
@@ -97,8 +128,9 @@ class MultiprocessEmitter(SignalEmitter[T]):
         queues: list[Queue],
         mode_value: ctypes.c_int,
         lock: LockClass,
-        ts_value: ctypes.c_int64,
+        time_value: _SharedTime,
         up_values: list[ctypes.c_bool],
+        error_flags: list[ctypes.c_bool],
         sm_queues: list[Queue],
         *,
         forced_mode: TransportMode | None = None,
@@ -112,8 +144,9 @@ class MultiprocessEmitter(SignalEmitter[T]):
         # Shared memory state
         self._data_type: type[SMCompliant] | None = None
         self._lock = lock
-        self._ts_value = ts_value
+        self._time_value = time_value
         self._up_values = up_values
+        self._error_flags = error_flags
         self._sm_queues = sm_queues
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
@@ -146,8 +179,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
             self._set_mode(TransportMode.QUEUE)
         return self._mode
 
-    def _emit_queue(self, data: T, ts: int) -> bool:
-        msg = Message(data, ts)
+    def _emit_queue(self, data: T, time: Time) -> bool:
+        msg = Message(data, time)
         success = False
 
         for q in self._queues:
@@ -164,7 +197,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
         return success
 
-    def _emit_shared_memory(self, data: SMCompliant, ts: int) -> bool:
+    def _emit_shared_memory(self, data: SMCompliant, time: Time) -> bool:
         if self._data_type is None:
             self._data_type = type(data)
         elif not isinstance(data, self._data_type):
@@ -188,23 +221,29 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
         with self._lock:
             data.set_to_buffer(self._sm.buf)
-            self._ts_value.value = ts
+            self._time_value.set(time)
             for up_value in self._up_values:
                 up_value.value = True
 
         return True
 
-    def emit(self, data: T, ts: int = -1):
-        ts = ts if ts >= 0 else self._clock.now_ns()
+    def _emit(self, data: T, time: Time):
+        if isinstance(data, SignalError):
+            with self._lock:
+                self._time_value.set(None)
+                self._emit_queue(data, time)
+                for error_flag in self._error_flags:
+                    error_flag.value = True
+            return
         mode = self._ensure_mode(data)
 
         if mode is TransportMode.SHARED_MEMORY:
             if not isinstance(data, SMCompliant):
                 raise TypeError('Shared memory transport selected; data must implement SMCompliant')
-            self._emit_shared_memory(data, ts)
+            self._emit_shared_memory(data, time)
             return
 
-        self._emit_queue(data, ts)
+        self._emit_queue(data, time)
 
     def close(self) -> None:
         if self._closed:
@@ -229,36 +268,41 @@ class MultiprocessEmitter(SignalEmitter[T]):
 class MultiprocessReceiver(SignalReceiver[T]):
     """Signal receiver companion for :class:`MultiprocessEmitter`.
 
-    The receiver lazily initialises shared-memory views when the transport mode
-    switches and keeps the last queue message as a fallback.
+    Shared-memory views are initialized on first delivery. Cached reads retain
+    that receiver's receipt coordinates until another value arrives.
     """
 
     def __init__(
         self,
-        queue: mp.Queue,
+        queue: Queue,
+        clock: Clock,
         mode_value: ctypes.c_int,
         lock: LockClass,
-        ts_value: ctypes.c_int64,
+        time_value: _SharedTime,
         up_value: ctypes.c_bool,
-        sm_queue: mp.Queue,
+        error_flag: ctypes.c_bool,
+        sm_queue: Queue,
         *,
         forced_mode: TransportMode | None = None,
     ):
         self._queue = queue
+        self._clock = clock
         self._mode_value = mode_value
         self._forced_mode = forced_mode
         self._mode = forced_mode or TransportMode.UNDECIDED
 
         # Shared memory state
         self._lock = lock
-        self._ts_value = ts_value
+        self._time_value = time_value
         self._up_value = up_value
+        self._error_flag = error_flag
         self._sm_queue = sm_queue
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._out_value: SMCompliant | None = None
         self._readonly_buffer: memoryview | None = None
 
         self._last_queue_message: Message[T] | None = None
+        self._last_shared_message: Message[T] | None = None
         self._closed = False
         if forced_mode is not None:
             self._mode_value.value = int(forced_mode)
@@ -279,15 +323,15 @@ class MultiprocessReceiver(SignalReceiver[T]):
         except Empty:
             message = None
         else:
-            self._last_queue_message = Message(message.data, message.ts, True)
-            if self._mode is TransportMode.UNDECIDED:
+            self._last_queue_message = message._received(self._clock)
+            if self._mode is TransportMode.UNDECIDED and not isinstance(message.data, SignalError):
                 self._mode = TransportMode.QUEUE
             return self._last_queue_message
 
         if self._last_queue_message is None:
             return None
 
-        return Message(self._last_queue_message.data, self._last_queue_message.ts, False)
+        return Message(self._last_queue_message.data, self._last_queue_message.time, False)
 
     def _ensure_shared_memory_initialized(self) -> bool:
         if self._out_value is not None:
@@ -318,23 +362,36 @@ class MultiprocessReceiver(SignalReceiver[T]):
         return True
 
     def _read_shared_memory(self) -> Message[T] | None:
-        with self._lock:
-            if self._ts_value.value == -1:
-                return None
-
         if not self._ensure_shared_memory_initialized():
-            return None
+            return self._read_queue()
 
         with self._lock:
-            if self._ts_value.value == -1:
-                return None
+            if not self._time_value.is_set:
+                return self._read_queue()
 
             assert self._readonly_buffer is not None
             assert self._out_value is not None
-            self._out_value.read_from_buffer(self._readonly_buffer)
-            updated = self._up_value.value
-            self._up_value.value = False
-            return Message(data=self._out_value, ts=self._ts_value.value, updated=updated)  # instead of True
+            if self._up_value.value:
+                self._out_value.read_from_buffer(self._readonly_buffer)
+                time = self._time_value.get()
+                self._last_shared_message = Message(cast(T, self._out_value), time)._received(self._clock)
+                self._up_value.value = False
+                self._drop_errors()
+                return self._last_shared_message
+            assert self._last_shared_message is not None
+            return Message(self._last_shared_message.data, self._last_shared_message.time, False)
+
+    def _drop_errors(self) -> None:
+        """Drop each ``SignalError`` that a newer shared-memory payload replaces."""
+        self._last_queue_message = None
+        if not self._error_flag.value:
+            return
+        self._error_flag.value = False
+        while True:
+            try:
+                self._queue.get_nowait()
+            except Empty:
+                break
 
     def read(self) -> Message[T] | None:
         mode = self.transport_mode
@@ -380,73 +437,42 @@ class LocalQueueEmitter(SignalEmitter[T]):
         self._queue = queue
         self._clock = clock
 
-    def emit(self, data: T, ts: int = -1):
-        self._queue.append(Message(data, ts if ts >= 0 else self._clock.now_ns()))
+    def _emit(self, data: T, time: Time):
+        self._queue.append(Message(data, time))
 
 
 class LocalQueueReceiver(SignalReceiver[T]):
-    def __init__(self, queue: deque):
+    def __init__(self, queue: deque, clock: Clock | None = None):
         """Reader that allows to read messages from deque.
 
         Args:
             queue: (deque) Queue to read from.
         """
         self._queue = queue
-        self._last_value = None
+        self._clock = clock if clock is not None else SystemClock()
+        self._last_value: Message[T] | None = None
 
     def read(self) -> Message[T] | None:
-        if len(self._queue) > 0:
-            self._last_value = self._queue.popleft()
-            if self._last_value is not None:
-                self._last_value.updated = True
-        elif self._last_value is not None:
-            self._last_value.updated = False
-        return self._last_value
+        if self._queue:
+            self._last_value = self._queue.popleft()._received(self._clock)
+            return self._last_value
+        if self._last_value is None:
+            return None
+        return Message(self._last_value.data, self._last_value.time, False)
 
 
 class EventReceiver(SignalReceiver[bool]):
     def __init__(self, event: EventClass, clock: Clock):
         self._event = event
         self._clock = clock
-        self._last_value = None
+        self._last_value: Message[bool] | None = None
 
     def read(self) -> Message[bool] | None:
         value = self._event.is_set()
-        updated = self._last_value is None or value != self._last_value
-        self._last_value = value
-        return Message(data=value, ts=self._clock.now_ns(), updated=updated)
-
-
-class SystemClock(Clock):
-    def now(self) -> float:
-        return time.monotonic()
-
-    def now_ns(self) -> int:
-        return time.monotonic_ns()
-
-
-class VirtualClock(Clock):
-    """Simulated-time clock owned and advanced by the World.
-
-    Time does not pass on its own. As the scheduler works through its timeline it
-    moves this clock forward to the next scheduled event, so simulated time runs as
-    fast as the machine allows and is decoupled from any engine's internal time.
-    The clock is kept in integer nanoseconds — the resolution recorded timestamps use —
-    so the scheduler reasons on one exact grid. Only the World advances it; control
-    systems just read ``now()``/``now_ns()``.
-    """
-
-    def __init__(self):
-        self._time_ns = 0
-
-    def now(self) -> float:
-        return self._time_ns / 1e9
-
-    def now_ns(self) -> int:
-        return self._time_ns
-
-    def advance_to_ns(self, target_ns: int) -> None:
-        self._time_ns = max(self._time_ns, target_ns)
+        if self._last_value is None or value != self._last_value.data:
+            self._last_value = Message(value)._received(self._clock)
+            return self._last_value
+        return Message(value, self._last_value.time, False)
 
 
 class _CallAnsweringLoop:
@@ -468,11 +494,11 @@ class _CallAnsweringLoop:
 
 
 _ORPHAN_POLL_S = 0.5
-_DEFERRED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+_STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
 
-def _exit_on_sigterm(signum, frame) -> None:
-    raise SystemExit(128 + signum)
+def _parent_is_gone(parent_pid: int) -> bool:
+    return os.getppid() != parent_pid
 
 
 def _stop_when_orphaned(stop_event: EventClass, name: str, parent_pid: int) -> None:
@@ -480,7 +506,7 @@ def _stop_when_orphaned(stop_event: EventClass, name: str, parent_pid: int) -> N
 
     def watch() -> None:
         while not stop_event.is_set():
-            if os.getppid() != parent_pid:
+            if _parent_is_gone(parent_pid):
                 logger.warning(f'{name}: the parent process {parent_pid} is gone; stopping')
                 stop_event.set()
                 return
@@ -500,13 +526,20 @@ def _bg_wrapper(
 ):
     if shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
         # Stop only on the parent's stop event, so the device finishes its shutdown.
-        for signum in _DEFERRED_SIGNALS:
+        for signum in _STOP_SIGNALS:
             signal.signal(signum, signal.SIG_IGN)
-    _stop_when_orphaned(stop_event, name, parent_pid)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
         configure_process_logging(parent_component_levels)
+        # The parent can die, or stop the World, while this child imports.
+        if _parent_is_gone(parent_pid):
+            logger.warning(f'{name}: the parent process {parent_pid} is gone; not starting')
+            return
+        if stop_event.is_set():
+            logger.info(f'{name}: the World stopped before this process started; not starting')
+            return
+        _stop_when_orphaned(stop_event, name, parent_pid)
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
                 case Sleep(seconds):
@@ -532,6 +565,13 @@ def _bg_wrapper(
         stop_event.set()
 
 
+class _WallOnlyClock(SystemClock):
+    """A host clock without access to the world's time."""
+
+    def time(self) -> Time:
+        return Time(wall=self.now_ns())
+
+
 class World:
     """Utility class to bind and run control loops."""
 
@@ -553,16 +593,70 @@ class World:
         self._protected_foreground_loops: list[Iterator[Command]] = []
         self._cleanup_emitters_readers = []
         self.entered = False
-        self._previous_sigterm = None
+        self._previous_handlers: dict[int, Callable[[int, FrameType | None], object] | int] = {}
+        self._signal_scope = contextlib.ExitStack()
+        self._stopped_by_signal: int | None = None
         self._connections = []
 
     def __enter__(self):
         self.entered = True
-        self._previous_sigterm = None
+        self._stopped_by_signal = None
+        self._signal_scope = contextlib.ExitStack()
         if threading.current_thread() is threading.main_thread():
-            # A SIGTERM ends the World through `__exit__`, which stops and joins its children.
-            self._previous_sigterm = signal.signal(signal.SIGTERM, _exit_on_sigterm)
+            self._take_signals()
         return self
+
+    @property
+    def _protects_a_shutdown(self) -> bool:
+        return bool(self._protected_foreground_loops) or (
+            ShutdownPolicy.WAIT_FOR_COMPLETION in self._shutdown_policies.values()
+        )
+
+    def _take_signals(self) -> None:
+        """Handle SIGINT and SIGTERM until ``__exit__``. A handler that the block sets wins inside it."""
+        read_fd, write_fd = os.pipe()
+        relay = threading.Thread(target=self._relay_signals, args=(read_fd,), name='pimm.World.signals', daemon=True)
+        relay.start()
+        self._signal_scope.callback(relay.join)
+        self._signal_scope.callback(os.close, write_fd)
+
+        def on_signal(signum: int, frame: FrameType | None) -> None:
+            if not self._protects_a_shutdown:
+                self._deliver_signal(signum, frame)
+                return
+            if self._stopped_by_signal is None:
+                self._stopped_by_signal = signum
+            # FOOTGUN: a handler runs where the main thread stopped, which can be inside the stop event's lock.
+            # `request_stop` here would deadlock, so the relay thread raises the stop.
+            os.write(write_fd, bytes([signum]))
+
+        self._previous_handlers = {}
+        for signum in _STOP_SIGNALS:
+            previous = signal.getsignal(signum)
+            # A signal the process ignores stays ignored, and a handler set outside Python is left alone.
+            if callable(previous) or previous == signal.SIG_DFL:
+                self._previous_handlers[signum] = previous
+                signal.signal(signum, on_signal)
+                self._signal_scope.callback(signal.signal, signum, previous)
+
+    def _relay_signals(self, read_fd: int) -> None:
+        """Stop the World for each signal that ``on_signal`` writes to the pipe, until the pipe closes."""
+        with open(read_fd, 'rb', buffering=0) as received:
+            while signum := received.read(1):
+                name = signal.Signals(signum[0]).name
+                logger.warning(f'{name}: stopping the World once each protected shutdown completes')
+                self.request_stop()
+
+    def _deliver_signal(self, signum: int, frame: FrameType | None) -> None:
+        """What the signal does once nothing is left to protect: the earlier handler runs. With no earlier handler,
+        SIGTERM exits and SIGINT raises ``KeyboardInterrupt``."""
+        previous = self._previous_handlers[signum]
+        if callable(previous):
+            previous(signum, frame)
+        elif signum == signal.SIGTERM:
+            raise SystemExit(128 + signum)
+        else:
+            signal.default_int_handler(signum, frame)
 
     def _drive(self, loop: Iterator[Command]) -> None:
         real_time = not isinstance(self._clock, VirtualClock)
@@ -580,114 +674,52 @@ class World:
             except BaseException as exc:
                 errors.append(exc)
 
-        loops = [finish(loop) for loop in self._protected_foreground_loops]
-        while True:
-            try:
-                self._drive(self._interleave(loops))
-            except BaseException as exc:
-                errors.append(exc)
-            else:
-                break
+        self._drive(self._interleave([finish(loop) for loop in self._protected_foreground_loops]))
         if len(errors) == 1:
             raise errors[0]
         if errors:
             raise BaseExceptionGroup('Foreground shutdown failed', errors)
 
-    def _join_process(self, process: BaseProcess, timeout_s: float | None, errors: list[BaseException]) -> None:
-        while True:
-            try:
-                process.join(timeout=timeout_s)
-                return
-            except (KeyboardInterrupt, SystemExit) as exc:
-                if ShutdownPolicy.WAIT_FOR_COMPLETION not in self._shutdown_policies.values():
-                    raise
-                errors.append(exc)
-
     def _join_background_processes(self) -> None:
-        errors: list[BaseException] = []
         logger.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
             policy = self._shutdown_policies[process]
-            timeout_s = None if policy is ShutdownPolicy.WAIT_FOR_COMPLETION else 90.0
-            self._join_process(process, timeout_s, errors)
+            process.join(timeout=None if policy is ShutdownPolicy.WAIT_FOR_COMPLETION else 90.0)
             if process.is_alive():
                 logger.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
                 process.terminate()
-                self._join_process(process, 2.0, errors)
+                process.join(timeout=2.0)
                 if process.is_alive():
                     logger.warning(f'Process {process.name} (pid {process.pid}) still alive, killing...')
                     process.kill()
-                    self._join_process(process, None, errors)
+                    process.join()
             logger.info(f'Process {process.name} (pid {process.pid}) finished')
             process.close()
-        if len(errors) == 1:
-            raise errors[0]
-        if errors:
-            raise BaseExceptionGroup('Background shutdown interrupted', errors)
-
-    @contextlib.contextmanager
-    def _defer_signals(self, errors: list[BaseException], *, registering_protected: bool = False) -> Iterator[None]:
-        has_protected_systems = (
-            registering_protected
-            or bool(self._protected_foreground_loops)
-            or ShutdownPolicy.WAIT_FOR_COMPLETION in self._shutdown_policies.values()
-        )
-        if not has_protected_systems or threading.current_thread() is not threading.main_thread():
-            yield
-            return
-        previous = {}
-        for signum in _DEFERRED_SIGNALS:
-            handler = signal.getsignal(signum)
-            # A SIGINT left at SIG_DFL replays as `default_int_handler`; any other non-Python handler is left alone.
-            if callable(handler) or (signum == signal.SIGINT and handler == signal.SIG_DFL):
-                previous[signum] = handler
-        pending = []
-
-        def defer(signum, frame):
-            pending.append((signum, frame))
-
-        for signum in previous:
-            signal.signal(signum, defer)
-        try:
-            yield
-        finally:
-            for signum, handler in previous.items():
-                signal.signal(signum, handler)
-            for signum, frame in pending:
-                handler = previous[signum]
-                try:
-                    if callable(handler):
-                        handler(signum, frame)
-                    else:
-                        signal.default_int_handler(signum, frame)
-                except BaseException as exc:
-                    errors.append(exc)
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
         errors: list[BaseException] = []
-        with self._defer_signals(errors):
-            logger.info('Stopping background processes...')
-            self.request_stop()
-            cleanup = [self._finish_foreground_shutdown, self._join_background_processes]
-            for emitter, receivers in self._cleanup_emitters_readers:
-                cleanup.extend(
-                    receiver.close for receiver in (receivers if isinstance(receivers, list) else [receivers])
-                )
-                cleanup.append(emitter.close)
-            for finish in cleanup:
-                try:
-                    finish()
-                except BaseException as exc:
-                    errors.append(exc)
-        if self._previous_sigterm is not None:
-            signal.signal(signal.SIGTERM, self._previous_sigterm)
+        logger.info('Stopping background processes...')
+        self.request_stop()
+        cleanup = [self._finish_foreground_shutdown, self._join_background_processes]
+        for emitter, receivers in self._cleanup_emitters_readers:
+            cleanup.extend(receiver.close for receiver in (receivers if isinstance(receivers, list) else [receivers]))
+            cleanup.append(emitter.close)
+        cleanup.append(self._signal_scope.close)
+        for finish in cleanup:
+            try:
+                finish()
+            except BaseException as exc:
+                errors.append(exc)
         if errors and exc_value is not None:
             errors.insert(0, exc_value)
         if len(errors) == 1:
             raise errors[0]
         if errors:
             raise BaseExceptionGroup('World shutdown failed', errors)
+        if exc_value is None and self._stopped_by_signal is not None:
+            # A signal that stopped a protected World takes effect after its shutdown, unless something else raised.
+            self._deliver_signal(self._stopped_by_signal, None)
 
     def request_stop(self):
         self._stop_event.set()
@@ -696,6 +728,10 @@ class World:
     def clock(self) -> Clock:
         """The clock this world schedules against (wall or virtual)."""
         return self._clock
+
+    @property
+    def _background_clock(self) -> Clock:
+        return _WallOnlyClock() if isinstance(self._clock, VirtualClock) else self._clock
 
     @property
     def should_stop(self) -> bool:
@@ -912,25 +948,16 @@ class World:
             yield from loop
             return
         self._protected_foreground_loops.append(loop)
+        # Stepped by hand: closing this generator must not close the device's loop, which `__exit__` finishes.
         while True:
-            errors: list[BaseException] = []
-            step: tuple[Command] | None = None
-            with self._defer_signals(errors):
-                try:
-                    step = (next(loop),)
-                except StopIteration:
-                    pass
-                except BaseException as exc:
-                    errors.append(exc)
-            if len(errors) == 1:
-                raise errors[0]
-            if errors:
-                raise BaseExceptionGroup('Foreground step failed', errors)
-            if step is None:
+            try:
+                command = next(loop)
+            except StopIteration:
                 return
-            yield step[0]
+            yield command
 
-    def _bind_multiprocess_connections(self, connections) -> None:
+    def _bind_multiprocess_connections(self, connections, local_cs: set[ControlSystem]) -> None:
+        background_clock = self._background_clock
         grouped_mp_connections = defaultdict(list)
         for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, clock in connections:
             grouped_mp_connections[emitter].append((emitter_wrp, receiver_wrp, receiver, maxsize, clock))
@@ -949,9 +976,17 @@ class World:
                     )
 
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
-            emitter_physical, receivers_physical = self.mp_pipes(clock=clock, num_receivers=num_receivers, **kwargs)
+            emitter_physical, receivers_physical = self.mp_pipes(
+                clock=clock,
+                num_receivers=num_receivers,
+                receiver_clocks=[
+                    self._clock if receiver.owner in local_cs else background_clock
+                    for _, _, receiver, _, _ in receivers_logical
+                ],
+                **kwargs,
+            )
 
-            emitter_logical._bind(emitter_wrp(emitter_physical))
+            emitter_logical._bind(emitter_wrp(emitter_physical), clock=clock)
 
             if not isinstance(receivers_physical, list):
                 receivers_physical = [receivers_physical]
@@ -960,7 +995,7 @@ class World:
                 logical._bind(receiver_wrp(physical))
 
     def _bind_connections(self, local_cs: set[ControlSystem], all_cs: set[ControlSystem]) -> None:
-        system_clock = SystemClock()
+        background_clock = self._background_clock
         local_connections, mp_connections = [], []
         for emitter, receiver, emitter_wrp, receiver_wrp in self._connections:
             if emitter.owner in local_cs and receiver.owner in local_cs:
@@ -970,16 +1005,16 @@ class World:
             elif receiver.owner not in all_cs:
                 raise ValueError(f'Receiver {receiver.owner} is not in any control system')
             else:
-                clock = None if emitter.owner in local_cs else system_clock
+                clock = self._clock if emitter.owner in local_cs else background_clock
                 mp_connections.append((emitter, emitter_wrp, receiver, receiver_wrp, receiver.maxsize, clock))
 
         for emitter, emitter_wrp, receiver, receiver_wrp, maxsize, _clock in local_connections:
             kwargs = {'maxsize': maxsize} if maxsize is not None else {}
             em, re = self.local_pipe(**kwargs)
-            emitter._bind(emitter_wrp(em))
+            emitter._bind(emitter_wrp(em), clock=self._clock)
             receiver._bind(receiver_wrp(re))
 
-        self._bind_multiprocess_connections(mp_connections)
+        self._bind_multiprocess_connections(mp_connections, local_cs)
 
     def start(
         self,
@@ -1048,13 +1083,12 @@ class World:
                 name = f'{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}'
             else:
                 name = getattr(bg_loop, '__name__', 'anonymous')
-            # TODO: now we allow only real clock, change clock to a Emitter?
             p = self._mp_ctx.Process(
                 target=_bg_wrapper,
                 args=(
                     bg_loop,
                     self._stop_event,
-                    SystemClock(),
+                    self._background_clock,
                     name,
                     parent_component_levels,
                     shutdown_policy,
@@ -1063,34 +1097,23 @@ class World:
                 daemon=True,
                 name=name,
             )
-            # A Ctrl-C between the spawn and the registration would leave a protected child unjoined.
-            errors: list[BaseException] = []
-            with self._defer_signals(
-                errors, registering_protected=shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION
-            ):
-                self._spawn_and_register(p, name, shutdown_policy)
-            if len(errors) == 1:
-                raise errors[0]
-            if errors:
-                raise BaseExceptionGroup('Background start interrupted', errors)
-
-    def _spawn_and_register(self, p: BaseProcess, name: str, shutdown_policy: ShutdownPolicy) -> None:
-        try:
-            p.start()
-        except Exception as e:
-            # With spawn, starting a subprocess requires all arguments (incl. bg_loop)
-            # to be picklable. Provide a clearer error than "can't pickle local object".
-            raise RuntimeError(
-                f'Failed to spawn background process for {name!r}. '
-                f'Current pid={os.getpid()}. '
-                'Background control systems must be picklable under spawn. '
-                'If you captured closures, lambdas, bound methods with non-picklable state, '
-                'or hold OS resources (e.g. sockets/GUI handles), refactor to construct them '
-                'inside the background process or run them in the main process.'
-            ) from e
-        self._shutdown_policies[p] = shutdown_policy
-        self.background_processes.append(p)
-        logger.info(f'Started background process {name} (pid {p.pid})')
+            # Registered before the spawn, so a signal during it finds the World protected.
+            self._shutdown_policies[p] = shutdown_policy
+            try:
+                p.start()
+            except Exception as e:
+                # With spawn, starting a subprocess requires all arguments (incl. bg_loop)
+                # to be picklable. Provide a clearer error than "can't pickle local object".
+                raise RuntimeError(
+                    f'Failed to spawn background process for {name!r}. '
+                    f'Current pid={os.getpid()}. '
+                    'Background control systems must be picklable under spawn. '
+                    'If you captured closures, lambdas, bound methods with non-picklable state, '
+                    'or hold OS resources (e.g. sockets/GUI handles), refactor to construct them '
+                    'inside the background process or run them in the main process.'
+                ) from e
+            self.background_processes.append(p)
+            logger.info(f'Started background process {name} (pid {p.pid})')
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel within the same process.
@@ -1103,7 +1126,7 @@ class World:
             Tuple of (emitter, reader) for local communication
         """
         q = deque(maxlen=maxsize or None)
-        return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
+        return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q, self._clock)
 
     @functools.cached_property
     def _manager(self):
@@ -1117,6 +1140,7 @@ class World:
         clock: Clock | None = None,
         *,
         num_receivers: int = 1,
+        receiver_clocks: Sequence[Clock] | None = None,
         transport: TransportMode = TransportMode.UNDECIDED,
     ) -> tuple[SignalEmitter[T], SignalReceiver[T] | list[SignalReceiver[T]]]:
         """Create an inter-process channel with optional transport override.
@@ -1133,6 +1157,7 @@ class World:
             clock: Optional clock override for timestamp generation when the
                 emitter lives in another process.
             num_receivers: number of receivers to emit. i.e broadcast if > 1
+            receiver_clocks: Clock at each receiving endpoint; defaults to this world clock.
             transport: Transport override. ``TransportMode.UNDECIDED`` enables
                 adaptive selection; ``TransportMode.QUEUE`` or
                 ``TransportMode.SHARED_MEMORY`` pins the transport.
@@ -1146,25 +1171,48 @@ class World:
         forced_mode: TransportMode | None
         forced_mode = transport if transport in (TransportMode.QUEUE, TransportMode.SHARED_MEMORY) else None
 
+        receiver_clocks = receiver_clocks if receiver_clocks is not None else [self._clock] * num_receivers
+        if len(receiver_clocks) != num_receivers:
+            raise ValueError('Each receiver needs one clock')
+
         message_queues = [self._manager.Queue(maxsize=maxsize) for _ in range(num_receivers)]
         sm_queues = [self._manager.Queue() for _ in range(num_receivers)]
         # The lock and the values below live in shared memory, not in the manager: every emit and read touches
-        # them, and each proxy access is a round trip to the manager process. The lock guards ts and the flags.
+        # them, and each proxy access is a round trip to the manager process. The lock guards the time and the flags.
         lock = self._mp_ctx.Lock()
-        ts_value = self._mp_ctx.RawValue(ctypes.c_int64, -1)
+        time_value = _SharedTime(self._mp_ctx)
         up_values = [self._mp_ctx.RawValue(ctypes.c_bool, False) for _ in range(num_receivers)]
+        error_flags = [self._mp_ctx.RawValue(ctypes.c_bool, False) for _ in range(num_receivers)]
         initial_mode = forced_mode or TransportMode.UNDECIDED
         mode_value = self._mp_ctx.RawValue(ctypes.c_int, int(initial_mode))
 
         emitter_clock = clock or self._clock
         emitter = MultiprocessEmitter(
-            emitter_clock, message_queues, mode_value, lock, ts_value, up_values, sm_queues, forced_mode=forced_mode
+            emitter_clock,
+            message_queues,
+            mode_value,
+            lock,
+            time_value,
+            up_values,
+            error_flags,
+            sm_queues,
+            forced_mode=forced_mode,
         )
 
         receivers = []
-        for m_queue, up_value, sm_queue in zip(message_queues, up_values, sm_queues, strict=True):
+        for m_queue, up_value, error_flag, sm_queue, receiver_clock in zip(
+            message_queues, up_values, error_flags, sm_queues, receiver_clocks, strict=True
+        ):
             receiver = MultiprocessReceiver(
-                m_queue, mode_value, lock, ts_value, up_value, sm_queue, forced_mode=forced_mode
+                m_queue,
+                receiver_clock,
+                mode_value,
+                lock,
+                time_value,
+                up_value,
+                error_flag,
+                sm_queue,
+                forced_mode=forced_mode,
             )
             receivers.append(receiver)
 

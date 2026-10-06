@@ -363,6 +363,24 @@ class _Arm(DriverRun[command.CommandType]):
                 'clear the error in Desk, then start the run again'
             )
 
+    def ready(self, call: pimm.calls.Call[None, None]) -> None:
+        """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
+
+        Answer with the error instead when it stays.
+        """
+        with pimm.calls.raise_to(call):
+            st = self.robot.state()
+            if st.error != 0 and not self.robot.recover_from_errors():
+                raise RuntimeError(f'the arm holds an error that the recovery did not clear: {st.error_message}')
+            self.clear_held_fault()
+            if self._refused and not self.safe_inputs.confirmed_clear:
+                triggered = self.safe_inputs.triggered
+                cause = (
+                    f'safe inputs {triggered} are triggered' if triggered else 'no reading shows every safe input clear'
+                )
+                raise RuntimeError(f'the arm rejects every move, and its fault stays: {cause}')
+            call.set_result(None)
+
     def move_to(
         self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
     ) -> Generator[pimm.Command, None, MoveStatus]:
@@ -557,6 +575,7 @@ class Robot(pimm.ControlSystem):
         self._relative_dynamics_factor = relative_dynamics_factor
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         # FOOTGUN: recovers whatever ``state().error`` reads, since a latched Reflex reads 0.
@@ -708,6 +727,8 @@ class Robot(pimm.ControlSystem):
             in_error = False
 
             while not should_stop.value:
+                for call in self.ready.incoming():
+                    arm.ready(call)
                 st = robot.state()
                 arm.publish(st)
                 goal = robot.goal()

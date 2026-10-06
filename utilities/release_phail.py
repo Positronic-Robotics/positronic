@@ -31,6 +31,7 @@ import pos3
 from pimm.logging import init_logging
 from positronic.cfg import analysis as analysis_cfg
 from positronic.dataset.dataset import Dataset
+from positronic.dataset.episode import select_timeline
 from positronic.dataset.utilities.migrate_remote import migrate_dataset
 from positronic.utils import PUBLIC
 from positronic.utils.checkpoints import get_latest_checkpoint
@@ -102,7 +103,10 @@ def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
     for i, ep in enumerate(dataset):
         model = ep.get('model', '')
         items = ep.get('eval.successful_items', 0)
-        duration = ep.get('eval.duration') or ep.duration_ns / 1e9
+        duration = (
+            ep.get('eval.duration')
+            or (ep.bounds(select_timeline(ep.timelines)).finish - ep.bounds(select_timeline(ep.timelines)).start) / 1e9
+        )
         if items and duration > 0:
             uph_by_model[model].append(items / (duration / 3600))
 
@@ -129,7 +133,11 @@ def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
             if ep.get('model', '') != model:
                 continue
             ep_items = ep.get('eval.successful_items', 0)
-            ep_duration = ep.get('eval.duration') or ep.duration_ns / 1e9
+            ep_duration = (
+                ep.get('eval.duration')
+                or (ep.bounds(select_timeline(ep.timelines)).finish - ep.bounds(select_timeline(ep.timelines)).start)
+                / 1e9
+            )
             if ep_items and ep_duration > 0:
                 uph = ep_items / (ep_duration / 3600)
                 if abs(uph - mean) > 3 * std:

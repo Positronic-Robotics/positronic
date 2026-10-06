@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 import pytest
-from platform_client.enums import EndpointKind, Placement, RequestType, Wire
+from platform_client.enums import EndpointKind, Placement, RequestType, RigShape, StartPose, Wire
 from platform_client.eval_plan import (
     _ENDPOINT_OVERRIDES,
     _PER_TASK_ONLY,
@@ -162,6 +162,7 @@ A_PER_TASK_VALUE = {
     'camera_vantage': 'phail',
     'external_cameras': {'side': 'left'},
     'clutter': {'count_min': 1, 'count_max': 2},
+    'start_pose': 'droid_reset',
 }
 
 
@@ -197,6 +198,19 @@ def test_a_scene_is_flat_on_every_level():
     assert sent['external_cameras'] == {'side': 'left'}
 
 
+def test_a_plan_and_a_task_each_state_a_start_pose():
+    plan = a_plan(start_pose='droid_reset', tasks=[SPOONS, {'task_id': MUG, 'start_pose': 'nominal'}])
+    assert plan.start_pose is StartPose.droid_reset
+    assert plan.tasks[0].start_pose is None
+    assert plan.tasks[1].start_pose is StartPose.nominal
+    sent = plan.model_dump(mode='json')
+    assert sent['start_pose'] == 'droid_reset'
+    assert sent['tasks'][1]['start_pose'] == 'nominal'
+    assert EvalPlan.model_validate(sent) == plan
+    with pytest.raises(ValidationError):
+        a_plan(start_pose='home')
+
+
 def test_a_scene_value_outside_the_closed_set_is_refused():
     with pytest.raises(ValidationError):
         a_plan(tote_placement='middle')
@@ -206,6 +220,27 @@ def test_every_cap_sits_under_the_ceiling():
     with pytest.raises(ValidationError, match='over the plan ceiling'):
         a_plan(max_cap_per_episode_sec=100, tasks=[{'task_id': SPOONS, 'cap_per_episode_sec': 120}])
     assert a_plan(max_cap_per_episode_sec=100, cap_per_episode_sec=100).cap_per_episode_sec == 100
+
+
+def test_a_plan_names_its_rig_shape_and_runs_on_a_franka_when_it_names_none():
+    assert a_plan().rig_shape is RigShape.franka
+    yam = a_plan(rig_shape='yam')
+    assert yam.rig_shape is RigShape.yam
+    assert yam.model_dump(mode='json')['rig_shape'] == 'yam'
+    assert EvalPlan.model_validate(yam.model_dump(mode='json')) == yam
+
+
+def test_a_rig_shape_outside_the_closed_set_is_refused():
+    with pytest.raises(ValidationError):
+        a_plan(rig_shape='ur5')
+
+
+def test_a_plan_naming_an_eval_runs_on_the_embodiment_the_eval_pins():
+    image = plan_of_image(PolicyImage('org/policy@sha256:abc'), EvalRef('robolab.public_subset'))
+    stated = image.model_dump(mode='json')
+    with pytest.raises(ValidationError, match='an eval runs on the embodiment it pins'):
+        EvalPlan.model_validate({**stated, 'rig_shape': 'yam'})
+    assert EvalPlan.model_validate(stated).rig_shape is RigShape.franka
 
 
 def test_an_unknown_field_is_refused():

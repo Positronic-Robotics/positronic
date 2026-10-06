@@ -433,16 +433,18 @@
         const query = new URLSearchParams(window.location.search);
         const seekT = query.get("seek_t");
         const seekTsNs = query.get("seek_ts_ns");
-        if (seekT == null && seekTsNs == null) return;
+        const timeline = query.get("seek_timeline");
+        if (timeline == null || (seekT == null && seekTsNs == null)) return;
 
         function poll() {
           const id = handle.get_active_recording_id();
           if (!id) { setTimeout(poll, 50); return; }
-          const range = handle.get_timeline_time_range(id, "time");
+          const range = handle.get_timeline_time_range(id, timeline);
           if (!range) { setTimeout(poll, 50); return; }
 
           const ts = seekTsNs != null ? parseFloat(seekTsNs) : range.min + parseFloat(seekT) * 1e9;
-          handle.set_time_for_timeline(id, "time", ts);
+          handle.set_active_timeline(id, timeline);
+          handle.set_time_for_timeline(id, timeline, ts);
           handle.set_playing(id, false);
         }
         poll();

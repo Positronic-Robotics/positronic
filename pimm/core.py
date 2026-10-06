@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Generic, TypeAlias, TypeVar, final
 
+from .time import EMITTED_PREFIX, EMITTED_WALL, RECEIVED_PREFIX, Clock, SystemClock, Time
+
 T = TypeVar('T')
 U = TypeVar('U')
 P = TypeVar('P')
@@ -13,30 +15,66 @@ class NoValueException(Exception):
     pass
 
 
-@dataclass
-class Message(Generic[T]):
-    """
-    Contains some data and a timestamp for this data. Timestamps are integers,
-    to avoid floating point precision issues. It can be related to epoch or
-    to anything else, depending on the context.
+class SignalError(Exception):
+    """The value an emitter sends in place of data while its signal has no valid value."""
 
-    If no timestamp is provided, the current system time is used.
-    """
+
+@dataclass(init=False)
+class Message(Generic[T]):
+    """A signal value with read-only timestamps and a first-delivery flag."""
 
     data: T
-    ts: int = -1  # -1 means no value
-    updated: bool = True
+    _time: Time
+    updated: bool
+
+    def __init__(self, data: T, time: Time | None = None, updated: bool = True):
+        if time is not None and not isinstance(time, Time):
+            raise TypeError('Message timestamps must be a Time')
+        self.data = data
+        self._time = time if time is not None else Time(**{EMITTED_WALL: SystemClock().now_ns()})
+        self.updated = updated
+
+    @property
+    def time(self) -> Time:
+        return self._time
+
+    def _received(self, clock: Clock) -> 'Message[T]':
+        return Message(self.data, Time(**self.time, **{f'{RECEIVED_PREFIX}{k}': v for k, v in clock.time().items()}))
+
+
+def _message_value(msg: Message[T]) -> T:
+    """The data of ``msg``. Raises the data when it is a ``SignalError``."""
+    if isinstance(msg.data, SignalError):
+        # A signal returns one instance on many reads, and each raise adds to its traceback. So start a new one.
+        raise msg.data.with_traceback(None)
+    return msg.data
 
 
 class SignalEmitter(ABC, Generic[T]):
     """Write a signal value. All implementations must be non-blocking."""
 
+    _clock: Clock = SystemClock()
+
+    @property
+    def _emission_clock(self) -> Clock:
+        return self._clock
+
+    @final
+    def emit(self, data: T, *, time: Time | None = None):
+        """Emit host-available data, optionally attaching producer-owned timelines."""
+        if time is not None:
+            if not isinstance(time, Time):
+                raise TypeError('Producer timestamps must be a Time')
+            if any(name.startswith((EMITTED_PREFIX, RECEIVED_PREFIX)) for name in time):
+                raise ValueError('The emitted.* and received.* timelines belong to pimm')
+        coordinates = {f'{EMITTED_PREFIX}{k}': v for k, v in self._emission_clock.time().items()}
+        if time is not None:
+            coordinates.update(time)
+        self._emit(data, Time(**coordinates))
+
     @abstractmethod
-    def emit(self, data: T, ts: int = -1):
-        """
-        Emit a message with the given data and timestamp.
-        Must overwrite ts with current clock time if negative.
-        """
+    def _emit(self, data: T, time: Time):
+        """Forward a value whose emission coordinates have already been stamped."""
         pass
 
 
@@ -51,34 +89,21 @@ class SignalReceiver(ABC, Generic[T]):
     @final
     @property
     def value(self) -> T:
-        """Returns the current value of the signal."""
+        """Returns the current value of the signal. Raises the ``SignalError`` that the signal carries."""
         msg = self.read()
         if msg is None:
             raise NoValueException
-        return msg.data
+        return _message_value(msg)
 
 
 class NoOpEmitter(SignalEmitter[T]):
-    def emit(self, data: T, ts: int = -1):
+    def _emit(self, data: T, time: Time):
         pass
 
 
 class NoOpReceiver(SignalReceiver[T]):
     def read(self) -> None:
         return None
-
-
-class Clock(ABC):
-    """A clock is a source of timestamps. It can be system clock, or a more precise clock."""
-
-    @abstractmethod
-    def now(self) -> float:
-        """Get current timestamp in seconds."""
-        pass
-
-    def now_ns(self) -> int:
-        """Get current timestamp in nanoseconds."""
-        return int(self.now() * 1e9)
 
 
 @dataclass
@@ -126,7 +151,8 @@ class ShutdownPolicy(Enum):
 
     # A foreground loop stops at once. A background process gets 90 s, then is terminated.
     BEST_EFFORT = auto()
-    # The World runs the shutdown to its end, with no timeout. A background process ignores SIGINT and SIGTERM.
+    # The World runs the shutdown to its end, with no timeout. While one runs, SIGINT and SIGTERM only stop the
+    # World, and take effect after its shutdown. A background process ignores both signals.
     WAIT_FOR_COMPLETION = auto()
 
 
@@ -166,12 +192,13 @@ class ControlSystemEmitter(SignalEmitter[T]):
     def num_bound(self) -> int:
         return len(self._internal)
 
-    def _bind(self, emitter: SignalEmitter[T]):
+    def _bind(self, emitter: SignalEmitter[T], *, clock: Clock):
+        self._clock = clock
         self._internal.append(emitter)
 
-    def emit(self, data: T, ts: int = -1):
+    def _emit(self, data: T, time: Time):
         for emitter in self._internal:
-            emitter.emit(data, ts)
+            emitter._emit(data, time)
 
 
 class ControlSystemReceiver(SignalReceiver[T]):
@@ -203,12 +230,12 @@ class DefaultingReceiver(ControlSystemReceiver[T]):
 
     def __init__(self, owner: ControlSystem, default: T, maxsize: int | None = None):
         super().__init__(owner, maxsize)
-        self._default = default
+        self._default = Message(default, updated=False)
 
     def read(self) -> Message[T]:
         msg = super().read()
         # The default is always not-updated: it is a value the signal never carried.
-        return msg if msg is not None else Message(self._default, -1, False)
+        return msg if msg is not None else self._default
 
 
 class FakeEmitter(ControlSystemEmitter[T]):
@@ -218,10 +245,10 @@ class FakeEmitter(ControlSystemEmitter[T]):
     World.connect ignores connections involving FakeEmitter, preventing signal flow.
     """
 
-    def emit(self, data: T, ts: int = -1):
+    def _emit(self, data: T, time: Time):
         raise RuntimeError('FakeEmitter.emit() is not supposed to be called')
 
-    def _bind(self, emitter: SignalEmitter[T]):
+    def _bind(self, emitter: SignalEmitter[T], *, clock: Clock):
         raise RuntimeError('FakeEmitter._bind() is not supposed to be called')
 
 

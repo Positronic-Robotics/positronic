@@ -13,6 +13,7 @@ import pytest
 import pimm
 from positronic import telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
+from positronic.cfg.eval.real import droid as real_droid
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
@@ -56,6 +57,40 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
     main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, ()))])
 
 
+class _ArmThatStopsShort(pimm.ControlSystem):
+    """An arm whose every move stops short. It counts the moves it is asked for."""
+
+    def __init__(self):
+        self.move = pimm.calls.ControlSystemHandler[object, None](self)
+        self.asked = 0
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            for call in self.move.incoming():
+                self.asked += 1
+                call.set_exception(RuntimeError('the arm stopped short of its target'))
+            yield pimm.Sleep(0.01)
+
+
+@pytest.mark.timeout(30.0)
+def test_a_home_that_stops_short_ends_an_unattended_run():
+    arm = _ArmThatStopsShort()
+    embodiment = Embodiment(
+        descriptor='stub',
+        observations={},
+        commands={},
+        prepare_handlers={eval_keys.ARM: arm.move},
+        static_meta={},
+        meta_source=None,
+        control_systems=(arm,),
+        simulated=True,
+    )
+    tasks = [Task(instruction_source='stack', timeout_sec=0.05, prepare_args={eval_keys.ARM: 'home'})] * 2
+    with pytest.raises(RuntimeError, match='stopped short'):
+        main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, tasks))])
+    assert arm.asked == 1
+
+
 class _EpisodeStub(pimm.ControlSystem):
     """Stands in for the harness: records the task it was asked for, and answers a round later."""
 
@@ -86,6 +121,69 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
             pass
 
     assert stub.asked == tasks
+
+
+class _ScriptedEpisodes(pimm.ControlSystem):
+    """Stands in for the harness: records each task it is asked for, and answers with the next outcome."""
+
+    def __init__(self, outcomes: list[dict | Exception]):
+        self.asked: list[Task] = []
+        self._outcomes = list(outcomes)
+        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict](self)
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            for call in self.perform_task.incoming():
+                self.asked.append(call.request.task)
+                outcome = self._outcomes.pop(0)
+                if isinstance(outcome, Exception):
+                    call.set_exception(outcome)
+                else:
+                    call.set_result(outcome)
+            yield pimm.Sleep(0.01)
+
+
+def _drive(tasks: list[Task], episodes: _ScriptedEpisodes) -> None:
+    driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
+    with pimm.World(virtual_time=True) as world:
+        world.connect(driver.perform_task, episodes.perform_task)
+        for _ in islice(world.start([driver, episodes]), 200):
+            pass
+
+
+def _tasks(count: int) -> list[Task]:
+    return [Task(instruction_source='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(count)]
+
+
+@pytest.mark.timeout(3.0)
+def test_a_signal_error_runs_its_task_again():
+    """Each task gets its own count: a signal error on the second task after one on the first ends nothing."""
+    tasks = _tasks(2)
+    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), {}, pimm.SignalError('camera lost'), {}])
+    _drive(tasks, episodes)
+
+    assert episodes.asked == [tasks[0], tasks[0], tasks[1], tasks[1]]
+
+
+@pytest.mark.timeout(3.0)
+def test_a_task_failed_by_two_signal_errors_in_a_row_ends_the_run():
+    tasks = _tasks(2)
+    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), pimm.SignalError('camera lost again')])
+    with pytest.raises(pimm.SignalError, match='camera lost again'):
+        _drive(tasks, episodes)
+
+    assert episodes.asked == [tasks[0], tasks[0]]
+
+
+@pytest.mark.timeout(3.0)
+@pytest.mark.parametrize('failure', [pimm.calls.HandlerStopped(), RuntimeError('the arm holds an error')])
+def test_a_failure_other_than_a_signal_error_ends_the_run_at_once(failure):
+    tasks = _tasks(1)
+    episodes = _ScriptedEpisodes([failure])
+    with pytest.raises(type(failure)):
+        _drive(tasks, episodes)
+
+    assert episodes.asked == [tasks[0]]
 
 
 # `positronic.cli.eval` exports a command named `run`, which takes the attribute path to this module.
@@ -129,6 +227,14 @@ def test_a_sweep_numbers_its_trials_across_every_task():
     assert [t.meta[eval_keys.TRIAL_COUNT] for t in trials] == [3, 3, 3]
     assert [t.meta[eval_keys.TASK] for t in trials] == ['quick', 'slow', 'slow']
     assert [t.prepare_args[eval_keys.SCENE] for t in trials] == [params for _, params in pairs]
+
+
+def test_a_real_droid_trial_homes_the_arm_with_no_control_law():
+    """The arm's own controller runs the home, on the attended path and on a planned sweep."""
+    attended = real_droid.attended_trials.instantiate()()
+    planned = real_droid.pick_place.override(embodiment=None, trial_count=2).instantiate().tasks()
+    for task in [attended, *planned]:
+        assert task.prepare_args[eval_keys.ARM].mode is None
 
 
 def test_timed_sweep_needs_an_output_dir():

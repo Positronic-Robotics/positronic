@@ -7,6 +7,7 @@ import pytest
 
 from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReceiver, Sleep, Yield
 from pimm.shared_memory import NumpySMAdapter
+from pimm.time import EMITTED_WALL, Time
 from pimm.world import MultiprocessReceiver, TransportMode, World
 
 
@@ -56,13 +57,14 @@ class TestSharedMemoryAPI:
             data = NumpySMAdapter(array.shape, array.dtype)
             data.array = array
 
-            emitter.emit(data, ts=12345)
+            emitter.emit(data, time=Time(source=12345))
 
             # Reader should now receive the data
             message = reader.read()
             assert message is not None
             assert isinstance(message, Message)
-            assert message.ts == 12345
+            assert message is not None
+            assert message.time['source'] == 12345
             assert isinstance(message.data, NumpySMAdapter)
             assert np.allclose(message.data.array, [3.14, 2.71])
             assert message.updated is True
@@ -109,20 +111,22 @@ class TestSharedMemoryAPI:
             data.array = array
 
             # Initial emit
-            emitter.emit(data, ts=100)
+            emitter.emit(data, time=Time(source=100))
             message = reader.read()
             assert np.allclose(message.data.array, [1.0, 2.0])
-            assert message.ts == 100
+            assert message is not None
+            assert message.time['source'] == 100
 
             # Modify data and emit again
             data.array[0] = 3.0
             data.array[1] = 4.0
-            emitter.emit(data, ts=200)
+            emitter.emit(data, time=Time(source=200))
 
             # Reader should see updated values
             message = reader.read()
             assert np.allclose(message.data.array, [3.0, 4.0])
-            assert message.ts == 200
+            assert message is not None
+            assert message.time['source'] == 200
 
     def test_data_updates_not_reflected_in_shared_memory_without_emit(self):
         with World() as world:
@@ -133,10 +137,11 @@ class TestSharedMemoryAPI:
             data.array = array
 
             # Initial emit
-            emitter.emit(data, ts=100)
+            emitter.emit(data, time=Time(source=100))
             message = reader.read()
             assert np.allclose(message.data.array, [1.0, 2.0])
-            assert message.ts == 100
+            assert message is not None
+            assert message.time['source'] == 100
 
             # Modify data but don't emit again
             data.array[0] = 3.0
@@ -145,7 +150,8 @@ class TestSharedMemoryAPI:
             # Reader should see updated values
             message = reader.read()
             assert np.allclose(message.data.array, [1.0, 2.0])
-            assert message.ts == 100
+            assert message is not None
+            assert message.time['source'] == 100
 
     def test_reader_returns_none_when_no_data_written(self):
         """Test that reader returns None when no data has been written."""
@@ -168,10 +174,11 @@ class TestSharedMemoryAPI:
             data = NumpySMAdapter(array.shape, array.dtype)
             data.array = array
 
-            emitter.emit(data, ts=111)
+            emitter.emit(data, time=Time(source=111))
             message1 = reader1.read()
             assert np.allclose(message1.data.array, [1.0, 2.0])
-            assert message1.ts == 111
+            assert message1 is not None
+            assert message1.time['source'] == 111
 
             # reader2 should return None since it's a different shared memory
             message2 = reader2.read()
@@ -185,14 +192,16 @@ class TestSharedMemoryAPI:
             array = np.array([5.5, 6.6], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
             data.array = array
-            emitter.emit(data, ts=333)
+            emitter.emit(data, time=Time(source=333))
 
             # Multiple reads should return the same data
             message1 = reader.read()
             message2 = reader.read()
             message3 = reader.read()
 
-            assert message1.ts == message2.ts == message3.ts == 333
+            assert message1 is not None
+            assert message2 is not None and message3 is not None
+            assert message1.time['source'] == message2.time['source'] == message3.time['source'] == 333
             assert np.allclose(message1.data.array, [5.5, 6.6])
             assert np.allclose(message2.data.array, [5.5, 6.6])
             assert np.allclose(message3.data.array, [5.5, 6.6])
@@ -207,10 +216,11 @@ class TestSharedMemoryAPI:
             data.array = array
 
             # Emit with timestamp 0 (should be auto-generated to non-zero)
-            emitter.emit(data, ts=-1)
+            emitter.emit(data, time=None)
             message = reader.read()
             assert message is not None
-            assert message.ts >= 0  # Should be auto-generated
+            assert message is not None
+            assert message.time[EMITTED_WALL] >= 0  # Should be auto-generated
 
     def test_shared_memory_survives_data_modifications(self):
         """Test that shared memory correctly reflects live data modifications."""
@@ -220,7 +230,7 @@ class TestSharedMemoryAPI:
             array = np.array([10.0, 20.0], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
             data.array = array
-            emitter.emit(data, ts=500)
+            emitter.emit(data, time=Time(source=500))
 
             # Verify initial values
             message = reader.read()
@@ -231,12 +241,13 @@ class TestSharedMemoryAPI:
             data.array[1] = 200.0
 
             # Re-emit to update timestamp
-            emitter.emit(data, ts=600)
+            emitter.emit(data, time=Time(source=600))
 
             # Reader should see the updated values
             message = reader.read()
             assert np.allclose(message.data.array, [100.0, 200.0])
-            assert message.ts == 600
+            assert message is not None
+            assert message.time['source'] == 600
 
     def test_different_array_shapes_and_dtypes(self):
         """Test various array shapes and dtypes work correctly."""
@@ -266,7 +277,7 @@ class TestSharedMemoryAPI:
 
                 data = NumpySMAdapter(test_array.shape, test_array.dtype)
                 data.array = test_array
-                emitter.emit(data, ts=1000)
+                emitter.emit(data, time=Time(source=1000))
 
                 message = reader.read()
                 assert message is not None, f'Failed for {description}'
@@ -292,12 +303,12 @@ class TestEmitterControlLoop:
         data = NumpySMAdapter(test_array.shape, test_array.dtype)
         data.array = test_array
 
-        self.emitter.emit(data, ts=12345)
+        self.emitter.emit(data, time=Time(source=12345))
 
         yield Sleep(0.2)
 
         data.array[0] = 10.0
-        self.emitter.emit(data, ts=67890)
+        self.emitter.emit(data, time=Time(source=67890))
 
         yield Sleep(0.2)
 
@@ -341,7 +352,7 @@ class FrameStampEmitter:
         ts = 0
         while not should_stop.value:
             data.array[:] = ts
-            self.emitter.emit(data, ts=ts)
+            self.emitter.emit(data, time=Time(capture=ts))
             ts += 1
             yield Yield()
 
@@ -352,7 +363,7 @@ class SingleFrameEmitter:
     def run(self, should_stop: SignalReceiver, _clock: Clock) -> Iterator[Sleep]:
         data = NumpySMAdapter((3,), np.dtype(np.float32))
         data.array[:] = [1.0, 2.0, 3.0]
-        self.emitter.emit(data, ts=NS_TIMESTAMP)
+        self.emitter.emit(data, time=Time(capture=NS_TIMESTAMP))
         while not should_stop.value:
             yield Sleep(0.01)
 
@@ -368,7 +379,7 @@ class TimestampEcho:
         while not should_stop.value:
             msg = self.frames.read()
             if msg is not None and msg.updated:
-                self.echo.emit((msg.ts, msg.data.array.tolist()))
+                self.echo.emit((msg.time['capture'], msg.data.array.tolist()))
             yield Sleep(0.001)
 
 
@@ -401,8 +412,9 @@ class TestSharedMemoryAcrossProcesses:
             while len(seen) < FRAMES_TO_CHECK_FOR_TEARING and time.monotonic() < deadline:
                 msg = reader.read()
                 if msg is not None:
-                    assert np.all(msg.data.array == msg.ts), f"frame {msg.ts} holds another frame's data"
-                    seen.add(msg.ts)
+                    ts = msg.time['capture']
+                    assert np.all(msg.data.array == ts), f"frame {ts} holds another frame's data"
+                    seen.add(ts)
 
         assert len(seen) >= FRAMES_TO_CHECK_FOR_TEARING
 
@@ -416,7 +428,7 @@ class TestSharedMemoryAcrossProcesses:
             msg = _wait_for(reader, lambda m: m.updated)
 
             assert reader.uses_shared_memory
-            assert msg.ts == NS_TIMESTAMP
+            assert msg.time['capture'] == NS_TIMESTAMP
             assert np.allclose(msg.data.array, [1.0, 2.0, 3.0])
 
     def test_a_reader_in_a_subprocess_gets_each_frame_and_its_nanosecond_timestamp(self):
@@ -431,22 +443,15 @@ class TestSharedMemoryAcrossProcesses:
             for step in range(3):
                 ts = NS_TIMESTAMP + step
                 data.array[:] = [step, -step]
-                emitter.emit(data, ts=ts)
+                emitter.emit(data, time=Time(capture=ts))
                 msg = _wait_for(echoes, lambda m, ts=ts: m.data[0] == ts)
                 assert msg.data[1] == [step, -step]
-
-    def test_a_float_timestamp_is_refused(self):
-        with World() as world:
-            emitter, _ = _single_pipe(world, TransportMode.SHARED_MEMORY)
-
-            with pytest.raises(TypeError):
-                emitter.emit(NumpySMAdapter((2,), np.dtype(np.float32)), ts=1.5)  # pyright: ignore[reportArgumentType]
 
     def test_emit_and_read_make_no_call_to_the_manager_process(self, monkeypatch):
         with World() as world:
             emitter, reader = _single_pipe(world, TransportMode.SHARED_MEMORY)
             data = NumpySMAdapter((2,), np.dtype(np.float32))
-            emitter.emit(data, ts=1)
+            emitter.emit(data, time=Time(capture=1))
             assert reader.read() is not None  # The first read takes the buffer's name from a manager queue.
 
             calls = []
@@ -458,9 +463,9 @@ class TestSharedMemoryAcrossProcesses:
 
             monkeypatch.setattr(BaseProxy, '_callmethod', counting_callmethod)
             for ts in range(2, 12):
-                emitter.emit(data, ts=ts)
+                emitter.emit(data, time=Time(capture=ts))
                 msg = reader.read()
-                assert msg is not None and msg.ts == ts
+                assert msg is not None and msg.time['capture'] == ts
 
             assert calls == []
 
@@ -485,23 +490,23 @@ class TestBroadcastCommunication:
             array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
             data.array = array
-            emitter.emit(data, ts=100)
+            emitter.emit(data, time=Time(source=100))
 
             # All readers should receive the same data
             messages = [r.read() for r in readers]
             assert all(msg is not None for msg in messages)
-            assert all(msg.ts == 100 for msg in messages)
+            assert all(msg is not None and msg.time['source'] == 100 for msg in messages)
             assert all(msg.updated is True for msg in messages)
             assert all(np.allclose(msg.data.array, [1.0, 2.0, 3.0]) for msg in messages)
 
             # Update and emit again
             data.array[0] = 10.0
-            emitter.emit(data, ts=200)
+            emitter.emit(data, time=Time(source=200))
 
             # All readers should see the updated values
             messages = [r.read() for r in readers]
             assert all(msg is not None for msg in messages)
-            assert all(msg.ts == 200 for msg in messages)
+            assert all(msg is not None and msg.time['source'] == 200 for msg in messages)
             assert all(msg.updated is True for msg in messages)
             assert all(np.allclose(msg.data.array, [10.0, 2.0, 3.0]) for msg in messages)
 
@@ -520,23 +525,23 @@ class TestBroadcastCommunication:
 
             # Emit data (regular Python object, not SMCompliant)
             data = {'value': 42, 'name': 'test'}
-            emitter.emit(data, ts=100)
+            emitter.emit(data, time=Time(source=100))
 
             # All readers should receive the same data
             messages = [r.read() for r in readers]
             assert all(msg is not None for msg in messages)
-            assert all(msg.ts == 100 for msg in messages)
+            assert all(msg is not None and msg.time['source'] == 100 for msg in messages)
             assert all(msg.updated is True for msg in messages)
             assert all(msg.data == {'value': 42, 'name': 'test'} for msg in messages)
 
             # Emit again with different data
             data2 = {'value': 99, 'name': 'updated'}
-            emitter.emit(data2, ts=200)
+            emitter.emit(data2, time=Time(source=200))
 
             # All readers should see the new data
             messages = [r.read() for r in readers]
             assert all(msg is not None for msg in messages)
-            assert all(msg.ts == 200 for msg in messages)
+            assert all(msg is not None and msg.time['source'] == 200 for msg in messages)
             assert all(msg.updated is True for msg in messages)
             assert all(msg.data == {'value': 99, 'name': 'updated'} for msg in messages)
 
@@ -548,17 +553,19 @@ class TestBroadcastCommunication:
             array = np.array([5.0, 6.0], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
             data.array = array
-            emitter.emit(data, ts=100)
+            emitter.emit(data, time=Time(source=100))
 
             # First reader reads the message (updated=True)
             msg1 = readers[0].read()
             assert msg1.updated is True
-            assert msg1.ts == 100
+            assert msg1 is not None
+            assert msg1.time['source'] == 100
 
             # Second reader hasn't read yet, should still see updated=True
             msg2 = readers[1].read()
             assert msg2.updated is True
-            assert msg2.ts == 100
+            assert msg2 is not None
+            assert msg2.time['source'] == 100
 
             # Both readers read again without new emit (updated=False for both)
             msg1_stale = readers[0].read()
@@ -584,11 +591,12 @@ class TestConnectOneToOne:
             array = np.array([7.0, 8.0], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
             data.array = array
-            emitter.emit(data, ts=300)
+            emitter.emit(data, time=Time(source=300))
 
             message = reader.read()
             assert message is not None
-            assert message.ts == 300
+            assert message is not None
+            assert message.time['source'] == 300
             assert np.allclose(message.data.array, [7.0, 8.0])
 
     def test_single_receiver_with_queue(self):
@@ -603,11 +611,12 @@ class TestConnectOneToOne:
 
             # Test basic communication
             data = {'status': 'active', 'count': 123}
-            emitter.emit(data, ts=400)
+            emitter.emit(data, time=Time(source=400))
 
             message = reader.read()
             assert message is not None
-            assert message.ts == 400
+            assert message is not None
+            assert message.time['source'] == 400
             assert message.data == {'status': 'active', 'count': 123}
 
     def test_default_num_receivers_is_one(self):
@@ -622,9 +631,10 @@ class TestConnectOneToOne:
             array = np.array([99.0], dtype=np.float32)
             data = NumpySMAdapter(array.shape, array.dtype)
             data.array = array
-            emitter.emit(data, ts=500)
+            emitter.emit(data, time=Time(source=500))
 
             message = reader.read()
             assert message is not None
-            assert message.ts == 500
+            assert message is not None
+            assert message.time['source'] == 500
             assert np.allclose(message.data.array, [99.0])

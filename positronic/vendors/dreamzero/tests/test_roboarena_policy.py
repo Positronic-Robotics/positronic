@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from positronic_model_server.serialization import serialize
 from positronic_wire.roboarena import RoboarenaAddress
 
 from positronic import keys as rig
@@ -12,7 +13,6 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy.codec import ACTION
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.utils.serialization import serialize
 from positronic.vendors.dreamzero import roboarena as wire
 from positronic.vendors.dreamzero import roboarena_policy
 
@@ -334,6 +334,18 @@ class TestTheWire:
 
         for socket in sockets:
             socket.close.assert_called_once()
+
+    def test_each_episode_s_handshake_carries_the_policy_s_headers(self):
+        headers = {'Authorization': 'Bearer run-token'}
+        policy = roboarena_policy.RoboarenaPolicy(ADDRESS, headers)
+
+        with patch('positronic_wire.roboarena.connect', return_value=websocket_answering(serialize(ANNOUNCED))) as dial:
+            runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
+            run = runtime.start(policy)
+            runtime.close()
+            run.close()
+
+        assert dial.call_args.kwargs['additional_headers'] == headers
 
     def test_each_episode_builds_its_stack_from_the_config_its_own_connection_announced(self, monkeypatch):
         """A server restarted between two episodes may announce another resolution."""

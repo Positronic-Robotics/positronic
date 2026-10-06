@@ -1,0 +1,99 @@
+# syntax=docker/dockerfile:1.7
+# A policy image the platform can run: GR00T N1.7 DROID on top of `positro/gr00t-base`.
+# docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
+#
+# Usage (from the repository root)
+#   HF_TOKEN=<a read token> make -C docker build-serve-gr00t-n17-droid        # positro/gr00t-n17-droid:local
+#   docker buildx build --platform linux/amd64 --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
+#       -f docker/Dockerfile.serve-gr00t-n17-droid -t docker.io/<you>/gr00t-n17-droid:v1 --push .
+#   docker run --rm --network none docker.io/<you>/gr00t-n17-droid:v1        # the offline pre-flight
+#
+# The layers go from the least often changed to the most: base, dependencies, source, weights. The
+# source and the weights come in through `COPY --link`, and no step runs after them, so a source change
+# builds one new layer and pulls no cached layer.
+#
+# The Hugging Face token is for `nvidia/Cosmos-Reason2-2B`, the backbone every N1.7 checkpoint
+# loads: the repository is gated, and NVIDIA grants access on the form. The token enters no layer.
+
+ARG BASE_IMAGE=positro/gr00t-base:latest
+ARG MODEL=nvidia/GR00T-N1.7-DROID
+ARG MODEL_REVISION=05e7cc97e40dbd33b0890c35cc0214fcb0547ab5
+ARG BACKBONE=nvidia/Cosmos-Reason2-2B
+ARG BACKBONE_REVISION=9ce19a195e423419c349abfc86fd07178b230561
+
+# The weights stage does not build on the base, so a new base reuses the downloaded weights.
+FROM python:3.12-slim AS weights
+ARG MODEL MODEL_REVISION BACKBONE BACKBONE_REVISION
+ENV HF_HOME=/opt/hf
+RUN pip install --no-cache-dir huggingface_hub==0.35.3
+# A download by commit writes no `refs/main`, and the offline load of the default revision reads it.
+RUN --mount=type=secret,id=hf_token \
+    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ && for spec in "${MODEL}@${MODEL_REVISION}" "${BACKBONE}@${BACKBONE_REVISION}"; do \
+      repo="${spec%@*}" rev="${spec#*@}" \
+   && hf download "$repo" --revision "$rev" > /dev/null \
+   && refs="$HF_HOME/hub/models--$(echo "$repo" | sed 's|/|--|g')/refs" \
+   && mkdir -p "$refs" && printf %s "$rev" > "$refs/main" || exit 1; \
+    done
+
+FROM ${BASE_IMAGE}
+ARG MODEL
+RUN apt-get update && apt-get install -y --no-install-recommends libturbojpeg && rm -rf /var/lib/apt/lists/*
+
+# The server loads GROOT_MODEL_SOURCE, so the model this build caches is the model the image serves.
+ENV HF_HOME=/opt/hf \
+    GROOT_MODEL_SOURCE=hf://${MODEL} \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary:/gr00t \
+    UV_PROJECT_ENVIRONMENT=/positronic/.venv \
+    VIRTUAL_ENV=/positronic/.venv \
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=600
+
+# The dependencies install from the lock alone, so a source change does not reinstall them.
+WORKDIR /positronic
+COPY pyproject.toml uv.lock ./
+COPY client/pyproject.toml client/
+COPY wire/pyproject.toml wire/
+COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
+RUN uv sync --locked --python 3.13 --no-dev --no-install-workspace && uv cache clean
+
+# The workspace installs from its manifests and package stubs, which records each package's metadata.
+# The source then lands with no step after it: the packages import from PYTHONPATH.
+COPY README.md LICENSE ./
+COPY client/README.md client/
+COPY wire/README.md wire/
+COPY model_server/README.md model_server/
+COPY vocabulary/README.md vocabulary/
+COPY positronic/__init__.py positronic/
+COPY pimm/__init__.py pimm/
+COPY client/platform_client/py.typed client/platform_client/
+COPY wire/positronic_wire/py.typed wire/positronic_wire/
+COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
+COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
+RUN uv sync --locked --python 3.13 --no-dev && uv cache clean
+
+COPY --link . /positronic
+
+# For a fine-tuned checkpoint of your own, `COPY` its `checkpoint-<step>` directories instead and
+# set GROOT_MODEL_SOURCE to their parent directory. The backbone still comes from the weights stage.
+COPY --link --from=weights /opt/hf /opt/hf
+# The NVIDIA Open Model License requires each copy of the models to carry the agreement and this notice.
+COPY --link positronic/vendors/gr00t/NOTICE positronic/vendors/gr00t/LICENSE-NVIDIA-Open-Model-License.txt /opt/gr00t/
+
+# GROOT_PATCH_MISTRAL: transformers asks the Hub about the backbone's tokenizer on every load, with
+# no cache fallback, and the patch answers that question locally. Without it the offline load fails;
+# without HF_HUB_OFFLINE each file costs a retried HEAD request and the load exceeds the ready budget.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    UV_OFFLINE=1 \
+    UV_NO_SYNC=1 \
+    GROOT_PATCH_MISTRAL=1
+
+EXPOSE 8000
+
+# `exec` makes the server pid 1, so it receives the stop signal.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.gr00t.server droid \
+   --model.model_source=\"$GROOT_MODEL_SOURCE\" \"$@\"", "--"]

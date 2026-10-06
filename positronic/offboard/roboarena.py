@@ -2,14 +2,13 @@
 
 import logging
 from collections.abc import Mapping
-from enum import Enum
 from typing import Any
 
+from positronic_model_server.serialization import deserialize, serialize
 from positronic_wire import registry, wire
 from positronic_wire import roboarena as roboarena_wire
 
 from positronic.offboard.client import ConnectOutcome, ConnectRetries
-from positronic.utils.serialization import deserialize, serialize
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +30,13 @@ RESET_TIMEOUT_S = 10.0
 READY_PROBE_TIMEOUT_S = 5.0
 
 
-class ProbeOutcome(Enum):
-    READY = 'ready'
-    NOT_READY = 'not_ready'
-
-
 class RoboarenaClient:
     """One connection to a roboarena server, and the msgpack frames it carries."""
 
-    def __init__(self, host: str = '127.0.0.1', port: int = 9000):
+    def __init__(self, host: str = '127.0.0.1', port: int = 9000, headers: Mapping[str, str] | None = None):
+        """``headers`` go on every handshake this client opens: ``connect`` and ``probe`` alike."""
         self._address = roboarena_wire.RoboarenaAddress(host, port)
+        self._headers = headers
         self._wire = registry.client_wire(roboarena_wire.RoboarenaClientWire.NAME)
         self._connection: wire.ClientConnection | None = None
         self._server_config: dict[str, Any] | None = None
@@ -48,7 +44,7 @@ class RoboarenaClient:
 
     def connect(self) -> dict[str, Any]:
         """Open the connection and answer the config the server announces on it."""
-        connection = self._wire.dial(self._address, None, HANDSHAKE_TIMEOUT_S)
+        connection = self._wire.dial(self._address, self._headers, HANDSHAKE_TIMEOUT_S)
         try:
             announced: dict[str, Any] = deserialize(connection.recv(timeout=HANDSHAKE_TIMEOUT_S))
         except BaseException:
@@ -73,18 +69,16 @@ class RoboarenaClient:
             raise RuntimeError('Not connected: the server announces its config on connect')
         return self._server_config
 
-    def probe(self) -> ProbeOutcome:
-        """Probe the server once for the config it announces.
+    def probe(self) -> wire.Refusal | None:
+        """Probe the server once for the config it announces. Returns what ``ClientWire.probe`` returns.
 
         Raises ``TextAnswer`` when it answers in text, and ``wire.ConnectRefused`` on a refusal the connect retry
         policy surfaces.
         """
-        refusal = self._wire.probe(self._address, None, READY_PROBE_TIMEOUT_S)
-        if refusal is None:
-            return ProbeOutcome.READY
-        if self._probe_retries.take(refusal) is ConnectOutcome.SURFACE:
+        refusal = self._wire.probe(self._address, self._headers, READY_PROBE_TIMEOUT_S)
+        if refusal is not None and self._probe_retries.take(refusal) is ConnectOutcome.SURFACE:
             raise wire.ConnectRefused(refusal, f'{self.url} refused the connection')
-        return ProbeOutcome.NOT_READY
+        return refusal
 
     def infer(self, observation: Mapping[str, Any]) -> Any:
         """The action chunk the server answers ``observation`` with."""

@@ -14,7 +14,8 @@ from pimm.logging import init_logging
 from positronic import geom, keys, wire
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
-from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterCommand
+from positronic.dataset.episode import select_timeline
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers import roboarm
@@ -138,7 +139,7 @@ def main(
 
         with pimm.World(virtual_time=True) as world:
             # The sim carries both the arm and the gripper ports, so it fills both slots.
-            ds_agent = wire.wire(world, replay, dataset_factory, cameras_mapped, sim, sim, gui, TimeMode.MESSAGE)
+            ds_agent = wire.wire(world, replay, dataset_factory, cameras_mapped, sim, sim, gui)
             player_cmd = world.pair(replay.command)
 
             ds_cmd = pimm.NoOpEmitter()
@@ -158,7 +159,8 @@ def main(
             ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
             player_cmd.emit(DsPlayerStartCommand(episode))
 
-            p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')
+            first, last = episode.bounds(select_timeline(episode.timelines))
+            p_bar = tqdm.tqdm(total=round((last - first) / 1e9, 1), unit='s')
 
             for _ in sim_iter:
                 p_bar.n = round(world.clock.now(), 1)

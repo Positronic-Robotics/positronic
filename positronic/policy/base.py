@@ -12,13 +12,6 @@ from typing_extensions import TypeAliasType
 
 from positronic import telemetry
 
-# Structural keys of the wire spec for sequential and parallel composition.
-SEQ = 'seq'
-PAR = 'par'
-NAME = 'name'
-ARGS = 'args'
-VERSION = 'version'
-
 
 class NotAnswered(RuntimeError):
     """The call has not answered yet. A read of an ``Answer`` raises this rather than waiting."""

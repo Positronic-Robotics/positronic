@@ -1,6 +1,9 @@
 import dataclasses
 import logging
+import subprocess
+import sys
 import types
+from collections.abc import Callable, Iterator
 from enum import Enum
 from typing import Any
 
@@ -11,13 +14,23 @@ import pimm
 import positronic.cfg.embodiment as embodiment_cfg
 import positronic.cfg.hardware.roboarm as roboarm_cfg
 from pimm.tests.testing import MockClock, wire_call
-from positronic.drivers.roboarm import RobotStatus, command, yam
+from positronic import keys
+from positronic.cfg import video_encoder
+from positronic.cfg.eval.real import yam as yam_eval
+from positronic.drivers.roboarm import RobotStatus, command
+from positronic.drivers.roboarm import yam as yam_package
 from positronic.drivers.roboarm.tests.fakes import StopFlag
+from positronic.drivers.roboarm.yam import driver as yam
+from positronic.eval import Embodiment
+from positronic.eval import keys as eval_keys
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.zeros(6)
 RAISED = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 DEFAULT_TUNING = yam.PARK_SETTLE
+OPEN, CLOSED = 0.0, 1.0
+_GRIP_TOL = 0.05
+STATION_GRAVITY_COMP = [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]
 
 
 class FakeYam(yam._FakeYam):
@@ -61,9 +74,9 @@ class Site(Enum):
 
     CHAIN_READ = ('vendor', 'get_observations')
     CHAIN_COMMAND = ('vendor', 'command_joint_pos')
-    META_EMIT = ('robot_meta', 'emit')
-    STATE_EMIT = ('state', 'emit')
-    GRIP_EMIT = ('grip', 'emit')
+    META_EMIT = ('robot_meta', '_emit')
+    STATE_EMIT = ('state', '_emit')
+    GRIP_EMIT = ('grip', '_emit')
     COMMANDS_READ = ('commands', 'read')
     TARGET_GRIP_READ = ('target_grip', 'read')
 
@@ -122,17 +135,17 @@ class Rig:
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
         self.driver = yam.Robot(
-            connect=lambda channel, sim: ports['vendor'],
+            connect=lambda channel, sim, gravity_comp_factor: ports['vendor'],
             park_after_idle_s=1.0,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
         )
+        self.clock = MockClock()
         self.driver.commands._bind(ports['commands'])
         self.driver.target_grip._bind(ports['target_grip'])
-        self.driver.state._bind(ports['state'])
-        self.driver.grip._bind(ports['grip'])
-        self.driver.robot_meta._bind(ports['robot_meta'])
-        self.clock = MockClock()
+        self.driver.state._bind(ports['state'], clock=self.clock)
+        self.driver.grip._bind(ports['grip'], clock=self.clock)
+        self.driver.robot_meta._bind(ports['robot_meta'], clock=self.clock)
         self.stop = StopFlag()
         self.loop = self.driver.run(self.stop, self.clock)
 
@@ -152,9 +165,18 @@ class Rig:
                 self.clock.advance(wait.seconds)
             assert self.clock.now() < deadline, 'shutdown blocked: the driver kept the arm powered'
 
-    def raise_arm(self):
+    def ready(self):
+        """Run until the start move ends."""
         while not self.states.emitted or self.states.emitted[-1][1].status == RobotStatus.BUSY:
             self.tick()
+
+    def rest(self):
+        """Run past the start move and the idle park after it, until the arm rests at the parking pose."""
+        self.tick(12)
+        np.testing.assert_allclose(self.vendor._pos[:6], PARK, atol=0.005)
+
+    def raise_arm(self):
+        self.ready()
         self.commands.push(command.JointPosition(RAISED))
         self.tick(0.5)
         np.testing.assert_allclose(self.vendor._pos[:6], RAISED, atol=0.005)
@@ -216,7 +238,7 @@ def test_repeated_identical_grip_commands_delay_parking_until_they_stop(rig):
 
 
 def test_sync_move_starts_idle_time_at_completion(world, rig):
-    rig.tick(4)
+    rig.rest()
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
     wire_call(world, caller, rig.driver.sync_move)
     answer = caller(command.JointPosition(RAISED))
@@ -260,13 +282,36 @@ def test_disabling_idle_parking_still_parks_on_exit(rig):
     assert rig.vendor.closed
 
 
-def test_startup_and_shutdown_preserve_the_gripper(rig):
-    rig.vendor._pos[:6] = RAISED
+def test_the_start_raises_the_arm_and_opens_the_gripper(rig):
     rig.vendor._pos[6] = 0.4
-    rig.tick(4)
+    rig.ready()
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert rig.vendor._pos[6] == pytest.approx(1.0, abs=0.005)  # the chain's 1 is open
+
+
+def test_an_arm_left_alone_after_the_start_parks_after_the_idle_time(rig):
+    rig.ready()
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    rig.tick(5)
     np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
-    assert rig.vendor._pos[6] == pytest.approx(0.4)
+
+
+def test_an_arm_that_cannot_reach_the_start_pose_reads_error_and_takes_commands(rig, caplog):
+    rig.vendor.stuck = True
+    rig.ready()
+    assert 'did not reach the start pose' in caplog.text
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    rig.vendor.stuck = False
+    rig.commands.push(command.JointPosition(RAISED))
+    rig.tick(0.5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+
+
+def test_shutdown_preserves_the_gripper(rig):
     rig.raise_arm()
+    rig.grip.push(0.6)
+    rig.tick(0.5)
     rig.finish()
     np.testing.assert_allclose(rig.vendor.released_at[0], np.append(PARK, 0.4), atol=0.005)
 
@@ -382,7 +427,7 @@ def test_an_arm_with_noisy_position_readings_is_tuned_not_edited(monkeypatch, st
 @pytest.mark.parametrize(('grip_tolerance', 'arrives'), [(yam.MOVE_SETTLE.grip_tolerance, False), (0.1, True)])
 def test_an_arm_whose_fingers_read_off_is_tuned_not_edited(world, monkeypatch, grip_tolerance, arrives):
     rig = Rig(move_tuning=dataclasses.replace(yam.MOVE_SETTLE, grip_tolerance=grip_tolerance))
-    rig.tick(4)
+    rig.rest()
     read = rig.vendor.get_observations
 
     def fingers_read_off():
@@ -429,7 +474,7 @@ def test_failed_shutdown_parking_keeps_the_arm_powered(rig, caplog):
 
 
 def test_stop_during_a_move_answers_the_caller_and_parks(world, rig):
-    rig.tick(4)
+    rig.rest()
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
     wire_call(world, caller, rig.driver.sync_move)
     answer = caller(command.JointPosition(RAISED))
@@ -446,16 +491,17 @@ def test_invalid_idle_timeout_is_rejected(timeout):
         yam.Robot(park_after_idle_s=timeout)
 
 
-def test_starting_at_zero_still_measures_the_gap_after_commanding_the_target(rig):
+def test_parking_from_zero_still_measures_the_gap_after_commanding_the_target(rig):
+    rig.rest()
     rig.vendor.bias = np.array([0.0, 0.01, 0.025, 0.025, 0.0, 0.0])
-    rig.tick(12)
-    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
-    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
-    assert np.min(_asked(rig)) < 0.0
+    sent = len(rig.vendor.targets)
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert np.min(_asked(rig)[sent:]) < 0.0
 
 
 def test_ordinary_move_can_arrive_with_an_error_that_parking_closes(world, rig):
-    rig.tick(4)
+    rig.rest()
     rig.vendor.bias = np.array([0.0, 0.01, 0.0, 0.0, 0.0, 0.0])
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
     wire_call(world, caller, rig.driver.sync_move)
@@ -497,7 +543,7 @@ def test_a_blocking_move_opens_the_gripper_and_keeps_it_open(world, rig):
 
 def test_a_move_the_servo_holds_short_of_its_tolerance_settles_onto_its_target(world, rig):
     """The servo holds joint 3 short by 28.5 mrad, past the 20 mrad tolerance."""
-    rig.tick(4)
+    rig.rest()
     rig.vendor.bias = np.array([0.0, 0.0, -0.0285, 0.0, 0.0, 0.0])
     answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
     _until_answered(rig, answer)
@@ -508,7 +554,7 @@ def test_a_move_the_servo_holds_short_of_its_tolerance_settles_onto_its_target(w
 
 @pytest.mark.parametrize('distance', [0.5, 1.047, 2.0])
 def test_a_blocking_move_is_paced_by_the_distance_it_travels(world, rig, monkeypatch, distance):
-    rig.tick(4)
+    rig.rest()
     target = np.array([0.0, distance, distance, 0.0, 0.0, 0.0])
     commands = []
     send = rig.vendor.command_joint_pos
@@ -530,7 +576,7 @@ def test_a_blocking_move_is_paced_by_the_distance_it_travels(world, rig, monkeyp
 
 
 def test_a_blocking_move_never_corrects_past_a_joint_limit(world, rig):
-    rig.tick(4)
+    rig.rest()
     rig.vendor.bias = np.array([0.0, 0.03, 0.0, 0.0, 0.0, 0.0])
     near_the_stop = np.array([0.0, 0.01, 1.0, 0.0, 0.0, 0.0])
     sent = len(rig.vendor.targets)
@@ -542,7 +588,7 @@ def test_a_blocking_move_never_corrects_past_a_joint_limit(world, rig):
 
 
 def test_a_streamed_command_reaches_the_chain_unramped_and_uncorrected(rig):
-    rig.tick(4)
+    rig.rest()
     rig.vendor.bias = np.array([0.0, 0.0, -0.0285, 0.0, 0.0, 0.0])
     rig.commands.push(command.JointPosition(RAISED))
     rig.tick()
@@ -577,25 +623,24 @@ def test_parking_accepts_error_within_its_tolerance(rig):
 
 
 def test_parking_allows_more_time_than_an_ordinary_move(rig):
-    rig.vendor._pos[:6] = RAISED
+    rig.raise_arm()
     rig.vendor.stuck = True
+    rig.stop.stopped = True
     rig.tick(4)
     assert rig.states.emitted[-1][1].status == RobotStatus.BUSY
     rig.vendor.stuck = False
-    rig.tick(3)
-    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
-    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+    rig.finish(within_s=3)
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
 
 
 def test_parking_finishes_after_measured_arrival_and_stopping(rig):
-    rig.vendor._pos[:6] = RAISED
-    rig.tick(float(np.max(RAISED)) / DEFAULT_TUNING.max_speed_rad_s + 0.5)
-    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
-    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+    rig.raise_arm()
+    rig.finish(within_s=float(np.max(RAISED)) / DEFAULT_TUNING.max_speed_rad_s + 0.5)
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
 
 
 def test_a_move_that_cannot_reach_its_target_fails_within_its_bound(world, rig):
-    rig.tick(4)
+    rig.rest()
     rig.vendor.stuck = True
     answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
     tuning = yam.MOVE_SETTLE
@@ -608,7 +653,7 @@ def test_a_move_that_cannot_reach_its_target_fails_within_its_bound(world, rig):
 
 def test_world_exit_parks_a_foreground_yam_before_closing():
     vendor = FakeYam()
-    driver = yam.Robot(connect=lambda channel, sim: vendor)
+    driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: vendor)
     with pimm.World(virtual_time=True) as world:
         loop = world.start(driver)
         for _ in range(150):
@@ -620,7 +665,7 @@ def test_world_exit_parks_a_foreground_yam_before_closing():
 
 def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it():
     vendor = FakeYam()
-    driver = yam.Robot(connect=lambda channel, sim: vendor)
+    driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: vendor)
     read = vendor.get_observations
     armed = []
 
@@ -634,7 +679,7 @@ def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it():
     with pytest.raises(OSError, match='CAN read failed'):
         with pimm.World(virtual_time=True) as world:
             loop = world.start(driver)
-            for _ in range(1000):  # past the startup park, into the command loop
+            for _ in range(1000):  # past the start move, into the command loop
                 next(loop)
             vendor._pos[:6] = RAISED
             armed.append(True)
@@ -914,7 +959,7 @@ def test_commands_do_not_interrupt_shutdown_parking(world, rig):
 def test_unstarted_foreground_yam_does_not_connect_on_world_exit():
     connections = []
 
-    def connect(channel, sim):
+    def connect(channel, sim, gravity_comp_factor):
         vendor = FakeYam()
         connections.append(vendor)
         return vendor
@@ -1023,10 +1068,10 @@ def test_a_fault_that_prevents_a_verified_park_keeps_the_arm_powered(caplog, sit
 class SettledStateFails(RecordingEmitter):
     """Refuses every state that reports the arm settled; the reports while the arm moves still go out."""
 
-    def emit(self, data, ts=-1):
+    def _emit(self, data, time: pimm.Time):
         if data.status is not RobotStatus.BUSY:
             raise OSError('state transport closed')
-        super().emit(data, ts)
+        super()._emit(data, time)
 
 
 class FailsOnceStopped(RecordingEmitter):
@@ -1036,10 +1081,10 @@ class FailsOnceStopped(RecordingEmitter):
         super().__init__()
         self.stop = stop
 
-    def emit(self, data, ts=-1):
+    def _emit(self, data, time: pimm.Time):
         if self.stop.stopped:
             raise OSError('transport closed')
-        super().emit(data, ts)
+        super()._emit(data, time)
 
 
 def test_a_shutdown_with_every_publish_failing_still_parks_and_releases(caplog):
@@ -1061,3 +1106,150 @@ def test_a_verified_park_releases_even_when_its_report_fails(caplog):
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
     assert 'Publishing the arm state failed during shutdown' in caplog.text
+
+
+@pytest.fixture
+def chains(monkeypatch) -> dict[str, yam._FakeYam]:
+    """The fake chain each driver opens, keyed by its CAN channel."""
+    opened: dict[str, yam._FakeYam] = {}
+    monkeypatch.setattr(yam, 'get_yam_robot', lambda channel, **_: opened.setdefault(channel, yam._FakeYam()))
+    return opened
+
+
+def _run_until(loop: Iterator[pimm.Command], done: Callable[[], bool], steps: int = 20_000) -> None:
+    for _ in range(steps):
+        if done():
+            return
+        next(loop)
+    raise AssertionError('the world did not reach the state the test waits for')
+
+
+def _grip(rx: pimm.SignalReceiver[float]) -> float | None:
+    msg = rx.read()
+    return None if msg is None else msg.data
+
+
+def _a_trial_after_a_closed_trial(rig: Embodiment, prepare_args: dict, sides: list[str]) -> list[float | None]:
+    """Close each gripper as a policy does at the end of a trial, then ready the next trial with
+    ``prepare_args``. Returns the grip that each arm reads, in the order of ``sides``, once every prepare call
+    has an answer.
+
+    ``sides`` holds the suffix of each arm's ``grip`` and ``target_grip`` signals.
+    """
+    with pimm.World(virtual_time=True) as world:
+        close = {s: world.pair(rig.commands[f'{keys.TARGET_GRIP}{s}'].dest) for s in sides}
+        grips = {s: world.pair(rig.observations[f'{keys.GRIP}{s}'].source) for s in sides}
+        prepare = {name: world.pair(handler) for name, handler in rig.prepare_handlers.items()}
+        loop = world.start(list(rig.control_systems))
+
+        for emitter in close.values():
+            emitter.emit(CLOSED)
+        _run_until(loop, lambda: all((g := _grip(rx)) is not None and g > CLOSED - _GRIP_TOL for rx in grips.values()))
+
+        answers = [prepare[name](arg) for name, arg in prepare_args.items()]
+        _run_until(loop, lambda: all(a.done() for a in answers))
+        for answer in answers:
+            answer.result()
+        return [_grip(grips[s]) for s in sides]
+
+
+def test_a_bimanual_trial_starts_with_both_grippers_open_after_a_trial_that_closed_them(chains):
+    rig = yam_eval.bimanual.override(
+        embodiment=embodiment_cfg.yam_bimanual.override(cameras={}, video_encoder=video_encoder.libx264_veryfast)
+    ).instantiate()
+    (trial,) = rig.tasks()
+
+    grips = _a_trial_after_a_closed_trial(rig.embodiment, trial.prepare_args, [f'.{s}' for s in keys.BIMANUAL_ARMS])
+
+    assert all(g is not None and g < _GRIP_TOL for g in grips), grips
+    assert len(chains) == 2
+    for chain in chains.values():
+        assert chain.last_command is not None and chain.last_command[6] == pytest.approx(1.0)  # the chain's 1 is open
+
+
+def test_a_single_arm_trial_starts_with_the_gripper_open_after_a_trial_that_closed_it(chains):
+    rig = embodiment_cfg.yam.override(video_encoder=video_encoder.libx264_veryfast).instantiate()
+    start = {eval_keys.ARM: command.JointPosition(np.asarray(roboarm_cfg.YAM_NOMINAL_JOINTS)), eval_keys.GRIPPER: OPEN}
+
+    (grip,) = _a_trial_after_a_closed_trial(rig, start, [''])
+
+    assert grip is not None and grip < _GRIP_TOL, grip
+    (chain,) = chains.values()
+    assert chain.last_command is not None and chain.last_command[6] == pytest.approx(1.0)
+
+
+def _opened_with(**kwargs) -> dict:
+    """Start a ``Robot`` built with ``kwargs`` and return what it asked its vendor factory for."""
+    seen = {}
+
+    def connect(channel, sim, gravity_comp_factor):
+        seen.update(channel=channel, sim=sim, gravity_comp_factor=gravity_comp_factor)
+        return yam._FakeYam()
+
+    robot = yam.Robot('can0', connect=connect, **kwargs)
+    with pimm.World() as world:
+        loop = world.start([robot])
+        next(loop)  # the chain is opened before the driver yields for the first time
+    return seen
+
+
+def test_a_station_hands_its_gravity_compensation_to_the_chain():
+    """i2rt holds a joint against a gravity model of its own, and a joint that model reads short settles below
+    where it is sent. The factors a station measured are no use to it unless the driver passes them on."""
+    passed = _opened_with(gravity_comp_factor=STATION_GRAVITY_COMP)['gravity_comp_factor']
+    np.testing.assert_array_equal(passed, STATION_GRAVITY_COMP)
+
+
+def test_a_station_that_measured_none_leaves_the_vendor_its_own():
+    """Every YAM shares i2rt's factors until a station measures better ones; naming none has to mean that,
+    rather than a vector of ones that would turn the compensation off."""
+    assert _opened_with()['gravity_comp_factor'] is None
+
+
+def _gravity_by_channel(monkeypatch, rig) -> dict:
+    """Start a bimanual ``rig`` and return the gravity compensation each CAN channel asked i2rt for."""
+    factors = {}
+
+    def get_yam_robot(channel, gravity_comp_factor, **_):
+        factors[channel] = gravity_comp_factor
+        return yam._FakeYam()
+
+    monkeypatch.setattr(yam, 'get_yam_robot', get_yam_robot)
+    with pimm.World() as world:
+        loop = world.start(
+            list(rig.override(cameras={}, video_encoder=video_encoder.libx264_veryfast).instantiate().control_systems)
+        )
+        _run_until(loop, lambda: len(factors) == 2)
+    return factors
+
+
+def test_the_yambox_station_hands_its_gravity_compensation_to_both_chains(monkeypatch):
+    for passed in _gravity_by_channel(monkeypatch, embodiment_cfg.yam_bimanual_yambox).values():
+        np.testing.assert_array_equal(passed, STATION_GRAVITY_COMP)
+
+
+def test_each_bimanual_chain_gets_the_gravity_compensation_of_its_own_arm(monkeypatch):
+    left_channel, right_channel = 'can-left', 'can-right'
+    left, right = [1.0, 1.1, 1.4, 1.4, 1.0, 1.0], [1.0, 1.2, 1.3, 1.5, 1.0, 1.0]
+    rig = embodiment_cfg.yam_bimanual_yambox.override(
+        left_channel=left_channel,
+        right_channel=right_channel,
+        gravity_comp_factor={keys.LEFT_ARM: left, keys.RIGHT_ARM: right},
+    )
+    factors = _gravity_by_channel(monkeypatch, rig)
+    np.testing.assert_array_equal(factors[left_channel], left)
+    np.testing.assert_array_equal(factors[right_channel], right)
+
+
+def test_the_yam_package_hands_out_the_driver():
+    assert yam_package.Robot is yam.Robot
+
+
+def test_the_settle_tuning_imports_without_the_driver():
+    loaded = subprocess.run(
+        [sys.executable, '-c', 'import sys, positronic.drivers.roboarm.yam.settle; print(sorted(sys.modules))'],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert 'positronic.drivers.roboarm.yam.driver' not in loaded

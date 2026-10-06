@@ -32,7 +32,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
   --pipeline.ee_frame=None
 ```
 
-Check server: `curl http://localhost:8000/api/v1/models` returns the ID of the checkpoint it serves.
+Check server: `curl -X POST http://localhost:8000/api/v1/keepalive` answers once the model has loaded and warmed.
 
 **Run inference:**
 ```bash
@@ -82,8 +82,8 @@ Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`
 
 **The server declares data preparation.** Its client stack can contain
 `RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.
-`compress_images=True` on the deployment enables JPEG transport. The websocket wire adds no
-other compression: neither end accepts permessage-deflate. The model returns
+The client JPEG-encodes each frame unless the deployment sets `compress_images=False`. The
+websocket wire adds no other compression: neither end accepts permessage-deflate. The model returns
 full chunks; client scheduling emits commands immediately when they become due.
 
 **The handshake is recorded as the server sent it.** Every episode stores the server's handshake metadata under `inference.policy.server.*`. The client reads the declared stack and `compress_images` from it and records the rest without a check. A `prompt` field there is the server's own field, and positronic gives it no meaning. The instruction an episode sent is `task`.
@@ -103,13 +103,19 @@ The model sees measured hand state and camera images, then requests one bounded 
 
 ## Who Decides Episode Boundaries
 
-Something has to say when an episode starts and when it finishes. There are two answers, one command each:
+Something has to say when an episode starts and when it finishes.
 
-**Unattended — `positronic eval run`:** a driver walks the eval's tasks, `--eval.trial_count=10` episodes back-to-back. Each ends when its benchmark reports the task done, or when the task's timeout expires (`--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
+**Unattended — `positronic eval run`:** a driver walks the eval's tasks, `--eval.trial_count=10` episodes back-to-back. Each ends when its benchmark reports the task done, or when the task's timeout expires (`--eval.timeout=60`, seconds per episode). An episode that fails on a `pimm.SignalError` runs its task again, and two such failures of one task in a row end the run. Any other failed episode ends the run. Batch evaluation with nobody in the loop.
 
-**Keyboard — `positronic-inference real`:** press `s` to start an episode, `p` to stop and save, `q` to quit. Headless — it renders nothing — and it takes `--next_task`, `--embodiment`, `--policy` and `--output_dir`. `--next_task` names the config that makes each trial, one per press. The default draws a new start pose for every one of them. Set the goal with `--next_task.instruction="..."`. Manual evaluation and debugging on hardware.
+**Keyboard — `positronic-inference real`:** press `s` to start an episode, `p` to stop and save, `q` to quit. Headless — it renders nothing — and it takes `--next_task`, `--embodiment`, `--policy` and `--output_dir`. `--next_task` names the config that makes each trial, one per press. The default draws a new start pose for every one of them. Set the goal with `--next_task.instruction="..."`. An episode that fails is logged, and `s` starts the next one. Manual evaluation and debugging on hardware.
 
-Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the policy definition the episode runs and names where it records. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
+**Browser — `positronic-inference web`:** a page at `http://127.0.0.1:8080/` shows a live tile for each camera. Start opens an episode on the trial `--next_task` makes. Finish ends it with a pass or fail verdict. The instruction field shows the configured instruction. An edit becomes an override, which stays in force until Reset to configured, and the field locks while an episode runs. It takes the flags of `real`, plus `--host` and `--port` for the page. The page serves on localhost; reach it from another machine over an SSH tunnel. `--host=0.0.0.0` lets anyone who reaches the machine start an episode. An episode that fails, for example on a home move that stops short, records nothing. The page shows its error, and Start runs the next episode. End run on the page, or Ctrl-C, ends the run: each device runs its own shutdown, and the program exits. The page refuses End run while an episode is open. Each recorded episode stores the instruction it sent (`task`), whether that was an override (`eval.instruction_overridden`), its number in the run (`eval.trial_index`), and the verdict (`eval.success`).
+
+Anything richer — a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the policy definition the episode runs and names where it records. The answer carries the episode's terminal payload or the error that failed it, and the driver decides whether that error ends the run. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
+
+**A device that gives no data fails only its episode.** A device driver emits a `pimm.SignalError` on its observation signal while the device gives no data, for example after a camera drops off the USB bus. The harness reads that value before the policy does. It discards the episode, records nothing, and answers the ask with that `SignalError`. The harness does not run the task again. The driver decides what follows, as it does for any failed episode: `positronic eval run` runs the task once more. The device driver keeps the error until the harness asks the device to be ready. A device driver that stops emitting without a `SignalError` leaves the policy on the last value it sent.
+
+**Every device is ready before an episode starts.** Before each episode, the harness calls each handler in `Embodiment.ready_handlers` with no argument, then the prepare handlers that the task names. A healthy device answers at once. A device that holds an error repairs first and answers when it gives data again. A device that cannot repair answers with its error. That error fails the ask, and the harness keeps serving asks. The next ask calls the handler again.
 
 ## Recording and Replay
 

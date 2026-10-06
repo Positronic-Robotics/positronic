@@ -1,8 +1,9 @@
-"""The client side of the gRPC wire, and the call both ends of it agree on.
+"""The client side of the gRPC wire, and the calls both ends of it agree on.
 
 The stream is untyped bytes on both sides. There is no protobuf schema and no generated code.
 """
 
+import json
 import queue
 import threading
 import time
@@ -15,6 +16,9 @@ from positronic_wire import wire
 SERVICE = 'positronic.offboard.v1.Inference'
 METHOD = 'Session'
 METHOD_PATH = f'/{SERVICE}/{METHOD}'
+# The unary method beside the session that resets the server's idle timer. Both ends carry JSON on it.
+KEEPALIVE_METHOD = 'KeepAlive'
+KEEPALIVE_METHOD_PATH = f'/{SERVICE}/{KEEPALIVE_METHOD}'
 
 # A path no handler serves: a probe of it opens no session on a server that is up.
 PROBE_PATH = f'/{SERVICE}/ChannelProbe'
@@ -44,7 +48,7 @@ _UNUSABLE_EDGE_DETAILS = (
 )
 
 # Status details carrying an authoritative answer that the host has no address. A resolver that timed out
-# says something else, and stays cold: a name can start resolving, where a misspelt one never does.
+# says something else, which reads as no answer: a name can start resolving, where a misspelt one never does.
 _NO_SUCH_HOST_DETAILS = ('Domain name not found', 'DNS server returned answer with no data')
 
 # Status details naming a size limit: the metadata a session opens with, or a frame either end refuses.
@@ -52,20 +56,27 @@ _NO_SUCH_HOST_DETAILS = ('Domain name not found', 'DNS server returned answer wi
 # RESOURCE_EXHAUSTED too, says something else, and stays cold.
 _HARD_LIMIT_DETAILS = ('exceeds hard limit', 'message larger than max')
 
-_COLD_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.DEADLINE_EXCEEDED)
+# Status details gRPC writes where nothing answered: no address took the connection, or the name lookup timed
+# out. A server that answers ``UNAVAILABLE`` says something else.
+_NO_ANSWER_DETAILS = ('failed to connect to all addresses', 'Timeout while contacting DNS servers')
+
+_COLD_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.RESOURCE_EXHAUSTED)
 
 
 def _refusal(status: grpc.RpcError) -> wire.Refusal:
     """What a status that ended a call before it opened says about the server.
 
-    ``PERMISSION_DENIED`` reads as 403, ``UNAVAILABLE`` as 503, ``RESOURCE_EXHAUSTED`` as 429. Refusals that
-    no wait fixes wear a retryable code too — an unusable edge, a host with no address, a breached size
-    limit — and their details tell them from a cold backend.
+    ``PERMISSION_DENIED`` reads as 403, ``UNAVAILABLE`` as 503, ``RESOURCE_EXHAUSTED`` as 429, and
+    ``DEADLINE_EXCEEDED`` as no answer before the deadline. Refusals that no wait fixes wear a retryable code
+    too — an unusable edge, a host with no address, a breached size limit — and their details tell them from a
+    cold backend. So do the details of a connect nothing answered.
     """
     details = status.details() or ''
     if any(marker in details for marker in _UNUSABLE_EDGE_DETAILS + _NO_SUCH_HOST_DETAILS + _HARD_LIMIT_DETAILS):
         return wire.Refusal.FINAL
     code = status.code()
+    if code is grpc.StatusCode.DEADLINE_EXCEEDED or any(marker in details for marker in _NO_ANSWER_DETAILS):
+        return wire.Refusal.SILENT
     if code is grpc.StatusCode.PERMISSION_DENIED:
         return wire.Refusal.FORBIDDEN
     return wire.Refusal.COLD if code in _COLD_CODES else wire.Refusal.FINAL
@@ -227,13 +238,13 @@ def _ready_channel(channel: grpc.Channel, target: str, open_timeout: float) -> g
         channel.close()
         if refusal is None:
             message = f'gRPC channel to {target} is not ready within {open_timeout}s'
-            raise wire.ConnectRefused(wire.Refusal.COLD, message) from not_ready
+            raise wire.ConnectRefused(wire.Refusal.SILENT, message) from not_ready
         raise wire.ConnectRefused(_refusal(refusal), str(refusal)) from refusal
     return channel
 
 
 class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
-    """The client side of the gRPC wire, whose port carries sessions alone. The channel is plaintext."""
+    """The client side of the gRPC wire. Its port carries sessions and the keepalive call. The channel is plaintext."""
 
     NAME = 'grpc'
     ADDRESS = wire.HostPortAddress
@@ -255,6 +266,23 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         channel = _ready_channel(self.channel(dialled), dialled, open_timeout)
         metadata = _metadata(headers) + ((SESSION_PATH_HEADER, address.path), (SESSION_QUERY_HEADER, address.query))
         return GrpcClientConnection(channel, dialled, metadata)
+
+    def keepalive(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+        """Call ``KEEPALIVE_METHOD_PATH`` on its own channel. ``timeout`` bounds the whole call: the channel takes what
+        it needs, and the call takes the rest."""
+        dialled = target(address.host, address.port)
+        deadline = time.monotonic() + timeout
+        channel = _ready_channel(self.channel(dialled), dialled, timeout)
+        try:
+            unary = channel.unary_unary(KEEPALIVE_METHOD_PATH, request_serializer=None, response_deserializer=None)
+            answer = unary(b'', metadata=_metadata(headers), timeout=max(0.0, deadline - time.monotonic()))
+        except grpc.RpcError as e:
+            if e.code() is grpc.StatusCode.UNIMPLEMENTED:
+                raise wire.KeepaliveUnsupported(f'{dialled} serves sessions but not {KEEPALIVE_METHOD}') from e
+            raise wire.ConnectRefused(_refusal(e), f'{e} (calling {KEEPALIVE_METHOD} on {dialled})') from e
+        finally:
+            channel.close()
+        return json.loads(answer)[wire.ALIVE_SECONDS]
 
     def probe(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float

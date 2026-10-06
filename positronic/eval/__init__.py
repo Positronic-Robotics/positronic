@@ -59,6 +59,10 @@ class Embodiment:
     prepare_handlers: dict[str, pimm.calls.ControlSystemHandler[Any, None]]
     static_meta: dict[str, Any]
     meta_source: pimm.ControlSystemEmitter | None
+    # One handler per device that can hold an error. The harness calls every one with no argument before each
+    # episode, before ``prepare_handlers``. A device answers once it gives valid data, repairing itself first
+    # where it must, or answers with the error that it cannot clear.
+    ready_handlers: dict[str, pimm.calls.ControlSystemHandler[None, None]] = field(default_factory=dict)
     control_systems: tuple[pimm.ControlSystem, ...] = ()
     simulated: bool = False
     # How the recorder encodes the camera signals

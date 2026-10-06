@@ -18,10 +18,12 @@ from .core import (
     Run,
     ShutdownPolicy,
     SignalEmitter,
+    SignalError,
     SignalReceiver,
     Sleep,
     Yield,
 )
+from .time import Time
 from .utils import RateLimiter, map, read_updated, value_updated
 from .world import World
 
@@ -49,8 +51,10 @@ __all__ = [
     'shared_memory',
     'ShutdownPolicy',
     'SignalEmitter',
+    'SignalError',
     'SignalReceiver',
     'Sleep',
+    'Time',
     'value_updated',
     'World',
     'Yield',

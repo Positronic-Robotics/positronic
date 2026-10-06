@@ -38,7 +38,7 @@ jobs:
             exit 1
           fi
 
-  # `positronic` requires `positronic-platform-client` and `positronic-wire`, so each is on the
+  # `positronic` requires its workspace members, so each is on the
   # index before the release that depends on it. Each carries its own version and usually has not
   # moved, which is what `skip-existing` is for: republishing an unchanged member is a no-op, not a
   # failed release.
@@ -98,9 +98,65 @@ jobs:
           packages-dir: wire/dist
           skip-existing: true
 
+  publish-model-server-pypi:
+    runs-on: ubuntu-latest
+    needs: publish-wire-pypi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable uv (with cache)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        working-directory: model_server
+        run: |
+          rm -rf dist/
+          uvx --from build pyproject-build --sdist --wheel
+
+      - name: Twine check
+        run: uvx twine check model_server/dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: model_server/dist
+          skip-existing: true
+
+  publish-vocabulary-pypi:
+    runs-on: ubuntu-latest
+    needs: verify-release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable uv (with cache)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        working-directory: vocabulary
+        run: |
+          rm -rf dist/
+          uvx --from build pyproject-build --sdist --wheel
+
+      - name: Twine check
+        run: uvx twine check vocabulary/dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: vocabulary/dist
+          skip-existing: true
+
   publish-pypi:
     runs-on: ubuntu-latest
-    needs: [verify-release, publish-client-pypi, publish-wire-pypi]
+    needs: [verify-release, publish-client-pypi, publish-wire-pypi, publish-model-server-pypi, publish-vocabulary-pypi]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -163,3 +219,16 @@ jobs:
           unset CI
           VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
           make push IMAGE_TAG=v${VERSION}
+
+  # Each serving image holds its weights, so each builds on a runner of its own.
+  publish-serve-images:
+    needs: publish-pypi
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [pi05-droid, gr00t-n17-droid, molmoact2-droid]
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: ${{ matrix.name }}
+      release: true
+    secrets: inherit
