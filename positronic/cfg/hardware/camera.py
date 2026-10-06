@@ -67,6 +67,12 @@ zed_x_top = zed.override(serial_number=48953814)
 zed_x_one_left = zed.override(serial_number=309745677, mono=True)
 zed_x_one_right = zed.override(serial_number=303714482, mono=True)
 
+# YAM station (yambox): the same rig as brunello, with the cameras this station carries. Each wrist serial is
+# checked against its arm in recorded episodes: its video changes most on the frames where that arm moves alone.
+yambox_zed_x_top = zed.override(serial_number=47582904)
+yambox_zed_x_one_left = zed.override(serial_number=309151692, mono=True)
+yambox_zed_x_one_right = zed.override(serial_number=301008060, mono=True)
+
 
 @cfn.config()
 def luxonis(**kwargs):
