@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+import pimm
 from pimm.world import SystemClock
 from positronic.eval import Task
 from positronic.gui.station import Episode, Outcome, Phase, RunView, Station, terminal_payload
@@ -172,6 +173,40 @@ def test_a_camera_reads_live_with_its_rate_until_its_frames_stop():
     stale = feed.view(CAMERA, now=103.0)
     assert not stale.live and stale.fps == 0.0
     assert (stale.width, stale.height) == (640, 360)
+    feed.stream.close()
+
+
+class _Frame:
+    def __init__(self, array: np.ndarray):
+        self.array = array
+
+
+def _console_with_camera() -> tuple[StationConsole, ManualCommandReceiver, CameraFeed]:
+    console = StationConsole(_trial, policy='remote', host='127.0.0.1', port=0)
+    camera = ManualCommandReceiver()
+    console.cameras[CAMERA]._bind(camera)
+    return console, camera, CameraFeed()
+
+
+def test_a_camera_with_no_data_keeps_its_last_tile():
+    console, camera, feed = _console_with_camera()
+    camera.push(_Frame(_frame(1)))
+    console._push_frames({CAMERA: feed}, SystemClock())
+    camera.push(pimm.SignalError('camera lost'))
+    console._push_frames({CAMERA: feed}, SystemClock())
+
+    assert feed.view(CAMERA, now=0.0).width == 640
+    feed.stream.close()
+
+
+def test_a_camera_that_gives_data_again_updates_its_tile():
+    console, camera, feed = _console_with_camera()
+    camera.push(pimm.SignalError('camera lost'))
+    console._push_frames({CAMERA: feed}, SystemClock())
+    camera.push(_Frame(_frame(1)))
+    console._push_frames({CAMERA: feed}, SystemClock())
+
+    assert feed.view(CAMERA, now=0.0).width == 640
     feed.stream.close()
 
 

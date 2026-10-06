@@ -209,6 +209,25 @@ def test_records_what_the_inputs_hold_when_the_episode_opens(world):
     assert [(s, v) for (s, v, _) in w.appends] == [('a', 99), ('a', 7)]
 
 
+def test_an_input_that_carries_an_observation_error_records_nothing(world):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
+
+    script = [
+        (partial(emitters['a'].emit, pimm.SignalError('absent')), 0.001),  # on the channel when the episode opens
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
+        (partial(emitters['a'].emit, 7), 0.001),
+        (partial(emitters['a'].emit, pimm.SignalError('lost')), 0.001),
+        (partial(emitters['a'].emit, 8), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
+    ]
+
+    run_scripted_agent(agent, script, world=world)
+
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _) in w.appends] == [('a', 7), ('a', 8)]
+
+
 def test_records_producer_timeline(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)

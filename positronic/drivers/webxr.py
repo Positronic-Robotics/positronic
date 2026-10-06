@@ -140,6 +140,13 @@ class WebXR(pimm.ControlSystem):
         self.buttons = pimm.ControlSystemEmitter(self)
         self.sensitivity = sensitivity
 
+    def _next_frame(self, last_sent_time: pimm.Time | None) -> pimm.Message | None:
+        """The frame the video stream sends next. ``None`` while no new frame arrived or the camera is lost."""
+        msg = self.frame.read()
+        if msg is None or isinstance(msg.data, pimm.SignalError) or msg.time == last_sent_time:
+            return None
+        return msg
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         app = FastAPI()
         jpeg_encoder = turbojpeg.TurboJPEG()
@@ -183,12 +190,8 @@ class WebXR(pimm.ControlSystem):
                 while not should_stop.value:
                     await asyncio.sleep(1 / 60)
 
-                    msg = self.frame.read()
-
+                    msg = self._next_frame(last_sent_time)
                     if msg is None:
-                        continue
-
-                    if last_sent_time is not None and last_sent_time == msg.time:
                         continue
                     last_sent_time = msg.time
                     base64_frame = encode_frame(msg.data)
