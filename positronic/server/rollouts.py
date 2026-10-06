@@ -12,10 +12,6 @@ from eval_vocabulary.progress import LADDER, STAGE_LABELS, highest_stage
 
 from positronic.server.positronic_server import RendererConfig
 
-# What a word this release has no colour for draws as. The vocabulary is append-only and floats,
-# so an install can hold a word added after this module was written.
-NEUTRAL = 'default'
-
 # The badge colour each verdict carries. `app.js` accepts these four names and nothing else.
 OUTCOME_VARIANT: dict[Outcome, str] = {
     Outcome.SUCCESS: 'success',
@@ -36,15 +32,11 @@ def outcome_label(outcome: Outcome) -> str:
     return LABEL_OVERRIDES.get(outcome, outcome.value)
 
 
-def outcome_variant(outcome: Outcome) -> str:
-    return OUTCOME_VARIANT.get(outcome, NEUTRAL)
-
-
 # A word this vocabulary does not carry is not listed, and `app.js` then draws it as itself on a
 # neutral badge — a recording from a console one word ahead still reads.
 OUTCOME_BADGE = RendererConfig(
     type='badge',
-    options={outcome: {'label': outcome_label(outcome), 'variant': outcome_variant(outcome)} for outcome in Outcome},
+    options={outcome: {'label': outcome_label(outcome), 'variant': OUTCOME_VARIANT[outcome]} for outcome in Outcome},
 )
 
 

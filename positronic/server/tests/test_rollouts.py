@@ -11,18 +11,8 @@ from positronic.server.positronic_server import ASSET_ROUTE, _pkg_path
 
 
 def test_every_word_this_release_knows_has_a_colour_chosen_for_it():
-    """The fallback below keeps a newer vocabulary rendering, and would also swallow a word added
-    here with no colour picked for it. This catches that."""
     assert set(rollouts.OUTCOME_VARIANT) == set(Outcome)
     assert set(rollouts.OUTCOME_BADGE.options) == set(Outcome)
-
-
-def test_a_word_added_after_this_release_draws_neutral(monkeypatch):
-    """The vocabulary floats and is append-only, so an install can hold a word this module has no
-    colour for — the state this makes, by taking one away. Reading it must not raise at import."""
-    monkeypatch.delitem(rollouts.OUTCOME_VARIANT, Outcome.DISCARDED)
-
-    assert rollouts.outcome_variant(Outcome.DISCARDED) == rollouts.NEUTRAL
 
 
 def _variants_app_js_accepts() -> set[str]:
