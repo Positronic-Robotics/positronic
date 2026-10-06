@@ -1,4 +1,5 @@
 import importlib
+import logging
 import os
 import sys
 from contextlib import contextmanager
@@ -9,6 +10,7 @@ from typing import cast
 
 import pos3
 import pytest
+from platform_client.evals import MOLMO_EPISODE_INDEX_KEY, PUBLIC_EVALS, EvalRef, public_eval
 
 import pimm
 from positronic import telemetry, telemetry_keys
@@ -20,6 +22,7 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyRun, Runtime, Step
 from positronic.policy.harness import Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
+from positronic.simulator.molmo_spaces import keys as molmo_keys
 
 
 def _eval(simulated: bool) -> Eval:
@@ -143,6 +146,61 @@ def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, s
     run_command(run_module.run, eval=eval_cfg, policy='a policy', **states)
 
     assert [task.charge_inference_time for task in seen] == [charged, charged]
+
+
+SMOKE = 'molmo.franka_pick_mini_smoke'
+
+
+def test_a_local_run_of_a_public_eval_runs_the_config_its_definition_names(run_command, monkeypatch):
+    seen: list[Eval] = []
+    monkeypatch.setattr(run_module, 'main', lambda policy, evals, output_dir, timing: seen.extend(evals))
+
+    run_command(run_module.run, eval=SMOKE, policy='a policy')
+
+    assert [ev.embodiment.descriptor for ev in seen] == ['remote.molmo_spaces.droid']
+
+
+@pytest.mark.parametrize('name', PUBLIC_EVALS)
+def test_a_public_eval_binds_its_arguments_on_the_installed_positronic(name: str):
+    definition = public_eval(EvalRef(name))
+
+    config = run_module._public_eval_config(name)
+
+    assert config.kwargs['eval'].kwargs.items() >= definition.args.items()
+    assert isinstance(config.instantiate(), Eval)
+
+
+def test_the_molmo_trial_key_of_a_public_eval_is_the_one_molmo_spaces_reads():
+    assert MOLMO_EPISODE_INDEX_KEY == molmo_keys.EPISODE_INDEX
+
+
+@pytest.mark.parametrize('name', ['molmo.held_out', ''])
+def test_a_local_run_refuses_a_name_the_public_code_does_not_define(run_command, name: str):
+    with pytest.raises(SystemExit, match=f'--eval={name!r}: .*--policy-image runs an eval on the platform'):
+        run_command(run_module.run, eval=name, policy='a policy')
+
+
+PINNED = public_eval(EvalRef(SMOKE)).positronic_revision
+
+
+@pytest.mark.parametrize(
+    'installed, warns',
+    [
+        ({'commit': PINNED, 'dirty': False}, False),
+        ({'commit': PINNED, 'dirty': True}, True),
+        ({'commit': '0' * 40, 'dirty': False}, True),
+        (None, True),
+    ],
+)
+def test_a_public_eval_warns_unless_the_installed_positronic_is_the_platforms(
+    monkeypatch, caplog, installed: dict | None, warns: bool
+):
+    monkeypatch.setattr(run_module, 'get_package_git_state', lambda: installed)
+
+    with caplog.at_level(logging.WARNING, logger=run_module.logger.name):
+        run_module._public_eval_config(SMOKE)
+
+    assert (PINNED in caplog.text) is warns
 
 
 def test_a_spec_carries_only_what_the_eval_binds():
