@@ -94,6 +94,9 @@ class Harness(pimm.ControlSystem):
     Each ``perform_task`` call runs one ``Rollout`` until its deadline or a truthy ``done`` signal.
     Its answer carries the terminal payload, or the error that failed the episode. The caller decides
     whether that error ends the run. Between episodes, manual commands pass through.
+    Before each episode the harness asks every device to be ready, then prepares what the task names. A device
+    that answers ready with an error fails the episode before it starts. A ``pimm.SignalError`` on an
+    observation fails the episode before the policy reads that value.
     """
 
     def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
@@ -104,6 +107,7 @@ class Harness(pimm.ControlSystem):
 
         self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
         self.commands = pimm.EmitterDict(self, names=embodiment.commands)
+        self.ready = pimm.calls.CallerDict[None, None](self, names=embodiment.ready_handlers)
         self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
 
         self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict[str, Any]](self)
@@ -117,17 +121,24 @@ class Harness(pimm.ControlSystem):
         """Yield one simulator tick, or sleep for ``delay_sec`` on a real rig."""
         return pimm.Yield() if self._embodiment.simulated else pimm.Sleep(delay_sec)
 
-    def _ready(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> pimm.Run[None]:
+    def _wait(self, should_stop: pimm.SignalReceiver, answer: pimm.calls.Answer[Any]) -> pimm.Run[None]:
+        """Wait until ``answer`` is done or the world stops. Raise the error ``answer`` carries."""
+        while not answer.done() and not should_stop.value:
+            yield self._yield()
+        if answer.done():
+            answer.result()
+
+    def _ready_devices(self, should_stop: pimm.SignalReceiver) -> pimm.Run[None]:
+        """Ask every device to be ready and wait for the answers. Raise the first error that a device answers."""
+        yield from self._wait(should_stop, pimm.calls.all_of([ready(None) for ready in self.ready.values()]))
+
+    def _prepare(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> pimm.Run[None]:
         """Prepare only the named devices and wait for them. Empty args leave every device as it is."""
         unknown = sorted(set(args) - set(self.prepare))
         if unknown:
             rig = self._embodiment.descriptor or 'this rig'
             raise ValueError(f'{unknown} is not something {rig} readies; it readies {sorted(self.prepare)}')
-        ready = pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()])
-        while not ready.done() and not should_stop.value:
-            yield self._yield()
-        if ready.done():
-            ready.result()
+        yield from self._wait(should_stop, pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()]))
 
     def _statics(self) -> dict[str, Any]:
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
@@ -150,7 +161,8 @@ class Harness(pimm.ControlSystem):
         """Read sensors, reusing each signal's serialized fields until a new message arrives.
 
         Copy updated arrays because devices may reuse their buffers while inference still reads them.
-        Return ``None`` if a required signal has no message. Conversion errors propagate.
+        Return ``None`` if a required signal has no message. Raise the ``pimm.SignalError`` a signal carries.
+        Conversion errors propagate.
         Put each signal's read and conversion durations into ``step_ms``.
         """
         inputs: dict[str, Any] = {}
@@ -162,6 +174,9 @@ class Harness(pimm.ControlSystem):
             step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (convert_started_ns - read_started_ns) / 1e6
             if message is None:
                 return None
+            if isinstance(message.data, pimm.SignalError):
+                # A signal returns one instance on many reads, and each raise adds to its traceback. So start a new one.
+                raise message.data.with_traceback(None)
             if message.updated or name not in self._obs_by_signal:
                 value = message.data
                 if obs.serializer is not None:
@@ -251,7 +266,7 @@ class Harness(pimm.ControlSystem):
         task = rollout.task
         self._telemetry.begin(task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
-            yield from self._ready(should_stop, task.prepare_args)
+            yield from self._prepare(should_stop, task.prepare_args)
         if should_stop.value:
             return None
 
@@ -317,7 +332,7 @@ class Harness(pimm.ControlSystem):
             back_args = {k: v for k, v in task.prepare_args.items() if k != eval_keys.SCENE}
             # rules-allow: swallowed-error — the move back is cleanup, and the recording is already complete.
             try:
-                yield from self._ready(should_stop, back_args)
+                yield from self._prepare(should_stop, back_args)
             except Exception as exc:
                 logging.error(f'The rig failed to go back after the episode: {exc}')
         return payload
@@ -335,6 +350,7 @@ class Harness(pimm.ControlSystem):
                     failure: BaseException = pimm.calls.HandlerStopped()
                     # rules-allow: swallowed-error — the answer carries the error; the caller decides if the run ends
                     try:
+                        yield from self._ready_devices(should_stop)
                         payload = yield from self._run_episode(clock, should_stop, call.request)
                     except Exception as exc:
                         failure = exc

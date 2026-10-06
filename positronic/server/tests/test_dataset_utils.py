@@ -369,6 +369,25 @@ def test_a_layout_puts_the_3d_view_left_of_the_cameras_at_its_shares_over_the_ch
     assert list(root.row_shares) == [3, 1]
     assert [type(view) for view in top.contents] == [rrb.Spatial3DView, rrb.Grid]
     assert list(top.column_shares) == [1, 3]
+    assert [type(view) for view in top.contents[1].contents] == [rrb.Spatial2DView]
+    assert isinstance(bottom, rrb.Horizontal)
+
+
+def test_a_layout_with_the_3d_view_in_the_camera_grid_puts_it_after_the_cameras(tmp_path):
+    ep = _episode(tmp_path / 'ep', {keys.EE_POSE: 7, keys.GRIP: 1}, {eval_keys.POSE_SIGNALS: [keys.EE_POSE]})
+    cameras = {'left': 16 / 9, 'right': 16 / 9}
+    signals = replace(_collect_signal_groups(ep), videos=list(cameras), camera_aspects=cameras)
+
+    root = _root(signals, ep, replace(_layout(_GRIP), trajectory_in_camera_grid=True))
+
+    top, bottom = root.contents
+    assert list(root.row_shares) == [3, 1]
+    assert isinstance(top, rrb.Grid)
+    assert [(type(view), view.name) for view in top.contents] == [
+        (rrb.Spatial2DView, 'left'),
+        (rrb.Spatial2DView, 'right'),
+        (rrb.Spatial3DView, '3D Trajectory'),
+    ]
     assert isinstance(bottom, rrb.Horizontal)
 
 

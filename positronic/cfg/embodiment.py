@@ -34,6 +34,7 @@ def droid(robot_arm, gripper, cameras):
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: gripper.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
+        ready_handlers={eval_keys.ARM: robot_arm.ready},
         control_systems=(*cameras.values(), robot_arm, gripper),
         simulated=False,
     )

@@ -1,10 +1,10 @@
 import logging
 import time
 from collections.abc import Callable
-from typing import Generic, TypeVar, overload
+from typing import Generic, TypeVar, cast, overload
 
-from pimm import Message, SignalEmitter, SignalReceiver
-from pimm.core import Clock, Command, Sleep, Yield
+from pimm import Message, SignalEmitter, SignalError, SignalReceiver
+from pimm.core import Clock, Command, Sleep, Yield, _message_value
 from pimm.time import Time
 
 logger = logging.getLogger(__name__)
@@ -24,12 +24,12 @@ def read_updated(receiver: SignalReceiver[T]) -> Message[T] | None:
 
 
 def value_updated(receiver: SignalReceiver[T]) -> T | None:
-    """The receiver's value if it was delivered since the last read, else None.
+    """The receiver's value if it was delivered since the last read, else None. Raises a delivered ``SignalError``.
 
     A delivered ``None`` reads as nothing delivered; ``read_updated`` tells the two apart.
     """
     msg = read_updated(receiver)
-    return msg.data if msg is not None else None
+    return _message_value(msg) if msg is not None else None
 
 
 class MapSignalReceiver(SignalReceiver[U], Generic[T, U]):
@@ -37,7 +37,8 @@ class MapSignalReceiver(SignalReceiver[U], Generic[T, U]):
 
     The wrapped receiver produces ``T``; ``func`` maps it to ``U`` and this
     receiver reads ``U`` out. If func returns None, the value is filtered out
-    and the receiver behaves like it didn't see the filtered message.
+    and the receiver behaves like it didn't see the filtered message. A ``SignalError`` passes through, and ``func``
+    does not get it.
     """
 
     def __init__(self, receiver: SignalReceiver[T], func: Callable[[T], U | None]):
@@ -51,7 +52,9 @@ class MapSignalReceiver(SignalReceiver[U], Generic[T, U]):
         if orig_message is None:
             return None
 
-        transformed_data = self.func(orig_message.data)
+        data = orig_message.data
+        # The Message types do not name the SignalError that any message can carry.
+        transformed_data = cast(U, data) if isinstance(data, SignalError) else self.func(data)
         if transformed_data is None:
             if self.last_message is None:
                 return None
@@ -71,7 +74,7 @@ class MapSignalEmitter(SignalEmitter[T], Generic[T, U]):
     The caller emits ``T``; ``func`` maps it to ``U`` and this emitter forwards
     ``U`` to the wrapped emitter. If func returns None, the value is filtered
     out and nothing is emitted. This enables conditional filtering at the
-    emission point.
+    emission point. A ``SignalError`` passes through, and ``func`` does not get it.
     """
 
     def __init__(self, emitter: SignalEmitter[U], func: Callable[[T], U | None]):
@@ -83,7 +86,7 @@ class MapSignalEmitter(SignalEmitter[T], Generic[T, U]):
         return self.emitter._emission_clock
 
     def _emit(self, data: T, time: Time):
-        transformed_data = self.func(data)
+        transformed_data = cast(U, data) if isinstance(data, SignalError) else self.func(data)
         if transformed_data is not None:
             self.emitter._emit(transformed_data, time)
 
@@ -118,7 +121,7 @@ def map(func: Callable[[T], U | None]) -> SignalMapWrapper[T, U]:
 
     Returns a wrapper that applies func to all values. If func returns None,
     the value is filtered: receivers return the last valid message, emitters
-    skip emission entirely.
+    skip emission entirely. A ``SignalError`` passes through, and func does not get it.
 
     Args:
         func: Callable that maps a value of type T to U, or returns None to filter.
