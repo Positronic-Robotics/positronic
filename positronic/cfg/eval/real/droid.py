@@ -6,17 +6,21 @@ import configuronic as cfn
 
 from positronic.cfg.embodiment import droid
 from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
-from positronic.cfg.hardware.roboarm import droid_start_pose
+from positronic.cfg.hardware.roboarm import FRANKA_JOINTS_SPREAD, FRANKA_NOMINAL_JOINTS
+from positronic.drivers.roboarm import command
 from positronic.eval import Eval, Task
 from positronic.eval import keys as eval_keys
 
 
 def _droid_trial(instruction: str, timeout: float | None, meta: dict[str, Any] | None = None) -> Task:
     """One droid trial. A person fills the tote before the trial, so the trial asks for no scene."""
+    # The arm's own controller homes it. DROID's impedance gains run the home in the software torque loop, and a
+    # home after a policy episode then stops on the power limit reflex.
+    start_pose = command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD)
     return Task(
         instruction_source=instruction,
         timeout_sec=timeout,
-        prepare_args={eval_keys.ARM: droid_start_pose(), eval_keys.GRIPPER: 0.0},
+        prepare_args={eval_keys.ARM: start_pose, eval_keys.GRIPPER: 0.0},
         meta=meta or {},
     )
 

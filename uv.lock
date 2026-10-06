@@ -70,6 +70,7 @@ positronic-franka = false
 [manifest]
 members = [
     "positronic",
+    "positronic-eval-vocabulary",
     "positronic-model-server",
     "positronic-platform-client",
     "positronic-wire",
@@ -5170,6 +5171,7 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "plotly" },
     { name = "pos3" },
+    { name = "positronic-eval-vocabulary" },
     { name = "positronic-model-server" },
     { name = "positronic-platform-client" },
     { name = "positronic-wire", extra = ["grpc", "websocket"] },
@@ -5314,6 +5316,7 @@ requires-dist = [
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-anthropic'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-google'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
+    { name = "positronic-eval-vocabulary", editable = "vocabulary" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
     { name = "positronic-model-server", editable = "model_server" },
     { name = "positronic-platform-client", editable = "client" },
@@ -5372,6 +5375,11 @@ dev = [
     { name = "rerun-sdk", extras = ["notebook"] },
     { name = "ruff" },
 ]
+
+[[package]]
+name = "positronic-eval-vocabulary"
+version = "0.1.0"
+source = { editable = "vocabulary" }
 
 [[package]]
 name = "positronic-franka"

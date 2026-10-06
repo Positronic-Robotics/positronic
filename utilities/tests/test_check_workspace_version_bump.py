@@ -6,7 +6,7 @@ import pytest
 
 from utilities import check_workspace_version_bump as gate
 
-CLIENT, WIRE, MODEL_SERVER = gate.MEMBERS
+CLIENT, WIRE, MODEL_SERVER, VOCABULARY = gate.MEMBERS
 
 
 def test_a_later_version_is_later():

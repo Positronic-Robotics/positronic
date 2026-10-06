@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libnss-myhostna
 ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
     OPENPI_DATA_HOME=/opt/positronic/openpi-data \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/openpi
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary:/openpi
 
 # The server starts openpi's own `serve_policy.py` through `uv run --project /openpi`, which reads
 # the environment the base resolved openpi into, /.venv. Left to its default, uv builds a second
@@ -50,6 +50,7 @@ COPY pyproject.toml uv.lock ./
 COPY client/pyproject.toml client/
 COPY wire/pyproject.toml wire/
 COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
 RUN uv sync --locked --python 3.13 --extra openpi --no-dev --no-install-workspace && uv cache clean
 
 # The workspace installs from its manifests and package stubs, which records each package's metadata.
@@ -58,11 +59,13 @@ COPY README.md LICENSE ./
 COPY client/README.md client/
 COPY wire/README.md wire/
 COPY model_server/README.md model_server/
+COPY vocabulary/README.md vocabulary/
 COPY positronic/__init__.py positronic/
 COPY pimm/__init__.py pimm/
 COPY client/platform_client/py.typed client/platform_client/
 COPY wire/positronic_wire/py.typed wire/positronic_wire/
 COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
+COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
 RUN uv sync --locked --python 3.13 --extra openpi --no-dev && uv cache clean
 
 COPY --link . /positronic

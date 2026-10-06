@@ -81,7 +81,7 @@ jobs:
       - name: Install as package and verify imports
         run: |
           uv venv --python ${{ matrix.python }} /tmp/pkg-test
-          uv pip install --python /tmp/pkg-test ./client ./wire ./model_server . jinja2
+          uv pip install --python /tmp/pkg-test ./client ./wire ./model_server ./vocabulary . jinja2
           /tmp/pkg-test/bin/python utilities/check_packaging.py
 
   model-server-packaging:
