@@ -55,6 +55,8 @@ class Episode(BaseModel):
     # Both stay ``None`` while the episode is open.
     ended_at: float | None = None
     outcome: Outcome | None = None
+    # The error that failed an ``ERROR`` episode, as the last line of its traceback.
+    error: str | None = None
 
 
 class RunView(BaseModel):
@@ -141,11 +143,11 @@ class Station:
             self._generation += 1
             return terminal_payload(verdict)
 
-    def close(self, outcome: Outcome, now: float) -> None:
+    def close(self, outcome: Outcome, now: float, error: str | None = None) -> None:
         """Record how the open episode ended."""
         with self._lock:
             episode = self._episodes[-1]
-            episode.ended_at, episode.outcome = now, outcome
+            episode.ended_at, episode.outcome, episode.error = now, outcome, error
             self._ending = False
             self._generation += 1
 

@@ -90,6 +90,16 @@ def test_the_phase_follows_start_verdict_and_answer():
     assert (view.episodes[0].started_at, view.episodes[0].ended_at) == (1.0, 2.5)
 
 
+def test_a_failed_episode_keeps_its_error_and_the_next_start_opens_the_next_episode():
+    station = Station(_trials())
+    station.start(now=1.0)
+    station.close(Outcome.ERROR, now=2.0, error='RuntimeError: the arm stopped short of its target')
+    view = station.view(now=3.0)
+    assert view.phase is Phase.READY
+    assert view.episodes[0].error == 'RuntimeError: the arm stopped short of its target'
+    assert station.start(now=4.0).meta[eval_keys.TRIAL_INDEX] == 1
+
+
 def test_one_episode_runs_at_a_time_and_takes_one_verdict():
     station = Station(_trials())
     with pytest.raises(Refused):

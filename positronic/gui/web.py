@@ -7,6 +7,7 @@ import asyncio
 import logging
 import queue
 import threading
+import traceback
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -175,11 +176,11 @@ class StationConsole(pimm.ControlSystem):
         if self._episode is None or not self._episode.done():
             return
         episode, self._episode = self._episode, None
-        try:  # rules-allow: swallowed-error — the page shows the episode as an error, and the log says why
+        try:  # rules-allow: swallowed-error — the page shows the error, and the operator decides whether to retry
             result = episode.result()
-        except Exception:
+        except Exception as exc:
             logger.exception('Episode failed')
-            station.close(Outcome.ERROR, clock.now())
+            station.close(Outcome.ERROR, clock.now(), error=''.join(traceback.format_exception_only(exc)).strip())
         else:
             station.close(outcome_of(result), clock.now())
 

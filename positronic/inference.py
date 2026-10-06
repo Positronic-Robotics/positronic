@@ -39,8 +39,8 @@ class KeyboardOperator(KeyboardControl):
     ``q`` ends the run.
 
     One episode is in flight at a time: a press while one runs is declined here, with a warning. It holds
-    the pending answer because that is where the episode's terminal — or a refused ask — arrives, and it
-    logs that as it lands. ``next_task`` makes the trial and the policy opens its session, once per accepted
+    the pending answer because that is where the episode's terminal, its error or a refused ask arrives, and
+    it logs that as it lands. ``next_task`` makes the trial and the policy opens its session, once per accepted
     press. Every episode records into ``output_path``, and none records when that is ``None``.
     """
 

@@ -87,7 +87,7 @@ class TaskDriver(pimm.ControlSystem):
                 if should_stop.value:
                     return
                 yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
-            answer.result()  # raises if the episode failed
+            answer.result()  # a failed episode raises here, and that ends the run
         # Let the recorder commit the final episode before this return brings the world down.
         yield pimm.Sleep(0.5)
 

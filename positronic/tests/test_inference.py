@@ -55,11 +55,16 @@ class _IdlePolicy(Policy):
             self.closed = True
 
 
-class _ReadyDevices(pimm.ControlSystem):
-    """The arm and fingers of a rig that reaches wherever it is asked to go ``move_s`` after it is asked."""
+ARM_STOPPED_SHORT = 'the arm stopped short of its target'
 
-    def __init__(self, move_s: float = 0.0):
+
+class _ReadyDevices(pimm.ControlSystem):
+    """The arm and fingers of a rig that reaches wherever it is asked to go ``move_s`` after it is asked. The arm's
+    first ``arm_failures`` moves stop short."""
+
+    def __init__(self, move_s: float = 0.0, arm_failures: int = 0):
         self._move_s = move_s
+        self._arm_failures = arm_failures
         self.arm = pimm.calls.ControlSystemHandler[Any, None](self)
         self.gripper = pimm.calls.ControlSystemHandler[Any, None](self)
 
@@ -67,16 +72,21 @@ class _ReadyDevices(pimm.ControlSystem):
         moving: list[tuple[pimm.calls.Call[Any, None], float]] = []
         while not should_stop.value:
             now = clock.now()
-            for handler in (self.arm, self.gripper):
-                moving.extend((call, now + self._move_s) for call in handler.incoming())
+            for call in self.arm.incoming():
+                if self._arm_failures > 0:
+                    self._arm_failures -= 1
+                    call.set_exception(RuntimeError(ARM_STOPPED_SHORT))
+                else:
+                    moving.append((call, now + self._move_s))
+            moving.extend((call, now + self._move_s) for call in self.gripper.incoming())
             for call, _ in [(call, at) for call, at in moving if at <= now]:
                 call.set_result(None)
             moving = [(call, at) for call, at in moving if at > now]
             yield pimm.Sleep(0.01)
 
 
-def _embodiment(simulated: bool = False, move_s: float = 0.0) -> Embodiment:
-    devices = _ReadyDevices(move_s)
+def _embodiment(simulated: bool = False, move_s: float = 0.0, arm_failures: int = 0) -> Embodiment:
+    devices = _ReadyDevices(move_s, arm_failures)
     return Embodiment(
         descriptor='stub',
         observations={},
@@ -442,14 +452,15 @@ def _wait(condition: Callable[[], Any], clock: pimm.Clock, seconds: float = 5.0)
 
 
 def _run_attended(
-    marks: Path, script: Callable[[str, pimm.Clock], Iterator[pimm.Command]], move_s: float = 0.0
+    marks: Path, script: Callable[[str, pimm.Clock], Iterator[pimm.Command]], move_s: float = 0.0, arm_failures: int = 0
 ) -> None:
     """The world ``web`` composes, with the station console in a process of its own and ``script`` pressing the
-    page's buttons from beside the harness. The rig takes ``move_s`` for each move."""
+    page's buttons from beside the harness. The rig takes ``move_s`` for each move, and its arm's first
+    ``arm_failures`` moves stop short."""
     port = _free_port()
     console = StationConsole(_trial('pick up the cube'), policy='stub', host='127.0.0.1', port=port)
     forwarder = TrialForwarder(partial(Rollout, policy=_MarkingPolicy(marks), output_path=None))
-    embodiment = _embodiment(move_s=move_s)
+    embodiment = _embodiment(move_s=move_s, arm_failures=arm_failures)
     harness = Harness(embodiment)
     operator = _PageOperator(partial(script, f'http://127.0.0.1:{port}'))
     with pimm.World() as world:
@@ -543,3 +554,34 @@ def test_a_verdict_does_not_end_the_next_trial_after_a_slow_move_back(tmp_path):
     [status] = statuses
     assert status is not None
     assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
+
+
+@pytest.mark.timeout(120.0)
+def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_path):
+    presses: list[int] = []
+    statuses: list[Status | None] = []
+
+    def ended(base: str) -> bool:
+        status = _status(base)
+        return status is not None and bool(status.run.episodes) and status.run.episodes[-1].outcome is not None
+
+    def script(base: str, clock: pimm.Clock):
+        yield from _wait(lambda: _status(base) is not None, clock, seconds=60.0)
+        presses.append(_post(base, '/episode/start'))
+        yield from _wait(lambda: ended(base), clock)
+        statuses.append(_status(base))
+        presses.append(_post(base, '/episode/start'))
+        yield from _wait((tmp_path / 'episode-1').exists, clock)
+        presses.append(_post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
+        yield from _wait(lambda: _phase(base) is Phase.READY, clock)
+        statuses.append(_status(base))
+
+    _run_attended(tmp_path, script, arm_failures=1)
+
+    assert presses == [200, 200, 200]
+    failed, retried = statuses
+    assert failed is not None and retried is not None
+    assert failed.run.phase is Phase.READY
+    [episode] = failed.run.episodes
+    assert (episode.outcome, episode.error) == (Outcome.ERROR, f'RuntimeError: {ARM_STOPPED_SHORT}')
+    assert [episode.outcome for episode in retried.run.episodes] == [Outcome.ERROR, Outcome.PASS]

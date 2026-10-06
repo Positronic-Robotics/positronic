@@ -56,6 +56,40 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
     main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, ()))])
 
 
+class _ArmThatStopsShort(pimm.ControlSystem):
+    """An arm whose every move stops short. It counts the moves it is asked for."""
+
+    def __init__(self):
+        self.move = pimm.calls.ControlSystemHandler[object, None](self)
+        self.asked = 0
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            for call in self.move.incoming():
+                self.asked += 1
+                call.set_exception(RuntimeError('the arm stopped short of its target'))
+            yield pimm.Sleep(0.01)
+
+
+@pytest.mark.timeout(30.0)
+def test_a_home_that_stops_short_ends_an_unattended_run():
+    arm = _ArmThatStopsShort()
+    embodiment = Embodiment(
+        descriptor='stub',
+        observations={},
+        commands={},
+        prepare_handlers={eval_keys.ARM: arm.move},
+        static_meta={},
+        meta_source=None,
+        control_systems=(arm,),
+        simulated=True,
+    )
+    tasks = [Task(instruction_source='stack', timeout_sec=0.05, prepare_args={eval_keys.ARM: 'home'})] * 2
+    with pytest.raises(RuntimeError, match='stopped short'):
+        main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, tasks))])
+    assert arm.asked == 1
+
+
 class _EpisodeStub(pimm.ControlSystem):
     """Stands in for the harness: records the task it was asked for, and answers a round later."""
 

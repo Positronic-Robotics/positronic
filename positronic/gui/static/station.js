@@ -39,6 +39,7 @@ function readStatus(answer) {
       startedAt: e.started_at,
       endedAt: e.ended_at,
       outcome: e.outcome,
+      error: e.error,
     })),
     cameras: answer.cameras.map((c) => ({
       name: c.name,
@@ -189,6 +190,7 @@ function render(status) {
   renderStatusRow(status);
   renderInstruction(status);
   renderButtons();
+  renderFailure(status);
   renderEpisodes(status);
 }
 
@@ -255,6 +257,15 @@ function renderButtons() {
   for (const [button] of verdictButtons) button.disabled = !(idle && phase === PHASE.running);
 }
 
+function renderFailure(status) {
+  const last = status.episodes[status.episodes.length - 1];
+  const failed = status.phase === PHASE.ready && last !== undefined && last.outcome === OUTCOME.error;
+  $('failure').hidden = !failed;
+  if (!failed) return;
+  $('failure-head').textContent = `Episode ${last.number} failed. Start runs the next episode.`;
+  $('failure-text').textContent = last.error ?? '';
+}
+
 function renderEpisodes(status) {
   const episodes = [...status.episodes].reverse();
   const count = (outcome) => status.episodes.filter((e) => e.outcome === outcome).length;
@@ -283,9 +294,10 @@ function row(episode, status) {
   if (episode.outcome === null) classes.push('is-open');
   if (!episode.overridden) classes.push('is-configured');
   const tag = episode.overridden ? '<span class="tag">override</span>' : '';
+  const error = episode.error === null ? '' : ` title="${escapeHtml(episode.error)}"`;
   return (
     `<li class="${classes.join(' ')}"><span class="ep-n">#${episode.number}</span>` +
-    `<span class="out out--${view.css}">${view.label}</span>` +
+    `<span class="out out--${view.css}"${error}>${view.label}</span>` +
     `<span class="ep-dur">${clock(duration(episode, status))}</span>` +
     `<span class="ep-text"><span class="t">${escapeHtml(episode.instruction)}</span>${tag}</span></li>`
   );

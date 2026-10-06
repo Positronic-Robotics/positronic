@@ -374,7 +374,7 @@ def test_episode_deadline_uses_the_done_signal_timestamp(episode_harness, done_a
 
 
 @pytest.mark.parametrize('failure', ['startup', 'policy', 'conversion'])
-def test_episode_failures_close_the_generator_and_answer_the_caller(episode_harness, failure):
+def test_a_failed_episode_closes_the_generator_answers_its_call_and_the_next_call_runs(episode_harness, failure):
     h = episode_harness
     closed = []
 
@@ -393,10 +393,42 @@ def test_episode_failures_close_the_generator_and_answer_the_caller(episode_harn
     if failure == 'conversion':
         error = pimm.NoValueException
         h.serializer.side_effect = error('conversion failed')
-    answer = h.caller(Rollout(Task('test', None), Failing(), None))
-    with pytest.raises(error, match=f'{failure} failed'):
-        next(h.loop)
+    answer = h.caller(Rollout(Task('test', 0.01), Failing(), None))
+    next(h.loop)
     assert closed == [True]
+    with pytest.raises(error, match=f'{failure} failed'):
+        answer.result()
+    opened = failure != 'startup'
+    recorded = [DsWriterCommandType.START_EPISODE, DsWriterCommandType.ABORT_EPISODE] if opened else []
+    assert [command.type for _, command in h.records.values] == recorded
+    assert [deadline for _, deadline in h.deadlines.values] == ([10_000_000, None] if opened else [])
+
+    h.serializer.side_effect = lambda value: value
+    h.caller(Rollout(Task('next', None), Hold(), None))
+    next(h.loop)
+    assert h.records.values[-1][1].type is DsWriterCommandType.START_EPISODE
+
+
+@pytest.mark.parametrize('ending', ['stop', 'interrupt'])
+def test_an_episode_that_does_not_fail_on_its_own_answers_handler_stopped(episode_harness, ending):
+    h = episode_harness
+
+    class Interrupted(Policy):
+        def run(self, runtime):
+            yield
+            raise KeyboardInterrupt
+
+    h.observation.emit(1)
+    if ending == 'stop':
+        answer = h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), Hold(), None))
+        next(h.loop)
+        assert next(h.prepare[RESET].incoming()).request == 'home'
+        h.world.request_stop()
+        list(h.loop)
+    else:
+        answer = h.caller(Rollout(Task('move', None), Interrupted(), None))
+        with pytest.raises(KeyboardInterrupt):
+            next(h.loop)
     with pytest.raises(pimm.calls.HandlerStopped):
         answer.result()
 
@@ -557,12 +589,14 @@ def test_uncharged_failures_reach_the_policy_at_the_same_time():
             answer = runtime.submit(infer)
             calls.append(runtime.time_ns)
             yield Step({}, runtime.time_ns + 1_000_000_000)
+            with pytest.raises(ValueError, match='model failed'):
+                answer.result()
             calls.append(runtime.time_ns)
-            answer.result()
+            while True:
+                yield Step({}, runtime.time_ns + 1_000_000_000)
 
     with policy_world(Waiting()) as (_, loop, _):
-        with pytest.raises(ValueError, match='model failed'):
-            next(loop)
+        next(loop)
         assert calls == [0, 0]
 
 
@@ -735,15 +769,20 @@ def test_preparation_errors_and_failed_return(episode_harness, failure, caplog):
     name = 'unknown' if failure == 'unknown' else RESET
     answer = h.caller(Rollout(Task('move', 0.01, prepare_args={name: None}), Hold(), None))
     if failure == 'unknown':
+        next(h.loop)
         with pytest.raises(ValueError, match='unknown'):
-            next(h.loop)
+            answer.result()
     else:
         next(h.loop)
         call = next(h.prepare[RESET].incoming())
         if failure == 'prepare':
             call.set_exception(ValueError('prepare failed'))
+            next(h.loop)
             with pytest.raises(ValueError, match='prepare failed'):
-                next(h.loop)
+                answer.result()
+            h.caller(Rollout(Task('move', 0.01, prepare_args={RESET: 'again'}), Hold(), None))
+            next(h.loop)
+            assert next(h.prepare[RESET].incoming()).request == 'again'
         else:
             call.set_result(None)
             next(h.loop)
@@ -756,8 +795,6 @@ def test_preparation_errors_and_failed_return(episode_harness, failure, caplog):
             assert answer.result()[eval_keys.SUCCESS] is True
             assert 'return failed' in caplog.text
             return
-    with pytest.raises(pimm.calls.HandlerStopped):
-        answer.result()
     assert h.records.values == []
 
 
@@ -778,8 +815,7 @@ def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_pat
         if ending == 'failure':
             h.observation.emit(1)
             h.serializer.side_effect = ValueError('failed')
-            with pytest.raises(ValueError, match='failed'):
-                next(h.loop)
+            next(h.loop)
         else:
             if ending == 'shutdown':
                 h.world.request_stop()
@@ -788,8 +824,8 @@ def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_pat
             next(h.loop)
             with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
                 pass
-            h.world.request_stop()
-            list(h.loop)
+        h.world.request_stop()
+        list(h.loop)
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
     reset = next(s for s in spans if s.name == telemetry_keys.SPAN_RESET)
