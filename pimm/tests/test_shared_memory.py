@@ -5,7 +5,7 @@ from multiprocessing.managers import BaseProxy
 import numpy as np
 import pytest
 
-from pimm.core import Clock, Message, NoOpEmitter, SignalEmitter, SignalReceiver, Sleep, Yield
+from pimm.core import Clock, Message, NoOpEmitter, NoOpReceiver, SignalEmitter, SignalReceiver, Sleep, Yield
 from pimm.shared_memory import NumpySMAdapter
 from pimm.time import EMITTED_WALL, Time
 from pimm.world import MAX_PICKLED_TIME_BYTES, MultiprocessReceiver, TransportMode, World
@@ -339,7 +339,6 @@ class TestSharedMemoryMultiprocessing:
 
 # Nanoseconds since the epoch. A double holds a value of this size only to 256 ns, so a float field loses digits.
 NS_TIMESTAMP = 1_758_650_000_123_456_789
-FRAMES_TO_CHECK_FOR_TEARING = 50
 
 
 class FrameStampEmitter:
@@ -371,11 +370,10 @@ class SingleFrameEmitter:
 class TimestampEcho:
     """Reads frames in its own process and sends the timestamp and data of each new frame back over a second pipe."""
 
-    frames: SignalReceiver | None = None
+    frames: SignalReceiver = NoOpReceiver()
     echo: SignalEmitter = NoOpEmitter()
 
     def run(self, should_stop: SignalReceiver, _clock: Clock) -> Iterator[Sleep]:
-        assert self.frames is not None
         while not should_stop.value:
             msg = self.frames.read()
             if msg is not None and msg.updated:
@@ -401,6 +399,7 @@ def _wait_for(receiver: SignalReceiver, predicate, timeout: float = 20.0) -> Mes
 
 class TestSharedMemoryAcrossProcesses:
     def test_a_read_never_returns_a_frame_torn_by_a_concurrent_emit(self):
+        frames_to_check = 50
         emitter_loop = FrameStampEmitter()
 
         with World() as world:
@@ -409,14 +408,14 @@ class TestSharedMemoryAcrossProcesses:
 
             seen = set()
             deadline = time.monotonic() + 20.0
-            while len(seen) < FRAMES_TO_CHECK_FOR_TEARING and time.monotonic() < deadline:
+            while len(seen) < frames_to_check and time.monotonic() < deadline:
                 msg = reader.read()
                 if msg is not None:
                     ts = msg.time['capture']
                     assert np.all(msg.data.array == ts), f"frame {ts} holds another frame's data"
                     seen.add(ts)
 
-        assert len(seen) >= FRAMES_TO_CHECK_FOR_TEARING
+        assert len(seen) >= frames_to_check
 
     def test_an_undecided_pipe_takes_the_transport_its_subprocess_emitter_picks(self):
         emitter_loop = SingleFrameEmitter()
