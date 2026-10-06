@@ -269,8 +269,24 @@ def _next_fragment(subscriber: queue.Queue[bytes]) -> bytes | None:
 
 
 async def _stream(websocket: WebSocket, stream: VideoStream, should_stop: pimm.SignalReceiver) -> None:
-    """Send the codec string, the init segment, and then each fragment until the client leaves or the run stops."""
+    """Send the stream until the client leaves, the server closes the socket, or the run stops."""
     subscriber = stream.subscribe()
+    sending = asyncio.create_task(_send_stream(websocket, stream, subscriber, should_stop))
+    leaving = asyncio.create_task(_until_disconnect(websocket))
+    try:
+        done, _ = await asyncio.wait({sending, leaving}, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()
+    finally:
+        sending.cancel()
+        leaving.cancel()
+        stream.unsubscribe(subscriber)
+
+
+async def _send_stream(
+    websocket: WebSocket, stream: VideoStream, subscriber: queue.Queue[bytes], should_stop: pimm.SignalReceiver
+) -> None:
+    """Send the codec string, the init segment, and then each fragment until the run stops."""
     loop = asyncio.get_running_loop()
     try:
         while not stream.init_segment and not should_stop.value:
@@ -286,5 +302,9 @@ async def _stream(websocket: WebSocket, stream: VideoStream, should_stop: pimm.S
                 await websocket.send_bytes(fragment)
     except WebSocketDisconnect:
         pass
-    finally:
-        stream.unsubscribe(subscriber)
+
+
+async def _until_disconnect(websocket: WebSocket) -> None:
+    """Return once the client leaves or the server closes the socket. The page sends nothing on it."""
+    async for _ in websocket.iter_bytes():
+        pass

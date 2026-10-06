@@ -592,7 +592,8 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
 
 @pytest.mark.timeout(240.0)
 def test_end_run_waits_for_the_open_episode_and_then_stops_the_whole_command(tmp_path):
-    """End run stops the World, so each device runs its teardown and the command returns without a signal."""
+    """End run stops the World, so each device runs its teardown and the command returns without a signal. A camera
+    tile stays open on the page through it."""
     port = _free_port()
     base = f'http://127.0.0.1:{port}'
     marks = tmp_path / 'marks'
@@ -610,10 +611,12 @@ def test_end_run_waits_for_the_open_episode_and_then_stops_the_whole_command(tmp
         verdict = EndBody(verdict=Outcome.PASS).model_dump(mode='json')
         httpx.post(f'{base}/episode/end', json=verdict).raise_for_status()
         _wait_for(lambda: (s := _status(base)) and s.run.phase is Phase.READY, 'episode 1 to close')
-        ended = httpx.post(f'{base}/run/end')
-        ended.raise_for_status()
-        assert Status.model_validate(ended.json()).run.phase is Phase.RUN_ENDED
-        run.join(timeout=120)
+        with connect(f'ws://127.0.0.1:{port}/video/{keys.WRIST_IMAGE}', open_timeout=10) as tile:
+            assert isinstance(tile.recv(timeout=10), str)
+            ended = httpx.post(f'{base}/run/end')
+            ended.raise_for_status()
+            assert Status.model_validate(ended.json()).run.phase is Phase.RUN_ENDED
+            run.join(timeout=60)
         assert run.exitcode == 0
         assert (marks / 'parked').exists()
     finally:
