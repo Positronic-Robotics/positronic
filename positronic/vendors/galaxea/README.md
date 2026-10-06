@@ -44,24 +44,32 @@ session owns and closes its backend connection.
 
 ## Docker setup
 
-The dedicated `positro/galaxea` image contains Galaxea's Python 3.10 environment
-and a separate Positronic Python 3.13 environment. Galaxea is pinned to
-`89f2322b4ad016e192437adc1a2c253b05bab246`. Its [inference dependencies](requirements-inference.txt)
+The `galaxea` serving image, [`docker/Dockerfile.serve-galaxea`](../../../docker/Dockerfile.serve-galaxea),
+contains Galaxea's Python 3.10 environment, a separate Positronic Python 3.13
+environment and the DROID checkpoint bundle at `/galaxea/checkpoints`. Galaxea is
+pinned to `89f2322b4ad016e192437adc1a2c253b05bab246`, and the checkpoint to
+`OpenGalaxea/G05` at `e312be81e90c56a55bcb26b57429bd39a335b449`. Its [inference dependencies](requirements-inference.txt)
 are constrained to the versions in that revision's lockfile. PyTorch supplies CUDA
 12.8 runtime libraries; the image uses an Ubuntu base and omits Galaxea's training
-and simulation packages. Positronic installs its frozen lockfile without extras.
-Model weights are mounted separately.
+and simulation packages. Positronic installs its locked dependencies without extras.
 Inference requires a CUDA GPU; Galaxea's DROID guide estimates about 12 GB of free
 GPU memory. RoboLab also needs GPU memory and graphics support.
 
-Build from the Positronic repository root:
+The image carries the gated weights, so a person who pulls it accepts no terms.
+Push it to a private registry only. CI does not build it.
+
+Build and push from the Positronic repository root. The Hugging Face account of the
+token must have access to G05 (see [Checkpoint access](#checkpoint-access)), and the
+build reads the token through a secret mount:
 
 ```bash
-make -C docker build-galaxea
+HF_TOKEN="$(cat $HOME/.hf_token)" make -C docker build-serve-galaxea
+HF_TOKEN="$(cat $HOME/.hf_token)" make -C docker push-serve-galaxea
 ```
 
-Galaxea's image targets are opt-in; aggregate image publishing does not include
-this evaluation-only vendor.
+`push-serve-galaxea` needs a BuildKit `docker-container` builder. It pushes to
+`GALAXEA_REPO`, which is the Nebius registry by default. To push to a different
+private repository, set `GALAXEA_REPO`.
 
 ### Checkpoint access
 
@@ -72,7 +80,7 @@ user must accept Galaxea's conditions and obtain access for their account.
 That access remains subject to the model license, including the hardware and
 image conditions above.
 
-On the machine holding the Docker bind-mounted cache, log in and check the account:
+Log in and check the account:
 
 ```bash
 uvx hf auth login
@@ -84,7 +92,8 @@ edit the active token in [Hugging Face settings](https://huggingface.co/settings
 and enable **Read access to contents of all public gated repos you can access**.
 The account must also have access to G05; the token permission alone does not grant it.
 
-Download the pinned DROID checkpoint and shared resources (about 12 GB):
+For a source installation, download the pinned DROID checkpoint and shared
+resources (about 12 GB):
 
 ```bash
 uvx hf download OpenGalaxea/G05 \
@@ -98,8 +107,7 @@ uvx hf download OpenGalaxea/G05 \
 
 ### Start the server
 
-Keep `.hydra/config.yaml`, `dataset_stats.json`, and `checkpoints/model_state_dict.pt`
-inside `checkpoints/g05-droid/`. Start the server on the GPU host:
+Start the server on the GPU host:
 
 ```bash
 IMAGE_TAG=local docker compose -f docker/docker-compose.yml \

@@ -1,0 +1,114 @@
+# syntax=docker/dockerfile:1.7
+# A policy image the platform can run: Galaxea G0.5-DROID, with Galaxea's model code and the checkpoint bundle in
+# the image. It serves positronic's session protocol on port 8000 with no arguments and no network.
+#
+# PRIVATE. The weights are gated, and the G0.5 Community License allows internal, non-commercial evaluation only
+# (positronic/vendors/galaxea/NOTICE and LICENSE-G0.5). A person who pulls this image accepts no terms, so push it
+# to a private registry only. CI does not build it: `galaxea` is not in SERVE_IMAGES.
+#
+# Usage (from the repository root)
+#   HF_TOKEN="$(cat $HOME/.hf_token)" make -C docker build-serve-galaxea   # <GALAXEA_REPO>:local
+#   HF_TOKEN="$(cat $HOME/.hf_token)" make -C docker push-serve-galaxea    # to GALAXEA_REPO, the Nebius registry
+#   docker run --rm --network none --gpus all <GALAXEA_REPO>:local         # the offline pre-flight
+#
+# The layers go from the least often changed to the most: base with Galaxea's environment, positronic's
+# dependencies, source, weights. The source and the weights come in through `COPY --link`, and no step runs after
+# them, so a source change builds one new layer and pulls no cached layer.
+#
+# The Hugging Face token is for `OpenGalaxea/G05`. Its account must accept Galaxea's conditions on the model page,
+# and the token must read gated repositories. The token enters no layer.
+
+ARG G05_REVISION=e312be81e90c56a55bcb26b57429bd39a335b449
+
+# The weights stage does not build on the base, so a new base reuses the downloaded weights. The server reads the
+# checkpoint, the action tokenizer and the processor from /galaxea/checkpoints, at the paths the checkpoint's
+# config names. `licenses/` goes with the weights it governs.
+FROM python:3.12-slim AS weights
+ARG G05_REVISION
+RUN pip install --no-cache-dir huggingface_hub==0.35.3
+RUN --mount=type=secret,id=hf_token \
+    HF_TOKEN="$(cat /run/secrets/hf_token)" hf download OpenGalaxea/G05 --revision "$G05_REVISION" \
+      --local-dir /galaxea/checkpoints \
+      --include 'g05-droid/*' action_tokenizer.pt 'qwen3_5_2b_base_processor/*' 'licenses/*' > /dev/null \
+ && rm -rf /galaxea/checkpoints/.cache
+
+FROM ubuntu:22.04
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.31 /uv /uvx /bin/
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git ca-certificates ffmpeg \
+    libgl1 libglib2.0-0 libsm6 libxext6 libturbojpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep the interpreters outside the uv cache, which no layer keeps.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=600 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+ARG GALAXEA_SHA=89f2322b4ad016e192437adc1a2c253b05bab246
+RUN git clone https://github.com/OpenGalaxea/GalaxeaVLA.git /galaxea \
+    && git -C /galaxea checkout ${GALAXEA_SHA}
+
+WORKDIR /galaxea
+COPY positronic/vendors/galaxea/requirements-inference.txt /galaxea/requirements-inference.txt
+# Export versions without installing Galaxea's training and simulation dependencies.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt \
+        --output-file /galaxea/constraints.txt \
+    && uv venv --python 3.10 /galaxea/.venv \
+    && uv pip install --python /galaxea/.venv/bin/python \
+        --index https://pypi.org/simple --default-index https://download.pytorch.org/whl/cu128 \
+        --index-strategy unsafe-best-match \
+        --constraint /galaxea/constraints.txt --requirement /galaxea/requirements-inference.txt
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary \
+    UV_PROJECT_ENVIRONMENT=/positronic/.venv
+
+# positronic's server runs in an environment of its own, beside Galaxea's. The dependencies install from the lock
+# alone, so a source change does not reinstall them.
+WORKDIR /positronic
+COPY pyproject.toml uv.lock ./
+COPY client/pyproject.toml client/
+COPY wire/pyproject.toml wire/
+COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
+RUN uv sync --locked --python 3.13 --no-dev --no-install-workspace && uv cache clean
+
+# The workspace installs from its manifests and package stubs, which records each package's metadata.
+# The source then lands with no step after it: the packages import from PYTHONPATH.
+COPY README.md LICENSE ./
+COPY client/README.md client/
+COPY wire/README.md wire/
+COPY model_server/README.md model_server/
+COPY vocabulary/README.md vocabulary/
+COPY positronic/__init__.py positronic/
+COPY pimm/__init__.py pimm/
+COPY client/platform_client/py.typed client/platform_client/
+COPY wire/positronic_wire/py.typed wire/positronic_wire/
+COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
+COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
+RUN uv sync --locked --python 3.13 --no-dev && uv cache clean
+
+COPY --link . /positronic
+
+COPY --link --from=weights /galaxea/checkpoints /galaxea/checkpoints
+
+# A fetch the build did not make fails at once on the denied network.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    UV_OFFLINE=1 \
+    UV_NO_SYNC=1
+
+EXPOSE 8000
+
+# The server starts Galaxea's model in Galaxea's interpreter, on port 9000 inside the container.
+ENTRYPOINT ["/positronic/.venv/bin/python", "-m", "positronic.vendors.galaxea.server", "droid"]
+
+LABEL org.opencontainers.image.title="galaxea" \
+    org.opencontainers.image.description="Galaxea G0.5-DROID with its gated weights, served over positronic's session protocol. Internal, non-commercial evaluation only: see /galaxea/checkpoints/licenses and /positronic/positronic/vendors/galaxea/NOTICE. Private: never publish." \
+    org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-G0.5-Community-1.0" \
+    org.opencontainers.image.source="https://github.com/Positronic-Robotics/positronic"
