@@ -19,11 +19,6 @@ DROID_IMPEDANCE = command.Impedance(
 )
 
 
-def droid_start_pose() -> command.JointPosition:
-    """The command a DROID trial opens with: joints drawn afresh around the Franka's nominal, under DROID's gains."""
-    return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD, DROID_IMPEDANCE)
-
-
 @cfn.config(
     ip='172.168.0.2',
     relative_dynamics_factor=0.2,

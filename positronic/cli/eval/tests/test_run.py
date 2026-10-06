@@ -13,6 +13,7 @@ import pytest
 import pimm
 from positronic import telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
+from positronic.cfg.eval.real import droid as real_droid
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
@@ -163,6 +164,14 @@ def test_a_sweep_numbers_its_trials_across_every_task():
     assert [t.meta[eval_keys.TRIAL_COUNT] for t in trials] == [3, 3, 3]
     assert [t.meta[eval_keys.TASK] for t in trials] == ['quick', 'slow', 'slow']
     assert [t.prepare_args[eval_keys.SCENE] for t in trials] == [params for _, params in pairs]
+
+
+def test_a_real_droid_trial_homes_the_arm_with_no_control_law():
+    """The arm's own controller runs the home, on the attended path and on a planned sweep."""
+    attended = real_droid.attended_trials.instantiate()()
+    planned = real_droid.pick_place.override(embodiment=None, trial_count=2).instantiate().tasks()
+    for task in [attended, *planned]:
+        assert task.prepare_args[eval_keys.ARM].mode is None
 
 
 def test_timed_sweep_needs_an_output_dir():
