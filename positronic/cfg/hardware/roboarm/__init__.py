@@ -5,7 +5,7 @@ import configuronic as cfn
 import positronic.cfg.hardware.motors
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.franka_fake import FakeFranka
-from positronic.drivers.roboarm.settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
+from positronic.drivers.roboarm.yam.settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
 # The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
@@ -93,7 +93,7 @@ def yam(
     park_tuning: SettleTuning,
     move_tuning: SettleTuning,
 ):
-    from positronic.drivers.roboarm.yam import Robot
+    from positronic.drivers.roboarm.yam.driver import Robot
 
     return Robot(
         channel,
