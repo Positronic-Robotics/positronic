@@ -1354,7 +1354,7 @@ def test_a_ready_call_answers_the_fault_that_stays_and_the_run_serves_the_next_o
 
 
 def test_a_ready_call_answers_the_release_instruction_while_the_emergency_stop_is_pressed(desk, world):
-    """The ready call refuses before the arm moves, so the asker gets the instruction and not a refused move."""
+    """The ready call refuses before the arm moves, so the asker gets the release instruction."""
     arm = FakeArm(PARK)
     desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
     driver = _driver(arm)
