@@ -13,6 +13,7 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock, wire_call
+from positronic.drivers.camera import CAPTURE_TIME
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.tests.testing_coutils import RecordingEmitter
 
@@ -272,7 +273,7 @@ def _camera(module, sdk: DroppingSdk, frames: RecordingEmitter):
         TIME_REFERENCE=types.SimpleNamespace(IMAGE='image'),
     )
     camera = module.SLCamera(serial_number=SERIAL)
-    camera.frame._bind(frames)
+    camera.frame._bind(frames, clock=sdk.clock)
     return camera
 
 
@@ -296,7 +297,7 @@ def _returned(loop: pimm.Run[None]) -> bool:
 
 
 def _frame_times(frames: RecordingEmitter) -> list[float]:
-    return [ts for ts, data in frames.emitted if not isinstance(data, pimm.SignalError)]
+    return [time[CAPTURE_TIME] / 1e9 for time, data in frames.emitted if not isinstance(data, pimm.SignalError)]
 
 
 def _errors(frames: RecordingEmitter) -> list[pimm.SignalError]:
