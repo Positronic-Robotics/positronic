@@ -24,7 +24,6 @@ def _row(outcome, stage=NO_STAGE, model='pi05'):
 
 
 def test_the_stage_cell_sorts_by_the_ladder_and_not_by_the_label():
-    """By label, `at the target` sorts first and `reaching` sorts last, which is not the ladder."""
     cells = [cfg_server.highest_rollout_stage(_with_stages(stage.value)) for stage in LADDER]
     ranks = [cell.rank for cell in cells]
     labels = [cell.label for cell in cells]
@@ -40,7 +39,7 @@ def test_the_stage_cell_shows_the_operators_word_for_the_rung():
 
 
 def test_the_highest_rung_reached_is_the_one_shown():
-    """The cell is the maximum rather than the last written: a rollout records every rung it passes."""
+    """A rollout records every rung it passes, and the cell shows the highest."""
     cell = cfg_server.highest_rollout_stage(_with_stages('at-target', 'reaching', 'contact'))
 
     assert cell.label == STAGE_LABELS[Stage.AT_TARGET]
@@ -106,7 +105,6 @@ def test_the_model_table_counts_a_target_reached_off_the_stage_cell():
 
 
 def test_a_rung_above_the_target_still_counts_as_reaching_it():
-    """The ladder is append-only, and a rung added past `AT_TARGET` passed through it."""
     group = cfg_server.rollouts_by_model.instantiate()
     beyond = LADDER.index(Stage.AT_TARGET) + 1
 
@@ -131,7 +129,6 @@ def test_an_episode_nobody_scored_reads_as_unscored():
 
 
 def test_a_word_this_vocabulary_does_not_carry_reaches_the_page_as_itself():
-    """Constructing the enum here would take the whole table down over one such recording."""
     assert cfg_server.rollout_outcome(EpisodeContainer({OUTCOME: 'Rescored by hand'})) == 'Rescored by hand'
 
 

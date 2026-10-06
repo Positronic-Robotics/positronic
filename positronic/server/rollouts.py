@@ -23,7 +23,7 @@ OUTCOME_VARIANT: dict[Outcome, str] = {
     Outcome.DISCARDED: 'default',
 }
 
-# The one word that the page spells differently from the recording.
+# The page spells one word differently from the recording.
 LABEL_OVERRIDES: dict[Outcome, str] = {Outcome.UNSCORED: 'Unscored'}
 
 
