@@ -87,7 +87,7 @@ class TaskDriver(pimm.ControlSystem):
                 if should_stop.value:
                     return
                 yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
-            answer.result()  # raises if the episode failed
+            answer.result()  # a failed episode raises here, and that ends the run
         # Let the recorder commit the final episode before this return brings the world down.
         yield pimm.Sleep(0.5)
 
@@ -102,13 +102,11 @@ def run_world(
 ) -> None:
     """Wire one embodiment under a fresh Harness + World, and run it until a control system returns.
 
-    Every trial runs here, whoever asks for it: the driver is what an attended run and an unattended one
-    differ by. A driver is any control system with a ``perform_task`` caller — a plan walked to its end, a
-    person at a keyboard, a console of somebody's own — and it reads what it decides from itself, so the
-    runner wires nothing of it but that call. The driver brings the policy definition and the output path.
-    ``record`` off keeps the recorder
-    out of the world, so a run that writes nothing costs the producers nothing. ``done`` is what ends an
-    episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
+    An attended run and an unattended one differ only by their driver: any control system with a ``perform_task``
+    caller — a plan walked to its end, a person at a keyboard, a console of somebody's own. The driver reads what it
+    decides from itself, so the runner wires nothing of it but that call. ``record`` off keeps the recorder out of
+    the world, so a run that writes nothing costs the producers nothing. ``done`` ends an episode from outside the
+    policy: the env's terminal in a sim eval, the operator in an attended run.
     """
     harness = Harness(embodiment)
     with pimm.World(virtual_time=embodiment.simulated) as world:
