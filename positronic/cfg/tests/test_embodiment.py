@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import pytest
 
 from positronic import keys
@@ -31,3 +34,12 @@ def test_the_fake_droid_declares_what_the_real_droid_declares():
         name: obs.serializer for name, obs in real.observations.items()
     }
     assert set(fake.ready_handlers) == set(real.ready_handlers)
+
+
+def test_loading_the_configs_imports_no_yam_code():
+    probe = (
+        'import sys, positronic.cfg.embodiment, positronic.cfg.hardware.roboarm; '
+        "print(sorted(m for m in sys.modules if m.startswith('positronic.drivers.roboarm.yam')))"
+    )
+    loaded = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, check=True).stdout
+    assert loaded.strip() == '[]'
