@@ -594,7 +594,7 @@ def test_a_streamed_target_one_tick_of_travel_away_reaches_the_chain_unchanged_a
     target = np.array([0.0, MAX_STREAMED_STEP, MAX_STREAMED_STEP / 2, 0.0, -MAX_STREAMED_STEP, 0.0])
     rig.commands.push(command.JointPosition(target))
     rig.tick()
-    # The mock clock's elapsed time carries float rounding, so the cap can trim ~1e-16 rad.
+    # The cap can trim ~1e-16 rad: the mock clock's elapsed time carries float rounding.
     np.testing.assert_allclose(rig.vendor.targets[-1][:6], target, rtol=0, atol=1e-12)
     sent = len(rig.vendor.targets)
     rig.tick(0.5)  # inside the rig's one-second idle limit, so no park takes over
