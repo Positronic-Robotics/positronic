@@ -7,7 +7,7 @@ from positronic.cli.account.gateway import gateway, refusing_bad_input
 
 def _text(token: object, field: str) -> str:
     if not isinstance(token, str):
-        raise SystemExit(f'{field} must be text; quote a value that reads as a literal: \'"{token}"\'')
+        raise SystemExit(f'{field} must be text; quote the original argument with inner double quotes')
     return token
 
 

@@ -4,6 +4,7 @@ import json
 import os
 
 import pytest
+from fire import parser
 from platform_client import config as config_module
 from platform_client import routes
 from platform_client.billing import CREDIT_SCALE, Tariff
@@ -189,6 +190,16 @@ def test_buy_explains_how_to_quote_numeric_text_before_http(field, platform, run
 def test_purchase_explains_how_to_quote_numeric_text_before_http(platform, run_command):
     with pytest.raises(SystemExit, match='quote'):
         run_command(purchase, id=20261005)
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize('argument', ['1_000', '0x1F', '1e3', '20261005'])
+def test_buy_quote_hint_preserves_the_original_retry_key(argument, platform, run_command):
+    token = parser.DefaultParseValue(argument)
+    with pytest.raises(SystemExit) as raised:
+        run_command(buy, org='acme', package_id='package', transaction_key=token)
+    assert 'original argument' in str(raised.value)
+    assert str(token) not in str(raised.value)
     assert platform.seen is None
 
 
