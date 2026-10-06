@@ -4,11 +4,12 @@ import hashlib
 from typing import Annotated, Self
 
 from platform_client.enums import BillingMode, BillingRole, BillingState
-from platform_client.ids import OrgSlug, UserId
+from platform_client.ids import OrgSlug, PackageId, PurchaseId, UserId
 from platform_client.slug import Slugged
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 CREDIT_SCALE = 60_000_000_000
+NANOSECONDS_PER_MINUTE = 60_000_000_000
 MAX_UNITS = (1 << 63) - 1
 CreditUnits = Annotated[int, Field(strict=True, ge=0, le=MAX_UNITS)]
 
@@ -62,7 +63,9 @@ class CreditQuote(BaseModel):
         if len(set(bindings)) != len(bindings):
             raise ValueError('quote repeats a task endpoint')
         for line in self.lines:
-            maximum = line.count * (self.terms.episode_units + line.cap_ns * self.terms.minute_units // CREDIT_SCALE)
+            maximum = line.count * (
+                self.terms.episode_units + line.cap_ns * self.terms.minute_units // NANOSECONDS_PER_MINUTE
+            )
             if line.max_units != maximum:
                 raise ValueError('quote line does not match its tariff')
         if self.total_units != sum(line.max_units for line in self.lines):
@@ -79,10 +82,8 @@ class RequestBilling(BaseModel):
 
     @model_validator(mode='after')
     def _mode_has_the_matching_quote(self) -> Self:
-        if self.mode is BillingMode.INVALID or self.state is BillingState.INVALID:
-            raise ValueError('billing mode and state must be set')
         if (self.mode is BillingMode.prepaid) != (self.quote is not None):
-            raise ValueError('only a prepaid request carries a quote')
+            raise ValueError('a prepaid request requires a quote, and a legacy request cannot carry one')
         if self.mode is BillingMode.legacy and self.state is not BillingState.settled:
             raise ValueError('a legacy request holds no credits')
         return self
@@ -107,7 +108,7 @@ class CreditBalance(BaseModel):
 class CreditPackage(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
 
-    id: str = Field(min_length=1)
+    id: PackageId = Field(min_length=1)
     credit_units: CreditUnits = Field(gt=0)
     amount_minor: int = Field(strict=True, gt=0, le=MAX_UNITS)
     currency: str = Field(pattern=r'^[a-z]{3}$')
@@ -121,15 +122,9 @@ class BillingAccount(BaseModel):
     tariff: Tariff
     packages: tuple[CreditPackage, ...]
 
-    @model_validator(mode='after')
-    def _known_mode_and_role(self) -> Self:
-        if self.mode is BillingMode.INVALID or self.billing_role is BillingRole.INVALID:
-            raise ValueError('billing mode and role must be set')
-        return self
-
 
 class PurchaseView(BaseModel):
-    id: str = Field(min_length=1)
+    id: PurchaseId = Field(min_length=1)
     package: CreditPackage
     initiated_by: UserId
     created_at: AwareDatetime

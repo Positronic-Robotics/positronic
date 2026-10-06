@@ -48,7 +48,7 @@ from platform_client.eval_plan import (
     plan_of_image,
 )
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, OrgSlug, SubmissionId, TransactionKey, UserId
+from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey, UserId
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
@@ -891,7 +891,9 @@ def test_billing_terms_round_trip_with_exact_integer_units():
 
 
 def test_billing_account_and_purchase_keep_exact_package_and_member_identity():
-    package = CreditPackage(id='operator-package', credit_units=CREDIT_SCALE // 6, amount_minor=17, currency='jpy')
+    package = CreditPackage(
+        id=PackageId('operator-package'), credit_units=CREDIT_SCALE // 6, amount_minor=17, currency='jpy'
+    )
     account = BillingAccount(
         org=OrgSlug('acme'),
         mode=BillingMode.prepaid,
@@ -902,7 +904,7 @@ def test_billing_account_and_purchase_keep_exact_package_and_member_identity():
     )
     assert BillingAccount.model_validate_json(account.model_dump_json()) == account
     purchase = PurchaseView(
-        id='opaque-purchase-id',
+        id=PurchaseId('opaque-purchase-id'),
         package=package,
         initiated_by=USER,
         created_at=AT,
@@ -925,8 +927,8 @@ def test_purchase_package_refuses_inexact_or_unbounded_credits_and_money(field, 
 def test_a_reviewed_or_credited_purchase_cannot_publish_a_payable_link(lifecycle):
     with pytest.raises(ValidationError):
         PurchaseView(
-            id='opaque-purchase-id',
-            package=CreditPackage(id='package', credit_units=1, amount_minor=17, currency='jpy'),
+            id=PurchaseId('opaque-purchase-id'),
+            package=CreditPackage(id=PackageId('package'), credit_units=1, amount_minor=17, currency='jpy'),
             initiated_by=USER,
             created_at=AT,
             checkout_url='https://checkout.stripe.com/accepted',
@@ -937,9 +939,9 @@ def test_a_reviewed_or_credited_purchase_cannot_publish_a_payable_link(lifecycle
 def test_billing_queries_and_create_request_share_the_input_boundary():
     models = (
         BillingAccountQuery(org=OrgSlug('acme')),
-        BillingPurchaseGetQuery(id='opaque-purchase-id'),
+        BillingPurchaseGetQuery(id=PurchaseId('opaque-purchase-id')),
         BillingPurchaseCreateRequest(
-            org=OrgSlug('acme'), package_id='package', transaction_key=TransactionKey('retry-key')
+            org=OrgSlug('acme'), package_id=PackageId('package'), transaction_key=TransactionKey('retry-key')
         ),
     )
     for model in models:

@@ -24,7 +24,7 @@ from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
-from platform_client.ids import ApiKey, OrgSlug, SubmissionId
+from platform_client.ids import ApiKey, OrgSlug, PurchaseId, SubmissionId
 from platform_client.requests import (
     BillingAccountQuery,
     BillingPurchaseCreateRequest,
@@ -174,7 +174,7 @@ class PlatformClient:
     def create_purchase(self, request: BillingPurchaseCreateRequest) -> PurchaseView:
         return self._post(routes.BILLING_PURCHASES_CREATE, request, PurchaseView)
 
-    def get_purchase(self, purchase_id: str) -> PurchaseView:
+    def get_purchase(self, purchase_id: PurchaseId) -> PurchaseView:
         return self._get(routes.BILLING_PURCHASES_GET, PurchaseView, query=BillingPurchaseGetQuery(id=purchase_id))
 
     def list_purchases(self, org: OrgSlug) -> PurchaseListResponse:

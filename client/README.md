@@ -52,8 +52,13 @@ tailnet: pass `--plaintext-http` to reach it.
 ## Credit accounts
 
 `PlatformClient.billing_account(org)` reads the member's billing role, credit balance, tariff, and configured purchase packages.
-One credit is `60_000_000_000` integer units. The initial tariff is one sixth credit per recorded episode plus one credit per minute.
+One credit is `60_000_000_000` integer units.
+The account response carries the operator-configured tariff for recorded episodes and duration.
 The gateway freezes the accepted request's quote and reserves its full maximum before execution.
+
+The prepaid balance belongs to the organization. `QuotaLimit` values from `users.me` describe independent limits and use each limit's own `scale`.
+The period credits meter uses six units per credit. Its remaining quota does not describe or fund the prepaid balance.
+Legacy organizations continue with usage invoices. Prepaid organizations spend their frozen request quote against the prepaid balance.
 
 `PlatformClient.create_purchase` takes a `BillingPurchaseCreateRequest` with an organization, package id, and transaction key.
 Reuse the same key to read the same owned purchase after a lost response. A new purchase requires the billing spender role.
@@ -72,6 +77,7 @@ positronic account credits purchases --org=acme
 ```
 
 These commands print typed JSON with exact integer units and configured currency amounts.
+Quote a numeric-looking text argument with inner quotes, for example `--transaction-key='"20261005"'`.
 
 ## Eval plans
 
@@ -187,7 +193,6 @@ names each task and what it lacks.
 spends no quota and returns no submission id. A plan with a `transaction_key` draws from that key,
 so a dry run shows the draws a submission under the same key then makes. Without a key, the draws
 are an example. From Python, `PlatformClient.resolve_plan` makes the call.
-
 
 `EvalPlan` refuses unknown fields. `EvalPlan.model_validate(plan)` raises on one before anything
 reaches the platform.

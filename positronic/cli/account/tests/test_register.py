@@ -1,4 +1,4 @@
-"""`positronic account register`, over a stub platform transport."""
+"""`positronic account` commands over a stub platform transport."""
 
 import json
 import os
@@ -175,6 +175,20 @@ def test_buy_refuses_invalid_input_before_http(field, platform, run_command):
     args = {'org': 'acme', 'package_id': 'package', 'transaction_key': 'retry-key', field: ''}
     with pytest.raises(SystemExit):
         run_command(buy, **args)
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize('field', ['org', 'package_id', 'transaction_key'])
+def test_buy_explains_how_to_quote_numeric_text_before_http(field, platform, run_command):
+    args = {'org': 'acme', 'package_id': 'package', 'transaction_key': 'retry-key', field: 20261005}
+    with pytest.raises(SystemExit, match='quote'):
+        run_command(buy, **args)
+    assert platform.seen is None
+
+
+def test_purchase_explains_how_to_quote_numeric_text_before_http(platform, run_command):
+    with pytest.raises(SystemExit, match='quote'):
+        run_command(purchase, id=20261005)
     assert platform.seen is None
 
 

@@ -86,5 +86,8 @@ TransactionKey = NewType('TransactionKey', str)
 # memberships and refuses one it does not know.
 OrgSlug = NewType('OrgSlug', str)
 
+PurchaseId = NewType('PurchaseId', str)
+PackageId = NewType('PackageId', str)
+
 # The plaintext API key, returned by `users.register` exactly once and stored only as a hash.
 ApiKey = NewType('ApiKey', str)

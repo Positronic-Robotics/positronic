@@ -21,6 +21,7 @@ RANKINGS_LIST = f'{API_PREFIX}/rankings.list'
 # What the platform offers the caller: the evals a plan may name, and the tasks it may compose.
 CATALOG_EVALS = f'{API_PREFIX}/catalog.evals'
 CATALOG_TASKS = f'{API_PREFIX}/catalog.tasks'
+
 BILLING_ACCOUNT = f'{API_PREFIX}/billing.account'
 BILLING_PURCHASES_CREATE = f'{API_PREFIX}/billing.purchases.create'
 BILLING_PURCHASES_GET = f'{API_PREFIX}/billing.purchases.get'
