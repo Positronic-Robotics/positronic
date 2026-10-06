@@ -106,11 +106,13 @@ COPY pyproject.toml uv.lock ./
 COPY client/pyproject.toml client/
 COPY wire/pyproject.toml wire/
 COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
 RUN uv sync --locked --python 3.13 --no-dev --no-install-workspace $SKIP_UNIMPORTED_PACKAGES && uv cache clean
 COPY README.md LICENSE ./
 COPY client/ client/
 COPY wire/ wire/
 COPY model_server/ model_server/
+COPY vocabulary/ vocabulary/
 COPY pimm/ pimm/
 COPY positronic/ positronic/
 RUN uv sync --locked --python 3.13 --no-dev $SKIP_UNIMPORTED_PACKAGES && uv cache clean

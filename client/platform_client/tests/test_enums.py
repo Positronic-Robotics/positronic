@@ -27,6 +27,7 @@ from platform_client.enums import (
     ReasonCode,
     RequestType,
     RigShape,
+    StartPose,
     SubmissionStatus,
     Wire,
 )
@@ -102,6 +103,8 @@ REQUEST_TYPE_VALUES = {'INVALID': 0, 'nebius_competition': 1, 'private_eval': 2}
 
 RIG_SHAPE_VALUES = {'INVALID': 0, 'franka': 1, 'yam': 2, 'sim': 3}
 
+START_POSE_VALUES = {'INVALID': 0, 'nominal': 1, 'droid_reset': 2}
+
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (BillingMode, {'INVALID': 0, 'legacy': 1, 'prepaid': 2}),
     (BillingRole, {'INVALID': 0, 'none': 1, 'spender': 2}),
@@ -119,6 +122,7 @@ PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (CameraVantage, CAMERA_VANTAGE_VALUES),
     (RequestType, REQUEST_TYPE_VALUES),
     (RigShape, RIG_SHAPE_VALUES),
+    (StartPose, START_POSE_VALUES),
 ]
 
 

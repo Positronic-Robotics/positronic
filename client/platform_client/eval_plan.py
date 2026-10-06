@@ -11,7 +11,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Annotated, Generic, Literal, Self
 
-from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, RigShape, Wire
+from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, RigShape, StartPose, Wire
 from platform_client.evals import EvalRef
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.model_config import INPUT_MODEL_CONFIG
@@ -68,6 +68,7 @@ class Cascade(BaseModel):
     # Per external camera the task defines, keyed by the mount name the task gives it.
     external_cameras: dict[str, Slugged[Placement]] = Field(default_factory=dict)
     clutter: Clutter | None = None
+    start_pose: Slugged[StartPose] | None = None
 
 
 # Each address field holds what the table in the client README states, and no other value.

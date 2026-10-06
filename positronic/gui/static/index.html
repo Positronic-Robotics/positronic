@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Station console</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="station.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark"></span><span class="brand-name">positronic</span>
+        <span class="brand-page">Station console</span>
+      </div>
+      <div class="chips">
+        <span class="chip chip-offline" id="offline" hidden><span class="dot dot-off"></span>No connection to the console</span>
+        <span class="chip"><span class="chip-key">Policy</span><span class="chip-mono" id="policy"></span></span>
+        <span class="chip"><span class="chip-key">Cameras</span><span id="cameras-live"></span></span>
+        <span class="chip"><span class="chip-key">Page bound to</span><span class="chip-mono" id="host"></span></span>
+        <button class="end-run" id="end-run" type="button" disabled>End run</button>
+      </div>
+    </header>
+
+    <section class="cams" id="cams"></section>
+
+    <main class="desk">
+      <section class="card control">
+        <div class="status-row" id="status-row">
+          <span class="status" id="status"><span class="dot"></span><span id="status-text"></span></span>
+          <span class="status-detail" id="status-detail"></span>
+          <span class="counters" id="counters"></span>
+          <span class="elapsed" id="elapsed" hidden><small>Elapsed</small><span id="elapsed-value"></span></span>
+        </div>
+        <div class="control-body">
+          <div class="instr">
+            <div class="instr-head">
+              <span class="label">Instruction for the policy</span>
+              <span class="badge" id="instr-badge"></span>
+              <button class="link-btn" id="reset" type="button" disabled>
+                <svg class="i" viewBox="0 0 16 16"><path d="M3.5 6.5A4.8 4.8 0 113 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M2.5 3v3.8h3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Reset to configured
+              </button>
+            </div>
+            <div class="cfg-bar" id="cfg-bar" hidden>
+              <span class="k">Configured</span><span id="cfg-text"></span><span class="src">run configuration</span>
+            </div>
+            <label class="field" id="field">
+              <span class="field-k" id="field-k" hidden>Override</span>
+              <textarea id="instruction" rows="2" spellcheck="false" aria-label="Instruction for the policy"></textarea>
+              <span class="lock" id="lock" hidden>
+                <svg class="i" viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 015 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                Locked
+              </span>
+            </label>
+            <div class="instr-foot"><span id="instr-hint"></span><span class="aside" id="instr-aside"></span></div>
+          </div>
+          <div class="sends" id="sends">
+            <svg class="i" viewBox="0 0 16 16"><path d="M3 8h9M8.5 4.5L12 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span id="sends-text"></span>
+          </div>
+        </div>
+        <div class="control-foot">
+          <div class="refusal" id="refusal" role="alert" hidden></div>
+          <div class="refusal failure" id="failure" role="alert" hidden>
+            <span id="failure-head"></span><code id="failure-text"></code>
+          </div>
+          <div class="actions">
+            <button class="btn btn-start" id="start" type="button" disabled>
+              <svg class="i" viewBox="0 0 16 16"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/></svg>Start
+            </button>
+            <button class="btn btn-pass" id="finish-pass" type="button" disabled>
+              <svg class="i" viewBox="0 0 16 16"><path d="M3 8.5l3.2 3.2L13 4.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Finish <small>· pass</small>
+            </button>
+            <button class="btn btn-fail" id="finish-fail" type="button" disabled>
+              <svg class="i" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Finish <small>· fail</small>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card episodes">
+        <div class="ep-head">
+          <span class="ep-title">Episodes</span><span class="ep-order" id="ep-order" hidden>newest first</span>
+          <span class="ep-sum" id="ep-sum"></span>
+        </div>
+        <div class="ep-empty" id="ep-empty">
+          <div class="big">No episodes yet</div>
+          Start records an episode with the instruction on the left. Finish it with a verdict.
+        </div>
+        <ol class="ep-list" id="ep-list"></ol>
+        <div class="ep-legend" id="ep-legend" hidden>
+          <span><span class="tag">override</span>the operator changed the instruction for this episode</span>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="station.js"></script>
+</body>
+</html>

@@ -92,7 +92,8 @@ class Harness(pimm.ControlSystem):
     handles completions before advancing time, including unrestricted chains of calls at one instant.
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline or a truthy ``done`` signal.
-    Its answer carries the terminal payload. Between episodes, manual commands pass through.
+    Its answer carries the terminal payload, or the error that failed the episode. The caller decides
+    whether that error ends the run. Between episodes, manual commands pass through.
     """
 
     def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
@@ -221,7 +222,7 @@ class Harness(pimm.ControlSystem):
             return {eval_keys.TERMINATED: False}
         return None
 
-    def _wait_for_next_tick(self, runtime: Executor, resume_at_ns: int | None) -> pimm.Run[tuple[Answer[Any], ...]]:
+    def _wait_for_next_tick(self, runtime: Executor, resume_at_ns: int) -> pimm.Run[tuple[Answer[Any], ...]]:
         """Return completions before advancing time; otherwise follow simulator ticks or poll real time.
 
         Shutdown is checked between episode iterations. Pending inference may delay shutdown;
@@ -236,8 +237,6 @@ class Harness(pimm.ControlSystem):
                     break
                 case WaitStatus.TIMED_OUT:
                     continue
-        if resume_at_ns is None:
-            resume_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9)
         # A positive real-time sleep gives this loop its own wake-up, independent of other loops' timers.
         delay_ns = max(1, resume_at_ns - runtime.time_ns)
         if runtime.has_pending:
@@ -260,21 +259,24 @@ class Harness(pimm.ControlSystem):
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
         policy_run = None
+        opened = False
         try:
             policy_run = runtime.start(rollout.policy)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
             self.ds_command.emit(DsWriterCommand.START(rollout.output_path))
+            opened = True
             payload = None
             resume_at_ns = None
             completed = ()
             while not should_stop.value and payload is None:
                 if completed or resume_at_ns is None or runtime.time_ns >= resume_at_ns:
                     resume_at_ns = self._step(task, runtime, policy_run, resume_at_ns)
-                wake_at_ns = resume_at_ns
+                # No complete observation yet: read the sensors again after one poll period.
+                wake_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9) if resume_at_ns is None else resume_at_ns
                 if deadline_ns is not None:
-                    wake_at_ns = deadline_ns if wake_at_ns is None else min(wake_at_ns, deadline_ns)
+                    wake_at_ns = min(wake_at_ns, deadline_ns)
                 completed = yield from self._wait_for_next_tick(runtime, wake_at_ns)
                 if call := next(self.perform_task.incoming(), None):
                     call.set_exception(RuntimeError('An episode is already running'))
@@ -289,6 +291,12 @@ class Harness(pimm.ControlSystem):
             self.ds_command.emit(
                 DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
             )
+        except Exception:
+            # A failed episode clears its deadline and discards its recording: the harness serves the next call.
+            if opened:
+                self.deadline_ns.emit(None)
+                self.ds_command.emit(DsWriterCommand.ABORT())
+            raise
         finally:
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
@@ -324,12 +332,16 @@ class Harness(pimm.ControlSystem):
                 pimm.read_updated(self.done)
                 if call is not None:
                     payload = None
+                    failure: BaseException = pimm.calls.HandlerStopped()
+                    # rules-allow: swallowed-error — the answer carries the error; the caller decides if the run ends
                     try:
                         payload = yield from self._run_episode(clock, should_stop, call.request)
+                    except Exception as exc:
+                        failure = exc
                     finally:
                         self._telemetry.end(clock.now(), partial=True)
                         if payload is None:
-                            call.set_exception(pimm.calls.HandlerStopped())
+                            call.set_exception(failure)
                     if payload is not None:
                         call.set_result(payload)
                 elif manual is not None:

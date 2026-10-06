@@ -91,6 +91,7 @@ COPY pyproject.toml uv.lock ./
 COPY client/pyproject.toml client/
 COPY wire/pyproject.toml wire/
 COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
 RUN uv-positronic sync --locked --python 3.12 --no-dev --no-install-workspace && uv-positronic cache clean
 COPY . /positronic
 RUN uv-positronic sync --locked --python 3.12 --no-dev && uv-positronic cache clean

@@ -19,11 +19,6 @@ DROID_IMPEDANCE = command.Impedance(
 )
 
 
-def droid_start_pose() -> command.JointPosition:
-    """The command a DROID trial opens with: joints drawn afresh around the Franka's nominal, under DROID's gains."""
-    return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD, DROID_IMPEDANCE)
-
-
 @cfn.config(
     ip='172.168.0.2',
     relative_dynamics_factor=0.2,
@@ -73,8 +68,8 @@ def so101(motor_bus):
     return Robot(motor_bus=motor_bus)
 
 
-@cfn.config(channel='can0', sim=False, base_pose=None)
-def yam(channel: str, sim: bool, base_pose):
+@cfn.config(channel='can0', sim=False, base_pose=None, gravity_comp_factor=None)
+def yam(channel: str, sim: bool, base_pose, gravity_comp_factor):
     from positronic.drivers.roboarm.yam import Robot
 
-    return Robot(channel, base_pose=base_pose, sim=sim)
+    return Robot(channel, base_pose=base_pose, sim=sim, gravity_comp_factor=gravity_comp_factor)
