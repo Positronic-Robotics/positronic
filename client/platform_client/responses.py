@@ -243,7 +243,6 @@ class ResolvedPlan(BaseModel):
 
     episodes_total: int = Field(ge=1)
     tasks: list[ResolvedTask] = Field(min_length=1)
-    # None when the gateway response omits the rig shape.
     rig_shape: Slugged[RigShape] | None = None
 
     @model_validator(mode='after')
