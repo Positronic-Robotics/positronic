@@ -35,6 +35,7 @@ from .core import (
     Message,
     ShutdownPolicy,
     SignalEmitter,
+    SignalError,
     SignalReceiver,
     Sleep,
     Yield,
@@ -84,7 +85,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
     The emitter owns both the queue transport and (when selected) a
     shared-memory buffer. It defers the transport choice until the first payload
-    unless ``forced_mode`` pins the decision.
+    unless ``forced_mode`` pins the decision. A ``SignalError`` does not choose the transport: it goes on the
+    queue, and it clears the shared-memory time, so a receiver reads the queue until the next payload.
 
     Broadcast emitting is supported by allowing queues, up_values and sm_queues be lists.
     """
@@ -193,6 +195,11 @@ class MultiprocessEmitter(SignalEmitter[T]):
         return True
 
     def _emit(self, data: T, time: Time):
+        if isinstance(data, SignalError):
+            with self._lock:
+                self._time_value.value = None
+                self._emit_queue(data, time)
+            return
         mode = self._ensure_mode(data)
 
         if mode is TransportMode.SHARED_MEMORY:
@@ -280,7 +287,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
             message = None
         else:
             self._last_queue_message = message._received(self._clock)
-            if self._mode is TransportMode.UNDECIDED:
+            if self._mode is TransportMode.UNDECIDED and not isinstance(message.data, SignalError):
                 self._mode = TransportMode.QUEUE
             return self._last_queue_message
 
@@ -319,12 +326,12 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
     def _read_shared_memory(self) -> Message[T] | None:
         if not self._ensure_shared_memory_initialized():
-            return None
+            return self._read_queue()
 
         with self._lock:
             time = self._time_value.value
             if time is None:
-                return None
+                return self._read_queue()
 
             assert self._readonly_buffer is not None
             assert self._out_value is not None
@@ -332,9 +339,19 @@ class MultiprocessReceiver(SignalReceiver[T]):
                 self._out_value.read_from_buffer(self._readonly_buffer)
                 self._last_shared_message = Message(cast(T, self._out_value), time)._received(self._clock)
                 self._up_value.value = False
+                self._drop_errors()
                 return self._last_shared_message
             assert self._last_shared_message is not None
             return Message(self._last_shared_message.data, self._last_shared_message.time, False)
+
+    def _drop_errors(self) -> None:
+        """Drop each ``SignalError`` that a newer shared-memory payload replaces."""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except Empty:
+                break
+        self._last_queue_message = None
 
     def read(self) -> Message[T] | None:
         mode = self.transport_mode
@@ -440,12 +457,16 @@ _ORPHAN_POLL_S = 0.5
 _STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
 
+def _parent_is_gone(parent_pid: int) -> bool:
+    return os.getppid() != parent_pid
+
+
 def _stop_when_orphaned(stop_event: EventClass, name: str, parent_pid: int) -> None:
     """Stop this child's World once its parent is gone."""
 
     def watch() -> None:
         while not stop_event.is_set():
-            if os.getppid() != parent_pid:
+            if _parent_is_gone(parent_pid):
                 logger.warning(f'{name}: the parent process {parent_pid} is gone; stopping')
                 stop_event.set()
                 return
@@ -467,11 +488,18 @@ def _bg_wrapper(
         # Stop only on the parent's stop event, so the device finishes its shutdown.
         for signum in _STOP_SIGNALS:
             signal.signal(signum, signal.SIG_IGN)
-    _stop_when_orphaned(stop_event, name, parent_pid)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
         configure_process_logging(parent_component_levels)
+        # The parent can die, or stop the World, while this child imports.
+        if _parent_is_gone(parent_pid):
+            logger.warning(f'{name}: the parent process {parent_pid} is gone; not starting')
+            return
+        if stop_event.is_set():
+            logger.info(f'{name}: the World stopped before this process started; not starting')
+            return
+        _stop_when_orphaned(stop_event, name, parent_pid)
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
                 case Sleep(seconds):

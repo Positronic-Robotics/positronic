@@ -29,6 +29,7 @@ from pimm.core import (
     ReceiverDict,
     ShutdownPolicy,
     SignalEmitter,
+    SignalError,
     SignalReceiver,
     Sleep,
     Yield,
@@ -49,6 +50,7 @@ from pimm.world import (
     TransportMode,
     VirtualClock,
     World,
+    _bg_wrapper,
     _stop_when_orphaned,
 )
 
@@ -576,6 +578,89 @@ class TestWorld:
 
             with pytest.raises(TypeError, match='Shared memory transport selected'):  # type: ignore[arg-type]
                 emitter.emit('not-compatible')
+
+    @staticmethod
+    def _one_mp_pipe(
+        world: World, transport: TransportMode = TransportMode.UNDECIDED
+    ) -> tuple[MultiprocessEmitter, MultiprocessReceiver]:
+        emitter, reader = world.mp_pipes(transport=transport)
+        assert isinstance(emitter, MultiprocessEmitter) and isinstance(reader, MultiprocessReceiver)
+        return emitter, reader
+
+    @staticmethod
+    def _read(reader: SignalReceiver) -> Message:
+        message = reader.read()
+        assert message is not None
+        return message
+
+    def test_mp_pipes_carry_a_signal_error_beside_shared_memory(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit(DummySMValue(1.0), time=Time(capture=1))
+            assert self._read(reader).data.value == pytest.approx(1.0)
+
+            error = SignalError('camera lost')
+            emitter.emit(error, time=Time(capture=2))
+
+            message = self._read(reader)
+            assert (message.data.args, message.time['capture'], message.updated) == (error.args, 2, True)
+            with pytest.raises(SignalError, match='camera lost'):
+                _ = reader.value
+            assert self._read(reader).updated is False
+
+            emitter.emit(DummySMValue(3.0), time=Time(capture=3))
+            message = self._read(reader)
+            assert (message.data.value, message.time['capture'], message.updated) == (pytest.approx(3.0), 3, True)
+            assert emitter.uses_shared_memory and reader.uses_shared_memory
+
+    def test_mp_pipes_give_the_newest_of_errors_and_shared_memory_payloads(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit(DummySMValue(1.0), time=Time(capture=1))
+            emitter.emit(SignalError('lost'), time=Time(capture=2))
+            emitter.emit(DummySMValue(3.0), time=Time(capture=3))
+
+            message = self._read(reader)
+            assert (message.data.value, message.time['capture']) == (pytest.approx(3.0), 3)
+
+            emitter.emit(SignalError('lost again'), time=Time(capture=4))
+            message = self._read(reader)
+            assert (message.data.args, message.time['capture']) == (('lost again',), 4)
+
+    def test_a_signal_error_does_not_choose_the_transport(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit(SignalError('camera absent'), time=Time(capture=1))
+
+            assert self._read(reader).data.args == ('camera absent',)
+            assert not emitter.uses_shared_memory and not reader.uses_shared_memory
+
+            emitter.emit(DummySMValue(2.0), time=Time(capture=2))
+            message = self._read(reader)
+            assert (message.data.value, message.time['capture']) == (pytest.approx(2.0), 2)
+            assert emitter.uses_shared_memory and reader.uses_shared_memory
+
+    def test_a_shared_memory_receiver_reads_a_signal_error_before_the_first_payload(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world, TransportMode.SHARED_MEMORY)
+            emitter.emit(SignalError('camera absent'), time=Time(capture=1))
+            assert self._read(reader).data.args == ('camera absent',)
+
+            emitter.emit(DummySMValue(2.0), time=Time(capture=2))
+            message = self._read(reader)
+            assert (message.data.value, message.time['capture']) == (pytest.approx(2.0), 2)
+
+    def test_mp_pipes_carry_a_signal_error_on_a_queue_transport(self):
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world)
+            emitter.emit('hello', time=Time(capture=1))
+            assert self._read(reader).data == 'hello'
+
+            emitter.emit(SignalError('lost'), time=Time(capture=2))
+            assert self._read(reader).data.args == ('lost',)
+
+            emitter.emit('again', time=Time(capture=3))
+            assert self._read(reader).data == 'again'
 
 
 class TestWorldControlSystems:
@@ -1626,7 +1711,7 @@ def test_a_signal_while_a_protected_child_spawns_still_registers_and_joins_it(mo
             with world:
                 world.start([], ShutdownWaiter(ready, holding, release, closed))
         assert len(world.background_processes) == 1
-        assert closed.is_set()
+        assert not ready.is_set()  # born stopped, so its loop never ran
     finally:
         signal.signal(signal.SIGINT, previous)
 
@@ -1976,6 +2061,44 @@ def test_a_child_whose_parent_is_alive_keeps_running():
         assert not stop.wait(1.0)
     finally:
         stop.set()
+
+
+def _mark_started(marker, should_stop, clock) -> Iterator[Command]:
+    marker.touch()
+    yield Yield()
+
+
+def _run_wrapper_in_a_child(tmp_path, parent_pid: int, *, stopped: bool = False):
+    """Run `_bg_wrapper` in a spawned child that names `parent_pid` as its parent; return the marker and stop event."""
+    ctx = mp.get_context('spawn')
+    stop, marker = ctx.Event(), tmp_path / 'started'
+    if stopped:
+        stop.set()
+    args = (partial(_mark_started, marker), stop, SystemClock(), 'probe', {}, ShutdownPolicy.BEST_EFFORT, parent_pid)
+    child = ctx.Process(target=_bg_wrapper, args=args)
+    child.start()
+    child.join(timeout=30)
+    assert child.exitcode == 0
+    return marker, stop
+
+
+def test_a_child_whose_parent_is_gone_before_it_starts_never_runs_its_loop(tmp_path):
+    # The child's real parent is this process, so any other pid reads as a parent that is gone.
+    marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getppid())
+    assert not marker.exists()
+    assert stop.is_set()
+
+
+def test_a_child_whose_world_stopped_before_it_starts_never_runs_its_loop(tmp_path):
+    marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getpid(), stopped=True)
+    assert not marker.exists()
+    assert stop.is_set()
+
+
+def test_a_child_whose_parent_is_alive_runs_its_loop(tmp_path):
+    marker, stop = _run_wrapper_in_a_child(tmp_path, parent_pid=os.getpid())
+    assert marker.exists()
+    assert stop.is_set()
 
 
 class YieldsNone(ControlSystem):
