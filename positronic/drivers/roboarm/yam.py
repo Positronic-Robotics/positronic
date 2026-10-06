@@ -205,6 +205,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._shutting_down = False
         self._publish_failure_logged = False
         self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
+        self._sent_at = 0.0
 
     def observations(self) -> dict[str, np.ndarray]:
         return self.vendor.get_observations()
@@ -235,18 +236,20 @@ class _Arm(DriverRun[command.CommandType]):
     def _send(self, joints: np.ndarray, open_width: float) -> None:
         self.vendor.command_joint_pos(np.append(joints, open_width))
         self._sent_joints = np.array(joints, dtype=np.float64)
+        self._sent_at = self.clock.now()
 
     def command_target(self, joints: np.ndarray, grip: float) -> None:
         """Command the joints and the grip; the vendor takes the grip as open width."""
         self._send(joints, 1.0 - grip)
 
     def command_step_toward(self, target: np.ndarray, grip: float) -> None:
-        """Command the grip, and the joints one tick of travel from the last joints sent toward ``target``."""
+        """Command the grip, and the joints toward ``target`` as far as the speed cap allows since the last joints
+        sent, counting at most one tick: a late tick does not catch up."""
         if self._sent_joints is None:
             raise RuntimeError('the chain has received no joints to step from')
         step = target - self._sent_joints
         farthest = float(np.max(np.abs(step)))
-        max_step = self._MAX_STREAMED_JOINT_SPEED_RAD_S / _CONTROL_HZ
+        max_step = self._MAX_STREAMED_JOINT_SPEED_RAD_S * min(self.clock.now() - self._sent_at, 1 / _CONTROL_HZ)
         if farthest <= max_step:
             self.command_target(target, grip)
         else:

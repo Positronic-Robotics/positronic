@@ -577,6 +577,35 @@ def test_a_far_streamed_target_is_approached_in_a_line_at_the_speed_cap(rig):
     np.testing.assert_array_equal(asked[-1], RAISED)
 
 
+def test_a_late_tick_moves_the_streamed_target_no_faster_than_the_cap(rig, monkeypatch):
+    rig.tick(4)
+    sent_at = []
+    command_joint_pos = rig.vendor.command_joint_pos
+
+    def timed(joint_pos):
+        sent_at.append(rig.clock.now())
+        command_joint_pos(joint_pos)
+
+    monkeypatch.setattr(rig.vendor, 'command_joint_pos', timed)
+    rig.commands.push(command.JointPosition(RAISED))
+    rig.tick(0.05)
+    rig.clock.advance(0.0095)  # the loop wakes 9.5 ms late, and its next tick comes 0.5 ms later
+    rig.tick(0.05)
+    steps = np.max(np.abs(np.diff(_asked(rig)[-len(sent_at) :], axis=0)), axis=1)
+    assert np.all(steps <= yam._Arm._MAX_STREAMED_JOINT_SPEED_RAD_S * np.diff(sent_at) + 1e-12)
+
+
+def test_a_stalled_loop_moves_the_streamed_target_one_tick_at_most_when_it_wakes(rig):
+    rig.tick(4)
+    rig.commands.push(command.JointPosition(RAISED))
+    rig.tick(0.05)
+    sent = len(rig.vendor.targets)
+    rig.clock.advance(0.2)  # the loop stalls for twenty ticks
+    rig.tick()
+    asked = _asked(rig)[sent - 1 :]
+    assert np.max(np.abs(np.diff(asked, axis=0))) <= MAX_STREAMED_STEP * (1 + 1e-9)
+
+
 # A joint step between two commands of a 15 Hz policy, which the cap must pass before the next command
 POLICY_STEP_RAD, POLICY_HZ = 0.12, 15.0
 
