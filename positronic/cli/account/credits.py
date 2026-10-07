@@ -1,7 +1,6 @@
 import sys
 
 import configuronic as cfn
-from platform_client.billing import PurchasePageLimit
 from platform_client.client import PlatformClient
 from platform_client.ids import OrgSlug, PackageId, PurchaseId, TransactionKey
 from platform_client.requests import (
@@ -9,9 +8,9 @@ from platform_client.requests import (
     BillingOrgQuery,
     BillingPurchaseCreateRequest,
     BillingPurchaseGetQuery,
-    BillingPurchaseListQuery,
+    PurchasePageLimit,
 )
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from positronic.cli.account.gateway import gateway, refusing_bad_input
 
@@ -89,8 +88,7 @@ def purchases(
     named = _named_org(org)
     cursor = PurchaseId(_text(after, 'after')) if after is not None else None
     with refusing_bad_input():
-        page_limit = TypeAdapter(PurchasePageLimit).validate_python(limit)
+        page_limit = TypeAdapter(PurchasePageLimit, config=ConfigDict(title='limit')).validate_python(limit)
     with gateway(platform_url) as client:
-        query = BillingPurchaseListQuery(org=_org(client, named), after=cursor, limit=page_limit)
-        result = client.list_purchases(query.org, after=query.after, limit=query.limit)
+        result = client.list_purchases(_org(client, named), after=cursor, limit=page_limit)
     print(result.model_dump_json(indent=2))

@@ -10,6 +10,7 @@ from platform_client import routes
 from platform_client.billing import CREDIT_SCALE, Tariff
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
 from platform_client.ids import ApiKey
+from pydantic import ValidationError
 
 from positronic.cli.account import commands
 from positronic.cli.account import gateway as gateway_module
@@ -324,14 +325,14 @@ def test_personal_purchase_history_cli_keeps_the_continuation(platform, run_comm
 
 @pytest.mark.parametrize('limit', [0, -1, True, 1.5, '50', None])
 def test_purchase_history_refuses_invalid_limit_before_http(platform, run_command, limit):
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit, match='limit'):
         run_command(purchases, org='acme', limit=limit)
     assert platform.seen is None
 
 
 @pytest.mark.parametrize('limit', [0, -1, True, 1.5, '50', None])
 def test_personal_purchase_history_refuses_invalid_limit_before_http(platform, run_command, limit):
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit, match='limit'):
         run_command(purchases, limit=limit)
     assert platform.seen is None
 
@@ -369,5 +370,33 @@ def test_purchase_commands_hide_values_from_malformed_response(command, platform
 
 def test_purchase_history_refuses_an_answer_without_continuation(platform, run_command):
     platform.answer({'purchases': []})
-    with pytest.raises(SystemExit, match='cannot read: next'):
+    with pytest.raises(SystemExit, match='cannot read: missing'):
         run_command(purchases, org='acme')
+
+
+def test_billing_response_hides_extra_field_names(platform, run_command):
+    private_key = 'private-response-key-marker'
+    platform.answer({**ACCOUNT, 'packages': [{**PACKAGE, private_key: 'private-value'}]})
+    with pytest.raises(SystemExit) as raised:
+        run_command(account, org='acme')
+    message = str(raised.value)
+    assert 'the platform answered with a response the client cannot read' in message
+    assert 'extra_forbidden' in message
+    assert private_key not in message
+
+
+def test_personal_discovery_hides_response_validation_field_names(monkeypatch, run_command):
+    private_key = 'private-response-key-marker'
+
+    def unreadable_profile(self):
+        raise ValidationError.from_exception_data(
+            'MeResponse', [{'type': 'extra_forbidden', 'loc': (private_key,), 'input': 'private-value'}]
+        )
+
+    monkeypatch.setattr(gateway_module.PlatformClient, 'me', unreadable_profile)
+    with pytest.raises(SystemExit) as raised:
+        run_command(account)
+    message = str(raised.value)
+    assert 'the platform answered with a response the client cannot read' in message
+    assert 'extra_forbidden' in message
+    assert private_key not in message
