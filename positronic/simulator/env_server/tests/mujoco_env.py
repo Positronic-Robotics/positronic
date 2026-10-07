@@ -131,9 +131,9 @@ class MujocoEnv(EnvProtocol):
             protocol.FRAME_CONTROL_DT: self._timestep,
         }
 
-    def step(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
+    def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
         assert self._gen is not None, 'step() called before reset()'  # real Gym envs reject step-before-reset
-        (action,) = actions  # one scene, so one slot
+        (action,) = actions.values()  # one scene, so one slot
         wire = protocol.single_arm(action)
         command = wire[protocol.ROBOT_COMMAND]
         match command[protocol.COMMAND_TYPE]:

@@ -117,18 +117,15 @@ def test_transport_is_transparent(env_server):
     seed = 7
 
     direct = make_mujoco_env(list(CAMERAS.values()))
-    direct_reset = direct.reset(seed)
-    (base_slot,) = direct_reset[protocol.SLOTS]  # this env serves one slot, so ``slots`` holds one entry
-    base = np.asarray(base_slot[protocol.FRAME_OBS]['q'])
+    direct_reset = protocol.slot_frame(direct.reset(seed), 0)
+    base = np.asarray(direct_reset[protocol.FRAME_OBS]['q'])
     actions = [
-        [
-            protocol.single_arm_action(
-                {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: base + 0.03 * i}, 0.2 * (i % 2)
-            )
-        ]
+        protocol.single_arm_action(
+            {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: base + 0.03 * i}, 0.2 * (i % 2)
+        )
         for i in range(1, 6)
     ]
-    direct_steps = [direct.step(action) for action in actions]
+    direct_steps = [protocol.slot_frame(direct.step({0: action}), 0) for action in actions]
     direct.close()
 
     conn = EnvConnection(host, port)
@@ -137,16 +134,10 @@ def test_transport_is_transparent(env_server):
     conn.close()
 
     assert direct_reset[protocol.FRAME_CONTROL_DT] == socket_reset[protocol.FRAME_CONTROL_DT]
-    _assert_obs_equal(
-        direct_reset[protocol.SLOTS][0][protocol.FRAME_OBS], socket_reset[protocol.SLOTS][0][protocol.FRAME_OBS]
-    )
+    _assert_obs_equal(direct_reset[protocol.FRAME_OBS], socket_reset[protocol.FRAME_OBS])
     for direct_step, socket_step in zip(direct_steps, socket_steps, strict=True):
-        _assert_obs_equal(
-            direct_step[protocol.SLOTS][0][protocol.FRAME_OBS], socket_step[protocol.SLOTS][0][protocol.FRAME_OBS]
-        )
-        assert (
-            direct_step[protocol.SLOTS][0][protocol.FRAME_DONE] == socket_step[protocol.SLOTS][0][protocol.FRAME_DONE]
-        )
+        _assert_obs_equal(direct_step[protocol.FRAME_OBS], socket_step[protocol.FRAME_OBS])
+        assert direct_step[protocol.FRAME_DONE] == socket_step[protocol.FRAME_DONE]
         assert direct_step[protocol.FRAME_CONTROL_DT] == socket_step[protocol.FRAME_CONTROL_DT]
 
 
@@ -221,7 +212,7 @@ def _serve_without_heartbeat(monkeypatch, answer_after: float | None):
                 return
             if release.wait(timeout=answer_after):
                 return
-            connection.send(protocol.encode({protocol.SLOTS: [{protocol.FRAME_OBS: {'ready': True}}]}))
+            connection.send(protocol.encode({protocol.FRAME_OBS: {'ready': True}}))
 
     host, port = 'localhost', free_port()
     with websocket_serve(handler, host, port) as server:
@@ -253,25 +244,23 @@ def test_scene_reset_survives_delayed_heartbeat_replies(server_without_heartbeat
     host, port, ignored_pings = server_without_heartbeat
     conn = EnvConnection(host, port)
     try:
-        assert conn.reset({}) == {protocol.SLOTS: [{protocol.FRAME_OBS: {'ready': True}}]}
+        assert conn.reset({}) == {protocol.FRAME_OBS: {'ready': True}}
         assert ignored_pings
     finally:
         conn.close()
 
 
 @pytest.mark.timeout(10.0)
-@pytest.mark.parametrize(
-    ('command', 'payload'), [(EnvConnection.tasks, {}), (EnvConnection.reset, {}), (EnvConnection.step, [])]
-)
-def test_unanswered_heartbeat_closes_pending_requests(mute_server_without_heartbeat, command, payload):
+@pytest.mark.parametrize('command', [EnvConnection.tasks, EnvConnection.reset, EnvConnection.step])
+def test_unanswered_heartbeat_closes_pending_requests(mute_server_without_heartbeat, command):
     host, port, ignored_pings = mute_server_without_heartbeat
     conn = EnvConnection(host, port, ping_timeout=0.02)
     try:
         with pytest.raises(ConnectionClosedError, match='keepalive ping timeout'):
-            command(conn, payload)
+            command(conn, {})
         assert ignored_pings
         with pytest.raises(ConnectionClosedError):
-            conn.step([])
+            conn.step({})
     finally:
         conn.close()
 
@@ -281,10 +270,10 @@ _HOLD = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
 
 def _settle(env, action: dict, steps: int) -> np.ndarray:
     """Apply the action once, hold for ``steps`` ticks, and return the settled end-effector position."""
-    (slot,) = env.step([action])[protocol.SLOTS]
+    out = protocol.slot_frame(env.step({0: action}), 0)
     for _ in range(steps):
-        (slot,) = env.step([_HOLD])[protocol.SLOTS]
-    return np.asarray(slot[protocol.FRAME_OBS]['ee_pos'])
+        out = protocol.slot_frame(env.step({0: _HOLD}), 0)
+    return np.asarray(out[protocol.FRAME_OBS]['ee_pos'])
 
 
 class _CommandOnlyAdapter(WireCommandAdapter):
@@ -489,9 +478,9 @@ def test_cartesian_delta_matches_absolute_target():
     lift = np.array([0.0, 0.0, 0.04])
 
     abs_env = make_mujoco_env(list(CAMERAS.values()))
-    (reset_slot,) = abs_env.reset(seed)[protocol.SLOTS]
-    ee0 = np.asarray(reset_slot[protocol.FRAME_OBS]['ee_pos'])
-    target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset_slot[protocol.FRAME_OBS]['ee_quat']))
+    reset = protocol.slot_frame(abs_env.reset(seed), 0)
+    ee0 = np.asarray(reset[protocol.FRAME_OBS]['ee_pos'])
+    target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset[protocol.FRAME_OBS]['ee_quat']))
     absolute = protocol.single_arm_action(
         {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: target.as_vector(rotmat)}, 0.0
     )
@@ -542,7 +531,6 @@ class _CountdownEnv(EnvProtocol):
         }
 
     def step(self, actions):
-        assert len(actions) == 1, 'this env serves one slot'
         self._steps += 1
         done = self._done_after is not None and self._steps >= self._done_after
         return {
@@ -757,7 +745,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
         {protocol.CMD: 'bogus'},
         {
             protocol.CMD: protocol.Command.STEP.value,
-            protocol.ACTIONS: [protocol.single_arm_action({protocol.COMMAND_TYPE: 'bogus'}, 0.0)],
+            protocol.ACTION: protocol.single_arm_action({protocol.COMMAND_TYPE: 'bogus'}, 0.0),
         },
     ],
 )
@@ -769,5 +757,5 @@ def test_server_failure_crosses_as_error_frame(env_server, message):
     with pytest.raises(RuntimeError, match='bogus'):
         conn._request(message)
     joints = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: np.zeros(7)}
-    assert protocol.SLOTS in conn.step([protocol.single_arm_action(joints, 0.0)])
+    assert protocol.FRAME_OBS in conn.step(protocol.single_arm_action(joints, 0.0))
     conn.close()

@@ -98,12 +98,12 @@ def _goal_qpos(c) -> np.ndarray:
 
 def _reset(env: LiberoEnv, token: dict) -> dict:
     """Reset the env under validation and report its one slot's frame."""
-    return protocol.one_slot(env.reset(token))
+    return protocol.slot_frame(env.reset(token), 0)
 
 
 def _step(env: LiberoEnv, action: dict) -> dict:
     """Step the env under validation with one slot's action and report that slot's frame."""
-    return protocol.one_slot(env.step([action]))
+    return protocol.slot_frame(env.step({0: action}), 0)
 
 
 def _check_serve(env: LiberoEnv, token: dict) -> None:

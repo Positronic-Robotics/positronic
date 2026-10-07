@@ -1,8 +1,8 @@
-"""How many scene clones a run asks for, from the eval config down to the env server's own command line.
+"""How a run reaches its RoboLab env server: the clone count on the server's own command line, and an eval
+that shares a server some other process runs.
 
 Nothing here spawns RoboLab: the spawn needs its pinned checkout and the whole Isaac Lab stack, which
-``e2e.py`` exercises on a RoboLab box. What is checked is that the number a run names is the number the
-server is told to clone.
+``e2e.py`` exercises on a RoboLab box.
 """
 
 import subprocess
@@ -11,9 +11,22 @@ from typing import Any
 import pytest
 
 from positronic.cfg.eval.sim import robolab as robolab_cfg
+from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import launcher as env_launcher
+from positronic.simulator.env_server.server import EnvProtocol
+from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab import launcher
+
+
+class _StubProcess:
+    """Stands in for the spawned server: with the bind wait stubbed out, it is only ever terminated."""
+
+    def terminate(self) -> None:
+        pass
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
 
 
 @pytest.fixture
@@ -28,47 +41,49 @@ def spawned(monkeypatch) -> list[list[str]]:
     return commands
 
 
-class _StubProcess:
-    """Stands in for the spawned server: with the bind wait stubbed out, it is only ever terminated."""
-
-    def terminate(self) -> None:
-        pass
-
-    def wait(self, timeout: float | None = None) -> int:
-        return 0
-
-
 def _flag(command: list[str], name: str) -> str:
     return command[command.index(name) + 1]
 
 
 def test_a_run_that_names_no_clone_count_serves_one_scene(spawned):
-    """With no clone count named, the server is told to serve one scene behind the socket."""
     with launcher.serve_robolab(robolab_keys.WRIST_LEFT):
         pass
 
     assert _flag(spawned[0], '--num-envs') == '1'
 
 
-def test_the_clone_count_reaches_the_env_server(spawned):
-    """A run that asks for 16 clones tells the server to clone 16 times."""
-    with launcher.serve_robolab(robolab_keys.WRIST_LEFT, num_envs=16):
+def test_the_clone_count_and_the_host_reach_the_env_server(spawned):
+    with launcher.serve_robolab(robolab_keys.WRIST_LEFT, '0.0.0.0', num_envs=16):
         pass
 
     assert _flag(spawned[0], '--num-envs') == '16'
+    assert _flag(spawned[0], '--host') == '0.0.0.0'
     assert _flag(spawned[0], '--cameras') == robolab_keys.WRIST_LEFT
 
 
-def test_the_eval_config_surfaces_the_clone_count(monkeypatch):
-    """``--eval.num_envs`` is what an operator sets; it reaches the launcher unchanged."""
-    asked: list[Any] = []
+class _OneTaskEnv(EnvProtocol):
+    """Answers the task listing a RoboLab server would give for one task."""
 
-    def serve_robolab(cameras: str, num_envs: int = 1):
-        asked.append((cameras, num_envs))
-        return None
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{'name': 'BananaInBowlTask', 'episode_length_s': 30.0}]
 
-    monkeypatch.setattr(robolab_cfg, 'serve_robolab', serve_robolab)
+    def reset(self, token: Any) -> dict[str, Any]:
+        raise AssertionError('the listing needs no reset')
 
-    robolab_cfg.banana_in_bowl.override(num_envs=8).instantiate()
+    def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
+        raise AssertionError('the listing needs no step')
 
-    assert asked == [(robolab_keys.WRIST_LEFT_RIGHT, 8)]
+    def close(self) -> None:
+        pass
+
+
+def test_an_eval_with_an_env_server_drives_that_server_and_launches_none(monkeypatch):
+    def launch(*args, **kwargs):
+        raise AssertionError('an eval that names an env server launched one of its own')
+
+    monkeypatch.setattr(robolab_cfg, 'serve_robolab', launch)
+    with serve_env(_OneTaskEnv(), slots=2) as (host, port):
+        ev = robolab_cfg.banana_in_bowl.override(env_server=f'{host}:{port}').instantiate()
+        trials = ev.tasks()
+
+    assert [trial.prepare_args[eval_keys.SCENE][eval_keys.TASK] for trial in trials] == ['BananaInBowlTask']

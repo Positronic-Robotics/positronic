@@ -195,8 +195,8 @@ class LiberoEnv(EnvProtocol):
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
-    def step(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
-        (action,) = actions  # LIBERO runs one scene per process, so this server serves one slot
+    def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
+        (action,) = actions.values()  # LIBERO runs one scene per process, so this server serves one slot
         wire = protocol.single_arm(action)
         arm = self._arm_action(wire[protocol.ROBOT_COMMAND])
         # positronic grip in [0, 1] maps to robosuite's [-1, 1]; robosuite's PandaGripper opens at -1 and closes

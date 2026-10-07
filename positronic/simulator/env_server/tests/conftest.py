@@ -12,14 +12,14 @@ from positronic.simulator.env_server.tests.mujoco_env import CAMERAS, make_mujoc
 
 
 @contextmanager
-def serve_env(env: EnvProtocol) -> Iterator[tuple[str, int]]:
-    """Serve one ``EnvProtocol`` on a localhost port in a background thread.
+def serve_env(env: EnvProtocol, slots: int = 1) -> Iterator[tuple[str, int]]:
+    """Serve one ``EnvProtocol`` with ``slots`` clients on a localhost port in a background thread.
 
     A thread (not a subprocess) shares this process, so a test's ``mj.Renderer`` monkeypatch reaches
     the server's render path.
     """
     host, port = 'localhost', free_port()
-    server = EnvServer(env, host, port)
+    server = EnvServer(env, host, port, slots)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 

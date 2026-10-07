@@ -161,7 +161,7 @@ class _MolmoObservationEnv(EnvProtocol):
         }
 
     def step(self, actions):
-        (action,) = actions  # this env serves one slot
+        (action,) = actions.values()  # this env serves one slot
         self.actions.append(action)
         return {
             protocol.SLOTS: [

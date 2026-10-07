@@ -17,7 +17,8 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
   reported but not fatal;
 - ``cartesian_delta``: solves to the same joint targets as the equivalent absolute command, and the composed
   target tracks end-to-end;
-- with ``--num-envs`` above one, the batch: every clone answers its own frame and takes its own command.
+- with ``--num-envs`` above one, the batch: every clone answers its own frame and takes its own command, and a
+  clone with no command holds.
 
 The transform checks all drive a single clone, whatever ``--num-envs`` asks for; the batch check builds its
 own env, because a clone count is fixed at ``create_env``.
@@ -98,12 +99,12 @@ def _wire_pose(pos: torch.Tensor, quat: torch.Tensor) -> np.ndarray:
 
 def _reset(env: RobolabEnv, token: dict) -> dict:
     """Reset the env under validation and report its one slot's frame: these checks drive a single scene."""
-    return protocol.one_slot(env.reset(token))
+    return protocol.slot_frame(env.reset(token), 0)
 
 
 def _step(env: RobolabEnv, action: dict) -> dict:
     """Step the env under validation with one slot's action and report that slot's frame."""
-    return protocol.one_slot(env.step([action]))
+    return protocol.slot_frame(env.step({0: action}), 0)
 
 
 def _settle(env: RobolabEnv) -> dict:
@@ -284,8 +285,8 @@ def _check_cartesian_delta(env: RobolabEnv) -> None:
     delta_cmd = {protocol.COMMAND_TYPE: protocol.CARTESIAN_DELTA, protocol.COMMAND_DELTA: _wire_pose(dpos, dquat)}
     pose_cmd = {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: _wire_pose(target_pos, target_quat)}
     # Same sim state, no stepping: the delta must solve to the joint targets of the absolute pose it composes to.
-    q_delta = env._joint_targets([delta_cmd])
-    q_abs = env._joint_targets([pose_cmd])
+    q_delta = env._joint_targets({0: delta_cmd})
+    q_abs = env._joint_targets({0: pose_cmd})
     assert torch.allclose(q_delta, q_abs, atol=1e-4), f'delta vs absolute joint targets differ: {q_delta - q_abs}'
     # End-to-end: one delta step, then hold the absolute target it defined.
     out = _step(env, protocol.single_arm_action(delta_cmd, 0.0))
@@ -302,32 +303,41 @@ def _check_cartesian_delta(env: RobolabEnv) -> None:
 def _check_batch(num_envs: int) -> None:
     """Every clone answers its own frame and takes the command addressed to it.
 
-    Each clone is driven to a target of its own, so a frame or an action that reached the wrong clone shows
-    up as a slot commanded away from its target. Builds its own env: the clone count is fixed at
-    ``create_env``, so this cannot share the single-clone env the checks above drive.
+    Each clone but the last is driven to a target of its own, and the last gets no command, so it holds. A
+    frame or an action that reached the wrong clone shows up as a slot away from its own target, or as a slot
+    whose observed joints are another clone's. Builds its own env: the clone count is fixed at ``create_env``,
+    so this cannot share the single-clone env the checks above drive.
     """
     env = RobolabEnv(num_envs)
     out = env.reset(_TOKEN)
-    assert len(out[protocol.SLOTS]) == num_envs, (
-        f'{num_envs} clones asked for, {len(out[protocol.SLOTS])} frames answered'
-    )
-    targets = [(env._measured_q()[slot] + 0.05 * (slot + 1)).cpu().numpy() for slot in range(num_envs)]
-    out = env.step([
-        protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: target}, 0.0)
-        for target in targets
-    ])
+    assert len(out[protocol.SLOTS]) == num_envs, f'{num_envs} clones asked for, {len(out[protocol.SLOTS])} answered'
+    held = num_envs - 1
+    start = env._measured_q().cpu().numpy()
+    targets = {slot: start[slot] + 0.05 * (slot + 1) for slot in range(held)}
+    before = start
+    for _ in range(_SETTLE_STEPS):
+        before = env._measured_q().cpu().numpy()
+        out = env.step({
+            slot: protocol.single_arm_action(
+                {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: target}, 0.0
+            )
+            for slot, target in targets.items()
+        })
     applied = env._env.action_manager.action[:, :7].cpu().numpy()
-    for slot, target in enumerate(targets):
+    for slot, target in targets.items():
         err = float(np.max(np.abs(applied[slot] - target)))
         assert err < 1e-6, f'clone {slot} was commanded {err:.6f} rad off its own target'
-    assert len(out[protocol.SLOTS]) == num_envs, (
-        f'the step answered {len(out[protocol.SLOTS])} slots for {num_envs} clones'
-    )
+    hold_err = float(np.max(np.abs(applied[held] - before[held])))
+    assert hold_err < 1e-6, f'clone {held} had no command and was commanded {hold_err:.6f} rad off its joints'
+    measured = env._measured_q().cpu().numpy()
+    assert len(out[protocol.SLOTS]) == num_envs, f'the step answered {len(out[protocol.SLOTS])} of {num_envs} clones'
     for slot, frame in enumerate(out[protocol.SLOTS]):
-        expected = {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS}
-        assert frame.keys() == expected, f'clone {slot} answered {sorted(frame)}'
+        assert frame.keys() == {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS}, sorted(frame)
+        observed = frame[protocol.FRAME_OBS][keys.OBS_JOINT_POS]
+        nearest = int(np.argmin(np.abs(measured - observed).max(axis=1)))
+        assert nearest == slot, f'slot {slot} answered the joints of clone {nearest}'
     env.close()
-    print(f'  batch: OK ({num_envs} clones answer their own frames and take their own commands)')
+    print(f'  batch: OK ({num_envs} clones answer their own frames, take their own commands, and hold without one)')
 
 
 def main() -> None:
