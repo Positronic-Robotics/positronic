@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.23.0"
+uv add "positronic-platform-client==0.24.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -79,6 +79,11 @@ positronic account credits purchase --id=<purchase-id>
 positronic account credits purchases --org=acme
 positronic account credits purchases --org=acme --limit=50 --after='"last-purchase-id"'
 ```
+
+`users.me` names the caller's personal organization in `personal_org` when the platform keeps one.
+The caller owns that organization alone. `account`, `buy` and `purchases` use it when the caller gives no `--org`.
+Each of these commands prints the organization it uses on stderr, for example `org: user-a0 (personal org)`.
+A platform that keeps no personal organization for the caller requires `--org`.
 
 These commands print typed JSON with exact integer units and configured currency amounts.
 Quote a numeric-looking text argument with inner quotes, for example `--transaction-key='"20261005"'`.

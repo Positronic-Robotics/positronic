@@ -28,7 +28,7 @@ from platform_client.enums import (
 )
 from platform_client.eval_plan import Clutter, EndpointAddress
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId, UserId
+from platform_client.ids import ApiKey, OrgSlug, SubmissionId, UserId
 from platform_client.slug import Slugged, slug_of
 from platform_client.tasks import TaskRef
 from pydantic import AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
@@ -282,7 +282,10 @@ class RegisterResponse(BaseModel):
 
 
 class MeResponse(BaseModel):
-    """`users.me`. `client` is the client a grant lets the caller file rig plans for, unset without one."""
+    """`users.me`. `client` is the client a grant lets the caller file rig plans for, unset without one.
+
+    `personal_org` is the org that the caller owns alone, unset where the platform keeps none for the caller.
+    """
 
     user_id: UserId
     alias: str | None = None
@@ -290,6 +293,7 @@ class MeResponse(BaseModel):
     plan: str
     quota: list[QuotaLimit]
     client: str | None = None
+    personal_org: OrgSlug | None = None
 
     def quota_for(self, key: str) -> QuotaLimit | None:
         """The limit under a rule key (`QUOTA_SUBMISSIONS_DAY` and friends), or None where the plan
