@@ -1,8 +1,7 @@
 """How a run reaches its RoboLab env server: the clone count on the server's own command line, and an eval
 that shares a server some other process runs.
 
-Nothing here spawns RoboLab: the spawn needs its pinned checkout and the whole Isaac Lab stack, which
-``e2e.py`` exercises on a RoboLab box.
+Nothing here spawns RoboLab: the spawn needs its pinned checkout and the whole Isaac Lab stack.
 """
 
 import subprocess
