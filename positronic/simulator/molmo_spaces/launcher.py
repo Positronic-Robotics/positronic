@@ -20,7 +20,7 @@ _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 _MAPPING_DIR = Path(__file__).parent
 
 _MOLMO_REPO = 'https://github.com/allenai/molmospaces.git'
-_MOLMO_COMMIT = 'c2f1b583f087e1d3994e1377574843b759d9d0f8'
+_MOLMO_COMMIT = '713fd12ab593c3bbb4abfaa76622e14249aa36b3'
 _MOLMO_SRC = Path.home() / '.cache' / 'positronic' / 'molmospaces' / 'src'
 
 # Version constraints compensate for MolmoSpaces' missing lockfile; the file documents how to regenerate them.
