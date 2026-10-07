@@ -1951,6 +1951,66 @@ def test_foreground_cleanup_errors_remain_visible_through_world_exit(
         assert raised.value is errors[0]
 
 
+@pytest.mark.parametrize('start_control_system', [True, False], ids=['start', 'interleave'])
+@pytest.mark.parametrize('scheduler_count', [2, 3])
+@pytest.mark.parametrize('body_error', [None, RuntimeError('body failed'), KeyboardInterrupt('body interrupted')])
+def test_separate_foreground_schedulers_keep_all_cleanup_errors_at_world_exit(
+    start_control_system, scheduler_count, body_error
+):
+    errors = [OSError('cleanup-first'), ValueError('cleanup-second'), KeyboardInterrupt('cleanup-third')][
+        :scheduler_count
+    ]
+    closed = []
+    owner = threading.get_ident()
+
+    class Closing(ControlSystem):
+        def __init__(self, index):
+            self.index = index
+
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(1)
+            finally:
+                closed.append((self.index, threading.get_ident()))
+                raise errors[self.index]
+
+    world = World(virtual_time=True)
+    systems = [Closing(index) for index in range(scheduler_count)]
+    schedulers = [world.start(system) if start_control_system else world.interleave(system.run) for system in systems]
+    stopped_at = world.clock.now()
+    with pytest.raises((OSError, BaseExceptionGroup)) as raised:
+        with world:
+            for scheduler in schedulers:
+                next(scheduler)
+            stopped_at = world.clock.now()
+            if body_error is not None:
+                raise body_error
+    assert closed == [(index, owner) for index in reversed(range(scheduler_count))]
+    assert all(list(scheduler) == [] for scheduler in schedulers)
+    assert world.clock.now() == stopped_at
+    assert world.should_stop
+
+    pending: list[BaseException] = [raised.value]
+    seen = set()
+    while pending:
+        error = pending.pop()
+        if id(error) in seen:
+            continue
+        seen.add(id(error))
+        if isinstance(error, BaseExceptionGroup):
+            pending.extend(error.exceptions)
+        if error.__context__ is not None:
+            pending.append(error.__context__)
+        if error.__cause__ is not None:
+            pending.append(error.__cause__)
+    rendered = ''.join(traceback.format_exception(raised.value))
+    assert all(id(error) in seen and str(error) in rendered for error in errors)
+    if body_error is not None:
+        assert isinstance(raised.value, BaseExceptionGroup)
+        assert raised.value.exceptions[0] is body_error
+
+
 @pytest.mark.parametrize('body_error', [RuntimeError('sibling failed'), KeyboardInterrupt()])
 def test_foreground_close_failure_keeps_the_primary_error_first_and_closes_other_loops(body_error):
     closed = []
