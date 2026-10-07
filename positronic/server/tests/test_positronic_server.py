@@ -209,14 +209,14 @@ def test_a_single_timeline_cached_rrd_is_not_reused(rrd_cache):
     assert not current.exists()
 
 
-_GRIP_LAYOUT = ReplayLayout(row_shares=(3, 1), top_shares=(1, 3), charts={'Grip': [keys.GRIP]})
+_GRIP_LAYOUT = ReplayLayout(split_shares=(3, 1), view_shares=(1, 3), charts={'Grip': [keys.GRIP]})
 
 
 def test_a_cached_rrd_built_under_another_layout_is_not_served(rrd_cache):
     reordered = {'Joints': [keys.JOINTS], 'Grip': [keys.GRIP]}
     assert rrd_cache(30.0, 640) != rrd_cache(30.0, 640, _GRIP_LAYOUT)
     assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, show_unnamed_signals=False))
-    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, row_shares=(3, 2)))
+    assert rrd_cache(30.0, 640, _GRIP_LAYOUT) != rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, split_shares=(3, 2)))
     assert rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, charts={'Grip': [keys.GRIP], 'Joints': [keys.JOINTS]})) != (
         rrd_cache(30.0, 640, replace(_GRIP_LAYOUT, charts=reordered))
     )
