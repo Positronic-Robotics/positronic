@@ -779,9 +779,15 @@ class World:
         resolving at one instant with no loop ever sleeping or finishing, the clock cannot advance —
         a stall (a hang in virtual time, a busy-spin on a wall clock) that ``interleave`` warns about.
         """
-        yield from self._interleave([iter(loop(self.should_stop_reader(), self._clock)) for loop in loops])
 
-    def _interleave(self, iters: list[Iterator[Command]]) -> Iterator[Command]:
+        def run_loops() -> Generator[Command, None, None]:
+            yield from self._interleave([iter(loop(self.should_stop_reader(), self._clock)) for loop in loops])
+
+        scheduler = run_loops()
+        self._foreground_scope.callback(scheduler.close)
+        return scheduler
+
+    def _interleave(self, iters: list[Iterator[Command]]) -> Generator[Command, None, None]:
         with contextlib.ExitStack() as scope:
             self._foreground_scope.callback(scope.close)
             for loop in iters:
@@ -795,6 +801,8 @@ class World:
                 try:
                     scope.close()
                 except BaseException as close_error:
+                    if isinstance(exc, GeneratorExit):
+                        raise
                     raise BaseExceptionGroup('Foreground shutdown failed', [exc, close_error]) from None
                 raise
 
@@ -1070,7 +1078,9 @@ class World:
 
         for cs in spawned:
             self.start_in_subprocess(_CallAnsweringLoop(cs), shutdown_policy=cs.shutdown_policy)
-        return self._interleave([self._run_foreground(cs) for cs in in_process])
+        scheduler = self._interleave([self._run_foreground(cs) for cs in in_process])
+        self._foreground_scope.callback(scheduler.close)
+        return scheduler
 
     def run(
         self,
