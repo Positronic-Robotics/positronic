@@ -93,7 +93,7 @@ class SLCamera(pimm.ControlSystem):
 
         # The exposure, gain and white balance the camera runs at, read back from it every ``state_period_sec``
         # while something receives them.
-        self.state: pimm.ControlSystemEmitter[dict[str, int]] = pimm.ControlSystemEmitter(self)
+        self.state: pimm.ControlSystemEmitter[dict[str, int | bool]] = pimm.ControlSystemEmitter(self)
         self._state_due_at = float('-inf')
 
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
@@ -300,28 +300,28 @@ class SLCamera(pimm.ControlSystem):
             self._emit_depth(camera, capture_time)
         return GrabOutcome.SENT
 
-    # The settings a camera's automatic control moves, keyed by the name each records under. ``auto_exposure_gain``
-    # is the SDK's one switch for automatic exposure and gain together, and ``auto_white_balance`` is its switch for
-    # the white balance; each says whether the values it governs are the sensor's own choice or a set point.
+    # The settings a camera's automatic control moves, keyed by the name each records under, with the type each
+    # records as. ``auto_exposure_gain`` is the SDK's one switch for automatic exposure and gain together, and
+    # ``auto_white_balance`` is its switch for the white balance.
     STATE_SETTINGS = {
-        'exposure': sl.VIDEO_SETTINGS.EXPOSURE,
-        'gain': sl.VIDEO_SETTINGS.GAIN,
-        'white_balance_temperature': sl.VIDEO_SETTINGS.WHITEBALANCE_TEMPERATURE,
-        'auto_exposure_gain': sl.VIDEO_SETTINGS.AEC_AGC,
-        'auto_white_balance': sl.VIDEO_SETTINGS.WHITEBALANCE_AUTO,
+        'exposure': (sl.VIDEO_SETTINGS.EXPOSURE, int),
+        'gain': (sl.VIDEO_SETTINGS.GAIN, int),
+        'white_balance_temperature': (sl.VIDEO_SETTINGS.WHITEBALANCE_TEMPERATURE, int),
+        'auto_exposure_gain': (sl.VIDEO_SETTINGS.AEC_AGC, bool),
+        'auto_white_balance': (sl.VIDEO_SETTINGS.WHITEBALANCE_AUTO, bool),
     }
 
     @staticmethod
-    def _read_state(camera) -> dict[str, int]:
+    def _read_state(camera) -> dict[str, int | bool]:
         """What ``camera`` reports for each of ``STATE_SETTINGS`` now.
 
         A setting the SDK refuses is logged and left out, so the settings it reports still record.
         """
         state = {}
-        for name, setting in SLCamera.STATE_SETTINGS.items():
+        for name, (setting, recorded_type) in SLCamera.STATE_SETTINGS.items():
             error_code, value = camera.get_camera_settings(setting)
             if error_code == sl.ERROR_CODE.SUCCESS:
-                state[name] = int(value)
+                state[name] = recorded_type(value)
             else:
                 logger.error('The camera refused to report its %s setting: %s', name, error_code)
         return state

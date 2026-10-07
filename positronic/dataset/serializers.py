@@ -142,7 +142,7 @@ class Serializers:
         return data.array
 
     @staticmethod
-    def camera_state(data: dict[str, int]) -> dict[str, int]:
+    def camera_state(data: dict[str, int | bool]) -> dict[str, int | bool]:
         """Record each read-back camera setting as its own scalar signal: ``camera_state.wrist.exposure``."""
         return {f'.{name}': value for name, value in data.items()}
 
