@@ -1,4 +1,4 @@
-The image that docker/Dockerfile.cosmos3-nano builds contains:
+The image that docker/Dockerfile.serve-cosmos3-nano builds contains:
 
 - Cosmos3-Nano-Policy-DROID, from NVIDIA Corporation, under the OpenMDW License Agreement, version 1.1
   (OpenMDW-1.1). Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. A copy of the agreement is at

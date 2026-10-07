@@ -1,0 +1,40 @@
+name: Build and Push the FLUX 3 Action DROID Serving Image
+
+# Main republishes positro/flux3-action on a change to its recipe, its build,
+# or the packages and manifests it installs.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.serve-flux3-action
+      - docker/Makefile
+      - .dockerignore
+      - pyproject.toml
+      - uv.lock
+      - README.md
+      - LICENSE
+      - positronic/**
+      - pimm/**
+      - client/**
+      - wire/**
+      - model_server/**
+      - vocabulary/**
+      - .github/workflows/docker-serve-flux3-action.yaml
+      - .github/workflows/docker-serve-image.yaml
+      - '!**/tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: serve-flux3-action-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  serve-image:
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: flux3-action
+    secrets: inherit

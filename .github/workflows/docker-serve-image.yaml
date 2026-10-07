@@ -28,7 +28,7 @@ permissions:
 jobs:
   serve-image:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       NAME: ${{ inputs.name }}
       # A recipe reads it through a BuildKit secret mount.
@@ -40,11 +40,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # A build with no cache holds the weights twice, in their own stage and in the image.
+      # A build with no cache holds the weights twice, in their own stage and in the image, then writes each layer
+      # compressed. Cosmos3-Nano runs out of disk with 107 GB free.
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm
-          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"/{CodeQL,node,go}
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm /usr/local/.ghcup \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/boost /usr/local/share/chromium \
+            /usr/local/lib/node_modules /opt/az /opt/microsoft /opt/google /opt/pipx /usr/lib/google-cloud-sdk \
+            /usr/share/miniconda "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"
+          docker system prune -af --volumes > /dev/null
           df -h /
 
       - name: Set up a BuildKit builder

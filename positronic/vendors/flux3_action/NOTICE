@@ -1,6 +1,6 @@
 This FLUX Model is licensed by Black Forest Labs Inc. under the FLUX Kommunity License. Copyright Black Forest Labs Inc. IN NO EVENT SHALL BLACK FOREST LABS INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH USE OF THIS MODEL.
 
-The image that docker/Dockerfile.flux3-action builds contains the FLUX 3 Action DROID policy and the
+The image that docker/Dockerfile.serve-flux3-action builds contains the FLUX 3 Action DROID policy and the
 video VAE of FLUX 3 Action Base, from Black Forest Labs Inc. The FLUX Kommunity License v1.0 governs
 them. The image holds a copy of the licence at /opt/flux3_action/LICENSE.md. The same text is at
 https://huggingface.co/black-forest-labs/flux-3-action-droid/blob/3d0887bdc7acee1686b19afac267125d519ff4f1/LICENSE.md.
