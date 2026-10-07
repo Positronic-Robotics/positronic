@@ -92,12 +92,13 @@ class FakeArm:
     ``goal_status`` pins the reported status, so a move that never lands can be scripted; ``raises``, once
     set, is what every call but ``stop`` raises, ``ik_raises`` what only the solver raises, and
     ``recover_raises`` what only ``recover_from_errors`` raises; ``error`` is the vendor fault flag every
-    state carries, and ``recover_clears`` whether a recovery puts it back to 0.
+    state carries beside ``error_message``, and ``recover_clears`` whether a recovery puts it back to 0.
     """
 
     def __init__(self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None):
         self.q = np.asarray(q, dtype=np.float64)
         self.error = 0
+        self.error_message = ''
         self.calls: list[Call] = []
         self.targets: list[np.ndarray] = []
         self.modes: list[Any] = []
@@ -121,7 +122,7 @@ class FakeArm:
     def state(self) -> _ArmState:
         self._record(Call.STATE)
         pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-        return _ArmState(self.q.copy(), np.zeros(7), pose, np.zeros(6), self.error, '')
+        return _ArmState(self.q.copy(), np.zeros(7), pose, np.zeros(6), self.error, self.error_message)
 
     def goal(self) -> _Goal:
         self._record(Call.GOAL)
@@ -143,7 +144,7 @@ class FakeArm:
         if self.recover_raises is not None:
             raise self.recover_raises
         if self.recover_clears:
-            self.error = 0
+            self.error, self.error_message = 0, ''
         return self.error == 0
 
     def stop(self) -> None:
@@ -1581,3 +1582,153 @@ def test_an_arm_with_no_fault_nobody_called_runs_no_recovery(desk, world):
         next(loop)
 
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
+
+
+def test_a_move_waiting_on_an_erroring_arm_is_refused_after_the_grace(desk, world):
+    """A move that waits through a fault the recovery does not clear is held until the grace runs out, then
+    refused."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error, arm.error_message = 1, '[cartesian_reflex]'
+    answer = move(command.JointPosition(JOGGED))
+    for _ in range(3):  # the error is entered and the call is held; the grace has not elapsed
+        next(loop)
+
+    assert not answer.done(), 'the move was refused before the grace elapsed'
+
+    clock.advance(franka._Arm._RECOVERY_GRACE_S)
+    next(loop)
+
+    with pytest.raises(franka.MoveRefused) as refused:
+        answer.result()
+    assert refused.value.error_message == '[cartesian_reflex]'
+    assert refused.value.moved_rad == 0.0  # nothing commanded the arm, so it did not move
+
+
+def test_a_refused_move_reports_the_largest_joint_motion_during_recovery(desk, world):
+    """A joint that moves away and comes back during recovery is reported by the largest distance it moved."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    answer = move(command.JointPosition(JOGGED))
+    next(loop)  # the error is entered and the call is held
+    arm.q = PARK + np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])  # one reading; the goal poll puts it back
+    next(loop)
+    clock.advance(franka._Arm._RECOVERY_GRACE_S)
+    next(loop)
+
+    with pytest.raises(franka.MoveRefused) as refused:
+        answer.result()
+    assert refused.value.moved_rad == pytest.approx(0.1)
+
+
+def test_a_move_waiting_on_an_erroring_arm_is_served_once_recovery_clears(desk, world):
+    """A fault the driver's own recovery clears inside the grace lets the waiting move run, with no retry."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error, arm.recover_clears = 1, True
+    answer = move(command.JointPosition(JOGGED))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    answer.result()
+    np.testing.assert_allclose(arm.targets[-1], JOGGED)
+
+
+def test_a_jog_sent_while_a_move_waits_on_the_erroring_arm_is_dropped(desk, world):
+    """A jog issued during an error reaches an arm that cannot move on it, so the driver drops it rather
+    than applying it once the error clears."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    answer = move(command.JointPosition(PARK))
+    next(loop)  # the call is held
+    feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+    next(loop)
+    arm.error = 0  # the fault clears
+    mark = len(arm.targets)
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    answer.result()
+    assert not any(np.allclose(target, JOGGED) for target in arm.targets[mark:]), 'a dropped jog was applied'
+
+
+def test_a_move_held_on_an_erroring_arm_is_answered_when_the_world_stops(desk, world):
+    """A held move is out of the handler queue, so the driver answers it or its caller waits for good."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    stop = StopFlag()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    answer = move(command.JointPosition(JOGGED))
+    next(loop)  # the call is held
+    assert not answer.done()
+
+    stop.stopped = True
+    _drive(loop, clock)
+
+    with pytest.raises(MoveAbandoned):
+        answer.result()
+
+
+def test_a_move_held_on_an_erroring_arm_is_answered_when_a_throw_ends_the_run(desk, world):
+    """A recovery that throws ends the run with a move held, and the move's caller still gets an answer."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    answer = move(command.JointPosition(JOGGED))
+    next(loop)  # the call is held
+    arm.recover_raises = RuntimeError('libfranka: control command rejected')
+
+    with pytest.raises(RuntimeError, match='control command rejected'):
+        next(loop)
+    with pytest.raises(MoveAbandoned):
+        answer.result()
