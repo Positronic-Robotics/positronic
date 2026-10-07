@@ -272,7 +272,7 @@ class ReplayLayout:
     right, and ``split_shares`` divides the height, or the width, between the views and the charts. ``charts`` holds
     the charts in order. A key ``Group/Chart`` puts the chart as a tab in that group, where the group first appears;
     any other key is a chart of its own. A list names each line by its signal, and a dict by its key. A text signal
-    plots the index of its value, and keeps the legend that names each value. A chart with no signal in the episode is
+    plots the index of its value, and its line name also names each value. A chart with no signal in the episode is
     left out. With ``show_unnamed_signals``, the signals that no chart plots and the log of each text signal follow in
     one group, Other.
     """
@@ -365,6 +365,11 @@ def _lines(signals: list[str] | dict[str, str]) -> list[tuple[str | None, str]]:
     return list(signals.items()) if isinstance(signals, dict) else [(None, signal) for signal in signals]
 
 
+def _value_legend(values: list[str]) -> str:
+    """The name of each value of a text signal, by the index it plots at."""
+    return ', '.join(f'{index} {value}' for index, value in enumerate(values))
+
+
 def _chart_view(
     name: str, lines: list[tuple[str | None, str]], signals: EpisodeSignals, ep: Episode
 ) -> rrb.TimeSeriesView | None:
@@ -376,10 +381,11 @@ def _chart_view(
     line_names: dict[str, str] = {}
     for label, signal in shown:
         path = f'/signals/{signal}'
+        line = signal if label is None else label
         if signal in signals.plotted_texts:
-            continue
-        if widths[signal] == 1:
-            line_names[path] = signal if label is None else label
+            line_names[path] = f'{line}: {_value_legend(signals.plotted_texts[signal])}'
+        elif widths[signal] == 1:
+            line_names[path] = line
         elif label is not None:
             names = _value_names(signal, signals, ep)
             line_names.update({f'{path}/{i}': f'{label} {names[i] if names else i}' for i in range(widths[signal])})
@@ -992,8 +998,9 @@ def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStre
 
         if key in plotted:
             values = plotted[key]
-            label = ', '.join(f'{index} {value}' for index, value in enumerate(values))
-            style = rr.SeriesLines(names=[label], interpolation_mode=rr.components.InterpolationMode.StepAfter)
+            style = rr.SeriesLines(
+                names=[_value_legend(values)], interpolation_mode=rr.components.InterpolationMode.StepAfter
+            )
             rr.log(f'/signals/{key}', style, static=True)
             # The last sample holds the final value to the end of the episode.
             shown = np.union1d(changes, [len(texts) - 1])

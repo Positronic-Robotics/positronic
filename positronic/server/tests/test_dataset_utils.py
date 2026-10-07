@@ -115,6 +115,7 @@ def test_notice_names_every_unplotted_signal_and_its_width():
 
 
 _STATES = ['floating', 'floating', 'reaching', 'contact', 'reaching', 'reaching', 'at-target']
+_STATE_LEGEND = '0 floating, 1 reaching, 2 contact, 3 at-target'
 
 
 def _text_episode(ep_dir, texts: dict[str, list[Any]]) -> DiskEpisode:
@@ -531,8 +532,16 @@ def test_a_chart_plots_a_text_signal_by_the_index_of_its_value_and_shows_the_leg
     (view,) = _bottom_row(ep, _layout({'Progress': ['progress.state']}, show_unnamed_signals=False))
 
     assert view.contents == ['/signals/progress.state/**']
-    assert _line_names(view) == {}
+    assert _line_names(view) == {'/signals/progress.state': [f'progress.state: {_STATE_LEGEND}']}
     assert _legend_visible(view)
+
+
+def test_a_dict_names_a_text_line_by_its_key_and_keeps_the_names_of_its_values(tmp_path):
+    ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
+
+    (view,) = _bottom_row(ep, _layout({'Progress': {'State': 'progress.state'}}, show_unnamed_signals=False))
+
+    assert _line_names(view) == {'/signals/progress.state': [f'State: {_STATE_LEGEND}']}
 
 
 def test_the_text_log_of_a_charted_text_signal_follows_in_other(tmp_path):
@@ -619,7 +628,10 @@ def test_the_default_charts_the_progress_marks_and_keeps_only_their_text_log_in_
 
     assert progress.name == 'Progress'
     assert progress.contents == ['/signals/progress.delivered/**', '/signals/progress.state/**']
-    assert _line_names(progress) == {'/signals/progress.delivered': ['progress.delivered']}
+    assert _line_names(progress) == {
+        '/signals/progress.delivered': ['progress.delivered'],
+        '/signals/progress.state': [f'progress.state: {_STATE_LEGEND}'],
+    }
     assert [(type(view), view.name) for view in other.contents[0].contents] == [
         (rrb.TimeSeriesView, 'device.level'),
         (rrb.TextLogView, 'progress.state'),
