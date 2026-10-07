@@ -837,3 +837,11 @@ def test_an_unknown_task_comes_back_carrying_the_catalogue():
         make_client(gateway).create_submission(PLAN)
     assert caught.value.tasks == ['eight-spoons-into-grey-tote', 'stack-the-cubes']
     assert caught.value.evals is None
+
+
+def test_purchase_history_requires_an_explicit_continuation_field():
+    gateway = Gateway(200, {'purchases': []})
+    client = make_client(gateway)
+    with pytest.raises(ValidationError):
+        client.list_purchases(OrgSlug('acme'))
+    assert gateway.request().url.params['limit'] == '50'

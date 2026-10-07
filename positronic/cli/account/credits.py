@@ -1,14 +1,17 @@
 import sys
 
 import configuronic as cfn
+from platform_client.billing import PurchasePageLimit
 from platform_client.client import PlatformClient
 from platform_client.ids import OrgSlug, PackageId, PurchaseId, TransactionKey
 from platform_client.requests import (
+    DEFAULT_PURCHASE_PAGE_SIZE,
     BillingOrgQuery,
     BillingPurchaseCreateRequest,
     BillingPurchaseGetQuery,
     BillingPurchaseListQuery,
 )
+from pydantic import TypeAdapter
 
 from positronic.cli.account.gateway import gateway, refusing_bad_input
 
@@ -76,12 +79,18 @@ def purchase(id: object, platform_url: str | None = None):
 
 
 @cfn.config()
-def purchases(org: object = None, after: object | None = None, limit: int = 50, platform_url: str | None = None):
+def purchases(
+    org: object = None,
+    after: object | None = None,
+    limit: object = DEFAULT_PURCHASE_PAGE_SIZE,
+    platform_url: str | None = None,
+):
     """Print one purchase history page. Pass its next cursor as after to continue."""
     named = _named_org(org)
     cursor = PurchaseId(_text(after, 'after')) if after is not None else None
+    with refusing_bad_input():
+        page_limit = TypeAdapter(PurchasePageLimit).validate_python(limit)
     with gateway(platform_url) as client:
-        with refusing_bad_input():
-            query = BillingPurchaseListQuery(org=_org(client, named), after=cursor, limit=limit)
+        query = BillingPurchaseListQuery(org=_org(client, named), after=cursor, limit=page_limit)
         result = client.list_purchases(query.org, after=query.after, limit=query.limit)
     print(result.model_dump_json(indent=2))

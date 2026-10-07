@@ -7,6 +7,7 @@ would change what the submission means. `submissions.create` takes an `EvalPlan`
 
 from __future__ import annotations
 
+from platform_client.billing import PurchasePageLimit
 from platform_client.boards import BoardRef
 from platform_client.ids import OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
 from platform_client.model_config import INPUT_MODEL_CONFIG
@@ -78,12 +79,15 @@ class BillingOrgQuery(BaseModel):
     org: OrgSlug = Field(min_length=1)
 
 
+DEFAULT_PURCHASE_PAGE_SIZE = 50
+
+
 class BillingPurchaseListQuery(BaseModel):
     model_config = INPUT_MODEL_CONFIG
 
     org: OrgSlug = Field(min_length=1)
     after: PurchaseId | None = Field(default=None, min_length=1)
-    limit: int = Field(default=50, strict=True, gt=0)
+    limit: PurchasePageLimit = DEFAULT_PURCHASE_PAGE_SIZE
 
 
 class BillingPurchaseGetQuery(BaseModel):
