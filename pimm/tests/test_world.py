@@ -1738,6 +1738,56 @@ def test_world_finishes_protected_foreground_shutdown_on_context_exit():
 
 
 @pytest.mark.parametrize('failure', [RuntimeError('sibling failed'), KeyboardInterrupt()])
+def test_sibling_failure_closes_ordinary_foreground_loops_on_the_owner_thread(failure):
+    closed = []
+    owner = threading.get_ident()
+
+    class Holding(ControlSystem):
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            finally:
+                closed.append(threading.get_ident())
+
+    class Failing(ControlSystem):
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            raise failure
+
+    with pytest.raises(type(failure)) as raised:
+        with World(virtual_time=True) as world:
+            world.run([Holding(), Failing()])
+    assert raised.value is failure
+    assert closed == [owner]
+
+
+def test_an_interrupted_sleep_closes_foreground_loops_on_the_owner_thread(monkeypatch):
+    closed = []
+    owner = threading.get_ident()
+
+    class Holding(ControlSystem):
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            finally:
+                closed.append(threading.get_ident())
+
+    failure = KeyboardInterrupt()
+
+    def interrupted(seconds):
+        raise failure
+
+    monkeypatch.setattr(time, 'sleep', interrupted)
+    with pytest.raises(KeyboardInterrupt) as raised:
+        with World() as world:
+            world.run(Holding())
+    assert raised.value is failure
+    assert closed == [owner]
+
+
+@pytest.mark.parametrize('failure', [RuntimeError('sibling failed'), KeyboardInterrupt()])
 def test_sibling_failure_does_not_discard_protected_foreground_shutdown(failure):
     class Failing(ControlSystem):
         def run(self, should_stop, clock):

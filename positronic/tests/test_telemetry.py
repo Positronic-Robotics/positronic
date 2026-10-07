@@ -14,6 +14,7 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 
+import pimm
 from positronic import telemetry
 from positronic.simulator.env_server.telemetry import ENV_PROCESS, ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.telemetry_keys import HARNESS_PROCESS, SPAN_EVAL_PASS
@@ -225,6 +226,51 @@ def test_resource_carries_process_identity(tmp_path):
     assert attrs[telemetry.ATTR_RUN_ID] == 'run-1'
     assert attrs[telemetry.ATTR_PROCESS_NAME] == ENV_PROCESS
     assert attrs[telemetry.ATTR_PROCESS_PID] == os.getpid()
+
+
+def test_an_interrupted_world_flushes_telemetry_before_its_exception_is_released(tmp_path):
+    closed = []
+    owner = threading.get_ident()
+    failure = RuntimeError('sibling failed')
+
+    def recording(should_stop, clock):
+        with telemetry.bind(tmp_path, HARNESS_PROCESS, 'interrupted'):
+            with telemetry.span('completed'):
+                pass
+            try:
+                while not should_stop.value:
+                    yield pimm.Sleep(0.01)
+            finally:
+                closed.append(threading.get_ident())
+
+    class Recording(pimm.ControlSystem):
+        def run(self, should_stop, clock):
+            return recording_loop
+
+    class Failing(pimm.ControlSystem):
+        def run(self, should_stop, clock):
+            yield pimm.Sleep(0.01)
+            raise failure
+
+    with pimm.World(virtual_time=True) as world:
+        recording_loop = recording(world.should_stop_reader(), world.clock)
+        try:
+            with pytest.raises(RuntimeError) as raised:
+                world.run([Recording(), Failing()])
+            assert raised.value is failure
+            assert closed == [owner]
+            assert not telemetry.enabled()
+            telemetry.force_flush()
+            spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, HARNESS_PROCESS)))
+            assert [span.name for span in spans] == ['completed']
+            with telemetry.bind(tmp_path, HARNESS_PROCESS, 'next'):
+                with telemetry.span('next-run'):
+                    pass
+            assert not telemetry.enabled()
+            spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, HARNESS_PROCESS)))
+            assert [span.name for span in spans] == ['completed', 'next-run']
+        finally:
+            recording_loop.close()
 
 
 class _FakeUtil:
