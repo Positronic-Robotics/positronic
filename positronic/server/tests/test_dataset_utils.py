@@ -505,7 +505,18 @@ def test_the_signals_no_chart_plots_follow_the_charts_in_one_group(tmp_path):
     (group,) = other.contents
     assert grip.name == 'Grip'
     assert group.name == 'Other'
-    assert [view.name for view in group.contents] == ['progress', 'device.level']
+    assert [view.name for view in group.contents] == ['device.level', 'progress']
+
+
+def test_other_lists_its_signals_by_name_in_any_order_the_recording_holds_them(tmp_path):
+    ep = _episode(tmp_path / 'ep', {'b.level': 1, 'a.speed': 1, 'c.load': 1, 'a.level': 1})
+    signals = _collect_signal_groups(ep)
+
+    for numerics in (sorted(signals.numerics), sorted(signals.numerics, reverse=True)):
+        other: Any = dataset_utils._other_cell(replace(signals, numerics=numerics), set())
+        (group,) = other.contents
+        assert [view.name for view in group.contents] == ['a', 'b.level', 'c.load']
+        assert [view.name for view in group.contents[0].contents] == ['a.level', 'a.speed']
 
 
 def test_with_unnamed_signals_off_only_the_charts_show(tmp_path):
@@ -607,7 +618,7 @@ def test_the_default_charts_the_progress_marks_and_keeps_only_their_text_log_in_
     progress, other = _default_column(ep).contents
 
     assert progress.name == 'Progress'
-    assert sorted(progress.contents) == ['/signals/progress.delivered/**', '/signals/progress.state/**']
+    assert progress.contents == ['/signals/progress.delivered/**', '/signals/progress.state/**']
     assert _line_names(progress) == {'/signals/progress.delivered': ['progress.delivered']}
     assert [(type(view), view.name) for view in other.contents[0].contents] == [
         (rrb.TimeSeriesView, 'device.level'),

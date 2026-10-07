@@ -303,7 +303,7 @@ def _value_names(key: str, signals: EpisodeSignals, ep: Episode) -> list[str] | 
 
 
 def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | rrb.Container]:
-    """A view of each signal that is not in ``placed``, and the text log of each text signal.
+    """A view of each signal that is not in ``placed``, and the text log of each text signal, by name.
 
     A group of signals that share a prefix shows as tabs.
     """
@@ -329,7 +329,7 @@ def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | 
 
     # Each group becomes a Tabs container that opens on its first text signal.
     # A text signal's log is a cell of its own beside its group: a share of one grid cell is too narrow to read.
-    unplaced = [sig for sig in [*signals.plotted, *signals.plotted_texts] if sig not in placed]
+    unplaced = sorted(sig for sig in [*signals.plotted, *signals.plotted_texts] if sig not in placed)
     views: list[rrb.View | rrb.Container] = []
     for group_name, sigs in _group_signals_by_prefix(unplaced):
         if len(sigs) == 1:
@@ -339,7 +339,7 @@ def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | 
             view = rrb.Tabs(*[_view(sig) for sig in sigs], name=group_name, active_tab=texts[0] if texts else None)
         views.append(view)
         views.extend(_text_log_view(sig) for sig in sigs if sig in signals.plotted_texts)
-    views.extend(_text_log_view(sig) for sig in signals.texts if sig not in unplaced)
+    views.extend(_text_log_view(sig) for sig in sorted(signals.texts) if sig not in unplaced)
     if signals.unplotted:
         views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
     return views
@@ -528,7 +528,7 @@ _DEFAULT_SPLIT_SHARES = (3, 1)
 
 def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Horizontal:
     charts_by_arm = {arm: _arm_charts(arm) for arm in _recorded_arms(signals.numerics)}
-    names = [*signals.numerics, *signals.texts]
+    names = sorted([*signals.numerics, *signals.texts])
     progress: Charts = {'Progress': [name for name in names if name.partition('.')[0] == _PROGRESS_CHANNEL]}
     column = [*_arm_cells(charts_by_arm, signals, ep), *((cell, 1) for cell in _chart_cells(progress, signals, ep))]
     placed = {signal for charts in [*charts_by_arm.values(), progress] for signal in _charted(charts, signals)}
