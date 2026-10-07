@@ -109,7 +109,12 @@ def test_statics_that_are_not_a_json_object_are_unscored_rather_than_fatal(tmp_p
 
 @pytest.mark.parametrize(
     ('static', 'misrecorded'),
-    [({SUCCESS_KEY: 1, MOLMO_TASK_KEY: CUP}, SUCCESS_KEY), ({SUCCESS_KEY: True, MOLMO_TASK_KEY: 3}, MOLMO_TASK_KEY)],
+    [
+        ({SUCCESS_KEY: 1, MOLMO_TASK_KEY: CUP}, SUCCESS_KEY),
+        ({SUCCESS_KEY: True, MOLMO_TASK_KEY: 3}, MOLMO_TASK_KEY),
+        ({SUCCESS_KEY: None, MOLMO_TASK_KEY: CUP}, SUCCESS_KEY),
+        ({SUCCESS_KEY: True, MOLMO_TASK_KEY: None}, MOLMO_TASK_KEY),
+    ],
 )
 def test_a_success_or_task_of_the_wrong_type_is_no_outcome_and_is_logged(
     static: dict[str, object], misrecorded: str, caplog: pytest.LogCaptureFixture
