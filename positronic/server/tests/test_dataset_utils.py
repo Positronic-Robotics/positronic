@@ -571,7 +571,7 @@ def test_an_arm_is_found_by_its_state_and_no_other_signal_makes_one():
 
 
 def test_the_default_shows_the_signals_of_a_recording_with_no_arm_in_other(tmp_path):
-    ep = _episode(tmp_path / 'ep', {'sim_state': _MAX_PLOTTED_WIDTH + 1, 'device.level': 1, 'device.speed': 1})
+    ep = _episode(tmp_path / 'ep', {'wide': _MAX_PLOTTED_WIDTH + 1, 'device.level': 1, 'device.speed': 1})
 
     (other,) = _default_column(ep).contents
 
