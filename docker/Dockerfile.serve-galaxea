@@ -20,10 +20,11 @@
 
 ARG G05_REVISION=e312be81e90c56a55bcb26b57429bd39a335b449
 
-# The weights stage does not build on the base, so a new base reuses the downloaded weights. The server reads the
-# checkpoint, the action tokenizer and the processor from /galaxea/checkpoints, at the paths the checkpoint's
-# config names. `licenses/` goes with the weights it governs.
-FROM python:3.12-slim AS weights
+# The weights stage does not build on the base, so a new base reuses the downloaded weights. Its own base is pinned by
+# digest: a moved tag would download the weights again and push them as a new layer. The server reads the checkpoint,
+# the action tokenizer and the processor from /galaxea/checkpoints, at the paths the checkpoint's config names.
+# `licenses/` goes with the weights it governs.
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS weights
 ARG G05_REVISION
 RUN pip install --no-cache-dir huggingface_hub==0.35.3
 RUN --mount=type=secret,id=hf_token \
