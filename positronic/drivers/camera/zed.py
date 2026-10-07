@@ -313,12 +313,17 @@ class SLCamera(pimm.ControlSystem):
 
     @staticmethod
     def _read_state(camera) -> dict[str, int]:
-        """What ``camera`` reports for each of ``STATE_SETTINGS`` now. A setting the SDK refuses is left out."""
+        """What ``camera`` reports for each of ``STATE_SETTINGS`` now.
+
+        A setting the SDK refuses is logged and left out, so the settings it reports still record.
+        """
         state = {}
         for name, setting in SLCamera.STATE_SETTINGS.items():
             error_code, value = camera.get_camera_settings(setting)
             if error_code == sl.ERROR_CODE.SUCCESS:
                 state[name] = int(value)
+            else:
+                logger.error('The camera refused to report its %s setting: %s', name, error_code)
         return state
 
     def _emit_state(self, clock: pimm.Clock) -> None:
