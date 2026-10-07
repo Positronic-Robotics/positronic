@@ -153,3 +153,10 @@ Run `uv run pytest model_server positronic/offboard/tests positronic/policy/test
 repository root. CI also builds wheels and installs them in isolated environments with NumPy
 1.26.4 on Python 3.11 and 3.12, selecting no transport, WebSocket alone, or gRPC alone. Root tests
 exercise the repository's locked NumPy version.
+
+Runtime dependencies are a design constraint. Before installing test tools, CI checks every
+installed distribution against the per-transport allowlist in
+`utilities/check_model_server_package.py`. Any additional runtime package fails the check,
+whether direct or indirect, including dependencies introduced by upstream package updates.
+Transport dependencies must stay optional. Changes to the allowlist require explicit design
+review; do not expand it merely to make CI pass. The dependency check uses only the standard library.

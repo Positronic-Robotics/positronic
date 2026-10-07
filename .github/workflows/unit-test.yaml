@@ -105,10 +105,12 @@ jobs:
         run: |
           uv venv --python ${{ matrix.python }} /tmp/model-package
           uv pip install --python /tmp/model-package --no-index --find-links /tmp/model-wheels --no-deps positronic-wire positronic-model-server
-          uv pip install --python /tmp/model-package --find-links /tmp/model-wheels "positronic-model-server${{ matrix.transport.extra }}" 'numpy==1.26.4' pytest
-      - name: Check installed imports and serialization
+          uv pip install --python /tmp/model-package --find-links /tmp/model-wheels "positronic-model-server${{ matrix.transport.extra }}" 'numpy==1.26.4'
+      - name: Check runtime dependency allowlist, imports and serialization
+        run: /tmp/model-package/bin/python -I utilities/check_model_server_package.py --wire ${{ matrix.transport.wires }}
+      - name: Install test tools and run package tests
         run: |
-          /tmp/model-package/bin/python -I utilities/check_model_server_package.py --wire ${{ matrix.transport.wires }}
+          uv pip install --python /tmp/model-package pytest
           /tmp/model-package/bin/python -I -m pytest -p no:cacheprovider -c /dev/null --import-mode=importlib model_server/positronic_model_server/tests
 
   lerobot:
