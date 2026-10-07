@@ -98,6 +98,40 @@ Select `droid_three_cameras` for a checkpoint trained on three views.
 Use `--model.checkpoint=10000` to select a saved step. Omit it to serve the latest.
 A Hugging Face source uses `--model.model_source=hf://owner/model`.
 
+## Client pipeline
+
+The client registry supports two GR00T components, both at version 1:
+
+- `gr00t_droid`, with `image_mappings`: the DROID observation and robot-command conversions.
+- `gr00t_action_chunk`, without arguments: converts the native `(actions, info)` result into action
+  rows. Arrays must have shape `(1, T, D)` and share a time horizon. Auxiliary `info` is excluded
+  from robot commands.
+
+A complete client pipeline can be constructed and serialized inside Positronic:
+
+```python
+from positronic.policy import Sequential
+from positronic.policy.codec import EncodeImages
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.vendors.gr00t.codecs import ActionChunk, droid
+
+pipeline = Sequential(
+    PauseOnUnavailable(),
+    ChunkedSchedule(fps=15, horizon_sec=1.0),
+    droid() | ActionChunk() | EncodeImages(quality=90),
+)
+description = pipeline.to_spec()
+```
+
+Use `droid_three_cameras()` for the three-camera layout. Image encoding follows observation conversion
+and preserves the model's batch and time dimensions. `EncodeImages` selects all RGB images by default;
+`paths=[["video", "wrist_image_left"]]` compresses only that camera, and `paths=[]` uses lossless arrays.
+
+A [native model server](../../../model_server/README.md) sends this description as `Session.client_stack`.
+Its script builds the same plain data with the wrapper's `component` and `sequence` helpers, without
+importing Positronic. The client performs conversion, JPEG encoding, native-result decoding and scheduling.
+The `groot-server` Docker entrypoint uses the legacy server and its server-side codecs.
+
 ## Adapter parity tests
 
 The GR00T source is included in the image at `/gr00t`. From the image's `/positronic` directory:

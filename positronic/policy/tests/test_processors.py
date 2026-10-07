@@ -43,6 +43,7 @@ from positronic.policy.processors import (
     mean_delay,
 )
 from positronic.policy.sequential import Sequential
+from positronic.vendors.gr00t.codecs import ActionChunk, DroidCodec
 
 MOTOR = 'motor'
 POSITION = 'position'
@@ -785,6 +786,8 @@ def test_wire_names_match_the_registered_components():
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
         'joint_delta_action': JointDeltaAction(),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
+        'gr00t_droid': DroidCodec(image_mappings={}),
+        'gr00t_action_chunk': ActionChunk(),
     }
     registered = spec.COMPONENTS
     assert set(instances) == set(registered)
