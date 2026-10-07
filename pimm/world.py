@@ -787,9 +787,18 @@ class World:
             for loop in iters:
                 if isinstance(loop, Generator):
                     scope.callback(loop.close)
-            yield from self._schedule(iters)
+            scheduler = self._schedule(iters)
+            scope.callback(scheduler.close)
+            try:
+                yield from scheduler
+            except BaseException as exc:
+                try:
+                    scope.close()
+                except BaseException as close_error:
+                    raise BaseExceptionGroup('Foreground shutdown failed', [exc, close_error]) from None
+                raise
 
-    def _schedule(self, iters: list[Iterator[Command]]) -> Iterator[Command]:
+    def _schedule(self, iters: list[Iterator[Command]]) -> Generator[Command, None, None]:
         ready = list(range(len(iters)))  # loop indices due at the current instant
         pq: list[tuple[int, int]] = []  # min-heap of (wake_ns, loop_index)
         stalled_rounds = 0  # consecutive rounds with no clock-mover (no sleeper, no loop finished)
