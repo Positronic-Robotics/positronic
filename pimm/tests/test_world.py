@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import nullcontext
 from functools import partial
 from multiprocessing.context import SpawnProcess
 from queue import Empty, Full
@@ -1785,6 +1786,69 @@ def test_an_interrupted_sleep_closes_foreground_loops_on_the_owner_thread(monkey
             world.run(Holding())
     assert raised.value is failure
     assert closed == [owner]
+
+
+@pytest.mark.parametrize('start_control_system', [True, False])
+@pytest.mark.parametrize('failure', [None, RuntimeError('body failed'), KeyboardInterrupt()])
+def test_context_exit_closes_a_retained_foreground_scheduler(start_control_system, failure):
+    closed = []
+    owner = threading.get_ident()
+
+    class Holding(ControlSystem):
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            finally:
+                closed.append(threading.get_ident())
+
+    expected = nullcontext() if failure is None else pytest.raises(type(failure))
+    with expected:
+        with World(virtual_time=True) as world:
+            holding = Holding()
+            scheduler = world.start(holding) if start_control_system else world.interleave(holding.run)
+            next(scheduler)
+            assert not closed
+            if failure is not None:
+                raise failure
+    assert closed == [owner]
+    assert list(scheduler) == []
+
+
+def test_foreground_close_failure_keeps_its_cause_and_closes_other_loops():
+    closed = []
+    body_error = RuntimeError('sibling failed')
+    close_error = OSError('close failed')
+
+    class Holding(ControlSystem):
+        def __init__(self, error=None):
+            self.error = error
+
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            finally:
+                closed.append(self)
+                if self.error is not None:
+                    raise self.error
+
+    class Failing(ControlSystem):
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            raise body_error
+
+    ordinary = Holding()
+    failing_close = Holding(close_error)
+    with pytest.raises(OSError) as raised:
+        with World(virtual_time=True) as world:
+            world.run([ordinary, failing_close, Failing()])
+    assert raised.value is close_error
+    cause = raised.value.__context__
+    while cause is not None and cause is not body_error:
+        cause = cause.__context__
+    assert cause is body_error
+    assert closed == [failing_close, ordinary]
 
 
 @pytest.mark.parametrize('failure', [RuntimeError('sibling failed'), KeyboardInterrupt()])
