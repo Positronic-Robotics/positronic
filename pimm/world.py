@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.context import BaseContext
@@ -592,6 +592,7 @@ class World:
         self.background_processes = []
         self._shutdown_policies = {}
         self._protected_foreground_loops: list[Iterator[Command]] = []
+        self._foreground_scope = contextlib.ExitStack()
         self._cleanup_emitters_readers = []
         self.entered = False
         self._previous_handlers: dict[int, Callable[[int, FrameType | None], object] | int] = {}
@@ -702,7 +703,7 @@ class World:
         errors: list[BaseException] = []
         logger.info('Stopping background processes...')
         self.request_stop()
-        cleanup = [self._finish_foreground_shutdown, self._join_background_processes]
+        cleanup = [self._finish_foreground_shutdown, self._foreground_scope.close, self._join_background_processes]
         for emitter, receivers in self._cleanup_emitters_readers:
             cleanup.extend(receiver.close for receiver in (receivers if isinstance(receivers, list) else [receivers]))
             cleanup.append(emitter.close)
@@ -781,6 +782,14 @@ class World:
         yield from self._interleave([iter(loop(self.should_stop_reader(), self._clock)) for loop in loops])
 
     def _interleave(self, iters: list[Iterator[Command]]) -> Iterator[Command]:
+        with contextlib.ExitStack() as scope:
+            self._foreground_scope.callback(scope.close)
+            for loop in iters:
+                if isinstance(loop, Generator):
+                    scope.callback(loop.close)
+            yield from self._schedule(iters)
+
+    def _schedule(self, iters: list[Iterator[Command]]) -> Iterator[Command]:
         ready = list(range(len(iters)))  # loop indices due at the current instant
         pq: list[tuple[int, int]] = []  # min-heap of (wake_ns, loop_index)
         stalled_rounds = 0  # consecutive rounds with no clock-mover (no sleeper, no loop finished)
