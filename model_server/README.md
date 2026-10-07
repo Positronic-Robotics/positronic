@@ -69,8 +69,13 @@ All model operations run on one worker thread in the server process: load, prepa
 session cleanup and model cleanup. Each session's inference callable retains its own settings and
 history. Inference is serialized across all listeners. Queue time is reported separately from model
 time. The event loop answers keepalive while the worker is busy; no waiting messages interrupt an
-inference response. A failed inference reports an error and leaves the session usable. A malformed
+inference response. A failed inference reports an error and keeps the session open. A malformed
 session request ends that session.
+
+Clients own recovery from reported inference errors. The recommended client behavior is to close
+the affected session and, if retrying, open a fresh session and wait for `ready`. Continuing in the
+same session is an explicit client choice for failures it knows are recoverable. An open session
+does not guarantee that a failed inference left the model's state valid.
 
 `Session.close` runs after outstanding work, on explicit close, disconnect or server shutdown.
 The end-session acknowledgement follows cleanup. `Model.close` runs after sessions finish and
