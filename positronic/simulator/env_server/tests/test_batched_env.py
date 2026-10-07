@@ -3,7 +3,6 @@
 ``_ClonedScene`` holds one step count per clone and FREEZES a clone that ends: it stops advancing and reports
 the verdict it ended on, the way RoboLab's env does instead of re-rolling a terminated clone. Each clone also
 reports the grip of the last action it received, so a test can see which client's action reached it.
-``positronic/simulator/robolab/validate.py`` runs the same shape against the real benchmark on a RoboLab box.
 """
 
 import ast

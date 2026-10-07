@@ -35,7 +35,7 @@ def spawned(monkeypatch) -> list[list[str]]:
     commands: list[list[str]] = []
     monkeypatch.setattr(launcher, '_ensure_robolab_src', lambda: launcher._ROBOLAB_SRC)
     monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: None)
-    # Nothing binds the port here, so the wait for it is stubbed out; ``test_remote_env`` covers that wait.
+    # Nothing binds the port here, so the wait for it is stubbed out.
     monkeypatch.setattr(env_launcher, '_await_bind', lambda *args, **kwargs: None)
     monkeypatch.setattr(subprocess, 'Popen', lambda command, **kwargs: commands.append(command) or _StubProcess())
     return commands

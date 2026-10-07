@@ -300,10 +300,7 @@ class RobolabEnv(EnvProtocol):
         }
 
     def _frozen_slots(self) -> list[bool]:
-        """Per slot, whether RoboLab froze it — its episode ended and its verdict is recorded.
-
-        RoboLab zeroes the action of a frozen slot until the whole batch resets.
-        """
+        """Per slot, whether RoboLab froze it — its episode ended and its verdict is recorded."""
         active = set(self._env.active_env_ids)
         return [slot not in active for slot in range(self._num_envs)]
 
