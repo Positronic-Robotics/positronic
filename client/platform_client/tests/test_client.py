@@ -7,6 +7,7 @@ import json
 import httpx
 import pytest
 from platform_client import routes
+from platform_client.billing import CREDIT_SCALE, BillingAccount, PurchaseListResponse, PurchaseView, Tariff
 from platform_client.boards import BoardRef
 from platform_client.client import (
     API_KEY_ENV,
@@ -24,6 +25,7 @@ from platform_client.enums import (
     OnExhausted,
     QuotaSubject,
     ReasonCode,
+    RigShape,
     SubmissionStatus,
     Wire,
 )
@@ -38,9 +40,9 @@ from platform_client.eval_plan import (
     plan_of_image,
 )
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, OrgSlug, SubmissionId
+from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
-from platform_client.requests import CancelRequest, RegisterRequest
+from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
     ArtifactListResponse,
@@ -86,6 +88,84 @@ class Gateway:
 def make_client(gateway: Gateway, *, api_key: ApiKey | None = KEY) -> PlatformClient:
     transport = httpx.MockTransport(gateway)
     return PlatformClient(client=httpx.Client(base_url=BASE, transport=transport), api_key=api_key)
+
+
+PURCHASE_PACKAGE = {'id': 'configured-package', 'credit_units': CREDIT_SCALE, 'amount_minor': 17, 'currency': 'jpy'}
+PURCHASE_BODY = {
+    'id': 'opaque-purchase-id',
+    'package': PURCHASE_PACKAGE,
+    'initiated_by': 'a0',
+    'created_at': AT,
+    'checkout_url': 'https://checkout.stripe.com/accepted',
+}
+
+
+def test_billing_account_reads_the_member_role_balance_and_explicit_package_money():
+    gateway = Gateway(
+        200,
+        {
+            'org': 'acme',
+            'mode': 'prepaid',
+            'billing_role': 'none',
+            'balance': {'posted_units': 60, 'reserved_units': 12},
+            'tariff': Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE).model_dump(mode='json'),
+            'packages': [PURCHASE_PACKAGE],
+        },
+    )
+    response = make_client(gateway).billing_account(OrgSlug('acme'))
+    assert isinstance(response, BillingAccount)
+    assert response.balance.available_units == 48
+    assert gateway.request().method == 'GET'
+    assert gateway.request().url.path == routes.BILLING_ACCOUNT
+    assert dict(gateway.request().url.params) == {'org': 'acme'}
+    assert gateway.request().headers[AUTH_HEADER] == f'Bearer {KEY}'
+
+
+def test_a_credit_purchase_posts_only_organization_package_and_transaction_identity():
+    gateway = Gateway(200, PURCHASE_BODY)
+    request = BillingPurchaseCreateRequest(
+        org=OrgSlug('acme'),
+        package_id=PackageId('configured-package'),
+        transaction_key=TransactionKey('frozen-retry-key'),
+    )
+    response = make_client(gateway).create_purchase(request)
+    assert isinstance(response, PurchaseView)
+    assert gateway.request().method == 'POST'
+    assert gateway.request().url.path == routes.BILLING_PURCHASES_CREATE
+    assert gateway.body() == {'org': 'acme', 'package_id': 'configured-package', 'transaction_key': 'frozen-retry-key'}
+
+
+def test_reading_a_purchase_keeps_its_opaque_identifier_in_the_query():
+    gateway = Gateway(200, PURCHASE_BODY)
+    response = make_client(gateway).get_purchase(PurchaseId('opaque-purchase-id'))
+    assert response.id == 'opaque-purchase-id'
+    assert gateway.request().method == 'GET'
+    assert gateway.request().url.path == routes.BILLING_PURCHASES_GET
+    assert dict(gateway.request().url.params) == {'id': 'opaque-purchase-id'}
+
+
+def test_purchase_history_defaults_to_a_bounded_page_and_keeps_its_continuation():
+    gateway = Gateway(200, {'purchases': [PURCHASE_BODY], 'next': 'opaque-purchase-id'})
+    response = make_client(gateway).list_purchases(OrgSlug('acme'))
+    assert isinstance(response, PurchaseListResponse)
+    assert response.purchases[0].package.amount_minor == 17
+    assert gateway.request().method == 'GET'
+    assert gateway.request().url.path == routes.BILLING_PURCHASES_LIST
+    assert dict(gateway.request().url.params) == {'org': 'acme', 'limit': '50'}
+    assert response.next == 'opaque-purchase-id'
+
+
+def test_purchase_history_sends_the_previous_page_cursor_and_requested_limit():
+    gateway = Gateway(200, {'purchases': [], 'next': None})
+    response = make_client(gateway).list_purchases(OrgSlug('acme'), after=PurchaseId('last-seen'), limit=200)
+    assert dict(gateway.request().url.params) == {'org': 'acme', 'after': 'last-seen', 'limit': '200'}
+    assert response.purchases == [] and response.next is None
+
+
+def test_the_client_refuses_a_payable_link_after_a_purchase_enters_review():
+    gateway = Gateway(200, {**PURCHASE_BODY, 'review_reason': 'payment identity conflict'})
+    with pytest.raises(ValidationError, match='payable link'):
+        make_client(gateway).get_purchase(PurchaseId('opaque-purchase-id'))
 
 
 def test_register_posts_the_body_unauthenticated_and_parses_the_response():
@@ -189,8 +269,17 @@ def test_me_sends_the_bearer_token_and_parses_every_limit():
     assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
 
 
-def test_create_submission_sends_the_run_defining_fields():
-    gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending', 'policy_image_digest': 'sha256:abc'})
+@pytest.mark.parametrize('prepaid', [False, True])
+def test_create_submission_sends_the_run_defining_fields(prepaid):
+    body: dict[str, object] = {'submission_id': '1f', 'status': 'pending', 'policy_image_digest': 'sha256:abc'}
+    quote = {
+        'terms': Tariff.for_rates(1, CREDIT_SCALE).model_dump(),
+        'lines': [{'task_pos': 0, 'endpoint': 'candidate', 'count': 1, 'cap_ns': 1, 'max_units': 2}],
+        'total_units': 2,
+    }
+    if prepaid:
+        body['billing'] = {'mode': 'prepaid', 'state': 'held', 'quote': quote}
+    gateway = Gateway(200, body)
     client = make_client(gateway)
 
     response = client.create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke')))
@@ -198,6 +287,11 @@ def test_create_submission_sends_the_run_defining_fields():
     assert isinstance(response, SubmissionCreateResponse)
     assert response.submission_id == 0x1F
     assert response.status is SubmissionStatus.pending
+    if prepaid:
+        assert response.billing is not None and response.billing.quote is not None
+        assert response.billing.quote.total_units == 2
+    else:
+        assert response.billing is None
     assert gateway.request().url.path == routes.SUBMISSIONS_CREATE
     assert gateway.body()['endpoints'][0]['image'] == 'org/policy:v1'
     assert gateway.body()['eval'] == 'fake.smoke'
@@ -221,8 +315,10 @@ def test_create_submission_sends_a_registry_password_the_platform_can_use(tmp_pa
     }
 
 
-def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
+@pytest.mark.parametrize('prepaid', [False, True])
+def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back(prepaid):
     resolved = {
+        'rig_shape': 'franka',
         'episodes_total': 2,
         'tasks': [
             {
@@ -244,6 +340,12 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
             }
         ],
     }
+    if prepaid:
+        resolved['credit_quote'] = {
+            'terms': Tariff.for_rates(1, CREDIT_SCALE).model_dump(),
+            'lines': [{'task_pos': 0, 'endpoint': 'a', 'count': 2, 'cap_ns': 1, 'max_units': 4}],
+            'total_units': 4,
+        }
     gateway = Gateway(200, resolved)
     plan = EvalPlan(
         request_type=PrivateEval(org=OrgSlug('acme')),
@@ -261,6 +363,11 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back():
     response = make_client(gateway).resolve_plan(plan)
 
     assert isinstance(response, ResolvedPlan) and response.episodes_total == 2
+    assert response.rig_shape is RigShape.franka
+    if prepaid:
+        assert response.credit_quote is not None and response.credit_quote.total_units == 4
+    else:
+        assert response.credit_quote is None
     assert gateway.request().url.path == routes.SUBMISSIONS_RESOLVE
     assert gateway.body()['episodes_per_endpoint'] == 2
 
@@ -546,6 +653,10 @@ def test_every_endpoint_has_exactly_one_method():
         'list_boards',
         'catalog_evals',
         'catalog_tasks',
+        'billing_account',
+        'create_purchase',
+        'get_purchase',
+        'list_purchases',
     }
     assert len(declared) == len(methods)
     assert methods <= set(vars(PlatformClient))
@@ -726,3 +837,11 @@ def test_an_unknown_task_comes_back_carrying_the_catalogue():
         make_client(gateway).create_submission(PLAN)
     assert caught.value.tasks == ['eight-spoons-into-grey-tote', 'stack-the-cubes']
     assert caught.value.evals is None
+
+
+def test_purchase_history_requires_an_explicit_continuation_field():
+    gateway = Gateway(200, {'purchases': []})
+    client = make_client(gateway)
+    with pytest.raises(ValidationError):
+        client.list_purchases(OrgSlug('acme'))
+    assert gateway.request().url.params['limit'] == '50'
