@@ -62,7 +62,11 @@ def test_the_clone_count_and_the_host_reach_the_env_server(spawned):
 
 
 class _OneTaskEnv(EnvProtocol):
-    """Answers the task listing a RoboLab server would give for one task."""
+    """Answers the task listing a RoboLab server of two clones would give for one task."""
+
+    @property
+    def num_slots(self) -> int:
+        return 2
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         return [{'name': 'BananaInBowlTask', 'episode_length_s': 30.0}]
@@ -82,7 +86,7 @@ def test_an_eval_with_an_env_server_drives_that_server_and_launches_none(monkeyp
         raise AssertionError('an eval that names an env server launched one of its own')
 
     monkeypatch.setattr(robolab_cfg, 'serve_robolab', launch)
-    with serve_env(_OneTaskEnv(), slots=2) as (host, port):
+    with serve_env(_OneTaskEnv()) as (host, port):
         ev = robolab_cfg.banana_in_bowl.override(env_server=f'{host}:{port}').instantiate()
         trials = ev.tasks()
 

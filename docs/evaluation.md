@@ -47,7 +47,7 @@ uv run positronic-server --dataset.path=~/evals/libero \
 uv run python -m positronic.simulator.robolab.launcher --num-envs 2 --host 0.0.0.0 --port 9100
 ```
 
-Then start each eval with `--eval.env_server=<host>:9100`, and the same `--eval.cameras` as the server. Each eval drives one clone with its own policy. The clones share one scene, so every eval runs the same trials in the same order. A reset waits until every eval asks for it, and the server refuses evals that ask for different tasks at the same reset.
+Then start each eval with `--eval.env_server=<host>:9100`, and the same `--eval.cameras` as the server. Each eval drives one clone with its own policy. The clones share one scene, so every eval runs the same trials in the same order. A reset waits until every eval asks for it. Evals that ask for different tasks at the same reset get an error, because all clones of one server share one task.
 
 `--eval` also takes the name of a public platform eval. The run then uses the config, the arguments and the trials that the platform runs under that name. It runs on the positronic you installed, and it warns when that positronic is not the commit that the platform runs ([Public evals](../client/README.md#public-evals)):
 

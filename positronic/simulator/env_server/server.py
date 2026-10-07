@@ -13,8 +13,8 @@ Command handling failures return ``{'error': str}`` without closing the session;
 ``meta`` identifies the scene; ``robot_meta`` identifies the robot model.
 Either metadata dict can be empty when the client supplies that information.
 
-An env serves a fixed number of slots: independent episodes that one env call steps together. Most envs serve
-one. Each client that connects takes the next free slot and drives only that slot, so N clients can run N
+An env serves a fixed number of slots, ``num_slots``: independent episodes that one env call steps together. Most
+envs serve one. Each client that connects takes the next free slot and drives only that slot, so N clients can run N
 different policies in one env:
 
 * A reset answers when every slot has asked for one or has left. All slots reset together, with one token.
@@ -51,6 +51,11 @@ class EnvProtocol(ABC):
 
         An absent key leaves that axis unrestricted; an unknown value raises.
         """
+
+    @property
+    def num_slots(self) -> int:
+        """How many episodes the env steps together, each driven by a client of its own."""
+        return 1
 
     @abstractmethod
     def reset(self, token: Any) -> dict[str, Any]:
@@ -106,19 +111,17 @@ def _error(e: Exception) -> dict[str, Any]:
 
 
 class EnvServer:
-    """Serve ``slots`` clients; ``shutdown`` releases the owned environment.
+    """Serve one client per slot of ``env``; ``shutdown`` releases the owned environment.
 
     The env runs on the thread that calls ``serve_forever``: macOS GLFW requires environment calls on the main
     thread. ``serve_forever`` ends when every slot has had a client and all of them have left, or on shutdown.
     """
 
-    def __init__(self, env: EnvProtocol, host: str, port: int, slots: int = 1):
-        if slots < 1:
-            raise ValueError(f'a server serves at least one slot, not {slots}')
+    def __init__(self, env: EnvProtocol, host: str, port: int):
         self._env = env
         self._host = host
         self._port = port
-        self._slots = [_Slot() for _ in range(slots)]
+        self._slots = [_Slot() for _ in range(env.num_slots)]
         self._requests: queue.Queue[_Request | _Disconnect] = queue.Queue()
         self._lock = threading.Lock()  # guards slot claims and ``_stopped``
         self._stopped = False
@@ -202,7 +205,10 @@ class EnvServer:
         try:
             tokens = {protocol.encode(request.msg[protocol.TOKEN]) for request in requests.values()}
             if len(tokens) > 1:
-                raise ValueError(f'{len(requests)} slots asked for {len(tokens)} different resets; all slots share one')
+                raise ValueError(
+                    f'{len(requests)} slots asked for {len(tokens)} different resets at once, but all slots of one env '
+                    'server share one scene and one task: run every client of this server in one task order'
+                )
             answer = self._env.reset(next(iter(requests.values())).msg[protocol.TOKEN])
         except Exception as e:
             for request in requests.values():

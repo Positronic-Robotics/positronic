@@ -6,10 +6,12 @@ reports the grip of the last action it received, so a test can see which client'
 ``positronic/simulator/robolab/validate.py`` runs the same shape against the real benchmark on a RoboLab box.
 """
 
+import ast
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -23,6 +25,7 @@ from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
+from positronic.simulator.env_server.tests.mujoco_env import make_mujoco_env
 from positronic.tests.testing_coutils import drive_scheduler
 
 _SCENE = 'cloned_scene'
@@ -46,6 +49,10 @@ class _ClonedScene(EnvProtocol):
         self._grips = [0.0] * len(ends_at)
         self.resets: list[Any] = []
         self.stepped: list[set[int]] = []  # the slots each env step received an action for
+
+    @property
+    def num_slots(self) -> int:
+        return len(self._ends_at)
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         return [{'name': _SCENE}]
@@ -88,10 +95,10 @@ class _ClonedScene(EnvProtocol):
 @contextmanager
 def _clients(env: _ClonedScene) -> Iterator[list[EnvConnection]]:
     """One connection per clone of ``env``, opened in slot order."""
-    with serve_env(env, slots=len(env._ends_at)) as (host, port):
+    with serve_env(env) as (host, port):
         conns = []
         try:
-            for _ in env._ends_at:
+            for _ in range(env.num_slots):
                 conns.append(EnvConnection(host, port))
                 conns[-1].tasks({})  # a request the server answers at once, so this client holds its slot
             yield conns
@@ -198,7 +205,7 @@ def test_a_client_that_leaves_holds_nobody_back():
 def test_slots_that_ask_for_different_resets_are_refused():
     """The clones share one scene, so one batch reset cannot serve two tokens."""
     with _clients(_ClonedScene(ends_at=[9, 9])) as (first, second):
-        with pytest.raises(RuntimeError, match='2 different resets'):
+        with pytest.raises(RuntimeError, match='all slots of one env server share one scene and one task'):
             _together(lambda: first.reset('one scene'), lambda: second.reset('another scene'))
 
 
@@ -264,9 +271,26 @@ def _drive_one_proxy(host: str, port: int, grip: float, started: threading.Barri
 @pytest.mark.timeout(60.0)
 def test_two_proxies_drive_two_slots_of_one_env():
     """Two Worlds, as two evals would run them, each command and observe their own clone of one env."""
-    with serve_env(_ClonedScene(ends_at=[99, 99]), slots=2) as (host, port):
+    with serve_env(_ClonedScene(ends_at=[99, 99])) as (host, port):
         started = threading.Barrier(2)
         grips = _together(
             lambda: _drive_one_proxy(host, port, 0.25, started), lambda: _drive_one_proxy(host, port, 0.75, started)
         )
     assert grips == [0.25, 0.75]
+
+
+def test_an_env_serves_one_slot_unless_it_says_otherwise():
+    assert make_mujoco_env([]).num_slots == 1
+
+
+@pytest.mark.parametrize('env_source', ['libero/env.py', 'molmo_spaces/env.py'])
+def test_a_one_scene_benchmark_keeps_the_default_of_one_slot(env_source):
+    """These envs import only in their own interpreters, so the check reads the class from the source."""
+    tree = ast.parse((Path(__file__).parents[2] / env_source).read_text())
+    (env_class,) = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and any(isinstance(b, ast.Name) and b.id == 'EnvProtocol' for b in node.bases)
+    ]
+    members = {node.name for node in env_class.body if isinstance(node, ast.FunctionDef)}
+    assert 'num_slots' not in members, f'{env_class.name} serves more than the one slot its single scene holds'
