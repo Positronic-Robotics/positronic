@@ -247,7 +247,8 @@ services:
 
   # Galaxea model use is restricted to internal, non-commercial evaluation; see vendors/galaxea/NOTICE.
   galaxea-server:
-    image: positro/galaxea:${IMAGE_TAG:-latest}
+    # The name `make build-serve-galaxea` tags: GALAXEA_REPO and NEBIUS_REGISTRY in docker/Makefile.
+    image: ${GALAXEA_REPO:-cr.eu-north1.nebius.cloud/e00a0ahqzcp9x0xczz/galaxea}:${IMAGE_TAG:-local}
     init: true
     shm_size: 8g
     deploy:
@@ -260,7 +261,6 @@ services:
     volumes:
       - ${CACHE_ROOT:-${HOME}}/.cache:/root/.cache
       - ${CACHE_ROOT:-${HOME}}/.aws:/root/.aws:ro
-      - ${CACHE_ROOT:-${HOME}}/.cache/galaxea/checkpoints:/galaxea/checkpoints
     ports:
       - "127.0.0.1:8000:8000"
 

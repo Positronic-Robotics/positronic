@@ -15,7 +15,7 @@
 | `positro/openpi` | OpenPI training and inference |
 | `positro/dreamzero` | DreamZero inference (1+ GPU, H100 80GB recommended) |
 | `positro/robolab` | RoboLab (Isaac Lab) eval — runs `positronic eval run`, which spawns the Isaac sim subprocess in-container; needs an RTX-class GPU |
-| `positro/galaxea` | G0.5-DROID inference, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
+| `galaxea` | G0.5-DROID inference with its gated weights, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
 
 `Dockerfile.serve-<name>` builds `positro/<name>`, a policy image the platform runs: one
 checkpoint, its weights inside, offline, serving on `:8000`. `pi05-droid` and `gr00t-n17-droid`
@@ -26,8 +26,8 @@ publishes each one; `make build-serve-<name>` builds it. See
 
 Build and push all: `make push`
 
-Galaxea is opt-in: `make build-galaxea`. Its evaluation-only image is excluded from
-aggregate builds and pushes; see [the vendor README](../positronic/vendors/galaxea/README.md).
+`Dockerfile.serve-galaxea` builds `galaxea` in the same form, and the image is private by licence.
+See [the vendor README](../positronic/vendors/galaxea/README.md#docker-setup).
 
 ## References
 

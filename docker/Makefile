@@ -1,5 +1,4 @@
 .PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
-.PHONY: build-galaxea tag-galaxea push-galaxea
 
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
@@ -8,7 +7,6 @@ IMAGE_NAME_DREAMZERO := positro/dreamzero
 IMAGE_NAME_DREAMZERO_BASE := positro/dreamzero-base
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 IMAGE_NAME_ROBOLAB := positro/robolab
-IMAGE_NAME_GALAXEA := positro/galaxea
 # One serving image per checkpoint, the weights inside, starting with no network: positro/<name>, from
 # Dockerfile.serve-<name>. Not in `build` or `push`.
 SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid flux3-action cosmos3-nano
@@ -52,8 +50,8 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  make build-training  Build the training image"
-	@echo "  make build-galaxea   Build the internal non-commercial evaluation image"
 	@echo "  make build-serve-<name>  Build a serving image: $(SERVE_IMAGES)"
+	@echo "  make build-serve-galaxea  Build the private Galaxea serving image (needs HF_TOKEN)"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
 	@echo "  make tag-training    Tag the training image (depends on build-training)"
@@ -101,23 +99,12 @@ build-robolab:
 	@echo "Building $(IMAGE_NAME_ROBOLAB)..."
 	docker build --platform linux/amd64 -f Dockerfile.robolab -t $(IMAGE_NAME_ROBOLAB):local ..
 
-build-galaxea:
-	docker build --platform linux/amd64 -f Dockerfile.galaxea -t $(IMAGE_NAME_GALAXEA):local ..
-
-tag-galaxea: build-galaxea
-	docker tag $(IMAGE_NAME_GALAXEA):local $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
-	docker tag $(IMAGE_NAME_GALAXEA):local $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
-
-push-galaxea: tag-galaxea
-	docker push $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
-	docker push $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
-
 # The GR00T backbone is gated on the Hub. BuildKit reads the token from HF_TOKEN, and it enters no layer.
 SERVE_BUILD_FLAGS_gr00t-n17-droid := --secret id=hf_token,env=HF_TOKEN
 
 # `push-serve-<name>` builds and pushes in one BuildKit run, which needs a docker-container builder
-# (`docker buildx create --use`). The cache at positro/<name>:buildcache holds every stage, so a rebuild
-# reuses the base, the weights and any unchanged layer.
+# (`docker buildx create --use`). The second argument of SERVE_IMAGE is the repository. The cache at
+# <repository>:buildcache holds every stage, so a rebuild reuses the base, the weights and any unchanged layer.
 # FOOTGUN: `max` also writes the weight stages compressed, so Cosmos3-Nano's build runs out of a GitHub runner's
 # disk with it. Its cache holds the image's own layers only.
 SERVE_CACHE_MODE_cosmos3-nano := min
@@ -127,16 +114,23 @@ define SERVE_IMAGE
 .PHONY: build-serve-$(1) push-serve-$(1)
 
 build-serve-$(1):
-	docker build --platform linux/amd64 $$(SERVE_BUILD_FLAGS_$(1)) -f Dockerfile.serve-$(1) -t positro/$(1):local ..
+	docker build --platform linux/amd64 $$(SERVE_BUILD_FLAGS_$(1)) -f Dockerfile.serve-$(1) -t $(2):local ..
 
 push-serve-$(1):
 	docker buildx build --platform linux/amd64 --provenance=false --sbom=false $$(SERVE_BUILD_FLAGS_$(1)) \
-		--cache-from type=registry,ref=positro/$(1):buildcache \
-		--cache-to type=registry,ref=positro/$(1):buildcache,mode=$$(or $$(SERVE_CACHE_MODE_$(1)),max) \
-		$$(foreach tag,$$(SERVE_TAGS),-t positro/$(1):$$(tag)) --push -f Dockerfile.serve-$(1) ..
+		--cache-from type=registry,ref=$(2):buildcache \
+		--cache-to type=registry,ref=$(2):buildcache,mode=$$(or $$(SERVE_CACHE_MODE_$(1)),max) \
+		$$(foreach tag,$$(SERVE_TAGS),-t $(2):$$(tag)) --push -f Dockerfile.serve-$(1) ..
 endef
 
-$(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name))))
+$(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name),positro/$(name))))
+
+# Galaxea's weights are gated and its licence allows internal evaluation only, so its image goes to a private
+# registry, built and pushed by hand. It is not in SERVE_IMAGES, which CI publishes to Docker Hub.
+GALAXEA_REPO ?= $(NEBIUS_REGISTRY)/galaxea
+SERVE_BUILD_FLAGS_galaxea := --secret id=hf_token,env=HF_TOKEN
+$(eval $(call SERVE_IMAGE,galaxea,$(GALAXEA_REPO)))
+push-serve-galaxea: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(GALAXEA_REPO)),nebius-login)
 
 build: build-training build-openpi build-groot build-dreamzero build-robolab
 
@@ -310,9 +304,7 @@ clean:
 	-docker rmi $(IMAGE_NAME_ROBOLAB):local
 	-docker rmi $(IMAGE_NAME_ROBOLAB):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_ROBOLAB):$(GIT_SHA)
-	-docker rmi $(IMAGE_NAME_GALAXEA):local
-	-docker rmi $(IMAGE_NAME_GALAXEA):$(IMAGE_TAG)
-	-docker rmi $(IMAGE_NAME_GALAXEA):$(GIT_SHA)
+	-docker rmi $(GALAXEA_REPO):local
 	-for name in $(SERVE_IMAGES); do docker rmi positro/$$name:local; done
 	@echo "Image cleanup attempts complete. Check the output for removal errors."
 
