@@ -15,20 +15,19 @@
 | `positro/openpi` | OpenPI training and inference |
 | `positro/dreamzero` | DreamZero inference (1+ GPU, H100 80GB recommended) |
 | `positro/robolab` | RoboLab (Isaac Lab) eval — runs `positronic eval run`, which spawns the Isaac sim subprocess in-container; needs an RTX-class GPU |
-| `positro/galaxea` | G0.5-DROID inference, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
+| `galaxea` | G0.5-DROID inference with its gated weights, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
 
 `Dockerfile.serve-<name>` builds `positro/<name>`, a policy image the platform runs: one
 checkpoint, its weights inside, offline, serving on `:8000`. `pi05-droid` and `gr00t-n17-droid`
-build on `positro/openpi-base` and `positro/gr00t-base`, and `molmoact2-droid` on a Python 3.13
-image with uv. CI publishes each one; `make build-serve-<name>` builds it. `Dockerfile.flux3-action`
-and `Dockerfile.cosmos3-nano` build the FLUX 3 Action and Cosmos3-Nano policy images, which CI
-publishes as `positro/flux3-action` and `positro/cosmos3-nano`. See
+build on `positro/openpi-base` and `positro/gr00t-base`, `molmoact2-droid` on a Python 3.13
+image with uv, and `flux3-action` and `cosmos3-nano` build the vendor stack themselves. CI
+publishes each one; `make build-serve-<name>` builds it. See
 [Submit a policy image](../docs/submit-a-policy-image.md).
 
 Build and push all: `make push`
 
-Galaxea is opt-in: `make build-galaxea`. Its evaluation-only image is excluded from
-aggregate builds and pushes; see [the vendor README](../positronic/vendors/galaxea/README.md).
+`Dockerfile.serve-galaxea` builds `galaxea` in the same form, and the image is private by licence.
+See [the vendor README](../positronic/vendors/galaxea/README.md#docker-setup).
 
 ## References
 

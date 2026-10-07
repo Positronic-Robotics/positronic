@@ -14,23 +14,23 @@ test that the image starts with the network denied before you submit:
 
 The openpi and GR00T recipes build on a `positro/<vendor>-base` image on Docker Hub, which carries
 the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: MolmoAct2 has no
-vendor stack. These three recipes add the weights, the positronic source with an offline
-environment, `EXPOSE 8000` and a start command. Their layers go from the least often changed to the
-most: base, dependencies, source, weights. The source and the weights come in through `COPY --link`
-with no step after them, so a source change builds one new layer and reuses the rest from a cache.
-The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves. CI publishes all five
-images to Docker Hub. Build from the root of a positronic checkout:
+vendor stack. The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves. Each
+recipe adds the weights, the positronic source with an offline environment, `EXPOSE 8000` and a
+start command. The layers go from the least often changed to the most: base, dependencies, source,
+weights. The source and the weights come in through `COPY --link` with no step after them, so a
+source change builds one new layer and reuses the rest from a cache. CI publishes all five images
+to Docker Hub. Build from the root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
 | openpi π0.5 DROID | [`docker/Dockerfile.serve-pi05-droid`](../docker/Dockerfile.serve-pi05-droid), published as `positro/pi05-droid` | `positro/openpi-base` | `pi05_droid_jointpos`, the public checkpoint |
 | GR00T N1.7 DROID | [`docker/Dockerfile.serve-gr00t-n17-droid`](../docker/Dockerfile.serve-gr00t-n17-droid), published as `positro/gr00t-n17-droid` | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
 | MolmoAct2 DROID | [`docker/Dockerfile.serve-molmoact2-droid`](../docker/Dockerfile.serve-molmoact2-droid), published as `positro/molmoact2-droid` | `ghcr.io/astral-sh/uv:python3.13-bookworm` | `allenai/MolmoAct2-DROID` at a pinned revision |
-| FLUX 3 Action DROID | [`docker/Dockerfile.flux3-action`](../docker/Dockerfile.flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
-| Cosmos3-Nano DROID | [`docker/Dockerfile.cosmos3-nano`](../docker/Dockerfile.cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
+| FLUX 3 Action DROID | [`docker/Dockerfile.serve-flux3-action`](../docker/Dockerfile.serve-flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
+| Cosmos3-Nano DROID | [`docker/Dockerfile.serve-cosmos3-nano`](../docker/Dockerfile.serve-cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
 
 CI builds each image when its recipe or the code it installs changes, and tags each build `main`, `latest`
-and the commit. A release also tags the three serving images `v<version>`. CI does not test an
+and the commit. A release also tags each of them `v<version>`. CI does not test an
 image: run the checks in [Test the image before you submit](#test-the-image-before-you-submit).
 Read the digest of a published image with `docker/read_image_digest.sh positro/<image>:main`, and
 pin it.
@@ -89,8 +89,7 @@ address.
 
 `positro/flux3-action` holds FLUX 3 Action DROID, the serving code of Black Forest Labs (BFL), and
 every weight the server loads. It serves the session protocol, and the platform runs the published image as a
-submission. CI builds it when its recipe changes, and tags each build with the commit. Read its digest
-with `docker/read_image_digest.sh positro/flux3-action:main`.
+submission.
 
 - The image holds two Python environments. positronic's server answers on port 8000. It starts BFL's
   own server in BFL's environment, on port 9000 inside the container, and sends it each observation.
@@ -105,9 +104,7 @@ with `docker/read_image_digest.sh positro/flux3-action:main`.
 
 `positro/cosmos3-nano` holds Cosmos3-Nano-Policy-DROID, NVIDIA's action server with its environment,
 and the Wan2.2 VAE the model loads. It serves the session protocol, and the platform runs the
-published image as a submission. CI builds it when its recipe or the positronic source it installs
-changes, and tags each build with the commit. Read its digest with
-`docker/read_image_digest.sh positro/cosmos3-nano:main`.
+published image as a submission.
 
 - The image holds two Python environments. positronic's server answers on port 8000. It starts
   NVIDIA's server in NVIDIA's environment, on port 9000 inside the container, and sends it each
