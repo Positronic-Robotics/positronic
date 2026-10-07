@@ -25,10 +25,11 @@ ARG FLUX_POLICY_SUBFOLDER=variants/gd
 ARG FLUX_BASE_REPO=black-forest-labs/flux-3-action-base
 ARG FLUX_BASE_REVISION=62878e2925e59b7a89ec14463ce89932624c490d
 
-# The weight stages do not build on the base, so a new base reuses the downloaded weights. One large file per
-# stage, and so per layer. FOOTGUN: a registry can refuse a layer of 30 GB, and the DiT is one 13.9 GB file that
-# cannot be split. `variants/gd` is the guidance-distilled BF16 package.
-FROM python:3.12-slim AS hub
+# The weight stages do not build on the base, so a new base reuses the downloaded weights. Their own base is pinned by
+# digest: a moved tag would download the weights again and push them as new layers. One large file per stage, and so
+# per layer. FOOTGUN: a registry can refuse a layer of 30 GB, and the DiT is one 13.9 GB file that cannot be split.
+# `variants/gd` is the guidance-distilled BF16 package.
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS hub
 ENV HF_HOME=/opt/hf-home
 RUN pip install --no-cache-dir huggingface_hub==0.35.3
 
