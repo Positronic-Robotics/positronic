@@ -15,10 +15,10 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 from platform_client.policy_container import PROVISIONING_DEADLINE_S
+from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
 from positronic import keys
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import wait_for_subprocess_ready, warmup
