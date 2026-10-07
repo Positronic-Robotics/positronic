@@ -167,6 +167,10 @@ class RobolabEnv(EnvProtocol):
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
+    @property
+    def num_slots(self) -> int:
+        return self._num_envs
+
     def _timed_phase(self, method: Callable[..., Any], name: str) -> Callable[..., Any]:
         """``method`` wrapped to record a ``name`` span (parented to the in-flight ``env.step``/``env.reset``)
         each call, so the sim's native physics/render cost decomposes the step under ``--timing``."""
@@ -471,7 +475,7 @@ def main() -> None:
     # Under --timing the parent forwards the telemetry dir + run id via the environment; the server then
     # writes its own ``env.spans.jsonl`` sidecar. Inert otherwise.
     with telemetry.bind_from_env():
-        EnvServer(RobolabEnv(args.num_envs), args.host, args.port, slots=args.num_envs).serve_forever()
+        EnvServer(RobolabEnv(args.num_envs), args.host, args.port).serve_forever()
     simulation_app.close()
 
 
