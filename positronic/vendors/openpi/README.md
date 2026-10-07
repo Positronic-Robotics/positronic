@@ -98,7 +98,9 @@ If you want your run to report to wandb, add `docker/.env.wandb` containing your
 
 ## 4. Serve Inference
 
-The OpenPI inference server wraps the OpenPI policy in a FastAPI server that provides a unified API across all vendors (GR00T, LeRobot, OpenPI). The server manages the OpenPI subprocess and handles observation encoding/action decoding.
+The OpenPI inference server uses `positronic.offboard.server.PolicyServer` with the shared transports
+from `positronic-model-server`. WebSocket serving uses Uvicorn; gRPC serving uses `grpc.aio`.
+The server manages the OpenPI subprocess and handles observation encoding and action decoding.
 
 ### Starting the Server
 

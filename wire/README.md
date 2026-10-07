@@ -15,9 +15,9 @@ uv add "positronic-wire[websocket,grpc] @ git+https://github.com/Positronic-Robo
 
 For an unpublished revision, use the Git installation pinned to a tag or commit.
 
-`positronic_wire` never imports `positronic`. `positronic` depends on it: each server side in
-`positronic.offboard` imports the facts from here, and `InferenceClient` dials through the wires
-here.
+`positronic_wire` never imports `positronic` or `positronic_model_server`. Both packages depend on
+it: the server transports in `positronic_model_server` import the shared wire definitions, and
+`positronic.offboard.client.InferenceClient` dials through the client wires.
 
 ## What a wire is
 
@@ -29,9 +29,10 @@ that transport's wire classes. Code outside a wire speaks to every transport thr
 and reads one answer. A wire over TLS is a member of its own, so no caller holds a `secure` flag,
 and nothing anywhere reads a transport off a URL scheme: a caller names the wire.
 
-Most wires here carry the `positronic.offboard.protocol` frames, and `positronic.offboard` serves
-their other end. `roboarena` is the exception: it carries a partner's own protocol, the partner
-serves it, and this package holds the client end alone.
+WebSocket and gRPC carry the session frames used by `positronic_model_server` and the legacy
+`positronic.offboard` server. Both servers use transports from `positronic_model_server`.
+`roboarena` carries a partner's own protocol. The partner serves it, and this package holds the
+client end alone.
 
 ## The package boundary
 
@@ -43,10 +44,14 @@ serves it, and this package holds the client end alone.
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every installed member by its `NAME`, and `client_wire(name)` |
 
-`positronic.offboard` keeps the server side: `server_wire.Wire` and `server_wire.ServerConnection`,
-`websocket_wire.WebsocketWire`, `grpc_wire.GrpcWire`, the session protocol, `InferenceClient` and
-`PolicyServer`. The server side depends on `fastapi`, `uvicorn` and `grpc.aio`, which no client
-needs.
+[`positronic_model_server`](../model_server/README.md) owns the server transports:
+`server_wire.Wire`, `server_wire.ServerConnection`, `websocket_wire.WebsocketWire` and
+`grpc_wire.GrpcWire`. It also owns `ModelServer`, shared message definitions and value serialization.
+The WebSocket server uses Uvicorn directly; the gRPC server uses `grpcio`'s `grpc.aio` API.
+Each server transport has its own optional installation extra.
+
+`positronic.offboard` owns `InferenceClient`, the legacy `PolicyServer`, and v1/v2 robot-command
+encoding. `positronic-wire` does not depend on either server package.
 
 ## The client interface
 
@@ -150,7 +155,8 @@ most 16 KiB of a keepalive body, and the roboarena member one frame of at most `
 | A coordinator that probes an endpoint and warms it | `registry.client_wire`, `probe`, `PROBE_PATH`, the routes | `positronic-wire[websocket,grpc]`, or just the required transport extra |
 | A service that validates an endpoint record | `registry.CLIENT_WIRES` | `positronic-wire` with the transport extras it accepts |
 | A host that runs a policy server and waits for it before it sends sessions | `keepalive`, `probe` | `positronic-wire[websocket,grpc]`, or just the required transport extra |
-| A server | The server side | `positronic` |
+| A native model server | The shared server and its transports | `positronic-model-server[websocket,grpc]`, or just the required transport extra |
+| A legacy policy server | `positronic.offboard.server.PolicyServer` | `positronic` |
 
 A consumer whose lockfile already carries `grpcio` (through a cloud SDK) and `websockets` (through
 `uvicorn`) adds no third-party package when it adds this one.
@@ -215,7 +221,7 @@ A consumer moves onto the wire in this order, each step green on its own:
 
 ## What is not shared
 
-- The server side of each offboard wire, which serves through `fastapi`, `uvicorn` and `grpc.aio`.
+- Server transports live in `positronic-model-server` and use Uvicorn or `grpc.aio`.
 - Model message definitions and value serialization live in `positronic-model-server`. The policy
   stack and robotics codecs live in `positronic`. Neither is a dependency of `positronic-wire`.
 - A transport this package does not implement. A consumer that owns one writes it as a `ClientWire`
