@@ -289,6 +289,18 @@ your machine. The run uses the positronic you installed. It warns when that posi
 commit the definition names, because the two runs can then differ. A local run does not stop at the
 time limit.
 
+## Scoring a run
+
+`platform_client.scoring` makes a run's `scores.json` from its recorded episodes. A scorer reads one
+episode and gives its outcome: the task, the success, and a graded score where the scorer grades one.
+`score(scorer, episodes)` adds the outcomes up into `Scores`. `primary` is the mean episode score,
+and a board ranks on it. An episode that recorded no outcome counts in `unscored`, not as a failure.
+
+`PUBLIC_SCORERS` holds the scorer of each public eval, under the name the definition gives as its
+`scorer`. The platform scores a public eval with the same scorer. The platform also scores evals
+that it does not publish, with scorers that it does not publish: it passes them to `score` beside
+`PUBLIC_SCORERS`.
+
 ## From the command line
 
 `positronic` carries the other commands, and a checkout needs no installation step. `eval run`

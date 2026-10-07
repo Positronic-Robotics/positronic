@@ -11,13 +11,15 @@ from typing import cast
 
 import pos3
 import pytest
-from platform_client.evals import MOLMO_EPISODE_INDEX_KEY, PUBLIC_EVALS, EvalRef, public_eval
+from platform_client.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORER, PUBLIC_EVALS, EvalRef, public_eval
+from platform_client.scoring import score
 
 import pimm
-from positronic import telemetry, telemetry_keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.cfg.eval.real import droid as real_droid
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
+from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyRun, Runtime, Step
@@ -238,6 +240,16 @@ def test_a_public_eval_binds_its_arguments_on_the_installed_positronic(name: str
 
 def test_the_molmo_trial_key_of_a_public_eval_is_the_one_molmo_spaces_reads():
     assert MOLMO_EPISODE_INDEX_KEY == molmo_keys.EPISODE_INDEX
+
+
+def test_the_molmo_scorer_reads_the_outcome_that_positronic_records(tmp_path):
+    with LocalDatasetWriter(tmp_path) as writer, writer.new_episode() as episode:
+        episode.set_static(keys.TASK, 'pick up the cup.')
+        episode.set_static(eval_keys.SUCCESS, True)
+
+    scores = score(MOLMO_SCORER, [episode.path])
+
+    assert (scores.unscored, scores.success_rate, list(scores.per_task)) == (0, 1.0, ['pick up the cup.'])
 
 
 @pytest.mark.parametrize('name', ['molmo.held_out', ''])
