@@ -14,8 +14,10 @@ from typing import Any, NewType, Self
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
 
-# Exclusive upper bound: SQLite's INTEGER is signed 64-bit, so an id must fit a positive int64.
-ID_LIMIT = 2**63
+# SQLite's INTEGER is signed 64-bit.
+INT64_MAX = (1 << 63) - 1
+# Exclusive upper bound: an id must fit a positive int64.
+ID_LIMIT = INT64_MAX + 1
 
 # The wire form, matched whole. `int(s, 16)` alone is too generous: it also takes a `0x` prefix, a
 # sign and embedded underscores, so three spellings would name one id.
@@ -85,6 +87,9 @@ TransactionKey = NewType('TransactionKey', str)
 # An organisation's slug, as the platform names it. The platform resolves it against the caller's
 # memberships and refuses one it does not know.
 OrgSlug = NewType('OrgSlug', str)
+
+PurchaseId = NewType('PurchaseId', str)
+PackageId = NewType('PackageId', str)
 
 # The plaintext API key, returned by `users.register` exactly once and stored only as a hash.
 ApiKey = NewType('ApiKey', str)

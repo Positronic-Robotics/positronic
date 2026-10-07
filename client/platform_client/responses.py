@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Annotated, Any, Self
 
+from platform_client.billing import CreditQuote, RequestBilling
 from platform_client.boards import BoardRef
 from platform_client.enums import (
     BoardVisibility,
@@ -20,6 +21,7 @@ from platform_client.enums import (
     Placement,
     QuotaSubject,
     ReasonCode,
+    RigShape,
     StartPose,
     SubmissionStatus,
     Wire,
@@ -244,6 +246,8 @@ class ResolvedPlan(BaseModel):
 
     episodes_total: int = Field(ge=1)
     tasks: list[ResolvedTask] = Field(min_length=1)
+    rig_shape: Slugged[RigShape]
+    credit_quote: CreditQuote | None = None
 
     @model_validator(mode='after')
     def _the_total_is_the_sum(self) -> Self:
@@ -317,6 +321,7 @@ class SubmissionCreateResponse(_ReasonBearing):
     policy_image_digest: str | None = None
     # A rig plan as it will run. None on a plan the simulator runs, which names an eval.
     resolved: ResolvedPlan | None = None
+    billing: RequestBilling | None = None
 
 
 class SubmissionListRow(_ReasonBearing):
