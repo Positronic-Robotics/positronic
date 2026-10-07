@@ -273,7 +273,8 @@ class ReplayLayout:
     the charts in order. A key ``Group/Chart`` puts the chart as a tab in that group, where the group first appears;
     any other key is a chart of its own. A list names each line by its signal, and a dict by its key. A text signal
     plots the index of its value, and keeps the legend that names each value. A chart with no signal in the episode is
-    left out. With ``show_unnamed_signals``, the signals that no chart plots follow in one group, Other.
+    left out. With ``show_unnamed_signals``, the signals that no chart plots and the log of each text signal follow in
+    one group, Other.
     """
 
     split_shares: tuple[float, float]  # views, charts
@@ -302,7 +303,10 @@ def _value_names(key: str, signals: EpisodeSignals, ep: Episode) -> list[str] | 
 
 
 def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | rrb.Container]:
-    """A view of each signal that is not in ``placed``: a group of signals that share a prefix shows as tabs."""
+    """A view of each signal that is not in ``placed``, and the text log of each text signal.
+
+    A group of signals that share a prefix shows as tabs.
+    """
 
     def _ts_view(sig: str) -> rrb.TimeSeriesView:
         return rrb.TimeSeriesView(
@@ -335,7 +339,7 @@ def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | 
             view = rrb.Tabs(*[_view(sig) for sig in sigs], name=group_name, active_tab=texts[0] if texts else None)
         views.append(view)
         views.extend(_text_log_view(sig) for sig in sigs if sig in signals.plotted_texts)
-    views.extend(_text_log_view(sig) for sig in signals.texts if sig not in signals.plotted_texts)
+    views.extend(_text_log_view(sig) for sig in signals.texts if sig not in unplaced)
     if signals.unplotted:
         views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
     return views
@@ -368,6 +372,7 @@ def _chart_view(
     shown = [(label, signal) for label, signal in lines if signal in widths]
     if not shown:
         return None
+    plots_text = any(signal in signals.plotted_texts for _, signal in shown)
     line_names: dict[str, str] = {}
     for label, signal in shown:
         path = f'/signals/{signal}'
@@ -383,7 +388,7 @@ def _chart_view(
         origin='/signals',
         contents=[f'/signals/{signal}/**' for _, signal in shown],
         overrides={path: rr.SeriesLines(names=[line]) for path, line in line_names.items()},
-        plot_legend=rrb.PlotLegend(visible=sum(widths[signal] for _, signal in shown) > 1),
+        plot_legend=rrb.PlotLegend(visible=plots_text or sum(widths[signal] for _, signal in shown) > 1),
         axis_y=rrb.ScalarAxis(zoom_lock=True),
     )
 
@@ -410,7 +415,7 @@ def _chart_cells(charts: Charts, signals: EpisodeSignals, ep: Episode) -> list[r
 
 
 def _other_cell(signals: EpisodeSignals, placed: set[str]) -> rrb.Tabs | None:
-    """One group, Other, of the signals not in ``placed``, with their text logs and the signals left unplotted."""
+    """One group, Other, of the signals not in ``placed``, every text log, and the signals left unplotted."""
     views = _signal_views(signals, placed)
     return _titled_tabs('Other', views) if views else None
 

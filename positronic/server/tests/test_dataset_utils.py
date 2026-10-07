@@ -441,6 +441,10 @@ def _line_names(view: Any) -> dict[str, list[str]]:
     return {str(path): lines.names.as_arrow_array().to_pylist() for path, lines in view.visualizer_overrides.items()}
 
 
+def _legend_visible(view: Any) -> bool:
+    return view.properties['PlotLegend'].visible.as_arrow_array().to_pylist() == [True]
+
+
 def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):
     static = {eval_keys.JOINT_SIGNALS: [keys.JOINTS], roboarm_keys.JOINT_NAMES: ['j1', 'j2']}
     widths = {keys.GRIP: 1, keys.TARGET_GRIP: 1, keys.JOINTS: 2, keys.TARGET_JOINTS: 2}
@@ -489,6 +493,7 @@ def test_a_chart_plots_the_signals_the_episode_records_and_a_chart_with_none_is_
     (view,) = _bottom_row(ep, _layout(charts, show_unnamed_signals=False))
 
     assert view.contents == [f'/signals/{keys.GRIP}/**']
+    assert not _legend_visible(view)
 
 
 def test_the_signals_no_chart_plots_follow_the_charts_in_one_group(tmp_path):
@@ -509,13 +514,24 @@ def test_with_unnamed_signals_off_only_the_charts_show(tmp_path):
     assert [view.name for view in _bottom_row(ep, _layout(_GRIP, show_unnamed_signals=False))] == ['Grip']
 
 
-def test_a_chart_plots_a_text_signal_by_the_index_of_its_value_and_keeps_its_legend(tmp_path):
+def test_a_chart_plots_a_text_signal_by_the_index_of_its_value_and_shows_the_legend_that_names_each_value(tmp_path):
     ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
 
-    (view,) = _bottom_row(ep, _layout({'Progress': ['progress.state']}))
+    (view,) = _bottom_row(ep, _layout({'Progress': ['progress.state']}, show_unnamed_signals=False))
 
     assert view.contents == ['/signals/progress.state/**']
     assert _line_names(view) == {}
+    assert _legend_visible(view)
+
+
+def test_the_text_log_of_a_charted_text_signal_follows_in_other(tmp_path):
+    ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
+
+    chart, other = _bottom_row(ep, _layout({'Progress': ['progress.state']}))
+
+    (group,) = other.contents
+    assert chart.name == 'Progress'
+    assert [(type(view), view.name) for view in group.contents] == [(rrb.TextLogView, 'progress.state')]
 
 
 def _default_column(ep: DiskEpisode) -> Any:
@@ -580,7 +596,7 @@ def test_the_default_shows_the_signals_of_a_recording_with_no_arm_in_other(tmp_p
     assert [view.name for view in group.contents] == ['device', 'Not plotted']
 
 
-def test_the_default_charts_the_progress_marks_and_leaves_them_out_of_other(tmp_path):
+def test_the_default_charts_the_progress_marks_and_keeps_only_their_text_log_in_other(tmp_path):
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for i, state in enumerate(_STATES):
             writer.append('progress.state', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
@@ -593,7 +609,10 @@ def test_the_default_charts_the_progress_marks_and_leaves_them_out_of_other(tmp_
     assert progress.name == 'Progress'
     assert sorted(progress.contents) == ['/signals/progress.delivered/**', '/signals/progress.state/**']
     assert _line_names(progress) == {'/signals/progress.delivered': ['progress.delivered']}
-    assert [view.name for view in other.contents[0].contents] == ['device.level']
+    assert [(type(view), view.name) for view in other.contents[0].contents] == [
+        (rrb.TimeSeriesView, 'device.level'),
+        (rrb.TextLogView, 'progress.state'),
+    ]
 
 
 def test_a_text_signal_holds_its_last_value_to_the_last_sample(tmp_path, monkeypatch):
