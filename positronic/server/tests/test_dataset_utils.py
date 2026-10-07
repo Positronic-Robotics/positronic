@@ -346,7 +346,7 @@ def test_a_tab_group_opens_on_its_text_signal(tmp_path):
 
 def _layout(charts: dict[str, list[str] | dict[str, str]], show_unnamed_signals: bool = True) -> ReplayLayout:
     return ReplayLayout(
-        split_shares=(3, 1), top_shares=(1, 3), charts=charts, show_unnamed_signals=show_unnamed_signals
+        split_shares=(3, 1), view_shares=(1, 3), charts=charts, show_unnamed_signals=show_unnamed_signals
     )
 
 

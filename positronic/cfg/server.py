@@ -53,7 +53,7 @@ def eval_table():
 single_arm_replay_layout = cfn.Config(
     ReplayLayout,
     split_shares=(3, 1),
-    top_shares=(1, 3),
+    view_shares=(1, 3),
     charts={
         'Robot State/Joints': [keys.JOINTS],
         'Robot State/End Effector': [keys.EE_POSE],

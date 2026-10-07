@@ -244,7 +244,7 @@ def _recording_builder_threads(monkeypatch) -> list[int]:
 
 
 def test_each_recording_is_built_with_the_layout_the_export_is_given(dataset, tmp_path, monkeypatch):
-    layout = ReplayLayout(split_shares=(3, 1), top_shares=(1, 3), charts={}, show_unnamed_signals=False)
+    layout = ReplayLayout(split_shares=(3, 1), view_shares=(1, 3), charts={}, show_unnamed_signals=False)
     stream = positronic_server.stream_episode_rrd
     layouts: list[ReplayLayout | None] = []
 

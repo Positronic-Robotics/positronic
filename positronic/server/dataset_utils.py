@@ -283,9 +283,9 @@ def _series_columns(cells: int, height_share: float) -> int:
 class ReplayLayout:
     """The shares of a replay's views and charts, and the signals each chart plots.
 
-    The views are the 3D view and, on its right, the camera grid, at ``top_shares``. With
+    The views are the 3D view and, on its right, the camera grid, at ``view_shares``. With
     ``trajectory_in_camera_grid``, the views are one grid that holds the cameras and then the 3D view, and
-    ``top_shares`` is not used. The charts form a row under the views, or with ``charts_beside`` a column on their
+    ``view_shares`` is not used. The charts form a row under the views, or with ``charts_beside`` a column on their
     right, and ``split_shares`` divides the height, or the width, between the views and the charts. ``charts`` holds
     the charts in order. A key ``Group/Chart`` puts the chart as a tab in that group, where the group first appears;
     any other key is a chart of its own. A list names each line by its signal, and a dict by its key. A chart with no
@@ -294,7 +294,7 @@ class ReplayLayout:
     """
 
     split_shares: tuple[float, float]  # views, charts
-    top_shares: tuple[float, float]  # 3D view, camera grid
+    view_shares: tuple[float, float]  # 3D view, camera grid
     charts: dict[str, list[str] | dict[str, str]]
     show_unnamed_signals: bool = True
     trajectory_in_camera_grid: bool = False
@@ -424,7 +424,7 @@ def _layout_views(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) ->
         return rrb.Grid(*cells) if cells else None
     cameras = rrb.Grid(*_image_views(signals)) if signals.videos else None
     top = [
-        (view, share) for view, share in zip((trajectory, cameras), layout.top_shares, strict=True) if view is not None
+        (view, share) for view, share in zip((trajectory, cameras), layout.view_shares, strict=True) if view is not None
     ]
     if not top:
         return None

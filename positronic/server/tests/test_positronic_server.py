@@ -209,7 +209,7 @@ def test_a_single_timeline_cached_rrd_is_not_reused(rrd_cache):
     assert not current.exists()
 
 
-_GRIP_LAYOUT = ReplayLayout(split_shares=(3, 1), top_shares=(1, 3), charts={'Grip': [keys.GRIP]})
+_GRIP_LAYOUT = ReplayLayout(split_shares=(3, 1), view_shares=(1, 3), charts={'Grip': [keys.GRIP]})
 
 
 def test_a_cached_rrd_built_under_another_layout_is_not_served(rrd_cache):
