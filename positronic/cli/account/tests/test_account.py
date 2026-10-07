@@ -8,8 +8,10 @@ from fire import parser
 from platform_client import config as config_module
 from platform_client import routes
 from platform_client.billing import CREDIT_SCALE, Tariff
+from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
 from platform_client.ids import ApiKey
+from pydantic import ValidationError
 
 from positronic.cli.account import commands
 from positronic.cli.account import gateway as gateway_module
@@ -168,13 +170,23 @@ def test_buy_sends_a_named_retry_key_and_prints_the_owned_checkout(platform, run
     run_command(buy, org='acme', package_id='package', transaction_key='retry-key')
     assert platform.request.url.path == routes.BILLING_PURCHASES_CREATE
     assert platform.body == {'org': 'acme', 'package_id': 'package', 'transaction_key': 'retry-key'}
-    assert json.loads(capsys.readouterr().out)['checkout_url'] == PURCHASE['checkout_url']
+    printed = capsys.readouterr()
+    assert json.loads(printed.out)['checkout_url'] == PURCHASE['checkout_url']
+    assert printed.err == 'org: acme (from --org)\n'
 
 
 @pytest.mark.parametrize('field', ['org', 'package_id', 'transaction_key'])
 def test_buy_refuses_invalid_input_before_http(field, platform, run_command):
     args = {'org': 'acme', 'package_id': 'package', 'transaction_key': 'retry-key', field: ''}
     with pytest.raises(SystemExit):
+        run_command(buy, **args)
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize('field', ['package_id', 'transaction_key'])
+def test_buy_without_an_org_refuses_invalid_input_before_http(field, platform, run_command):
+    args = {'package_id': 'package', 'transaction_key': 'retry-key', field: ''}
+    with pytest.raises(SystemExit, match=f'^{field} must not be empty$'):
         run_command(buy, **args)
     assert platform.seen is None
 
@@ -217,20 +229,99 @@ def test_purchases_reads_the_named_member_account(platform, run_command, capsys)
     run_command(purchases, org='acme')
     assert platform.request.url.path == routes.BILLING_PURCHASES_LIST
     assert platform.request.url.params['org'] == 'acme'
+    printed = capsys.readouterr()
     assert platform.request.url.params['limit'] == '50'
-    body = json.loads(capsys.readouterr().out)
+    body = json.loads(printed.out)
     assert len(body['purchases']) == 1 and body['next'] == 'opaque-purchase'
+    assert printed.err == 'org: acme (from --org)\n'
+
+
+ME_WITHOUT_PERSONAL_ORG = {'user_id': 'a0', 'tenant': 't', 'plan': 'p', 'quota': []}
+ME = {**ME_WITHOUT_PERSONAL_ORG, 'personal_org': 'user-a0'}
+ACCOUNT = {
+    'org': 'user-a0',
+    'mode': 'prepaid',
+    'billing_role': 'spender',
+    'balance': {'posted_units': 0, 'reserved_units': 0, 'available_units': 0},
+    'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE).model_dump(),
+    'packages': [PACKAGE],
+}
+
+
+@pytest.mark.parametrize(
+    ('command', 'args', 'route', 'answer'),
+    [
+        (account, {}, routes.BILLING_ACCOUNT, ACCOUNT),
+        (buy, {'package_id': 'package', 'transaction_key': 'retry-key'}, routes.BILLING_PURCHASES_CREATE, PURCHASE),
+        (purchases, {}, routes.BILLING_PURCHASES_LIST, {'purchases': [], 'next': None}),
+    ],
+)
+def test_a_credit_command_without_an_org_uses_the_personal_org(
+    command, args, route, answer, platform, run_command, capsys
+):
+    platform.answer_by_route({routes.USERS_ME: (ME, 200), route: (answer, 200)})
+
+    run_command(command, **args)
+
+    assert platform.paths == [routes.USERS_ME, route]
+    sent = platform.body['org'] if platform.request.method == 'POST' else platform.request.url.params['org']
+    assert sent == 'user-a0'
+    printed = capsys.readouterr()
+    assert json.loads(printed.out)
+    assert printed.err == 'org: user-a0 (personal org)\n'
+
+
+def test_a_named_org_is_used_without_asking_for_the_personal_org(platform, run_command):
+    platform.answer(ACCOUNT)
+
+    run_command(account, org='acme')
+
+    assert platform.paths == [routes.BILLING_ACCOUNT]
+
+
+@pytest.mark.parametrize('command', [account, purchases])
+def test_a_platform_that_names_no_personal_org_requires_an_org(command, platform, run_command):
+    platform.answer({**ME, 'personal_org': None})
+
+    with pytest.raises(SystemExit, match='--org'):
+        run_command(command)
+
+    assert platform.paths == [routes.USERS_ME]
+
+
+def test_a_purchase_for_no_org_is_never_created(platform, run_command):
+    platform.answer(ME_WITHOUT_PERSONAL_ORG)
+
+    with pytest.raises(SystemExit, match='--org'):
+        run_command(buy, package_id='package', transaction_key='retry-key')
+
+    assert platform.paths == [routes.USERS_ME]
+
+
+def test_credit_commands_are_in_the_real_account_tree():
+    assert commands['credits'] == {'account': account, 'buy': buy, 'purchase': purchase, 'purchases': purchases}
 
 
 def test_purchase_history_cli_reads_the_page_after_an_opaque_purchase(platform, run_command, capsys):
     platform.answer({'purchases': [], 'next': None})
     run_command(purchases, org='acme', after='opaque-purchase', limit=3)
     assert dict(platform.request.url.params) == {'org': 'acme', 'after': 'opaque-purchase', 'limit': '3'}
-    assert json.loads(capsys.readouterr().out) == {'purchases': [], 'next': None}
+    printed = capsys.readouterr()
+    assert json.loads(printed.out) == {'purchases': [], 'next': None}
+    assert printed.err == 'org: acme (from --org)\n'
 
 
-def test_credit_commands_are_in_the_real_account_tree():
-    assert commands['credits'] == {'account': account, 'buy': buy, 'purchase': purchase, 'purchases': purchases}
+def test_personal_purchase_history_cli_keeps_the_continuation(platform, run_command, capsys):
+    platform.answer_by_route({
+        routes.USERS_ME: (ME, 200),
+        routes.BILLING_PURCHASES_LIST: ({'purchases': [], 'next': None}, 200),
+    })
+    run_command(purchases, after='last-purchase', limit=2)
+    assert platform.paths == [routes.USERS_ME, routes.BILLING_PURCHASES_LIST]
+    assert dict(platform.request.url.params) == {'org': 'user-a0', 'after': 'last-purchase', 'limit': '2'}
+    printed = capsys.readouterr()
+    assert json.loads(printed.out) == {'purchases': [], 'next': None}
+    assert printed.err == 'org: user-a0 (personal org)\n'
 
 
 @pytest.mark.parametrize('limit', [0, -1, True, 1.5, '50', None])
@@ -238,6 +329,26 @@ def test_purchase_history_refuses_invalid_limit_before_http(platform, run_comman
     with pytest.raises(SystemExit, match='limit'):
         run_command(purchases, org='acme', limit=limit)
     assert platform.seen is None
+
+
+@pytest.mark.parametrize('limit', [0, -1, True, 1.5, '50', None])
+def test_personal_purchase_history_refuses_invalid_limit_before_http(platform, run_command, limit):
+    with pytest.raises(SystemExit, match='limit'):
+        run_command(purchases, limit=limit)
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize('command', [account, purchases])
+def test_personal_credit_commands_hide_values_from_malformed_profile(command, platform, run_command):
+    private_value = 'private-response-marker'
+    platform.answer({**ME, 'user_id': private_value})
+    with pytest.raises(SystemExit) as raised:
+        run_command(command)
+    message = str(raised.value)
+    assert 'the platform answered with a response the client cannot read' in message
+    assert private_value not in message
+    assert 'input_value' not in message
+    assert platform.paths == [routes.USERS_ME]
 
 
 @pytest.mark.parametrize('command', [purchase, purchases])
@@ -266,9 +377,26 @@ def test_purchase_history_refuses_an_answer_without_continuation(platform, run_c
 
 def test_billing_response_hides_extra_field_names(platform, run_command):
     private_key = 'private-response-key-marker'
-    platform.answer({**PURCHASE, 'package': {**PACKAGE, private_key: 'private-value'}})
+    platform.answer({**ACCOUNT, 'packages': [{**PACKAGE, private_key: 'private-value'}]})
     with pytest.raises(SystemExit) as raised:
-        run_command(purchase, id='opaque-purchase')
+        run_command(account, org='acme')
+    message = str(raised.value)
+    assert 'the platform answered with a response the client cannot read' in message
+    assert 'extra_forbidden' in message
+    assert private_key not in message
+
+
+def test_personal_discovery_hides_response_validation_field_names(platform, monkeypatch, run_command):
+    private_key = 'private-response-key-marker'
+
+    def unreadable_profile(self):
+        raise ValidationError.from_exception_data(
+            'MeResponse', [{'type': 'extra_forbidden', 'loc': (private_key,), 'input': 'private-value'}]
+        )
+
+    monkeypatch.setattr(PlatformClient, 'me', unreadable_profile)
+    with pytest.raises(SystemExit) as raised:
+        run_command(account)
     message = str(raised.value)
     assert 'the platform answered with a response the client cannot read' in message
     assert 'extra_forbidden' in message
