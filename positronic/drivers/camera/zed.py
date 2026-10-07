@@ -16,27 +16,6 @@ with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
 
 logger = logging.getLogger(__name__)
 
-# The settings a camera's automatic control moves, keyed by the name each records under. ``auto_exposure_gain``
-# is the SDK's one switch for automatic exposure and gain together, and ``auto_white_balance`` is its switch for
-# the white balance; each says whether the values it governs are the sensor's own choice or a set point.
-CAMERA_STATE_SETTINGS = {
-    'exposure': sl.VIDEO_SETTINGS.EXPOSURE,
-    'gain': sl.VIDEO_SETTINGS.GAIN,
-    'white_balance_temperature': sl.VIDEO_SETTINGS.WHITEBALANCE_TEMPERATURE,
-    'auto_exposure_gain': sl.VIDEO_SETTINGS.AEC_AGC,
-    'auto_white_balance': sl.VIDEO_SETTINGS.WHITEBALANCE_AUTO,
-}
-
-
-def read_camera_state(zed) -> dict[str, int]:
-    """What the camera reports for each of ``CAMERA_STATE_SETTINGS`` now. A setting the SDK refuses is left out."""
-    state = {}
-    for name, setting in CAMERA_STATE_SETTINGS.items():
-        error_code, value = zed.get_camera_settings(setting)
-        if error_code == sl.ERROR_CODE.SUCCESS:
-            state[name] = int(value)
-    return state
-
 
 class CameraOpenError(RuntimeError):
     """The SDK did not open the camera."""
@@ -319,12 +298,33 @@ class SLCamera(pimm.ControlSystem):
             self._emit_depth(camera, capture_time)
         return GrabOutcome.SENT
 
+    # The settings a camera's automatic control moves, keyed by the name each records under. ``auto_exposure_gain``
+    # is the SDK's one switch for automatic exposure and gain together, and ``auto_white_balance`` is its switch for
+    # the white balance; each says whether the values it governs are the sensor's own choice or a set point.
+    STATE_SETTINGS = {
+        'exposure': sl.VIDEO_SETTINGS.EXPOSURE,
+        'gain': sl.VIDEO_SETTINGS.GAIN,
+        'white_balance_temperature': sl.VIDEO_SETTINGS.WHITEBALANCE_TEMPERATURE,
+        'auto_exposure_gain': sl.VIDEO_SETTINGS.AEC_AGC,
+        'auto_white_balance': sl.VIDEO_SETTINGS.WHITEBALANCE_AUTO,
+    }
+
+    @staticmethod
+    def _read_state(camera) -> dict[str, int]:
+        """What ``camera`` reports for each of ``STATE_SETTINGS`` now. A setting the SDK refuses is left out."""
+        state = {}
+        for name, setting in SLCamera.STATE_SETTINGS.items():
+            error_code, value = camera.get_camera_settings(setting)
+            if error_code == sl.ERROR_CODE.SUCCESS:
+                state[name] = int(value)
+        return state
+
     def _emit_state_when_due(self, clock: pimm.Clock) -> None:
         """Send the settings the open camera runs at, at most once every ``state_period_sec``."""
         if self._error is not None or self.state.num_bound == 0 or clock.now() < self._state_due_at:
             return
         assert self._camera is not None, 'a camera that holds no error is open'
-        self.state.emit(read_camera_state(self._camera))
+        self.state.emit(self._read_state(self._camera))
         self._state_due_at = clock.now() + self._state_period_sec
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:

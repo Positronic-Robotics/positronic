@@ -1201,6 +1201,7 @@ def test_recorder_refuses_an_encoder_this_host_cannot_run():
 def test_a_recorded_signal_reaches_the_recorder_and_not_the_policy():
     """A device read-back the embodiment lists under ``recorded`` is a recorder input under its own name, expanded
     as its serializer says, and no observation the harness reads."""
+    camera_state = keys.camera_state(f'{keys.IMAGE_PREFIX}{CAMERA}')
     with pimm.World(virtual_time=True) as world:
         motion = Motion()
         embodiment = Embodiment(
@@ -1211,13 +1212,14 @@ def test_a_recorded_signal_reaches_the_recorder_and_not_the_policy():
             static_meta={},
             meta_source=None,
             simulated=True,
-            recorded={keys.camera_state(f'{keys.IMAGE_PREFIX}{CAMERA}'): Observation(motion.position, None)},
+            recorded={camera_state: Observation(motion.position, None)},
         )
         harness = Harness(embodiment)
         recorder = wire.wire_embodiment(world, harness, embodiment)
 
     assert recorder is not None
-    assert set(recorder.inputs) == {POSITION, MOTOR, f'camera_state.{CAMERA}'}
+    assert camera_state == 'camera_state.camera'
+    assert set(recorder.inputs) == {POSITION, MOTOR, camera_state}
     assert set(harness.observations) == {POSITION}
     assert Serializers.camera_state({'exposure': 45, 'gain': 12}) == {'.exposure': 45, '.gain': 12}
 

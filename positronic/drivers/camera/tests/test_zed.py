@@ -462,15 +462,15 @@ class SettingsCamera:
         return ErrorCode.FAILURE, -1
 
 
-def test_read_camera_state_reports_every_setting_the_camera_answers(zed_module):
+def test_the_state_read_reports_every_setting_the_camera_answers(zed_module):
     zed_module.sl.ERROR_CODE = ErrorCode
-    assert zed_module.read_camera_state(SettingsCamera(SETTINGS)) == STATE
+    assert zed_module.SLCamera._read_state(SettingsCamera(SETTINGS)) == STATE
 
 
-def test_read_camera_state_leaves_out_a_setting_the_camera_refuses(zed_module):
+def test_the_state_read_leaves_out_a_setting_the_camera_refuses(zed_module):
     zed_module.sl.ERROR_CODE = ErrorCode
     camera = SettingsCamera({VideoSettings.EXPOSURE: 45})
-    assert zed_module.read_camera_state(camera) == {'exposure': 45}
+    assert zed_module.SLCamera._read_state(camera) == {'exposure': 45}
 
 
 def test_the_camera_sends_its_settings_once_a_period_while_something_receives_them(zed_module):
