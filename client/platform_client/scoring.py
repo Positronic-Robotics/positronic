@@ -79,8 +79,8 @@ def read_static(episode: Path) -> dict[str, object] | None:
     if not static.is_file():
         return None
     try:
-        loaded = json.loads(static.read_text())
-    except json.JSONDecodeError:
+        loaded = json.loads(static.read_text(encoding='utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         loaded = None
     if not isinstance(loaded, dict):
         # One damaged upload leaves the other episodes scorable, so this is logged, not raised.
@@ -90,8 +90,16 @@ def read_static(episode: Path) -> dict[str, object] | None:
 
 
 def recorded_success(static: Mapping[str, object], task_key: str) -> tuple[str, bool] | None:
-    """The task under `task_key` and the recorded success, or None when either is missing."""
+    """The task under `task_key` and the recorded success, or None when either is missing or of the wrong type."""
     success, task = static.get(SUCCESS_KEY), static.get(task_key)
+    misrecorded = [
+        f'{key}={value!r} is not a {kind.__name__}'
+        for key, value, kind in ((SUCCESS_KEY, success, bool), (task_key, task, str))
+        if value is not None and not isinstance(value, kind)
+    ]
+    if misrecorded:
+        # One damaged record leaves the other episodes scorable, so this is logged, not raised.
+        log.error('%s; scoring this episode as unscored', '; '.join(misrecorded))
     if not isinstance(success, bool) or not isinstance(task, str):
         return None
     return task, success
