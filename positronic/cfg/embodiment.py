@@ -41,6 +41,9 @@ def droid(robot_arm, gripper, cameras):
         ready_handlers={eval_keys.ARM: robot_arm.ready, **{name: cam.ready for name, cam in cameras.items()}},
         control_systems=(*cameras.values(), robot_arm, gripper),
         simulated=False,
+        recorded={
+            keys.camera_state(name): Observation(cam.state, Serializers.camera_state) for name, cam in cameras.items()
+        },
     )
 
 
