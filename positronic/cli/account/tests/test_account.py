@@ -8,6 +8,7 @@ from fire import parser
 from platform_client import config as config_module
 from platform_client import routes
 from platform_client.billing import CREDIT_SCALE, Tariff
+from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
 from platform_client.ids import ApiKey
 from pydantic import ValidationError
@@ -385,7 +386,7 @@ def test_billing_response_hides_extra_field_names(platform, run_command):
     assert private_key not in message
 
 
-def test_personal_discovery_hides_response_validation_field_names(monkeypatch, run_command):
+def test_personal_discovery_hides_response_validation_field_names(platform, monkeypatch, run_command):
     private_key = 'private-response-key-marker'
 
     def unreadable_profile(self):
@@ -393,7 +394,7 @@ def test_personal_discovery_hides_response_validation_field_names(monkeypatch, r
             'MeResponse', [{'type': 'extra_forbidden', 'loc': (private_key,), 'input': 'private-value'}]
         )
 
-    monkeypatch.setattr(gateway_module.PlatformClient, 'me', unreadable_profile)
+    monkeypatch.setattr(PlatformClient, 'me', unreadable_profile)
     with pytest.raises(SystemExit) as raised:
         run_command(account)
     message = str(raised.value)
