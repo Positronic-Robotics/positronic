@@ -1,6 +1,11 @@
 import configuronic as cfn
 from platform_client.ids import OrgSlug, PackageId, PurchaseId, TransactionKey
-from platform_client.requests import BillingOrgQuery, BillingPurchaseCreateRequest, BillingPurchaseGetQuery
+from platform_client.requests import (
+    BillingOrgQuery,
+    BillingPurchaseCreateRequest,
+    BillingPurchaseGetQuery,
+    BillingPurchaseListQuery,
+)
 
 from positronic.cli.account.gateway import gateway, refusing_bad_input
 
@@ -46,10 +51,14 @@ def purchase(id: object, platform_url: str | None = None):
 
 
 @cfn.config()
-def purchases(org: object, platform_url: str | None = None):
-    """Print the purchase history of one organization this account belongs to."""
+def purchases(org: object, after: object | None = None, limit: int = 50, platform_url: str | None = None):
+    """Print one purchase history page. Pass its next cursor as after to continue."""
     with refusing_bad_input():
-        query = BillingOrgQuery(org=OrgSlug(_text(org, 'org')))
+        query = BillingPurchaseListQuery(
+            org=OrgSlug(_text(org, 'org')),
+            after=PurchaseId(_text(after, 'after')) if after is not None else None,
+            limit=limit,
+        )
     with gateway(platform_url) as client:
-        result = client.list_purchases(query.org)
+        result = client.list_purchases(query.org, after=query.after, limit=query.limit)
     print(result.model_dump_json(indent=2))

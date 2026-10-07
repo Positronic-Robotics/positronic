@@ -78,6 +78,14 @@ class BillingOrgQuery(BaseModel):
     org: OrgSlug = Field(min_length=1)
 
 
+class BillingPurchaseListQuery(BaseModel):
+    model_config = INPUT_MODEL_CONFIG
+
+    org: OrgSlug = Field(min_length=1)
+    after: PurchaseId | None = Field(default=None, min_length=1)
+    limit: int = Field(default=50, strict=True, gt=0)
+
+
 class BillingPurchaseGetQuery(BaseModel):
     model_config = INPUT_MODEL_CONFIG
 

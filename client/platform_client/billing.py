@@ -141,3 +141,4 @@ class PurchaseView(BaseModel):
 
 class PurchaseListResponse(BaseModel):
     purchases: list[PurchaseView]
+    next: PurchaseId | None = None

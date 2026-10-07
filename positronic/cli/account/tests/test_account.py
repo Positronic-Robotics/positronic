@@ -213,11 +213,20 @@ def test_purchase_reads_an_opaque_id_without_creating_another_checkout(platform,
 
 
 def test_purchases_reads_the_named_member_account(platform, run_command, capsys):
-    platform.answer({'purchases': [PURCHASE]})
+    platform.answer({'purchases': [PURCHASE], 'next': 'opaque-purchase'})
     run_command(purchases, org='acme')
     assert platform.request.url.path == routes.BILLING_PURCHASES_LIST
     assert platform.request.url.params['org'] == 'acme'
-    assert len(json.loads(capsys.readouterr().out)['purchases']) == 1
+    assert platform.request.url.params['limit'] == '50'
+    body = json.loads(capsys.readouterr().out)
+    assert len(body['purchases']) == 1 and body['next'] == 'opaque-purchase'
+
+
+def test_purchase_history_cli_reads_the_page_after_an_opaque_purchase(platform, run_command, capsys):
+    platform.answer({'purchases': [], 'next': None})
+    run_command(purchases, org='acme', after='opaque-purchase', limit=3)
+    assert dict(platform.request.url.params) == {'org': 'acme', 'after': 'opaque-purchase', 'limit': '3'}
+    assert json.loads(capsys.readouterr().out) == {'purchases': [], 'next': None}
 
 
 def test_credit_commands_are_in_the_real_account_tree():

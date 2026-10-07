@@ -29,6 +29,7 @@ from platform_client.requests import (
     BillingOrgQuery,
     BillingPurchaseCreateRequest,
     BillingPurchaseGetQuery,
+    BillingPurchaseListQuery,
     CancelRequest,
     RankingsQuery,
     RegisterRequest,
@@ -177,8 +178,10 @@ class PlatformClient:
     def get_purchase(self, purchase_id: PurchaseId) -> PurchaseView:
         return self._get(routes.BILLING_PURCHASES_GET, PurchaseView, query=BillingPurchaseGetQuery(id=purchase_id))
 
-    def list_purchases(self, org: OrgSlug) -> PurchaseListResponse:
-        return self._get(routes.BILLING_PURCHASES_LIST, PurchaseListResponse, query=BillingOrgQuery(org=org))
+    def list_purchases(self, org: OrgSlug, *, after: PurchaseId | None = None, limit: int = 50) -> PurchaseListResponse:
+        """Read one history page. Pass its `next` as `after` until `next` is None."""
+        query = BillingPurchaseListQuery(org=org, after=after, limit=limit)
+        return self._get(routes.BILLING_PURCHASES_LIST, PurchaseListResponse, query=query)
 
     def create_submission(self, plan: EvalPlan) -> SubmissionCreateResponse:
         """Run one plan. A plan that states its own tasks needs a customer grant: a key without one
