@@ -19,8 +19,9 @@ ARG BASE_IMAGE=ghcr.io/astral-sh/uv:python3.13-bookworm
 ARG MODEL=allenai/MolmoAct2-DROID
 ARG MODEL_REVISION=d8c1abd8a27d8e859455bbe514df2bcc617db0fb
 
-# The weights stage does not build on the base, so a new base reuses the downloaded weights.
-FROM python:3.12-slim AS weights
+# The weights stage does not build on the base, so a new base reuses the downloaded weights. Its own base is
+# pinned by digest: a moved tag would download the weights again and push them as a new layer.
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS weights
 ARG MODEL MODEL_REVISION
 ENV HF_HOME=/opt/hf
 RUN pip install --no-cache-dir huggingface_hub==0.35.3
