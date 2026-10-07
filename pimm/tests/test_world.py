@@ -1919,6 +1919,7 @@ def test_foreground_cleanup_errors_remain_visible_through_world_exit(
     with pytest.raises((OSError, BaseExceptionGroup)) as raised:
         with world:
             next(scheduler)
+            stopped_at = world.clock.now()
             if close_scheduler:
                 scheduler.close()
             if body_error is not None:
