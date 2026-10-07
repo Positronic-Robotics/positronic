@@ -154,34 +154,6 @@ class Codec:
         return NotImplemented
 
 
-def _meta_conflicts(left: dict, right: dict, prefix: str = '') -> list[str]:
-    """``key: left != right`` for every leaf the two metas declare differently. Nested dicts merge per key,
-    so only leaves can conflict."""
-    found = []
-    for key in left.keys() & right.keys():
-        a, b = left[key], right[key]
-        if isinstance(a, dict) and isinstance(b, dict):
-            found += _meta_conflicts(a, b, f'{prefix}{key}.')
-        elif isinstance(a, dict) or isinstance(b, dict) or not np.array_equal(a, b):
-            found.append(f'{prefix}{key}: {a!r} != {b!r}')
-    return found
-
-
-def _merged_meta(left: dict, right: dict) -> dict:
-    """Two codecs' metadata as one dict.
-
-    A leaf both declare differently has no merged answer, so it raises rather than keeping one: the survivor
-    would describe a pipeline neither codec implements. Declare the composition as a single value instead.
-    """
-    conflicts = _meta_conflicts(left, right)
-    if conflicts:
-        raise ValueError(f'composed codecs disagree on metadata — {"; ".join(sorted(conflicts))}')
-    result: dict[str, Any] = {}
-    merge_dicts(result, left)
-    merge_dicts(result, right)
-    return result
-
-
 class EncodeImages(Codec):
     """JPEG-encode uint8 RGB observations recursively, or restrict encoding to explicit paths.
 
@@ -223,6 +195,34 @@ class EncodeImages(Codec):
         if self._images is not None:
             args['paths'] = [list(image.path) for image in self._images]
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+
+
+def _meta_conflicts(left: dict, right: dict, prefix: str = '') -> list[str]:
+    """``key: left != right`` for every leaf the two metas declare differently. Nested dicts merge per key,
+    so only leaves can conflict."""
+    found = []
+    for key in left.keys() & right.keys():
+        a, b = left[key], right[key]
+        if isinstance(a, dict) and isinstance(b, dict):
+            found += _meta_conflicts(a, b, f'{prefix}{key}.')
+        elif isinstance(a, dict) or isinstance(b, dict) or not np.array_equal(a, b):
+            found.append(f'{prefix}{key}: {a!r} != {b!r}')
+    return found
+
+
+def _merged_meta(left: dict, right: dict) -> dict:
+    """Two codecs' metadata as one dict.
+
+    A leaf both declare differently has no merged answer, so it raises rather than keeping one: the survivor
+    would describe a pipeline neither codec implements. Declare the composition as a single value instead.
+    """
+    conflicts = _meta_conflicts(left, right)
+    if conflicts:
+        raise ValueError(f'composed codecs disagree on metadata — {"; ".join(sorted(conflicts))}')
+    result: dict[str, Any] = {}
+    merge_dicts(result, left)
+    merge_dicts(result, right)
+    return result
 
 
 class _ComposedCodec(Codec):
