@@ -404,7 +404,7 @@ def _chart_view(
 
 
 def _chart_cells(layout: ReplayLayout, signals: EpisodeSignals, ep: Episode) -> list[rrb.View | rrb.Container]:
-    """The bottom row's cells: each group of charts, and each chart in no group."""
+    """The chart cells: each group of charts, and each chart in no group."""
     cells: dict[tuple[str, bool], list[rrb.TimeSeriesView]] = {}
     for key, chart_signals in layout.charts.items():
         group, slash, chart = key.partition('/')
@@ -432,6 +432,14 @@ def _layout_views(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) ->
     return views[0] if len(views) == 1 else rrb.Horizontal(*views, column_shares=[s for _, s in top])
 
 
+def _with_a_view(
+    parts: list[tuple[rrb.View | rrb.Container | None, float]],
+) -> tuple[list[rrb.View | rrb.Container], list[float]]:
+    """The parts that hold a view, and their shares."""
+    shown = [(view, share) for view, share in parts if view is not None]
+    return [view for view, _ in shown], [share for _, share in shown]
+
+
 def _layout_root(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) -> rrb.Vertical | rrb.Horizontal:
     views = _layout_views(signals, ep, layout)
     charts = _chart_cells(layout, signals, ep)
@@ -445,14 +453,6 @@ def _layout_root(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) -> 
         return rrb.Horizontal(*parts, column_shares=shares)
     parts, shares = _with_a_view([(views, views_share), (rrb.Horizontal(*charts) if charts else None, charts_share)])
     return rrb.Vertical(*parts, row_shares=shares)
-
-
-def _with_a_view(
-    parts: list[tuple[rrb.View | rrb.Container | None, float]],
-) -> tuple[list[rrb.View | rrb.Container], list[float]]:
-    """The parts that hold a view, and their shares."""
-    shown = [(view, share) for view, share in parts if view is not None]
-    return [view for view, _ in shown], [share for _, share in shown]
 
 
 def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Vertical:
