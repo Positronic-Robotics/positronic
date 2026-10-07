@@ -1,0 +1,40 @@
+name: Build and Push the Cosmos3-Nano DROID Serving Image
+
+# Main republishes positro/cosmos3-nano on a change to its recipe, its build,
+# or the packages and manifests it installs.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docker/Dockerfile.serve-cosmos3-nano
+      - docker/Makefile
+      - .dockerignore
+      - pyproject.toml
+      - uv.lock
+      - README.md
+      - LICENSE
+      - positronic/**
+      - pimm/**
+      - client/**
+      - wire/**
+      - model_server/**
+      - vocabulary/**
+      - .github/workflows/docker-serve-cosmos3-nano.yaml
+      - .github/workflows/docker-serve-image.yaml
+      - '!**/tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: serve-cosmos3-nano-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  serve-image:
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: cosmos3-nano
+    secrets: inherit
