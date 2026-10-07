@@ -75,7 +75,10 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
             raise SystemExit('\n'.join(lines)) from exc
         except ValidationError as exc:
             # A 2xx whose body is not the route's response model. The body stays out of the message.
-            raise SystemExit(f'the platform answered with a response the client cannot read: {one_line(exc)}') from exc
+            fields = '; '.join(
+                f'{".".join(str(part) for part in error["loc"])}: {error["type"]}' for error in exc.errors()
+            )
+            raise SystemExit(f'the platform answered with a response the client cannot read: {fields}') from exc
 
 
 def credential() -> str:

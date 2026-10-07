@@ -12,6 +12,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field
 CREDIT_SCALE = 60_000_000_000
 NANOSECONDS_PER_MINUTE = 60_000_000_000
 CreditUnits = Annotated[int, Field(strict=True, ge=0, le=INT64_MAX)]
+PurchasePageLimit = Annotated[int, Field(strict=True, gt=0)]
 
 
 class Tariff(BaseModel):
@@ -141,4 +142,4 @@ class PurchaseView(BaseModel):
 
 class PurchaseListResponse(BaseModel):
     purchases: list[PurchaseView]
-    next: PurchaseId | None = None
+    next: PurchaseId | None

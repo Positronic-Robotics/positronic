@@ -231,3 +231,34 @@ def test_purchase_history_cli_reads_the_page_after_an_opaque_purchase(platform, 
 
 def test_credit_commands_are_in_the_real_account_tree():
     assert commands['credits'] == {'account': account, 'buy': buy, 'purchase': purchase, 'purchases': purchases}
+
+
+@pytest.mark.parametrize('limit', [0, -1, True, 1.5, '50', None])
+def test_purchase_history_refuses_invalid_limit_before_http(platform, run_command, limit):
+    with pytest.raises(SystemExit):
+        run_command(purchases, org='acme', limit=limit)
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize('command', [purchase, purchases])
+def test_purchase_commands_hide_values_from_malformed_response(command, platform, run_command):
+    private_value = 'private-response-marker'
+    malformed = {**PURCHASE, 'initiated_by': private_value}
+    if command is purchase:
+        platform.answer(malformed)
+        args = {'id': 'opaque-purchase'}
+    else:
+        platform.answer({'purchases': [malformed], 'next': None})
+        args = {'org': 'acme'}
+    with pytest.raises(SystemExit) as raised:
+        run_command(command, **args)
+    message = str(raised.value)
+    assert 'the platform answered with a response the client cannot read' in message
+    assert private_value not in message
+    assert 'input_value' not in message
+
+
+def test_purchase_history_refuses_an_answer_without_continuation(platform, run_command):
+    platform.answer({'purchases': []})
+    with pytest.raises(SystemExit, match='cannot read: next'):
+        run_command(purchases, org='acme')

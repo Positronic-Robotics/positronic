@@ -26,6 +26,7 @@ from platform_client.errors import PlatformError
 from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
 from platform_client.ids import ApiKey, OrgSlug, PurchaseId, SubmissionId
 from platform_client.requests import (
+    DEFAULT_PURCHASE_PAGE_SIZE,
     BillingOrgQuery,
     BillingPurchaseCreateRequest,
     BillingPurchaseGetQuery,
@@ -178,7 +179,9 @@ class PlatformClient:
     def get_purchase(self, purchase_id: PurchaseId) -> PurchaseView:
         return self._get(routes.BILLING_PURCHASES_GET, PurchaseView, query=BillingPurchaseGetQuery(id=purchase_id))
 
-    def list_purchases(self, org: OrgSlug, *, after: PurchaseId | None = None, limit: int = 50) -> PurchaseListResponse:
+    def list_purchases(
+        self, org: OrgSlug, *, after: PurchaseId | None = None, limit: int = DEFAULT_PURCHASE_PAGE_SIZE
+    ) -> PurchaseListResponse:
         """Read one history page. Pass its `next` as `after` until `next` is None."""
         query = BillingPurchaseListQuery(org=org, after=after, limit=limit)
         return self._get(routes.BILLING_PURCHASES_LIST, PurchaseListResponse, query=query)
