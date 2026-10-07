@@ -205,7 +205,8 @@ class SLCamera(pimm.ControlSystem):
     ) -> Generator[pimm.Sleep, None, None]:
         """Answer ``call`` at once while the last frame is recent.
 
-        Otherwise reopen the camera, and answer once it sends a frame, or with the error that it holds.
+        Otherwise reopen the camera, and answer once it sends a frame and its settings, or with the error that it
+        holds.
         """
         if self._error is None and self._frame_at is not None and clock.now() - self._frame_at <= self.STALE_FRAME_SEC:
             call.set_result(None)
@@ -216,6 +217,7 @@ class SLCamera(pimm.ControlSystem):
             self._camera = None
         yield from self._open_or_hold(should_stop)
         if self._error is None and self._grab_frame(clock) is GrabOutcome.SENT:
+            self._emit_state(clock)
             call.set_result(None)
             return
         error = self._error
@@ -319,13 +321,17 @@ class SLCamera(pimm.ControlSystem):
                 state[name] = int(value)
         return state
 
-    def _emit_state_when_due(self, clock: pimm.Clock) -> None:
-        """Send the settings the open camera runs at, at most once every ``state_period_sec``."""
-        if self._error is not None or self.state.num_bound == 0 or clock.now() < self._state_due_at:
+    def _emit_state(self, clock: pimm.Clock) -> None:
+        """Send the settings the open camera runs at, and read them next ``state_period_sec`` later."""
+        if self.state.num_bound == 0:
             return
         assert self._camera is not None, 'a camera that holds no error is open'
         self.state.emit(self._read_state(self._camera))
         self._state_due_at = clock.now() + self._state_period_sec
+
+    def _emit_state_when_due(self, clock: pimm.Clock) -> None:
+        if self._error is None and clock.now() >= self._state_due_at:
+            self._emit_state(clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         fps_counter = pimm.utils.RateCounter('Camera')

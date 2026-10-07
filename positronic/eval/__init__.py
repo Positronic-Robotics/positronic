@@ -69,7 +69,7 @@ class Embodiment:
     video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER
     # What a device reports about itself during an episode, recorded beside the observations and never fed
     # to the policy: a camera's read-back exposure, gain and white balance.
-    recorded: dict[str, Observation] = field(default_factory=dict)
+    readbacks: dict[str, Observation] = field(default_factory=dict)
 
 
 @dataclass

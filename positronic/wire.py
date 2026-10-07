@@ -84,7 +84,7 @@ def _recorder(
     for name, cmd in embodiment.commands.items():
         ds_agent.add_signal(name, cmd.serializer)
         world.connect(harness.commands[name], ds_agent.inputs[name])
-    for name, obs in {**embodiment.recorded, **privileged}.items():
+    for name, obs in {**embodiment.readbacks, **privileged}.items():
         ds_agent.add_signal(name, obs.serializer)
         world.connect(obs.source, ds_agent.inputs[name])
     return ds_agent
