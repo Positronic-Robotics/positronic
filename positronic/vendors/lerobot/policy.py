@@ -5,9 +5,11 @@ import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+from lerobot.utils.constants import OBS_IMAGES
 
-from positronic.policy import Policy, Session
+from positronic.offboard.spec import Model
 from positronic.policy import keys as policy_keys
+from positronic.policy.base import Obs
 from positronic.policy.codec import ACTION
 from positronic.policy.observation import TASK_FIELD
 
@@ -31,46 +33,6 @@ def _detect_device() -> str:
     return 'cpu'
 
 
-class _LerobotSession(Session):
-    def __init__(self, policy, preprocessor, postprocessor, device: str, meta: dict[str, Any]):
-        self._policy = policy
-        self._preprocessor = preprocessor
-        self._postprocessor = postprocessor
-        self._device = device
-        self._meta = meta
-
-    def __call__(self, obs: dict[str, Any], time_ns: int) -> list[dict[str, Any]]:
-        obs_int = {}
-        for key, val in obs.items():
-            if key == TASK_FIELD:
-                obs_int[key] = val
-            elif isinstance(val, np.ndarray):
-                if key.startswith('observation.images.'):
-                    val = torch.from_numpy(np.transpose(val, (2, 0, 1)).copy()).float() / 255.0
-                else:
-                    val = torch.from_numpy(val).float()
-                obs_int[key] = val
-            else:
-                obs_int[key] = torch.as_tensor(val)
-
-        if self._preprocessor is not None:
-            obs_int = self._preprocessor(obs_int)
-
-        action = self._policy.select_action(obs_int)
-
-        if self._postprocessor is not None:
-            action = self._postprocessor(action)
-
-        action = action.cpu().numpy().squeeze(0)
-        if action.ndim == 1:
-            return [{ACTION: action}]
-        return [{ACTION: a} for a in action]
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._meta
-
-
 def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
     """Zero-filled inputs matching the features ``config`` declares.
 
@@ -89,9 +51,10 @@ def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
     return obs
 
 
-class LerobotPolicy(Policy):
+class LerobotModel(Model):
     def __init__(self, checkpoint_path: str, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self._device = device or _detect_device()
+        self._session_id: str | None = None
         config = PreTrainedConfig.from_pretrained(checkpoint_path)
         policy_cls = get_policy_class(config.type)
         self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
@@ -103,9 +66,47 @@ class LerobotPolicy(Policy):
         """The checkpoint's own declaration of what this policy takes."""
         return self._policy.config
 
-    def new_session(self, context=None, rt=None):
-        self._policy.reset()
-        return _LerobotSession(self._policy, self._preprocessor, self._postprocessor, self._device, self._meta)
+    def meta(self) -> dict[str, Any]:
+        return self._meta
+
+    def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
+        if self._session_id is None:
+            self._policy.reset()
+            self._preprocessor.reset()
+            self._postprocessor.reset()
+            self._session_id = session_id
+        if self._session_id != session_id:
+            raise RuntimeError('LeRobot is serving another session; end it before starting inference')
+        obs_int = {}
+        for key, val in obs.items():
+            if key == TASK_FIELD:
+                obs_int[key] = val
+            elif isinstance(val, np.ndarray):
+                if key.startswith(f'{OBS_IMAGES}.'):
+                    val = torch.from_numpy(np.transpose(val, (2, 0, 1)).copy()).float() / 255.0
+                else:
+                    val = torch.from_numpy(val).float()
+                obs_int[key] = val
+            else:
+                obs_int[key] = torch.as_tensor(val)
+
+        obs_int = self._preprocessor(obs_int)
+
+        action = self._policy.select_action(obs_int)
+
+        action = self._postprocessor(action)
+
+        action = action.cpu().numpy().squeeze(0)
+        if action.ndim == 1:
+            return [{ACTION: action}]
+        return [{ACTION: a} for a in action]
+
+    def end_session(self, session_id: str) -> None:
+        if self._session_id == session_id:
+            self._policy.reset()
+            self._preprocessor.reset()
+            self._postprocessor.reset()
+            self._session_id = None
 
     def close(self):
         if self._policy is not None:

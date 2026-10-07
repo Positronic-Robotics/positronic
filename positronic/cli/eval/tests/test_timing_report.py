@@ -40,6 +40,7 @@ from positronic.telemetry_keys import (
     SPAN_EVAL_PASS,
     SPAN_MATERIALIZE,
     SPAN_POLICY_INFER,
+    SPAN_POLICY_SUBMIT,
     SPAN_RECORD_IO,
     SPAN_RESET,
 )
@@ -111,9 +112,20 @@ def _fixture(telemetry_dir):
     (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
 
-def test_report_aggregates(tmp_path):
+@pytest.mark.parametrize('nested_inference', [False, True])
+def test_report_aggregates(tmp_path, nested_inference):
     _fixture(tmp_path / TELEMETRY_SUBDIR)
     spans = _read_spans_dir(tmp_path / TELEMETRY_SUBDIR)
+    if nested_inference:
+        nested = []
+        for span in spans:
+            if span.name == SPAN_POLICY_INFER:
+                call = span._replace(name='processor', span_id=f'call-{span.span_id}', end_ns=span.start_ns + 1)
+                worker = span._replace(name=SPAN_POLICY_SUBMIT, span_id=f'work-{span.span_id}', parent_id=call.span_id)
+                nested.extend([call, worker, span._replace(parent_id=worker.span_id)])
+            else:
+                nested.append(span)
+        spans = nested
     report = _build_report(spans, _read_stats_dir(tmp_path / TELEMETRY_SUBDIR), policy_gpu=None)
 
     assert report.episodes == 2

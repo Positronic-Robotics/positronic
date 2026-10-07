@@ -75,10 +75,10 @@ def test_unpack_wire_pose_rejects_wrong_width():
         mapping.unpack_wire_pose(np.zeros(7))
 
 
-def test_compose_world_delta_adds_translation_and_left_multiplies_rotation():
+def test_compose_reference_delta_adds_translation_and_left_multiplies_rotation():
     cur_rot = np.eye(3)
     delta_rot = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-    pos, rot = mapping.compose_world_delta([1.0, 0.0, 0.0], cur_rot, [0.0, 2.0, 0.0], delta_rot)
+    pos, rot = mapping.compose_reference_delta([1.0, 0.0, 0.0], cur_rot, [0.0, 2.0, 0.0], delta_rot)
     assert np.allclose(pos, [1.0, 2.0, 0.0])
     assert np.allclose(rot, delta_rot)
 
@@ -171,6 +171,43 @@ def test_discovery_finds_every_manifest_under_the_benchmarks_root(tmp_path: Path
         mapping.BenchmarkPath('v1', 'procthor-10k', 'Pick', 'pick_20251231'),
         mapping.BenchmarkPath('v2', 'objaverse', 'PickHard', 'hard_20260206'),
     ]
+
+
+def test_discovery_finds_a_benchmark_behind_a_symlinked_suite_directory(tmp_path: Path):
+    # MolmoSpaces' asset manager links each suite to one version of its cache: benchmarks/<suite> -> <cache>/<version>.
+    version = tmp_path / 'cache' / 'v1' / '20260408'
+    (version / 'procthor-10k' / 'Pick' / 'pick_20251231').mkdir(parents=True)
+    (version / 'procthor-10k' / 'Pick' / 'pick_20251231' / mapping.MOLMO_BENCHMARK_MANIFEST).write_text('[]')
+    (tmp_path / 'assets' / mapping.ASSETS_BENCHMARKS_DIR).mkdir(parents=True)
+    (tmp_path / 'assets' / mapping.ASSETS_BENCHMARKS_DIR / 'v1').symlink_to(version, target_is_directory=True)
+    assert mapping.discover_benchmarks(tmp_path / 'assets') == [
+        mapping.BenchmarkPath('v1', 'procthor-10k', 'Pick', 'pick_20251231')
+    ]
+
+
+def test_discovery_does_not_walk_a_symlink_back_into_its_own_ancestor(tmp_path: Path):
+    _lay_out(tmp_path, 'v1/procthor-10k/Pick/pick_20251231')
+    suite = tmp_path / mapping.ASSETS_BENCHMARKS_DIR / 'v1'
+    (suite / 'procthor-10k' / 'loop').symlink_to(suite, target_is_directory=True)
+    assert mapping.discover_benchmarks(tmp_path) == [
+        mapping.BenchmarkPath('v1', 'procthor-10k', 'Pick', 'pick_20251231')
+    ]
+
+
+def test_discovery_raises_on_a_directory_it_cannot_read(tmp_path: Path):
+    _lay_out(tmp_path, 'v1/procthor-10k/Pick/pick_20251231')
+    unreadable = tmp_path / mapping.ASSETS_BENCHMARKS_DIR / 'v1' / 'procthor-10k'
+    unreadable.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            mapping.discover_benchmarks(tmp_path)
+    finally:
+        unreadable.chmod(0o755)
+
+
+def test_discovery_raises_when_the_asset_directory_holds_no_benchmarks_root(tmp_path: Path):
+    with pytest.raises(FileNotFoundError):
+        mapping.discover_benchmarks(tmp_path)
 
 
 def test_selection_pins_any_dimension_by_a_name_or_a_list_and_leaves_the_rest_open():

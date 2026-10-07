@@ -16,7 +16,8 @@ from typing import Annotated
 import httpx
 from platform_client.client import API_KEY_ENV, API_URL_ENV, require_absolute_url
 from platform_client.ids import ApiKey
-from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError
+from platform_client.model_config import INPUT_MODEL_CONFIG
+from pydantic import AfterValidator, BaseModel, ValidationError
 
 CONFIG_DIR_ENV = 'POSITRONIC_PLATFORM_CONFIG_DIR'
 DEFAULT_CONFIG_DIR = Path('~/.config/positronic-platform')
@@ -53,7 +54,7 @@ def checked_platform_url(value: str) -> str:
 class Config(BaseModel):
     """What `register` records and every command reads: the platform, and the key that belongs to it."""
 
-    model_config = ConfigDict(extra='forbid')
+    model_config = INPUT_MODEL_CONFIG
 
     platform_url: Annotated[str, AfterValidator(checked_platform_url)]
     api_key: Annotated[ApiKey, AfterValidator(checked_api_key)]

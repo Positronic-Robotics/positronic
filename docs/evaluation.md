@@ -28,9 +28,9 @@ cd docker && docker compose run --rm --service-ports openpi-server libero
 Score a suite, and browse every trial — video, robot state, per-trial success:
 
 ```bash
-# --policy.host and --policy.port say where the server is — a remote host and 8000 if it runs on another machine
+# --policy.address.host and --policy.address.port say where the server is — a remote host and 8000 off-machine
 uv run positronic eval run --eval=.sim.libero.object \
-  --policy=.remote --policy.host=localhost --policy.port=8000 \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
   --eval.trial_count=10 --output_dir=~/evals/libero
 
 uv run positronic-server --dataset.path=~/evals/libero \
@@ -40,6 +40,14 @@ uv run positronic-server --dataset.path=~/evals/libero \
 **One server, many targets.** Every target publishes the same observation keys (see [the wire format](connect-your-model.md#the-wire-format)), so a DROID policy served once is scored on LIBERO, RoboLab, MolmoSpaces and our rig without a restart. Running everywhere is not the same as being comparable everywhere: each benchmark points `image.exterior` at its own camera, so a checkpoint scored on a target it was never trained for measures the viewpoint gap as much as the policy. Your own model is served the same way — [Connect your model](connect-your-model.md).
 
 `--eval` takes any target the catalog exposes: a whole benchmark (`.sim.libero.all`), a suite or category (`.sim.robolab.visual`), or one task (`.sim.robolab.banana_in_bowl`). A sim run charges the model's inference time; add `--charge_inference_time=False` to pause the world during inference instead. Every trial is recorded as a Positronic dataset under `--output_dir`, carrying whatever verdict its benchmark reported.
+
+`--eval` also takes the name of a public platform eval. The run then uses the config, the arguments and the trials that the platform runs under that name. It runs on the positronic you installed, and it warns when that positronic is not the commit that the platform runs ([Public evals](../client/README.md#public-evals)):
+
+```bash
+uv run positronic eval run --eval=molmo.franka_pick_mini_smoke \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
+  --output_dir=~/evals/molmo_smoke
+```
 
 Real-hardware DROID evals take the same model endpoint, but we run them for you — operated and operator-scored on our fleet, not self-driven in sim. Write to hi@phail.ai for those.
 

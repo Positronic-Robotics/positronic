@@ -1,13 +1,14 @@
 import base64
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, overload
 
-import numpy as np
+from pimm.time import RECEIVED_WORLD
 
-from .signal import Signal
+from .signal import RECORDED_TIME, Signal
+from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timeline, validate_timelines
 
 EPISODE_SCHEMA_VERSION = 1
 # Where the episode is written, in the meta of both the episode and the writer that made it.
@@ -16,6 +17,8 @@ META_PATH = 'path'
 META_UID = 'uid'
 # When the episode was opened, in the meta of both the episode and the writer that made it.
 META_CREATED_TS_NS = 'created_ts_ns'
+# The video encoder spec, under the ``writer`` entry of the episode meta.
+META_WRITER_VIDEO_ENCODER = 'video_encoder'
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
 
@@ -53,29 +56,35 @@ class _EpisodeTimeIndexer:
     def __init__(self, episode: 'Episode') -> None:
         self.episode = episode
 
-    def __getitem__(self, index_or_slice):
-        match index_or_slice:
-            case int() | np.integer() | float() | np.floating() as ts:
-                # For a single timestamp, return static items and only the values for signals
-                sampled = {key: sig.time[ts][0] for key, sig in self.episode.signals.items()}
-                return {**self.episode.static, **sampled}
-            case slice() as sl if sl.step is None:
+    def __getitem__(self, request: Time | slice | Sequence[Time]):
+        if isinstance(request, Time):
+            sampled = {
+                name: signal.time[request][0] for name, signal in self.episode._signals_on(request.timelines).items()
+            }
+            return {**self.episode.static, **sampled}
+        if isinstance(request, slice):
+            if request.step is None:
                 raise KeyError('Episode.time[start:stop] is not supported; use a step or explicit timestamps')
-            case slice() | list() | tuple() | np.ndarray() as req:
-                # For slice or sequence of timestamps, return a dict:
-                # - static items as-is
-                # - dynamic signals mapped to sequences of values sampled at requested timestamps
-                # If slice with step but no stop provided, default stop to episode.last_ts (+1 for end-exclusive)
-                if isinstance(req, slice) and req.step is not None and req.stop is None:
-                    req = slice(req.start, self.episode.last_ts + 1, req.step)
-                result: dict[str, Any] = self.episode.static.copy()
-                for key, sig in self.episode.signals.items():
-                    view = sig.time[req]
-                    # Extract the full sequence of values corresponding to the time selection
-                    result[key] = view._values_at(slice(None))
-                return {**self.episode.static, **result}
-            case _:
-                raise TypeError(f'Invalid index type: {type(index_or_slice)}')
+            if request.start is None:
+                raise ValueError('Slice start is required when step is provided')
+            start, stop, step = request.start, request.stop, request.step
+            if any(not isinstance(time, Time) for time in (start, stop, step) if time is not None):
+                raise TypeError('Time slice endpoints and step must be Time values')
+            stop = stop if stop is not None else self.episode.bounds(start.timelines).finish
+            request = TimeGrid(start, stop, step, inclusive=request.stop is None)
+            names = start.timelines
+        elif isinstance(request, Sequence):
+            validate_queries(request)
+            if not len(request):
+                return {
+                    **self.episode.static,
+                    **{name: signal[:0].values() for name, signal in self.episode.signals.items()},
+                }
+            names = request[0].timelines
+        else:
+            raise TypeError('Expected Time, a time slice, or a sequence of Time')
+        signals = self.episode._signals_on(names)
+        return {**self.episode.static, **{name: signal.time[request].values() for name, signal in signals.items()}}
 
 
 class Episode(ABC, Mapping[str, Any]):
@@ -102,6 +111,11 @@ class Episode(ABC, Mapping[str, Any]):
         return out
 
     @property
+    def timelines(self) -> tuple[str, ...]:
+        """All timeline names present in at least one signal."""
+        return tuple(dict.fromkeys(name for signal in self.signals.values() for name in signal.timelines))
+
+    @property
     def static(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for k in self:
@@ -110,25 +124,27 @@ class Episode(ABC, Mapping[str, Any]):
                 out[k] = v
         return out
 
-    @property
-    def start_ts(self):
-        values = [sig.start_ts for sig in self.signals.values()]
-        if not values:
-            raise ValueError('Episode has no signals')
-        return max(values)
+    def _signals_on(self, timelines: tuple[str, ...]) -> dict[str, Signal[Any]]:
+        validate_timelines(timelines)
+        return {name: signal for name, signal in self.signals.items() if set(timelines).issubset(signal.timelines)}
 
-    @property
-    def last_ts(self):
-        values = [sig.last_ts for sig in self.signals.values()]
-        if not values:
-            raise ValueError('Episode has no signals')
-        return max(values)
+    @overload
+    def bounds(self, timelines: str) -> TimeBounds[int]: ...
 
-    @property
-    def duration_ns(self):
-        if not self.signals:
-            return 0
-        return self.last_ts - self.start_ts
+    @overload
+    def bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]: ...
+
+    def bounds(self, timelines: str | tuple[str, ...]) -> TimeBounds[int] | TimeBounds[Time]:
+        """Coordinatewise latest starts and finishes of signals on every selected timeline."""
+        names = (timelines,) if isinstance(timelines, str) else timelines
+        bounds = [signal.bounds(names) for signal in self._signals_on(names).values()]
+        if not bounds:
+            raise ValueError('Episode has no signals on the requested timelines')
+        start = Time(**{name: max(bound.start[name] for bound in bounds) for name in names})
+        finish = Time(**{name: max(bound.finish[name] for bound in bounds) for name in names})
+        if isinstance(timelines, str):
+            return TimeBounds(start[timelines], finish[timelines])
+        return TimeBounds(start, finish)
 
     @property
     def time(self):
@@ -163,7 +179,7 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     """Abstract interface for recording an episode's dynamic and static data."""
 
     @abstractmethod
-    def append(self, signal_name: str, data: T, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
+    def append(self, signal_name: str, data: T, timestamps: Time) -> None:
         """Append a sample for the named signal."""
         pass
 
@@ -186,3 +202,17 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     def meta(self) -> dict:
         """Metadata for the episode, known at the time of request."""
         return {}
+
+
+def select_timeline(timelines: Iterable[str], *, timeline: str | None = None) -> str:
+    """Use world receipt time, legacy recorded time, or an explicitly requested timeline."""
+    available = set(timelines)
+    if timeline is not None:
+        validate_timeline(timeline)
+        if timeline not in available:
+            raise KeyError(timeline)
+        return timeline
+    for name in (RECEIVED_WORLD, RECORDED_TIME):
+        if name in available:
+            return name
+    raise ValueError(f'Select an explicit timeline from {sorted(available)}')

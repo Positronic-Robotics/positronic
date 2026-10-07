@@ -156,8 +156,8 @@ def build_teleop_arm(world, spread: Sequence[float] | np.ndarray = JOINTS_SPREAD
     """The controller with the arm side of its ``sync_move`` paired, and recorders on what it emits."""
     dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, spread)
     grips, sounds = RecordingEmitter(), RecordingEmitter()
-    dc.target_grip._bind(grips)
-    dc.sound._bind(sounds)
+    dc.target_grip._bind(grips, clock=world.clock)
+    dc.sound._bind(sounds, clock=world.clock)
     return dc, world.pair(dc.sync_move), world.pair(dc.buttons_receiver), grips, sounds
 
 
@@ -282,6 +282,26 @@ def test_a_start_pose_the_arm_refuses_is_sounded_to_the_operator(world):
     assert marks['after'] > marks['refused']
 
 
+def test_an_arm_state_that_carries_a_signal_error_is_sounded_and_the_session_goes_on(world):
+    """A pressed emergency stop puts an error on the arm's state. Tracking does not start, and the operator
+    hears it once."""
+    dc, _arm, buttons, grips, sounds = build_teleop_arm(world)
+    state = world.pair(dc.robot_state)
+    marks = {}
+
+    driver = ManualDriver([
+        (lambda: state.emit(pimm.SignalError('Release the emergency stop button')), 0.01),
+        (lambda: buttons.emit(make_buttons(A=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(A=True)), 0.01),
+        (lambda: marks.update(pressed=len(grips.emitted)), 0.01),
+        (lambda: marks.update(after=len(grips.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert [path.name for _, path in sounds.emitted] == ['error-occurred.wav']
+    assert marks['after'] > marks['pressed']
+
+
 def test_a_station_that_measured_no_spread_puts_the_arm_at_its_nominal(world):
     """Jitter is a station's to measure, and the arms that have none named are the ones asked for their
     nominal joints themselves."""
@@ -304,6 +324,23 @@ def test_every_start_pose_is_a_fresh_per_joint_draw_around_the_nominal():
     assert np.all(np.abs(offsets) < 1)  # inside the spread the nominal allows each joint
     assert np.all(offsets.std(axis=0) > 0)  # a draw of its own each time
     assert np.all(offsets.std(axis=1) > 0)  # each joint drawn on its own, not one offset for the whole vector
+
+
+def test_the_headset_video_skips_a_lost_camera_and_resumes_on_its_next_frame(world):
+    webxr = WebXR(port=0)
+    emitter, receiver = world.local_pipe()
+    webxr.frame._bind(receiver)
+
+    emitter.emit('frame 1')
+    first = webxr._next_frame(None)
+    assert first is not None and first.data == 'frame 1'
+
+    emitter.emit(pimm.SignalError('camera lost'))
+    assert webxr._next_frame(first.time) is None
+
+    emitter.emit('frame 2')
+    second = webxr._next_frame(first.time)
+    assert second is not None and second.data == 'frame 2'
 
 
 def test_data_collection_with_mujoco_robot_gripper(tmp_path):

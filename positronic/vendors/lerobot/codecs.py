@@ -2,12 +2,10 @@
 
 from positronic.cfg import codecs
 
-ee = codecs.compose.override(
-    obs=codecs.eepose_obs.override(image_size=(512, 512)), action=codecs.absolute_pos_action, horizon=1.0
-)
+ee = codecs.compose.override(obs=codecs.eepose_obs.override(image_size=(512, 512)), action=codecs.absolute_pos_action)
 phail_v1 = ee.override(action=codecs.phail_v1_execution.override(action=codecs.absolute_pos_action))
 joints = codecs.compose.override(
-    obs=codecs.joints_obs.override(image_size=(512, 512)), action=codecs.absolute_pos_action, horizon=1.0
+    obs=codecs.joints_obs.override(image_size=(512, 512)), action=codecs.absolute_pos_action
 )
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK

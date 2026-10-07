@@ -1,4 +1,7 @@
+import traceback
 from unittest.mock import Mock
+
+import pytest
 
 from pimm.core import (
     Clock,
@@ -7,8 +10,10 @@ from pimm.core import (
     DefaultingReceiver,
     Message,
     SignalEmitter,
+    SignalError,
     SignalReceiver,
 )
+from pimm.time import EMITTED_WALL, Time
 from pimm.utils import MapSignalEmitter, MapSignalReceiver, RateLimiter, read_updated, value_updated
 
 
@@ -20,7 +25,7 @@ class TestMapSignalReceiver:
         mock_reader = Mock(spec=SignalReceiver)
         test_data = 10
         test_ts = 123
-        mock_reader.read.return_value = Message(data=test_data, ts=test_ts)
+        mock_reader.read.return_value = Message(data=test_data, time=Time(source=test_ts))
 
         # Double the value
         map_reader = MapSignalReceiver(mock_reader, lambda x: x * 2)
@@ -28,20 +33,20 @@ class TestMapSignalReceiver:
 
         assert result is not None
         assert result.data == 20
-        assert result.ts == test_ts
+        assert result.time['source'] == test_ts
         assert result.updated is True
 
     def test_preserves_timestamp(self):
         """Test that original timestamp is preserved."""
         mock_reader = Mock(spec=SignalReceiver)
         test_ts = 987654321
-        mock_reader.read.return_value = Message(data='test', ts=test_ts)
+        mock_reader.read.return_value = Message(data='test', time=Time(source=test_ts))
 
         map_reader = MapSignalReceiver(mock_reader, lambda x: x.upper())
         result = map_reader.read()
 
         assert result is not None
-        assert result.ts == test_ts
+        assert result.time['source'] == test_ts
         assert result.updated is True
 
     def test_returns_none_when_reader_returns_none(self):
@@ -58,7 +63,7 @@ class TestMapSignalReceiver:
         """Test that returning None from func filters out the value."""
         mock_reader = Mock(spec=SignalReceiver)
         test_ts = 456
-        mock_reader.read.return_value = Message(data=10, ts=test_ts)
+        mock_reader.read.return_value = Message(data=10, time=Time(source=test_ts))
 
         # Filter function that returns None
         map_reader = MapSignalReceiver(mock_reader, lambda x: None)
@@ -71,21 +76,21 @@ class TestMapSignalReceiver:
         mock_reader = Mock(spec=SignalReceiver)
 
         # First read: return a valid value
-        mock_reader.read.return_value = Message(data=10, ts=100)
+        mock_reader.read.return_value = Message(data=10, time=Time(source=100))
         map_reader = MapSignalReceiver(mock_reader, lambda x: x * 2 if x < 20 else None)
 
         result1 = map_reader.read()
         assert result1 is not None
         assert result1.data == 20
-        assert result1.ts == 100
+        assert result1.time['source'] == 100
         assert result1.updated is True
 
         # Second read: func returns None, should return last message
-        mock_reader.read.return_value = Message(data=30, ts=200)
+        mock_reader.read.return_value = Message(data=30, time=Time(source=200))
         result2 = map_reader.read()
         assert result2 is not None
         assert result2.data == 20  # Last non-None value
-        assert result2.ts == 100  # Last non-None timestamp
+        assert result2.time['source'] == 100  # Last non-None timestamp
         assert result2.updated is False
 
     def test_filtering_with_conditional_logic(self):
@@ -99,31 +104,31 @@ class TestMapSignalReceiver:
         map_reader = MapSignalReceiver(mock_reader, filter_even)
 
         # Test with even number
-        mock_reader.read.return_value = Message(data=10, ts=100)
+        mock_reader.read.return_value = Message(data=10, time=Time(source=100))
         result1 = map_reader.read()
         assert result1 is not None
         assert result1.data == 10
 
         # Test with odd number (should return last message)
-        mock_reader.read.return_value = Message(data=11, ts=200)
+        mock_reader.read.return_value = Message(data=11, time=Time(source=200))
         result2 = map_reader.read()
         assert result2 is not None
         assert result2.data == 10  # Last even number
-        assert result2.ts == 100
+        assert result2.time['source'] == 100
         assert result2.updated is False
 
         # Test with another even number
-        mock_reader.read.return_value = Message(data=12, ts=300)
+        mock_reader.read.return_value = Message(data=12, time=Time(source=300))
         result3 = map_reader.read()
         assert result3 is not None
         assert result3.data == 12
-        assert result3.ts == 300
+        assert result3.time['source'] == 300
         assert result3.updated is True
 
     def test_initial_state_has_no_last_message(self):
         """Test that initial state returns None when func returns None."""
         mock_reader = Mock(spec=SignalReceiver)
-        mock_reader.read.return_value = Message(data=10, ts=100)
+        mock_reader.read.return_value = Message(data=10, time=Time(source=100))
 
         # First read with func returning None should return None
         map_reader = MapSignalReceiver(mock_reader, lambda x: None)
@@ -134,7 +139,7 @@ class TestMapSignalReceiver:
     def test_propagates_updated_flag(self):
         """Test that updated flag from upstream reader is preserved."""
         mock_reader = Mock(spec=SignalReceiver)
-        msg = Message(data=42, ts=100, updated=False)
+        msg = Message(data=42, time=Time(source=100), updated=False)
         mock_reader.read.return_value = msg
 
         map_reader = MapSignalReceiver(mock_reader, lambda x: x)
@@ -152,18 +157,31 @@ class TestMapSignalReceiver:
         mock_reader = Mock(spec=SignalReceiver)
         map_reader = MapSignalReceiver(mock_reader, lambda x: x if x < 20 else None)
 
-        mock_reader.read.return_value = Message(data=10, ts=100)
+        mock_reader.read.return_value = Message(data=10, time=Time(source=100))
         first = map_reader.read()
         assert first is not None
         assert first.updated is True
 
-        mock_reader.read.return_value = Message(data=30, ts=200)
+        mock_reader.read.return_value = Message(data=30, time=Time(source=200))
         stale = map_reader.read()
         assert stale is not None
         assert stale.data == 10
         assert stale.updated is False
         assert stale is not first
         assert first.updated is True
+
+    def test_a_signal_error_passes_through_and_the_function_does_not_get_it(self):
+        mock_reader = Mock(spec=SignalReceiver)
+        func = Mock(side_effect=lambda x: x if x < 20 else None)
+        map_reader = MapSignalReceiver(mock_reader, func)
+        error = SignalError('camera lost')
+
+        mock_reader.read.return_value = Message(data=error, time=Time(source=100))
+        assert map_reader.read() == Message(data=error, time=Time(source=100))
+        func.assert_not_called()
+
+        mock_reader.read.return_value = Message(data=30, time=Time(source=200))
+        assert map_reader.read() == Message(data=error, time=Time(source=100), updated=False)
 
 
 class TestMapSignalEmitter:
@@ -172,47 +190,52 @@ class TestMapSignalEmitter:
     def test_transforms_data_before_emitting(self):
         """Test that data is transformed before being emitted."""
         mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter._emission_clock.time.return_value = Time(wall=0)
         map_emitter = MapSignalEmitter(mock_emitter, lambda x: x * 2)
-        map_emitter.emit(10, ts=123)
-        mock_emitter.emit.assert_called_once_with(20, 123)
+        map_emitter.emit(10, time=Time(source=123))
+        mock_emitter._emit.assert_called_once_with(20, Time(**{EMITTED_WALL: 0, 'source': 123}))
 
     def test_preserves_timestamp(self):
         """Test that timestamp is preserved when emitting."""
         mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter._emission_clock.time.return_value = Time(wall=0)
         map_emitter = MapSignalEmitter(mock_emitter, lambda x: x.upper())
         test_ts = 987654321
-        map_emitter.emit('test', ts=test_ts)
-        mock_emitter.emit.assert_called_once_with('TEST', test_ts)
+        map_emitter.emit('test', time=Time(source=test_ts))
+        mock_emitter._emit.assert_called_once_with('TEST', Time(**{EMITTED_WALL: 0, 'source': test_ts}))
 
     def test_filters_when_func_returns_none(self):
         """Test that returning None from func prevents emission."""
         mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter._emission_clock.time.return_value = Time(wall=0)
         map_emitter = MapSignalEmitter(mock_emitter, lambda _: None)
-        map_emitter.emit(10, ts=123)
-        mock_emitter.emit.assert_not_called()
+        map_emitter.emit(10, time=Time(source=123))
+        mock_emitter._emit.assert_not_called()
 
     def test_conditional_filtering(self):
         """Test filtering with conditional logic."""
         mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter._emission_clock.time.return_value = Time(wall=0)
 
         def filter_even(x):
             return x if x % 2 == 0 else None
 
         map_emitter = MapSignalEmitter(mock_emitter, filter_even)
 
-        map_emitter.emit(10, ts=100)
-        mock_emitter.emit.assert_called_once_with(10, 100)
+        map_emitter.emit(10, time=Time(source=100))
+        mock_emitter._emit.assert_called_once_with(10, Time(**{EMITTED_WALL: 0, 'source': 100}))
 
         mock_emitter.reset_mock()
-        map_emitter.emit(11, ts=200)
-        mock_emitter.emit.assert_not_called()
+        map_emitter.emit(11, time=Time(source=200))
+        mock_emitter._emit.assert_not_called()
 
-        map_emitter.emit(12, ts=300)
-        mock_emitter.emit.assert_called_once_with(12, 300)
+        map_emitter.emit(12, time=Time(source=300))
+        mock_emitter._emit.assert_called_once_with(12, Time(**{EMITTED_WALL: 0, 'source': 300}))
 
     def test_transform_and_filter_combination(self):
         """Test combining transformation and filtering."""
         mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter._emission_clock.time.return_value = Time(wall=0)
 
         def transform_and_filter(x):
             squared = x * x
@@ -220,12 +243,24 @@ class TestMapSignalEmitter:
 
         map_emitter = MapSignalEmitter(mock_emitter, transform_and_filter)
 
-        map_emitter.emit(5, ts=100)
-        mock_emitter.emit.assert_called_once_with(25, 100)
+        map_emitter.emit(5, time=Time(source=100))
+        mock_emitter._emit.assert_called_once_with(25, Time(**{EMITTED_WALL: 0, 'source': 100}))
 
         mock_emitter.reset_mock()
-        map_emitter.emit(15, ts=200)
-        mock_emitter.emit.assert_not_called()
+        map_emitter.emit(15, time=Time(source=200))
+        mock_emitter._emit.assert_not_called()
+
+    def test_a_signal_error_passes_through_and_the_function_does_not_get_it(self):
+        mock_emitter = Mock(spec=SignalEmitter)
+        mock_emitter._emission_clock.time.return_value = Time(wall=0)
+        func = Mock(return_value=None)
+        map_emitter = MapSignalEmitter(mock_emitter, func)
+        error = SignalError('camera lost')
+
+        map_emitter.emit(error, time=Time(source=100))
+
+        mock_emitter._emit.assert_called_once_with(error, Time(**{EMITTED_WALL: 0, 'source': 100}))
+        func.assert_not_called()
 
 
 class TestDefaultingReceiver:
@@ -240,7 +275,7 @@ class TestDefaultingReceiver:
 
         assert result is not None
         assert result.data == 'default_value'
-        assert result.ts == -1
+        assert result.time == receiver.read().time
         assert result.updated is False
 
     def test_returns_actual_value_when_bound(self):
@@ -252,14 +287,14 @@ class TestDefaultingReceiver:
         mock_internal = Mock(spec=SignalReceiver)
         test_data = 'actual_data'
         test_ts = 123
-        mock_internal.read.return_value = Message(data=test_data, ts=test_ts, updated=True)
+        mock_internal.read.return_value = Message(data=test_data, time=Time(source=test_ts), updated=True)
         receiver._bind(mock_internal)
 
         result = receiver.read()
 
         assert result is not None
         assert result.data == test_data
-        assert result.ts == test_ts
+        assert result.time['source'] == test_ts
         assert result.updated is True
 
     def test_returns_default_when_bound_but_no_data(self):
@@ -276,7 +311,7 @@ class TestDefaultingReceiver:
 
         assert result is not None
         assert result.data == 42
-        assert result.ts == -1
+        assert result.time == receiver.read().time
         assert result.updated is False
 
 
@@ -290,6 +325,36 @@ class TestControlSystemReceiver:
         result = receiver.read()
 
         assert result is None
+
+    def test_value_raises_the_signal_error_that_read_returns(self):
+        receiver = ControlSystemReceiver(Mock(spec=ControlSystem))
+        internal = Mock(spec=SignalReceiver)
+        error = SignalError('camera lost')
+        internal.read.return_value = Message(data=error, time=Time(source=7))
+        receiver._bind(internal)
+
+        assert receiver.read() == Message(data=error, time=Time(source=7))
+        with pytest.raises(SignalError) as raised:
+            _ = receiver.value
+        assert raised.value is error
+
+        internal.read.return_value = Message(data='frame', time=Time(source=8))
+        assert receiver.value == 'frame'
+
+    def test_each_raise_of_one_signal_error_starts_a_new_traceback(self):
+        receiver = ControlSystemReceiver(Mock(spec=ControlSystem))
+        internal = Mock(spec=SignalReceiver)
+        error = SignalError('camera lost')
+        internal.read.return_value = Message(data=error, time=Time(source=7), updated=False)
+        receiver._bind(internal)
+
+        depths = []
+        for _ in range(3):
+            with pytest.raises(SignalError):
+                _ = receiver.value
+            depths.append(len(traceback.extract_tb(error.__traceback__)))
+
+        assert depths[0] == depths[-1]
 
 
 class TestRateLimiter:
@@ -443,13 +508,13 @@ class TestReadUpdated:
 
     def test_returns_the_message_when_it_was_just_delivered(self):
         receiver = Mock(spec=SignalReceiver)
-        receiver.read.return_value = Message(data='k', ts=7)
+        receiver.read.return_value = Message(data='k', time=Time(source=7))
 
-        assert read_updated(receiver) == Message(data='k', ts=7)
+        assert read_updated(receiver) == Message(data='k', time=Time(source=7))
 
     def test_returns_none_when_the_receiver_only_has_a_latched_value(self):
         receiver = Mock(spec=SignalReceiver)
-        receiver.read.return_value = Message(data='k', ts=7, updated=False)
+        receiver.read.return_value = Message(data='k', time=Time(source=7), updated=False)
 
         assert read_updated(receiver) is None
 
@@ -461,9 +526,12 @@ class TestReadUpdated:
 
     def test_consumes_the_read_so_one_message_is_returned_once(self):
         receiver = Mock(spec=SignalReceiver)
-        receiver.read.side_effect = [Message(data='k', ts=7), Message(data='k', ts=7, updated=False)]
+        receiver.read.side_effect = [
+            Message(data='k', time=Time(source=7)),
+            Message(data='k', time=Time(source=7), updated=False),
+        ]
 
-        assert read_updated(receiver) == Message(data='k', ts=7)
+        assert read_updated(receiver) == Message(data='k', time=Time(source=7))
         assert read_updated(receiver) is None
 
 
@@ -472,18 +540,27 @@ class TestValueUpdated:
 
     def test_returns_the_value_when_it_was_just_delivered(self):
         receiver = Mock(spec=SignalReceiver)
-        receiver.read.return_value = Message(data='k', ts=7)
+        receiver.read.return_value = Message(data='k', time=Time(source=7))
 
         assert value_updated(receiver) == 'k'
 
     def test_returns_none_when_the_receiver_only_has_a_latched_value(self):
         receiver = Mock(spec=SignalReceiver)
-        receiver.read.return_value = Message(data='k', ts=7, updated=False)
+        receiver.read.return_value = Message(data='k', time=Time(source=7), updated=False)
 
         assert value_updated(receiver) is None
 
     def test_a_delivered_none_reads_the_same_as_nothing_delivered(self):
         receiver = Mock(spec=SignalReceiver)
-        receiver.read.return_value = Message(data=None, ts=7)
+        receiver.read.return_value = Message(data=None, time=Time(source=7))
 
         assert value_updated(receiver) is None
+
+    def test_raises_a_delivered_signal_error(self):
+        receiver = Mock(spec=SignalReceiver)
+        error = SignalError('camera lost')
+        receiver.read.return_value = Message(data=error, time=Time(source=7))
+
+        with pytest.raises(SignalError) as raised:
+            value_updated(receiver)
+        assert raised.value is error

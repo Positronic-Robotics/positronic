@@ -1,8 +1,9 @@
 import numpy as np
+from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom, keys
 from positronic.dataset import transforms
-from positronic.dataset.episode import Episode
+from positronic.dataset.episode import Episode, select_timeline
 from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
@@ -35,7 +36,12 @@ class AbsolutePositionAction(Codec):
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         pose = episode[self.tgt_ee_pose_key]
         pose = transforms.recode_transform(RotRep.QUAT, self.rot_rep, pose)
-        return transforms.concat(pose, episode[self.tgt_grip_key], dtype=np.float32)
+        return transforms.concat(
+            pose,
+            episode[self.tgt_grip_key],
+            dtype=np.float32,
+            timelines=(select_timeline(pose.timelines + episode[self.tgt_grip_key].timelines),),
+        )
 
     @property
     def training_encoder(self):
@@ -43,8 +49,9 @@ class AbsolutePositionAction(Codec):
 
     def to_spec(self):
         return {
-            'name': self.WIRE_NAME,
-            'args': {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {
                 'tgt_ee_pose_key': self.tgt_ee_pose_key,
                 'tgt_grip_key': self.tgt_grip_key,
                 'rotation_rep': self.rot_rep.value,
@@ -75,7 +82,12 @@ class AbsoluteJointsAction(Codec):
         return {keys.ROBOT_COMMAND: command.JointPosition(positions=joint_positions), keys.TARGET_GRIP: target_grip}
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
-        return transforms.concat(episode[self.tgt_joints_key], episode[self.tgt_grip_key], dtype=np.float32)
+        return transforms.concat(
+            episode[self.tgt_joints_key],
+            episode[self.tgt_grip_key],
+            dtype=np.float32,
+            timelines=(select_timeline(episode[self.tgt_joints_key].timelines + episode[self.tgt_grip_key].timelines),),
+        )
 
     @property
     def training_encoder(self):
@@ -83,8 +95,9 @@ class AbsoluteJointsAction(Codec):
 
     def to_spec(self):
         return {
-            'name': self.WIRE_NAME,
-            'args': {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {
                 'tgt_joints_key': self.tgt_joints_key,
                 'tgt_grip_key': self.tgt_grip_key,
                 'num_joints': self.num_joints,
@@ -166,4 +179,4 @@ class JointDeltaAction(Codec):
         return {keys.ROBOT_COMMAND: command.JointDelta(velocities=velocities), keys.TARGET_GRIP: grip}
 
     def to_spec(self):
-        return {'name': self.WIRE_NAME, 'args': {'num_joints': self.num_joints}}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'num_joints': self.num_joints}}

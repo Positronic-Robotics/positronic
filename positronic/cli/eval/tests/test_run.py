@@ -1,24 +1,29 @@
 import importlib
+import inspect
+import logging
 import os
 import sys
 from contextlib import contextmanager
 from functools import partial
+from itertools import islice
 from types import SimpleNamespace
 from typing import cast
 
 import pos3
 import pytest
+from platform_client.evals import MOLMO_EPISODE_INDEX_KEY, PUBLIC_EVALS, EvalRef, public_eval
 
 import pimm
 from positronic import telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
+from positronic.cfg.eval.real import droid as real_droid
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
-from positronic.policy import Policy, Session
+from positronic.policy import Policy, PolicyRun, Runtime, Step
 from positronic.policy.harness import Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
-from positronic.tests.testing_coutils import IdleSession, drive_scheduler
+from positronic.simulator.molmo_spaces import keys as molmo_keys
 
 
 def _eval(simulated: bool) -> Eval:
@@ -33,16 +38,12 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
 
 
 class _IdlePolicy(Policy):
-    """Enough policy for ``main`` to warm up and close; it is never asked for an action."""
+    """A policy that asks for regular calls without emitting commands."""
 
-    def __init__(self):
-        self.observations: list[dict] = []
-
-    def new_session(self, *_args, **_kwargs) -> Session:
-        return IdleSession(self)
-
-    def close(self):
-        pass
+    def run(self, runtime: Runtime) -> PolicyRun:
+        yield
+        while True:
+            yield Step({}, runtime.time_ns + 100_000_000)
 
 
 @pytest.mark.timeout(30.0)
@@ -58,6 +59,40 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
         simulated=True,
     )
     main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, ()))])
+
+
+class _ArmThatStopsShort(pimm.ControlSystem):
+    """An arm whose every move stops short. It counts the moves it is asked for."""
+
+    def __init__(self):
+        self.move = pimm.calls.ControlSystemHandler[object, None](self)
+        self.asked = 0
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            for call in self.move.incoming():
+                self.asked += 1
+                call.set_exception(RuntimeError('the arm stopped short of its target'))
+            yield pimm.Sleep(0.01)
+
+
+@pytest.mark.timeout(30.0)
+def test_a_home_that_stops_short_ends_an_unattended_run():
+    arm = _ArmThatStopsShort()
+    embodiment = Embodiment(
+        descriptor='stub',
+        observations={},
+        commands={},
+        prepare_handlers={eval_keys.ARM: arm.move},
+        static_meta={},
+        meta_source=None,
+        control_systems=(arm,),
+        simulated=True,
+    )
+    tasks = [Task(instruction_source='stack', timeout_sec=0.05, prepare_args={eval_keys.ARM: 'home'})] * 2
+    with pytest.raises(RuntimeError, match='stopped short'):
+        main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, tasks))])
+    assert arm.asked == 1
 
 
 class _EpisodeStub(pimm.ControlSystem):
@@ -86,9 +121,73 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
     driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
     with pimm.World(virtual_time=True) as world:
         world.connect(driver.perform_task, stub.perform_task)
-        drive_scheduler(world.start([driver, stub]), steps=200)
+        for _ in islice(world.start([driver, stub]), 200):
+            pass
 
     assert stub.asked == tasks
+
+
+class _ScriptedEpisodes(pimm.ControlSystem):
+    """Stands in for the harness: records each task it is asked for, and answers with the next outcome."""
+
+    def __init__(self, outcomes: list[dict | Exception]):
+        self.asked: list[Task] = []
+        self._outcomes = list(outcomes)
+        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict](self)
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            for call in self.perform_task.incoming():
+                self.asked.append(call.request.task)
+                outcome = self._outcomes.pop(0)
+                if isinstance(outcome, Exception):
+                    call.set_exception(outcome)
+                else:
+                    call.set_result(outcome)
+            yield pimm.Sleep(0.01)
+
+
+def _drive(tasks: list[Task], episodes: _ScriptedEpisodes) -> None:
+    driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
+    with pimm.World(virtual_time=True) as world:
+        world.connect(driver.perform_task, episodes.perform_task)
+        for _ in islice(world.start([driver, episodes]), 200):
+            pass
+
+
+def _tasks(count: int) -> list[Task]:
+    return [Task(instruction_source='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(count)]
+
+
+@pytest.mark.timeout(3.0)
+def test_a_signal_error_runs_its_task_again():
+    """Each task gets its own count: a signal error on the second task after one on the first ends nothing."""
+    tasks = _tasks(2)
+    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), {}, pimm.SignalError('camera lost'), {}])
+    _drive(tasks, episodes)
+
+    assert episodes.asked == [tasks[0], tasks[0], tasks[1], tasks[1]]
+
+
+@pytest.mark.timeout(3.0)
+def test_a_task_failed_by_two_signal_errors_in_a_row_ends_the_run():
+    tasks = _tasks(2)
+    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), pimm.SignalError('camera lost again')])
+    with pytest.raises(pimm.SignalError, match='camera lost again'):
+        _drive(tasks, episodes)
+
+    assert episodes.asked == [tasks[0], tasks[0]]
+
+
+@pytest.mark.timeout(3.0)
+@pytest.mark.parametrize('failure', [pimm.calls.HandlerStopped(), RuntimeError('the arm holds an error')])
+def test_a_failure_other_than_a_signal_error_ends_the_run_at_once(failure):
+    tasks = _tasks(1)
+    episodes = _ScriptedEpisodes([failure])
+    with pytest.raises(type(failure)):
+        _drive(tasks, episodes)
+
+    assert episodes.asked == [tasks[0]]
 
 
 # `positronic.cli.eval` exports a command named `run`, which takes the attribute path to this module.
@@ -113,6 +212,69 @@ def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, s
     assert [task.charge_inference_time for task in seen] == [charged, charged]
 
 
+SMOKE = 'molmo.franka_pick_mini_smoke'
+
+
+def test_a_local_run_of_a_public_eval_runs_the_config_its_definition_names(run_command, monkeypatch):
+    seen: list[Eval] = []
+    monkeypatch.setattr(run_module, 'main', lambda policy, evals, output_dir, timing: seen.extend(evals))
+
+    run_command(run_module.run, eval=SMOKE, policy='a policy')
+
+    assert [ev.embodiment.descriptor for ev in seen] == ['remote.molmo_spaces.droid']
+
+
+@pytest.mark.parametrize('name', PUBLIC_EVALS)
+def test_a_public_eval_binds_its_arguments_on_the_installed_positronic(name: str):
+    definition = public_eval(EvalRef(name))
+
+    config = run_module._public_eval_config(name)
+
+    eval_config = config.kwargs['eval']
+    assert set(definition.args) <= set(inspect.signature(eval_config.target).parameters)
+    assert eval_config.kwargs.items() >= definition.args.items()
+    assert isinstance(config.instantiate(), Eval)
+
+
+def test_the_molmo_trial_key_of_a_public_eval_is_the_one_molmo_spaces_reads():
+    assert MOLMO_EPISODE_INDEX_KEY == molmo_keys.EPISODE_INDEX
+
+
+@pytest.mark.parametrize('name', ['molmo.held_out', ''])
+def test_a_local_run_refuses_a_name_the_public_code_does_not_define(run_command, name: str):
+    with pytest.raises(SystemExit, match=f'--eval={name!r}: .*--policy-image runs an eval on the platform'):
+        run_command(run_module.run, eval=name, policy='a policy')
+
+
+@pytest.mark.parametrize('value', [None, 1])
+def test_a_local_run_refuses_an_eval_that_is_neither_a_config_nor_a_name(run_command, value: object):
+    with pytest.raises(SystemExit, match=f'--eval={value!r} names nothing to run'):
+        run_command(run_module.run, eval=value, policy='a policy')
+
+
+PINNED = public_eval(EvalRef(SMOKE)).positronic_revision
+
+
+@pytest.mark.parametrize(
+    'installed, warns',
+    [
+        ({'commit': PINNED, 'dirty': False}, False),
+        ({'commit': PINNED, 'dirty': True}, True),
+        ({'commit': '0' * 40, 'dirty': False}, True),
+        (None, True),
+    ],
+)
+def test_a_public_eval_warns_unless_the_installed_positronic_is_the_platforms(
+    monkeypatch, caplog, installed: dict | None, warns: bool
+):
+    monkeypatch.setattr(run_module, 'get_package_git_state', lambda: installed)
+
+    with caplog.at_level(logging.WARNING, logger=run_module.logger.name):
+        run_module._public_eval_config(SMOKE)
+
+    assert (PINNED in caplog.text) is warns
+
+
 def test_a_spec_carries_only_what_the_eval_binds():
     """An eval leaves an axis unbound to run every value of it, and the env reads an absent key as that."""
     assert spec(suite='libero_spatial', task_id=None) == {'suite': 'libero_spatial'}
@@ -132,6 +294,14 @@ def test_a_sweep_numbers_its_trials_across_every_task():
     assert [t.meta[eval_keys.TRIAL_COUNT] for t in trials] == [3, 3, 3]
     assert [t.meta[eval_keys.TASK] for t in trials] == ['quick', 'slow', 'slow']
     assert [t.prepare_args[eval_keys.SCENE] for t in trials] == [params for _, params in pairs]
+
+
+def test_a_real_droid_trial_homes_the_arm_with_no_control_law():
+    """The arm's own controller runs the home, on the attended path and on a planned sweep."""
+    attended = real_droid.attended_trials.instantiate()()
+    planned = real_droid.pick_place.override(embodiment=None, trial_count=2).instantiate().tasks()
+    for task in [attended, *planned]:
+        assert task.prepare_args[eval_keys.ARM].mode is None
 
 
 def test_timed_sweep_needs_an_output_dir():

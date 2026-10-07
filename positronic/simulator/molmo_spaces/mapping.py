@@ -1,5 +1,6 @@
 """Shared benchmark selection and wire conversions for the client and MolmoSpaces server."""
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -47,9 +48,31 @@ class BenchmarkPath(NamedTuple):
 
 
 def discover_benchmarks(assets_dir: Path) -> list[BenchmarkPath]:
-    """Benchmarks with an episode manifest under the asset directory."""
+    """Benchmarks with an episode manifest under the asset directory.
+
+    The walk follows symlinked directories, and skips a link back into one of the directory's own ancestors.
+    """
     root = assets_dir / ASSETS_BENCHMARKS_DIR
-    return [BenchmarkPath.parse(str(p.parent.relative_to(root))) for p in sorted(root.rglob(MOLMO_BENCHMARK_MANIFEST))]
+    found = []
+    ancestors = {root: {root.resolve()}}
+
+    def unreadable(error: OSError) -> None:
+        raise error
+
+    # `os.walk` rather than `Path.walk`, which needs Python 3.12.
+    for dirpath, dirnames, filenames in os.walk(root, onerror=unreadable, followlinks=True):
+        here = Path(dirpath)
+        above = ancestors.pop(here)
+        if MOLMO_BENCHMARK_MANIFEST in filenames:
+            found.append(BenchmarkPath.parse(str(here.relative_to(root))))
+        descend = []
+        for name in dirnames:
+            real = (here / name).resolve()
+            if real not in above:
+                descend.append(name)
+                ancestors[here / name] = above | {real}
+        dirnames[:] = descend
+    return sorted(found)
 
 
 def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[BenchmarkPath]:
@@ -81,8 +104,8 @@ MOLMO_OBS_QPOS = 'qpos'  # MolmoSpaces joint positions, grouped by robot move gr
 
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'
-OBS_EEF_POS = 'eef_pos'  # World coordinates, metres.
-OBS_EEF_QUAT = 'eef_quat'  # World orientation, wxyz.
+OBS_EEF_POS = 'eef_pos'  # Position in the robot base frame, metres.
+OBS_EEF_QUAT = 'eef_quat'  # Orientation in the robot base frame, wxyz.
 OBS_GRIP = 'grip'  # Closure in [0, 1].
 OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
 
@@ -116,8 +139,10 @@ def unpack_wire_pose(vector: Any) -> tuple[np.ndarray, np.ndarray]:
     return vec[:3].copy(), vec[3:].reshape(3, 3).copy()
 
 
-def compose_world_delta(cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any) -> tuple[np.ndarray, np.ndarray]:
-    """Apply a world-frame translation and rotation delta to a measured pose."""
+def compose_reference_delta(
+    cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply a reference-frame translation and rotation delta to a measured pose."""
     return (
         np.asarray(cur_pos, dtype=np.float64).reshape(3) + np.asarray(delta_pos, dtype=np.float64).reshape(3),
         np.asarray(delta_rot, dtype=np.float64).reshape(3, 3) @ np.asarray(cur_rot, dtype=np.float64).reshape(3, 3),
@@ -131,7 +156,7 @@ def wire_command_to_arm_action(
     ik: Callable[[np.ndarray, np.ndarray], Any],
     current_eef: tuple[Any, Any],
 ) -> np.ndarray:
-    """Absolute arm joint targets; ``ik`` and ``current_eef`` use world-frame grasp-site poses."""
+    """Absolute arm joint targets; ``ik`` and ``current_eef`` use robot-frame grasp-site poses."""
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
     match command[protocol.COMMAND_TYPE]:
         case protocol.JOINT_POS:
@@ -147,7 +172,7 @@ def wire_command_to_arm_action(
             target = np.asarray(ik(*unpack_wire_pose(command[protocol.COMMAND_POSE])), dtype=np.float32).reshape(-1)
         case protocol.CARTESIAN_DELTA:
             delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            target_pos, target_rot = compose_world_delta(*current_eef, delta_pos, delta_rot)
+            target_pos, target_rot = compose_reference_delta(*current_eef, delta_pos, delta_rot)
             target = np.asarray(ik(target_pos, target_rot), dtype=np.float32).reshape(-1)
         case other:
             raise ValueError(

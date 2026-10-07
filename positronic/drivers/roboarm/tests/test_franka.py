@@ -18,9 +18,9 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = PARK + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
-# What the control box answers for a safe input, in its own words.
-CLEAR = 'Not triggered (Motion permitted)'
-STOPPED = 'Triggered (Motion prohibited)'
+# The emergency stop (x31), released and pressed.
+CLEAR = 'Active'
+STOPPED = 'Inactive'
 
 
 class Call(StrEnum):
@@ -92,12 +92,13 @@ class FakeArm:
     ``goal_status`` pins the reported status, so a move that never lands can be scripted; ``raises``, once
     set, is what every call but ``stop`` raises, ``ik_raises`` what only the solver raises, and
     ``recover_raises`` what only ``recover_from_errors`` raises; ``error`` is the vendor fault flag every
-    state carries, and ``recover_clears`` whether a recovery puts it back to 0.
+    state carries beside ``error_message``, and ``recover_clears`` whether a recovery puts it back to 0.
     """
 
     def __init__(self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None):
         self.q = np.asarray(q, dtype=np.float64)
         self.error = 0
+        self.error_message = ''
         self.calls: list[Call] = []
         self.targets: list[np.ndarray] = []
         self.modes: list[Any] = []
@@ -121,7 +122,7 @@ class FakeArm:
     def state(self) -> _ArmState:
         self._record(Call.STATE)
         pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-        return _ArmState(self.q.copy(), np.zeros(7), pose, np.zeros(6), self.error, '')
+        return _ArmState(self.q.copy(), np.zeros(7), pose, np.zeros(6), self.error, self.error_message)
 
     def goal(self) -> _Goal:
         self._record(Call.GOAL)
@@ -143,7 +144,7 @@ class FakeArm:
         if self.recover_raises is not None:
             raise self.recover_raises
         if self.recover_clears:
-            self.error = 0
+            self.error, self.error_message = 0, ''
         return self.error == 0
 
     def stop(self) -> None:
@@ -169,6 +170,10 @@ class FakeArm:
         self._record(Call.SET_LOAD)
 
 
+# The safe inputs as the lab control box reports them while the arm moves under a policy.
+MOVING = {'guidingEnableButton': 'Inactive', 'x31': 'Active', 'x32': 'Inactive', 'x33': 'Inactive', 'x4': 'Inactive'}
+
+
 class FakeDesk:
     """In-memory ``Desk``: records that the session prepared the robot and released control, records every
     brake operation the driver asked for, and reports whatever ``safe_inputs`` holds."""
@@ -177,7 +182,7 @@ class FakeDesk:
         self.prepared = False
         self.released = False
         self.calls: list[Call] = []
-        self.safe_inputs = dict.fromkeys(('x31', 'x32', 'x33', 'x4'), CLEAR)
+        self.safe_inputs = dict(MOVING)
         # A control box that has stopped answering. The driver swallows the error and the reading goes stale.
         self.unreachable = False
 
@@ -256,6 +261,13 @@ def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command
     """A caller on ``driver.sync_move``, for a test that pumps its generator rather than running a World."""
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
     wire_call(world, caller, driver.sync_move)
+    return caller
+
+
+def _readier(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[None, None]:
+    """A caller on ``driver.ready``, for a test that pumps its generator rather than running a World."""
+    caller = pimm.calls.ControlSystemCaller[None, None](driver)
+    wire_call(world, caller, driver.ready)
     return caller
 
 
@@ -620,9 +632,9 @@ def test_an_arm_that_will_not_park_reads_error_rather_than_ending_the_run():
     arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)  # the opening move never lands
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
-    driver.state._bind(states)
-    stop = StopFlag()
     clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    stop = StopFlag()
     loop = driver.run(stop, clock)
 
     for _ in range(5):
@@ -708,10 +720,10 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
     arm = FakeArm(PARK)
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
-    driver.state._bind(states)
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
     move = _mover(world, driver)
     stop = StopFlag()
-    clock = MockClock()
     loop = driver.run(stop, clock)
 
     for _ in range(2):  # through the opening move
@@ -744,9 +756,9 @@ def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world)
     arm = FakeArm(PARK, polls_to_reach=3)
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
-    driver.state._bind(states)
-    stop = StopFlag()
     clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    stop = StopFlag()
     loop = driver.run(stop, clock)
 
     for _ in range(2):  # through the opening move
@@ -767,8 +779,8 @@ def test_a_move_that_lands_as_its_deadline_expires_is_an_arrival():
     """The deadline stops the poll loop before it asks again, so a goal that landed just then is unseen."""
     arm = FakeArm(PARK, polls_to_reach=10**9)  # it never lands on a poll of its own
     driver = _driver(arm, manage_desk=False)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     travel = _arm(driver, clock).move_to(JOGGED, None)
 
     next(travel)  # the first poll: the goal is in flight
@@ -787,8 +799,9 @@ def test_a_fault_that_lands_with_the_arrival_reads_error_rather_than_available()
     arm = FakeArm(PARK, polls_to_reach=1)  # the first poll of the goal already reports it reached
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
-    driver.state._bind(states)
-    travel = _arm(driver, MockClock()).move_to(JOGGED, None)
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    travel = _arm(driver, clock).move_to(JOGGED, None)
 
     arm.error = 1
     with pytest.raises(StopIteration) as done:
@@ -804,10 +817,10 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
     arm = FakeArm(PARK)
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
-    driver.state._bind(states)
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
     move = _mover(world, driver)
     stop = StopFlag()
-    clock = MockClock()
     loop = driver.run(stop, clock)
 
     for _ in range(2):  # through the opening move, which still lands
@@ -841,10 +854,43 @@ def test_a_status_read_off_a_goal_is_equal_to_its_member_and_not_identical():
 
 
 def test_a_reading_the_driver_does_not_recognise_counts_as_a_triggered_safe_input():
-    """A phrase the driver does not recognise reads as triggered, never as clear."""
-    assert not franka._SafeInputs._triggered(CLEAR)
-    assert franka._SafeInputs._triggered(STOPPED)
-    assert franka._SafeInputs._triggered('a phrase this control box has never sent')
+    """A level or an input the driver does not recognise reads as triggered, never as clear."""
+    level = franka._SafeInputs._level
+    assert not franka._SafeInputs._triggered('x31', level(CLEAR))
+    assert franka._SafeInputs._triggered('x31', level(STOPPED))
+    assert franka._SafeInputs._triggered('x31', level('a state this control box has never sent'))
+    assert franka._SafeInputs._triggered('x5', level('Inactive'))
+
+
+def test_the_safe_inputs_of_an_arm_moving_under_a_policy_read_as_clear(desk):
+    """The reading the lab control box sends while the arm moves normally lets the driver clear a fault."""
+    watch = _safe_inputs(_driver(FakeArm(PARK)))
+
+    watch.sample()
+
+    assert watch.confirmed_clear
+
+
+@pytest.mark.parametrize(
+    ('name', 'state'),
+    [
+        ('x31', 'Inactive'),
+        ('x31', 'AcknowledgeRequired'),
+        ('x4', 'Active'),
+        ('guidingEnableButton', 'Active'),
+        ('x32', 'AcknowledgeRequired'),
+        ('x33', 'Invalid'),
+    ],
+)
+def test_a_pressed_stop_a_held_enabling_device_or_a_pending_acknowledge_is_not_clear(desk, name, state):
+    """Each state that means a person acts on the arm, or that Desk wants a person to confirm, holds the driver."""
+    watch = _safe_inputs(_driver(FakeArm(PARK)))
+    desk.safe_inputs[name] = state
+
+    watch.sample()
+
+    assert watch.triggered == [name]
+    assert not watch.confirmed_clear
 
 
 def test_the_driver_logs_a_safe_input_that_changes(desk, caplog):
@@ -955,8 +1001,8 @@ def test_a_move_a_safe_input_stopped_fails_rather_than_going_again(desk):
     """The driver cannot tell a bouncing contact from a person's hand, so a trip ends the move every time."""
     arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     desk.safe_inputs['x31'] = STOPPED
     travel = _arm(driver, clock).move_to(JOGGED, None)
 
@@ -972,8 +1018,8 @@ def test_a_move_clears_a_fault_the_arm_holds_and_lands(desk):
     """A latched reflex rejects every move and sets no error flag, so the refused goal is what the driver reads."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     driving = _arm(driver, clock)
     driving.note_refusals(REFUSED)  # the arm rejected the last goal and still holds the fault
 
@@ -989,8 +1035,8 @@ def test_a_fault_the_recovery_cannot_clear_says_what_the_operator_must_do(desk):
     arm = FakeArm(PARK)
     arm.error = 1  # the recovery runs and reports the fault still there
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     driving = _arm(driver, clock)
     driving.note_refusals(REFUSED)
 
@@ -1005,8 +1051,8 @@ def test_a_fault_is_left_alone_while_the_safe_inputs_have_never_been_read(desk):
     the same as a clear one. The recovery waits for a reading rather than assuming the arm is free."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     unread = franka._SafeInputs(driver._ip, None)  # no credentials: `sample` returns without reading
     driving = driver._arm(StopFlag(), clock, unread)
     driving.note_refusals(REFUSED)
@@ -1024,8 +1070,8 @@ def test_a_fault_is_left_alone_when_the_last_reading_failed_over_a_triggered_inp
     the inputs it last found triggered. Recovering there releases a fault a person is still holding."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
@@ -1047,8 +1093,8 @@ def test_a_fault_is_cleared_on_a_reading_that_found_every_safe_input_clear(desk)
     guard has turned the whole fault-clearing off."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     watch = _safe_inputs(driver)
     watch.sample()
     driving = driver._arm(StopFlag(), clock, watch)
@@ -1065,8 +1111,8 @@ def test_a_fault_a_triggered_safe_input_holds_is_left_for_the_person_to_clear(de
     """A safe input trips on a hand as much as on a reflex, so the driver clears nothing until the person does."""
     arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
@@ -1083,11 +1129,11 @@ def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
     """The move that fails logs the refusal itself."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
-    move = _mover(world, driver)
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
     watch = _safe_inputs(driver)
-    desk.safe_inputs['x31'] = STOPPED
+    desk.safe_inputs['x4'] = 'Active'  # a held enabling device; a pressed emergency stop refuses before the arm
     watch.sample()
     driving = driver._arm(StopFlag(), clock, watch)
     answer = move(command.JointPosition(JOGGED))
@@ -1099,15 +1145,36 @@ def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
 
     with pytest.raises(RuntimeError, match='stopped short'):
         answer.result()
-    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
+    assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x4'] are triggered"]
+
+
+def test_a_sync_move_answers_the_release_instruction_while_the_emergency_stop_is_pressed(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    watch = _safe_inputs(driver)
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    watch.sample()
+    driving = driver._arm(StopFlag(), clock, watch)
+    answer = move(command.JointPosition(JOGGED))
+    asked = driving.moves.next_request()
+    assert isinstance(asked, pimm.calls.Call)
+
+    _drive(driving.sync_move(asked), clock)
+
+    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+        answer.result()
+    assert not arm.targets
 
 
 def test_the_teardown_park_logs_the_move_the_arm_refused(desk, caplog):
     """The park swallows its own failure, so the refusal has to be recorded before it does."""
     arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
@@ -1121,8 +1188,8 @@ def test_a_move_the_arm_refused_as_its_deadline_expired_is_still_logged(desk, ca
     """The hold target the deadline sets replaces the goal, so nothing after this reading can name the refusal."""
     arm = FakeArm(PARK, polls_to_reach=10**9)  # it never lands on a poll of its own
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
@@ -1142,8 +1209,8 @@ def test_a_move_that_merely_ran_out_of_time_is_no_refusal(desk, caplog):
     """The count is of refusals, and a goal still in flight at the deadline has refused nothing."""
     arm = FakeArm(PARK, polls_to_reach=10**9)  # it never lands on a poll of its own
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
@@ -1179,9 +1246,9 @@ def test_a_run_whose_move_the_arm_refuses_fails_the_asker_and_logs_the_refusal(d
     """End to end: the move fails the caller, and the refusal is logged as it fails."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
-    move = _mover(world, driver)
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
@@ -1247,13 +1314,140 @@ def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):
     assert isinstance(arm.modes[mark], franka.pf.InternalImpedance)
 
 
+def test_a_ready_call_on_an_arm_with_no_fault_is_answered_at_once(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+
+    answer = _readier(world, driver)(None)
+    next(loop)
+
+    assert answer.result() is None
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
+
+
+def test_a_ready_call_clears_the_fault_a_latched_reflex_holds_before_it_answers(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.goal_status = franka.pf.GoalStatus.ABORTED  # a reflex latched: the arm rejects the goal it holds
+    next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+
+    answer = _readier(world, driver)(None)
+    next(loop)
+
+    assert answer.result() is None
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1
+
+
+@pytest.mark.parametrize('fault', ['error', 'safe input'])
+def test_a_ready_call_answers_the_fault_that_stays_and_the_run_serves_the_next_one(desk, world, fault):
+    arm = FakeArm(PARK)
+    if fault == 'safe input':
+        desk.safe_inputs['x4'] = 'Active'  # a person holds the enabling device, and only they let it go
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    ready = _readier(world, driver)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    if fault == 'error':
+        arm.error = 1  # recover_from_errors does not clear it
+    else:
+        arm.goal_status = franka.pf.GoalStatus.ABORTED
+        next(loop)
+
+    for _ in range(2):
+        answer = ready(None)
+        next(loop)
+        with pytest.raises(RuntimeError, match='recovery did not clear' if fault == 'error' else 'safe input'):
+            answer.result()
+
+
+def test_a_ready_call_answers_the_release_instruction_while_the_emergency_stop_is_pressed(desk, world):
+    """The ready call refuses before the arm moves, so the asker gets the release instruction."""
+    arm = FakeArm(PARK)
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    ready = _readier(world, driver)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
+
+    answer = ready(None)
+    next(loop)
+
+    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+        answer.result()
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
+
+
+def _shipped(desk: FakeDesk, stop: str) -> list[Any]:
+    """What the arm emits on three publishes, with the emergency stop at ``stop``."""
+    driver = _driver(FakeArm(PARK))
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = stop
+    arm = _arm(driver, clock)
+    for _ in range(3):
+        arm.publish(arm.robot.state())
+    return [data for _, data in states.emitted]
+
+
+def test_the_arm_state_carries_the_release_instruction_once_while_the_emergency_stop_is_pressed(desk):
+    """A reader keeps the last value, and the link queues each error, so one per press is enough."""
+    [error] = _shipped(desk, STOPPED)
+
+    assert isinstance(error, pimm.SignalError) and str(error) == franka.EMERGENCY_STOP_PRESSED
+
+
+@pytest.mark.parametrize('stop', ['AcknowledgeRequired', 'Invalid'])
+def test_an_emergency_stop_desk_does_not_read_as_pressed_leaves_the_arm_state_alone(desk, stop):
+    """Those levels hold the arm too, and a release of the button does not clear them."""
+    assert all(isinstance(data, franka.FrankaState) for data in _shipped(desk, stop))
+
+
+def test_the_arm_state_comes_back_once_the_emergency_stop_is_released(desk):
+    driver = _driver(FakeArm(PARK))
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    arm = _arm(driver, clock)
+    arm.publish(arm.robot.state())
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = CLEAR
+    arm.safe_inputs.sample()
+    arm.publish(arm.robot.state())
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    arm.safe_inputs.sample()
+    arm.publish(arm.robot.state())
+
+    kinds = [type(data) for _, data in states.emitted]
+    assert kinds == [pimm.SignalError, franka.FrankaState, pimm.SignalError]
+
+
 def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):
     """A console calls the arm to clear a latched fault: the driver runs the recovery and the answer to
     that call carries what it returned."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
@@ -1271,8 +1465,8 @@ def test_a_console_recover_call_is_answered_that_the_fault_did_not_clear(desk, w
     arm = FakeArm(PARK)
     arm.error = 1  # a fault recover_from_errors does not clear
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
@@ -1288,9 +1482,9 @@ def test_a_recovery_the_vendor_fails_answers_the_console_rather_than_ending_the_
     console and the fault, so the throw reaches the caller and the run goes on."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
-    recover = _recoverer(world, driver)
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    recover = _recoverer(world, driver)
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
@@ -1318,9 +1512,9 @@ def test_a_recovery_that_clears_the_fault_leaves_the_tick_no_second_one(desk, wo
     arm = FakeArm(PARK)
     arm.recover_clears = True
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
-    recover = _recoverer(world, driver)
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    recover = _recoverer(world, driver)
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
@@ -1339,9 +1533,9 @@ def test_an_arm_in_error_recovers_with_no_console_asking(desk, world):
     """The driver clears a fault it reads itself, whether or not a console asked."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
-    _recoverer(world, driver)
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    _recoverer(world, driver)
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
@@ -1358,9 +1552,9 @@ def test_a_recovery_no_console_asked_for_lets_the_vendor_throw_end_the_run(desk,
     run rather than going unreported."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
-    _recoverer(world, driver)
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    _recoverer(world, driver)
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
@@ -1376,9 +1570,9 @@ def test_an_arm_with_no_fault_nobody_called_runs_no_recovery(desk, world):
     """An arm carrying no fault gives the driver nothing to recover from, so only a call runs a recovery."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    driver.state._bind(RecordingEmitter())
-    _recoverer(world, driver)
     clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    _recoverer(world, driver)
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
@@ -1388,3 +1582,153 @@ def test_an_arm_with_no_fault_nobody_called_runs_no_recovery(desk, world):
         next(loop)
 
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
+
+
+def test_a_move_waiting_on_an_erroring_arm_is_refused_after_the_grace(desk, world):
+    """A move that waits through a fault the recovery does not clear is held until the grace runs out, then
+    refused."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error, arm.error_message = 1, '[cartesian_reflex]'
+    answer = move(command.JointPosition(JOGGED))
+    for _ in range(3):  # the error is entered and the call is held; the grace has not elapsed
+        next(loop)
+
+    assert not answer.done(), 'the move was refused before the grace elapsed'
+
+    clock.advance(franka._Arm._RECOVERY_GRACE_S)
+    next(loop)
+
+    with pytest.raises(franka.MoveRefused) as refused:
+        answer.result()
+    assert refused.value.error_message == '[cartesian_reflex]'
+    assert refused.value.moved_rad == 0.0  # nothing commanded the arm, so it did not move
+
+
+def test_a_refused_move_reports_the_largest_joint_motion_during_recovery(desk, world):
+    """A joint that moves away and comes back during recovery is reported by the largest distance it moved."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    answer = move(command.JointPosition(JOGGED))
+    next(loop)  # the error is entered and the call is held
+    arm.q = PARK + np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])  # one reading; the goal poll puts it back
+    next(loop)
+    clock.advance(franka._Arm._RECOVERY_GRACE_S)
+    next(loop)
+
+    with pytest.raises(franka.MoveRefused) as refused:
+        answer.result()
+    assert refused.value.moved_rad == pytest.approx(0.1)
+
+
+def test_a_move_waiting_on_an_erroring_arm_is_served_once_recovery_clears(desk, world):
+    """A fault the driver's own recovery clears inside the grace lets the waiting move run, with no retry."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error, arm.recover_clears = 1, True
+    answer = move(command.JointPosition(JOGGED))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    answer.result()
+    np.testing.assert_allclose(arm.targets[-1], JOGGED)
+
+
+def test_a_jog_sent_while_a_move_waits_on_the_erroring_arm_is_dropped(desk, world):
+    """A jog issued during an error reaches an arm that cannot move on it, so the driver drops it rather
+    than applying it once the error clears."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    answer = move(command.JointPosition(PARK))
+    next(loop)  # the call is held
+    feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+    next(loop)
+    arm.error = 0  # the fault clears
+    mark = len(arm.targets)
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    answer.result()
+    assert not any(np.allclose(target, JOGGED) for target in arm.targets[mark:]), 'a dropped jog was applied'
+
+
+def test_a_move_held_on_an_erroring_arm_is_answered_when_the_world_stops(desk, world):
+    """A held move is out of the handler queue, so the driver answers it or its caller waits for good."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    stop = StopFlag()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    answer = move(command.JointPosition(JOGGED))
+    next(loop)  # the call is held
+    assert not answer.done()
+
+    stop.stopped = True
+    _drive(loop, clock)
+
+    with pytest.raises(MoveAbandoned):
+        answer.result()
+
+
+def test_a_move_held_on_an_erroring_arm_is_answered_when_a_throw_ends_the_run(desk, world):
+    """A recovery that throws ends the run with a move held, and the move's caller still gets an answer."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    answer = move(command.JointPosition(JOGGED))
+    next(loop)  # the call is held
+    arm.recover_raises = RuntimeError('libfranka: control command rejected')
+
+    with pytest.raises(RuntimeError, match='control command rejected'):
+        next(loop)
+    with pytest.raises(MoveAbandoned):
+        answer.result()

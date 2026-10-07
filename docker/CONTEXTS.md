@@ -17,8 +17,12 @@
 | `positro/robolab` | RoboLab (Isaac Lab) eval — runs `positronic eval run`, which spawns the Isaac sim subprocess in-container; needs an RTX-class GPU |
 | `positro/galaxea` | G0.5-DROID inference, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
 
-`Dockerfile.submit-openpi` and `Dockerfile.submit-gr00t` build a policy image the platform runs on
-top of `positro/openpi` and `positro/gr00t`: weights baked, offline, serving on `:8000`. See
+`Dockerfile.serve-<name>` builds `positro/<name>`, a policy image the platform runs: one
+checkpoint, its weights inside, offline, serving on `:8000`. `pi05-droid` and `gr00t-n17-droid`
+build on `positro/openpi-base` and `positro/gr00t-base`, and `molmoact2-droid` on a Python 3.13
+image with uv. CI publishes each one; `make build-serve-<name>` builds it. `Dockerfile.flux3-action`
+and `Dockerfile.cosmos3-nano` build the FLUX 3 Action and Cosmos3-Nano policy images, which CI
+publishes as `positro/flux3-action` and `positro/cosmos3-nano`. See
 [Submit a policy image](../docs/submit-a-policy-image.md).
 
 Build and push all: `make push`
@@ -38,6 +42,12 @@ When running `docker --context <remote> compose run ...`, volume paths in `docke
 ```bash
 CACHE_ROOT=/home/<user> docker --context vm-train compose run -d --service-ports openpi-server ...
 ```
+
+## Restart policy
+
+Start a container with `--restart on-failure:2`, not `--restart unless-stopped`. A container that crashes and
+restarts reports `Up 1 second` to every `docker ps`, which reads as a slow start. `on-failure:2` stops the
+container after the second crash, so `docker ps` shows it dead and `docker logs` gives the fault.
 
 ## VM management
 

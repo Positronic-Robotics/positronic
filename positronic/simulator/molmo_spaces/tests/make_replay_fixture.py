@@ -16,13 +16,15 @@ Output: ``replay_ep<NN>.npz`` next to this script.
 
 import argparse
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode
-from positronic.dataset.signal import Signal
+from positronic.dataset.signal import RECORDED_TIME, Signal
+from positronic.dataset.time import Time
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
@@ -56,9 +58,9 @@ def benchmark_of(episode: DiskEpisode) -> mapping.BenchmarkPath:
     return mapping.BenchmarkPath(*(episode.static[key] for key in molmo_keys.BENCHMARK_DIMENSIONS))
 
 
-def sample_at(signal: Signal, timestamps: list[int]) -> list:
+def sample_at(signal: Signal, timestamps: Sequence[int]) -> list:
     """The last signal value at or before each timestamp."""
-    sampled = signal.time[timestamps]
+    sampled = signal.time[[Time(**{RECORDED_TIME: ts}) for ts in timestamps]]
     assert isinstance(sampled, Signal)  # a sequence of timestamps samples a Signal, a single one a record
     return [value for value, _ts in sampled]
 
@@ -92,13 +94,13 @@ def build_fixture(episode_dir: Path) -> dict[str, np.ndarray]:
     states = episode[mapping.OBS_SIM_STATE]
     # rules-allow: hardcoded-keys — 'target_grip' is a shared channel awaiting centralization (internal#211).
     commands, grips = episode[keys.TARGET_JOINTS], episode['target_grip']
-    frame_ts = [ts for _value, ts in states]
+    frame_ts = states.timestamps(RECORDED_TIME)
     step_ts = frame_ts[1:]  # The first frame is the reset observation.
     played = [np.asarray(value, dtype=np.float32) for value in sample_at(commands, step_ts)]
     grip = [float(np.asarray(value).reshape(-1)[0]) for value in sample_at(grips, step_ts)]
 
     # Stop at the last recorded command; later observations have no recorded commands (internal#130).
-    last_command_ts = commands[len(commands) - 1][1]
+    last_command_ts = commands.bounds(RECORDED_TIME).finish
     replayable = int(np.searchsorted(step_ts, last_command_ts, side='left')) + 1
 
     steps = np.arange(1, replayable + 1)

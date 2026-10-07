@@ -6,9 +6,9 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Generator, Iterator, Mapping
-from enum import Enum, auto
+from enum import Enum, StrEnum, auto
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import numpy as np
 
@@ -16,7 +16,7 @@ import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveRefused, MoveStatus, log_failure
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -106,6 +106,19 @@ _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
 # The field Desk answers the safe inputs in.
 SAFE_INPUT_STATE = 'safeInputState'
+# The safe input the emergency stop is wired to.
+EMERGENCY_STOP_INPUT = 'x31'
+# The error the arm's state carries, and a ready call answers, while the emergency stop is pressed.
+EMERGENCY_STOP_PRESSED = 'Release the emergency stop button'
+
+
+class _SafeInputLevel(StrEnum):
+    """The signal level Desk reports for one safe input."""
+
+    ACTIVE = 'Active'
+    INACTIVE = 'Inactive'
+    ACKNOWLEDGE_REQUIRED = 'AcknowledgeRequired'
+    INVALID = 'Invalid'
 
 
 class _Reading(NamedTuple):
@@ -113,6 +126,7 @@ class _Reading(NamedTuple):
 
     sampled: bool
     triggered: frozenset[str]
+    levels: Mapping[str, _SafeInputLevel | None] = {}
 
 
 class _SafeInputs:
@@ -122,9 +136,15 @@ class _SafeInputs:
     token, and the session that drives the arm must stay on one thread.
     """
 
-    # Desk's own words for a safe input that permits motion. The control box answers a phrase, and its
-    # safety log records the same two: 'Not triggered (Motion permitted)' and 'Triggered (Motion prohibited)'.
-    _MOTION_PERMITTED = 'not triggered'
+    # ACTIVE releases the emergency stop (x31) and presses an enabling device (x4, guidingEnableButton);
+    # x32 and x33 carry no fixed meaning. A level or an input not listed here counts as triggered.
+    _CLEAR_STATES: Mapping[str, frozenset[_SafeInputLevel]] = {
+        EMERGENCY_STOP_INPUT: frozenset({_SafeInputLevel.ACTIVE}),
+        'x4': frozenset({_SafeInputLevel.INACTIVE}),
+        'guidingEnableButton': frozenset({_SafeInputLevel.INACTIVE}),
+        'x32': frozenset({_SafeInputLevel.ACTIVE, _SafeInputLevel.INACTIVE}),
+        'x33': frozenset({_SafeInputLevel.ACTIVE, _SafeInputLevel.INACTIVE}),
+    }
     # How often the watch thread reads the safe inputs.
     _POLL_S = 0.5
 
@@ -153,13 +173,26 @@ class _SafeInputs:
         reading = self._reading
         return reading.sampled and not reading.triggered
 
-    @staticmethod
-    def _triggered(reading: object) -> bool:
-        """Whether Desk reports a safe input as triggered.
+    def level(self, name: str) -> _SafeInputLevel | None:
+        """The level the last reading found for the safe input ``name``; None where no reading is in hand."""
+        reading = self._reading
+        return reading.levels.get(name) if reading.sampled else None
 
-        A reading this does not recognise counts as triggered: the driver cannot read it as clear.
+    @staticmethod
+    def _level(reading: object) -> _SafeInputLevel | None:
+        """The level Desk sent, or None where Desk sent a value that names no level."""
+        try:
+            return _SafeInputLevel(reading)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _triggered(name: str, level: _SafeInputLevel | None) -> bool:
+        """Whether the safe input ``name`` is at a level that holds the driver back.
+
+        An input or a level this does not recognise counts as triggered: the driver cannot read it as clear.
         """
-        return _SafeInputs._MOTION_PERMITTED not in str(reading).casefold()
+        return level not in _SafeInputs._CLEAR_STATES.get(name, frozenset())
 
     def sample(self) -> None:
         """Take one reading, and log a safe input that changed."""
@@ -183,17 +216,18 @@ class _SafeInputs:
 
     def _note(self, state: Mapping[str, object]) -> None:
         """Record a reading, and log a safe input whose state changed."""
-        sampled, was_triggered = self._reading
+        sampled, was_triggered, _ = self._reading
         if not sampled:
             logger.info(f'The control box reports its safe inputs as {dict(state)}')
         self._unreadable = False
-        triggered = frozenset(name for name, reading in state.items() if self._triggered(reading))
+        levels = {name: self._level(reading) for name, reading in state.items()}
+        triggered = frozenset(name for name, level in levels.items() if self._triggered(name, level))
         if triggered != was_triggered:
             if triggered:
                 logger.warning(f'The control box prohibits motion: safe inputs {sorted(triggered)} are triggered')
             else:
                 logger.info('The control box permits motion: every safe input is clear')
-        self._reading = _Reading(True, triggered)
+        self._reading = _Reading(True, triggered, levels)
 
     def __enter__(self) -> '_SafeInputs':
         """Take the first reading, then keep it fresh on a thread until the block ends."""
@@ -225,6 +259,8 @@ class _Arm(DriverRun[command.CommandType]):
     _MOVE_GRACE_S = 5.0
     # How long the arm must accept moves again before the count of the moves it refused is logged.
     _REFUSAL_QUIET_S = 2.0
+    # How long an error the recovery does not clear holds a waiting sync move before it is refused.
+    _RECOVERY_GRACE_S = 2.0
 
     def __init__(
         self,
@@ -246,12 +282,21 @@ class _Arm(DriverRun[command.CommandType]):
         self._refusals = 0
         self._refused = False
         self._quiet_at = 0.0
+        self._stop_emitted = False
+        # A sync move that arrived while the arm errors, held until the error clears or the grace runs out.
+        self._held: pimm.calls.Call[command.CommandType, None] | None = None
+        self._error_started = 0.0
+        self._q_at_error = np.zeros(len(_PARK_JOINTS))
+        self._moved_in_error = 0.0
 
     def __enter__(self) -> '_Arm':
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Halt the control thread."""
+        """Answer a move still held, then halt the control thread."""
+        if self._held is not None:
+            self._held.set_exception(MoveAbandoned())
+            self._held = None
         # Before ``_desk_session`` deactivates FCI, or the thread dies mid-control with
         # "TCP connection got interrupted".
         self.robot.stop()
@@ -260,7 +305,56 @@ class _Arm(DriverRun[command.CommandType]):
         """Ship the arm as it is reported, marked ERROR while it is not where the driver put it."""
         faulted = self.moves.errored or st.error != 0  # the robot reports its own faults; a stall is not one
         self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
-        self.out.emit(self.state)
+        self.emit_state()
+
+    @property
+    def stop_pressed(self) -> bool:
+        """Whether the last reading found the emergency stop pressed."""
+        return self.safe_inputs.level(EMERGENCY_STOP_INPUT) is _SafeInputLevel.INACTIVE
+
+    def emit_state(self) -> None:
+        """Emit ``self.state``, or the emergency stop's error once in its place while the stop is pressed.
+
+        Once, because a reader keeps the last value and the link queues every error it carries.
+        """
+        if not self.stop_pressed:
+            self._stop_emitted = False
+            self.out.emit(self.state)
+        elif not self._stop_emitted:
+            # The Message types do not name the SignalError that any message can carry.
+            self.out.emit(cast(FrankaState, pimm.SignalError(EMERGENCY_STOP_PRESSED)))
+            self._stop_emitted = True
+
+    def hold_through_error(self, st: pf.State, entered: bool, outcome: 'RecoveryOutcome') -> None:
+        """Take one tick of an arm error for the sync move that waits on it.
+
+        It drops a jog the arm cannot move on and holds one waiting sync move. ``next_request`` serves the
+        held move once the error clears. ``MoveRefused`` answers it once the error outlasts the grace.
+        """
+        now = self.clock.now()
+        if entered:
+            self._error_started, self._q_at_error, self._moved_in_error = now, st.q, 0.0
+        self._moved_in_error = max(self._moved_in_error, float(np.max(np.abs(st.q - self._q_at_error))))
+        self.moves.drain_async()
+        if self._held is None:
+            asked = self.moves.next_request()
+            self._held = asked if isinstance(asked, pimm.calls.Call) else None
+        if outcome is RecoveryOutcome.CLEARED:
+            logger.info(f'The arm error cleared after {now - self._error_started:.1f}s')
+        elif self._held is not None and now - self._error_started >= self._RECOVERY_GRACE_S:
+            logger.warning(
+                f'The arm error persists after {self._RECOVERY_GRACE_S}s; refusing the waiting move: '
+                f'{st.error_message}, moved {self._moved_in_error:.3f} rad'
+            )
+            self._held.set_exception(MoveRefused(st.error_message, self._moved_in_error))
+            self._held = None
+
+    def next_request(self) -> pimm.calls.Call[command.CommandType, None] | command.CommandType | None:
+        """The sync move held through an error, before anything ``moves`` is asked for."""
+        if self._held is not None:
+            held, self._held = self._held, None
+            return held
+        return self.moves.next_request()
 
     @staticmethod
     def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
@@ -340,6 +434,26 @@ class _Arm(DriverRun[command.CommandType]):
                 'clear the error in Desk, then start the run again'
             )
 
+    def ready(self, call: pimm.calls.Call[None, None]) -> None:
+        """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
+
+        Answer with the error instead when it stays.
+        """
+        with pimm.calls.raise_to(call):
+            if self.stop_pressed:
+                raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
+            st = self.robot.state()
+            if st.error != 0 and not self.robot.recover_from_errors():
+                raise RuntimeError(f'the arm holds an error that the recovery did not clear: {st.error_message}')
+            self.clear_held_fault()
+            if self._refused and not self.safe_inputs.confirmed_clear:
+                triggered = self.safe_inputs.triggered
+                cause = (
+                    f'safe inputs {triggered} are triggered' if triggered else 'no reading shows every safe input clear'
+                )
+                raise RuntimeError(f'the arm rejects every move, and its fault stays: {cause}')
+            call.set_result(None)
+
     def move_to(
         self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
     ) -> Generator[pimm.Command, None, MoveStatus]:
@@ -350,7 +464,7 @@ class _Arm(DriverRun[command.CommandType]):
         """
         # The first emit must not ship an unfilled state.
         self.state.encode(self.robot.state(), RobotStatus.BUSY)
-        self.out.emit(self.state)
+        self.emit_state()
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
 
@@ -369,7 +483,7 @@ class _Arm(DriverRun[command.CommandType]):
             for wait in self.await_goal(should_stop, self.limiter.wait):
                 st = self.robot.state()
                 self.state.encode(st, RobotStatus.BUSY)
-                self.out.emit(self.state)
+                self.emit_state()
                 if st.error != 0 and not at_teardown:
                     self.robot.recover_from_errors()
                 yield wait
@@ -418,7 +532,13 @@ class _Arm(DriverRun[command.CommandType]):
         return target
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
-        """Put the arm where ``call`` asks and answer it once the state saying so is out."""
+        """Put the arm where ``call`` asks and answer it once the state saying so is out.
+
+        Answer with the release instruction, and send no target, while the emergency stop is pressed.
+        """
+        if self.stop_pressed:
+            call.set_exception(pimm.SignalError(EMERGENCY_STOP_PRESSED))
+            return
         cmd = call.request
         try:
             if (yield from self.move_to(self.to_joints(cmd), cmd.mode)) is MoveStatus.ARRIVED:
@@ -534,6 +654,7 @@ class Robot(pimm.ControlSystem):
         self._relative_dynamics_factor = relative_dynamics_factor
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         # FOOTGUN: recovers whatever ``state().error`` reads, since a latched Reflex reads 0.
@@ -650,10 +771,12 @@ class Robot(pimm.ControlSystem):
         )
 
     @staticmethod
-    def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> None:
-        """Run the arm's error recovery once, and answer every caller that asked for it on this tick.
+    def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> RecoveryOutcome:
+        """Run the arm's error recovery once, answer every caller that asked for it on this tick, and return
+        what it did.
 
-        A throw reaches the callers that asked; one nobody asked for reaches no caller, so it ends the run.
+        A throw reaches the callers that asked and counts as NOT_CLEARED; one nobody asked for reaches no
+        caller, so it ends the run.
         """
         try:
             cleared = robot.recover_from_errors()
@@ -664,12 +787,13 @@ class Robot(pimm.ControlSystem):
             logger.exception('The recovery a console asked for failed')
             for call in asked:
                 call.set_exception(exc)
-            return
+            return RecoveryOutcome.NOT_CLEARED
         if asked:
             logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
         outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
         for call in asked:
             call.set_result(outcome)
+        return outcome
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
@@ -685,6 +809,8 @@ class Robot(pimm.ControlSystem):
             in_error = False
 
             while not should_stop.value:
+                for call in self.ready.incoming():
+                    arm.ready(call)
                 st = robot.state()
                 arm.publish(st)
                 goal = robot.goal()
@@ -696,12 +822,14 @@ class Robot(pimm.ControlSystem):
 
                 asked_to_recover = list(self.recover.incoming())
                 if asked_to_recover or in_error:
-                    self._recover(robot, asked_to_recover)
+                    outcome = self._recover(robot, asked_to_recover)
+                    if in_error:
+                        arm.hold_through_error(st, entered_error, outcome)
                     # This tick commands nothing; the next one reads the arm the recovery left behind.
                     yield arm.limiter.wait()
                     continue
 
-                asked = arm.moves.next_request()
+                asked = arm.next_request()
                 if isinstance(asked, pimm.calls.Call):
                     with brakes.opened():
                         yield from arm.sync_move(asked)

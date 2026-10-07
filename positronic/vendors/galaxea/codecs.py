@@ -6,7 +6,7 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import ActionTiming, Codec
+from positronic.policy.codec import Codec
 from positronic.vendors.galaxea import protocol
 
 
@@ -60,7 +60,7 @@ class DroidCodec(Codec):
                 protocol.DUMMY_WRIST_RIGHT: np.zeros((3, 224, 224), dtype=np.uint8),
             },
             protocol.STATE: {
-                protocol.RIGHT_ARM: self._vector(data[self._joint_key], 7, self._joint_key),
+                protocol.RIGHT_ARM: self._vector(data[self._joint_key], protocol.RIGHT_ARM_WIDTH, self._joint_key),
                 protocol.RIGHT_GRIPPER: 1.0 - grip,
             },
             protocol.TASK: data[self._task_key],
@@ -69,7 +69,7 @@ class DroidCodec(Codec):
         }
 
     def _decode_single(self, data: dict) -> dict:
-        joints = self._vector(data[protocol.RIGHT_ARM], 7, protocol.RIGHT_ARM)
+        joints = self._vector(data[protocol.RIGHT_ARM], protocol.RIGHT_ARM_WIDTH, protocol.RIGHT_ARM)
         result = {keys.ROBOT_COMMAND: command.JointPosition(positions=joints)}
         if protocol.RIGHT_GRIPPER in data:
             grip = self._vector(data[protocol.RIGHT_GRIPPER], 1, protocol.RIGHT_GRIPPER)
@@ -77,11 +77,4 @@ class DroidCodec(Codec):
         return result
 
 
-# Galaxea's own server re-observes every `action_steps` (`scripts/serve_policy.py`, default 16).
-STEPS_PER_OBSERVATION = 16
-
-
-@cfn.config(codec=cfn.Config(DroidCodec))
-def droid(codec: DroidCodec):
-    timing = ActionTiming(fps=codec.fps, horizon_sec=STEPS_PER_OBSERVATION / codec.fps)
-    return timing | codecs.droid_execution(action=codec)
+droid = codecs.droid_execution.override(action=cfn.Config(DroidCodec))

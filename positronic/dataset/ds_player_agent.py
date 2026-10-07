@@ -5,14 +5,16 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import pimm
-from positronic.dataset import Episode
+from positronic.dataset import Episode, Time
+from positronic.dataset.episode import select_timeline
 
 
 @dataclass
 class DsPlayerStartCommand:
     episode: Episode
-    start_ts: int | None = None  # Start from `start_ts`
-    end_ts: int | None = None  # End at `end_ts`
+    start_ts: int | None = None
+    end_ts: int | None = None
+    timeline: str | None = None
 
 
 @dataclass
@@ -54,7 +56,7 @@ class DsPlayerAgent(pimm.ControlSystem):
                 continue
 
             scheduled_ts, name, value = playback.pop()
-            self.outputs[name].emit(value, scheduled_ts)
+            self.outputs[name].emit(value, time=Time(**{'playback.scheduled': scheduled_ts}))
 
             yield pimm.Yield()
 
@@ -74,8 +76,9 @@ class DsPlayerAgent(pimm.ControlSystem):
 class _Playback:
     command: DsPlayerStartCommand
     start_clock_ns: int
+    timeline: str
     heap: list[tuple[int, int, str, object]] = field(default_factory=list)
-    streams: dict[str, Iterator[tuple[object, int]]] = field(default_factory=dict)
+    streams: dict[str, Iterator[tuple[object, Time]]] = field(default_factory=dict)
     start_ts: int | None = None
     counter: int = 0
 
@@ -98,13 +101,13 @@ class _Playback:
         return scheduled_ts - self.start_ts + self.start_clock_ns, name, value
 
     def schedule_next(self, name: str):
-        stream = self.streams.get(name)
+        stream = self.streams[name]
         try:
             value, ts = next(stream)
         except StopIteration:
             self.streams.pop(name)
             return
-        self._push(name, ts, value)
+        self._push(name, ts[self.timeline], value)
 
     def _push(self, name: str, ts: int, value: object) -> None:
         heapq.heappush(self.heap, (ts, self.counter, name, value))
@@ -115,16 +118,22 @@ class _Playback:
         assert output_names, 'No output names provided'
 
         episode = command.episode
-        playback = cls(command, start_clock_ns)
-
+        selected = []
         for name in output_names:
-            signal = episode.signals.get(name)
-            if signal is None:
-                if name in episode.static:
-                    raise ValueError(f"Requested output '{name}' is static and cannot be emitted")
-                raise KeyError(f"Requested output '{name}' is not present in episode signals")
+            if name in episode.static:
+                raise ValueError(f'Requested output {name!r} is static and cannot be emitted')
+            selected.append(episode.signals[name])
+        timeline = select_timeline(
+            (name for signal in selected for name in signal.timelines), timeline=command.timeline
+        )
+        playback = cls(command, start_clock_ns, timeline)
+        start = Time(**{timeline: command.start_ts}) if command.start_ts is not None else None
+        end = Time(**{timeline: command.end_ts}) if command.end_ts is not None else None
 
-            playback.streams[name] = iter(signal.time[command.start_ts : command.end_ts])
+        for name, signal in zip(output_names, selected, strict=True):
+            if timeline not in signal.timelines:
+                raise KeyError(timeline)
+            playback.streams[name] = iter(signal if start is None and end is None else signal.time[start:end])
             playback.schedule_next(name)
 
         return playback if playback.heap else None

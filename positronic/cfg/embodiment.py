@@ -1,12 +1,18 @@
+from typing import TYPE_CHECKING
+
 import configuronic as cfn
 
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
+import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
+
+if TYPE_CHECKING:
+    from positronic.drivers.roboarm.yam.settle import SettleTuning
 
 
 @cfn.config(
@@ -32,16 +38,26 @@ def droid(robot_arm, gripper, cameras):
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: gripper.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
+        ready_handlers={eval_keys.ARM: robot_arm.ready, **{name: cam.ready for name, cam in cameras.items()}},
         control_systems=(*cameras.values(), robot_arm, gripper),
         simulated=False,
     )
 
 
 droid_3cam = droid.override(cameras=positronic.cfg.hardware.camera.droid_3cam)
+# DROID with no device behind it, for code that reads the embodiment's contract on a box without the vendor packages.
+droid_fake = droid.override(
+    robot_arm=positronic.cfg.hardware.roboarm.franka_fake,
+    gripper=positronic.cfg.hardware.gripper.robotiq_fake,
+    cameras=positronic.cfg.hardware.camera.droid_fake,
+)
+droid_3cam_fake = droid_fake.override(cameras=positronic.cfg.hardware.camera.droid_3cam_fake)
 
 
-@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={})
-def yam(robot_arm, cameras):
+@cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={}, video_encoder=positronic.cfg.video_encoder.jetson_h264
+)
+def yam(robot_arm, cameras, video_encoder):
     """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
     observations = {
         keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
@@ -56,42 +72,72 @@ def yam(robot_arm, cameras):
         descriptor='yam',
         observations=observations,
         commands=commands,
-        # One driver, one handler: the YAM chain carries its own fingers
-        prepare_handlers={eval_keys.ARM: robot_arm.sync_move},
+        prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: robot_arm.sync_grip},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
+        ready_handlers={name: cam.ready for name, cam in cameras.items()},
         control_systems=(*cameras.values(), robot_arm),
         simulated=False,
+        video_encoder=video_encoder,
     )
 
 
 @cfn.config(
     left_channel='can0',
     right_channel='can1',
+    park_after_idle_s=60.0,
+    park_tuning={
+        keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_park_tuning,
+        keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_park_tuning,
+    },
+    move_tuning={
+        keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
+        keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
+    },
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
-    mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.311], keys.RIGHT_ARM: [0.30, -0.305, 0.311]},
+    gravity_comp_factor=None,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
-        'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
-        'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
+        keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
+        keys.WRIST_RIGHT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
+    video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
-def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras):
+def yam_bimanual(
+    left_channel: str,
+    right_channel: str,
+    mounts: dict[str, list[float]],
+    gravity_comp_factor: dict[str, list[float]] | None,
+    cameras,
+    video_encoder,
+    park_after_idle_s: float | None,
+    park_tuning: dict[str, 'SettleTuning'],
+    move_tuning: dict[str, 'SettleTuning'],
+):
     """Real bimanual i2rt YAM on two CAN chains.
 
     Per-arm channels are the flat names the whole stack shares: ``robot_state.{side}`` expands into
     ``robot_state.{side}.q/.dq/.ee_pose`` on record and commands are ``robot_command.{side}`` +
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
-    signal that drives it.
+    signal that drives it. ``gravity_comp_factor[side]`` is that arm's i2rt gravity compensation; None keeps
+    i2rt's own factors on both arms.
     """
     from positronic import geom
-    from positronic.drivers.roboarm import yam as yam_driver
+    from positronic.drivers.roboarm.yam import driver as yam_driver
 
     arms = {
-        side: yam_driver.Robot(channel, base_pose=geom.Transform3D(mounts[side]))
-        for side, channel in (('left', left_channel), ('right', right_channel))
+        side: yam_driver.Robot(
+            channel,
+            base_pose=geom.Transform3D(mounts[side]),
+            gravity_comp_factor=None if gravity_comp_factor is None else gravity_comp_factor[side],
+            park_after_idle_s=park_after_idle_s,
+            park_tuning=park_tuning[side],
+            move_tuning=move_tuning[side],
+        )
+        for side, channel in zip(keys.BIMANUAL_ARMS, (left_channel, right_channel), strict=True)
     }
     observations = {
         **{f'{keys.ROBOT_STATE}.{s}': Observation(arm.state, Serializers.robot_state) for s, arm in arms.items()},
@@ -113,13 +159,40 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         descriptor='yam_bimanual',
         observations=observations,
         commands=commands,
-        prepare_handlers={f'{eval_keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+        prepare_handlers={
+            **{f'{eval_keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+            **{f'{eval_keys.GRIPPER}.{s}': arm.sync_grip for s, arm in arms.items()},
+        },
         static_meta=static_meta,
         # Both drivers emit the identical per-arm meta; record one copy.
-        meta_source=arms['left'].robot_meta,
+        meta_source=arms[keys.LEFT_ARM].robot_meta,
+        ready_handlers={name: cam.ready for name, cam in cameras.items()},
         control_systems=(*cameras.values(), *arms.values()),
         simulated=False,
+        video_encoder=video_encoder,
     )
+
+
+# The yambox station. Its CAN chains carry the names udev gives the two adapters, because `can0` and `can1`
+# there are the onboard controllers and reach no arm.
+yam_bimanual_yambox = yam_bimanual.override(
+    left_channel='can_follower_l',
+    right_channel='can_follower_r',
+    # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 0.022 plate.
+    # The sim scene's plate is 0.011, so only z differs from the default.
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.322], keys.RIGHT_ARM: [0.30, -0.305, 0.322]},
+    # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
+    # are sent, past the 20 mrad tolerance of a blocking move. These bring both arms inside it with about
+    # 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.
+    gravity_comp_factor=dict.fromkeys(keys.BIMANUAL_ARMS, [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]),
+    cameras={
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
+        keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
+        keys.WRIST_RIGHT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_right.override(
+            resolution='svga', fps=30
+        ),
+    },
+)
 
 
 def mujoco_franka(sim, camera_dict):

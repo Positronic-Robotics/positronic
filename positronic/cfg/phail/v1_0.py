@@ -19,7 +19,7 @@ from positronic.cfg.ds import group, local_all, transform
 from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, ROBOT_SIGNAL_POINTERS
 from positronic.cfg.eval.real.tasks import UNIFIED_TASK
 from positronic.dataset import Episode
-from positronic.dataset.episode import META_CREATED_TS_NS
+from positronic.dataset.episode import META_CREATED_TS_NS, select_timeline
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig
@@ -27,7 +27,7 @@ from positronic.server.positronic_server import main as server_main
 
 # The PUBLIC@ profile selector resolves to anonymous (unsigned) access, so these URLs work
 # with no AWS credentials — a reader can pass a model URL straight to an inference server's
-# `--pipeline.source.checkpoints_dir`.
+# `--model.checkpoints_dir`.
 _ROOT = 's3://PUBLIC@positronic-public/phail/v1.0'
 
 ds = types.SimpleNamespace(
@@ -62,7 +62,9 @@ def episodes_table():
 @cfn.config()
 def group_by_task():
     def group_fn(episodes: list[Episode]):
-        duration = sum(ep.duration_ns / 1e9 / 3600 for ep in episodes)
+        duration = sum(
+            (last - first) / 1e9 / 3600 for first, last in (ep.bounds(select_timeline(ep.timelines)) for ep in episodes)
+        )
         return {'task': episodes[0][keys.TASK], 'duration': duration, 'count': len(episodes)}
 
     format_table = {

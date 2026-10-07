@@ -1,0 +1,89 @@
+# syntax=docker/dockerfile:1.7
+# A policy image the platform can run: openpi pi05_droid_jointpos on top of `positro/openpi-base`.
+# docs/submit-a-policy-image.md says what the platform requires of the image and how to test it.
+#
+# Usage (from the repository root)
+#   make -C docker build-serve-pi05-droid        # positro/pi05-droid:local
+#   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+#       -f docker/Dockerfile.serve-pi05-droid -t docker.io/<you>/pi05-droid:v1 --push .
+#   docker run --rm --network none docker.io/<you>/pi05-droid:v1        # the offline pre-flight
+#
+# The layers go from the least often changed to the most: base, dependencies, source, weights. The
+# source and the weights come in through `COPY --link`, and no step runs after them, so a source change
+# builds one new layer and pulls no cached layer.
+
+ARG BASE_IMAGE=positro/openpi-base:latest
+ARG CLOUD_SDK_IMAGE=google/cloud-sdk:slim@sha256:c70885ba9f0450ea9987b1c5dc1ab80acc768bac2fe783962dc98a64ea74c806
+
+# The weights come in through a stage of their own, so the served image carries no cloud SDK and no
+# credential. For a checkpoint of your own, replace this stage with a `COPY` of its directory. The SDK
+# image is pinned by digest: a moved tag would download the weights again and push them as a new layer.
+FROM ${CLOUD_SDK_IMAGE} AS assets
+ARG CHECKPOINT_URI=gs://openpi-assets-simeval/pi05_droid_jointpos
+ARG TOKENIZER_URL=https://storage.eu-north1.nebius.cloud/positronic-public/assets/paligemma_tokenizer.model
+# The checkpoint sits one level down, under a directory named by digits: a local `checkpoints_dir`
+# lists its subdirectories as model ids, and the id has to be digits.
+RUN gcloud config set auth/disable_credentials true \
+ && mkdir -p /assets/checkpoints/0 \
+ && gcloud storage rsync --recursive "${CHECKPOINT_URI}" /assets/checkpoints/0
+RUN mkdir -p /assets/openpi-data/big_vision \
+ && curl -fsSL "${TOKENIZER_URL}" -o /assets/openpi-data/big_vision/paligemma_tokenizer.model
+
+FROM ${BASE_IMAGE}
+# openpi's `serve_policy.py` resolves the container's hostname. Under `--network none`, /etc/hosts has no
+# record of it, and nss-myhostname resolves it to a local address.
+RUN apt-get update && apt-get install -y --no-install-recommends libnss-myhostname \
+ && rm -rf /var/lib/apt/lists/* && grep -E '^hosts:.*myhostname' /etc/nsswitch.conf
+
+ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
+    OPENPI_DATA_HOME=/opt/positronic/openpi-data \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary:/openpi
+
+# The server starts openpi's own `serve_policy.py` through `uv run --project /openpi`, which reads
+# the environment the base resolved openpi into, /.venv. Left to its default, uv builds a second
+# copy at /openpi/.venv.
+RUN UV_PROJECT_ENVIRONMENT=/.venv uv sync --frozen --project /openpi && uv cache clean
+
+# The dependencies install from the lock alone, so a source change does not reinstall them.
+WORKDIR /positronic
+COPY pyproject.toml uv.lock ./
+COPY client/pyproject.toml client/
+COPY wire/pyproject.toml wire/
+COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
+RUN uv sync --locked --python 3.13 --extra openpi --no-dev --no-install-workspace && uv cache clean
+
+# The workspace installs from its manifests and package stubs, which records each package's metadata.
+# The source then lands with no step after it: the packages import from PYTHONPATH.
+COPY README.md LICENSE ./
+COPY client/README.md client/
+COPY wire/README.md wire/
+COPY model_server/README.md model_server/
+COPY vocabulary/README.md vocabulary/
+COPY positronic/__init__.py positronic/
+COPY pimm/__init__.py pimm/
+COPY client/platform_client/py.typed client/platform_client/
+COPY wire/positronic_wire/py.typed wire/positronic_wire/
+COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
+COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
+RUN uv sync --locked --python 3.13 --extra openpi --no-dev && uv cache clean
+
+COPY --link . /positronic
+
+COPY --link --from=assets /assets/checkpoints /opt/positronic/checkpoints/pi05_droid_jointpos
+COPY --link --from=assets /assets/openpi-data /opt/positronic/openpi-data
+
+# A fetch the build did not make fails at once on the denied network.
+ENV UV_PROJECT_ENVIRONMENT=/.venv \
+    UV_OFFLINE=1 \
+    UV_NO_SYNC=1 \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
+EXPOSE 8000
+
+# `exec` makes the server pid 1, so it receives the stop signal.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.openpi.server droid_jointpos \
+   --model.checkpoints_dir=\"$CHECKPOINTS_DIR\" \"$@\"", "--"]

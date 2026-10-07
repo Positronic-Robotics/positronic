@@ -25,6 +25,26 @@ An Episode has three kinds of data with distinct roles:
 
 - **Meta** (`episode.meta`) is *about* the episode — recording facts like `created_ts_ns`, `schema_version`, `writer`. Meta is not part of episode content, not in `keys()`, and transforms pass it through unchanged. Meta keys are optional and may vary by implementation (e.g. `size_mb` exists for disk episodes, may not for others).
 
+`pimm.Time` (also exported by `positronic.dataset`) holds immutable integer coordinates on a nonempty set of named timelines.
+Ordering and arithmetic match coordinates by name and require identical name sets.
+Writers require this value on each append. Each signal fixes its timeline set on its first record:
+all records contain every coordinate, never decrease any, and strictly increase at least one.
+There is no main or default query timeline. Signals in an episode may have overlapping or disjoint sets;
+`episode.timelines` is their union. Viewing and playback select `received.world`, or `recorded`
+for legacy data. Other timelines require an explicit name. Consumers pass that name explicitly to queries.
+
+Queries use `Time` values to name their timelines explicitly. Point lookup selects the last record
+satisfying all named upper bounds and returns its complete original coordinates. Batch sampling replaces queried
+coordinates with the requested values and retains other coordinates from the same selected record.
+Episode queries include only signals containing every requested timeline. Joins retain an explicitly
+selected common subset and reject incompatible ordering.
+
+Native Parquet signal files declare `positronic.signal_version = 2` and store each coordinate in a
+non-null `int64` column named `ts.<literal name>`. Video frame indexes use the same layout.
+Files without a marker decode their legacy timestamp column on its stored timeline name, or
+`recorded` when unnamed. Legacy auxiliary columns remain unexposed; reads require no conversion.
+Migration preserves every coordinate exposed by the source API.
+
 ## Identity
 
 Every episode is stamped with `meta['uid']` (a uuid4 hex) at recording time — the identity contract. Episodes lacking a stamped uid derive a stable `ts-<created_ts_ns>` one from their recording timestamp, which is equally immutable and travels with the episode. Position in a `Dataset` is *access*, not identity: `FilterDataset`/`ConcatDataset` renumber episodes freely. The uid is *reference* — stable across views, processes, copies, and exports. Because transforms pass meta through unchanged, a transformed episode keeps its recording's uid: it is a view of the same recording event.
@@ -36,20 +56,28 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 - One JSON record per line, each carrying its op and version so a log stays replayable forever. `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges static items over the recorded ones (log order, last write per key wins); `{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view while the recording stays on disk, and `{"op": "undrop", ...}` restores it — the last drop/undrop per episode wins.
 - The format stays dumb plain data — smarts live in the library — so external editors can write it. The dataset directory assumes a single writer; readers fail loudly on corrupt or unrecognized records.
 
-## Episode properties
+## Episode bounds
 
-`duration_ns`, `start_ts`, `last_ts` are **first-class properties on Episode**, always derived from signals. They are never stored in meta. If a transform changes signals, these properties reflect the change.
+`episode.bounds(names)` derives named endpoints from signals containing all selected timelines.
+It takes the coordinatewise maximum of signal starts and ends. Empty eligible signals or no
+eligible signals raise `ValueError`. Subtraction yields a span with units owned by consumers.
+Bounds and spans are not episode metadata; transformed views derive them from their signals.
 
-Implementations may cache these values internally (e.g. `DiskEpisode` reads a cached `duration_ns` from `meta.json`), but this is a private optimization — `episode.meta` must not expose `duration_ns`.
+Bounds return `TimeBounds(start, finish)` with inclusive endpoints. A single timeline name selects
+integer endpoints and `Sequence[int]` timestamps; a tuple selects `Time` endpoints and
+`Sequence[Time]` timestamps. Timestamp sequences may be lazy in either form.
 
 ## Laziness
 
 Nothing expensive happens until needed:
 - Listing episodes should not touch signal data
-- Accessing `duration_ns` should not load signal values
+- Accessing named bounds should not load signal values
 - Accessing one signal should not load other signals
 
-`SimpleSignal` reads parquet row-group statistics (file footer) for `start_ts`/`last_ts`/`len` without touching actual data. Full timestamps and values are loaded only when indexed or searched.
+`SimpleSignal` reads Parquet row-group statistics (file footer) for named bounds and length without
+loading values. Timestamp columns load independently when indexed or searched. HTTP discovery
+and bounds also defer value metadata and payload reads. Public timestamp collections use
+`Sequence[int]` or `Sequence[Time]`; backends may share immutable numeric storage and timeline names between rows.
 
 Laziness is what keeps the layering honest: if reading through the abstraction were expensive, a consumer would reach around it for the backend.
 

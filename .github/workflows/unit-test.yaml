@@ -36,6 +36,38 @@ jobs:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest
 
+  gstreamer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install GStreamer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gstreamer1.0-tools gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+
+      - name: Set up Python
+        run: uv venv --python 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # The GStreamer tests skip on a host without the software chain; this step fails instead.
+      - name: Check the software H.264 chain
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run python -c 'from positronic.dataset.tests.test_gst_video import SOFTWARE_H264; SOFTWARE_H264.ensure_available()'
+
+      - name: Run GStreamer encoder tests
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest positronic/dataset/tests/test_gst_video.py
+
   packaging:
     runs-on: ubuntu-latest
     strategy:
@@ -49,8 +81,35 @@ jobs:
       - name: Install as package and verify imports
         run: |
           uv venv --python ${{ matrix.python }} /tmp/pkg-test
-          uv pip install --python /tmp/pkg-test . jinja2
+          uv pip install --python /tmp/pkg-test ./client ./wire ./model_server ./vocabulary . jinja2
           /tmp/pkg-test/bin/python utilities/check_packaging.py
+
+  model-server-packaging:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+        transport:
+          - {extra: '', wires: ''}
+          - {extra: '[websocket]', wires: 'websocket websocket_tls websocket_unix roboarena'}
+          - {extra: '[grpc]', wires: 'grpc grpc_tls'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build independent wheels
+        run: |
+          uv build --package positronic-wire --out-dir /tmp/model-wheels
+          uv build --package positronic-model-server --out-dir /tmp/model-wheels
+      - name: Install the selected transport without Positronic
+        run: |
+          uv venv --python ${{ matrix.python }} /tmp/model-package
+          uv pip install --python /tmp/model-package --no-index --find-links /tmp/model-wheels --no-deps positronic-wire positronic-model-server
+          uv pip install --python /tmp/model-package --find-links /tmp/model-wheels "positronic-model-server${{ matrix.transport.extra }}" 'numpy==1.26.4' pytest
+      - name: Check installed imports and serialization
+        run: |
+          /tmp/model-package/bin/python -I utilities/check_model_server_package.py --wire ${{ matrix.transport.wires }}
+          /tmp/model-package/bin/python -I -m pytest -p no:cacheprovider -c /dev/null --import-mode=importlib model_server/positronic_model_server/tests
 
   lerobot:
     runs-on: ubuntu-latest
@@ -91,6 +150,40 @@ jobs:
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest positronic/vendors/lerobot/tests
+
+  llm:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        extra: [llm, llm-openai]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv venv --python 3.11
+      - run: uv sync --locked --extra ${{ matrix.extra }}
+      - run: uv run --no-sync pytest positronic/vendors/llm/tests
+
+  openpi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked --extra openpi
+
+      - name: Run openpi vendor tests
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest positronic/vendors/openpi/tests
 
   lockfile-portability:
     strategy:

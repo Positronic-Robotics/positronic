@@ -142,7 +142,7 @@ After installation, the following command-line scripts will be available:
 - `positronic-server`: Browse and inspect datasets
 - `lerobot-0_3_3-convert`: Convert datasets to model format
 - `positronic`: Run evals in simulation or on hardware, and read back the ones sent to the platform
-- `positronic-inference`: Run an attended keyboard session on hardware
+- `positronic-inference`: Run an attended session on hardware, from the keyboard or from a browser console
 
 All commands work both inside an activated virtual environment and with `uv run --locked` prefix (e.g., `uv run --locked positronic-server`). Use `--locked` so the installed environment matches the committed `uv.lock` — uv errors loudly if you edited `pyproject.toml` without re-running `uv lock`.
 
@@ -250,27 +250,20 @@ Progress to OpenPI or GR00T when you need more capable models. See:
 
 ### 4. Run Inference and Iterate
 
-Run trained policies through the [eval runner](positronic/cli/eval/run.py):
-
-```bash
-uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-    --policy=@positronic.vendors.lerobot_0_3_3.policy.act_absolute \
-    --policy.base.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --eval.timeout=60 \
-    --output_dir=~/datasets/inference_logs/stack_cubes_act
-```
+Run a model server on the same machine or a GPU host, then connect it to the
+[eval runner](positronic/cli/eval/run.py).
 
 **Remote inference** (run policy on a different machine):
 
 ```bash
 # On inference server (the subcommand selects the codec pipeline; must match training):
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-    --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/<run_id>
+    --model.checkpoints_dir=~/checkpoints/lerobot/<run_id>
 
 # On the simulator machine:
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
     --policy=.remote \
-    --policy.host=<server-ip> --policy.port=8000
+    --policy.address.host=<server-ip> --policy.address.port=8000
 ```
 
 Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs/inference.md) for details.
@@ -359,7 +352,6 @@ Our plans evolve with your feedback. Highlights for the next milestones:
 - **Delivered**
   - **Policy presets for π₀.₅ and GR00T.** Full support for both architectures.
   - **Remote inference primitives.** Run policies on different machines over one session protocol, on a WebSocket or a gRPC wire.
-  - **Batch evaluation harness.** `utilities/validate_server.py` for automated checkpoint scoring.
 - **Short term**
   - **Richer Positronic Server.** Surface metadata fields, annotation, and filtering flows for rapid triage.
   - **Direct Positronic Dataset integration.** Native adapter for training scripts to stream tensors directly from Positronic datasets.

@@ -1,7 +1,14 @@
+import dataclasses
+from typing import TYPE_CHECKING
+
 import configuronic as cfn
 
 import positronic.cfg.hardware.motors
 from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm.franka_fake import FakeFranka
+
+if TYPE_CHECKING:
+    from positronic.drivers.roboarm.yam.settle import SettleTuning
 
 # The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
@@ -16,11 +23,6 @@ DROID_IMPEDANCE = command.Impedance(
     kx=(750.0, 750.0, 750.0, 15.0, 15.0, 15.0),
     kxd=(37.0, 37.0, 37.0, 2.0, 2.0, 2.0),
 )
-
-
-def droid_start_pose() -> command.JointPosition:
-    """The command a DROID trial opens with: joints drawn afresh around the Franka's nominal, under DROID's gains."""
-    return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD, DROID_IMPEDANCE)
 
 
 @cfn.config(
@@ -55,6 +57,7 @@ def franka(
 
 
 franka_droid = franka.override(load=(0.9, [0.0, 0.0, 0.057], [0.002768, 0, 0, 0, 0.003149, 0, 0, 0, 0.000564]))
+franka_fake = cfn.Config(FakeFranka)
 
 
 @cfn.config(ip='192.168.1.10', relative_dynamics_factor=0.5)
@@ -71,8 +74,46 @@ def so101(motor_bus):
     return Robot(motor_bus=motor_bus)
 
 
-@cfn.config(channel='can0', sim=False, base_pose=None)
-def yam(channel: str, sim: bool, base_pose):
-    from positronic.drivers.roboarm.yam import Robot
+@cfn.config()
+def yam_park_tuning(**fields: float) -> 'SettleTuning':
+    from positronic.drivers.roboarm.yam.settle import PARK_SETTLE
 
-    return Robot(channel, base_pose=base_pose, sim=sim)
+    return dataclasses.replace(PARK_SETTLE, **fields)
+
+
+@cfn.config()
+def yam_move_tuning(**fields: float) -> 'SettleTuning':
+    from positronic.drivers.roboarm.yam.settle import MOVE_SETTLE
+
+    return dataclasses.replace(MOVE_SETTLE, **fields)
+
+
+@cfn.config(
+    channel='can0',
+    sim=False,
+    base_pose=None,
+    gravity_comp_factor=None,
+    park_after_idle_s=60.0,
+    park_tuning=yam_park_tuning,
+    move_tuning=yam_move_tuning,
+)
+def yam(
+    channel: str,
+    sim: bool,
+    base_pose,
+    gravity_comp_factor,
+    park_after_idle_s: float | None,
+    park_tuning: 'SettleTuning',
+    move_tuning: 'SettleTuning',
+):
+    from positronic.drivers.roboarm.yam.driver import Robot
+
+    return Robot(
+        channel,
+        base_pose=base_pose,
+        sim=sim,
+        gravity_comp_factor=gravity_comp_factor,
+        park_after_idle_s=park_after_idle_s,
+        park_tuning=park_tuning,
+        move_tuning=move_tuning,
+    )

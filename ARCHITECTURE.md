@@ -41,7 +41,7 @@ cadence, so sensors run at their own rate instead of a rate the loop imposes. On
 what its model was trained on, so translation to model I/O ships with the policy.
 
 **Components are functions over flowing data.** A component sees nothing but its inputs and touches
-nothing but its outputs. Whatever varies enters as data — time is an observation field, hardware
+nothing but its outputs. Whatever varies enters as data — time comes from the policy runtime, hardware
 identity is a `meta` port every driver emits — never as a global, a constructor argument, or a
 config the run captured once. Separable stages stay separate, and processing is deterministic where
 possible. One property, many payoffs: a component moves across process and machine boundaries
@@ -108,38 +108,28 @@ often its own interpreter — a helper two of them need belongs in core.
 What the goals and principles force. Each is stated with what forces it —
 revisit a decision only by revisiting its premises.
 
-**Time is an observation.** A policy that cannot tell sim from real cannot be allowed to read the
-wall clock, and a reproducible sim needs a single owner of "now". A real rig is asynchronous
-besides: sensors and deciders each run at their own frequency, so there is no global tick to share.
-Hence "now" reaches the policy as a field of the observation (`obs_time_ns`), the world hands every
-control system its clock, and no component reads time at point of use. Trajectories are stamped in
-the same time frame the observations carry, so a virtual clock, a slowed sim, or a replayed episode
-changes nothing downstream.
+**One runtime owns policy time.** A policy reads `runtime.time_ns`, which uses the
+world's clock in simulation and on hardware. Sensor values carry no shared current-time
+field. Submitted work becomes available according to the runtime's timing rules, so
+simulation can include inference latency without exposing its clock implementation.
 
-**The layer owns the plan, the harness plays it, the driver executes.** A policy speaks in
-trajectories — waypoints with absolute timestamps — because a model predicts a horizon, not an
-instant. But a trajectory on the wire makes every driver buffer the future, and makes the recording
-guess which prefix of that buffer actually ran. So the plan stops at the harness: a command channel
-carries the single command due at the moment it is emitted, the driver executes the latest one and
-holds otherwise, and emission time *is* execution time. Continuous-update schemes (RTC, temporal
-ensembling) therefore need no special mechanism: they are layers that hand back a new trajectory
-more often, and the harness keeps playing the old one until they do.
+**The scheduling processor owns and plays the plan; the driver executes commands.**
+Models return action chunks. The processor chooses which commands are due and yields a
+`Step` with commands to emit immediately and the next requested wake-up time. The harness
+connects these steps to signal emitters and owns the episode lifecycle. Drivers receive
+commands to execute now and do not buffer a policy's future trajectory.
 
 **The harness stays thin.** It is the one layer standing between any policy and any embodiment, so
 anything it encodes about either side breaks the any-to-any goal. It assembles the observation
-dict, calls the session, plays the returned trajectory one command per channel per round, and runs
-episode lifecycle — nothing else. Scheduling, blending, history stacking and error recovery live in
-the layer stack around the policy; a session returning `None` means "keep executing the current
-trajectory".
+dict, sends it into the policy run, emits the returned commands, and runs the episode
+lifecycle. Scheduling, blending, history stacking, and fault handling live in the
+processor stack. Empty commands leave the driver's last target in place.
 
-**Inference cost is a fact of the trial, owned by the harness.** The policy declares its heavy work
-as functions, and the framework runs each one off the loop thread. That work costs the trial either
-the wall time it took or nothing: it is charged unless a sim task states
-`charge_inference_time=False`. Only the harness reads the flag. Paying nothing means the loop waits
-for the work, which keeps a virtual clock still; paying wall time means letting the world run,
-though no further ahead of the work's start than wall time has. The harness reads the world clock
-and gives the reading to the policy stack as the call's `time_ns`. A scheduling layer stamps its
-chunk with that value, and never learns the mode.
+**Inference cost is a fact of the trial, owned by the harness.** The policy submits
+ordinary functions through its runtime. A simulated task can request
+`charge_inference_time=False`; otherwise answer availability includes queueing and
+execution time. The runtime exposes one clock to the policy, without revealing whether
+that clock is simulated. Scheduling processors read it when they anchor a chunk.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every
@@ -184,6 +174,6 @@ episode through both stacks and checks this contract. Re-run it when the sim's p
 The episode horizon is one case of that reproduction rather than a rule of its own: a task that
 defines a horizon has it enforced by the env, which reports expiry through the same terminal `done`
 a success uses; a task that defines none leaves nothing to reproduce. By default, the harness
-`Task.timeout` is a runaway-cost safety net derived from the benchmark horizon, with enough margin
+`Task.timeout_sec` is a runaway-cost safety net derived from the benchmark horizon, with enough margin
 to observe the env's terminal signal. An explicit timeout may truncate an episode before that
 horizon; the config warns when the user overrides the default.

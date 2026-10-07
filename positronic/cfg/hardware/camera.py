@@ -1,6 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
+from positronic.drivers.camera.zed_fake import FakeSLCamera
 
 
 @cfn.config()
@@ -48,6 +49,10 @@ droid = {
 
 droid_3cam = {**droid, keys.EXTERIOR_IMAGE_2: sideview_right.override(**_DROID_STREAM)}
 
+zed_fake = cfn.Config(FakeSLCamera)
+droid_fake = dict.fromkeys(droid, zed_fake)
+droid_3cam_fake = dict.fromkeys(droid_3cam, zed_fake)
+
 # `droid_left` holds `sideview_left` under `exterior`; `droid_right` holds `sideview_right` there.
 # FOOTGUN: `exterior` and `exterior_2` hold opposite sideviews in the two dicts.
 droid_left = droid_3cam  # the unsided three-camera set already binds the left sideview as `exterior`
@@ -61,6 +66,12 @@ droid_right = {
 zed_x_top = zed.override(serial_number=48953814)
 zed_x_one_left = zed.override(serial_number=309745677, mono=True)
 zed_x_one_right = zed.override(serial_number=303714482, mono=True)
+
+# YAM station (yambox): the same rig as brunello, with the cameras this station carries. Each wrist serial is
+# checked against its arm in recorded episodes: its video changes most on the frames where that arm moves alone.
+yambox_zed_x_top = zed.override(serial_number=47582904)
+yambox_zed_x_one_left = zed.override(serial_number=309151692, mono=True)
+yambox_zed_x_one_right = zed.override(serial_number=301008060, mono=True)
 
 
 @cfn.config()

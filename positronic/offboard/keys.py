@@ -4,6 +4,8 @@
 # what the rig builds and obeys — the local stack spec, image compression, the positronic version it runs.
 HOST = 'host'
 PORT = 'port'
+# The socket path a server bound instead of a host and a port. One of the two pairs is present, never both.
+UDS = 'uds'
 CHECKPOINT_ID = 'checkpoint_id'
 LOCAL_STACK = 'local_stack'
 COMPRESS_IMAGES = 'compress_images'

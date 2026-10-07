@@ -1,386 +1,267 @@
-"""Unit tests for the executor serving functions off the caller's thread."""
+"""Completion delivery and time accounting without a control-system dependency."""
 
-import logging
-import operator
+import contextvars
 import threading
-import time
-import weakref
-from contextvars import ContextVar
-from functools import partial
+from concurrent.futures import CancelledError
+from typing import cast
 
 import pytest
 
-from positronic.policy.base import Answer, DelegatingSession, Layer, NotAnswered, Policy, Session
-from positronic.policy.executor import Executor, blocking
-
-# How long a test waits for the worker threads before calling the call lost.
-TIMEOUT_SEC = 5.0
-
-
-def settled(answer: Answer) -> Answer:
-    """The answer once the worker has run its call; fails the test if it never lands."""
-    deadline = time.monotonic() + TIMEOUT_SEC
-    while not answer.done():
-        assert time.monotonic() < deadline, 'the call was never answered'
-        time.sleep(0.001)
-    return answer
+from positronic import telemetry, telemetry_keys
+from positronic.policy import executor as module
+from positronic.policy.base import NotAnswered, Policy, Step
+from positronic.policy.executor import Executor, WaitResult, WaitStatus, _UnchargedAnswer
 
 
 @pytest.fixture
-def serve():
-    """Serves the functions it is called with, and closes every executor it made when the test ends."""
-    executors = []
+def executors():
+    created = []
 
-    def make(*, max_workers: int = 1, **functions):
-        executors.append(Executor(functions, max_workers=max_workers))
-        return executors[-1]
+    def make(*, simulated=True, charged=False, workers=1):
+        now = [0]
+        runtime = Executor(lambda: now[0], simulated=simulated, charge_inference_time=charged, max_workers=workers)
+        created.append(runtime)
+        return runtime, now
 
     yield make
-    for executor in executors:
-        executor.close()
+    for runtime in created:
+        runtime.close()
 
 
-def test_fns_are_the_declared_names(serve):
-    assert sorted(serve(add=operator.add, mul=operator.mul).fns) == ['add', 'mul']
-
-
-def test_call_answers_with_the_functions_result(serve):
-    answer = serve(add=operator.add).fns['add'](2, 3)
-
-    assert isinstance(answer, Answer)
-    assert settled(answer).result() == 5
-
-
-def test_keyword_arguments_reach_the_function(serve):
-    fns = serve(pose=lambda arm, gripper=0.0: (arm, gripper)).fns
-
-    assert settled(fns['pose']('left', gripper=0.5)).result() == ('left', 0.5)
-
-
-def test_no_keyword_name_is_reserved(serve):
-    fns = serve(apply=lambda fn, self: (fn, self)).fns
-
-    assert settled(fns['apply'](fn='a', self='b')).result() == ('a', 'b')
-
-
-def test_answer_is_pending_until_the_function_returns(serve):
+def test_worker_span_keeps_parent_after_processor_yields(executors, tmp_path):
+    runtime, _ = executors()
     release = threading.Event()
-    answer = serve(gate=lambda: release.wait(TIMEOUT_SEC)).fns['gate']()
 
-    assert not answer.done()
-    with pytest.raises(NotAnswered):
-        answer.result()
+    def work():
+        assert release.wait(timeout=5)
+        with telemetry.span('worker_child'):
+            return 42
 
-    release.set()
-    assert settled(answer).result() is True
+    class Submit(Policy):
+        def run(self, runtime):
+            yield
+            answer = runtime.submit(work)
+            yield Step({}, 1)
+            assert answer.result() == 42
+            yield Step({}, 2)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'async-stack'):
+        run = runtime.start(Submit())
+        try:
+            assert run.send({}) == Step({}, 1)
+            release.set()
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            assert run.send({}) == Step({}, 2)
+        finally:
+            release.set()
+            runtime.close()
+            run.close()
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    calls = sorted((s for s in spans if s.name == 'submit'), key=lambda s: s.start_ns)
+    [worker] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_SUBMIT]
+    [child] = [s for s in spans if s.name == 'worker_child']
+    assert len(calls) == 2
+    assert all(s.parent_id is None for s in calls)
+    assert worker.parent_id == calls[0].span_id
+    assert child.parent_id == worker.span_id
+    assert calls[0].end_ns <= child.start_ns <= child.end_ns <= worker.end_ns <= calls[1].start_ns
 
 
-def test_result_raises_what_the_function_raised(serve):
+@pytest.mark.parametrize('read_first', [False, True])
+def test_completion_is_delivered_once_independently_of_result_reads(executors, read_first):
+    runtime, _ = executors()
+    answer = cast(_UnchargedAnswer[int], runtime.submit(lambda: 42))
+    assert answer.call.result(timeout=1) == 42
+    if read_first:
+        assert answer.result() == 42
+    assert runtime.has_pending
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert not runtime.has_pending
+    assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.CAN_ADVANCE)
+    assert answer.result() == 42
+    assert runtime.take_completed() == ()
+
+
+def test_submission_and_bounded_wait_do_not_wait_out_a_worker(executors):
+    runtime, now = executors()
+    release = threading.Event()
+    try:
+        answer = runtime.submit(lambda: release.wait(timeout=2))
+        assert not answer.done()
+        assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.TIMED_OUT)
+        assert runtime.take_completed() == ()
+        assert now == [0]
+        with pytest.raises(NotAnswered):
+            answer.result()
+    finally:
+        release.set()
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.CAN_ADVANCE)
+
+
+def test_fast_call_completes_while_another_worker_is_pending(executors):
+    runtime, _ = executors(workers=2)
+    release = threading.Event()
+    slow = runtime.submit(lambda: release.wait(timeout=2))
+    try:
+        fast = cast(_UnchargedAnswer[int], runtime.submit(lambda: 42))
+        assert fast.call.result(timeout=1) == 42
+        assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (fast,))
+        assert runtime.has_pending
+        assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.TIMED_OUT)
+    finally:
+        release.set()
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (slow,))
+
+
+def test_charged_completion_is_hidden_until_its_episode_time(executors, monkeypatch):
+    wall = [0]
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
+    runtime, now = executors(charged=True)
+
+    def work():
+        wall[0] = 20_000_000
+        return 42
+
+    answer = cast(_UnchargedAnswer[int], runtime.submit(work))
+    assert answer.call.result(timeout=1) == 42
+    for instant in (0, 19_999_999):
+        now[0] = instant
+        assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.CAN_ADVANCE)
+        assert runtime.has_pending
+        assert not answer.done()
+    now[0] = 20_000_000
+    assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert answer.result() == 42
+
+
+def test_charged_wait_is_bounded_by_the_time_still_owed(executors, monkeypatch):
+    wall = [0]
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
+    runtime, now = executors(charged=True)
+    release = threading.Event()
+    runtime.submit(lambda: release.wait(timeout=2))
+    waits = []
+
+    def wait(futures, *, timeout, return_when):
+        waits.append(timeout)
+        wall[0] += round(timeout * 1e9)
+
+    monkeypatch.setattr(module.concurrent.futures, 'wait', wait)
+    try:
+        now[0] = 10_000_000
+        assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.TIMED_OUT)
+        assert runtime.wait(timeout_sec=0.003) == WaitResult(WaitStatus.TIMED_OUT)
+        assert runtime.wait(timeout_sec=0.1) == WaitResult(WaitStatus.CAN_ADVANCE)
+        assert waits == pytest.approx([0.003, 0.007])
+        assert now == [10_000_000]
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize('charged', [False, True])
+def test_real_execution_never_waits_for_simulated_time(executors, charged, monkeypatch):
+    runtime, now = executors(simulated=False, charged=charged)
+
+    def forbidden_wait(*args, **kwargs):
+        pytest.fail('Real execution waited for simulated time')
+
+    monkeypatch.setattr(module.concurrent.futures, 'wait', forbidden_wait)
+    release = threading.Event()
+    try:
+        answer = cast(_UnchargedAnswer[int], runtime.submit(lambda: (release.wait(timeout=2), 42)[1]))
+        assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.CAN_ADVANCE)
+        assert not answer.done()
+    finally:
+        release.set()
+    assert answer.call.result(timeout=1) == 42
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert now == [0]
+    assert answer.result() == 42
+
+
+def test_cancellation_notifies_once(executors):
+    runtime, _ = executors()
+    release = threading.Event()
+    running = runtime.submit(lambda: release.wait(timeout=2))
+    try:
+        queued = runtime.submit(lambda: 42)
+        queued.cancel()
+        assert runtime.take_completed() == (queued,)
+        assert runtime.take_completed() == ()
+        with pytest.raises(CancelledError):
+            queued.result()
+    finally:
+        release.set()
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (running,))
+
+
+def test_failure_notifies_and_is_raised_by_result(executors, caplog):
+    runtime, _ = executors()
+
     def fail():
-        raise ValueError('inference blew up')
+        raise ValueError('model failed')
 
-    answer = serve(fail=fail).fns['fail']()
-
-    with pytest.raises(ValueError, match='inference blew up'):
-        settled(answer).result()
-
-
-def test_calls_run_one_at_a_time(serve):
-    release = threading.Event()
-    fns = serve(gate=lambda: release.wait(TIMEOUT_SEC), add=operator.add).fns
-
-    gated, queued = fns['gate'](), fns['add'](2, 3)
-    assert not queued.done()
-
-    release.set()
-    assert settled(gated).result() is True
-    assert settled(queued).result() == 5
-
-
-def test_max_workers_calls_run_side_by_side(serve):
-    # Neither call passes the barrier unless the other is running too, so a single worker breaks it.
-    paired = threading.Barrier(2)
-    fns = serve(max_workers=2, gate=lambda: paired.wait(TIMEOUT_SEC)).fns
-
-    first, second = fns['gate'](), fns['gate']()
-
-    assert sorted([settled(first).result(), settled(second).result()]) == [0, 1]
-
-
-# A ContextVar belongs at module level: every context that sets it holds a strong reference, so one made
-# inside a function is never collected.
-_marker: ContextVar[str] = ContextVar('test_executor_marker', default='unset')
-
-
-def test_call_runs_under_a_copy_of_the_context_it_was_made_in(serve):
-    fns = serve(marker=_marker.get).fns
-    _marker.set('episode-7')
-
-    assert settled(fns['marker']()).result() == 'episode-7'
-
-
-def test_nothing_is_in_flight_before_a_call(serve):
-    assert not serve(add=operator.add).in_flight
-
-
-def test_a_call_is_in_flight_until_it_answers(serve):
-    release = threading.Event()
-    executor = serve(gate=lambda: release.wait(TIMEOUT_SEC))
-
-    answer = executor.fns['gate']()
-    assert executor.in_flight
-
-    release.set()
-    settled(answer)
-    assert not executor.in_flight
-
-
-def test_nothing_is_owed_before_a_call(serve):
-    assert not serve(add=operator.add).owes_an_answer
-
-
-def test_an_answer_stays_owed_after_its_call_lands_until_it_is_read(serve):
-    executor = serve(add=operator.add)
-    answer = settled(executor.fns['add'](2, 3))
-
-    assert not executor.in_flight
-    assert executor.owes_an_answer
-
-    answer.result()
-    assert not executor.owes_an_answer
-
-
-def test_wait_returns_once_every_call_has_answered(serve):
-    executor = serve(sleep=partial(time.sleep, 0.05), add=operator.add)
-
-    first, second = executor.fns['sleep'](), executor.fns['add'](2, 3)
-    executor.wait(TIMEOUT_SEC)
-
-    assert not executor.in_flight
-    assert first.done() and second.result() == 5
-
-
-def test_wait_gives_up_at_its_timeout(serve):
-    release = threading.Event()
-    executor = serve(gate=lambda: release.wait(TIMEOUT_SEC))
-    executor.fns['gate']()
-
-    started = time.monotonic()
-    executor.wait(0.01)
-
-    assert time.monotonic() - started < TIMEOUT_SEC
-    assert executor.in_flight
-    release.set()
-
-
-def test_close_waits_out_the_call_in_flight(serve):
-    started, finished = threading.Event(), []
-
-    def slow():
-        started.set()
-        time.sleep(0.05)
-        finished.append(True)
-
-    executor = serve(slow=slow)
-    executor.fns['slow']()
-    assert started.wait(TIMEOUT_SEC)
-    executor.close()
-
-    assert finished == [True]
-
-
-def test_calling_a_closed_executor_raises(serve):
-    executor = serve(add=operator.add)
-    executor.close()
-
-    with pytest.raises(RuntimeError):
-        executor.fns['add'](2, 3)
-
-
-def _fail():
-    raise RuntimeError('the server went away')
-
-
-def test_close_reports_a_failure_that_nobody_read(serve, caplog):
-    executor = serve(infer=_fail)
-    settled(executor.fns['infer']())
-
-    with caplog.at_level(logging.ERROR):
-        executor.close()
-
-    assert 'the server went away' in caplog.text
-    assert 'infer' in caplog.text
-
-
-def test_close_stays_quiet_about_a_failure_its_caller_read(serve, caplog):
-    executor = serve(infer=_fail)
-    answer = settled(executor.fns['infer']())
-    with pytest.raises(RuntimeError):
+    answer = runtime.submit(fail)
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    with pytest.raises(ValueError, match='model failed'):
         answer.result()
-
-    with caplog.at_level(logging.ERROR):
-        executor.close()
-
-    assert caplog.text == ''
+    runtime.close()
+    assert 'model failed' not in caplog.text
 
 
-def test_close_stays_quiet_about_a_call_that_answered(serve, caplog):
-    executor = serve(add=operator.add)
-    settled(executor.fns['add'](2, 3))
+def test_unread_failure_is_reported_on_close(executors, caplog):
+    runtime, _ = executors()
 
-    with caplog.at_level(logging.ERROR):
-        executor.close()
+    def fail():
+        raise ValueError('unread failure')
 
-    assert caplog.text == ''
-
-
-class _PlainPolicy(Policy):
-    """Serves nothing: its session answers inside the call that asked."""
-
-    class _Session(Session):
-        def __init__(self):
-            self.calls = 0
-
-        def __call__(self, obs, time_ns):
-            self.calls += 1
-            return [{'action': obs}]
-
-    def __init__(self):
-        self.session = _PlainPolicy._Session()
-
-    def new_session(self, context=None, rt=None) -> Session:
-        return self.session
+    answer = runtime.submit(fail)
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    runtime.close()
+    runtime.close()
+    assert caplog.text.count('unread failure') == 1
 
 
-_ECHO = 'echo'
+def test_submission_preserves_context_and_keyword_arguments(executors):
+    runtime, _ = executors()
+    context = contextvars.ContextVar('test_context', default='missing')
+    token = context.set('episode')
+    try:
+        answer = runtime.submit(lambda *, value: (context.get(), value), value=42)
+    finally:
+        context.reset(token)
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert answer.result() == ('episode', 42)
 
 
-class _EchoPolicy(Policy):
-    """Serves ``echo``, and makes sessions that take ``rounds`` calls of it to answer."""
+def test_close_waits_for_running_work_and_cancels_queued_work(executors):
+    runtime, _ = executors()
+    started, release, closed = threading.Event(), threading.Event(), threading.Event()
+    calls = []
 
-    class _Session(Session):
-        def __init__(self, rt, rounds: int):
-            self._rt = rt
-            self._answer = None
-            self._left = rounds
-            self.calls = 0
+    def first():
+        started.set()
+        assert release.wait(timeout=2)
+        calls.append('first')
 
-        def __call__(self, obs, time_ns):
-            self.calls += 1
-            result = None
-            if self._answer is not None:
-                result, self._answer = self._answer.result(), None
-            if self._left > 0:
-                self._left -= 1
-                self._answer = self._rt.fns[_ECHO](obs)
-                return None
-            return result
-
-    def __init__(self, rounds: int):
-        self._rounds = rounds
-        self.session: _EchoPolicy._Session
-
-    def new_session(self, context=None, rt=None) -> Session:
-        assert rt is not None
-        self.session = _EchoPolicy._Session(rt, self._rounds)
-        return self.session
-
-    @property
-    def functions(self):
-        return {_ECHO: lambda obs: obs}
-
-
-class _CountingLayer(Layer):
-    """Counts the calls that reach the session it wraps."""
-
-    def __init__(self):
-        self.calls = 0
-
-    class _Session(DelegatingSession):
-        def __init__(self, inner: Session, layer: '_CountingLayer'):
-            super().__init__(inner)
-            self._layer = layer
-
-        def __call__(self, obs, time_ns):
-            self._layer.calls += 1
-            return self._inner(obs, time_ns)
-
-    def make_session(self, inner):
-        return self._Session(inner, self)
-
-
-@pytest.fixture
-def opened():
-    """Opens the sessions a test asks for, and closes every one at teardown."""
-    sessions = []
-
-    def make(policy: Policy) -> Session:
-        sessions.append(policy.new_session())
-        return sessions[-1]
-
-    yield make
-    for session in sessions:
-        session.close()
-
-
-class TestBlocking:
-    """A policy whose sessions answer in the call that asked."""
-
-    def test_a_session_that_answers_in_its_own_call_is_called_one_time(self, opened):
-        policy = _PlainPolicy()
-
-        assert opened(blocking(policy))({'x': 1}, 0.0) == [{'action': {'x': 1}}]
-        assert policy.session.calls == 1
-
-    @pytest.mark.parametrize(('rounds', 'calls'), [(1, 2), (2, 3)])
-    def test_a_session_is_called_again_for_every_function_it_starts(self, opened, rounds, calls):
-        policy = _EchoPolicy(rounds)
-
-        assert opened(blocking(policy))({'x': 1}, 0.0) == {'x': 1}
-        assert policy.session.calls == calls
-
-    def test_a_session_that_starts_nothing_and_answers_none_is_called_one_time(self, opened):
-        policy = _EchoPolicy(rounds=0)
-
-        assert opened(blocking(policy))({'x': 1}, 0.0) is None
-        assert policy.session.calls == 1
-
-    def test_a_layer_above_it_is_called_one_time_for_one_answer(self, opened):
-        """A layer above ``blocking`` is called once for one answer. That is why ``blocking`` wraps the
-        policy and not the chain: a layer that encodes the observation, or records it, would otherwise do
-        that work once per call the answer took."""
-        layer, policy = _CountingLayer(), _EchoPolicy(rounds=2)
-
-        assert opened(layer.wrap(blocking(policy)))({'x': 1}, 0.0) == {'x': 1}
-        assert (layer.calls, policy.session.calls) == (1, 3)
-
-    def test_it_serves_its_functions_itself(self):
-        """A blocking policy runs its own functions, so nothing above it builds a runtime for them."""
-        assert blocking(_EchoPolicy(rounds=1)).functions == {}
-
-    def test_closing_the_session_closes_the_runtime_it_made(self):
-        """The session owns the runtime it was made with, and closing the session is the only way to
-        close it."""
-        policy = _EchoPolicy(rounds=1)
-        session = blocking(policy).new_session()
-        session.close()
-
-        # The session's own runtime is closed, so the function it would start is gone.
-        with pytest.raises(RuntimeError):
-            policy.session({'x': 1}, 0)
-
-
-class _Weights:
-    """Stands in for what a function is declared with: model weights, a socket."""
-
-
-def test_close_frees_what_the_functions_held(serve):
-    """A closed runtime drops its functions, so the policy that closes next can free the weights."""
-    weights = _Weights()
-    gone = weakref.ref(weights)
-    executor = serve(infer=partial(operator.is_, weights))
-    del weights
-
-    assert gone() is not None
-    executor.close()
-    assert gone() is None
+    runtime.submit(first)
+    assert started.wait(timeout=1)
+    queued = runtime.submit(lambda: calls.append('second'))
+    assert not queued.done()
+    closer = threading.Thread(target=lambda: (runtime.close(), closed.set()))
+    closer.start()
+    try:
+        with pytest.raises(CancelledError):
+            cast(_UnchargedAnswer, queued).call.result(timeout=1)
+        assert not closed.is_set()
+        assert calls == []
+    finally:
+        release.set()
+        closer.join(timeout=2)
+    assert closed.is_set()
+    assert calls == ['first']
+    with pytest.raises(CancelledError):
+        queued.result()
+    with pytest.raises(RuntimeError):
+        runtime.submit(lambda: None)

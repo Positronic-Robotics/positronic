@@ -1,6 +1,8 @@
 import unittest
 
 import numpy as np
+from scipy.spatial.transform import Rotation as SciRotation
+from scipy.spatial.transform import Slerp
 
 from positronic.geom import Rotation, Transform3D, degrees_to_radians, quat_closest, radians_to_degrees
 
@@ -58,6 +60,16 @@ class TestTransform3D(unittest.TestCase):
 
         np.testing.assert_array_almost_equal(identity.translation, np.zeros(3))
         np.testing.assert_array_almost_equal(identity.rotation.as_quat, np.array([1.0, 0.0, 0.0, 0.0]))
+
+    def test_interpolate_translation_and_shortest_rotation(self):
+        start = Transform3D([1, 2, 3], Rotation.from_euler([0, 0, np.deg2rad(179)]))
+        end = Transform3D([5, -2, 1], Rotation.from_euler([0, 0, np.deg2rad(-179)]))
+        for fraction in [0.0, 0.25, 0.5, 1.0]:
+            with self.subTest(fraction=fraction):
+                result = start.interpolate(end, fraction)
+                np.testing.assert_allclose(result.translation, [1 + 4 * fraction, 2 - 4 * fraction, 3 - 2 * fraction])
+                expected = Rotation.from_euler([0, 0, np.deg2rad(179 + 2 * fraction)])
+                np.testing.assert_allclose(result.rotation.as_rotation_matrix, expected.as_rotation_matrix, atol=1e-14)
 
     def test_copy_creates_independent_transform(self):
         translation = np.array([1.0, 2.0, 3.0])
@@ -219,6 +231,11 @@ class TestRotation(unittest.TestCase):
         expected_result = Rotation.from_quat([1.0, 0.0, 0.0, 0.0])
         np.testing.assert_array_almost_equal(q.as_quat, expected_result.as_quat)
 
+    def test_from_rotvec_rejects_invalid_shapes(self):
+        for shape in [(), (0,), (2,), (4,), (1, 3), (3, 1)]:
+            with self.subTest(shape=shape), self.assertRaisesRegex(ValueError, r'shape \(3,\)'):
+                Rotation.from_rotvec(np.ones(shape))
+
     def test_from_rotvec_x_axis_90_degrees_returns_correct_rotation(self):
         rotvec = np.array([np.pi / 2, 0.0, 0.0])  # 90 degrees around x-axis
         q = Rotation.from_rotvec(rotvec)
@@ -242,6 +259,47 @@ class TestRotation(unittest.TestCase):
         q = Rotation.from_rotvec(original_rotvec)
         recovered_rotvec = q.as_rotvec
         np.testing.assert_array_almost_equal(original_rotvec, recovered_rotvec, decimal=4)
+
+    def test_principal_angle_and_rotvec_ignore_quaternion_sign(self):
+        for angle, expected in [(0, 0), (1e-12, 1e-12), (np.pi, np.pi), (np.deg2rad(350), np.deg2rad(-10))]:
+            for sign in [1, -1]:
+                with self.subTest(angle=float(angle), sign=sign):
+                    rotation = Rotation.from_rotvec(np.array([0, 0, angle]))
+                    rotation = Rotation.from_quat(sign * rotation.as_quat)
+                    np.testing.assert_allclose(rotation.angle, abs(expected), rtol=1e-12, atol=0)
+                    np.testing.assert_allclose(rotation.as_rotvec, [0, 0, expected], rtol=1e-12, atol=0)
+
+    def test_interpolate_matches_shortest_arc(self):
+        rng = np.random.default_rng(7)
+        for index, quaternions in enumerate(rng.normal(size=(12, 2, 4))):
+            start, end = (Rotation.from_quat(q) for q in quaternions)
+            oracle = Slerp([0, 1], SciRotation.from_matrix([start.as_rotation_matrix, end.as_rotation_matrix]))
+            for fraction in [0.0, 0.1, 0.5, 0.9, 1.0]:
+                with self.subTest(index=index, fraction=fraction):
+                    actual = start.interpolate(end, fraction)
+                    np.testing.assert_allclose(actual.as_rotation_matrix, oracle(fraction).as_matrix(), atol=1e-14)
+
+    def test_interpolate_identical_rotations_with_either_quaternion_sign(self):
+        start = Rotation.from_euler([0.3, -0.7, 1.2])
+        for sign in [1, -1]:
+            for fraction in [0.0, 0.5, 1.0]:
+                with self.subTest(sign=sign, fraction=fraction):
+                    end = Rotation.from_quat(sign * start.as_quat)
+                    actual = start.interpolate(end, fraction)
+                    np.testing.assert_allclose(actual.as_rotation_matrix, start.as_rotation_matrix, atol=1e-14)
+
+    def test_interpolate_preserves_tiny_rotations(self):
+        end = Rotation.from_rotvec(np.array([1e-12, 0, 0]))
+        result = Rotation.identity.interpolate(end, 0.5)
+        np.testing.assert_allclose(result.as_rotvec, [5e-13, 0, 0], rtol=1e-12, atol=0)
+
+    def test_interpolate_rejects_fractions_outside_unit_interval(self):
+        for fraction in [-0.1, 1.1, float('nan'), float('inf'), -float('inf')]:
+            with self.subTest(fraction=fraction):
+                with self.assertRaisesRegex(ValueError, 'fraction'):
+                    Rotation.identity.interpolate(Rotation.identity, fraction)
+                with self.assertRaisesRegex(ValueError, 'fraction'):
+                    Transform3D.identity.interpolate(Transform3D.identity, fraction)
 
     def test_to_representation_euler_same_as_as_euler(self):
         q = Rotation.from_quat([0.7071, 0.7071, 0, 0])  # 90 degrees rotation around x-axis

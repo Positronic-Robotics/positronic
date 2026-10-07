@@ -18,13 +18,15 @@ import pytest
 import rerun as rr
 
 from positronic import keys
-from positronic.dataset import Dataset
+from positronic.dataset import Dataset, Time
 from positronic.dataset.dataset import FilterDataset
 from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform, Identity
 from positronic.server import export, positronic_server
+from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.export import (
     GROUP_INDEX_FILE,
     MAX_FILTER_KEYS_PER_GROUP,
@@ -103,7 +105,9 @@ def a_dataset(root: Path, *statics: dict) -> Dataset:
                 for name, value in static.items():
                     episode.set_static(name, value)
                 for step in range(4):
-                    episode.append(keys.JOINTS, np.zeros(7, dtype=np.float32), ts_ns=10_000 + step * 1_000)
+                    episode.append(
+                        keys.JOINTS, np.zeros(7, dtype=np.float32), Time(**{RECORDED_TIME: 10_000 + step * 1_000})
+                    )
     return load_all_datasets(root)
 
 
@@ -237,6 +241,22 @@ def _recording_builder_threads(monkeypatch) -> list[int]:
 
     monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_record)
     return threads
+
+
+def test_each_recording_is_built_with_the_layout_the_export_is_given(dataset, tmp_path, monkeypatch):
+    layout = ReplayLayout(split_shares=(3, 1), view_shares=(1, 3), charts={}, show_unnamed_signals=False)
+    stream = positronic_server.stream_episode_rrd
+    layouts: list[ReplayLayout | None] = []
+
+    def stream_and_record(ds, episode_id, **kwargs):
+        layouts.append(kwargs['layout'])
+        yield from stream(ds, episode_id, **kwargs)
+
+    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_record)
+
+    an_export(dataset, tmp_path / 'out', layout=layout, workers=1)
+
+    assert layouts == [layout, layout]
 
 
 def test_the_recordings_are_built_on_worker_threads_and_the_export_copies_them(dataset, tmp_path, monkeypatch):

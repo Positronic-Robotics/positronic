@@ -1,0 +1,83 @@
+name: Build a Serving Image
+
+# Builds positro/<name> from docker/Dockerfile.serve-<name> and pushes it with `main`, the commit and `latest`; on a
+# release, with `v<version>` and the commit.
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: The image, one of SERVE_IMAGES in docker/Makefile.
+        required: true
+        type: string
+      release:
+        description: Push `v<version>` and leave `latest` where it is.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      HF_TOKEN:
+        required: false
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_PASSWORD:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  serve-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      NAME: ${{ inputs.name }}
+      # A recipe reads it through a BuildKit secret mount.
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # A build with no cache holds the weights twice, in their own stage and in the image.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"/{CodeQL,node,go}
+          df -h /
+
+      - name: Set up a BuildKit builder
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push
+        id: push
+        env:
+          RELEASE: ${{ inputs.release }}
+        run: |
+          if [ "$RELEASE" = true ]; then
+            # A release may be cut from a commit that is not on main, so it must not move `latest`.
+            unset CI
+            export PUBLISH_RELEASE=1
+            tag="v$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)"
+          elif [ "$GITHUB_REF" = refs/heads/main ]; then
+            tag=main
+          else
+            # Any other ref, a branch or a tag, pushes `ref-<name>` and the commit. No `main`, `latest` or release
+            # tag starts with `ref-`.
+            unset CI
+            tag="ref-$(printf %s "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9_.-' -)"
+            tag="${tag:0:128}"
+          fi
+          make -C docker "push-serve-${NAME}" IMAGE_TAG="$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # Reads anonymously, as the platform does, so a repository that is not public fails here.
+      - name: Read the published digest and size
+        run: docker/read_image_digest.sh "positro/${NAME}:${{ steps.push.outputs.tag }}"

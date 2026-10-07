@@ -4,6 +4,7 @@ from typing import Any
 
 import pimm
 from positronic.dataset.serializers import Serializer
+from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.eval import keys as eval_keys
 from positronic.keys import EE_POSE, JOINTS, TARGET_EE_POSE
 
@@ -58,8 +59,14 @@ class Embodiment:
     prepare_handlers: dict[str, pimm.calls.ControlSystemHandler[Any, None]]
     static_meta: dict[str, Any]
     meta_source: pimm.ControlSystemEmitter | None
+    # One handler per device that can hold an error, called with no argument before each episode and before
+    # ``prepare_handlers``. A handler named like an observation is also called between episodes while that observation
+    # carries a ``pimm.SignalError``. A device answers once it gives valid data, or with the error it cannot clear.
+    ready_handlers: dict[str, pimm.calls.ControlSystemHandler[None, None]] = field(default_factory=dict)
     control_systems: tuple[pimm.ControlSystem, ...] = ()
     simulated: bool = False
+    # How the recorder encodes the camera signals
+    video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER
 
 
 @dataclass

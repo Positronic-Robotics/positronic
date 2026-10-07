@@ -4,16 +4,21 @@ from datetime import datetime
 
 import configuronic as cfn
 import pos3
+from eval_vocabulary.outcome import ABSENT, OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, is_scored
+from eval_vocabulary.progress import LADDER, STATE_SIGNAL, Stage
 
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import Episode
-from positronic.dataset.episode import META_CREATED_TS_NS
+from positronic.dataset.episode import META_CREATED_TS_NS, select_timeline
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.eval import keys as eval_keys
+from positronic.policy import keys as policy_keys
+from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import GroupTableConfig, RendererConfig
+from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
+from positronic.server.rollouts import OUTCOME_BADGE, StageCell, rate_cell, stage_cell
 
 from . import analysis as analysis_cfg
 from . import ds
@@ -44,11 +49,28 @@ def eval_table():
     }
 
 
+# The arm's state as tabs, the target grip beside the grip, and each command.
+single_arm_replay_layout = cfn.Config(
+    ReplayLayout,
+    split_shares=(3, 1),
+    view_shares=(1, 3),
+    charts={
+        'Robot State/Joints': [keys.JOINTS],
+        'Robot State/End Effector': [keys.EE_POSE],
+        'Robot State/Joints Vel': [keys.JOINT_VEL],
+        'Grip': {'Target': keys.TARGET_GRIP, 'Current': keys.GRIP},
+        'Robot Commands – Joints': [keys.TARGET_JOINTS],
+        'Robot Commands – End Effector': [keys.TARGET_EE_POSE],
+    },
+)
+
+
 def uph(ep: Episode) -> float | None:
     items = ep['units']
     if items == 0:
         return None
-    return items / (ep.duration_ns / 1e9 / 3600)
+    first, last = ep.bounds(select_timeline(ep.timelines))
+    return items / ((last - first) / 1e9 / 3600)
 
 
 finetune_ds = ds.transform.override(
@@ -110,7 +132,8 @@ def finetune_group_by_task():
     def group_fn(episodes: list[Episode]):
         duration, units = 0, 0
         for ep in episodes:
-            duration += ep.duration_ns / 1e9 / 3600
+            first, last = ep.bounds(select_timeline(ep.timelines))
+            duration += (last - first) / 1e9 / 3600
             units += ep['units']
 
         result = {'task': episodes[0][keys.TASK]}
@@ -127,11 +150,120 @@ def finetune_group_by_task():
     return GroupTableConfig(group_keys='task', group_fn=group_fn, format_table=format_table)
 
 
+POLICY_LABEL = f'{policy_keys.POLICY_META}.{policy_keys.LABEL}'
+
+# The fields this preset derives onto each episode.
+DERIVED_MODEL = 'model'
+DERIVED_OUTCOME = 'outcome'
+DERIVED_STAGE = 'stage'
+DERIVED_ITEMS = 'items'
+DERIVED_STARTED = 'started'
+
+
+def rollout_model(ep: Episode) -> str:
+    """The endpoint the episode was served by; older recordings name it through their checkpoint path."""
+    return ep[POLICY_LABEL] if POLICY_LABEL in ep else analysis_cfg.model(ep)
+
+
+def rollout_outcome(ep: Episode) -> str:
+    """The word the recording holds, or `ABSENT` where it holds none."""
+    return ep[OUTCOME] if OUTCOME in ep else ABSENT
+
+
+def highest_rollout_stage(ep: Episode) -> StageCell:
+    """The highest rung the arm reached, as the cell `positronic.server.rollouts` defines."""
+    marked = {value for value, _ in ep[STATE_SIGNAL]} if STATE_SIGNAL in ep else set()
+    return stage_cell(marked)
+
+
+def rollout_items(ep: Episode) -> str | None:
+    if SUCCESSFUL_ITEMS in ep and TOTAL_ITEMS in ep:
+        return f'{ep[SUCCESSFUL_ITEMS]}/{ep[TOTAL_ITEMS]}'
+    return None
+
+
+rollouts_ds = ds.transform.override(
+    base=ds.local_all,
+    transforms=[
+        ds.group.override(
+            transforms=[
+                Identity(),
+                Derive(**{
+                    DERIVED_MODEL: rollout_model,
+                    DERIVED_OUTCOME: rollout_outcome,
+                    DERIVED_STAGE: highest_rollout_stage,
+                    DERIVED_ITEMS: rollout_items,
+                    DERIVED_STARTED: analysis_cfg.started,
+                }),
+            ]
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
+    ],
+)
+
+
+@cfn.config()
+def rollouts_episodes_table():
+    return {
+        '__index__': C(label='#', format='%d'),
+        '__duration__': C(label='Duration', format='%.0f sec'),
+        keys.TASK: C(label='Task', filter=True),
+        DERIVED_MODEL: C(label='Model', filter=True),
+        DERIVED_OUTCOME: C(label='Outcome', renderer=OUTCOME_BADGE, filter=True, align='center'),
+        DERIVED_STAGE: C(label='Stage'),
+        DERIVED_ITEMS: C(label='Items', default='-'),
+        DERIVED_STARTED: C(label='Started', format='%Y-%m-%d %H:%M:%S'),
+    }
+
+
+@cfn.config()
+def rollouts_by_model():
+    def group_fn(episodes: list[Episode]):
+        # An episode the operator discarded or never scored measures nothing, so it is listed and
+        # counted and stays out of the rate.
+        scored = [ep for ep in episodes if is_scored(ep[DERIVED_OUTCOME])]
+        successes = sum(1 for ep in scored if ep[DERIVED_OUTCOME] == Outcome.SUCCESS)
+        # FOOTGUN: count from the target up. The ladder is append-only, and a rung added past the
+        # target passed through it.
+        at_target = LADDER.index(Stage.AT_TARGET)
+        return {
+            DERIVED_MODEL: episodes[0][DERIVED_MODEL],
+            'count': len(episodes),
+            'scored': len(scored),
+            'successes': successes,
+            'success_rate': rate_cell(successes, len(scored)),
+            'at_target': sum(1 for ep in episodes if ep[DERIVED_STAGE].rank >= at_target),
+        }
+
+    format_table = {
+        DERIVED_MODEL: C(label='Model'),
+        'count': C(label='Episodes'),
+        'scored': C(label='Scored'),
+        'successes': C(label='Successes'),
+        'success_rate': C(label='Success rate'),
+        'at_target': C(label='Reached target'),
+    }
+
+    return GroupTableConfig(
+        group_keys=DERIVED_MODEL,
+        group_fn=group_fn,
+        format_table=format_table,
+        group_filter_keys={keys.TASK: 'Task'},
+        default_sort=SortConfig(column='success_rate'),
+    )
+
+
 finetune_server = server_main.override(
     dataset=finetune_ds, ep_table_cfg=finetune_episodes_table, group_tables={'tasks': finetune_group_by_task}
+)
+
+# Manual rollout rounds:
+#   uv run --locked python -m positronic.cfg.server rollouts --dataset.base.path=s3://inference/droid_three_way/020926/
+rollouts_server = server_main.override(
+    dataset=rollouts_ds, ep_table_cfg=rollouts_episodes_table, group_tables={'models': rollouts_by_model}
 )
 
 if __name__ == '__main__':
     with pos3.mirror():
         init_logging()
-        cfn.cli(finetune_server)
+        cfn.cli({'finetune': finetune_server, 'rollouts': rollouts_server})

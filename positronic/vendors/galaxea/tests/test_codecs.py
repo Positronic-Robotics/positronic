@@ -90,24 +90,14 @@ def test_invalid_frequency_fails(fps):
         codecs.DroidCodec(fps=fps)
 
 
-def test_long_chunk_is_cut_to_sixteen_steps_and_uses_droid_control_mode(observation):
-    codec = codecs.droid(codec=codecs.DroidCodec(fps=10))
+def test_full_chunk_uses_droid_control_mode(observation):
+    codec = codecs.droid(action=codecs.DroidCodec(fps=10))
     raw = [{protocol.RIGHT_ARM: [float(i)] * 7, protocol.RIGHT_GRIPPER: [i / 31]} for i in range(32)]
     trajectory = codec.decode(raw)
-    assert len(trajectory) == 17
-    for i, action in enumerate(trajectory[:-1]):
-        assert action[keys.ACTION_TIMESTAMP] == pytest.approx(i / 10)
+    assert len(trajectory) == 32
+    for i, action in enumerate(trajectory):
+        assert 'timestamp' not in action
         np.testing.assert_array_equal(action[keys.ROBOT_COMMAND].positions, [i] * 7)
         assert action[keys.ROBOT_COMMAND].mode == DROID_IMPEDANCE
         assert action[keys.TARGET_GRIP] == pytest.approx(1 - i / 31, abs=1e-7)
-    assert trajectory[-1] == {keys.ACTION_TIMESTAMP: 1.6}
     assert codec.encode(observation)[protocol.FREQUENCY] == 10
-
-
-def test_short_chunk_keeps_every_step_and_its_own_end_timestamp():
-    codec = codecs.droid(codec=codecs.DroidCodec(fps=10))
-    raw = [{protocol.RIGHT_ARM: [float(i)] * 7, protocol.RIGHT_GRIPPER: [0.5]} for i in range(10)]
-    trajectory = codec.decode(raw)
-    assert len(trajectory) == 11
-    assert [a[keys.ACTION_TIMESTAMP] for a in trajectory] == pytest.approx([i / 10 for i in range(11)])
-    assert trajectory[-1] == {keys.ACTION_TIMESTAMP: pytest.approx(1.0)}

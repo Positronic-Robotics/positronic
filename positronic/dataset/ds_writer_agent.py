@@ -2,11 +2,12 @@ import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import dataclass, field
-from enum import Enum, IntEnum
+from enum import Enum
 from pathlib import Path
 from typing import Any, TypeAlias
 
 import pimm
+from pimm.time import EMITTED_WALL, Time
 from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter
@@ -64,13 +65,6 @@ class DsWriterCommand:
     @staticmethod
     def ABORT():
         return DsWriterCommand(DsWriterCommandType.ABORT_EPISODE)
-
-
-class TimeMode(IntEnum):
-    """Mode of timestamping for the dataset writer."""
-
-    CLOCK = 0
-    MESSAGE = 1
 
 
 class _Recording:
@@ -164,15 +158,13 @@ class DsWriterAgent(pimm.ControlSystem):
     opens that dataset, once per name — and applies `static_data`. A `START_EPISODE` that names no dataset
     opens an episode that records nowhere. The opening turn records what each
     input holds, whenever that value was produced. While open, each updated input
-    signal (from `inputs`) is appended with the current timestamp from `clock`.
+    signal (from `inputs`) is appended with its emission and first-delivery coordinates.
     `STOP_EPISODE` and `ABORT_EPISODE` are handled after that turn's inputs, so
     the trial's last frame is recorded before STOP finalizes the writer; samples
     timestamped after STOP — whatever the next trial's prepare moves, or sensor
     data the async real path queues — are dropped, and ABORT discards the
     episode. Invalid or out-of-order commands are ignored with a log message.
-
-    `TimeMode` selects whether timestamps come from the control loop clock
-    (`CLOCK`) or from the producing message (`MESSAGE`).
+    An input that carries a ``pimm.SignalError`` records nothing.
 
     ``virtual_time`` makes the recorder yield to ride the producer's clock — sim lockstep, where the
     simulator is the sole time-master — instead of pacing itself at ``poll_hz`` (real/background).
@@ -182,7 +174,6 @@ class DsWriterAgent(pimm.ControlSystem):
         self,
         dataset_factory: DatasetFactory,
         poll_hz: float = 1000.0,
-        time_mode: TimeMode = TimeMode.CLOCK,
         virtual_time: bool = False,
         # rules-allow: misleading-name — timing is the only use, and a name for the mechanism alone reads as
         # a context of unsaid purpose. It generalises when a second kind of caller arrives.
@@ -192,7 +183,6 @@ class DsWriterAgent(pimm.ControlSystem):
         # opens its datasets there.
         self._dataset_factory = dataset_factory
         self._poll_hz = float(poll_hz)
-        self._time_mode = time_mode
         self._virtual_time = virtual_time
         # An opaque context factory wrapped around the writer's serialize+append work; the default is
         # inert. The caller decides what it brackets — the writer never learns.
@@ -213,16 +203,8 @@ class DsWriterAgent(pimm.ControlSystem):
     def inputs(self) -> dict[str, pimm.ControlSystemReceiver[Any]]:
         return frozen_keys_dict(self._inputs)
 
-    def _record(self, ep_writer: EpisodeWriter, name: str, msg: pimm.Message, clock: pimm.Clock) -> None:
-        """Append one input's sample, stamped as ``time_mode`` selects and carrying every clock beside it."""
-        world_time_ns, message_time_ns = clock.now_ns(), msg.ts
-        primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
-
-        extra_ts = {'message': message_time_ns, 'system': pimm.world.SystemClock().now_ns()}
-        # Only add 'world' if clock is not system clock
-        if not isinstance(clock, pimm.world.SystemClock):
-            extra_ts['world'] = world_time_ns
-
+    def _record(self, ep_writer: EpisodeWriter, name: str, msg: pimm.Message) -> None:
+        """Append one input's sample with all its message timestamps."""
         with self._telemetry_span():
             serializer = self._serializers.get(name)
             value = msg.data
@@ -230,9 +212,9 @@ class DsWriterAgent(pimm.ControlSystem):
                 value = serializer(value)
             for full_name, v in expand_suffixed(name, value):
                 if v is not None:
-                    ep_writer.append(full_name, v, primary_ts, extra_ts)
+                    ep_writer.append(full_name, v, msg.time)
 
-    def _record_window(self, ep_writer: EpisodeWriter, clock: pimm.Clock, before: int | None, opening: bool):
+    def _record_window(self, ep_writer: EpisodeWriter, before: Time | None, opening: bool):
         """Append this turn's input samples, dropping any stamped after ``before``.
 
         The opening turn reads every channel outright rather than only what arrived, so a channel silent
@@ -240,8 +222,10 @@ class DsWriterAgent(pimm.ControlSystem):
         """
         for name, reader in self._inputs.items():
             msg = reader.read() if opening else pimm.read_updated(reader)
-            if msg is not None and (before is None or msg.ts <= before):
-                self._record(ep_writer, name, msg, clock)
+            if msg is None or isinstance(msg.data, pimm.SignalError):
+                continue
+            if before is None or msg.time[EMITTED_WALL] <= before[EMITTED_WALL]:
+                self._record(ep_writer, name, msg)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         """Main loop: process commands and append updated inputs to the episode."""
@@ -261,8 +245,8 @@ class DsWriterAgent(pimm.ControlSystem):
                         stop = cmd
 
                 if recording.writer is not None:
-                    before = stop.ts if stop is not None else None
-                    self._record_window(recording.writer, clock, before, recording.writer is not sampled)
+                    before = stop.time if stop is not None else None
+                    self._record_window(recording.writer, before, recording.writer is not sampled)
                     sampled = recording.writer
 
                 if stop is not None:

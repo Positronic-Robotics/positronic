@@ -4,13 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, TypeVar
+from typing import TypeVar
 
 import pimm
-from positronic.eval import Task
-from positronic.policy import Policy, Session
-from positronic.policy.harness import Harness, Rollout
+from pimm.time import EMITTED_WALL, EMITTED_WORLD
 
 # The driver runs a step for its effect, so a step that hands something back — a call's answer — is one too.
 ScriptStep = tuple[Callable[[], object] | None, float]
@@ -58,40 +55,14 @@ def scripted_driver(*steps: ScriptStep) -> ManualDriver:
     return ManualDriver(script=steps)
 
 
-class EpisodeCaller:
-    """Asks ``harness`` for a task the way a driver does: it opens the session that runs it and names the
-    path it records into. Nothing writes there unless the test runs a recorder of its own."""
-
-    def __init__(self, world: pimm.World, harness: Harness, policy: Policy, output_path: Path | None = Path('dataset')):
-        self._perform_task = world.pair(harness.perform_task)
-        self._policy = policy
-        self._output_path = output_path
-        self._rollouts: list[Rollout] = []
-
-    def __call__(self, task: Task) -> pimm.calls.Answer[dict[str, Any]]:
-        rollout = Rollout(task, self._policy, self._output_path)
-        self._rollouts.append(rollout)
-        return self._perform_task(rollout)
-
-    def wait_for_functions(self) -> None:
-        """Block until every function the rollouts asked for has answered. The task answers are its own
-        matter, and may all still be pending when this returns."""
-        for rollout in self._rollouts:
-            rollout.rt.wait()
-
-    def close(self) -> None:
-        while self._rollouts:
-            self._rollouts.pop().close()
-
-
 class RecordingEmitter(pimm.SignalEmitter[T]):
     """Emitter that records all emissions for later assertions."""
 
     def __init__(self) -> None:
-        self.emitted: list[tuple[int, T]] = []
+        self.emitted: list[tuple[pimm.Time, T]] = []
 
-    def emit(self, data: T, ts: int = -1):
-        self.emitted.append((ts, data))
+    def _emit(self, data: T, time: pimm.Time):
+        self.emitted.append((time, data))
 
 
 class ManualCommandReceiver(pimm.SignalReceiver[T]):
@@ -103,9 +74,13 @@ class ManualCommandReceiver(pimm.SignalReceiver[T]):
 
     def push(self, data: T, ts: int | None = None) -> None:
         if ts is None:
-            base = self._pending[-1].ts if self._pending else (self._last.ts if self._last else -1)
+            base = (
+                self._pending[-1].time[EMITTED_WORLD]
+                if self._pending
+                else (self._last.time[EMITTED_WORLD] if self._last else -1)
+            )
             ts = base + 1
-        self._pending.append(pimm.Message(data, ts))
+        self._pending.append(pimm.Message(data, pimm.Time(**{EMITTED_WORLD: ts, EMITTED_WALL: ts})))
 
     def read(self) -> pimm.Message[T] | None:
         if self._pending:
@@ -144,24 +119,3 @@ def run_scripted_agent(
     driver = ManualDriver(script=script)
     scheduler = world.start([agent, driver])
     drive_scheduler(scheduler, steps=steps)
-
-
-class IdleSession(Session):
-    """A policy session that records what it is shown and commands nothing.
-
-    The recording lands on its policy's ``observations`` list.
-    """
-
-    def __init__(self, policy):
-        self._policy = policy
-
-    def __call__(self, obs, time_ns):
-        self._policy.observations.append(obs)
-        return []
-
-    @property
-    def meta(self):
-        return {}
-
-    def close(self):
-        pass

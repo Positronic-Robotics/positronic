@@ -13,7 +13,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
-from positronic.dataset.episode import Episode
+from positronic.dataset.episode import Episode, select_timeline
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
@@ -48,9 +48,8 @@ def run_episode(wire: str, host: str, port: int, output: Path, seed: int, wall_t
         '--eval=.sim.positronic.stack_cubes',
         '--policy=.remote',
         f'--policy.wire={wire}',
-        f'--policy.host={host}',
-        f'--policy.port={port}',
-        f'--policy.model={CHECKPOINT_ID}',
+        f'--policy.address.host={host}',
+        f'--policy.address.port={port}',
         f'--eval.seed={seed}',
         '--eval.trial_count=1',
         f'--eval.timeout={EPISODE_SECONDS}',
@@ -102,7 +101,10 @@ def cube_trace(
     red, green = model.body(STACK_RED_CUBE.body_name).id, model.body(STACK_GREEN_CUBE.body_name).id
     fingers = {model.body(name).id for name in FINGER_BODIES}
     state_signal = episode[state_key]
-    times = np.asarray(list(state_signal.keys()), dtype=np.int64) - episode.start_ts
+    times = (
+        np.asarray(state_signal.timestamps(select_timeline(state_signal.timelines)), dtype=np.int64)
+        - episode.bounds(select_timeline(episode.timelines)).start
+    )
     if np.any(np.diff(times) > np.ceil(model.opt.timestep * 1e9) + 1):
         raise ValueError(f'{state_key}: recording skips physics steps')
     poses = np.empty((len(times), 2, 7))
@@ -123,7 +125,10 @@ def read_trace(episode: Episode) -> dict[str, np.ndarray]:
     for name in RECORDED_SIGNALS:
         signal = episode[name]
         trace[name] = np.asarray(list(signal.values()))
-        trace[name + TIME_SUFFIX] = np.asarray(list(signal.keys()), dtype=np.int64) - episode.start_ts
+        trace[name + TIME_SUFFIX] = (
+            np.asarray(signal.timestamps(select_timeline(signal.timelines)), dtype=np.int64)
+            - episode.bounds(select_timeline(episode.timelines)).start
+        )
     for name, values in trace.items():
         if not len(values) or not np.isfinite(values).all():
             raise ValueError(f'{name}: empty or non-finite recording')

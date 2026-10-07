@@ -1,77 +1,65 @@
 import logging
-from collections.abc import Callable
-from typing import Any
 
 import configuronic as cfn
 
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import warmup
-from positronic.policy import Codec, Policy
+from positronic.offboard.spec import Model, PolicyDeployment
+from positronic.policy import Codec, Sequential
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.spec import ModelSource, remote
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
-from positronic.vendors.molmoact2.policy import MolmoAct2Policy, warm_observation
+from positronic.vendors.molmoact2.policy import (
+    BIMANUAL_YAM_STATE_DIM,
+    DROID_STATE_DIM,
+    MolmoAct2Model,
+    warm_observation,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_HF_REPO = 'allenai/MolmoAct2-DROID'
+BIMANUAL_YAM_HF_REPO = 'allenai/MolmoAct2-BimanualYAM'
 
 
-class MolmoAct2Source(ModelSource):
-    """Loads one pretrained MolmoAct2 checkpoint from HuggingFace into an in-process policy."""
-
-    def __init__(
-        self,
-        hf_repo: str = DEFAULT_HF_REPO,
-        *,
-        device_map: str = 'auto',
-        norm_tag: str = 'franka_droid',
-        num_steps: int = 10,
-    ):
-        self._hf_repo = hf_repo
-        self._device_map = device_map
-        self._norm_tag = norm_tag
-        self._num_steps = num_steps
-
-    def get_models(self) -> list[str]:
-        # Clients echo the advertised id onto the single-segment session route
-        # (/api/v1/session/{model_id}), so it must be slash-free — derive it from the repo name.
-        return [self._hf_repo.split('/')[-1]]
-
-    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
-        message = f'Loading MolmoAct2 model {self._hf_repo} (device_map={self._device_map})'
-        logger.info(message)
-        if on_progress is not None:
-            on_progress(message)
-        policy = MolmoAct2Policy(
-            self._hf_repo, device_map=self._device_map, norm_tag=self._norm_tag, num_steps=self._num_steps
-        )
-        warmup(policy, warm_observation(), on_progress)
-        return policy
-
-    def meta(self, model_id: str) -> dict[str, Any]:
-        return {'model_id': model_id, 'hf_repo': self._hf_repo}
+@cfn.config(
+    hf_repo=DEFAULT_HF_REPO, device_map='auto', norm_tag='franka_droid', num_steps=10, state_dim=DROID_STATE_DIM
+)
+def molmoact2_model(hf_repo: str, device_map: str, norm_tag: str, num_steps: int, state_dim: int) -> Model:
+    """One pretrained MolmoAct2 checkpoint from HuggingFace, in process."""
+    logger.info(f'Loading MolmoAct2 model {hf_repo} (device_map={device_map})')
+    policy = MolmoAct2Model(hf_repo, device_map=device_map, norm_tag=norm_tag, num_steps=num_steps)
+    warmup(policy, warm_observation(state_dim))
+    return policy
 
 
-molmoact2_source = cfn.Config(MolmoAct2Source)
-
-
-@cfn.config(codec=molmoact2_codecs.droid, source=molmoact2_source)
-def pipeline(codec: Codec, source: ModelSource):
-    return StopOnFault() | ChunkedSchedule() | RestrictImageSize() | remote | codec | source
+@cfn.config(codec=molmoact2_codecs.droid)
+def pipeline(codec: Codec, fps: float = 15.0, horizon_sec: float | None = None, compress_images: bool = False):
+    return PolicyDeployment(
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize()),
+        codec,
+        compress_images=compress_images,
+    )
 
 
 droid = pipeline
 droid_3cam = pipeline.override(codec=molmoact2_codecs.droid_3cam)
+# The checkpoint predicts 30 steps at 30 Hz; the upstream YAM example executes the first 25 of them.
+yam_bimanual = pipeline.override(
+    codec=molmoact2_codecs.yam_bimanual, fps=30.0, horizon_sec=25 / 30, compress_images=True
+)
+yam_bimanual_model = molmoact2_model.override(
+    hf_repo=BIMANUAL_YAM_HF_REPO, norm_tag='yam_dual_molmoact2', state_dim=BIMANUAL_YAM_STATE_DIM
+)
 
 
-# Every pipeline is a subcommand; MolmoAct2 pins one checkpoint, so there is no separate deployment.
+# Every pipeline is a subcommand and pins its own checkpoint, so there is no separate deployment.
 # The empty key is the default command, so a no-argument launch starts the server.
 COMMANDS = {
-    **{k: serve.override(pipeline=droid) for k in ('', 'serve', 'droid')},
-    'droid_3cam': serve.override(pipeline=droid_3cam),
+    **{k: serve.override(model=molmoact2_model, pipeline=droid) for k in ('', 'serve', 'droid')},
+    'droid_3cam': serve.override(model=molmoact2_model, pipeline=droid_3cam),
+    'yam_bimanual': serve.override(model=yam_bimanual_model, pipeline=yam_bimanual),
 }
 
 

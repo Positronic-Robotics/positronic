@@ -16,12 +16,14 @@ import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
+import positronic.cfg.video_encoder
 import positronic.cfg.webxr
 from pimm.logging import init_logging
 from positronic import geom, keys, utils, wire
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
@@ -153,7 +155,14 @@ class DataCollectionController(pimm.ControlSystem):
             yield pimm.Sleep(0.001)
         ready.result()
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def _report_entered_error(self, error: pimm.SignalError, was_error: bool, error_wav_path: Path) -> None:
+        """Log and sound ``error`` once, as the controller enters it."""
+        _, entered_error = _check_error(True, was_error)
+        if entered_error:
+            logging.error(f'The arm gives no state: {error}')
+            self.sound.emit(error_wav_path)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         sounds = Path(package_assets_path('assets/sounds'))
         start_wav_path = sounds / 'recording-has-started.wav'
         end_wav_path = sounds / 'recording-has-stopped.wav'
@@ -218,6 +227,11 @@ class DataCollectionController(pimm.ControlSystem):
             except pimm.NoValueException:
                 yield pimm.Sleep(0.001)
                 continue
+            except pimm.SignalError as e:
+                # Nothing goes to the arm until its state gives data again.
+                self._report_entered_error(e, in_error, error_wav_path)
+                in_error = True
+                yield pimm.Sleep(0.001)
 
 
 def controller_positions_serializer(controller_positions: dict[str, geom.Transform3D]) -> dict[str, np.ndarray]:
@@ -276,7 +290,7 @@ def main(
     stream_video_to_webxr: str | None = None,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
-    video_options: dict[str, str] | None = None,
+    video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
 ):
     """Runs data collection in real hardware."""
     if (robot_arm is not None) != (len(nominal_joints) > 0):
@@ -303,13 +317,14 @@ def main(
         static_meta.update(wire.ROBOT_STATIC_META)
     output_path = None
     if output_dir is not None:
+        video_encoder.ensure_available()
         output_path = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
         operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
     )
 
-    dataset_factory = partial(LocalDatasetWriter, video_options=video_options) if output_path is not None else None
+    dataset_factory = partial(LocalDatasetWriter, video_encoder=video_encoder) if output_path is not None else None
     with pimm.World() as world:
         ds_agent = wire.wire(world, data_collection, dataset_factory, camera_emitters, robot_arm, gripper, None)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
@@ -377,11 +392,11 @@ def main_sim(
     dataset_factory = LocalDatasetWriter if output_path is not None else None
     with pimm.World(virtual_time=True) as world:
         # The sim carries both the arm and the gripper ports, so it fills both slots.
-        ds_agent = wire.wire(world, data_collection, dataset_factory, cameras, sim, sim, gui, TimeMode.MESSAGE)
+        ds_agent = wire.wire(world, data_collection, dataset_factory, cameras, sim, sim, gui)
         _wire(world, ds_agent, data_collection, webxr, sim, sound)
         world.connect(data_collection.redraw_scene, sim.env_reset)
 
-        sim_iter = world.start([sim, data_collection], [webxr, gui, ds_agent, sound])
+        sim_iter = world.start([sim, data_collection, ds_agent], [webxr, gui, sound])
         sim_iter = iter(sim_iter)
 
         # VR teleop is live, so pace virtual time to wall time: only step the sim when it has fallen behind.
@@ -433,9 +448,7 @@ def so101cfg(robot_arm, **kwargs):
     operator_position=OperatorPosition.BACK,
     cameras={},
     nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
-    # The YAM station records several cameras on a weak CPU; x264's default preset can't keep up with the
-    # camera rate, so trade ~2x bitrate for ~2.5x faster encoding.
-    video_options={'preset': 'ultrafast', 'tune': 'zerolatency'},
+    video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
 def yamcfg(robot_arm, **kwargs):
     """Runs data collection on a real i2rt YAM arm (the arm driver carries the gripper)."""

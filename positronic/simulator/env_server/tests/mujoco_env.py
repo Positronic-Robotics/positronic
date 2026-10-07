@@ -43,7 +43,7 @@ class _NeverStop(pimm.SignalReceiver):
     """A ``should_stop`` that never fires — ``MujocoEnv`` drives the sim loop tick by tick instead."""
 
     def read(self) -> pimm.Message:
-        return pimm.Message(False, 0, False)
+        return pimm.Message(False, updated=False)
 
 
 class MujocoEnv(EnvProtocol):
@@ -73,7 +73,7 @@ class MujocoEnv(EnvProtocol):
 
     def _bind_output(self, emitter: pimm.ControlSystemEmitter) -> LocalQueueReceiver:
         queue: deque = deque(maxlen=1)
-        emitter._bind(LocalQueueEmitter(queue, self._clock))
+        emitter._bind(LocalQueueEmitter(queue, self._clock), clock=self._clock)
         return LocalQueueReceiver(queue)
 
     @property

@@ -41,14 +41,8 @@ def get_latest_checkpoint(checkpoints_dir: str, prefix: str = '') -> str:
     return list_checkpoints(checkpoints_dir, prefix=prefix)[-1]
 
 
-def resolve_checkpoint(checkpoints_dir: str, configured: str | None, requested: str | None) -> str:
-    """Resolve a checkpoint ID from an explicit request, a configured default, or latest available."""
-    if requested:
-        available = list_checkpoints(checkpoints_dir)
-        if requested not in available:
-            raise ValueError(f'Checkpoint not found: {requested}. Available: {available}')
-        return requested
-
+def resolve_checkpoint(checkpoints_dir: str, configured: str | None) -> str:
+    """The configured checkpoint ID, or the latest available one when none is configured."""
     if configured:
         checkpoint_id = str(configured).strip('/')
         available = list_checkpoints(checkpoints_dir)
