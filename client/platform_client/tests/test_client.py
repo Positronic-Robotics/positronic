@@ -144,14 +144,22 @@ def test_reading_a_purchase_keeps_its_opaque_identifier_in_the_query():
     assert dict(gateway.request().url.params) == {'id': 'opaque-purchase-id'}
 
 
-def test_purchase_history_uses_the_same_member_organization_query():
-    gateway = Gateway(200, {'purchases': [PURCHASE_BODY]})
+def test_purchase_history_defaults_to_a_bounded_page_and_keeps_its_continuation():
+    gateway = Gateway(200, {'purchases': [PURCHASE_BODY], 'next': 'opaque-purchase-id'})
     response = make_client(gateway).list_purchases(OrgSlug('acme'))
     assert isinstance(response, PurchaseListResponse)
     assert response.purchases[0].package.amount_minor == 17
     assert gateway.request().method == 'GET'
     assert gateway.request().url.path == routes.BILLING_PURCHASES_LIST
-    assert dict(gateway.request().url.params) == {'org': 'acme'}
+    assert dict(gateway.request().url.params) == {'org': 'acme', 'limit': '50'}
+    assert response.next == 'opaque-purchase-id'
+
+
+def test_purchase_history_sends_the_previous_page_cursor_and_requested_limit():
+    gateway = Gateway(200, {'purchases': [], 'next': None})
+    response = make_client(gateway).list_purchases(OrgSlug('acme'), after=PurchaseId('last-seen'), limit=200)
+    assert dict(gateway.request().url.params) == {'org': 'acme', 'after': 'last-seen', 'limit': '200'}
+    assert response.purchases == [] and response.next is None
 
 
 def test_the_client_refuses_a_payable_link_after_a_purchase_enters_review():

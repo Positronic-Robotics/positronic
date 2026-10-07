@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.22.0"
+uv add "positronic-platform-client==0.24.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -67,6 +67,9 @@ The response carries a Checkout URL only when the initiating member can still pa
 Credits appear after the gateway verifies the payment. A browser redirect does not grant credits.
 
 `PlatformClient.get_purchase(id)` and `list_purchases(org)` read purchases without creating another Checkout session.
+`list_purchases` returns one page with up to 50 purchases by default. The gateway clamps larger limits to 200.
+Pass `response.next` as `after` to read the next page. Continue until `response.next` is `None`.
+The gateway requires a list limit. Older clients that omit it receive HTTP 422 instead of an incomplete history.
 An organization member can read purchase history. A reviewed or credited purchase carries no payable URL.
 
 ```bash
@@ -74,6 +77,7 @@ positronic account credits account --org=acme
 positronic account credits buy --org=acme --package-id=<configured-package> --transaction-key=<stable-key>
 positronic account credits purchase --id=<purchase-id>
 positronic account credits purchases --org=acme
+positronic account credits purchases --org=acme --limit=50 --after='"last-purchase-id"'
 ```
 
 `users.me` names the caller's personal organization in `personal_org` when the platform keeps one.
