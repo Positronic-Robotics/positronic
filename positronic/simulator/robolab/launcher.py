@@ -125,8 +125,7 @@ def serve_robolab(
     ``cameras`` names the set in ``keys.CAMERA_SETS`` the server renders; RoboLab bakes it into the
     registered task, so one server serves one set.
 
-    ``num_envs`` is how many clones of the scene the one Isaac process steps together. Each clone is a slot of
-    the server, and a client of its own drives each slot.
+    ``num_envs`` is how many clones of the scene the one Isaac process steps together.
     """
     return serve_subprocess(partial(_spawn, cameras=cameras, num_envs=num_envs), host)
 
