@@ -77,7 +77,7 @@ def test_list_reads_every_page(platform, run_command, capsys):
 
 def test_a_response_the_client_cannot_read_is_a_refusal_without_the_body(platform, run_command):
     platform.answer_by_route({routes.SUBMISSIONS_LIST: ({'submissions': 'not a list', 'secret': 'x'}, 200)})
-    with pytest.raises(SystemExit, match='cannot read: submissions') as caught:
+    with pytest.raises(SystemExit, match='cannot read: list_type') as caught:
         run_command(list_submissions)
     assert 'secret' not in str(caught.value)
 
