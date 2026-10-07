@@ -26,10 +26,6 @@ FIXTURES = sorted(Path(__file__).parent.glob('replay_ep*.npz'))
 
 SIM_STATE_TOL = 1e-6  # Absolute tolerance for numeric differences between replay hosts.
 
-_OPEN_BENCHMARK = mapping.BenchmarkPath(
-    'molmospaces-bench-v1', 'ithor', 'FrankaOpenDataGenConfig', 'FrankaOpenDataGenConfig_20260123_json_benchmark'
-)
-
 
 def _skip_unless_present(bench: mapping.BenchmarkPath) -> None:
     """Skip unless the asset directory contains the fixture's benchmark manifest."""
@@ -62,6 +58,11 @@ def test_recorded_rollout_replays_the_pinned_trajectory(fixture_path: Path):
         assert deviation <= SIM_STATE_TOL, (
             f'sim_state diverged by {deviation:.3e} at step {step} of episode {episode_index}'
         )
+
+
+_OPEN_BENCHMARK = mapping.BenchmarkPath(
+    'molmospaces-bench-v1', 'ithor', 'FrankaOpenDataGenConfig', 'FrankaOpenDataGenConfig_20260123_json_benchmark'
+)
 
 
 # Episode 246 opens a drawer that is part of an iThor scene and is in no object package.

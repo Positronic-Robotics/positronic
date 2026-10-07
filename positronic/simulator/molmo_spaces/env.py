@@ -78,12 +78,14 @@ class _DroidEvalConfig(JsonBenchmarkEvalConfig):
 class _JointGraspSampler(JsonEvalTaskSampler):
     """``JsonEvalTaskSampler`` that finds the joint grasps of iThor scene assets."""
 
+    # HACK: upstream looks up joint grasps with no grasp libraries. An iThor scene asset is in no object package,
+    # so that lookup finds no library and reset raises. Droid is the only built-in library with joint grasps.
+    # rules-allow: hidden-dependency — the upstream method takes no grasp libraries; a copy would fork MolmoSpaces.
+    @mock.patch.object(
+        grasps, 'get_joint_grasp_path', functools.partial(grasps.get_joint_grasp_path, grasp_libraries=['droid'])
+    )
     def set_joint_values(self, env: Any) -> None:
-        # HACK: upstream looks up joint grasps with no grasp libraries. An iThor scene asset is in no object package,
-        # so that lookup finds no library and reset raises. Droid is the only built-in library with joint grasps.
-        lookup = functools.partial(grasps.get_joint_grasp_path, grasp_libraries=['droid'])
-        with mock.patch.object(grasps, 'get_joint_grasp_path', lookup):
-            super().set_joint_values(env)
+        super().set_joint_values(env)
 
 
 class MolmoSpacesEnv(EnvProtocol):
