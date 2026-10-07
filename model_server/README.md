@@ -83,6 +83,12 @@ listeners stop, including when startup fails after loading. Call `server.shutdow
 an idle timeout ends the server only when no sessions remain. A model operation must return for
 graceful shutdown to complete.
 
+Model-specific implementations own cleanup and its failure policy. Cleanup callbacks are expected
+to release their resources and complete without raising. If `Session.close` raises, the wrapper logs
+the failure, attempts to report it to the client and ends the connection; it continues serving other
+sessions. A cleanup failure can leak resources or leave shared model state invalid. The implementation
+is responsible for recovery or for requesting `server.shutdown()` when continued serving is unsafe.
+
 Pass `auth_token` to require a bearer token on both session and keepalive calls. `None` serves open;
 empty or malformed tokens are refused at construction. For gRPC, use `grpc_wire.GrpcWire` with its
 own `ServedHostPort`. Both listeners can be passed to one server and share its loaded model.
