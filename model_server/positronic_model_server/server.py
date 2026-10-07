@@ -6,10 +6,10 @@ import json
 import logging
 import math
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any, TypeVar
 from uuid import uuid4
@@ -22,22 +22,32 @@ logger = logging.getLogger(__name__)
 T = TypeVar('T')
 
 
-@dataclass
-class Session:
-    """A prepared, warm session. Its callable owns session state while sharing loaded weights.
+class Session(ABC):
+    """A prepared, warm session that owns its state while sharing loaded weights.
 
     ``close`` releases that state. ``output_images`` selects result values for JPEG serialization.
     """
 
-    infer: Callable[[Any], Any]
-    client_stack: dict[str, Any]
-    metadata: dict[str, Any] = field(default_factory=dict)
-    output_images: Sequence[serialization.JpegEncoding] = ()
-    close: Callable[[], None] = lambda: None
+    def __init__(
+        self,
+        client_stack: dict[str, Any],
+        *,
+        metadata: dict[str, Any] | None = None,
+        output_images: Sequence[serialization.JpegEncoding] = (),
+    ):
+        self.client_stack = client_stack
+        self.metadata = {} if metadata is None else metadata
+        self.output_images = output_images
+
+    @abstractmethod
+    def infer(self, observation: Any) -> Any: ...
+
+    def close(self) -> None:
+        """Release this session's resources after its operations finish."""
+        return None
 
 
-@dataclass
-class Model:
+class Model(ABC):
     """Loaded, warm model resources and the operation that prepares each session.
 
     ``parameters`` declares accepted session names and their defaults. ``prepare_session`` receives
@@ -45,10 +55,16 @@ class Model:
     A preparation that raises must release any resources it acquired before returning a session.
     """
 
-    prepare_session: Callable[[dict[str, Any]], Session]
-    parameters: dict[str, Any] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
-    close: Callable[[], None] = lambda: None
+    def __init__(self, *, parameters: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None):
+        self.parameters = {} if parameters is None else parameters
+        self.metadata = {} if metadata is None else metadata
+
+    @abstractmethod
+    def prepare_session(self, params: dict[str, Any]) -> Session: ...
+
+    def close(self) -> None:
+        """Release the model's resources after its sessions finish."""
+        return None
 
 
 class ModelServer:

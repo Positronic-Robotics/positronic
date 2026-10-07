@@ -31,8 +31,9 @@ if find_spec('grpc') is not None:
     TRANSPORTS.append(pytest.param((GrpcWire, GrpcClientWire), id='grpc'))
 
 
-class Probe:
+class Probe(Model):
     def __init__(self):
+        super().__init__(parameters={'scale': 1}, metadata={'checkpoint': 'fake'})
         self.calls = []
         self.loading = threading.Event()
         self.load_release = threading.Event()
@@ -51,34 +52,39 @@ class Probe:
         self.record('load')
         self.loading.set()
         assert self.load_release.wait(10)
-        return Model(self.prepare, parameters={'scale': 1}, metadata={'checkpoint': 'fake'}, close=self.close)
+        return self
 
     def close(self) -> None:
         self.record('close_model')
 
-    def prepare(self, params: dict[str, Any]) -> Session:
+    def prepare_session(self, params: dict[str, Any]) -> Session:
         self.record('prepare')
         self.preparing.set()
         assert self.prepare_release.wait(10)
         if not isinstance(params['scale'], int):
             raise ValueError('scale must be an integer')
-        count = 0
+        return ProbeSession(self, params['scale'])
 
-        def infer(obs):
-            nonlocal count
-            self.record('infer')
-            self.inferring.set()
-            assert self.infer_release.wait(10)
-            if obs.get('fail'):
-                raise ValueError('model rejected observation')
-            count += 1
-            return {'count': count, 'scaled': params['scale'] * obs.get('value', 1), 'native': obs}
 
-        def close():
-            self.record('close_session')
-            self.cleaned.set()
+class ProbeSession(Session):
+    def __init__(self, probe: Probe, scale: int):
+        super().__init__(spec.component('chunked_schedule', version=2, fps=20))
+        self._probe = probe
+        self._scale = scale
+        self._count = 0
 
-        return Session(infer, spec.component('chunked_schedule', version=2, fps=20), close=close)
+    def infer(self, observation):
+        self._probe.record('infer')
+        self._probe.inferring.set()
+        assert self._probe.infer_release.wait(10)
+        if observation.get('fail'):
+            raise ValueError('model rejected observation')
+        self._count += 1
+        return {'count': self._count, 'scaled': self._scale * observation.get('value', 1), 'native': observation}
+
+    def close(self):
+        self._probe.record('close_session')
+        self._probe.cleaned.set()
 
 
 @dataclass

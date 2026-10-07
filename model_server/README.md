@@ -27,24 +27,36 @@ from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.spec import component
 from positronic_model_server.websocket_wire import WebsocketWire
 
-def load_model():
-    def prepare_session(params):
+class EchoSession(Session):
+    def __init__(self, fps):
+        super().__init__(component("chunked_schedule", version=2, fps=fps))
+
+    def infer(self, observation):
+        return [observation]
+
+
+class EchoModel(Model):
+    def __init__(self):
+        super().__init__(parameters={"fps": 20}, metadata={keys.CHECKPOINT_ID: "example"})
+
+    def prepare_session(self, params):
         if params["fps"] <= 0:
             raise ValueError("fps must be positive")
-        return Session(
-            infer=lambda observation: [observation],
-            client_stack=component("chunked_schedule", version=2, fps=params["fps"]),
-        )
+        return EchoSession(params["fps"])
 
-    return Model(prepare_session, parameters={"fps": 20}, metadata={keys.CHECKPOINT_ID: "example"})
 
-server = ModelServer(load_model, idle_timeout_min=10)
+server = ModelServer(EchoModel, idle_timeout_min=10)
 server.serve([WebsocketWire(ServedHostPort("0.0.0.0", 8000))])
 ```
 
-Each vendor supplies its own script and argument parsing. For a native model, `load_model` loads
-weights and finishes shared warm-up before returning. Listeners bind afterwards, so any successful
-keepalive answer means shared startup has finished. The factory owns cleanup if loading raises.
+Implement `Model.prepare_session` and `Session.infer` in subclasses. Each `Session` owns its state
+and may reference the loaded model. Override `close()` to release owned resources; its default does
+nothing. The constructors accept the client description, parameters, metadata and output image settings.
+
+Each vendor supplies its own script and argument parsing. The factory passed to `ModelServer` can be
+a model class or a function. It loads weights and finishes shared warm-up before returning.
+Listeners bind afterwards, so any successful keepalive answer means shared startup has finished.
+The factory owns cleanup if loading raises.
 
 `Model.parameters` declares accepted session names and defaults. Query values are decoded as JSON,
 or retained as strings when they are not JSON. Duplicate or unknown names are refused; strings
@@ -66,8 +78,8 @@ The client may report any additional metadata and owns how it records or combine
 The server checks description structure without importing client components.
 
 All model operations run on one worker thread in the server process: load, preparation, inference,
-session cleanup and model cleanup. Each session's inference callable retains its own settings and
-history. Inference is serialized across all listeners. Queue time is reported separately from model
+session cleanup and model cleanup. Each session retains its own settings and history.
+Inference is serialized across all listeners. Queue time is reported separately from model
 time. The event loop answers keepalive while the worker is busy; no waiting messages interrupt an
 inference response. A failed inference reports an error and keeps the session open. A malformed
 session request ends that session.
@@ -83,7 +95,7 @@ listeners stop, including when startup fails after loading. Call `server.shutdow
 an idle timeout ends the server only when no sessions remain. A model operation must return for
 graceful shutdown to complete.
 
-Model-specific implementations own cleanup and its failure policy. Cleanup callbacks are expected
+Model-specific implementations own cleanup and its failure policy. Cleanup methods are expected
 to release their resources and complete without raising. If `Session.close` raises, the wrapper logs
 the failure, attempts to report it to the client and ends the connection; it continues serving other
 sessions. A cleanup failure can leak resources or leave shared model state invalid. The implementation

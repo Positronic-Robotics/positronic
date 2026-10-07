@@ -2,6 +2,7 @@
 
 import threading
 from contextlib import contextmanager
+from functools import partial
 
 import numpy as np
 import pytest
@@ -18,13 +19,29 @@ from positronic.policy.spec import from_spec
 from positronic.utils.versions import resolve_version
 
 
+class EchoSession(Session):
+    def infer(self, observation):
+        return observation
+
+
+class EchoModel(Model):
+    def __init__(self, session_metadata=None):
+        super().__init__(parameters={'fps': 20})
+        self._session_metadata = session_metadata
+
+    def prepare_session(self, params):
+        return EchoSession(
+            spec.component('chunked_schedule', version=2, fps=params['fps']), metadata=self._session_metadata
+        )
+
+
 @pytest.fixture(
     params=[(websocket_wire.WebsocketWire, websocket.WebsocketClientWire), (grpc_wire.GrpcWire, grpc.GrpcClientWire)]
 )
 def serving(request):
     @contextmanager
-    def serve(prepare, **kwargs):
-        server = ModelServer(lambda: Model(prepare, parameters={'fps': 20}), **kwargs)
+    def serve(load_model, **kwargs):
+        server = ModelServer(load_model, **kwargs)
         transport_type, client_type = request.param
         transport = transport_type(server_wire.ServedHostPort('127.0.0.1', 0))
         ready = threading.Event()
@@ -45,14 +62,7 @@ def serving(request):
 def test_v3_client_preserves_native_markers_in_metadata_and_results(serving):
     native = {'robot_command': {'vendor': 'value'}, b'__cmd__': 'not a robot command', 'array': np.arange(12)}
 
-    def prepare(params):
-        return Session(
-            lambda obs: obs,
-            spec.component('chunked_schedule', version=2, fps=params['fps']),
-            metadata={'native': native},
-        )
-
-    with serving(prepare) as endpoint:
+    with serving(partial(EchoModel, session_metadata={'native': native})) as endpoint:
         session = InferenceClient(*endpoint).new_session()
         try:
             assert session.protocol_version is protocol.ProtocolVersion.V3
@@ -74,14 +84,16 @@ def test_images_use_client_selection_and_explicit_output_paths(serving, image_ar
     )
     seen = []
 
-    def prepare(params):
-        def infer(obs):
-            seen.append(obs)
-            return {'images': [obs['video']['camera']], 'state': obs['state']}
+    class ImageSession(Session):
+        def infer(self, observation):
+            seen.append(observation)
+            return {'images': [observation['video']['camera']], 'state': observation['state']}
 
-        return Session(infer, description, output_images=[serialization.JpegEncoding(('images', 0), 95)])
+    class ImageModel(Model):
+        def prepare_session(self, params):
+            return ImageSession(description, output_images=[serialization.JpegEncoding(('images', 0), 95)])
 
-    with serving(prepare) as endpoint:
+    with serving(ImageModel) as endpoint:
         session = InferenceClient(*endpoint).new_session()
         try:
             codec = from_spec(description[spec.SEQ][-1])
@@ -96,10 +108,7 @@ def test_images_use_client_selection_and_explicit_output_paths(serving, image_ar
 
 
 def test_remote_policy_derives_client_metadata_without_changing_the_server_report(serving):
-    def prepare(params):
-        return Session(lambda obs: [obs], spec.component('chunked_schedule', version=2, fps=params['fps']))
-
-    with serving(prepare) as (client, address):
+    with serving(EchoModel) as (client, address):
         policy = RemotePolicy(client.NAME, address)
         metadata = policy.meta()
         assert metadata[policy_keys.ACTION_FPS] == 20
