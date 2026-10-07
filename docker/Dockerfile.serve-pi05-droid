@@ -13,10 +13,11 @@
 # builds one new layer and pulls no cached layer.
 
 ARG BASE_IMAGE=positro/openpi-base:latest
-ARG CLOUD_SDK_IMAGE=google/cloud-sdk:slim
+ARG CLOUD_SDK_IMAGE=google/cloud-sdk:slim@sha256:c70885ba9f0450ea9987b1c5dc1ab80acc768bac2fe783962dc98a64ea74c806
 
 # The weights come in through a stage of their own, so the served image carries no cloud SDK and no
-# credential. For a checkpoint of your own, replace this stage with a `COPY` of its directory.
+# credential. For a checkpoint of your own, replace this stage with a `COPY` of its directory. The SDK
+# image is pinned by digest: a moved tag would download the weights again and push them as a new layer.
 FROM ${CLOUD_SDK_IMAGE} AS assets
 ARG CHECKPOINT_URI=gs://openpi-assets-simeval/pi05_droid_jointpos
 ARG TOKENIZER_URL=https://storage.eu-north1.nebius.cloud/positronic-public/assets/paligemma_tokenizer.model

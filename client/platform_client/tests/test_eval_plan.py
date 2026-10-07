@@ -27,6 +27,7 @@ from platform_client.eval_plan import (
     RegistryCredential,
     RegistryCredentialFile,
     RoboarenaAddress,
+    Sample,
     SessionPath,
     SessionQuery,
     SocketPath,
@@ -871,3 +872,19 @@ def test_an_image_plan_is_a_competition_run_unless_it_names_an_org():
     assert isinstance(plan_of_image(image, EvalRef('molmo.x')).request_type, NebiusCompetition)
     private = plan_of_image(image, EvalRef('molmo.x'), org=OrgSlug('acme')).request_type
     assert isinstance(private, PrivateEval) and private.org == 'acme'
+
+
+def test_a_sample_of_a_named_eval_survives_a_round_trip():
+    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'), sample=Sample(percent=10, seed=7))
+    assert EvalPlan.model_validate_json(plan.model_dump_json()).sample == Sample(percent=10, seed=7)
+
+
+@pytest.mark.parametrize('sizes', [{}, {'count': 5, 'percent': 10}], ids=['neither', 'both'])
+def test_a_sample_states_its_size_as_a_count_or_a_percent(sizes: dict):
+    with pytest.raises(ValidationError, match='exactly one of the two'):
+        Sample.model_validate({'seed': 7, **sizes})
+
+
+def test_a_plan_that_states_its_tasks_takes_no_sample():
+    with pytest.raises(ValidationError, match='a sample draws from the trials of the eval a plan names'):
+        a_plan(sample={'count': 1})

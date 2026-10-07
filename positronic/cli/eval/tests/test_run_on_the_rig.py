@@ -299,7 +299,9 @@ def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path:
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}])
+@pytest.mark.parametrize(
+    'elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}, {'sample_count': 5}]
+)
 def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_command, tmp_path: Path, elsewhere: dict):
     with pytest.raises(SystemExit, match='a rig run has no'):
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', PLAN_YAML), **elsewhere)

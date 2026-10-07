@@ -6,7 +6,7 @@ Not a command of its own: running an eval is one act, and where it runs is an ar
 from pathlib import Path
 
 from platform_client.enums import NO_RESULT_STATUSES
-from platform_client.eval_plan import RegistryCredential, password_from_file, plan_of_image
+from platform_client.eval_plan import RegistryCredential, Sample, password_from_file, plan_of_image
 from platform_client.evals import EvalRef
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.policy_images import PolicyImage
@@ -42,6 +42,7 @@ def submit(
     org: str | None = None,
     registry_username: str | None = None,
     registry_password_file: str | None = None,
+    sample: Sample | None = None,
 ) -> SubmissionCreateResponse:
     """Submit one policy image against one eval, print what came back, and return it.
 
@@ -52,7 +53,7 @@ def submit(
     returns the original instead of spending another day's quota. `org` runs it as a private
     request for that organisation instead of a `nebius_competition` one. An image the platform
     cannot pull anonymously takes a credential: `registry_username` and `registry_password_file`,
-    the file the password is in.
+    the file the password is in. `sample` runs a random subset of the eval's trials.
     """
     with refusing_bad_input():
         plan = plan_of_image(
@@ -62,6 +63,7 @@ def submit(
             transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
             credential=_credential(registry_username, registry_password_file),
             org=OrgSlug(org) if org is not None else None,
+            sample=sample,
         )
     with gateway(platform_url) as client:
         submission = client.create_submission(plan)
