@@ -1,12 +1,14 @@
 """Implementation of multiprocessing channels."""
 
 import contextlib
+import ctypes
 import functools
 import heapq
 import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
 import os
+import pickle
 import signal
 import sys
 import threading
@@ -16,8 +18,9 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from enum import IntEnum
 from multiprocessing import resource_tracker
-from multiprocessing.managers import ValueProxy
+from multiprocessing.context import BaseContext
 from multiprocessing.synchronize import Event as EventClass
+from multiprocessing.synchronize import Lock as LockClass
 from queue import Empty, Full, Queue
 from types import FrameType
 from typing import TypeVar, cast, overload
@@ -63,6 +66,34 @@ class TransportMode(IntEnum):
     SHARED_MEMORY = 2
 
 
+MAX_PICKLED_TIME_BYTES = 4096
+
+
+class _SharedTime:
+    """A ``Time | None`` in shared memory, pickled. Read and write it under the pipe's lock."""
+
+    def __init__(self, ctx: BaseContext):
+        self._size = ctx.RawValue(ctypes.c_uint32, 0)
+        self._buffer = ctx.RawArray(ctypes.c_char, MAX_PICKLED_TIME_BYTES)
+
+    @property
+    def is_set(self) -> bool:
+        return self._size.value != 0
+
+    def get(self) -> Time:
+        return pickle.loads(memoryview(self._buffer).cast('B')[: self._size.value])
+
+    def set(self, time: Time | None) -> None:
+        if time is None:
+            self._size.value = 0
+            return
+        payload = pickle.dumps(time, protocol=pickle.HIGHEST_PROTOCOL)
+        if len(payload) > MAX_PICKLED_TIME_BYTES:
+            raise ValueError(f'{time!r} pickles to {len(payload)} bytes; a pipe holds {MAX_PICKLED_TIME_BYTES}')
+        memoryview(self._buffer).cast('B')[: len(payload)] = payload
+        self._size.value = len(payload)
+
+
 class QueueEmitter(SignalEmitter[T]):
     def __init__(self, queue: Queue, clock: Clock):
         self._queue = queue
@@ -95,10 +126,11 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self,
         clock: Clock,
         queues: list[Queue],
-        mode_value: mp.Value,
-        lock: mp.Lock,
-        time_value: ValueProxy[Time | None],
-        up_values: list[ValueProxy[bool]],
+        mode_value: ctypes.c_int,
+        lock: LockClass,
+        time_value: _SharedTime,
+        up_values: list[ctypes.c_bool],
+        error_flags: list[ctypes.c_bool],
         sm_queues: list[Queue],
         *,
         forced_mode: TransportMode | None = None,
@@ -114,6 +146,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self._lock = lock
         self._time_value = time_value
         self._up_values = up_values
+        self._error_flags = error_flags
         self._sm_queues = sm_queues
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._expected_buf_size: int | None = None
@@ -187,8 +220,9 @@ class MultiprocessEmitter(SignalEmitter[T]):
             )
 
         with self._lock:
+            # The time goes first: a time too large for the pipe raises before the frame is touched.
+            self._time_value.set(time)
             data.set_to_buffer(self._sm.buf)
-            self._time_value.value = time
             for up_value in self._up_values:
                 up_value.value = True
 
@@ -197,8 +231,10 @@ class MultiprocessEmitter(SignalEmitter[T]):
     def _emit(self, data: T, time: Time):
         if isinstance(data, SignalError):
             with self._lock:
-                self._time_value.value = None
+                self._time_value.set(None)
                 self._emit_queue(data, time)
+                for error_flag in self._error_flags:
+                    error_flag.value = True
             return
         mode = self._ensure_mode(data)
 
@@ -241,10 +277,11 @@ class MultiprocessReceiver(SignalReceiver[T]):
         self,
         queue: Queue,
         clock: Clock,
-        mode_value: mp.Value,
-        lock: mp.Lock,
-        time_value: ValueProxy[Time | None],
-        up_value: mp.Value,
+        mode_value: ctypes.c_int,
+        lock: LockClass,
+        time_value: _SharedTime,
+        up_value: ctypes.c_bool,
+        error_flag: ctypes.c_bool,
         sm_queue: Queue,
         *,
         forced_mode: TransportMode | None = None,
@@ -259,6 +296,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
         self._lock = lock
         self._time_value = time_value
         self._up_value = up_value
+        self._error_flag = error_flag
         self._sm_queue = sm_queue
         self._sm: multiprocessing.shared_memory.SharedMemory | None = None
         self._out_value: SMCompliant | None = None
@@ -329,14 +367,14 @@ class MultiprocessReceiver(SignalReceiver[T]):
             return self._read_queue()
 
         with self._lock:
-            time = self._time_value.value
-            if time is None:
+            if not self._time_value.is_set:
                 return self._read_queue()
 
             assert self._readonly_buffer is not None
             assert self._out_value is not None
             if self._up_value.value:
                 self._out_value.read_from_buffer(self._readonly_buffer)
+                time = self._time_value.get()
                 self._last_shared_message = Message(cast(T, self._out_value), time)._received(self._clock)
                 self._up_value.value = False
                 self._drop_errors()
@@ -346,12 +384,15 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
     def _drop_errors(self) -> None:
         """Drop each ``SignalError`` that a newer shared-memory payload replaces."""
+        self._last_queue_message = None
+        if not self._error_flag.value:
+            return
+        self._error_flag.value = False
         while True:
             try:
                 self._queue.get_nowait()
             except Empty:
                 break
-        self._last_queue_message = None
 
     def read(self) -> Message[T] | None:
         mode = self.transport_mode
@@ -1136,24 +1177,42 @@ class World:
             raise ValueError('Each receiver needs one clock')
 
         message_queues = [self._manager.Queue(maxsize=maxsize) for _ in range(num_receivers)]
-        lock = self._manager.Lock()
-        time_value: ValueProxy[Time | None] = self._manager.Value('O', None)
-        up_values = [self._manager.Value('b', False) for _ in range(num_receivers)]
         sm_queues = [self._manager.Queue() for _ in range(num_receivers)]
+        # Every emit and read touches these, and a manager proxy costs a round trip per access.
+        lock = self._mp_ctx.Lock()
+        time_value = _SharedTime(self._mp_ctx)
+        up_values = [self._mp_ctx.RawValue(ctypes.c_bool, False) for _ in range(num_receivers)]
+        error_flags = [self._mp_ctx.RawValue(ctypes.c_bool, False) for _ in range(num_receivers)]
         initial_mode = forced_mode or TransportMode.UNDECIDED
-        mode_value = self._manager.Value('i', int(initial_mode))
+        mode_value = self._mp_ctx.RawValue(ctypes.c_int, int(initial_mode))
 
         emitter_clock = clock or self._clock
         emitter = MultiprocessEmitter(
-            emitter_clock, message_queues, mode_value, lock, time_value, up_values, sm_queues, forced_mode=forced_mode
+            emitter_clock,
+            message_queues,
+            mode_value,
+            lock,
+            time_value,
+            up_values,
+            error_flags,
+            sm_queues,
+            forced_mode=forced_mode,
         )
 
         receivers = []
-        for m_queue, up_value, sm_queue, receiver_clock in zip(
-            message_queues, up_values, sm_queues, receiver_clocks, strict=True
+        for m_queue, up_value, error_flag, sm_queue, receiver_clock in zip(
+            message_queues, up_values, error_flags, sm_queues, receiver_clocks, strict=True
         ):
             receiver = MultiprocessReceiver(
-                m_queue, receiver_clock, mode_value, lock, time_value, up_value, sm_queue, forced_mode=forced_mode
+                m_queue,
+                receiver_clock,
+                mode_value,
+                lock,
+                time_value,
+                up_value,
+                error_flag,
+                sm_queue,
+                forced_mode=forced_mode,
             )
             receivers.append(receiver)
 
