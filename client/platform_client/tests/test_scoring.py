@@ -7,6 +7,7 @@ the `<block>/<episode>` layout that positronic records. Five of the twenty episo
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -51,14 +52,16 @@ def score_molmo(episodes: list[Path]) -> Scores:
     return score(MOLMO_SCORER, episodes)
 
 
-def _episodes(tmp_path: Path, *statics: dict[str, object] | str | None) -> list[Path]:
-    """One episode directory per given `static.json`: a mapping is written as JSON, a string as it is, and
-    None leaves the episode without one."""
+def _episodes(tmp_path: Path, *statics: dict[str, object] | str | bytes | None) -> list[Path]:
+    """One episode directory per given `static.json`: a mapping is written as JSON, a string or bytes as they
+    are, and None leaves the episode without one."""
     made = []
     for index, static in enumerate(statics):
         episode = tmp_path / f'{index:012d}'
         episode.mkdir()
-        if static is not None:
+        if isinstance(static, bytes):
+            (episode / STATIC_FILE).write_bytes(static)
+        elif static is not None:
             (episode / STATIC_FILE).write_text(static if isinstance(static, str) else json.dumps(static))
         made.append(episode)
     return made
@@ -97,16 +100,33 @@ def test_a_failed_episode_is_scored_as_a_trial_rather_than_as_nothing(tmp_path: 
     assert scores.per_task[KETTLE].trials == 1
 
 
-@pytest.mark.parametrize('static', ['{ truncated upload', '[true, "pick up the cup."]'])
-def test_statics_that_are_not_a_json_object_are_unscored_rather_than_fatal(tmp_path: Path, static: str):
+@pytest.mark.parametrize('static', ['{ truncated upload', '[true, "pick up the cup."]', b'{"task": "\xff"}'])
+def test_statics_that_are_not_a_json_object_are_unscored_rather_than_fatal(tmp_path: Path, static: str | bytes):
     (episode,) = _episodes(tmp_path, static)
     assert read_static(episode) is None
     assert score_molmo([episode]).unscored == 1
 
 
-@pytest.mark.parametrize('static', [{SUCCESS_KEY: 1, MOLMO_TASK_KEY: CUP}, {SUCCESS_KEY: True, MOLMO_TASK_KEY: 3}])
-def test_a_success_or_task_of_the_wrong_type_is_no_outcome(static: dict[str, object]):
-    assert recorded_success(static, MOLMO_TASK_KEY) is None
+@pytest.mark.parametrize(
+    ('static', 'misrecorded'),
+    [({SUCCESS_KEY: 1, MOLMO_TASK_KEY: CUP}, SUCCESS_KEY), ({SUCCESS_KEY: True, MOLMO_TASK_KEY: 3}, MOLMO_TASK_KEY)],
+)
+def test_a_success_or_task_of_the_wrong_type_is_no_outcome_and_is_logged(
+    static: dict[str, object], misrecorded: str, caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.ERROR, logger='platform_client.scoring'):
+        assert recorded_success(static, MOLMO_TASK_KEY) is None
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert misrecorded in caplog.records[0].getMessage()
+
+
+@pytest.mark.parametrize('static', [{MOLMO_TASK_KEY: CUP}, {SUCCESS_KEY: True}])
+def test_a_missing_success_or_task_is_no_outcome_and_logs_nothing(
+    static: dict[str, object], caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.DEBUG, logger='platform_client.scoring'):
+        assert recorded_success(static, MOLMO_TASK_KEY) is None
+    assert caplog.records == []
 
 
 def _graded(episode: Path) -> Outcome | None:
