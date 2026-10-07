@@ -134,10 +134,14 @@ class RunSummary(BaseModel):
 
 
 class ReplayLink(BaseModel):
-    """A page that plays back a run's recorded episodes. `expires_at` is unset on a link that does not expire."""
+    """A page that plays back a run's recorded episodes. `expires_at` is unset on a link that does not expire.
+
+    `data_url` names the JSON object the page renders from, and is unset on a page that publishes none.
+    """
 
     url: str
     expires_at: AwareDatetime | None = None
+    data_url: str | None = None
 
 
 class EndpointOutcome(BaseModel):
@@ -484,7 +488,7 @@ class RankingRow(BaseModel):
     it is stable for a user across boards. Render them together (`ateam#0ddba7`).
 
     The value the board ranks on is `scores.primary`. `replay` plays back the camera video of the
-    submission's episodes, and it is absent until the platform has built the page.
+    submission's episodes, and it is absent until the platform has built the page. Its `data_url` is set.
     """
 
     rank: int
