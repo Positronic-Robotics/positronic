@@ -32,15 +32,6 @@ def _credential(username: str | None, password_file: object | None) -> RegistryC
     return RegistryCredential(username=username, password=SecretStr(password))
 
 
-def _sample(count: int | None, percent: int | None, seed: int | None) -> Sample | None:
-    """The sample the three flags state, or None where none of them is given."""
-    if count is None and percent is None and seed is None:
-        return None
-    if seed is None:
-        return Sample(count=count, percent=percent)
-    return Sample(count=count, percent=percent, seed=seed)
-
-
 def submit(
     eval_name: str,
     policy_image: str,
@@ -51,9 +42,7 @@ def submit(
     org: str | None = None,
     registry_username: str | None = None,
     registry_password_file: str | None = None,
-    sample_count: int | None = None,
-    sample_percent: int | None = None,
-    sample_seed: int | None = None,
+    sample: Sample | None = None,
 ) -> SubmissionCreateResponse:
     """Submit one policy image against one eval, print what came back, and return it.
 
@@ -64,8 +53,7 @@ def submit(
     returns the original instead of spending another day's quota. `org` runs it as a private
     request for that organisation instead of a `nebius_competition` one. An image the platform
     cannot pull anonymously takes a credential: `registry_username` and `registry_password_file`,
-    the file the password is in. `sample_count` or `sample_percent` runs a random subset of the
-    eval's trials, drawn from `sample_seed`.
+    the file the password is in. `sample` runs a random subset of the eval's trials.
     """
     with refusing_bad_input():
         plan = plan_of_image(
@@ -75,7 +63,7 @@ def submit(
             transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
             credential=_credential(registry_username, registry_password_file),
             org=OrgSlug(org) if org is not None else None,
-            sample=_sample(sample_count, sample_percent, sample_seed),
+            sample=sample,
         )
     with gateway(platform_url) as client:
         submission = client.create_submission(plan)

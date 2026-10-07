@@ -10,6 +10,7 @@ from typing import Any
 
 import configuronic as cfn
 import pos3
+from platform_client.eval_plan import Sample
 from platform_client.evals import EvalRef, public_eval
 from platform_client.responses import SubmissionCreateResponse
 
@@ -17,6 +18,7 @@ import pimm
 import positronic.cfg.policy as policy_cfg
 from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import unset
+from positronic.cli.account.gateway import refusing_bad_input
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
 from positronic.eval import Embodiment, Eval, Observation, Task
@@ -287,6 +289,16 @@ def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task
     return (replace(task, charge_inference_time=charge) for task in tasks())
 
 
+def _sample(count: int | None, percent: int | None, seed: int | None) -> Sample | None:
+    """The sample the three flags state, or None where none of them is given."""
+    if count is None and percent is None and seed is None:
+        return None
+    with refusing_bad_input():
+        if seed is None:
+            return Sample(count=count, percent=percent)
+        return Sample(count=count, percent=percent, seed=seed)
+
+
 @cfn.config(eval=unset, policy=policy_cfg.unset)
 def run(
     eval: Eval | str | None,
@@ -387,9 +399,7 @@ def run(
             org=org,
             registry_username=registry_username,
             registry_password_file=registry_password_file,
-            sample_count=sample_count,
-            sample_percent=sample_percent,
-            sample_seed=sample_seed,
+            sample=_sample(sample_count, sample_percent, sample_seed),
         )
 
     if source is not None:
