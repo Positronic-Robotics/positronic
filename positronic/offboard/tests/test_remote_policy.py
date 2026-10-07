@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 from positronic_model_server import keys as offboard_keys
-from positronic_model_server import protocol
+from positronic_model_server import protocol, spec
 from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
@@ -949,6 +949,45 @@ def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(co
         assert meta[policy_keys.JPEG_QUALITY] == 75
     else:
         assert policy_keys.JPEG_QUALITY not in meta
+
+
+@pytest.mark.parametrize('start_run', [False, True], ids=['meta', 'run'])
+def test_invalid_v3_stack_does_not_cache_metadata(runtime, start_run):
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: spec.component('unknown_processor')})
+    session.protocol_version = protocol.ProtocolVersion.V3
+
+    with pytest.raises(ValueError, match='Unknown local-stack entry'):
+        if start_run:
+            runtime.start(policy)
+        else:
+            policy.meta()
+    with pytest.raises(ValueError, match='Unknown local-stack entry'):
+        policy.meta()
+    assert session.close.call_count == 2
+
+    session.metadata = CHUNKED_STACK
+    metadata = policy.meta()
+    assert metadata[policy_keys.ACTION_FPS] == 10
+    assert policy.meta() == metadata
+    assert session.close.call_count == 3
+
+
+def test_failed_metadata_session_close_does_not_cache_metadata():
+    policy, session = _mock_remote_policy(CHUNKED_STACK)
+    session.protocol_version = protocol.ProtocolVersion.V3
+    session.close.side_effect = RuntimeError('cleanup failed')
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match='cleanup failed'):
+            policy.meta()
+    assert session.close.call_count == 2
+
+    session.close.side_effect = None
+    session.metadata = {offboard_keys.LOCAL_STACK: ChunkedSchedule(fps=20).to_spec()}
+    metadata = policy.meta()
+    assert metadata[policy_keys.ACTION_FPS] == 20
+    assert policy.meta() == metadata
+    assert session.close.call_count == 3
 
 
 @pytest.mark.parametrize('fails', [False, True])

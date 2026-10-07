@@ -141,13 +141,14 @@ class RemotePolicy(Policy):
 
     def meta(self) -> dict[str, Any]:
         if self._server_meta is None:
-            session = self._client.new_session()
-            try:
-                self._server_meta = dict(session.metadata)
-                if session.protocol_version is ProtocolVersion.V3:
-                    self._client_meta = declared_stack(session.metadata, session.protocol_version).meta()
-            finally:
-                session.close()
+            with closing(self._client.new_session()) as session:
+                server_meta = dict(session.metadata)
+                client_meta = (
+                    declared_stack(server_meta, session.protocol_version).meta()
+                    if session.protocol_version is ProtocolVersion.V3
+                    else {}
+                )
+            self._server_meta, self._client_meta = server_meta, client_meta
         meta: dict[str, Any] = {**self._client_meta, policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
         if self._server_meta.get(offboard_keys.COMPRESS_IMAGES):
             meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
@@ -157,12 +158,12 @@ class RemotePolicy(Policy):
         session = self._client.new_session()
         connection_lock = Lock()
         try:
-            meta = session.metadata
-            self._server_meta = dict(meta)
-            stack = declared_stack(meta, session.protocol_version)
-            self._client_meta = stack.meta() if session.protocol_version is ProtocolVersion.V3 else {}
+            server_meta = dict(session.metadata)
+            stack = declared_stack(server_meta, session.protocol_version)
+            client_meta = stack.meta() if session.protocol_version is ProtocolVersion.V3 else {}
+            self._server_meta, self._client_meta = server_meta, client_meta
             compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
-                meta.get(offboard_keys.COMPRESS_IMAGES)
+                server_meta.get(offboard_keys.COMPRESS_IMAGES)
             )
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
