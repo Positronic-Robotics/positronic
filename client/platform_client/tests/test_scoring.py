@@ -21,7 +21,7 @@ from platform_client.scoring import (
     Outcome,
     Scores,
     read_static,
-    recorded_success,
+    recorded_task_and_success,
     score,
 )
 
@@ -120,7 +120,7 @@ def test_a_success_or_task_of_the_wrong_type_is_no_outcome_and_is_logged(
     static: dict[str, object], misrecorded: str, caplog: pytest.LogCaptureFixture
 ):
     with caplog.at_level(logging.ERROR, logger='platform_client.scoring'):
-        assert recorded_success(static, MOLMO_TASK_KEY) is None
+        assert recorded_task_and_success(static, MOLMO_TASK_KEY) is None
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
     assert misrecorded in caplog.records[0].getMessage()
 
@@ -130,14 +130,14 @@ def test_a_missing_success_or_task_is_no_outcome_and_logs_nothing(
     static: dict[str, object], caplog: pytest.LogCaptureFixture
 ):
     with caplog.at_level(logging.DEBUG, logger='platform_client.scoring'):
-        assert recorded_success(static, MOLMO_TASK_KEY) is None
+        assert recorded_task_and_success(static, MOLMO_TASK_KEY) is None
     assert caplog.records == []
 
 
 def _graded(episode: Path) -> Outcome | None:
     """A caller's scorer: a success scores 1.0, and a failure scores the `grade` its statics record."""
     static = read_static(episode)
-    recorded = recorded_success(static, MOLMO_TASK_KEY) if static is not None else None
+    recorded = recorded_task_and_success(static, MOLMO_TASK_KEY) if static is not None else None
     if static is None or recorded is None:
         return None
     task, succeeded = recorded

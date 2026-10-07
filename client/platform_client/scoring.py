@@ -89,7 +89,7 @@ def read_static(episode: Path) -> dict[str, object] | None:
     return loaded
 
 
-def recorded_success(static: Mapping[str, object], task_key: str) -> tuple[str, bool] | None:
+def recorded_task_and_success(static: Mapping[str, object], task_key: str) -> tuple[str, bool] | None:
     """The task under `task_key` and the recorded success, or None when either is missing or of the wrong type."""
     success, task = static.get(SUCCESS_KEY), static.get(task_key)
     misrecorded = [
@@ -108,7 +108,7 @@ def recorded_success(static: Mapping[str, object], task_key: str) -> tuple[str, 
 def molmo_outcome(episode: Path) -> Outcome | None:
     """MolmoSpaces' scorer: an episode succeeds or fails, and a run ranks on its success rate."""
     static = read_static(episode)
-    recorded = recorded_success(static, MOLMO_TASK_KEY) if static is not None else None
+    recorded = recorded_task_and_success(static, MOLMO_TASK_KEY) if static is not None else None
     return Outcome(*recorded) if recorded is not None else None
 
 
