@@ -789,10 +789,22 @@ class World:
 
     def _interleave(self, iters: list[Iterator[Command]]) -> Generator[Command, None, None]:
         with contextlib.ExitStack() as scope:
+
+            def close_loops() -> None:
+                errors: list[BaseException] = []
+                for loop in reversed(iters):
+                    if isinstance(loop, Generator):
+                        try:
+                            loop.close()
+                        except BaseException as exc:
+                            errors.append(exc)
+                if len(errors) == 1:
+                    raise errors[0]
+                if errors:
+                    raise BaseExceptionGroup('Foreground shutdown failed', errors)
+
             self._foreground_scope.callback(scope.close)
-            for loop in iters:
-                if isinstance(loop, Generator):
-                    scope.callback(loop.close)
+            scope.callback(close_loops)
             scheduler = self._schedule(iters)
             scope.callback(scheduler.close)
             try:
