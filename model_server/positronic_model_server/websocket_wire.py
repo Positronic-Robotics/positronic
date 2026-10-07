@@ -3,6 +3,7 @@
 import asyncio
 import dataclasses
 import errno
+import json
 import os
 import socket
 import stat
@@ -10,12 +11,12 @@ from contextlib import suppress
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, WebSocketException, status
 from positronic_wire import wire
-from starlette.datastructures import QueryParams
-from starlette.websockets import WebSocketState
+from positronic_wire.wire import KEEPALIVE_PATH, SESSION_PATH
+from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent, HTTPScope, Scope, WebSocketScope
 
 from . import keys, server_wire
 
@@ -32,41 +33,72 @@ class ServedUnixSocket(server_wire.ServedAddress):
 
 
 class WebsocketServerConnection(server_wire.ServerConnection):
-    """A server's end of one websocket session, over an accepted ``WebSocket``."""
+    """An accepted WebSocket session carried by Uvicorn's ASGI events."""
 
-    def __init__(self, websocket: WebSocket, served_address: server_wire.ServedAddress):
-        self._websocket = websocket
+    def __init__(
+        self,
+        scope: WebSocketScope,
+        receive: ASGIReceiveCallable,
+        send: ASGISendCallable,
+        served_address: server_wire.ServedAddress,
+    ):
+        self._scope = scope
+        self._asgi_receive = receive
+        self._asgi_send = send
         self._served_address = served_address
+        self._closed = False
 
     @property
     def peer(self) -> str:
-        return str(self._websocket.client)
+        return str(self._scope.get('client'))
 
     @property
     def served_address(self) -> server_wire.ServedAddress:
         return self._served_address
 
     @property
-    def query_params(self) -> QueryParams:
-        return self._websocket.query_params
+    def query_params(self) -> list[tuple[str, str]]:
+        return parse_qsl(self._scope.get('query_string', b'').decode('latin-1'), keep_blank_values=True)
 
-    async def send(self, message: bytes) -> None:
-        # starlette refuses a send after the close with a bare RuntimeError, which a caller reads as a bug.
-        if self._websocket.application_state is WebSocketState.DISCONNECTED:
+    async def _send(self, event: ASGISendEvent) -> None:
+        if self._closed:
             raise wire.PeerDisconnected(f'The session on {self.peer} is closed')
         try:
-            await self._websocket.send_bytes(message)
-        except WebSocketDisconnect as e:
-            raise wire.PeerDisconnected(str(e)) from e
+            await self._asgi_send(event)
+        except OSError as error:
+            self._closed = True
+            raise wire.PeerDisconnected(str(error)) from error
+        if event['type'] == 'websocket.close':
+            self._closed = True
+
+    async def send(self, message: bytes) -> None:
+        await self._send({'type': 'websocket.send', 'bytes': message})
 
     async def receive(self) -> bytes:
-        try:
-            return await self._websocket.receive_bytes()
-        except WebSocketDisconnect as e:
-            raise wire.PeerDisconnected(str(e)) from e
+        if self._closed:
+            raise wire.PeerDisconnected(f'The session on {self.peer} is closed')
+        event = await self._asgi_receive()
+        if event['type'] == 'websocket.disconnect':
+            self._closed = True
+            raise wire.PeerDisconnected(f'{self.peer} ended the session: {event["code"]}')
+        payload = event.get('bytes') if event['type'] == 'websocket.receive' else None
+        if payload is None:
+            raise ValueError('A session message must be a binary WebSocket frame')
+        return payload
 
     async def refuse(self, reason: str) -> None:
-        await self._websocket.close(code=1008, reason=reason[:100])
+        # A close frame leaves 123 bytes for its UTF-8 reason after the status code.
+        reason = reason.encode('utf-8')[:123].decode('utf-8', errors='ignore')
+        await self._send({'type': 'websocket.close', 'code': 1008, 'reason': reason})
+
+    async def finish(self, timeout: float) -> None:
+        if self._closed:
+            return
+        # A server-initiated close can discard the final message on Unix sockets.
+        with suppress(TimeoutError, wire.PeerDisconnected):
+            await asyncio.wait_for(self.receive(), timeout=timeout)
+        if not self._closed:
+            await self._send({'type': 'websocket.close', 'code': 1000})
 
 
 def _listening_sockets(host: str, port: int) -> list[socket.socket]:
@@ -187,6 +219,46 @@ class WebsocketWire(server_wire.Wire):
         assert self._served_address is not None, 'The websocket wire has not started'
         return self._served_address
 
+    async def _serve_session(
+        self,
+        scope: WebSocketScope,
+        receive: ASGIReceiveCallable,
+        send: ASGISendCallable,
+        session: server_wire.SessionHandler,
+        authorized: bool,
+    ) -> None:
+        opening = await receive()
+        if opening['type'] != 'websocket.connect':
+            raise ValueError('Expected a WebSocket connection request')
+        if scope['path'] != SESSION_PATH or not authorized:
+            await send({'type': 'websocket.close', 'code': 1008})
+            return
+        await send({'type': 'websocket.accept'})
+        conn = WebsocketServerConnection(scope, receive, send, self.served_address)
+        await session(conn)
+        await conn.finish(self.CLOSE_TIMEOUT_SEC)
+
+    @staticmethod
+    async def _answer_keepalive(
+        scope: HTTPScope, send: ASGISendCallable, keepalive: server_wire.KeepaliveHandler, authorized: bool
+    ) -> None:
+        headers = [(b'content-type', b'text/plain; charset=utf-8')]
+        if scope['path'] != KEEPALIVE_PATH:
+            status = HTTPStatus.NOT_FOUND
+            body = status.phrase.encode()
+        elif scope['method'] != 'POST':
+            status = HTTPStatus.METHOD_NOT_ALLOWED
+            body = status.phrase.encode()
+            headers.append((b'allow', b'POST'))
+        else:
+            headers = [(b'content-type', b'application/json')]
+            status = HTTPStatus.OK if authorized else HTTPStatus.UNAUTHORIZED
+            payload = {wire.ALIVE_SECONDS: keepalive()} if authorized else {'detail': 'Invalid or missing bearer token'}
+            body = json.dumps(payload).encode()
+        headers.append((b'content-length', str(len(body)).encode()))
+        await send({'type': 'http.response.start', 'status': status, 'headers': headers})
+        await send({'type': 'http.response.body', 'body': body})
+
     async def start(
         self,
         session: server_wire.SessionHandler,
@@ -206,11 +278,23 @@ class WebsocketWire(server_wire.Wire):
             # A wire asked for port 0 binds any free one, so what it serves on is known only now.
             bound_port = self._sockets[0].getsockname()[1]
             self._served_address = server_wire.ServedHostPort(host, bound_port)
-        app = FastAPI()
-        self._route_sessions(app, session, authorized)
-        self._route_keepalive(app, keepalive, authorized)
+
+        async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
+            if scope['type'] == 'lifespan':
+                raise ValueError('The wire owns its startup and shutdown')
+            headers = {
+                name.decode('latin-1').lower(): value.decode('latin-1')
+                for name, value in reversed(list(scope['headers']))
+            }
+            if scope['type'] == 'websocket':
+                await self._serve_session(scope, receive, send, session, authorized(headers))
+            else:
+                await self._answer_keepalive(scope, send, keepalive, authorized(headers))
+
         config = uvicorn.Config(
             app,
+            interface='asgi3',
+            lifespan='off',
             host=host,
             port=bound_port,
             log_level='info',
@@ -221,45 +305,6 @@ class WebsocketWire(server_wire.Wire):
             timeout_graceful_shutdown=self.STOP_GRACE_SEC,
         )
         self._server = uvicorn.Server(config)
-
-    def _route_sessions(
-        self, app: FastAPI, session: server_wire.SessionHandler, authorized: server_wire.Authorized
-    ) -> None:
-        async def require_auth(websocket: WebSocket) -> None:
-            """Refuse before ``accept()``. An unauthorized peer never reaches the session handshake."""
-            if not authorized(websocket.headers):
-                raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
-
-        async def serve_model(websocket: WebSocket) -> None:
-            """Serve the server's one model. Every query param is a pipeline override."""
-            await websocket.accept()
-            await session(WebsocketServerConnection(websocket, self.served_address))
-            if (
-                websocket.application_state is WebSocketState.CONNECTED
-                and websocket.client_state is WebSocketState.CONNECTED
-            ):
-                # A server-initiated close can discard the final message on Unix sockets.
-                with suppress(TimeoutError):
-                    await asyncio.wait_for(websocket.receive(), timeout=self.CLOSE_TIMEOUT_SEC)
-                if websocket.client_state is WebSocketState.CONNECTED:
-                    await websocket.close()
-
-        app.websocket(wire.SESSION_PATH, dependencies=[Depends(require_auth)])(serve_model)
-
-    @staticmethod
-    def _route_keepalive(
-        app: FastAPI, keepalive: server_wire.KeepaliveHandler, authorized: server_wire.Authorized
-    ) -> None:
-        """Answer ``POST wire.KEEPALIVE_PATH`` under the credential the session route takes."""
-
-        async def require_auth(request: Request) -> None:
-            if not authorized(request.headers):
-                raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail='Invalid or missing bearer token')
-
-        async def answer() -> dict[str, int | None]:
-            return {wire.ALIVE_SECONDS: keepalive()}
-
-        app.post(wire.KEEPALIVE_PATH, dependencies=[Depends(require_auth)])(answer)
 
     async def serve(self) -> None:
         assert self._server is not None and self._sockets, 'The websocket wire has not started'

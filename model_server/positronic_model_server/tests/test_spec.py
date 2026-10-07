@@ -3,7 +3,18 @@
 import json
 
 import pytest
-from positronic_model_server.spec import ARGS, component, parallel, sequence
+from positronic_model_server.spec import (
+    ARGS,
+    NAME,
+    PAR,
+    SEQ,
+    VERSION,
+    component,
+    parallel,
+    resolve_params,
+    sequence,
+    validate,
+)
 
 
 # rules-allow: hardcoded-keys — the test pins the existing client's description grammar.
@@ -41,3 +52,34 @@ def test_invalid_versions_are_rejected(version):
 def test_empty_composition_is_rejected(compose):
     with pytest.raises(ValueError):
         compose()
+
+
+@pytest.mark.parametrize(
+    'node',
+    [
+        {},
+        {SEQ: []},
+        {PAR: []},
+        {SEQ: [component('x')], NAME: 'x'},
+        {NAME: 'x', VERSION: False},
+        {NAME: 'x', ARGS: []},
+        {NAME: 'x', ARGS: {'value': float('nan')}},
+    ],
+)
+def test_invalid_description_structure_is_rejected(node):
+    with pytest.raises(ValueError):
+        validate(node)
+
+
+def test_structural_validation_does_not_need_a_component_registry():
+    validate(sequence(component('unknown-vendor-component', version=17), parallel(component('another'))))
+
+
+def test_parameter_resolution_refuses_unknown_names_and_copies_defaults():
+    defaults = {'options': {'steps': [1, 2]}, 'fps': 20}
+    effective = resolve_params(defaults, {'fps': 10})
+    effective['options']['steps'].append(3)
+    assert defaults['options']['steps'] == [1, 2]
+    assert effective['fps'] == 10
+    with pytest.raises(ValueError, match='Unknown session parameters'):
+        resolve_params(defaults, {'typo': 1})

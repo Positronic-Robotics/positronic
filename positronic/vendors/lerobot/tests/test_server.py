@@ -6,8 +6,8 @@ pytest.importorskip('lerobot', minversion='0.4')
 
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.act.configuration_act import ACTConfig
+from positronic_model_server import keys as offboard_keys
 
-from positronic.offboard import keys as offboard_keys
 from positronic.policy.observation import TASK_FIELD
 from positronic.vendors.lerobot import server
 from positronic.vendors.lerobot.policy import LerobotModel, warm_observation

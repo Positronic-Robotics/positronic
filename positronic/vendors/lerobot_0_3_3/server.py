@@ -4,11 +4,11 @@ import configuronic as cfn
 import pos3
 from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
+from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
 from positronic import geom, keys
 from positronic.cfg import codecs
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment

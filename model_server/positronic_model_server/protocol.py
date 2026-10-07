@@ -28,6 +28,7 @@ PROTOCOL_VERSION = 'protocol_version'
 class ProtocolVersion(IntEnum):
     V1 = 1
     V2 = 2
+    V3 = 3
 
 
 # What the server spent on one inference, beside the ``RESULT`` it answers with: durations in

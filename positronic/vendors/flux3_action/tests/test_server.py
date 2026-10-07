@@ -10,12 +10,13 @@ from typing import Any
 
 import numpy as np
 import pytest
+from positronic_model_server import server_wire, websocket_wire
 from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_wire import websocket, wire
 from positronic_wire.roboarena import TextAnswer
 
 from positronic import keys
-from positronic.offboard import roboarena, server_wire, websocket_wire
+from positronic.offboard import roboarena
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
 from positronic.vendors.flux3_action import server

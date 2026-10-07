@@ -14,6 +14,7 @@ from positronic.policy.codec import (
     BinarizeGripTraining,
     ChangeEEFrame,
     Codec,
+    EncodeImages,
     FlipGrip,
     Metadata,
     RestrictImageSize,
@@ -29,6 +30,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     component.WIRE_NAME: {component.WIRE_VERSION: Version(component)}
     for component in (
         ChunkedSchedule,
+        EncodeImages,
         PauseOnUnavailable,
         TemporalStack,
         BinarizeGripTraining,

@@ -4,6 +4,11 @@ Positronic lets any robot run any policy over one protocol, which a WebSocket or
 
 **What you need:** [uv](https://docs.astral.sh/uv/) and a clone of the repo (`git clone git@github.com:Positronic-Robotics/positronic.git`). Docker is optional — it is only a convenient way to get a vendor model's Python dependencies; the server itself is an ordinary webserver you can also run from a checkout.
 
+For a model environment without Positronic installed, use the
+[lightweight model server](../model_server/README.md). It calls the native model in the same process
+and declares the full client processing pipeline as data. The deployments below use the legacy
+offboard server, which also supports server-side codecs.
+
 ## Run the demo
 
 The quickest way to see the whole system is a public ACT checkpoint trained on a simulated cube-stacking task.
@@ -169,12 +174,12 @@ Implement `Model`, then pass a function that builds it and a deployment to `Poli
 ```python
 from positronic import keys
 from positronic.drivers.roboarm import command
-from positronic.offboard import keys as offboard_keys
+from positronic_model_server import keys as offboard_keys
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.server_utils import warmup
-from positronic.offboard.server_wire import ServedHostPort
+from positronic_model_server.server_wire import ServedHostPort
 from positronic.offboard.spec import Model, PolicyDeployment
-from positronic.offboard.websocket_wire import WebsocketWire
+from positronic_model_server.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 

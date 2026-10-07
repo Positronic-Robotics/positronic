@@ -2,9 +2,9 @@ import logging
 
 import configuronic as cfn
 import pos3
+from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment

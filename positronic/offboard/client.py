@@ -7,13 +7,13 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
-from positronic_model_server import protocol
+from positronic_model_server import protocol, serialization
 from positronic_wire import wire
 from positronic_wire.wire import ClientWire
 
 from positronic import telemetry, telemetry_keys
 from positronic.offboard import protocol as legacy_protocol
-from positronic.utils.versions import resolve_version
+from positronic.utils.versions import Version, resolve_version
 
 from .protocol import deserialise, serialise, typed_commands
 
@@ -65,10 +65,12 @@ class InferenceSession:
         self._reopen = reopen
         ready = self._handshake(ready_by)
         self._protocol = resolve_version(
-            legacy_protocol.VERSIONS, ready.get(protocol.PROTOCOL_VERSION, 1), 'policy protocol'
+            {**legacy_protocol.VERSIONS, protocol.ProtocolVersion.V3.value: Version(protocol.ProtocolVersion.V3)},
+            ready.get(protocol.PROTOCOL_VERSION, 1),
+            'policy protocol',
         )
         self._metadata = ready[protocol.META]
-        self._session_id = ready[protocol.SESSION_ID] if self._protocol is protocol.ProtocolVersion.V2 else None
+        self._session_id = None if self._protocol is protocol.ProtocolVersion.V1 else ready[protocol.SESSION_ID]
         self._closed = False
         self._answered = False
 
@@ -81,7 +83,8 @@ class InferenceSession:
         wait = timeout_per_message
         while True:
             try:
-                response = deserialise(self._conn.recv(timeout=wait))
+                raw = self._conn.recv(timeout=wait)
+                response = serialization.deserialise(raw)
             except TimeoutError:
                 if wait < timeout_per_message:
                     raise TimeoutError('Server was not ready in the time left to connect') from None
@@ -97,7 +100,7 @@ class InferenceSession:
                 raise RuntimeError(f'Unexpected server response: {response}') from None
 
             if status is protocol.ServerStatus.READY:
-                return response
+                return deserialise(raw) if response.get(protocol.PROTOCOL_VERSION, 1) in (1, 2) else response
             if status is protocol.ServerStatus.ERROR:
                 raise RuntimeError('Server error: Unknown error')
 
@@ -121,7 +124,7 @@ class InferenceSession:
         return self._metadata
 
     def infer(self, obs: dict[str, Any]) -> Any:
-        """Send an observation and get the served session's result, with every robot-command channel typed.
+        """Send an observation and receive native v3 data, or typed robot commands for legacy versions.
 
         ``obs`` must be wire-serializable: plain-data containers and scalars, plus numeric numpy
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
@@ -140,10 +143,25 @@ class InferenceSession:
             # A second drop is a server that cannot serve this observation, and reaches the caller.
             return self._round_trip(obs)
 
+    @staticmethod
+    def _wire_values_equal(left: Any, right: Any) -> bool:
+        """Compare wire values independently of mapping order and NumPy's elementwise equality."""
+        if isinstance(left, Mapping) and isinstance(right, Mapping):
+            return left.keys() == right.keys() and all(
+                InferenceSession._wire_values_equal(value, right[key]) for key, value in left.items()
+            )
+        if isinstance(left, list) and isinstance(right, list):
+            return len(left) == len(right) and all(
+                InferenceSession._wire_values_equal(a, b) for a, b in zip(left, right, strict=True)
+            )
+        return serialise(left) == serialise(right)
+
     def _adopt(self, reopened: 'InferenceSession') -> None:
         """Carry on over ``reopened``'s connection, which must serve what this session opened on."""
         # The caller built its rig-side stack from this session's handshake, and the episode records that handshake.
-        if reopened.protocol_version is not self._protocol or reopened.metadata != self._metadata:
+        if reopened.protocol_version is not self._protocol or not self._wire_values_equal(
+            reopened.metadata, self._metadata
+        ):
             reopened.close()
             raise wire.PeerDisconnected('The server this session reconnected to declares other metadata')
         self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
@@ -155,7 +173,9 @@ class InferenceSession:
             if self._protocol is protocol.ProtocolVersion.V1
             else {protocol.SESSION_ID: self._session_id, protocol.OBSERVATION: obs}
         )
-        serialised = serialise(request)
+        serialised = (
+            serialization.serialise(request) if self._protocol is protocol.ProtocolVersion.V3 else serialise(request)
+        )
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
@@ -188,7 +208,11 @@ class InferenceSession:
             raise
         self._answered = True
         self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
-        response = deserialise(received)
+        response = (
+            serialization.deserialise(received)
+            if self._protocol is protocol.ProtocolVersion.V3
+            else deserialise(received)
+        )
         self.served_timing = response.get(protocol.TIMING) or {} if isinstance(response, dict) else {}
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
@@ -198,7 +222,8 @@ class InferenceSession:
                 self._conn.close()
             raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
 
-        return typed_commands(response[protocol.RESULT])
+        result = response[protocol.RESULT]
+        return result if self._protocol is protocol.ProtocolVersion.V3 else typed_commands(result)
 
     def close(self) -> None:
         """End the server session and wait for its cleanup before closing the connection."""
@@ -212,8 +237,11 @@ class InferenceSession:
         try:
             # The server can acknowledge and close before the transport confirms the final write.
             with suppress(wire.PeerDisconnected):
-                self._conn.send(serialise(message))
-            response = deserialise(self._conn.recv(timeout=self._infer_timeout))
+                self._conn.send(serialization.serialise(message))
+            raw = self._conn.recv(timeout=self._infer_timeout)
+            response = (
+                serialization.deserialise(raw) if self._protocol is protocol.ProtocolVersion.V3 else deserialise(raw)
+            )
             if protocol.ERROR in response:
                 raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
             if response != message:
