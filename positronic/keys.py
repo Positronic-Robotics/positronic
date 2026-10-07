@@ -62,8 +62,7 @@ WRIST_RIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_right'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
 # What a camera's own control chose, read back from the sensor and recorded beside its frames: the exposure,
-# the gain and the white-balance temperature an automatic mode settled on. The config says "auto"; this says
-# what auto chose, and the frames cannot reproduce it once the episode ends.
+# the gain and the white-balance temperature an automatic mode settled on.
 CAMERA_STATE_PREFIX = 'camera_state.'
 
 

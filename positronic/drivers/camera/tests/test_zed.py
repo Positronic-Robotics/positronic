@@ -4,6 +4,7 @@ settings it reads back."""
 import enum
 import importlib.util
 import inspect
+import logging
 import sys
 import types
 from contextlib import nullcontext
@@ -467,10 +468,13 @@ def test_the_state_read_reports_every_setting_the_camera_answers(zed_module):
     assert zed_module.SLCamera._read_state(SettingsCamera(SETTINGS)) == STATE
 
 
-def test_the_state_read_leaves_out_a_setting_the_camera_refuses(zed_module):
+def test_the_state_read_logs_and_leaves_out_a_setting_the_camera_refuses(zed_module, caplog):
     zed_module.sl.ERROR_CODE = ErrorCode
     camera = SettingsCamera({VideoSettings.EXPOSURE: 45})
     assert zed_module.SLCamera._read_state(camera) == {'exposure': 45}
+    refused = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(refused) == len(STATE) - 1
+    assert 'gain setting: ErrorCode.FAILURE' in ' '.join(refused)
 
 
 def test_the_camera_sends_its_settings_once_a_period_while_something_receives_them(zed_module):
