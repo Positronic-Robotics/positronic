@@ -715,6 +715,18 @@ class TestEncodeImages:
     def test_automatic_encoding_preserves_values_outside_the_image_rule(self, value):
         assert EncodeImages().encode({'state': value})['state'] is value
 
+    def test_an_rtc_prefix_passes_through_unchanged(self):
+        prefix = [{'action': np.array([0.1, 0.2], dtype=np.float32)}]
+        received = []
+
+        def model(obs):
+            received.append(obs[policy_keys.ACTION_PREFIX])
+            return []
+
+        EncodeImages().wrap(model)({policy_keys.ACTION_PREFIX: prefix})
+
+        np.testing.assert_array_equal(received[0][0]['action'], prefix[0]['action'])
+
     @pytest.mark.parametrize('paths, compressed', [(None, {'camera'}), ([['selected', 0]], {'selected'}), ([], set())])
     def test_selection_and_quality_survive_the_component_spec(self, paths, compressed):
         codec = EncodeImages(paths, quality=73)

@@ -200,6 +200,9 @@ class EncodeImages(Codec):
     def decode(self, data: Any) -> Any:
         return data
 
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
+
     def to_spec(self) -> dict[str, Any]:
         args: dict[str, Any] = {'quality': self._quality}
         if self._images is not None:
