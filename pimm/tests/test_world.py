@@ -8,7 +8,8 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import nullcontext
 from functools import partial
 from multiprocessing.context import SpawnProcess
 from queue import Empty, Full
@@ -1735,6 +1736,185 @@ def test_world_finishes_protected_foreground_shutdown_on_context_exit():
         assert not closed.is_set()
     assert holding.is_set()
     assert closed.is_set()
+
+
+@pytest.mark.parametrize('failure', [RuntimeError('sibling failed'), KeyboardInterrupt()])
+def test_sibling_failure_closes_ordinary_foreground_loops_on_the_owner_thread(failure):
+    closed = []
+    owner = threading.get_ident()
+
+    class Holding(ControlSystem):
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            finally:
+                closed.append(threading.get_ident())
+
+    class Failing(ControlSystem):
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            raise failure
+
+    with pytest.raises(type(failure)) as raised:
+        with World(virtual_time=True) as world:
+            world.run([Holding(), Failing()])
+    assert raised.value is failure
+    assert closed == [owner]
+
+
+def test_an_interrupted_sleep_closes_foreground_loops_on_the_owner_thread(monkeypatch):
+    closed = []
+    owner = threading.get_ident()
+
+    class Holding(ControlSystem):
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            finally:
+                closed.append(threading.get_ident())
+
+    failure = KeyboardInterrupt()
+
+    def interrupted(seconds):
+        raise failure
+
+    monkeypatch.setattr(time, 'sleep', interrupted)
+    with pytest.raises(KeyboardInterrupt) as raised:
+        with World() as world:
+            world.run(Holding())
+    assert raised.value is failure
+    assert closed == [owner]
+
+
+@pytest.mark.parametrize('start_control_system', [True, False])
+@pytest.mark.parametrize('failure', [None, RuntimeError('body failed'), KeyboardInterrupt()])
+def test_context_exit_closes_a_retained_foreground_scheduler(start_control_system, failure):
+    closed = []
+    owner = threading.get_ident()
+
+    class Holding(ControlSystem):
+        def __init__(self, seconds):
+            self.seconds = seconds
+
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(self.seconds)
+            finally:
+                closed.append(threading.get_ident())
+
+    expected = nullcontext() if failure is None else pytest.raises(type(failure))
+    with expected:
+        with World(virtual_time=True) as world:
+            fast, slow = Holding(0.01), Holding(3600)
+            scheduler = world.start([fast, slow]) if start_control_system else world.interleave(fast.run, slow.run)
+            next(scheduler)
+            assert not closed
+            stopped_at = world.clock.now()
+            if failure is not None:
+                raise failure
+    assert closed == [owner, owner]
+    assert list(scheduler) == []
+    assert world.clock.now() == stopped_at
+
+
+@pytest.mark.parametrize('start_control_system', [True, False])
+@pytest.mark.parametrize('failure', [None, RuntimeError('body failed'), KeyboardInterrupt()])
+def test_context_exit_closes_an_unstarted_foreground_scheduler(start_control_system, failure):
+    initialized = []
+
+    def loop(should_stop, clock):
+        initialized.append('run')
+        yield Sleep(10)
+
+    class Holding(ControlSystem):
+        def run(self, should_stop, clock):
+            initialized.append('create')
+            return loop(should_stop, clock)
+
+    expected = nullcontext() if failure is None else pytest.raises(type(failure))
+    with expected:
+        with World(virtual_time=True) as world:
+            holding = Holding()
+            scheduler = world.start(holding) if start_control_system else world.interleave(holding.run)
+            assert initialized == []
+            stopped_at = world.clock.now()
+            if failure is not None:
+                raise failure
+    assert list(scheduler) == []
+    assert initialized == []
+    assert world.clock.now() == stopped_at
+
+
+@pytest.mark.parametrize('start_control_system', [True, False])
+def test_closing_a_foreground_scheduler_raises_only_its_cleanup_error(start_control_system):
+    closed = []
+    owner = threading.get_ident()
+    close_error = OSError('close failed')
+
+    class Holding(ControlSystem):
+        def __init__(self, error=None):
+            self.error = error
+
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            finally:
+                closed.append((self, threading.get_ident()))
+                if self.error is not None:
+                    raise self.error
+
+    ordinary = Holding()
+    failing_close = Holding(close_error)
+    with World(virtual_time=True) as world:
+        scheduler = (
+            world.start([ordinary, failing_close])
+            if start_control_system
+            else world.interleave(ordinary.run, failing_close.run)
+        )
+        assert isinstance(scheduler, Generator)
+        next(scheduler)
+        with pytest.raises(OSError) as raised:
+            scheduler.close()
+        assert raised.value is close_error
+        assert closed == [(failing_close, owner), (ordinary, owner)]
+    assert list(scheduler) == []
+
+
+@pytest.mark.parametrize('body_error', [RuntimeError('sibling failed'), KeyboardInterrupt()])
+def test_foreground_close_failure_keeps_the_primary_error_first_and_closes_other_loops(body_error):
+    closed = []
+    owner = threading.get_ident()
+    close_error = OSError('close failed')
+
+    class Holding(ControlSystem):
+        def __init__(self, error=None):
+            self.error = error
+
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(0.01)
+            finally:
+                closed.append((self, threading.get_ident()))
+                if self.error is not None:
+                    raise self.error
+
+    class Failing(ControlSystem):
+        def run(self, should_stop, clock):
+            yield Sleep(0.01)
+            raise body_error
+
+    ordinary = Holding()
+    failing_close = Holding(close_error)
+    with pytest.raises(BaseExceptionGroup) as raised:
+        with World(virtual_time=True) as world:
+            world.run([ordinary, failing_close, Failing()])
+    assert raised.value.exceptions == (body_error, close_error)
+    assert closed == [(failing_close, owner), (ordinary, owner)]
 
 
 @pytest.mark.parametrize('failure', [RuntimeError('sibling failed'), KeyboardInterrupt()])
