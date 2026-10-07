@@ -186,6 +186,18 @@ image, and how to build, test and submit it.
 A policy image is one endpoint of a plan: `--policy-image` states an `image` endpoint on the
 `websocket` wire, and `--eval` names the eval whose tasks it runs. `plan_of_image` builds that shape.
 
+A plan that names an eval may run a random sample of the eval's trials. `sample` states the size as
+`count`, a number of trials, or as `percent`, a share of the eval's trials rounded up, and a `seed`
+(0 when none is given). The same seed draws the same trials, and the run takes them in the eval's
+own order. A count larger than the eval's trials is refused `bad_request`. A sampled run ranks on no
+board. A plan that states its own tasks takes no sample. On the command line, `--sample-count` or
+`--sample-percent` states the size and `--sample-seed` the seed.
+
+```yaml
+eval: molmo.franka_pick_mini_full
+sample: {percent: 10, seed: 7}           # or {count: 50, seed: 7}
+```
+
 An `image` endpoint whose registry serves no anonymous caller states `image_credential`. A plan
 file names the registry user and the FILE the password is in. `positronic eval run --from-file`
 reads it as `EvalPlan[RegistryCredentialFile]`, then `plan_with_passwords_read` gives the `EvalPlan`
