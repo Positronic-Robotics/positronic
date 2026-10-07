@@ -1795,29 +1795,35 @@ def test_context_exit_closes_a_retained_foreground_scheduler(start_control_syste
     owner = threading.get_ident()
 
     class Holding(ControlSystem):
+        def __init__(self, seconds):
+            self.seconds = seconds
+
         def run(self, should_stop, clock):
             try:
                 while not should_stop.value:
-                    yield Sleep(0.01)
+                    yield Sleep(self.seconds)
             finally:
                 closed.append(threading.get_ident())
 
     expected = nullcontext() if failure is None else pytest.raises(type(failure))
     with expected:
         with World(virtual_time=True) as world:
-            holding = Holding()
-            scheduler = world.start(holding) if start_control_system else world.interleave(holding.run)
+            fast, slow = Holding(0.01), Holding(3600)
+            scheduler = world.start([fast, slow]) if start_control_system else world.interleave(fast.run, slow.run)
             next(scheduler)
             assert not closed
+            stopped_at = world.clock.now()
             if failure is not None:
                 raise failure
-    assert closed == [owner]
+    assert closed == [owner, owner]
     assert list(scheduler) == []
+    assert world.clock.now() == stopped_at
 
 
-def test_foreground_close_failure_keeps_its_cause_and_closes_other_loops():
+@pytest.mark.parametrize('body_error', [RuntimeError('sibling failed'), KeyboardInterrupt()])
+def test_foreground_close_failure_keeps_the_primary_error_first_and_closes_other_loops(body_error):
     closed = []
-    body_error = RuntimeError('sibling failed')
+    owner = threading.get_ident()
     close_error = OSError('close failed')
 
     class Holding(ControlSystem):
@@ -1829,7 +1835,7 @@ def test_foreground_close_failure_keeps_its_cause_and_closes_other_loops():
                 while not should_stop.value:
                     yield Sleep(0.01)
             finally:
-                closed.append(self)
+                closed.append((self, threading.get_ident()))
                 if self.error is not None:
                     raise self.error
 
@@ -1840,15 +1846,11 @@ def test_foreground_close_failure_keeps_its_cause_and_closes_other_loops():
 
     ordinary = Holding()
     failing_close = Holding(close_error)
-    with pytest.raises(OSError) as raised:
+    with pytest.raises(BaseExceptionGroup) as raised:
         with World(virtual_time=True) as world:
             world.run([ordinary, failing_close, Failing()])
-    assert raised.value is close_error
-    cause = raised.value.__context__
-    while cause is not None and cause is not body_error:
-        cause = cause.__context__
-    assert cause is body_error
-    assert closed == [failing_close, ordinary]
+    assert raised.value.exceptions == (body_error, close_error)
+    assert closed == [(failing_close, owner), (ordinary, owner)]
 
 
 @pytest.mark.parametrize('failure', [RuntimeError('sibling failed'), KeyboardInterrupt()])
