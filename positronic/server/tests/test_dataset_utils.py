@@ -564,7 +564,7 @@ def test_the_default_gives_each_arm_of_a_two_arm_robot_its_charts_as_a_tab(tmp_p
 
 
 def test_an_arm_is_found_by_its_state_and_no_other_signal_makes_one():
-    names = ['robot_state.q', 'robot_state.right.ee_pose', 'robot_state.left.dq', keys.ROBOT_STATUS]
+    names = [keys.JOINTS, 'robot_state.right.ee_pose', 'robot_state.left.dq', keys.ROBOT_STATUS]
     names += ['robot_state.left.status', 'robot_command.mid.pose', 'grip.wrist']
 
     assert dataset_utils._recorded_arms(names) == [None, 'left', 'right']
