@@ -141,6 +141,11 @@ class Serializers:
         """Extract array from NumpySMAdapter for storage."""
         return data.array
 
+    @staticmethod
+    def camera_state(data: dict[str, int]) -> dict[str, int]:
+        """Record each read-back camera setting as its own scalar signal: ``camera_state.wrist.exposure``."""
+        return {f'.{name}': value for name, value in data.items()}
+
 
 def expand_suffixed(name: str, value: Any) -> Iterator[tuple[str, Any]]:
     """Unfold a value into ``(full_name, value)`` pairs: a dict expands into ``name + suffix``

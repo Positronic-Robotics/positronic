@@ -68,8 +68,8 @@ def wire(  # noqa: C901
 def _recorder(
     world: pimm.World, harness: Harness, embodiment: Embodiment, privileged: dict[str, Observation]
 ) -> DsWriterAgent:
-    """An embodiment's observations, command chunks and privileged ground-truth, recorded into the dataset
-    each episode names."""
+    """An embodiment's observations, command chunks, device read-backs and privileged ground-truth, recorded
+    into the dataset each episode names."""
     embodiment.video_encoder.ensure_available()
     ds_agent = DsWriterAgent(
         functools.partial(LocalDatasetWriter, video_encoder=embodiment.video_encoder),
@@ -84,6 +84,9 @@ def _recorder(
     for name, cmd in embodiment.commands.items():
         ds_agent.add_signal(name, cmd.serializer)
         world.connect(harness.commands[name], ds_agent.inputs[name])
+    for name, obs in embodiment.recorded.items():
+        ds_agent.add_signal(name, obs.serializer)
+        world.connect(obs.source, ds_agent.inputs[name])
     for name, priv in privileged.items():
         ds_agent.add_signal(name, priv.serializer)
         world.connect(priv.source, ds_agent.inputs[name])

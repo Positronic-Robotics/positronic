@@ -1198,6 +1198,30 @@ def test_recorder_refuses_an_encoder_this_host_cannot_run():
             wire.wire_embodiment(world, Harness(embodiment), embodiment)
 
 
+def test_a_recorded_signal_reaches_the_recorder_and_not_the_policy():
+    """A device read-back the embodiment lists under ``recorded`` is a recorder input under its own name, expanded
+    as its serializer says, and no observation the harness reads."""
+    with pimm.World(virtual_time=True) as world:
+        motion = Motion()
+        embodiment = Embodiment(
+            descriptor='recording-test',
+            observations={POSITION: Observation(motion.position, None)},
+            commands={MOTOR: Command(motion.command, None)},
+            prepare_handlers={},
+            static_meta={},
+            meta_source=None,
+            simulated=True,
+            recorded={keys.camera_state(f'{keys.IMAGE_PREFIX}{CAMERA}'): Observation(motion.position, None)},
+        )
+        harness = Harness(embodiment)
+        recorder = wire.wire_embodiment(world, harness, embodiment)
+
+    assert recorder is not None
+    assert set(recorder.inputs) == {POSITION, MOTOR, f'camera_state.{CAMERA}'}
+    assert set(harness.observations) == {POSITION}
+    assert Serializers.camera_state({'exposure': 45, 'gain': 12}) == {'.exposure': 45, '.gain': 12}
+
+
 def test_cartesian_delta_wire_roundtrip():
     delta = Transform3D(np.array([0.01, -0.02, 0.03]), Rotation.from_rotvec(np.array([0.0, 0.1, 0.0])))
     frame = Transform3D(np.array([0.0, 0.0, 0.1]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.5])))
