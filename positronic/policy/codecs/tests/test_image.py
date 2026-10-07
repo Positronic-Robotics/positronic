@@ -3,6 +3,7 @@ import pytest
 from positronic_model_server import serialization
 from positronic_model_server.spec import LATEST, NAME, component
 
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.codecs import EncodeImages, Resample, RestrictImageSize
 
@@ -152,6 +153,18 @@ class TestRestrictImageSize:
 
 
 class TestEncodeImages:
+    def test_an_rtc_prefix_passes_through_unchanged(self):
+        prefix = [{'action': np.array([0.1, 0.2], dtype=np.float32)}]
+        received = []
+
+        def model(obs):
+            received.append(obs[policy_keys.ACTION_PREFIX])
+            return []
+
+        EncodeImages().wrap(model)({policy_keys.ACTION_PREFIX: prefix})
+
+        np.testing.assert_array_equal(received[0][0]['action'], prefix[0]['action'])
+
     @pytest.mark.parametrize('shape', [(8, 12, 3), (2, 8, 12, 3), (2, 3, 8, 12, 3), (0, 8, 12, 3)])
     def test_automatic_encoding_reaches_nested_images_and_preserves_dimensions(self, shape):
         image = np.full(shape, 140, dtype=np.uint8)
