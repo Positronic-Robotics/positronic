@@ -488,3 +488,17 @@ def test_a_camera_whose_settings_nothing_receives_does_not_read_them(zed_module)
     _drive(_camera(zed_module, sdk, frames).run(stop, clock), clock, until=2.5)
     (camera,) = sdk.cameras
     assert camera.settings_reads == 0
+
+
+def test_a_ready_call_that_reopens_the_camera_sends_its_settings_before_it_answers(zed_module, world):
+    clock, stop, frames, states = MockClock(), StopFlag(), RecordingEmitter(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=LISTED_AGAIN_AT)
+    camera = _camera(zed_module, sdk, frames)
+    camera.state._bind(states, clock=clock)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=10.0)
+    answer = _readier(world, camera)(None)
+    _drive(loop, clock, until=clock.now() + 0.001)
+    assert answer.result() is None
+    _, reopened = sdk.cameras
+    assert reopened.settings_reads == len(STATE)
