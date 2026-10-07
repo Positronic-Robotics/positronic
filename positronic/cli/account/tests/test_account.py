@@ -260,5 +260,16 @@ def test_purchase_commands_hide_values_from_malformed_response(command, platform
 
 def test_purchase_history_refuses_an_answer_without_continuation(platform, run_command):
     platform.answer({'purchases': []})
-    with pytest.raises(SystemExit, match='cannot read: next'):
+    with pytest.raises(SystemExit, match='cannot read: missing'):
         run_command(purchases, org='acme')
+
+
+def test_billing_response_hides_extra_field_names(platform, run_command):
+    private_key = 'private-response-key-marker'
+    platform.answer({**PURCHASE, 'package': {**PACKAGE, private_key: 'private-value'}})
+    with pytest.raises(SystemExit) as raised:
+        run_command(purchase, id='opaque-purchase')
+    message = str(raised.value)
+    assert 'the platform answered with a response the client cannot read' in message
+    assert 'extra_forbidden' in message
+    assert private_key not in message

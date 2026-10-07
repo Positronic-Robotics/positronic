@@ -1,5 +1,4 @@
 import configuronic as cfn
-from platform_client.billing import PurchasePageLimit
 from platform_client.ids import OrgSlug, PackageId, PurchaseId, TransactionKey
 from platform_client.requests import (
     DEFAULT_PURCHASE_PAGE_SIZE,
@@ -7,6 +6,7 @@ from platform_client.requests import (
     BillingPurchaseCreateRequest,
     BillingPurchaseGetQuery,
     BillingPurchaseListQuery,
+    PurchasePageLimit,
 )
 from pydantic import ConfigDict, TypeAdapter
 
