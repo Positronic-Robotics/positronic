@@ -460,8 +460,7 @@ def _layout_root(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) -> 
     return rrb.Vertical(*parts, row_shares=shares)
 
 
-# The charts of one arm, by the signal names of a one-arm robot: the arm's state as tabs, the target grip over the
-# grip, and each kind of arm command.
+# The charts of one arm, by the signal names of a one-arm robot.
 ARM_CHARTS: Charts = {
     'Robot State/Joints': [keys.JOINTS],
     'Robot State/End Effector': [keys.EE_POSE],
@@ -523,8 +522,6 @@ _DEFAULT_SPLIT_SHARES = (3, 1)
 
 
 def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Horizontal:
-    """The cameras and the 3D view in one grid, and on its right a column: the charts of each arm, a chart of the
-    progress marks, and Other."""
     charts_by_arm = {arm: _arm_charts(arm) for arm in _recorded_arms(signals.numerics)}
     names = [*signals.numerics, *signals.texts]
     progress: Charts = {'Progress': [name for name in names if name.partition('.')[0] == _PROGRESS_CHANNEL]}
@@ -1052,8 +1049,9 @@ def stream_episode_rrd(
 
     Videos and numeric signals with a recognized nanosecond clock are thinned to ``max_hz``.
     ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
-    Without a ``layout``, the replay shows the cameras and the 3D view in one grid, and each arm's charts in a column on
-    its right. ``timeline`` selects the initial view; all timelines are exported.
+    Without a ``layout``, the replay shows the cameras and the 3D view in one grid, and on its right a column: the
+    charts of each arm, a chart of the progress marks, and Other, a group of every other signal. ``timeline`` selects
+    the initial view; all timelines are exported.
     """
 
     ep = ds[episode_id]
