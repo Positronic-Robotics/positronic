@@ -265,8 +265,8 @@ STATE = {
     'exposure': 45,
     'gain': 12,
     'white_balance_temperature': 4700,
-    'auto_exposure_gain': 1,
-    'auto_white_balance': 1,
+    'auto_exposure_gain': True,
+    'auto_white_balance': True,
 }
 
 
@@ -465,7 +465,9 @@ class SettingsCamera:
 
 def test_the_state_read_reports_every_setting_the_camera_answers(zed_module):
     zed_module.sl.ERROR_CODE = ErrorCode
-    assert zed_module.SLCamera._read_state(SettingsCamera(SETTINGS)) == STATE
+    state = zed_module.SLCamera._read_state(SettingsCamera(SETTINGS))
+    assert state == STATE
+    assert {name: type(value) for name, value in state.items()} == {name: type(value) for name, value in STATE.items()}
 
 
 def test_the_state_read_logs_and_leaves_out_a_setting_the_camera_refuses(zed_module, caplog):
