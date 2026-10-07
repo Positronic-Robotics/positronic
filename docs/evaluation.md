@@ -41,6 +41,14 @@ uv run positronic-server --dataset.path=~/evals/libero \
 
 `--eval` takes any target the catalog exposes: a whole benchmark (`.sim.libero.all`), a suite or category (`.sim.robolab.visual`), or one task (`.sim.robolab.banana_in_bowl`). A sim run charges the model's inference time; add `--charge_inference_time=False` to pause the world during inference instead. Every trial is recorded as a Positronic dataset under `--output_dir`, carrying whatever verdict its benchmark reported.
 
+**One RoboLab server, several policies.** A RoboLab server can clone its scene and give each clone to a different eval, so one GPU runs several policies at once. Start the server with one clone per eval:
+
+```bash
+uv run python -m positronic.simulator.robolab.launcher --num-envs 2 --host 0.0.0.0 --port 9100
+```
+
+Then start each eval with `--eval.env_server=<host>:9100`, and the same `--eval.cameras` as the server. Each eval drives one clone with its own policy. The clones share one scene, so every eval runs the same trials in the same order. A reset waits until every eval asks for it, and the server refuses evals that ask for different tasks at the same reset.
+
 `--eval` also takes the name of a public platform eval. The run then uses the config, the arguments and the trials that the platform runs under that name. It runs on the positronic you installed, and it warns when that positronic is not the commit that the platform runs ([Public evals](../client/README.md#public-evals)):
 
 ```bash

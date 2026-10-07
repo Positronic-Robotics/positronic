@@ -180,8 +180,8 @@ class MolmoSpacesEnv(EnvProtocol):
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
-    def step(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
-        (action,) = actions  # MolmoSpaces runs one scene per server, so this server serves one slot
+    def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
+        (action,) = actions.values()  # MolmoSpaces runs one scene per server, so this server serves one slot
         wire = protocol.single_arm(action)
         arm = mapping.wire_command_to_arm_action(
             wire[protocol.ROBOT_COMMAND], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()

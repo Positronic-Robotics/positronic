@@ -7,9 +7,11 @@ the dumb ``server``/``protocol`` without dragging in positronic; ``robolab`` its
 project.
 """
 
+import argparse
 import fcntl
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -17,8 +19,9 @@ from functools import partial
 from pathlib import Path
 
 from positronic.drivers.roboarm.models import bundled_franka_model
-from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
+from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess, terminate
 from positronic.simulator.env_server.protocol import encode
+from positronic.simulator.robolab import keys
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -114,13 +117,33 @@ def _spawn(host: str, port: int, cameras: str, num_envs: int) -> subprocess.Pope
     return subprocess.Popen(command, env=env)
 
 
-def serve_robolab(cameras: str, num_envs: int = 1, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
+def serve_robolab(
+    cameras: str, host: str = 'localhost', *, num_envs: int = 1
+) -> AbstractContextManager[tuple[str, int]]:
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
     ``cameras`` names the set in ``keys.CAMERA_SETS`` the server renders; RoboLab bakes it into the
     registered task, so one server serves one set.
 
-    ``num_envs`` is how many clones of the scene the one Isaac process steps together — the lever that fills
-    a card with more than one episode. Every per-slot wire field then carries that many entries.
+    ``num_envs`` is how many clones of the scene the one Isaac process steps together. Each clone is a slot of
+    the server, and a client of its own drives each slot.
     """
     return serve_subprocess(partial(_spawn, cameras=cameras, num_envs=num_envs), host)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Serve RoboLab to several evals, one scene clone each.')
+    parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
+    parser.add_argument('--num-envs', type=int, required=True, help='scene clones, one per eval that connects')
+    parser.add_argument('--host', default='localhost')
+    parser.add_argument('--port', type=int, required=True)
+    args = parser.parse_args()
+    proc = _spawn(args.host, args.port, args.cameras, args.num_envs)
+    try:
+        sys.exit(proc.wait())
+    finally:
+        terminate(proc)
+
+
+if __name__ == '__main__':
+    main()
