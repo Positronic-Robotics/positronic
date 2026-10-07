@@ -93,9 +93,9 @@ def recorded_success(static: Mapping[str, object], task_key: str) -> tuple[str, 
     """The task under `task_key` and the recorded success, or None when either is missing or of the wrong type."""
     success, task = static.get(SUCCESS_KEY), static.get(task_key)
     misrecorded = [
-        f'{key}={value!r} is not a {kind.__name__}'
-        for key, value, kind in ((SUCCESS_KEY, success, bool), (task_key, task, str))
-        if value is not None and not isinstance(value, kind)
+        f'{key}={static[key]!r} is not a {kind.__name__}'
+        for key, kind in ((SUCCESS_KEY, bool), (task_key, str))
+        if key in static and not isinstance(static[key], kind)
     ]
     if misrecorded:
         # One damaged record leaves the other episodes scorable, so this is logged, not raised.
