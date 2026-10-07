@@ -8,7 +8,7 @@ from platform_client.requests import (
     BillingPurchaseGetQuery,
     BillingPurchaseListQuery,
 )
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from positronic.cli.account.gateway import gateway, refusing_bad_input
 
@@ -65,7 +65,7 @@ def purchases(
         query = BillingPurchaseListQuery(
             org=OrgSlug(_text(org, 'org')),
             after=PurchaseId(_text(after, 'after')) if after is not None else None,
-            limit=TypeAdapter(PurchasePageLimit).validate_python(limit),
+            limit=TypeAdapter(PurchasePageLimit, config=ConfigDict(title='limit')).validate_python(limit),
         )
     with gateway(platform_url) as client:
         result = client.list_purchases(query.org, after=query.after, limit=query.limit)

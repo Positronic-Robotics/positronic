@@ -235,7 +235,7 @@ def test_credit_commands_are_in_the_real_account_tree():
 
 @pytest.mark.parametrize('limit', [0, -1, True, 1.5, '50', None])
 def test_purchase_history_refuses_invalid_limit_before_http(platform, run_command, limit):
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit, match='limit'):
         run_command(purchases, org='acme', limit=limit)
     assert platform.seen is None
 
