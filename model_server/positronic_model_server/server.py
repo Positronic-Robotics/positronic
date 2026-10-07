@@ -114,17 +114,6 @@ class ModelServer:
             await pending
             raise
 
-    async def _prepare(self, conn: server_wire.ServerConnection, prepare: Callable[[], None]) -> None:
-        pending = asyncio.create_task(self._call(prepare))
-        try:
-            while not pending.done():
-                await conn.send(serialization.serialise({protocol.STATUS: protocol.ServerStatus.WAITING}))
-                await asyncio.wait({pending}, timeout=self.WAITING_INTERVAL_SEC)
-            await pending
-        finally:
-            # A disconnected opener still owns the session being prepared until its cleanup completes.
-            await asyncio.shield(pending)
-
     async def _answer(self, conn: server_wire.ServerConnection, session: Session, session_id: str) -> None:
         while True:
             raw = await conn.receive()
@@ -159,6 +148,17 @@ class ModelServer:
         except Exception as error:
             logger.exception('Inference failed')
             return serialization.serialise({protocol.ERROR: str(error)})
+
+    async def _prepare(self, conn: server_wire.ServerConnection, prepare: Callable[[], None]) -> None:
+        pending = asyncio.create_task(self._call(prepare))
+        try:
+            while not pending.done():
+                await conn.send(serialization.serialise({protocol.STATUS: protocol.ServerStatus.WAITING}))
+                await asyncio.wait({pending}, timeout=self.WAITING_INTERVAL_SEC)
+            await pending
+        finally:
+            # A disconnected opener still owns the session being prepared until its cleanup completes.
+            await asyncio.shield(pending)
 
     @asynccontextmanager
     async def _prepared_session(self, conn: server_wire.ServerConnection, params: dict[str, Any]):
