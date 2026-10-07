@@ -345,7 +345,9 @@ def test_a_tab_group_opens_on_its_text_signal(tmp_path):
 
 
 def _layout(charts: dict[str, list[str] | dict[str, str]], show_unnamed_signals: bool = True) -> ReplayLayout:
-    return ReplayLayout(row_shares=(3, 1), top_shares=(1, 3), charts=charts, show_unnamed_signals=show_unnamed_signals)
+    return ReplayLayout(
+        split_shares=(3, 1), view_shares=(1, 3), charts=charts, show_unnamed_signals=show_unnamed_signals
+    )
 
 
 def _root(signals: dataset_utils.EpisodeSignals, ep: DiskEpisode, layout: ReplayLayout) -> Any:
@@ -389,6 +391,25 @@ def test_a_layout_with_the_3d_view_in_the_camera_grid_puts_it_after_the_cameras(
         (rrb.Spatial3DView, '3D Trajectory'),
     ]
     assert isinstance(bottom, rrb.Horizontal)
+
+
+def test_a_layout_with_the_charts_beside_stacks_them_right_of_the_views_at_its_split(tmp_path):
+    ep = _episode(
+        tmp_path / 'ep', {keys.EE_POSE: 7, keys.JOINTS: 7, keys.GRIP: 1}, {eval_keys.POSE_SIGNALS: [keys.EE_POSE]}
+    )
+    cameras = {'left': 16 / 9, 'right': 16 / 9}
+    signals = replace(_collect_signal_groups(ep), videos=list(cameras), camera_aspects=cameras)
+    charts = {'Robot State/Joints': [keys.JOINTS], **_GRIP}
+    layout = replace(_layout(charts, False), trajectory_in_camera_grid=True, charts_beside=True)
+
+    root = _root(signals, ep, layout)
+
+    media, column = root.contents
+    assert isinstance(root, rrb.Horizontal)
+    assert np.asarray(root.column_shares).tolist() == [3, 1]
+    assert isinstance(media, rrb.Grid)
+    assert isinstance(column, rrb.Vertical)
+    assert [type(chart) for chart in column.contents] == [rrb.Tabs, rrb.TimeSeriesView]
 
 
 def test_a_top_view_with_no_signal_to_show_is_left_out(tmp_path):
