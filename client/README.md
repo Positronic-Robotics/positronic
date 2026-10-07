@@ -214,6 +214,19 @@ definition.
 
 `ResolvedPlan.rig_shape` names the plan's rig shape. Missing or invalid shapes fail response validation.
 
+## Public evals
+
+`platform_client.evals` carries the definitions of the public evals. A definition pins what the
+platform runs under the eval's name: the positronic eval config and its arguments, the trials, the
+time limit of one run, the scorer, and the positronic commit that the platform runs the config at.
+`public_eval(name)` returns one definition, and `PUBLIC_EVALS` names them all. The platform also
+offers evals that it does not publish, and `public_eval` refuses their names.
+
+`positronic eval run` with `--policy` takes a public eval's name as `--eval`, and runs that eval on
+your machine. The run uses the positronic you installed. It warns when that positronic is not the
+commit the definition names, because the two runs can then differ. A local run does not stop at the
+time limit.
+
 ## From the command line
 
 `positronic` carries the other commands, and a checkout needs no installation step. `eval run`
@@ -294,7 +307,8 @@ moment. Pin by digest to know which image was scored.
 
 An **eval** is the whole of what a submission chooses: it names a task suite and the embodiment that
 runs it — one simulator, or one real robot — so there is no second axis to get wrong. The platform
-owns the set of names. Do not copy a name from a document; read it from the platform:
+owns the set of names, and `PUBLIC_EVALS` names only the public ones. Do not copy a name from a
+document; read it from the platform:
 
 - `rankings.list` needs no key. Each board it returns names the eval it ranks.
 - `submissions.create` with a name the platform does not offer raises a `PlatformError` whose

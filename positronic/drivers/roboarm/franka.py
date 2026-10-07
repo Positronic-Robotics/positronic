@@ -16,7 +16,7 @@ import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveRefused, MoveStatus, log_failure
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -259,6 +259,8 @@ class _Arm(DriverRun[command.CommandType]):
     _MOVE_GRACE_S = 5.0
     # How long the arm must accept moves again before the count of the moves it refused is logged.
     _REFUSAL_QUIET_S = 2.0
+    # How long an error the recovery does not clear holds a waiting sync move before it is refused.
+    _RECOVERY_GRACE_S = 2.0
 
     def __init__(
         self,
@@ -281,12 +283,20 @@ class _Arm(DriverRun[command.CommandType]):
         self._refused = False
         self._quiet_at = 0.0
         self._stop_emitted = False
+        # A sync move that arrived while the arm errors, held until the error clears or the grace runs out.
+        self._held: pimm.calls.Call[command.CommandType, None] | None = None
+        self._error_started = 0.0
+        self._q_at_error = np.zeros(len(_PARK_JOINTS))
+        self._moved_in_error = 0.0
 
     def __enter__(self) -> '_Arm':
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Halt the control thread."""
+        """Answer a move still held, then halt the control thread."""
+        if self._held is not None:
+            self._held.set_exception(MoveAbandoned())
+            self._held = None
         # Before ``_desk_session`` deactivates FCI, or the thread dies mid-control with
         # "TCP connection got interrupted".
         self.robot.stop()
@@ -314,6 +324,37 @@ class _Arm(DriverRun[command.CommandType]):
             # The Message types do not name the SignalError that any message can carry.
             self.out.emit(cast(FrankaState, pimm.SignalError(EMERGENCY_STOP_PRESSED)))
             self._stop_emitted = True
+
+    def hold_through_error(self, st: pf.State, entered: bool, outcome: 'RecoveryOutcome') -> None:
+        """Take one tick of an arm error for the sync move that waits on it.
+
+        It drops a jog the arm cannot move on and holds one waiting sync move. ``next_request`` serves the
+        held move once the error clears. ``MoveRefused`` answers it once the error outlasts the grace.
+        """
+        now = self.clock.now()
+        if entered:
+            self._error_started, self._q_at_error, self._moved_in_error = now, st.q, 0.0
+        self._moved_in_error = max(self._moved_in_error, float(np.max(np.abs(st.q - self._q_at_error))))
+        self.moves.drain_async()
+        if self._held is None:
+            asked = self.moves.next_request()
+            self._held = asked if isinstance(asked, pimm.calls.Call) else None
+        if outcome is RecoveryOutcome.CLEARED:
+            logger.info(f'The arm error cleared after {now - self._error_started:.1f}s')
+        elif self._held is not None and now - self._error_started >= self._RECOVERY_GRACE_S:
+            logger.warning(
+                f'The arm error persists after {self._RECOVERY_GRACE_S}s; refusing the waiting move: '
+                f'{st.error_message}, moved {self._moved_in_error:.3f} rad'
+            )
+            self._held.set_exception(MoveRefused(st.error_message, self._moved_in_error))
+            self._held = None
+
+    def next_request(self) -> pimm.calls.Call[command.CommandType, None] | command.CommandType | None:
+        """The sync move held through an error, before anything ``moves`` is asked for."""
+        if self._held is not None:
+            held, self._held = self._held, None
+            return held
+        return self.moves.next_request()
 
     @staticmethod
     def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
@@ -730,10 +771,12 @@ class Robot(pimm.ControlSystem):
         )
 
     @staticmethod
-    def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> None:
-        """Run the arm's error recovery once, and answer every caller that asked for it on this tick.
+    def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> RecoveryOutcome:
+        """Run the arm's error recovery once, answer every caller that asked for it on this tick, and return
+        what it did.
 
-        A throw reaches the callers that asked; one nobody asked for reaches no caller, so it ends the run.
+        A throw reaches the callers that asked and counts as NOT_CLEARED; one nobody asked for reaches no
+        caller, so it ends the run.
         """
         try:
             cleared = robot.recover_from_errors()
@@ -744,12 +787,13 @@ class Robot(pimm.ControlSystem):
             logger.exception('The recovery a console asked for failed')
             for call in asked:
                 call.set_exception(exc)
-            return
+            return RecoveryOutcome.NOT_CLEARED
         if asked:
             logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
         outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
         for call in asked:
             call.set_result(outcome)
+        return outcome
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
@@ -778,12 +822,14 @@ class Robot(pimm.ControlSystem):
 
                 asked_to_recover = list(self.recover.incoming())
                 if asked_to_recover or in_error:
-                    self._recover(robot, asked_to_recover)
+                    outcome = self._recover(robot, asked_to_recover)
+                    if in_error:
+                        arm.hold_through_error(st, entered_error, outcome)
                     # This tick commands nothing; the next one reads the arm the recovery left behind.
                     yield arm.limiter.wait()
                     continue
 
-                asked = arm.moves.next_request()
+                asked = arm.next_request()
                 if isinstance(asked, pimm.calls.Call):
                     with brakes.opened():
                         yield from arm.sync_move(asked)

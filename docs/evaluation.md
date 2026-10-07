@@ -41,6 +41,14 @@ uv run positronic-server --dataset.path=~/evals/libero \
 
 `--eval` takes any target the catalog exposes: a whole benchmark (`.sim.libero.all`), a suite or category (`.sim.robolab.visual`), or one task (`.sim.robolab.banana_in_bowl`). A sim run charges the model's inference time; add `--charge_inference_time=False` to pause the world during inference instead. Every trial is recorded as a Positronic dataset under `--output_dir`, carrying whatever verdict its benchmark reported.
 
+`--eval` also takes the name of a public platform eval. The run then uses the config, the arguments and the trials that the platform runs under that name. It runs on the positronic you installed, and it warns when that positronic is not the commit that the platform runs ([Public evals](../client/README.md#public-evals)):
+
+```bash
+uv run positronic eval run --eval=molmo.franka_pick_mini_smoke \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
+  --output_dir=~/evals/molmo_smoke
+```
+
 Real-hardware DROID evals take the same model endpoint, but we run them for you — operated and operator-scored on our fleet, not self-driven in sim. Write to hi@phail.ai for those.
 
 ## What a run cost
