@@ -5,9 +5,11 @@ End-effector poses describe ``gripper/grasp_site`` in the robot base frame.
 """
 
 import argparse
+import functools
 import os
 import sys
 import types
+from unittest import mock
 
 # MuJoCo's CGL package and its ctypes bindings to Apple's OpenGL framework.
 _CGL_PACKAGE = 'mujoco.cgl'
@@ -59,6 +61,7 @@ from molmo_spaces.evaluation.eval_main import (  # noqa: E402  # pyright: ignore
 from molmo_spaces.tasks.json_eval_task_sampler import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     JsonEvalTaskSampler,
 )
+from molmo_spaces.utils import grasps  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 
 class _DroidEvalConfig(JsonBenchmarkEvalConfig):
@@ -70,6 +73,17 @@ class _DroidEvalConfig(JsonBenchmarkEvalConfig):
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
         self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
+
+
+class _JointGraspSampler(JsonEvalTaskSampler):
+    """``JsonEvalTaskSampler`` that finds the joint grasps of iThor scene assets."""
+
+    def set_joint_values(self, env: Any) -> None:
+        # HACK: upstream looks up joint grasps with no grasp libraries. An iThor scene asset is in no object package,
+        # so that lookup finds no library and reset raises. Droid is the only built-in library with joint grasps.
+        lookup = functools.partial(grasps.get_joint_grasp_path, grasp_libraries=['droid'])
+        with mock.patch.object(grasps, 'get_joint_grasp_path', lookup):
+            super().set_joint_values(env)
 
 
 class MolmoSpacesEnv(EnvProtocol):
@@ -114,7 +128,7 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark.
         cfg.task_horizon = determine_task_horizon(episodes, None, cfg.policy_dt_ms)
-        self._sampler = JsonEvalTaskSampler(cfg, episode)
+        self._sampler = _JointGraspSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
