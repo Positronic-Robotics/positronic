@@ -32,7 +32,7 @@ from positronic.policy.codec import (
     SetControlMode,
 )
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.observation import ObservationCodec
+from positronic.policy.observation import ObservationCodec, RenameObservationFields
 from positronic.policy.processors import (
     ChunkedSchedule,
     PauseOnUnavailable,
@@ -625,7 +625,6 @@ class TestRestrictImageSize:
         assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
 
     def test_a_threaded_stack_scales_to_the_same_pixels_as_one_thread(self):
-        """A stack over the parallel bar scales to the same pixels as the frames taken one at a time."""
         rng = np.random.default_rng(0)
         stack = rng.integers(0, 256, size=(RestrictImageSize._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
         codec = RestrictImageSize(64, 48)
@@ -781,6 +780,7 @@ def test_wire_names_match_the_registered_components():
         'metadata': Metadata({'action_fps': 15}),
         'restrict_image_size': RestrictImageSize(),
         'observation_codec': ObservationCodec(state={}, images={}),
+        'rename_observation_fields': RenameObservationFields({'state': 'input'}),
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
         'joint_delta_action': JointDeltaAction(),

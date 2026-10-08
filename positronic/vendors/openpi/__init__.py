@@ -1,4 +1,4 @@
-"""What positronic states about OpenPI: the observation its subprocess takes, and the assets it needs on hand."""
+"""OpenPI observation fields, training columns and required assets."""
 
 import logging
 import os
@@ -24,6 +24,11 @@ EXTERIOR_IMAGE_LEFT = 'observation/exterior_image_1_left'
 WRIST_IMAGE_LEFT = 'observation/wrist_image_left'
 
 PROMPT = 'prompt'
+
+# Columns consumed by OpenPI's LeRobot dataset transforms.
+TRAINING_STATE = 'observation.state'
+TRAINING_WRIST_IMAGE = 'observation.images.left'
+TRAINING_IMAGE = 'observation.images.side'
 
 # The one ``STATE`` width every config accepts: the transform that does not pad takes exactly this, and the
 # ones that do pad it up to the action dimension. What a codec encodes is wider or narrower, but never

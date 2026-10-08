@@ -19,7 +19,7 @@ from positronic.policy.codec import (
     Metadata,
     RestrictImageSize,
 )
-from positronic.policy.observation import ObservationCodec
+from positronic.policy.observation import ObservationCodec, RenameObservationFields
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
@@ -40,6 +40,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         RestrictImageSize,
         ChangeEEFrame,
         ObservationCodec,
+        RenameObservationFields,
         AbsolutePositionAction,
         AbsoluteJointsAction,
         JointDeltaAction,
