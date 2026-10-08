@@ -21,6 +21,8 @@ IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, k
 # The emergency stop (x31), released and pressed.
 CLEAR = 'Active'
 STOPPED = 'Inactive'
+# A joint brake Desk reports engaged.
+LOCKED = 'Locked'
 
 
 class Call(StrEnum):
@@ -192,6 +194,8 @@ class FakeDesk:
         # A control box that has stopped answering. The driver swallows the error and the reading goes stale.
         self.unreachable = False
         self.self_test_raises: Exception | None = None
+        # Each joint brake as Desk reports it; a run starts with them open.
+        self.brakes = [franka.BRAKE_UNLOCKED] * 7
 
     def __enter__(self) -> 'FakeDesk':
         return self
@@ -205,9 +209,11 @@ class FakeDesk:
 
     def open_brakes(self) -> None:
         self.calls.append(Call.OPEN_BRAKES)
+        self.brakes = [franka.BRAKE_UNLOCKED] * 7
 
     def close_brakes(self) -> None:
         self.calls.append(Call.CLOSE_BRAKES)
+        self.brakes = [LOCKED] * 7
 
     def deactivate_fci(self) -> None:
         self.calls.append(Call.DEACTIVATE_FCI)
@@ -226,7 +232,7 @@ class FakeDesk:
     def safety_status(self) -> dict[str, Any]:
         if self.unreachable:
             raise ConnectionError('the control box is not answering')
-        return {franka.SAFE_INPUT_STATE: dict(self.safe_inputs)}
+        return {franka.SAFE_INPUT_STATE: dict(self.safe_inputs), franka.BRAKE_STATE: list(self.brakes)}
 
 
 @pytest.fixture
@@ -1528,6 +1534,7 @@ def test_a_fault_the_recovery_leaves_is_cleared_by_the_desk_self_test(desk, worl
     assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
         Call.RECOVER_FROM_ERRORS,
         Call.STOP,
+        Call.CLOSE_BRAKES,
         Call.DEACTIVATE_FCI,
         Call.RUN_SELF_TEST,
         Call.OPEN_BRAKES,
@@ -1545,6 +1552,35 @@ def test_a_fault_the_recovery_leaves_is_cleared_by_the_desk_self_test(desk, worl
     next(loop)
     assert arm.calls[mark:] == [], 'the run still drives the connection FCI ended'
     assert Call.STATE in reconnected.calls
+
+
+def test_the_self_test_leaves_alone_the_brakes_a_safety_stop_locked(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    desk.calls = arm.calls  # one log for both fakes, so the halt, the brakes and FCI are ordered
+    _reconnect_to(monkeypatch, FakeArm(PARK))
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    recover = _recoverer(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    desk.brakes = [LOCKED] * 7  # the safety controller engaged them
+    mark = len(arm.calls)
+    answer = recover(None)
+    next(loop)
+
+    assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
+        Call.RECOVER_FROM_ERRORS,
+        Call.STOP,
+        Call.DEACTIVATE_FCI,
+        Call.RUN_SELF_TEST,
+        Call.OPEN_BRAKES,
+        Call.ACTIVATE_FCI,
+    ]
+    assert answer.result() is RecoveryOutcome.CLEARED
 
 
 def test_the_self_test_waits_for_every_safe_input_to_read_clear(desk, world):
@@ -1613,7 +1649,7 @@ def test_a_failed_self_test_answers_the_console_and_the_run_goes_on(desk, world,
 
 
 def test_the_idle_time_brakes_the_arm_over_the_connection_the_self_test_opened(desk, world, monkeypatch):
-    """The control loop to halt before the brakes close is the one on the new connection."""
+    """The idle close halts the control loop on the new connection before it locks the brakes."""
     arm = FakeArm(PARK)
     arm.error = 1
     reconnected = FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED)  # no move in flight on it

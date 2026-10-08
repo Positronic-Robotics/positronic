@@ -106,6 +106,9 @@ _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
 # The field Desk answers the safe inputs in.
 SAFE_INPUT_STATE = 'safeInputState'
+# The field Desk answers the state of each joint brake in, and the state of an open brake.
+BRAKE_STATE = 'brakeState'
+BRAKE_UNLOCKED = 'Unlocked'
 # The safe input the emergency stop is wired to.
 EMERGENCY_STOP_INPUT = 'x31'
 # The error the arm's state carries, and a ready call answers, while the emergency stop is pressed.
@@ -769,8 +772,8 @@ class Robot(pimm.ControlSystem):
         )
 
     def _clear_with_self_test(self, desk: Desk, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
-        """Run the Desk self-test with FCI off, open the brakes, turn FCI on, connect to the arm again, and run
-        the recovery on the new connection.
+        """Run the Desk self-test with the brakes locked and FCI off, open the brakes, turn FCI on, connect to the
+        arm again, and run the recovery on the new connection.
 
         It runs only on a reading that found every safe input clear: a person may hold the arm, and only they
         release it.
@@ -782,7 +785,10 @@ class Robot(pimm.ControlSystem):
             )
             return RecoveryOutcome.NOT_CLEARED
         logger.warning('The recovery did not clear the fault; running the Desk self-test')
-        arm.robot.stop()  # no control loop may drive the arm when FCI goes down
+        arm.robot.stop()  # no control loop may drive the arm when the brakes engage or FCI goes down
+        # The self-test runs on locked brakes. A safety stop can lock them before the driver does.
+        if BRAKE_UNLOCKED in desk.safety_status()[BRAKE_STATE]:
+            desk.close_brakes()
         desk.deactivate_fci()
         try:
             desk.run_self_test()
