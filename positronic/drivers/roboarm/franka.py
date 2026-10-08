@@ -261,6 +261,7 @@ class _Arm(DriverRun[command.CommandType]):
     _REFUSAL_QUIET_S = 2.0
     # How long an error the recovery does not clear holds a waiting sync move before it is refused.
     _RECOVERY_GRACE_S = 2.0
+    _TARGET_MARGIN_INSIDE_SOFT_LIMITS_RAD = 0.05
 
     def __init__(
         self,
@@ -291,8 +292,9 @@ class _Arm(DriverRun[command.CommandType]):
         model = robot.get_robot_model()
         self._joint_names = _revolute_joint_names(model)
         soft_limits = ET.fromstring(model).findall("joint[@type='revolute']/safety_controller")
-        self._lower = np.array([float(c.attrib['soft_lower_limit']) for c in soft_limits])
-        self._upper = np.array([float(c.attrib['soft_upper_limit']) for c in soft_limits])
+        margin = self._TARGET_MARGIN_INSIDE_SOFT_LIMITS_RAD
+        self._lowest_target = np.array([float(c.attrib['soft_lower_limit']) for c in soft_limits]) + margin
+        self._highest_target = np.array([float(c.attrib['soft_upper_limit']) for c in soft_limits]) - margin
         self._clamps = 0
 
     def __enter__(self) -> '_Arm':
@@ -511,17 +513,20 @@ class _Arm(DriverRun[command.CommandType]):
         return MoveStatus.ARRIVED
 
     def _clamp(self, target: np.ndarray) -> np.ndarray:
-        """``target`` inside the soft limits; logs the first of a run of clamped commands, and the run's length."""
-        clamped = np.clip(target, self._lower, self._upper)
+        """``target`` a margin inside the soft limits; logs the first of a run of clamped commands, and its length."""
+        clamped = np.clip(target, self._lowest_target, self._highest_target)
         past = np.flatnonzero(clamped != target)
         if past.size:
             if not self._clamps:
                 asked = ', '.join(f'{self._joint_names[i]} {target[i]:.4f} to {clamped[i]:.4f}' for i in past)
-                logger.warning(f'A command asks for joints past their soft limits; clamping {asked}')
+                margin = self._TARGET_MARGIN_INSIDE_SOFT_LIMITS_RAD
+                logger.warning(
+                    f'A command asks for joints less than {margin} rad inside their soft limits; clamping {asked}'
+                )
             self._clamps += 1
         elif self._clamps:
             if self._clamps > 1:  # the first line already reported a single one
-                logger.warning(f'Clamped {self._clamps} commands in a row; the commands are inside the limits again')
+                logger.warning(f'Clamped {self._clamps} commands in a row; the next command needed no clamp')
             self._clamps = 0
         return clamped
 
@@ -530,7 +535,7 @@ class _Arm(DriverRun[command.CommandType]):
         return self.robot.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
 
     def to_joints(self, cmd: command.CommandType) -> np.ndarray:
-        """The joints ``cmd`` asks for, inside the soft limits, not applied yet.
+        """The joints ``cmd`` asks for, a margin inside the soft limits, not applied yet.
 
         Solved here so that a malformed command raises before anything changes; ``command_target``
         applies the result.

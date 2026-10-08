@@ -17,10 +17,16 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 
 PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = PARK + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-# Joint 4's upper soft limit in the bundled FR3 model, and the park pose with joint 4 past it and at it.
+# Joint 4's upper soft limit in the bundled FR3 model, and the highest target the driver sends it.
 J4_UPPER = -0.1518
-PAST_J4 = PARK + np.array([0.0, 0.0, 0.0, 1.6, 0.0, 0.0, 0.0])
-AT_J4 = np.where(np.arange(7) == 3, J4_UPPER, PARK)
+J4_HIGHEST = J4_UPPER - franka._Arm._TARGET_MARGIN_INSIDE_SOFT_LIMITS_RAD
+
+
+def _park_with_j4(j4: float) -> np.ndarray:
+    return np.where(np.arange(7) == 3, j4, PARK)
+
+
+PAST_J4 = _park_with_j4(-0.05)
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
 # The emergency stop (x31), released and pressed.
 CLEAR = 'Active'
@@ -431,18 +437,22 @@ def _streamed_target(cmd: command.CommandType) -> np.ndarray:
 
 
 @pytest.mark.parametrize(
-    'cmd',
-    [command.JointPosition(positions=PAST_J4), command.JointDelta(velocities=PAST_J4 - PARK)],
-    ids=['position', 'delta'],
+    'cmd, asked',
+    [
+        (command.JointPosition(positions=PAST_J4), -0.05),
+        (command.JointDelta(velocities=PAST_J4 - PARK), -0.05),
+        (command.JointPosition(positions=_park_with_j4(-0.17)), -0.17),
+    ],
+    ids=['position-past-the-limit', 'delta-past-the-limit', 'inside-the-margin'],
 )
-def test_a_joint_command_past_a_soft_limit_reaches_the_arm_at_that_limit(desk, caplog, cmd):
+def test_a_joint_command_near_or_past_a_soft_limit_reaches_the_arm_a_margin_inside_it(desk, caplog, cmd, asked):
     """The arm freezes on a target past a limit, and stays frozen for the rest of the episode."""
-    np.testing.assert_allclose(_streamed_target(cmd), AT_J4, atol=1e-6)
-    assert 'clamping joint4 -0.0500 to -0.1518' in caplog.text
+    np.testing.assert_allclose(_streamed_target(cmd), _park_with_j4(J4_HIGHEST), atol=1e-6)
+    assert f'clamping joint4 {asked:.4f} to {J4_HIGHEST:.4f}' in caplog.text
 
 
-@pytest.mark.parametrize('target', [JOGGED, AT_J4], ids=['inside', 'at-the-limit'])
-def test_a_joint_command_inside_the_soft_limits_reaches_the_arm_unchanged(desk, caplog, target):
+@pytest.mark.parametrize('target', [JOGGED, _park_with_j4(J4_HIGHEST)], ids=['inside', 'at-the-margin'])
+def test_a_joint_command_a_margin_inside_the_soft_limits_reaches_the_arm_unchanged(desk, caplog, target):
     np.testing.assert_array_equal(_streamed_target(command.JointPosition(positions=target)), target)
     assert 'soft limits' not in caplog.text
 
@@ -456,8 +466,8 @@ def test_a_run_of_clamped_commands_logs_its_first_command_and_its_length(desk, c
     watching.to_joints(command.JointPosition(positions=JOGGED))
 
     assert [r.message for r in caplog.records if 'lamp' in r.message] == [
-        'A command asks for joints past their soft limits; clamping joint4 -0.0500 to -0.1518',
-        'Clamped 3 commands in a row; the commands are inside the limits again',
+        'A command asks for joints less than 0.05 rad inside their soft limits; clamping joint4 -0.0500 to -0.2018',
+        'Clamped 3 commands in a row; the next command needed no clamp',
     ]
 
 
