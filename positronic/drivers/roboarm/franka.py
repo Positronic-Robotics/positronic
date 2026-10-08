@@ -106,8 +106,6 @@ _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
 # The field Desk answers the safe inputs in.
 SAFE_INPUT_STATE = 'safeInputState'
-# The field Desk answers the state of each joint brake in.
-BRAKE_STATE = 'brakeState'
 # The safe input the emergency stop is wired to.
 EMERGENCY_STOP_INPUT = 'x31'
 # The error the arm's state carries, and a ready call answers, while the emergency stop is pressed.
@@ -121,13 +119,6 @@ class _SafeInputLevel(StrEnum):
     INACTIVE = 'Inactive'
     ACKNOWLEDGE_REQUIRED = 'AcknowledgeRequired'
     INVALID = 'Invalid'
-
-
-class _BrakeState(StrEnum):
-    """The state Desk reports for one joint brake."""
-
-    LOCKED = 'Locked'
-    UNLOCKED = 'Unlocked'
 
 
 class _Reading(NamedTuple):
@@ -627,6 +618,17 @@ class _Brakes:
             return
         logger.info(f'No command and no move for {self._after_idle_s}s, closing the brakes')
         self.close()
+
+
+# The field Desk answers the state of each joint brake in.
+BRAKE_STATE = 'brakeState'
+
+
+class _BrakeState(StrEnum):
+    """The state Desk reports for one joint brake."""
+
+    LOCKED = 'Locked'
+    UNLOCKED = 'Unlocked'
 
 
 class Robot(pimm.ControlSystem):
