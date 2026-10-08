@@ -6,6 +6,7 @@ from typing import Any
 
 import av
 import numpy as np
+import psutil
 import pyarrow as pa
 import pytest
 import rerun.blueprint as rrb
@@ -158,6 +159,38 @@ def test_a_text_signal_reaches_the_recording_as_a_plot_and_a_text_log(tmp_path):
     archetypes = {(column.entity_path, column.archetype) for column in columns}
     assert ('/signals/progress.state', 'rerun.archetypes.Scalars') in archetypes
     assert ('/text/progress.state', 'rerun.archetypes.TextLog') in archetypes
+
+
+def _numeric_dataset(root: Path) -> LocalDataset:
+    with LocalDatasetWriter(root) as dataset_writer, dataset_writer.new_episode() as writer:
+        for i in range(3):
+            writer.append('x', np.array([i, 1.0]), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+    return LocalDataset(root)
+
+
+@pytest.mark.parametrize('read_all', [True, False])
+def test_an_ended_stream_releases_its_recording_threads(tmp_path, read_all):
+    # A leaked recording keeps two threads; other tests in the worker may start or end a few of their own.
+    streams = 10
+    ds = _numeric_dataset(tmp_path / 'ds')
+    process = psutil.Process()
+    b''.join(stream_episode_rrd(ds, 0))
+    threads = process.num_threads()
+
+    for _ in range(streams):
+        stream = stream_episode_rrd(ds, 0)
+        next(stream)
+        if read_all:
+            b''.join(stream)
+        stream.close()
+
+    assert process.num_threads() < threads + streams
+
+
+def test_a_streamed_recording_carries_its_blueprint(tmp_path):
+    rrd = b''.join(stream_episode_rrd(_numeric_dataset(tmp_path / 'ds'), 0))
+
+    assert rrb.archetypes.ContainerBlueprint.archetype().encode() in rrd
 
 
 def _null_drainer() -> dataset_utils._BinaryStreamDrainer:
