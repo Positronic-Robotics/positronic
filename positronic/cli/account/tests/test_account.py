@@ -256,19 +256,23 @@ ACCOUNT = {
         (list_purchases, {}, routes.BILLING_PURCHASES_LIST, {'purchases': [], 'next': None}),
     ],
 )
-def test_a_credit_command_without_an_org_uses_the_personal_org(
-    command, args, route, answer, platform, run_command, capsys
+@pytest.mark.parametrize(('org', 'personal_org'), [('user-a0', 'user-a0'), ('acme', None)])
+def test_a_credit_command_without_an_org_uses_the_sole_membership(
+    command, args, route, answer, org, personal_org, platform, run_command, capsys
 ):
-    platform.answer_by_route({routes.USERS_ME: (ME, 200), route: (answer, 200)})
+    me = {**ME, 'personal_org': personal_org, 'organizations': [org]}
+    if command is account:
+        answer = {**answer, 'org': org}
+    platform.answer_by_route({routes.USERS_ME: (me, 200), route: (answer, 200)})
 
     run_command(command, **args)
 
     assert platform.paths == [routes.USERS_ME, route]
     sent = platform.body['org'] if platform.request.method == 'POST' else platform.request.url.params['org']
-    assert sent == 'user-a0'
+    assert sent == org
     printed = capsys.readouterr()
     assert json.loads(printed.out)
-    assert printed.err == 'org: user-a0 (personal org)\n'
+    assert printed.err == f'org: {org} (sole organization)\n'
 
 
 def test_a_named_org_is_used_without_asking_for_the_personal_org(platform, run_command):
@@ -279,12 +283,25 @@ def test_a_named_org_is_used_without_asking_for_the_personal_org(platform, run_c
     assert platform.paths == [routes.BILLING_ACCOUNT]
 
 
-@pytest.mark.parametrize('command', [account, list_purchases])
-def test_a_platform_that_names_no_personal_org_requires_an_org(command, platform, run_command):
-    platform.answer({**ME, 'personal_org': None})
+@pytest.mark.parametrize(
+    ('command', 'args'),
+    [(account, {}), (buy, {'package_id': 'package', 'transaction_key': 'retry-key'}), (list_purchases, {})],
+)
+@pytest.mark.parametrize(
+    'me',
+    [
+        ME,
+        {**ME, 'personal_org': None},
+        {**ME, 'organizations': []},
+        {**ME_WITHOUT_PERSONAL_ORG, 'personal_org': 'user-a0'},
+    ],
+    ids=['several-with-personal', 'several-without-personal', 'empty-memberships', 'missing-memberships'],
+)
+def test_credit_commands_require_an_org_without_a_sole_membership(command, args, me, platform, run_command):
+    platform.answer(me)
 
     with pytest.raises(SystemExit, match='--org'):
-        run_command(command)
+        run_command(command, **args)
 
     assert platform.paths == [routes.USERS_ME]
 
@@ -316,9 +333,9 @@ def test_purchase_history_cli_reads_the_page_after_an_opaque_purchase(platform, 
     assert printed.err == 'org: acme (from --org)\n'
 
 
-def test_personal_purchase_history_cli_keeps_the_continuation(platform, run_command, capsys):
+def test_sole_organization_purchase_history_cli_keeps_the_continuation(platform, run_command, capsys):
     platform.answer_by_route({
-        routes.USERS_ME: (ME, 200),
+        routes.USERS_ME: ({**ME, 'organizations': ['user-a0']}, 200),
         routes.BILLING_PURCHASES_LIST: ({'purchases': [], 'next': None}, 200),
     })
     run_command(list_purchases, after='last-purchase', limit=2)
@@ -326,7 +343,7 @@ def test_personal_purchase_history_cli_keeps_the_continuation(platform, run_comm
     assert dict(platform.request.url.params) == {'org': 'user-a0', 'after': 'last-purchase', 'limit': '2'}
     printed = capsys.readouterr()
     assert json.loads(printed.out) == {'purchases': [], 'next': None}
-    assert printed.err == 'org: user-a0 (personal org)\n'
+    assert printed.err == 'org: user-a0 (sole organization)\n'
 
 
 @pytest.mark.parametrize('limit', [0, -1, True, 1.5, '50', None])

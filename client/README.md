@@ -88,11 +88,12 @@ positronic account credits list-purchases --org=acme --limit=50 --after='"last-p
 ```
 
 `users.me` lists every organization the caller belongs to in `organizations`.
-Older platforms that omit `organizations` produce an empty list. Use `--org` to select a shared organization.
+Older platforms that omit `organizations` produce an empty list.
 `personal_org` names the organization that the caller owns alone, when the platform keeps one.
-`account`, `buy` and `list-purchases` use `personal_org` when the caller gives no `--org`.
-Each of these commands prints the organization it uses on stderr, for example `org: user-a0 (personal org)`.
-A platform that keeps no personal organization for the caller requires `--org`.
+`account`, `buy` and `list-purchases` use the sole membership when the caller gives no `--org`.
+With zero or multiple memberships, they require `--org`, including when the server omits `organizations`.
+An explicit `--org` selects that organization without fetching memberships.
+Each command prints the organization it uses on stderr, for example `org: acme (sole organization)`.
 
 These commands print typed JSON with exact integer units and configured currency amounts.
 Quote a numeric-looking text argument with inner quotes, for example `--transaction-key='"20261005"'`.

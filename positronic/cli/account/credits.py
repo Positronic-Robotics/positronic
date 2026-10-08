@@ -31,13 +31,16 @@ def _named_org(org: object) -> OrgSlug | None:
 
 
 def _org(client: PlatformClient, named: OrgSlug | None) -> OrgSlug:
-    """`named` or the caller's personal org."""
+    """`named` or the caller's sole organization membership."""
     if named is not None:
         org, source = named, 'from --org'
-    elif (personal := client.me().personal_org) is not None:
-        org, source = personal, 'personal org'
     else:
-        raise SystemExit('name an org with --org: the platform names no personal org')
+        organizations = client.me().organizations
+        if len(organizations) != 1:
+            raise SystemExit(
+                f'choose an organization with --org: the platform lists {len(organizations)} organizations'
+            )
+        org, source = organizations[0], 'sole organization'
     # On stderr, because stdout carries only the JSON answer.
     print(f'org: {org} ({source})', file=sys.stderr)
     return org
@@ -45,7 +48,7 @@ def _org(client: PlatformClient, named: OrgSlug | None) -> OrgSlug:
 
 @cfn.config()
 def account(org: object = None, platform_url: str | None = None):
-    """Print exact credit units, configured tariff rates and purchase packages of `org` or the caller's personal org."""
+    """Print exact credit units, tariff rates and purchase packages of the named or sole organization."""
     named = _named_org(org)
     with gateway(platform_url) as client:
         result = client.billing_account(_org(client, named))
@@ -54,7 +57,7 @@ def account(org: object = None, platform_url: str | None = None):
 
 @cfn.config()
 def buy(package_id: object, transaction_key: object, org: object = None, platform_url: str | None = None):
-    """Create a purchase for `org` or the caller's personal org. A used retry key reads the same purchase."""
+    """Create a purchase for the named or sole organization. A used retry key reads the same purchase."""
     package, key = _text(package_id, 'package_id'), _text(transaction_key, 'transaction_key')
     named = _named_org(org)
     with gateway(platform_url) as client:
