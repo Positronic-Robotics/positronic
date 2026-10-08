@@ -306,7 +306,8 @@ uv run positronic eval list
 - `positronic eval catalog` prints the evals your key may name, and the tasks each one runs. The
   catalog changes, so read the names from it. Start with the smallest eval it offers: it answers
   whether the image serves at all.
-- `users.me` reports your quota. The default is 2 image submissions per day. An
+- `users.me` reports your quota. A competition submission counts against a daily limit:
+  [Submissions per day](nebius-competition.md#submissions-per-day). An
   [eval plan](../client/README.md#eval-plans) runs on the lab rig, a real robot, and does not count
   against it.
 
