@@ -21,8 +21,6 @@ IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, k
 # The emergency stop (x31), released and pressed.
 CLEAR = 'Active'
 STOPPED = 'Inactive'
-# A joint brake Desk reports engaged.
-LOCKED = 'Locked'
 
 
 class Call(StrEnum):
@@ -195,7 +193,7 @@ class FakeDesk:
         self.unreachable = False
         self.raises: dict[Call, Exception] = {}
         # Each joint brake as Desk reports it; a run starts with them open.
-        self.brakes = [franka.BRAKE_UNLOCKED] * 7
+        self.brakes = [franka._BrakeState.UNLOCKED] * 7
 
     def __enter__(self) -> 'FakeDesk':
         return self
@@ -214,11 +212,11 @@ class FakeDesk:
 
     def open_brakes(self) -> None:
         self._record(Call.OPEN_BRAKES)
-        self.brakes = [franka.BRAKE_UNLOCKED] * 7
+        self.brakes = [franka._BrakeState.UNLOCKED] * 7
 
     def close_brakes(self) -> None:
         self._record(Call.CLOSE_BRAKES)
-        self.brakes = [LOCKED] * 7
+        self.brakes = [franka._BrakeState.LOCKED] * 7
 
     def deactivate_fci(self) -> None:
         self._record(Call.DEACTIVATE_FCI)
@@ -235,7 +233,9 @@ class FakeDesk:
     def safety_status(self) -> dict[str, Any]:
         if self.unreachable:
             raise ConnectionError('the control box is not answering')
-        return {franka.SAFE_INPUT_STATE: dict(self.safe_inputs), franka.BRAKE_STATE: list(self.brakes)}
+        # Desk sends each brake state as a plain string.
+        brakes = [str(brake) for brake in self.brakes]
+        return {franka.SAFE_INPUT_STATE: dict(self.safe_inputs), franka.BRAKE_STATE: brakes}
 
 
 @pytest.fixture
@@ -1571,7 +1571,7 @@ def test_the_self_test_leaves_alone_the_brakes_a_safety_stop_locked(desk, world,
     for _ in range(3):  # init + the opening move
         next(loop)
     arm.error = 1
-    desk.brakes = [LOCKED] * 7  # the safety controller engaged them
+    desk.brakes = [franka._BrakeState.LOCKED] * 7  # the safety controller engaged them
     mark = len(arm.calls)
     answer = recover(None)
     next(loop)
