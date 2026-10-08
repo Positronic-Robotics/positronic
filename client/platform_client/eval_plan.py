@@ -487,8 +487,8 @@ class EvalPlan(Cascade, Generic[Credential]):
     sample: Sample | None = None
 
     @model_serializer(mode='wrap')
-    def _without_an_unused_sample(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
-        serialized = handler(self)
+    def _without_an_unused_sample(self, handler: SerializerFunctionWrapHandler):
+        serialized: dict[str, object] = handler(self)
         if self.sample is None:
             serialized.pop('sample', None)
         return serialized
