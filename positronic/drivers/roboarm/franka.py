@@ -804,8 +804,8 @@ class Robot(pimm.ControlSystem):
         desk.prepare()
         brakes.record_opened()
         del self._robot  # FCI off ended the connection this handle holds
-        arm.robot = self._robot
-        self._init_robot(arm.robot)
+        self._init_robot(self._robot)
+        arm.robot = self._robot  # only a configured handle drives the arm; a failed one ends the run, as at start
         cleared = arm.robot.recover_from_errors()
         logger.info(f'After Desk prepared the arm, recover_from_errors returned {cleared}')
         return RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED

@@ -1637,6 +1637,32 @@ def test_a_failed_desk_prepare_answers_the_console_and_ends_the_run(desk, world,
         next(loop)
 
 
+def test_a_new_connection_that_fails_its_configuration_never_drives_the_arm(desk, world, monkeypatch):
+    """As at a failed run start, the run ends on its next read of the arm."""
+    arm = FakeArm(PARK)
+    arm.error = 1
+    reconnected = FakeArm(PARK)
+    reconnected.raises_once = RuntimeError('libfranka: set_collision_behavior rejected')
+    _reconnect_to(monkeypatch, reconnected)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    recover = _recoverer(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    answer = recover(None)
+    next(loop)
+
+    with pytest.raises(RuntimeError, match='set_collision_behavior rejected'):
+        answer.result()
+    arm.raises = ConnectionError('FCI is off')  # the connection FCI off ended
+    with pytest.raises(ConnectionError):
+        next(loop)
+    assert reconnected.calls == [Call.SET_COLLISION_BEHAVIOR]
+
+
 def test_the_next_command_opens_the_brakes_the_driver_locked_when_fci_stays_on(desk, world):
     """A failed FCI deactivation leaves the run on its connection, with the brakes locked."""
     arm = FakeArm(PARK)
