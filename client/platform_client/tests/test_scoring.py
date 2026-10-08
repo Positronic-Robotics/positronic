@@ -11,19 +11,10 @@ import logging
 from pathlib import Path
 
 import pytest
+from eval_vocabulary.episode import STATIC_FILE, SUCCESS, TASK
 from platform_client.evals import MOLMO_SCORER, PUBLIC_EVALS, EvalRef, ScorerRef, public_eval
 from platform_client.responses import Scores as PublishedScores
-from platform_client.scoring import (
-    MOLMO_TASK_KEY,
-    PUBLIC_SCORERS,
-    STATIC_FILE,
-    SUCCESS_KEY,
-    Outcome,
-    Scores,
-    read_static,
-    recorded_task_and_success,
-    score,
-)
+from platform_client.scoring import PUBLIC_SCORERS, Outcome, Scores, read_static, recorded_task_and_success, score
 
 SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'molmo_sweep').glob('*/*') if p.is_dir())
 
@@ -82,7 +73,7 @@ def test_the_sweep_scores_five_of_twenty_in_this_record():
 
 
 def test_an_episode_that_recorded_no_outcome_is_unscored_rather_than_failed(tmp_path: Path):
-    episodes = _episodes(tmp_path, {MOLMO_TASK_KEY: CUP, SUCCESS_KEY: True}, {MOLMO_TASK_KEY: CUP}, None)
+    episodes = _episodes(tmp_path, {TASK: CUP, SUCCESS: True}, {TASK: CUP}, None)
     scores = score_molmo(episodes)
     assert (scores.episodes, scores.unscored) == (3, 2)
     assert scores.success_rate == pytest.approx(1.0)
@@ -95,7 +86,7 @@ def test_a_sweep_that_recorded_nothing_scores_zero_rather_than_dividing_by_it(tm
 
 
 def test_a_failed_episode_is_scored_as_a_trial_rather_than_as_nothing(tmp_path: Path):
-    scores = score_molmo(_episodes(tmp_path, {MOLMO_TASK_KEY: KETTLE, SUCCESS_KEY: False}))
+    scores = score_molmo(_episodes(tmp_path, {TASK: KETTLE, SUCCESS: False}))
     assert (scores.episodes, scores.unscored, scores.primary) == (1, 0, 0.0)
     assert scores.per_task[KETTLE].trials == 1
 
@@ -110,34 +101,34 @@ def test_statics_that_are_not_a_json_object_are_unscored_rather_than_fatal(tmp_p
 @pytest.mark.parametrize(
     ('static', 'misrecorded'),
     [
-        ({SUCCESS_KEY: 1, MOLMO_TASK_KEY: CUP}, SUCCESS_KEY),
-        ({SUCCESS_KEY: True, MOLMO_TASK_KEY: 3}, MOLMO_TASK_KEY),
-        ({SUCCESS_KEY: None, MOLMO_TASK_KEY: CUP}, SUCCESS_KEY),
-        ({SUCCESS_KEY: True, MOLMO_TASK_KEY: None}, MOLMO_TASK_KEY),
+        ({SUCCESS: 1, TASK: CUP}, SUCCESS),
+        ({SUCCESS: True, TASK: 3}, TASK),
+        ({SUCCESS: None, TASK: CUP}, SUCCESS),
+        ({SUCCESS: True, TASK: None}, TASK),
     ],
 )
 def test_a_success_or_task_of_the_wrong_type_is_no_outcome_and_is_logged(
     static: dict[str, object], misrecorded: str, caplog: pytest.LogCaptureFixture
 ):
     with caplog.at_level(logging.ERROR, logger='platform_client.scoring'):
-        assert recorded_task_and_success(static, MOLMO_TASK_KEY) is None
+        assert recorded_task_and_success(static, TASK) is None
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
     assert misrecorded in caplog.records[0].getMessage()
 
 
-@pytest.mark.parametrize('static', [{MOLMO_TASK_KEY: CUP}, {SUCCESS_KEY: True}])
+@pytest.mark.parametrize('static', [{TASK: CUP}, {SUCCESS: True}])
 def test_a_missing_success_or_task_is_no_outcome_and_logs_nothing(
     static: dict[str, object], caplog: pytest.LogCaptureFixture
 ):
     with caplog.at_level(logging.DEBUG, logger='platform_client.scoring'):
-        assert recorded_task_and_success(static, MOLMO_TASK_KEY) is None
+        assert recorded_task_and_success(static, TASK) is None
     assert caplog.records == []
 
 
 def _graded(episode: Path) -> Outcome | None:
     """A caller's scorer: a success scores 1.0, and a failure scores the `grade` its statics record."""
     static = read_static(episode)
-    recorded = recorded_task_and_success(static, MOLMO_TASK_KEY) if static is not None else None
+    recorded = recorded_task_and_success(static, TASK) if static is not None else None
     if static is None or recorded is None:
         return None
     task, succeeded = recorded
@@ -150,10 +141,7 @@ def _graded(episode: Path) -> Outcome | None:
 def test_a_caller_scores_with_its_own_scorer_beside_the_public_ones(tmp_path: Path):
     graded = ScorerRef('graded')
     episodes = _episodes(
-        tmp_path,
-        {MOLMO_TASK_KEY: CUP, SUCCESS_KEY: True},
-        {MOLMO_TASK_KEY: CUP, SUCCESS_KEY: False, 'grade': 0.5},
-        {MOLMO_TASK_KEY: KETTLE, SUCCESS_KEY: False},
+        tmp_path, {TASK: CUP, SUCCESS: True}, {TASK: CUP, SUCCESS: False, 'grade': 0.5}, {TASK: KETTLE, SUCCESS: False}
     )
 
     scores = score(graded, episodes, {**PUBLIC_SCORERS, graded: _graded})
@@ -171,9 +159,7 @@ def test_an_ungraded_task_reports_no_subtask_score_beside_a_graded_one(tmp_path:
             return outcome
         return Outcome(outcome.task, outcome.succeeded, 0.25)
 
-    episodes = _episodes(
-        tmp_path, {MOLMO_TASK_KEY: CUP, SUCCESS_KEY: False}, {MOLMO_TASK_KEY: KETTLE, SUCCESS_KEY: True}
-    )
+    episodes = _episodes(tmp_path, {TASK: CUP, SUCCESS: False}, {TASK: KETTLE, SUCCESS: True})
     per_task = score(ScorerRef('mixed'), episodes, {ScorerRef('mixed'): grades_only_the_cup}).per_task
 
     assert per_task[CUP].mean_subtask_score == pytest.approx(0.25)

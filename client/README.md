@@ -8,8 +8,9 @@ endpoint.
 > and nothing here is covered by a backwards-compatibility guarantee. Pin the exact version you
 > tested against, and expect to edit your code when you move off it.
 
-The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing else, so a service that
-only speaks to the platform installs it on its own, at the exact version it was written against:
+The library depends on `pydantic`, `httpx`, `typing-extensions` and `positronic-eval-vocabulary`, which
+has no dependencies. So a service that only speaks to the platform installs it on its own, at the exact
+version it was written against:
 
 ```bash
 uv add "positronic-platform-client==0.28.0"
