@@ -6,7 +6,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Generator, Iterator, Mapping
-from enum import Enum, StrEnum, auto
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, NamedTuple, cast
 
@@ -16,7 +16,7 @@ import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveRefused, MoveStatus, log_failure
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveRefused, MoveStatus, RecoveryOutcome, log_failure
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -608,13 +608,6 @@ class _Brakes:
         self._robot.stop()  # the brakes cannot engage on an arm the control loop still drives
         self._desk.close_brakes()
         self._closed = True
-
-
-class RecoveryOutcome(Enum):
-    """Whether the arm came out of error."""
-
-    CLEARED = auto()
-    NOT_CLEARED = auto()
 
 
 class Robot(pimm.ControlSystem):

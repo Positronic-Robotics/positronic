@@ -24,6 +24,13 @@ class MoveStatus(Enum):
     GAVE_UP = auto()
 
 
+class RecoveryOutcome(Enum):
+    """Whether the device came out of error."""
+
+    CLEARED = auto()
+    NOT_CLEARED = auto()
+
+
 class MoveAbandoned(RuntimeError):
     """A move the world came down under."""
 
