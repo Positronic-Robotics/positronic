@@ -75,10 +75,10 @@ from platform_client.responses import (
     ArtifactRefs,
     BlockedSubmissionView,
     BoardListResponse,
-    BoardReplayLink,
     BoardSummary,
     CancelledSubmissionView,
     CancelResponse,
+    DataBackedReplayLink,
     EndpointOutcome,
     EpisodeCounts,
     ErroredSubmissionView,
@@ -312,7 +312,7 @@ MODELS: list[BaseModel] = [
                 tag='3fa2c1',
                 submission_id=SUB,
                 submitted_at=AT,
-                replay=BoardReplayLink(url=REPLAY_URL, data_url=REPLAY_DATA_URL),
+                replay=DataBackedReplayLink(url=REPLAY_URL, data_url=REPLAY_DATA_URL),
             ),
         ],
     ),
@@ -484,7 +484,7 @@ def test_a_board_slug_arrives_as_its_own_type_on_both_sides():
 def test_a_board_row_reads_the_link_to_its_replay_and_the_object_the_page_renders_from():
     row = {'rank': 1, 'display_name': 'demo', 'tag': '0ddba7', 'submission_id': '1f', 'submitted_at': AT.isoformat()}
     built = RankingRow.model_validate({**row, 'replay': {'url': REPLAY_URL, 'data_url': REPLAY_DATA_URL}})
-    assert built.replay == BoardReplayLink(url=REPLAY_URL, data_url=REPLAY_DATA_URL)
+    assert built.replay == DataBackedReplayLink(url=REPLAY_URL, data_url=REPLAY_DATA_URL)
     assert RankingRow.model_validate(row).replay is None
     with pytest.raises(ValidationError, match='data_url'):
         RankingRow.model_validate({**row, 'replay': {'url': REPLAY_URL}})
