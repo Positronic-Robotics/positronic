@@ -272,15 +272,15 @@ def test_me_sends_the_bearer_token_and_parses_every_limit():
     assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
 
 
-@pytest.mark.parametrize('prepaid', [False, True])
-def test_create_submission_sends_the_run_defining_fields(prepaid):
+@pytest.mark.parametrize('pay_as_you_go', [False, True])
+def test_create_submission_sends_the_run_defining_fields(pay_as_you_go):
     body: dict[str, object] = {'submission_id': '1f', 'status': 'pending', 'policy_image_digest': 'sha256:abc'}
     quote = {
         'terms': Tariff.for_rates(1, CREDIT_SCALE, duration_rounding_sec=0).model_dump(),
         'lines': [{'task_pos': 0, 'endpoint': 'candidate', 'count': 1, 'cap_ns': 1, 'max_units': 2}],
         'total_units': 2,
     }
-    if prepaid:
+    if pay_as_you_go:
         body['billing'] = {'mode': 'pay_as_you_go', 'state': 'held', 'quote': quote}
     gateway = Gateway(200, body)
     client = make_client(gateway)
@@ -290,7 +290,7 @@ def test_create_submission_sends_the_run_defining_fields(prepaid):
     assert isinstance(response, SubmissionCreateResponse)
     assert response.submission_id == 0x1F
     assert response.status is SubmissionStatus.pending
-    if prepaid:
+    if pay_as_you_go:
         assert response.billing is not None and response.billing.quote is not None
         assert response.billing.quote.total_units == 2
     else:
@@ -329,8 +329,8 @@ def test_create_submission_sends_a_registry_password_the_platform_can_use(tmp_pa
     }
 
 
-@pytest.mark.parametrize('prepaid', [False, True])
-def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back(prepaid):
+@pytest.mark.parametrize('pay_as_you_go', [False, True])
+def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back(pay_as_you_go):
     resolved = {
         'rig_shape': 'franka',
         'episodes_total': 2,
@@ -354,7 +354,7 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back(prepaid):
             }
         ],
     }
-    if prepaid:
+    if pay_as_you_go:
         resolved['credit_quote'] = {
             'terms': Tariff.for_rates(1, CREDIT_SCALE, duration_rounding_sec=0).model_dump(),
             'lines': [{'task_pos': 0, 'endpoint': 'a', 'count': 2, 'cap_ns': 1, 'max_units': 4}],
@@ -378,7 +378,7 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back(prepaid):
 
     assert isinstance(response, ResolvedPlan) and response.episodes_total == 2
     assert response.rig_shape is RigShape.franka
-    if prepaid:
+    if pay_as_you_go:
         assert response.credit_quote is not None and response.credit_quote.total_units == 4
     else:
         assert response.credit_quote is None
