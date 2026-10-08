@@ -874,6 +874,22 @@ def test_an_image_plan_is_a_competition_run_unless_it_names_an_org():
     assert isinstance(private, PrivateEval) and private.org == 'acme'
 
 
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_a_plan_without_a_trial_sample_omits_it_from_its_dump(mode):
+    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'))
+    assert plan.sample is None
+    assert 'sample' not in plan.model_dump(mode=mode)
+
+
+def test_a_plan_serialization_schema_describes_its_fields():
+    schema = EvalPlan.model_json_schema(mode='serialization')
+    assert schema['additionalProperties'] is False
+    properties = schema['properties']
+    assert properties.keys() == EvalPlan.model_fields.keys()
+    assert properties['endpoints']['type'] == 'array'
+    assert properties['sample']['anyOf'] == [{'$ref': '#/$defs/Sample'}, {'type': 'null'}]
+
+
 def test_a_sample_of_a_named_eval_survives_a_round_trip():
     plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'), sample=Sample(percent=10, seed=7))
     assert EvalPlan.model_validate_json(plan.model_dump_json()).sample == Sample(percent=10, seed=7)

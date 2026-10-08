@@ -35,6 +35,7 @@ from platform_client.eval_plan import (
     EvalPlan,
     HostPortAddress,
     PrivateEval,
+    Sample,
     TaskNode,
     credential_from_file,
     plan_of_image,
@@ -296,6 +297,17 @@ def test_create_submission_sends_the_run_defining_fields(prepaid):
     assert gateway.body()['endpoints'][0]['image'] == 'org/policy:v1'
     assert gateway.body()['eval'] == 'fake.smoke'
     assert gateway.body()['transaction_key'] is None
+    assert 'sample' not in gateway.body()
+
+
+@pytest.mark.parametrize('sample', [Sample(count=5, seed=7), Sample(percent=10, seed=7)])
+def test_create_submission_sends_the_requested_trial_sample(sample):
+    gateway = Gateway(200, {'submission_id': '1f', 'status': 'pending'})
+    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke'), sample=sample)
+
+    make_client(gateway).create_submission(plan)
+
+    assert gateway.body()['sample'] == sample.model_dump(mode='json')
 
 
 def test_create_submission_sends_a_registry_password_the_platform_can_use(tmp_path):
