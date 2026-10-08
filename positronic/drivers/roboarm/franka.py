@@ -581,6 +581,13 @@ class _Brakes:
         self._closed = False
         self._idle_since = clock.now()
 
+    def close(self) -> None:
+        """Halt the control loop and lock the brakes."""
+        assert self._desk is not None, 'only a Desk session closes the brakes'
+        self._arm.robot.stop()  # the brakes cannot engage on an arm the control loop still drives
+        self._desk.close_brakes()
+        self._closed = True
+
     def open(self) -> None:
         """Open the brakes, and count the idle time from now."""
         assert self._desk is not None, 'only a Desk session opens the brakes'
@@ -613,9 +620,7 @@ class _Brakes:
         if self._clock.now() - self._idle_since < self._after_idle_s:
             return
         logger.info(f'No command and no move for {self._after_idle_s}s, closing the brakes')
-        self._arm.robot.stop()  # the brakes cannot engage on an arm the control loop still drives
-        self._desk.close_brakes()
-        self._closed = True
+        self.close()
 
 
 class Robot(pimm.ControlSystem):
@@ -785,10 +790,10 @@ class Robot(pimm.ControlSystem):
             )
             return RecoveryOutcome.NOT_CLEARED
         logger.warning('The recovery did not clear the fault; running the Desk self-test')
-        arm.robot.stop()  # no control loop may drive the arm when the brakes engage or FCI goes down
+        arm.robot.stop()  # no control loop may drive the arm when FCI goes down
         # The self-test runs on locked brakes. A safety stop can lock them before the driver does.
         if BRAKE_UNLOCKED in desk.safety_status()[BRAKE_STATE]:
-            desk.close_brakes()
+            brakes.close()
         desk.deactivate_fci()
         try:
             desk.run_self_test()

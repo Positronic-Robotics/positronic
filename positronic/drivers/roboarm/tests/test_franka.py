@@ -183,7 +183,7 @@ class FakeDesk:
     """In-memory ``Desk``: records that the session prepared the robot and released control, records every
     brake, FCI and self-test operation the driver asked for, and reports whatever ``safe_inputs`` holds.
 
-    ``self_test_raises`` is what the self-test raises.
+    An operation named in ``raises`` raises the exception it maps to.
     """
 
     def __init__(self):
@@ -193,7 +193,7 @@ class FakeDesk:
         self.safe_inputs = dict(MOVING)
         # A control box that has stopped answering. The driver swallows the error and the reading goes stale.
         self.unreachable = False
-        self.self_test_raises: Exception | None = None
+        self.raises: dict[Call, Exception] = {}
         # Each joint brake as Desk reports it; a run starts with them open.
         self.brakes = [franka.BRAKE_UNLOCKED] * 7
 
@@ -207,24 +207,27 @@ class FakeDesk:
     def prepare(self) -> None:
         self.prepared = True
 
+    def _record(self, call: Call) -> None:
+        self.calls.append(call)
+        if call in self.raises:
+            raise self.raises[call]
+
     def open_brakes(self) -> None:
-        self.calls.append(Call.OPEN_BRAKES)
+        self._record(Call.OPEN_BRAKES)
         self.brakes = [franka.BRAKE_UNLOCKED] * 7
 
     def close_brakes(self) -> None:
-        self.calls.append(Call.CLOSE_BRAKES)
+        self._record(Call.CLOSE_BRAKES)
         self.brakes = [LOCKED] * 7
 
     def deactivate_fci(self) -> None:
-        self.calls.append(Call.DEACTIVATE_FCI)
+        self._record(Call.DEACTIVATE_FCI)
 
     def run_self_test(self) -> None:
-        self.calls.append(Call.RUN_SELF_TEST)
-        if self.self_test_raises is not None:
-            raise self.self_test_raises
+        self._record(Call.RUN_SELF_TEST)
 
     def activate_fci(self) -> None:
-        self.calls.append(Call.ACTIVATE_FCI)
+        self._record(Call.ACTIVATE_FCI)
 
     def _authenticate(self) -> None:
         pass
@@ -1534,6 +1537,7 @@ def test_a_fault_the_recovery_leaves_is_cleared_by_the_desk_self_test(desk, worl
     assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
         Call.RECOVER_FROM_ERRORS,
         Call.STOP,
+        Call.STOP,  # the brakes halt the control loop again before they lock
         Call.CLOSE_BRAKES,
         Call.DEACTIVATE_FCI,
         Call.RUN_SELF_TEST,
@@ -1623,7 +1627,7 @@ def test_a_failed_self_test_answers_the_console_and_the_run_goes_on(desk, world,
     """The brakes open and FCI turns on again after a failed self-test, so the run keeps an arm to drive."""
     arm = FakeArm(PARK)
     arm.error = 1
-    desk.self_test_raises = RuntimeError('424 ActionUnavailable')
+    desk.raises[Call.RUN_SELF_TEST] = RuntimeError('424 ActionUnavailable')
     reconnected = FakeArm(PARK)
     reconnected.error = 1
     _reconnect_to(monkeypatch, reconnected)
@@ -1642,10 +1646,37 @@ def test_a_failed_self_test_answers_the_console_and_the_run_goes_on(desk, world,
         answer.result()
     assert desk.calls[-2:] == [Call.OPEN_BRAKES, Call.ACTIVATE_FCI]
 
-    reconnected.error, desk.self_test_raises = 0, None
+    reconnected.error, desk.raises = 0, {}
     answer = recover(None)
     next(loop)
     assert answer.result() is RecoveryOutcome.CLEARED, 'the run ended on the failed self-test'
+
+
+def test_the_next_command_opens_the_brakes_the_self_test_locked_when_fci_stays_on(desk, world):
+    """A failed FCI deactivation leaves the run on its connection, with the brakes locked."""
+    arm = FakeArm(PARK)
+    arm.error = 1
+    desk.raises[Call.DEACTIVATE_FCI] = RuntimeError('FCI did not go down')
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    answer = _recoverer(world, driver)(None)
+    next(loop)
+    with pytest.raises(RuntimeError, match='FCI did not go down'):
+        answer.result()
+    arm.error = 0
+    feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+
+    assert desk.calls[-2:] == [Call.DEACTIVATE_FCI, Call.OPEN_BRAKES]
+    np.testing.assert_allclose(arm.targets[-1], JOGGED)
 
 
 def test_the_idle_time_brakes_the_arm_over_the_connection_the_self_test_opened(desk, world, monkeypatch):
