@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Generator, Iterator
 from contextlib import nullcontext
 from functools import partial
@@ -1882,6 +1883,132 @@ def test_closing_a_foreground_scheduler_raises_only_its_cleanup_error(start_cont
         assert raised.value is close_error
         assert closed == [(failing_close, owner), (ordinary, owner)]
     assert list(scheduler) == []
+
+
+@pytest.mark.parametrize('start_control_system', [True, False], ids=['start', 'interleave'])
+@pytest.mark.parametrize('error_count', [1, 2, 3])
+@pytest.mark.parametrize(
+    ('close_scheduler', 'body_error'),
+    [(True, None), (False, None), (False, RuntimeError('body failed')), (False, KeyboardInterrupt('body interrupted'))],
+    ids=['explicit-close', 'world-exit', 'runtime-error', 'interrupt'],
+)
+def test_foreground_cleanup_errors_remain_visible_through_world_exit(
+    start_control_system, error_count, close_scheduler, body_error
+):
+    errors = [OSError('cleanup-first'), ValueError('cleanup-second'), KeyboardInterrupt('cleanup-third')][:error_count]
+    closed = []
+    owner = threading.get_ident()
+
+    class Closing(ControlSystem):
+        def __init__(self, index):
+            self.index = index
+
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(1)
+            finally:
+                closed.append((self.index, threading.get_ident()))
+                raise errors[self.index]
+
+    world = World(virtual_time=True)
+    systems = [Closing(index) for index in range(error_count)]
+    scheduler = world.start([*systems]) if start_control_system else world.interleave(*(cs.run for cs in systems))
+    assert isinstance(scheduler, Generator)
+    stopped_at = world.clock.now()
+    with pytest.raises((OSError, BaseExceptionGroup)) as raised:
+        with world:
+            next(scheduler)
+            stopped_at = world.clock.now()
+            if close_scheduler:
+                scheduler.close()
+            if body_error is not None:
+                raise body_error
+    assert closed == [(index, owner) for index in reversed(range(error_count))]
+    assert list(scheduler) == []
+    assert world.clock.now() == stopped_at
+    assert world.should_stop
+
+    pending: list[BaseException] = [raised.value]
+    seen = set()
+    while pending:
+        error = pending.pop()
+        if id(error) in seen:
+            continue
+        seen.add(id(error))
+        if isinstance(error, BaseExceptionGroup):
+            pending.extend(error.exceptions)
+        if error.__context__ is not None:
+            pending.append(error.__context__)
+        if error.__cause__ is not None:
+            pending.append(error.__cause__)
+    rendered = ''.join(traceback.format_exception(raised.value))
+    assert all(id(error) in seen and str(error) in rendered for error in errors)
+    if body_error is not None:
+        assert isinstance(raised.value, BaseExceptionGroup)
+        assert raised.value.exceptions[0] is body_error
+    elif error_count == 1:
+        assert raised.value is errors[0]
+
+
+@pytest.mark.parametrize('start_control_system', [True, False], ids=['start', 'interleave'])
+@pytest.mark.parametrize('scheduler_count', [2, 3])
+@pytest.mark.parametrize('body_error', [None, RuntimeError('body failed'), KeyboardInterrupt('body interrupted')])
+def test_separate_foreground_schedulers_keep_all_cleanup_errors_at_world_exit(
+    start_control_system, scheduler_count, body_error
+):
+    errors = [OSError('cleanup-first'), ValueError('cleanup-second'), KeyboardInterrupt('cleanup-third')][
+        :scheduler_count
+    ]
+    closed = []
+    owner = threading.get_ident()
+
+    class Closing(ControlSystem):
+        def __init__(self, index):
+            self.index = index
+
+        def run(self, should_stop, clock):
+            try:
+                while not should_stop.value:
+                    yield Sleep(1)
+            finally:
+                closed.append((self.index, threading.get_ident()))
+                raise errors[self.index]
+
+    world = World(virtual_time=True)
+    systems = [Closing(index) for index in range(scheduler_count)]
+    schedulers = [world.start(system) if start_control_system else world.interleave(system.run) for system in systems]
+    stopped_at = world.clock.now()
+    with pytest.raises((OSError, BaseExceptionGroup)) as raised:
+        with world:
+            for scheduler in schedulers:
+                next(scheduler)
+            stopped_at = world.clock.now()
+            if body_error is not None:
+                raise body_error
+    assert closed == [(index, owner) for index in reversed(range(scheduler_count))]
+    assert all(list(scheduler) == [] for scheduler in schedulers)
+    assert world.clock.now() == stopped_at
+    assert world.should_stop
+
+    pending: list[BaseException] = [raised.value]
+    seen = set()
+    while pending:
+        error = pending.pop()
+        if id(error) in seen:
+            continue
+        seen.add(id(error))
+        if isinstance(error, BaseExceptionGroup):
+            pending.extend(error.exceptions)
+        if error.__context__ is not None:
+            pending.append(error.__context__)
+        if error.__cause__ is not None:
+            pending.append(error.__cause__)
+    rendered = ''.join(traceback.format_exception(raised.value))
+    assert all(id(error) in seen and str(error) in rendered for error in errors)
+    if body_error is not None:
+        assert isinstance(raised.value, BaseExceptionGroup)
+        assert raised.value.exceptions[0] is body_error
 
 
 @pytest.mark.parametrize('body_error', [RuntimeError('sibling failed'), KeyboardInterrupt()])

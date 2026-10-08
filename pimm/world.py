@@ -592,7 +592,7 @@ class World:
         self.background_processes = []
         self._shutdown_policies = {}
         self._protected_foreground_loops: list[Iterator[Command]] = []
-        self._foreground_scope = contextlib.ExitStack()
+        self._foreground_cleanup: list[Callable[[], None]] = []
         self._cleanup_emitters_readers = []
         self.entered = False
         self._previous_handlers: dict[int, Callable[[int, FrameType | None], object] | int] = {}
@@ -699,11 +699,23 @@ class World:
             process.close()
 
     def __exit__(self, exc_type, exc_value, traceback):
+        def close_foreground() -> None:
+            errors: list[BaseException] = []
+            while self._foreground_cleanup:
+                try:
+                    self._foreground_cleanup.pop()()
+                except BaseException as exc:
+                    errors.append(exc)
+            if len(errors) == 1:
+                raise errors[0]
+            if errors:
+                raise BaseExceptionGroup('Foreground shutdown failed', errors)
+
         self.entered = False
         errors: list[BaseException] = []
         logger.info('Stopping background processes...')
         self.request_stop()
-        cleanup = [self._finish_foreground_shutdown, self._foreground_scope.close, self._join_background_processes]
+        cleanup = [self._finish_foreground_shutdown, close_foreground, self._join_background_processes]
         for emitter, receivers in self._cleanup_emitters_readers:
             cleanup.extend(receiver.close for receiver in (receivers if isinstance(receivers, list) else [receivers]))
             cleanup.append(emitter.close)
@@ -784,15 +796,27 @@ class World:
             yield from self._interleave([iter(loop(self.should_stop_reader(), self._clock)) for loop in loops])
 
         scheduler = run_loops()
-        self._foreground_scope.callback(scheduler.close)
+        self._foreground_cleanup.append(scheduler.close)
         return scheduler
 
     def _interleave(self, iters: list[Iterator[Command]]) -> Generator[Command, None, None]:
         with contextlib.ExitStack() as scope:
-            self._foreground_scope.callback(scope.close)
-            for loop in iters:
-                if isinstance(loop, Generator):
-                    scope.callback(loop.close)
+
+            def close_loops() -> None:
+                errors: list[BaseException] = []
+                for loop in reversed(iters):
+                    if isinstance(loop, Generator):
+                        try:
+                            loop.close()
+                        except BaseException as exc:
+                            errors.append(exc)
+                if len(errors) == 1:
+                    raise errors[0]
+                if errors:
+                    raise BaseExceptionGroup('Foreground shutdown failed', errors)
+
+            self._foreground_cleanup.append(scope.close)
+            scope.callback(close_loops)
             scheduler = self._schedule(iters)
             scope.callback(scheduler.close)
             try:
@@ -1079,7 +1103,7 @@ class World:
         for cs in spawned:
             self.start_in_subprocess(_CallAnsweringLoop(cs), shutdown_policy=cs.shutdown_policy)
         scheduler = self._interleave([self._run_foreground(cs) for cs in in_process])
-        self._foreground_scope.callback(scheduler.close)
+        self._foreground_cleanup.append(scheduler.close)
         return scheduler
 
     def run(
