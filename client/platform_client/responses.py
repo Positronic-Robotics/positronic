@@ -475,6 +475,13 @@ class CancelResponse(BaseModel):
     refunded: bool
 
 
+class DataBackedReplayLink(BaseModel):
+    """A replay page that does not expire. `data_url` names the JSON object the page renders from."""
+
+    url: str
+    data_url: str
+
+
 class RankingRow(BaseModel):
     """One row of a board: a user's best submission on it.
 
@@ -493,7 +500,7 @@ class RankingRow(BaseModel):
     scores: Scores = Field(default_factory=Scores)
     submission_id: SubmissionId
     submitted_at: AwareDatetime
-    replay: ReplayLink | None = None
+    replay: DataBackedReplayLink | None = None
 
 
 class BoardSummary(BaseModel):

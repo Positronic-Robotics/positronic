@@ -5427,7 +5427,7 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.24.1"
+version = "0.25.0"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
