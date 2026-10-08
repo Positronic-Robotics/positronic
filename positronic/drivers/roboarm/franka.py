@@ -445,7 +445,8 @@ class _Arm(DriverRun[command.CommandType]):
     def ready(self, call: pimm.calls.Call[None, None]) -> None:
         """Answer ``call`` once the arm takes moves, clearing a fault it holds first.
 
-        Answer with the error instead when it stays. ``Robot._ready`` runs the recovery on an error before this.
+        Answer with the error instead when it stays. It expects the recovery on an error to have run, so it answers
+        an error it finds as it stands.
         """
         with pimm.calls.raise_to(call):
             if self.stop_pressed:

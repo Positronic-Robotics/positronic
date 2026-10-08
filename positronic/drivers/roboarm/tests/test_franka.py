@@ -1481,14 +1481,7 @@ def test_a_ready_call_answers_the_release_instruction_while_the_emergency_stop_i
 def test_a_ready_call_runs_no_recovery_on_an_error_while_the_emergency_stop_is_pressed(desk, world):
     arm = FakeArm(PARK)
     desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
-    driver = _driver(arm)
-    clock = MockClock()
-    driver.state._bind(RecordingEmitter(), clock=clock)
-    ready = _readier(world, driver)
-    loop = driver.run(StopFlag(), clock)
-    for _ in range(3):  # init + the opening move
-        next(loop)
-    arm.error = 1
+    loop, ready = _started_with_error(_driver(arm), arm, world)
     before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
 
     answer = ready(None)
