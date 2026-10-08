@@ -1479,9 +1479,11 @@ def test_a_ready_call_answers_the_release_instruction_while_the_emergency_stop_i
 
 
 def _started_with_error(
-    driver: franka.Robot, arm: FakeArm, world: pimm.World
+    arm: FakeArm, world: pimm.World, **driver_options: Any
 ) -> tuple[Iterator[pimm.Command], pimm.calls.Caller[None, None]]:
-    """Run ``driver`` through init and the opening move, put ``arm`` in error, and return the run and a ready caller."""
+    """Run a driver on ``arm`` through init and the opening move, put ``arm`` in error, and return the run and a
+    ready caller."""
+    driver = _driver(arm, **driver_options)
     clock = MockClock()
     driver.state._bind(RecordingEmitter(), clock=clock)
     ready = _readier(world, driver)
@@ -1495,7 +1497,7 @@ def _started_with_error(
 def test_a_ready_call_runs_no_recovery_on_an_error_while_the_emergency_stop_is_pressed(desk, world):
     arm = FakeArm(PARK)
     desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
-    loop, ready = _started_with_error(_driver(arm), arm, world)
+    loop, ready = _started_with_error(arm, world)
     before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
 
     answer = ready(None)
@@ -1808,7 +1810,7 @@ def test_the_idle_time_brakes_the_arm_over_the_connection_desk_prepare_opened(de
 def test_a_ready_call_clears_an_error_the_recovery_clears_without_desk_prepare(desk, world):
     arm = FakeArm(PARK)
     arm.recover_clears = True
-    loop, ready = _started_with_error(_driver(arm), arm, world)
+    loop, ready = _started_with_error(arm, world)
     before = arm.calls.count(Call.RECOVER_FROM_ERRORS)
 
     answer = ready(None)
@@ -1825,7 +1827,7 @@ def test_a_ready_call_on_an_error_the_recovery_leaves_is_answered_after_desk_pre
     desk.calls = arm.calls  # one log for both fakes, so the halt, the brakes, FCI and prepare are ordered
     reconnected = FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED)
     _reconnect_to(monkeypatch, reconnected)
-    loop, ready = _started_with_error(_driver(arm), arm, world)
+    loop, ready = _started_with_error(arm, world)
     mark = len(arm.calls)
 
     answer = ready(None)
@@ -1858,7 +1860,7 @@ def test_a_ready_call_answers_the_error_that_desk_prepare_leaves(desk, world, mo
     reconnected.error = 1  # Desk.prepare() does not clear it either
     reconnected.error_message = 'the error on the new connection'
     _reconnect_to(monkeypatch, reconnected)
-    loop, ready = _started_with_error(_driver(arm), arm, world)
+    loop, ready = _started_with_error(arm, world)
 
     answer = ready(None)
     next(loop)
@@ -1871,7 +1873,7 @@ def test_a_ready_call_answers_the_error_that_desk_prepare_leaves(desk, world, mo
 def test_a_ready_call_answers_a_failed_desk_prepare(desk, world, monkeypatch):
     arm = FakeArm(PARK)
     monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
-    loop, ready = _started_with_error(_driver(arm), arm, world)
+    loop, ready = _started_with_error(arm, world)
     desk.raises[Call.PREPARE] = RuntimeError('TD2 self-test did not complete')
 
     answer = ready(None)
@@ -1884,7 +1886,7 @@ def test_a_ready_call_answers_a_failed_desk_prepare(desk, world, monkeypatch):
 def test_a_ready_call_on_a_driver_with_no_desk_session_answers_the_error_without_desk(world, monkeypatch, caplog):
     arm = FakeArm(PARK)
     monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
-    loop, ready = _started_with_error(_driver(arm, manage_desk=False), arm, world)
+    loop, ready = _started_with_error(arm, world, manage_desk=False)
 
     with caplog.at_level(logging.WARNING, logger=franka.__name__):
         answer = ready(None)
