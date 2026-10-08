@@ -18,7 +18,16 @@ from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.slug import Slugged, members_by_slug, slug_of
 from platform_client.tasks import TaskRef
-from pydantic import AfterValidator, BaseModel, Field, SecretStr, SerializationInfo, model_serializer, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    Field,
+    SecretStr,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 from typing_extensions import TypeVar
 
 
@@ -476,6 +485,13 @@ class EvalPlan(Cascade, Generic[Credential]):
     transaction_key: TransactionKey | None = Field(default=None, min_length=1)
     # The trials of the named eval this run takes. None runs every trial.
     sample: Sample | None = None
+
+    @model_serializer(mode='wrap')
+    def _without_an_unused_sample(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        serialized = handler(self)
+        if self.sample is None:
+            serialized.pop('sample', None)
+        return serialized
 
     @property
     def names_an_eval(self) -> bool:
