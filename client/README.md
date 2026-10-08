@@ -58,7 +58,7 @@ The gateway freezes the accepted request's quote and reserves its full maximum b
 The gateway configures `duration_rounding_sec`, with a default of 30 seconds, and rounds each episode duration up to that interval.
 `Tariff.for_rates` requires an explicit interval. Use zero for exact nanosecond pricing.
 The quote reserves the charge for the rounded cap. Zero duration adds no duration charge.
-Tariffs without that field retain exact nanosecond pricing and their original version hash.
+Tariffs without that field use exact nanosecond pricing and the v1 version hash.
 
 The credit balance belongs to the organization. `QuotaLimit` values from `users.me` describe independent limits and use each limit's own `scale`.
 The period credits meter uses six units per credit. Its remaining quota does not describe or fund the credit balance.
