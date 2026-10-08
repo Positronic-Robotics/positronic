@@ -316,6 +316,11 @@ class _Arm(DriverRun[command.CommandType]):
         self.emit_state()
 
     @property
+    def rejects_moves(self) -> bool:
+        """Whether the arm refused the goal the last reading found, with no goal sent since."""
+        return self._refused
+
+    @property
     def stop_pressed(self) -> bool:
         """Whether the last reading found the emergency stop pressed."""
         return self.safe_inputs.level(EMERGENCY_STOP_INPUT) is _SafeInputLevel.INACTIVE
@@ -441,26 +446,6 @@ class _Arm(DriverRun[command.CommandType]):
                 'the arm holds a fault that rejects every move, and the recovery did not clear it: '
                 'clear the error in Desk, then start the run again'
             )
-
-    def ready(self, call: pimm.calls.Call[None, None]) -> None:
-        """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
-
-        Answer with the error instead when it stays.
-        """
-        with pimm.calls.raise_to(call):
-            if self.stop_pressed:
-                raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
-            st = self.robot.state()
-            if st.error != 0 and not self.robot.recover_from_errors():
-                raise RuntimeError(f'the arm holds an error that the recovery did not clear: {st.error_message}')
-            self.clear_held_fault()
-            if self._refused and not self.safe_inputs.confirmed_clear:
-                triggered = self.safe_inputs.triggered
-                cause = (
-                    f'safe inputs {triggered} are triggered' if triggered else 'no reading shows every safe input clear'
-                )
-                raise RuntimeError(f'the arm rejects every move, and its fault stays: {cause}')
-            call.set_result(None)
 
     def move_to(
         self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
@@ -809,13 +794,15 @@ class Robot(pimm.ControlSystem):
             safe_inputs,
         )
 
-    def _clear_with_desk_prepare(self, desk: Desk, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
+    def _clear_with_desk_prepare(self, desk: Desk | None, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
         """Lock the brakes and turn FCI off, run ``Desk.prepare()`` as a run starts, connect to the arm again,
         and run the recovery on the new connection.
 
-        It runs only on a reading that found every safe input clear: a person may hold the arm, and only they
-        release it.
+        It runs only where the driver holds a Desk session, and on a reading that found every safe input clear:
+        a person may hold the arm, and only they release it.
         """
+        if desk is None:
+            return RecoveryOutcome.NOT_CLEARED
         if not arm.safe_inputs.confirmed_clear:
             logger.warning(
                 'The recovery did not clear the fault; no reading shows every safe input clear, so Desk does '
@@ -843,16 +830,15 @@ class Robot(pimm.ControlSystem):
         """Run the arm's error recovery once, answer every caller that asked for it on this tick, and return
         what it did.
 
-        When a caller asked and the recovery leaves the fault, Desk prepares the arm again, if the driver holds a
-        Desk session. A throw reaches the callers that asked and counts as NOT_CLEARED; one nobody asked for
-        reaches no caller, so it ends the run.
+        When a caller asked and the recovery leaves the fault, ``_clear_with_desk_prepare`` runs. A throw reaches
+        the callers that asked and counts as NOT_CLEARED; one nobody asked for reaches no caller, so it ends the run.
         """
         try:
             cleared = arm.robot.recover_from_errors()
             if asked:
                 logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
             outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
-            if asked and outcome is RecoveryOutcome.NOT_CLEARED and desk is not None:
+            if asked and outcome is RecoveryOutcome.NOT_CLEARED:
                 outcome = self._clear_with_desk_prepare(desk, arm, brakes)
         # rules-allow: swallowed-error — the throw is handed to every caller that asked
         except Exception as exc:
@@ -865,6 +851,32 @@ class Robot(pimm.ControlSystem):
         for call in asked:
             call.set_result(outcome)
         return outcome
+
+    def _ready(self, desk: Desk | None, arm: _Arm, brakes: _Brakes, call: pimm.calls.Call[None, None]) -> None:
+        """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
+
+        Where the recovery leaves the error, ``_clear_with_desk_prepare`` runs. Answer with the error instead when it
+        stays. A pressed emergency stop gets the release instruction, and no recovery.
+        """
+        with pimm.calls.raise_to(call):
+            if arm.stop_pressed:
+                raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
+            st = arm.robot.state()
+            if (
+                st.error != 0
+                and not arm.robot.recover_from_errors()
+                and self._clear_with_desk_prepare(desk, arm, brakes) is RecoveryOutcome.NOT_CLEARED
+            ):
+                remaining = arm.robot.state().error_message  # Desk's step may have replaced the connection
+                raise RuntimeError(f'the arm holds an error that the recovery did not clear: {remaining}')
+            arm.clear_held_fault()
+            if arm.rejects_moves and not arm.safe_inputs.confirmed_clear:
+                triggered = arm.safe_inputs.triggered
+                cause = (
+                    f'safe inputs {triggered} are triggered' if triggered else 'no reading shows every safe input clear'
+                )
+                raise RuntimeError(f'the arm rejects every move, and its fault stays: {cause}')
+            call.set_result(None)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
@@ -880,7 +892,7 @@ class Robot(pimm.ControlSystem):
 
             while not should_stop.value:
                 for call in self.ready.incoming():
-                    arm.ready(call)
+                    self._ready(desk, arm, brakes, call)
                 st = arm.robot.state()
                 arm.publish(st)
                 goal = arm.robot.goal()
