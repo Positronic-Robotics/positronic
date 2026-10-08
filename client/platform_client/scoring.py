@@ -15,17 +15,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+from eval_vocabulary.episode import STATIC_FILE, SUCCESS, TASK
 from platform_client.evals import MOLMO_SCORER, ScorerRef
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
 
 SCORES_FILENAME = 'scores.json'
-# The file and the key where positronic records an episode's statics and its success.
-STATIC_FILE = 'static.json'
-SUCCESS_KEY = 'eval.success'
-# MolmoSpaces' task name: the instruction that the episode ran.
-MOLMO_TASK_KEY = 'task'
 
 
 @dataclass(frozen=True)
@@ -91,10 +87,10 @@ def read_static(episode: Path) -> dict[str, object] | None:
 
 def recorded_task_and_success(static: Mapping[str, object], task_key: str) -> tuple[str, bool] | None:
     """The task under `task_key` and the recorded success, or None when either is missing or of the wrong type."""
-    success, task = static.get(SUCCESS_KEY), static.get(task_key)
+    success, task = static.get(SUCCESS), static.get(task_key)
     misrecorded = [
         f'{key}={static[key]!r} is not a {kind.__name__}'
-        for key, kind in ((SUCCESS_KEY, bool), (task_key, str))
+        for key, kind in ((SUCCESS, bool), (task_key, str))
         if key in static and not isinstance(static[key], kind)
     ]
     if misrecorded:
@@ -108,7 +104,7 @@ def recorded_task_and_success(static: Mapping[str, object], task_key: str) -> tu
 def molmo_outcome(episode: Path) -> Outcome | None:
     """MolmoSpaces' scorer: an episode succeeds or fails, and a run ranks on its success rate."""
     static = read_static(episode)
-    recorded = recorded_task_and_success(static, MOLMO_TASK_KEY) if static is not None else None
+    recorded = recorded_task_and_success(static, TASK) if static is not None else None
     return Outcome(*recorded) if recorded is not None else None
 
 

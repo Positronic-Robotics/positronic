@@ -1,17 +1,20 @@
 [project]
 name = "positronic-platform-client"
-version = "0.27.0"
+version = "0.28.0"
 description = "Typed wire contract and HTTP client for the Positronic evaluation platform API"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-# Nothing else, ever: a service that only speaks to the platform installs this subdirectory alone
+# No robotics or web stack: a service that only speaks to the platform installs this subdirectory alone
 # (`git+…#subdirectory=client`) and must not pull the robotics stack in behind it.
 dependencies = [
     # 2.11 is the first that takes a TypeVar with constraints and a default, which `EvalPlan` is generic in.
     "pydantic>=2.11",
     "httpx>=0.27",
     "typing-extensions>=4.12.2",
+    # The names an episode records, which `scoring` reads. It has no dependencies, and the root pins it
+    # exactly at the same version.
+    "positronic-eval-vocabulary==0.2.0",
 ]
 
 [project.scripts]

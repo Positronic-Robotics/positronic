@@ -4,8 +4,11 @@ Every sim adapter and embodiment produces them and every vendor codec consumes t
 here once, in a leaf module with no positronic imports, so a rename is a single-site change the type
 checker propagates instead of a string literal duplicated across codecs, configs, adapters and datasets.
 A key one package owns lives in that package's own ``keys`` module instead: a trial's in ``eval.keys``,
-the robot model's in ``drivers.roboarm.keys``, and so on.
+the robot model's in ``drivers.roboarm.keys``, and so on. A key that a scorer also reads lives in the
+dependency-free ``eval_vocabulary``, and a keys module imports from that package only.
 """
+
+from eval_vocabulary.episode import TASK as TASK
 
 JOINTS_SUFFIX = '.q'
 JOINT_VEL_SUFFIX = '.dq'
@@ -50,7 +53,6 @@ JOINT_VEL = f'{ROBOT_STATE}{JOINT_VEL_SUFFIX}'
 EE_POSE = f'{ROBOT_STATE}{EE_POSE_SUFFIX}'
 ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'
-TASK = 'task'
 # The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.
 DESCRIPTOR = 'descriptor'
 # The prefix that identifies a camera on the wire: an embodiment declares its cameras by naming

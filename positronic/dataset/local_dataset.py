@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from eval_vocabulary.episode import STATIC_FILE
 
 from positronic.utils.git import get_package_git_state
 from positronic.utils.lazy import LazyDict
@@ -219,7 +220,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._finished = True
 
         # Write all static items into a single static.json
-        episode_json = self._path / 'static.json'
+        episode_json = self._path / STATIC_FILE
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
                 json.dump(self._static_items, f, indent=2, cls=_StaticEncoder)
@@ -317,7 +318,7 @@ class DiskEpisode(Episode):
     def _static_data(self) -> dict[str, Any]:
         if self._static is None:
             self._static = {}
-            ep_json = self._dir / 'static.json'
+            ep_json = self._dir / STATIC_FILE
             if ep_json.exists():
                 with ep_json.open('r', encoding='utf-8') as f:
                     data = json.load(f, object_hook=_static_decode_hook)
