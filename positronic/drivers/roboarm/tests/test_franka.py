@@ -17,6 +17,16 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 
 PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = PARK + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+# Joint 4's upper soft limit in the bundled FR3 model, and the highest target the driver sends it.
+J4_UPPER = -0.1518
+J4_HIGHEST = J4_UPPER - franka._Arm._TARGET_MARGIN_INSIDE_SOFT_LIMITS_RAD
+
+
+def _park_with_j4(j4: float) -> np.ndarray:
+    return np.where(np.arange(7) == 3, j4, PARK)
+
+
+PAST_J4 = _park_with_j4(-0.05)
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
 # The emergency stop (x31), released and pressed.
 CLEAR = 'Active'
@@ -408,6 +418,57 @@ def test_a_joint_target_the_vendor_would_refuse_leaves_the_running_law_alone(des
 
     assert arm.modes[mark:] == [], 'the arm changed law for a target it never held'
     assert not any(np.isnan(t).any() for t in arm.targets), 'a NaN target reached the arm'
+
+
+def _streamed_target(cmd: command.CommandType) -> np.ndarray:
+    """The joint target the arm gets for ``cmd``, streamed to a driver whose arm stands at the park pose."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    loop = driver.run(StopFlag(), MockClock())
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    feed.push(cmd)
+    for _ in range(2):
+        next(loop)
+    return arm.targets[-1]
+
+
+@pytest.mark.parametrize(
+    'cmd, asked',
+    [
+        (command.JointPosition(positions=PAST_J4), -0.05),
+        (command.JointDelta(velocities=PAST_J4 - PARK), -0.05),
+        (command.JointPosition(positions=_park_with_j4(-0.17)), -0.17),
+    ],
+    ids=['position-past-the-limit', 'delta-past-the-limit', 'inside-the-margin'],
+)
+def test_a_joint_command_near_or_past_a_soft_limit_reaches_the_arm_a_margin_inside_it(desk, caplog, cmd, asked):
+    """The arm freezes on a target past a limit, and stays frozen for the rest of the episode."""
+    np.testing.assert_allclose(_streamed_target(cmd), _park_with_j4(J4_HIGHEST), atol=1e-6)
+    assert f'clamping joint4 {asked:.4f} to {J4_HIGHEST:.4f}' in caplog.text
+
+
+@pytest.mark.parametrize('target', [JOGGED, _park_with_j4(J4_HIGHEST)], ids=['inside', 'at-the-margin'])
+def test_a_joint_command_a_margin_inside_the_soft_limits_reaches_the_arm_unchanged(desk, caplog, target):
+    np.testing.assert_array_equal(_streamed_target(command.JointPosition(positions=target)), target)
+    assert 'soft limits' not in caplog.text
+
+
+def test_a_run_of_clamped_commands_logs_its_first_command_and_its_length(desk, caplog):
+    """A policy that pushes against a limit does so on every step, and a line per step buries the one that names it."""
+    watching = _arm(_driver(FakeArm(PARK)), MockClock())
+
+    for _ in range(3):
+        watching.to_joints(command.JointPosition(positions=PAST_J4))
+    watching.to_joints(command.JointPosition(positions=JOGGED))
+
+    assert [r.message for r in caplog.records if 'lamp' in r.message] == [
+        'A command asks for joints less than 0.05 rad inside their soft limits; clamping joint4 -0.0500 to -0.2018',
+        'Clamped 3 commands in a row; the next command needed no clamp',
+    ]
 
 
 def test_park_puts_the_arm_under_its_native_law():
