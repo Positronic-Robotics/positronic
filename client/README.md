@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.25.0"
+uv add "positronic-platform-client==0.26.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -344,6 +344,46 @@ same on every board you appear on.
 Each row carries `replay`, a page that plays back the camera video of the row's submission, with the
 task and outcome of each episode. The page opens without a key, and `replay` is absent until the
 platform has built it.
+
+`replay.data_url` names the JSON object the page renders from. `about` identifies the submission,
+and each episode carries its values and one absolute URL per camera video. A page on another origin
+can read the object, the videos and both `rankings` routes with no key:
+
+```json
+{
+  "title": "<board title> — 0ddba7",
+  "url": "https://app.positronic.ro/v/<token>/",
+  "about": [
+    {"key": "board", "label": "Board", "value": "<slug>"},
+    {"key": "eval", "label": "Eval", "value": "<eval>"},
+    {"key": "tag", "label": "Tag", "value": "0ddba7"},
+    {"key": "submission_id", "label": "Submission", "value": "<hex id>"},
+    {"key": "primary_score", "label": "success_rate", "value": 0.35}
+  ],
+  "columns": [{"key": "task", "label": "Task"}, {"key": "outcome", "label": "Outcome"}],
+  "episodes": [
+    {
+      "index": 0,
+      "values": {"task": "<task>", "outcome": "Success"},
+      "duration_s": 24.1,
+      "videos": [
+        {
+          "camera": "image.exterior",
+          "url": "https://app.positronic.ro/v/<token>/episodes/0/image.exterior.mp4",
+          "src": "episodes/0/image.exterior.mp4",
+          "width": 640,
+          "height": 360,
+          "duration_s": 24.1
+        }
+      ]
+    }
+  ]
+}
+```
+
+`columns` labels the keys of each episode's `values`. `src` is the video's path relative to the
+object. Every video of an episode starts at the episode's first camera frame, so one clock plays them
+together.
 
 ## From Python
 
