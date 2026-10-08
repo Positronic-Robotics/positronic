@@ -12,7 +12,7 @@ from pimm.tests.testing import MockClock, wire_call
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command, franka
 from positronic.drivers.roboarm.tests.fakes import StopFlag
-from positronic.drivers.utils import MoveAbandoned
+from positronic.drivers.utils import MoveAbandoned, RecoveryOutcome
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
@@ -271,9 +271,9 @@ def _readier(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[None,
     return caller
 
 
-def _recoverer(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[None, franka.RecoveryOutcome]:
+def _recoverer(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[None, RecoveryOutcome]:
     """A caller on ``driver.recover``, for a test that pumps its generator rather than running a World."""
-    caller = pimm.calls.ControlSystemCaller[None, franka.RecoveryOutcome](driver)
+    caller = pimm.calls.ControlSystemCaller[None, RecoveryOutcome](driver)
     wire_call(world, caller, driver.recover)
     return caller
 
@@ -1457,7 +1457,7 @@ def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):
     next(loop)
 
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1
-    assert answer.result() is franka.RecoveryOutcome.CLEARED
+    assert answer.result() is RecoveryOutcome.CLEARED
 
 
 def test_a_console_recover_call_is_answered_that_the_fault_did_not_clear(desk, world):
@@ -1474,7 +1474,7 @@ def test_a_console_recover_call_is_answered_that_the_fault_did_not_clear(desk, w
     answer = _recoverer(world, driver)(None)
     next(loop)
 
-    assert answer.result() is franka.RecoveryOutcome.NOT_CLEARED
+    assert answer.result() is RecoveryOutcome.NOT_CLEARED
 
 
 def test_a_recovery_the_vendor_fails_answers_the_console_rather_than_ending_the_run(desk, world):
@@ -1503,7 +1503,7 @@ def test_a_recovery_the_vendor_fails_answers_the_console_rather_than_ending_the_
     arm.recover_raises, arm.error = None, 0
     answer = recover(None)
     next(loop)
-    assert answer.result() is franka.RecoveryOutcome.CLEARED, 'the run ended on the failed recovery'
+    assert answer.result() is RecoveryOutcome.CLEARED, 'the run ended on the failed recovery'
 
 
 def test_a_recovery_that_clears_the_fault_leaves_the_tick_no_second_one(desk, world):
@@ -1525,7 +1525,7 @@ def test_a_recovery_that_clears_the_fault_leaves_the_tick_no_second_one(desk, wo
     next(loop)
 
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1, 'the tick ran the recovery twice'
-    assert answer.result() is franka.RecoveryOutcome.CLEARED
+    assert answer.result() is RecoveryOutcome.CLEARED
     assert arm.error == 0
 
 
