@@ -10,7 +10,8 @@ import pimm
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter, EpisodeWriter, Time
-from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand
+from positronic.dataset.dataset import DatasetFactory
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus

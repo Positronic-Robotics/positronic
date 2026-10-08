@@ -344,7 +344,9 @@ Each line of `edits.jsonl` is one JSON record carrying its op. `{"op": "set_stat
 
 ## `DsWriterAgent` (streaming recorder)
 
-`DsWriterAgent` is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends updated inputs with their `pimm.Message.time` timestamps.
+`DsWriterAgent` records data collection and replay runs. Inference recording belongs to
+[`Harness`](../policy/harness.py), which writes through the same dataset interfaces.
+The agent is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends updated inputs with their `pimm.Message.time` timestamps.
 
 Key ideas
 - Inputs are registered explicitly through `DsWriterAgent.add_signal(name, serializer=None)`.

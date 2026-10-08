@@ -10,7 +10,7 @@ import pimm
 from pimm.time import EMITTED_WALL, Time
 from positronic.utils import frozen_keys_dict
 
-from .dataset import DatasetWriter
+from .dataset import DatasetFactory, DatasetWriter
 from .episode import META_PATH, EpisodeWriter
 from .serializers import Serializer, StatefulSerializer, _PureSerializer, expand_suffixed
 
@@ -19,9 +19,6 @@ logger.setLevel(logging.INFO)
 
 # A factory of context managers the caller brackets each record-flush I/O section with (default inert).
 ContextFactory: TypeAlias = Callable[[], AbstractContextManager[Any]]
-
-# A factory of dataset writers, one per path a command names.
-DatasetFactory: TypeAlias = Callable[[Path], DatasetWriter]
 
 
 class DsWriterCommandType(Enum):

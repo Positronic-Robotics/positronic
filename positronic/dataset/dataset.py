@@ -1,7 +1,8 @@
 import collections.abc
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
-from typing import Any, overload
+from pathlib import Path
+from typing import Any, TypeAlias, overload
 
 import numpy as np
 
@@ -21,6 +22,9 @@ class DatasetWriter(AbstractContextManager, ABC):
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize resources on context-manager exit."""
         ...
+
+
+DatasetFactory: TypeAlias = collections.abc.Callable[[Path], DatasetWriter]
 
 
 class Dataset(ABC, collections.abc.Sequence[Episode]):

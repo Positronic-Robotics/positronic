@@ -21,7 +21,6 @@ from websockets.sync.client import connect
 import pimm
 from pimm.shared_memory import NumpySMAdapter
 from positronic import keys, wire
-from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import keyboard
@@ -199,8 +198,7 @@ def test_the_web_console_refuses_a_simulated_embodiment():
 
 
 class _ForwarderBench:
-    """A ``TrialForwarder`` with the console's caller, the harness's handler, the harness's recorder command and the
-    harness's ``done`` paired to it in a virtual-time world. Each step of a script acts on them."""
+    """A ``TrialForwarder`` whose trial calls, rollout calls and verdicts a script drives in virtual time."""
 
     PAYLOAD = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True}
 
@@ -217,7 +215,6 @@ class _ForwarderBench:
         with pimm.World(virtual_time=True) as world:
             self._trials = world.pair(self.forwarder.trials)
             self._harness = world.pair(self.forwarder.perform_task)
-            self._recorder = world.pair(self.forwarder.recorder)
             self._done = world.pair(self.forwarder.done)
             script = [(step, 0.05) for step in (*steps, self.watch, self.watch, self.watch)]
             drive_scheduler(world.start([self.forwarder, scripted_driver(*script)]))
@@ -235,9 +232,6 @@ class _ForwarderBench:
 
     def end(self) -> None:
         self.answers.append(self._trials(EndTrial(self.PAYLOAD)))
-
-    def record(self, command: DsWriterCommand) -> Callable[[], None]:
-        return lambda: self._recorder.emit(command)
 
     def answer(self, result: dict) -> None:
         for call in self.harness_calls:
@@ -264,40 +258,21 @@ def test_the_forwarder_hands_a_failed_episode_back_to_its_caller():
         bench.answers[0].result()
 
 
-def test_a_verdict_reaches_the_harness_once_after_the_harness_starts_its_trial():
+def test_a_verdict_is_forwarded_once_without_waiting_for_a_start_notification():
     bench = _ForwarderBench()
-    start = bench.record(DsWriterCommand.START(None))
-    before_start: list[int] = []
-    bench.run(
-        bench.ask,
-        bench.watch,
-        bench.end,
-        bench.watch,
-        bench.watch,
-        lambda: before_start.append(len(bench.done)),
-        start,
-        bench.watch,
-        bench.watch,
-    )
-    assert before_start == [0]
+    bench.run(bench.ask, bench.watch, bench.end, bench.watch, bench.end, bench.watch)
     assert bench.done == [_ForwarderBench.PAYLOAD]
 
 
-def test_a_verdict_for_a_trial_that_stopped_on_its_own_never_reaches_the_harness():
+def test_a_verdict_for_an_answered_trial_returns_its_result_without_sending_done():
     bench = _ForwarderBench()
-    start, stop = bench.record(DsWriterCommand.START(None)), bench.record(DsWriterCommand.STOP())
     timeout = {eval_keys.TERMINATED: False}
-    bench.run(
-        bench.ask,
-        bench.watch,
-        start,
-        bench.watch,
-        stop,
-        bench.watch,
-        bench.end,
-        bench.watch,
-        lambda: bench.answer(timeout),
-    )
+
+    def finish_and_end():
+        bench.answer(timeout)
+        bench.end()
+
+    bench.run(bench.ask, bench.watch, finish_and_end)
     assert bench.done == []
     assert [answer.result() for answer in bench.answers] == [timeout, timeout]
 
@@ -467,10 +442,9 @@ def _run_attended(
     harness = Harness(embodiment)
     operator = _PageOperator(partial(script, f'http://127.0.0.1:{port}'))
     with pimm.World() as world:
-        wire.wire_embodiment(world, harness, embodiment, record=False, done=forwarder.done)
+        wire.wire_embodiment(world, harness, embodiment, done=forwarder.done)
         world.connect(console.trials, forwarder.trials)
         world.connect(forwarder.perform_task, harness.perform_task)
-        world.connect(harness.ds_command, forwarder.recorder)
         world.run([operator, forwarder, harness, *embodiment.control_systems], [console])
 
 
@@ -484,26 +458,25 @@ def _phase(base: str) -> Phase | None:
     return status.run.phase if status else None
 
 
-@pytest.mark.timeout(120.0)
-def test_a_verdict_given_before_the_harness_takes_the_trial_still_ends_it(tmp_path):
-    """Start and Finish reach the console in one round, so the verdict leaves before the trial reaches the
-    harness, which drops a done signal while it is idle."""
-    presses: list[int] = []
-    statuses: list[Status | None] = []
+def test_a_verdict_sent_with_start_is_discarded_before_the_rollout_begins():
+    policy = _IdlePolicy()
+    embodiment = _embodiment(simulated=True)
+    harness = Harness(embodiment)
+    forwarder = TrialForwarder(partial(Rollout, policy=policy, output_path=None))
+    answers = []
+    with pimm.World(virtual_time=True) as world:
+        caller = world.pair(forwarder.trials)
+        wire.wire_embodiment(world, harness, embodiment, done=forwarder.done)
+        world.connect(forwarder.perform_task, harness.perform_task)
 
-    def script(base: str, clock: pimm.Clock):
-        yield from _wait(lambda: _status(base) is not None, clock, seconds=60.0)
-        presses.append(_post(base, '/episode/start'))
-        presses.append(_post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
-        yield from _wait(lambda: _phase(base) is Phase.READY, clock)
-        statuses.append(_status(base))
+        def start_and_finish():
+            answers.append(caller(Task('pick', 0.05)))
+            answers.append(caller(EndTrial(_ForwarderBench.PAYLOAD)))
 
-    _run_attended(tmp_path, script)
-
-    assert presses == [200, 200]
-    [status] = statuses
-    assert status is not None
-    assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS]
+        script = scripted_driver((start_and_finish, 0.2))
+        drive_scheduler(world.start([forwarder, harness, *embodiment.control_systems, script]))
+    assert policy.observations
+    assert [answer.result() for answer in answers] == [{eval_keys.TERMINATED: False}] * 2
 
 
 @pytest.mark.timeout(120.0)

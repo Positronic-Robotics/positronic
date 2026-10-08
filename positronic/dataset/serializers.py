@@ -31,7 +31,7 @@ Serializer = Callable[[Any], Any | dict[str, Any]]
 
 
 class StatefulSerializer:
-    """Base for serializers registered with ``DsWriterAgent``.
+    """Base for serializers whose state is scoped to an episode.
 
     ``reset`` is called automatically at the start of each episode.
     The default implementation is a no-op, suitable for pure serializers.

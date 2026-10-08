@@ -1,7 +1,11 @@
 import logging
+import math
 import time
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +15,12 @@ from opentelemetry.trace import Span
 import pimm
 from pimm.time import EMITTED_WALL, EMITTED_WORLD
 from positronic import keys, telemetry, telemetry_keys
-from positronic.dataset.ds_writer_agent import DsWriterCommand
-from positronic.dataset.serializers import expand_suffixed
+from positronic.dataset.dataset import DatasetFactory
+from positronic.dataset.episode import EpisodeWriter
+from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.dataset.serializers import Serializer, StatefulSerializer, expand_suffixed
 from positronic.drivers.roboarm.ik import assert_default_frame
-from positronic.eval import Embodiment, Task
+from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Obs, Policy, PolicyRun
@@ -82,6 +88,16 @@ class _EpisodeTelemetry:
         telemetry.force_flush()
 
 
+class _CommandEmitter(pimm.ControlSystemEmitter):
+    """Retain the emitted message for synchronous recording after command delivery."""
+
+    message: pimm.Message | None = None
+
+    def _emit(self, data, time: pimm.Time):
+        super()._emit(data, time)
+        self.message = pimm.Message(data, time)._received(self._emission_clock)
+
+
 class Harness(pimm.ControlSystem):
     """Run episode lifecycles and emit each policy step's commands immediately.
 
@@ -90,6 +106,10 @@ class Harness(pimm.ControlSystem):
     ticks. Every newly available answer can call the policy before its requested wake-up time.
     Real execution polls for completions at most every 5 ms while work is pending. Uncharged simulation
     handles completions before advancing time, including unrestricted chains of calls at one instant.
+
+    Recording samples observations and privileged inputs before policy calls and at ``recording_hz`` between
+    them. Each pass resets the sampling deadline. Harness appends commands after emission and waits for writer
+    finalization before answering the rollout. A rollout without an output path, or ``record=False``, writes nothing.
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline or a truthy ``done`` signal.
     Its answer carries the terminal payload, or the error that failed the episode. The caller decides
@@ -100,22 +120,43 @@ class Harness(pimm.ControlSystem):
     device in error (``_ready_devices_in_error``).
     """
 
-    def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        embodiment: Embodiment,
+        *,
+        static_meta: dict[str, Any] | None = None,
+        privileged: dict[str, Observation] | None = None,
+        dataset_factory: DatasetFactory | None = None,
+        recording_hz: float = 1000,
+        record: bool = True,
+    ):
+        if not math.isfinite(recording_hz) or not 0 < recording_hz <= 1e9:
+            raise ValueError('recording_hz must be positive and at most 1 GHz')
         self._embodiment = embodiment
         self._static_meta = static_meta or {}
+        self._privileged = privileged or {}
+        names = [*embodiment.observations, *embodiment.commands, *self._privileged]
+        if len(names) != len(set(names)):
+            raise ValueError('Observation, command and privileged signal names must be distinct')
+        self._dataset_factory = (
+            (dataset_factory or partial(LocalDatasetWriter, video_encoder=embodiment.video_encoder)) if record else None
+        )
+        self._recording_period_ns = round(1e9 / recording_hz)
+        self._writer: EpisodeWriter | None = None
+        self._recorded_privileged: set[str] = set()
         self._obs_by_signal: dict[str, dict[str, Any]] = {}
         self._telemetry = _EpisodeTelemetry()
         # A ready call the harness made between episodes, by device name, until the device answers it.
         self._repairs: dict[str, pimm.calls.Answer[None]] = {}
 
         self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
-        self.commands = pimm.EmitterDict(self, names=embodiment.commands)
+        self.commands = {name: _CommandEmitter(self) for name in embodiment.commands}
+        self.privileged = pimm.ReceiverDict(self, names=self._privileged)
         self.ready = pimm.calls.CallerDict[None, None](self, names=embodiment.ready_handlers)
         self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
 
         self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict[str, Any]](self)
         self.manual_command = pimm.ControlSystemReceiver(self)
-        self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.deadline_ns = pimm.ControlSystemEmitter[int | None](self)
         self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
         self.done = pimm.DefaultingReceiver[dict](self, default={})
@@ -180,6 +221,22 @@ class Harness(pimm.ControlSystem):
         meta[keys.TASK] = task.instruction
         return meta
 
+    @staticmethod
+    def _serialize(name: str, value: Any, serializer: Serializer | None) -> dict[str, Any]:
+        if serializer is not None:
+            value = serializer(value)
+        return {
+            full_name: entry.copy() if isinstance(entry, np.ndarray) else entry
+            for full_name, entry in expand_suffixed(name, value)
+            if entry is not None
+        }
+
+    @telemetry.traced(telemetry_keys.SPAN_RECORD_IO)
+    def _append(self, values: dict[str, Any], time: pimm.Time) -> None:
+        assert self._writer is not None
+        for name, value in values.items():
+            self._writer.append(name, value, time)
+
     def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
         """Read sensors, reusing each signal's serialized fields until a new message arrives.
 
@@ -189,6 +246,7 @@ class Harness(pimm.ControlSystem):
         Put each signal's read and conversion durations into ``step_ms``.
         """
         inputs: dict[str, Any] = {}
+        complete = True
         assert_default_frame(self._statics())
         for name, obs in self._embodiment.observations.items():
             read_started_ns = time.perf_counter_ns()
@@ -196,25 +254,35 @@ class Harness(pimm.ControlSystem):
             convert_started_ns = time.perf_counter_ns()
             step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (convert_started_ns - read_started_ns) / 1e6
             if message is None:
-                return None
+                complete = False
+                continue
             if isinstance(message.data, pimm.SignalError):
                 # A signal returns one instance on many reads, and each raise adds to its traceback. So start a new one.
                 raise message.data.with_traceback(None)
             if message.updated or name not in self._obs_by_signal:
-                value = message.data
-                if obs.serializer is not None:
-                    value = obs.serializer(value)
-                self._obs_by_signal[name] = {
-                    full_name: entry.copy() if isinstance(entry, np.ndarray) else entry
-                    for full_name, entry in expand_suffixed(name, value)
-                    if entry is not None
-                }
+                self._obs_by_signal[name] = self._serialize(name, message.data, obs.serializer)
                 converted_ns = time.perf_counter_ns() - convert_started_ns
                 step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = converted_ns / 1e6
+                if self._writer is not None:
+                    self._append(self._obs_by_signal[name], message.time)
             inputs.update(self._obs_by_signal[name])
+        if not complete:
+            return None
         inputs[keys.TASK] = task.instruction
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return frozen_view(inputs)
+
+    def _sample(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
+        obs = self.read_obs(task, step_ms)
+        if self._writer is not None:
+            for name, spec in self._privileged.items():
+                message = self.privileged[name].read()
+                if message is None or isinstance(message.data, pimm.SignalError):
+                    continue
+                if message.updated or name not in self._recorded_privileged:
+                    self._append(self._serialize(name, message.data, spec.serializer), message.time)
+                    self._recorded_privileged.add(name)
+        return obs
 
     def _step(self, task: Task, runtime: Executor, policy_run: PolicyRun, due_ns: int | None) -> int | None:
         """Read sensors, call the policy, emit commands, and return its clamped next wake-up time.
@@ -228,7 +296,7 @@ class Harness(pimm.ControlSystem):
                 if due_ns is not None and runtime.time_ns >= due_ns:
                     step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = (runtime.time_ns - due_ns) / 1e6
                 observe_started_ns = time.perf_counter_ns()
-                obs = self.read_obs(task, step_ms)
+                obs = self._sample(task, step_ms)
                 policy_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
                 if obs is None:
@@ -243,6 +311,12 @@ class Harness(pimm.ControlSystem):
                 for name, value in step.commands.items():
                     self.commands[name].emit(value)
                 step_ms[telemetry_keys.ATTR_STEP_EMIT_MS] = (time.perf_counter_ns() - emit_started_ns) / 1e6
+                if self._writer is not None:
+                    for name in step.commands:
+                        message = self.commands[name].message
+                        assert message is not None
+                        values = self._serialize(name, message.data, self._embodiment.commands[name].serializer)
+                        self._append(values, message.time)
             finally:
                 telemetry.set_attrs(span, **step_ms)
         period_sec = (step.resume_at_ns - started_at_ns) / 1e9
@@ -282,6 +356,69 @@ class Harness(pimm.ControlSystem):
         yield self._yield(delay_ns / 1e9)
         return runtime.take_completed()
 
+    @contextmanager
+    def _recording(self, path: Path | None) -> Iterator[None]:
+        serializers = [
+            spec.serializer
+            for specs in (self._embodiment.observations, self._embodiment.commands, self._privileged)
+            for spec in specs.values()
+        ]
+        for serializer in serializers:
+            if isinstance(serializer, StatefulSerializer):
+                serializer.reset()
+        try:
+            with ExitStack() as stack:
+                if path is not None and self._dataset_factory is not None:
+                    with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
+                        dataset = stack.enter_context(self._dataset_factory(path))
+                        writer = dataset.new_episode()
+                        self._writer = writer.__enter__()
+                        stack.push(telemetry.traced(telemetry_keys.SPAN_RECORD_IO)(writer.__exit__))
+                yield
+        finally:
+            self._writer = None
+            self._recorded_privileged.clear()
+
+    def _rollout(
+        self,
+        should_stop: pimm.SignalReceiver,
+        task: Task,
+        runtime: Executor,
+        policy_run: PolicyRun,
+        deadline_ns: int | None,
+    ) -> pimm.Run[dict[str, Any] | None]:
+        payload = None
+        resume_at_ns = None
+        sample_at_ns = runtime.time_ns
+        completed = ()
+        while not should_stop.value and payload is None:
+            sampled_ns = runtime.time_ns
+            if completed or resume_at_ns is None or sampled_ns >= resume_at_ns:
+                resume_at_ns = self._step(task, runtime, policy_run, resume_at_ns)
+                sample_at_ns = sampled_ns + self._recording_period_ns
+            elif self._writer is not None and sampled_ns >= sample_at_ns:
+                self._sample(task, {})
+                sample_at_ns = sampled_ns + self._recording_period_ns
+            # No complete observation yet: read the sensors again after one poll period.
+            wake_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9) if resume_at_ns is None else resume_at_ns
+            if self._writer is not None:
+                wake_at_ns = min(wake_at_ns, sample_at_ns)
+            if deadline_ns is not None:
+                wake_at_ns = min(wake_at_ns, deadline_ns)
+            completed = yield from self._wait_for_next_tick(runtime, wake_at_ns)
+            if call := next(self.perform_task.incoming(), None):
+                call.set_exception(RuntimeError('An episode is already running'))
+            pimm.read_updated(self.manual_command)
+            payload = self._trial_terminal(
+                pimm.read_updated(self.done),
+                runtime.time_ns,
+                deadline_ns,
+                EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL,
+            )
+        if self._writer is not None:
+            self._sample(task, {})
+        return payload
+
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
     ) -> pimm.Run[dict[str, Any] | None]:
@@ -297,44 +434,19 @@ class Harness(pimm.ControlSystem):
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
         policy_run = None
-        opened = False
         try:
             policy_run = runtime.start(rollout.policy)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
-            self.ds_command.emit(DsWriterCommand.START(rollout.output_path))
-            opened = True
-            payload = None
-            resume_at_ns = None
-            completed = ()
-            while not should_stop.value and payload is None:
-                if completed or resume_at_ns is None or runtime.time_ns >= resume_at_ns:
-                    resume_at_ns = self._step(task, runtime, policy_run, resume_at_ns)
-                # No complete observation yet: read the sensors again after one poll period.
-                wake_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9) if resume_at_ns is None else resume_at_ns
-                if deadline_ns is not None:
-                    wake_at_ns = min(wake_at_ns, deadline_ns)
-                completed = yield from self._wait_for_next_tick(runtime, wake_at_ns)
-                if call := next(self.perform_task.incoming(), None):
-                    call.set_exception(RuntimeError('An episode is already running'))
-                pimm.read_updated(self.manual_command)
-                payload = self._trial_terminal(
-                    pimm.read_updated(self.done),
-                    runtime.time_ns,
-                    deadline_ns,
-                    EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL,
-                )
-            self.deadline_ns.emit(None)
-            self.ds_command.emit(
-                DsWriterCommand.STOP({**self._build_episode_meta(rollout, runtime), **(payload or {})})
-            )
-        except Exception:
-            # A failed episode clears its deadline and discards its recording: the harness serves the next call.
-            if opened:
+            try:
+                with self._recording(rollout.output_path):
+                    payload = yield from self._rollout(should_stop, task, runtime, policy_run, deadline_ns)
+                    if self._writer is not None:
+                        for name, value in (self._build_episode_meta(rollout, runtime) | (payload or {})).items():
+                            self._writer.set_static(name, value)
+            finally:
                 self.deadline_ns.emit(None)
-                self.ds_command.emit(DsWriterCommand.ABORT())
-            raise
         finally:
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
@@ -347,10 +459,7 @@ class Harness(pimm.ControlSystem):
                 logging.info('Policy closed')
             self._obs_by_signal.clear()
 
-        virtual_now = clock.now()
-        # Let the recorder consume STOP while its flush still belongs to the episode span.
-        yield self._yield()
-        self._telemetry.end(virtual_now)
+        self._telemetry.end(clock.now())
         if payload is not None:
             back_args = {k: v for k, v in task.prepare_args.items() if k != eval_keys.SCENE}
             # rules-allow: swallowed-error — the move back is cleanup, and the recording is already complete.
@@ -361,6 +470,9 @@ class Harness(pimm.ControlSystem):
         return payload
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> pimm.Run[None]:
+        for emitter in self.commands.values():
+            # A command without a device receiver still needs the world's emission timestamps.
+            emitter._clock = clock
         # Episode spans must end before leaving the scope that closes the telemetry provider.
         with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS):
             while not should_stop.value:
