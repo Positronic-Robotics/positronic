@@ -88,9 +88,9 @@ positronic account credits list-purchases --org=acme --limit=50 --after='"last-p
 ```
 
 `users.me` lists every organization the caller belongs to in `organizations`, sorted by slug.
-It also names the caller's personal organization in `personal_org` when the platform keeps one.
 Older platforms that omit `organizations` produce an empty list. Use `--org` to select a shared organization.
-The caller owns that organization alone. `account`, `buy` and `list-purchases` use it when the caller gives no `--org`.
+`personal_org` names the organization that the caller owns alone, when the platform keeps one.
+`account`, `buy` and `list-purchases` use `personal_org` when the caller gives no `--org`.
 Each of these commands prints the organization it uses on stderr, for example `org: user-a0 (personal org)`.
 A platform that keeps no personal organization for the caller requires `--org`.
 
