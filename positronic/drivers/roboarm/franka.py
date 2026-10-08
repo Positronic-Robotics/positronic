@@ -570,22 +570,27 @@ class _Brakes:
     open for the whole run.
     """
 
-    def __init__(self, desk: Desk | None, robot: pf.Robot, clock: pimm.Clock, after_idle_s: float | None):
+    def __init__(self, desk: Desk | None, arm: _Arm, clock: pimm.Clock, after_idle_s: float | None):
         self._desk = desk
-        self._robot = robot
+        self._arm = arm
         self._clock = clock
         self._after_idle_s = after_idle_s
         self._closed = False
         self._idle_since = clock.now()
 
+    def open(self) -> None:
+        """Open the brakes, and count the idle time from now."""
+        assert self._desk is not None, 'only a Desk session opens the brakes'
+        self._desk.open_brakes()
+        self._closed = False
+        self._idle_since = self._clock.now()
+
     @contextlib.contextmanager
     def opened(self) -> Iterator[None]:
         """Open the brakes for the block, and count the idle time from the moment the block ends."""
         if self._closed:
-            assert self._desk is not None, 'only a Desk session closes the brakes'
             logger.info('A command arrived, opening the brakes')
-            self._desk.open_brakes()
-            self._closed = False
+            self.open()
         try:
             yield
         finally:
@@ -605,7 +610,7 @@ class _Brakes:
         if self._clock.now() - self._idle_since < self._after_idle_s:
             return
         logger.info(f'No command and no move for {self._after_idle_s}s, closing the brakes')
-        self._robot.stop()  # the brakes cannot engage on an arm the control loop still drives
+        self._arm.robot.stop()  # the brakes cannot engage on an arm the control loop still drives
         self._desk.close_brakes()
         self._closed = True
 
@@ -763,16 +768,51 @@ class Robot(pimm.ControlSystem):
             safe_inputs,
         )
 
-    @staticmethod
-    def _recover(robot: pf.Robot, asked: list[pimm.calls.Call[None, RecoveryOutcome]]) -> RecoveryOutcome:
+    def _clear_with_self_test(self, desk: Desk, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
+        """Run the Desk self-test with FCI off, open the brakes, turn FCI on, connect to the arm again, and run
+        the recovery on the new connection.
+
+        It runs only on a reading that found every safe input clear: a person may hold the arm, and only they
+        release it.
+        """
+        if not arm.safe_inputs.confirmed_clear:
+            logger.warning(
+                'The recovery did not clear the fault; no reading shows every safe input clear, so the '
+                'Desk self-test does not run'
+            )
+            return RecoveryOutcome.NOT_CLEARED
+        logger.warning('The recovery did not clear the fault; running the Desk self-test')
+        arm.robot.stop()  # no control loop may drive the arm when FCI goes down
+        desk.deactivate_fci()
+        try:
+            desk.run_self_test()
+        finally:
+            brakes.open()
+            desk.activate_fci()
+            del self._robot  # FCI off ended the connection this handle holds
+            arm.robot = self._robot
+            self._init_robot(arm.robot)
+        cleared = arm.robot.recover_from_errors()
+        logger.info(f'After the Desk self-test, recover_from_errors returned {cleared}')
+        return RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
+
+    def _recover(
+        self, desk: Desk | None, arm: _Arm, brakes: _Brakes, asked: list[pimm.calls.Call[None, RecoveryOutcome]]
+    ) -> RecoveryOutcome:
         """Run the arm's error recovery once, answer every caller that asked for it on this tick, and return
         what it did.
 
-        A throw reaches the callers that asked and counts as NOT_CLEARED; one nobody asked for reaches no
-        caller, so it ends the run.
+        When a caller asked and the recovery leaves the fault, the Desk self-test runs next, if the driver holds a
+        Desk session. A throw reaches the callers that asked and counts as NOT_CLEARED; one nobody asked for
+        reaches no caller, so it ends the run.
         """
         try:
-            cleared = robot.recover_from_errors()
+            cleared = arm.robot.recover_from_errors()
+            if asked:
+                logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
+            outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
+            if asked and outcome is RecoveryOutcome.NOT_CLEARED and desk is not None:
+                outcome = self._clear_with_self_test(desk, arm, brakes)
         # rules-allow: swallowed-error — the throw is handed to every caller that asked
         except Exception as exc:
             if not asked:
@@ -781,9 +821,6 @@ class Robot(pimm.ControlSystem):
             for call in asked:
                 call.set_exception(exc)
             return RecoveryOutcome.NOT_CLEARED
-        if asked:
-            logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
-        outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
         for call in asked:
             call.set_result(outcome)
         return outcome
@@ -791,10 +828,9 @@ class Robot(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
         with self._desk_session() as desk, safe_inputs, self._arm(should_stop, clock, safe_inputs) as arm:
-            robot = arm.robot
-            self._init_robot(robot)
-            self.robot_meta.emit(Robot._build_robot_meta(robot))
-            brakes = _Brakes(desk, robot, clock, self._brake_after_idle_s)
+            self._init_robot(arm.robot)
+            self.robot_meta.emit(Robot._build_robot_meta(arm.robot))
+            brakes = _Brakes(desk, arm, clock, self._brake_after_idle_s)
 
             with brakes.opened():
                 yield from arm.park()
@@ -804,9 +840,9 @@ class Robot(pimm.ControlSystem):
             while not should_stop.value:
                 for call in self.ready.incoming():
                     arm.ready(call)
-                st = robot.state()
+                st = arm.robot.state()
                 arm.publish(st)
-                goal = robot.goal()
+                goal = arm.robot.goal()
                 arm.note_refusals(goal)
 
                 in_error, entered_error = _check_error(st.error != 0, in_error)
@@ -815,7 +851,7 @@ class Robot(pimm.ControlSystem):
 
                 asked_to_recover = list(self.recover.incoming())
                 if asked_to_recover or in_error:
-                    outcome = self._recover(robot, asked_to_recover)
+                    outcome = self._recover(desk, arm, brakes, asked_to_recover)
                     if in_error:
                         arm.hold_through_error(st, entered_error, outcome)
                     # This tick commands nothing; the next one reads the arm the recovery left behind.
