@@ -288,6 +288,10 @@ class _Arm(DriverRun[command.CommandType]):
         self._error_started = 0.0
         self._q_at_error = np.zeros(len(_PARK_JOINTS))
         self._moved_in_error = 0.0
+        model = robot.get_robot_model()
+        self._joint_names = _revolute_joint_names(model)
+        self._lower, self._upper = self._soft_limits(model)
+        self._clamps = 0
 
     def __enter__(self) -> '_Arm':
         return self
@@ -504,16 +508,38 @@ class _Arm(DriverRun[command.CommandType]):
         self.publish(self.robot.state())
         return MoveStatus.ARRIVED
 
+    @staticmethod
+    def _soft_limits(urdf_xml: str) -> tuple[np.ndarray, np.ndarray]:
+        """The lower and the upper soft position limits of the revolute joints in ``urdf_xml``, in joint order."""
+        controllers = ET.fromstring(urdf_xml).findall("joint[@type='revolute']/safety_controller")
+        lower = np.array([float(c.attrib['soft_lower_limit']) for c in controllers])
+        upper = np.array([float(c.attrib['soft_upper_limit']) for c in controllers])
+        return lower, upper
+
+    def _clamp(self, target: np.ndarray) -> np.ndarray:
+        """``target`` inside the soft limits; logs the first of a run of clamped commands, and the run's length."""
+        clamped = np.clip(target, self._lower, self._upper)
+        past = np.flatnonzero(clamped != target)
+        if past.size:
+            if not self._clamps:
+                asked = ', '.join(f'{self._joint_names[i]} {target[i]:.4f} to {clamped[i]:.4f}' for i in past)
+                logger.warning(f'A command asks for joints past their soft limits; clamping {asked}')
+            self._clamps += 1
+        elif self._clamps:
+            if self._clamps > 1:  # the first line already reported a single one
+                logger.warning(f'Clamped {self._clamps} commands in a row; the commands are inside the limits again')
+            self._clamps = 0
+        return clamped
+
     def _ik(self, pose: geom.Transform3D) -> np.ndarray:
         """The joints that put the end effector at ``pose``, within the arm's limits."""
         return self.robot.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
 
     def to_joints(self, cmd: command.CommandType) -> np.ndarray:
-        """The joints ``cmd`` asks for, not applied yet.
+        """The joints ``cmd`` asks for, inside the soft limits, not applied yet.
 
         Solved here so that a malformed command raises before anything changes; ``command_target``
-        applies the result. ``_ik`` keeps a Cartesian command inside the joint limits; a joint-space
-        one is unbounded.
+        applies the result.
         """
         match cmd:
             case command.CartesianPosition(pose):
@@ -529,7 +555,7 @@ class _Arm(DriverRun[command.CommandType]):
         # The robot raises on a bad target too late to name the command; one velocity limit per joint sets the width.
         if np.shape(target) != self._MAX_JOINT_VELOCITY.shape or not np.all(np.isfinite(target)):
             raise ValueError(f'{cmd} does not name a joint target this arm can hold: {target}')
-        return target
+        return self._clamp(target)
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once the state saying so is out.
