@@ -290,7 +290,9 @@ class _Arm(DriverRun[command.CommandType]):
         self._moved_in_error = 0.0
         model = robot.get_robot_model()
         self._joint_names = _revolute_joint_names(model)
-        self._lower, self._upper = self._soft_limits(model)
+        soft_limits = ET.fromstring(model).findall("joint[@type='revolute']/safety_controller")
+        self._lower = np.array([float(c.attrib['soft_lower_limit']) for c in soft_limits])
+        self._upper = np.array([float(c.attrib['soft_upper_limit']) for c in soft_limits])
         self._clamps = 0
 
     def __enter__(self) -> '_Arm':
@@ -507,14 +509,6 @@ class _Arm(DriverRun[command.CommandType]):
         # The poll that reports arrival ends the loop, so the sample before it was taken mid-travel
         self.publish(self.robot.state())
         return MoveStatus.ARRIVED
-
-    @staticmethod
-    def _soft_limits(urdf_xml: str) -> tuple[np.ndarray, np.ndarray]:
-        """The lower and the upper soft position limits of the revolute joints in ``urdf_xml``, in joint order."""
-        controllers = ET.fromstring(urdf_xml).findall("joint[@type='revolute']/safety_controller")
-        lower = np.array([float(c.attrib['soft_lower_limit']) for c in controllers])
-        upper = np.array([float(c.attrib['soft_upper_limit']) for c in controllers])
-        return lower, upper
 
     def _clamp(self, target: np.ndarray) -> np.ndarray:
         """``target`` inside the soft limits; logs the first of a run of clamped commands, and the run's length."""
