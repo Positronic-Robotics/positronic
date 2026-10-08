@@ -874,6 +874,13 @@ def test_an_image_plan_is_a_competition_run_unless_it_names_an_org():
     assert isinstance(private, PrivateEval) and private.org == 'acme'
 
 
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_a_plan_without_a_trial_sample_omits_it_from_its_dump(mode):
+    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'))
+    assert plan.sample is None
+    assert 'sample' not in plan.model_dump(mode=mode)
+
+
 def test_a_sample_of_a_named_eval_survives_a_round_trip():
     plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'), sample=Sample(percent=10, seed=7))
     assert EvalPlan.model_validate_json(plan.model_dump_json()).sample == Sample(percent=10, seed=7)
