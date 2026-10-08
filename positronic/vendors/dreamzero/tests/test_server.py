@@ -3,12 +3,12 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from positronic_model_server import keys as offboard_keys
 from positronic_wire import roboarena as roboarena_wire
 from positronic_wire import wire
 
 pytest.importorskip('huggingface_hub')
 
-from positronic.offboard import keys as offboard_keys  # noqa: E402
 from positronic.vendors.dreamzero import roboarena, server  # noqa: E402
 from positronic.vendors.dreamzero.server import (  # noqa: E402
     _checkpoint_id,

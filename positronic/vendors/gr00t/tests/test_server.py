@@ -5,8 +5,8 @@ import msgpack_numpy
 import numpy as np
 import pytest
 import zmq
+from positronic_model_server import keys as offboard_keys
 
-from positronic.offboard import keys as offboard_keys
 from positronic.policy.codec import ACTION
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server as gr00t_server

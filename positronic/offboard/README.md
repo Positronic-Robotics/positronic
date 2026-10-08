@@ -2,7 +2,7 @@
 
 This package implements the protocol and utilities for offboard policy inference, allowing robots or simulators to stream observations to a remote server and receive actions.
 
-## Protocol v1
+## Protocol
 
 The protocol connects clients to callable models. Each deployment declares a client stack of
 processors and codecs, with an optional codec around the server call.
@@ -11,8 +11,8 @@ processors and codecs, with an optional codec around the server call.
 
 The protocol is a sequence of msgpack frames, and two wires carry them. Both carry the same frames in
 the same order. The client side of each wire, and the facts both ends share, ship as the
-`positronic-wire` distribution ([wire/README.md](../../wire/README.md)); this package holds the
-server side. Shared message fields, pipeline descriptions and neutral value serialization live in
+`positronic-wire` distribution ([wire/README.md](../../wire/README.md)). The server transports,
+shared message fields, pipeline descriptions and neutral value serialization live in
 [`positronic-model-server`](../../model_server/README.md). Robot-command encoding and protocol
 v1/v2 support remain in `positronic.offboard.protocol`.
 
@@ -196,8 +196,11 @@ The client selects the exact registered implementation; it never substitutes a n
 guesses from constructor arguments. Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
-The client runs a protocol v1 server's stack on the current processors. A new server uses
-protocol v2 and the current components.
+The client runs a protocol v1 server's stack on the current processors. `positronic.offboard.server`
+serves v2, including its optional server codec. `positronic_model_server.server` serves v3: the same
+session envelopes carry native model results without robot-command interpretation. Its full codec
+pipeline runs on the client, and image compression is explicitly selected by client components.
+See [the lightweight server contract](../../model_server/README.md) for readiness, parameters and cleanup.
 
 Published versions have three states in the protocol and component registries:
 
@@ -336,8 +339,8 @@ the client receives one stack spec containing its processors and codecs.
 
 ```python
 from positronic.offboard.server import PolicyServer
-from positronic.offboard.server_wire import ServedHostPort
-from positronic.offboard.websocket_wire import WebsocketWire
+from positronic_model_server.server_wire import ServedHostPort
+from positronic_model_server.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.codec import RestrictImageSize
 from positronic.offboard.spec import PolicyDeployment
@@ -357,7 +360,7 @@ server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 its own session headers:
 
 ```python
-from positronic.offboard import grpc_wire, server_wire, websocket_wire
+from positronic_model_server import grpc_wire, server_wire, websocket_wire
 
 wires = [
     websocket_wire.WebsocketWire(server_wire.ServedHostPort('0.0.0.0', 8000)),

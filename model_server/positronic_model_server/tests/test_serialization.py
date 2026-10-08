@@ -8,6 +8,27 @@ import pytest
 from positronic_model_server import serialization
 
 
+@pytest.mark.parametrize('path', [(), ('nested', 0)])
+def test_selected_image_paths_preserve_the_source_and_other_arrays(path):
+    image = np.full((1, 2, 8, 10, 3), 125, dtype=np.uint8)
+    state = np.full(image.shape, 1.25, dtype=np.float32)
+    source = {'nested': [image], 'state': state} if path else image
+    encoded = serialization.encode_images(source, [serialization.JpegEncoding(path)])
+    restored = serialization.deserialise(serialization.serialise(encoded))
+    selected = restored['nested'][0] if path else restored
+    assert selected.shape == image.shape
+    np.testing.assert_allclose(selected, image, atol=2)
+    if path:
+        assert isinstance(source, dict)
+        assert source['nested'][0] is image
+        np.testing.assert_array_equal(restored['state'], state)
+
+
+def test_a_missing_image_path_is_not_silently_ignored():
+    with pytest.raises(KeyError, match='missing'):
+        serialization.encode_images({}, [serialization.JpegEncoding(('missing',))])
+
+
 @pytest.mark.parametrize('dtype', ['float32', 'float64', 'int64', 'uint8', 'bool', '>f4'])
 @pytest.mark.parametrize('shape', [(), (0, 3), (2, 4, 3)])
 def test_arrays_preserve_dtype_shape_and_values(dtype, shape):

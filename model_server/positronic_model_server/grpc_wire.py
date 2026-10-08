@@ -4,6 +4,7 @@ and the unary keepalive call beside it."""
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping
+from urllib.parse import parse_qsl
 
 import grpc
 import grpc.aio
@@ -18,7 +19,6 @@ from positronic_wire.grpc import (
     SESSION_QUERY_HEADER,
     target,
 )
-from starlette.datastructures import QueryParams
 
 from . import server_wire
 
@@ -53,8 +53,8 @@ class GrpcServerConnection(server_wire.ServerConnection):
         return self._headers.get(SESSION_PATH_HEADER, wire.SESSION_PATH)
 
     @property
-    def query_params(self) -> QueryParams:
-        return QueryParams(self._headers.get(SESSION_QUERY_HEADER, ''))
+    def query_params(self) -> list[tuple[str, str]]:
+        return parse_qsl(self._headers.get(SESSION_QUERY_HEADER, ''), keep_blank_values=True)
 
     async def send(self, message: bytes) -> None:
         try:

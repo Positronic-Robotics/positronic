@@ -2,12 +2,10 @@
 
 import asyncio
 import hmac
-import json
 import logging
 import math
 import os
 import time
-from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from functools import partial
@@ -18,39 +16,19 @@ from uuid import uuid4
 
 import configuronic as cfn
 from platform_client.policy_container import AUTH_TOKEN_ENV
-from positronic_model_server import protocol
+from positronic_model_server import grpc_wire, protocol, server_wire, spec, websocket_wire
+from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_wire import wire
-from starlette.datastructures import QueryParams
 
 from positronic import telemetry
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.base import Obs
 
-from . import grpc_wire, server_wire, websocket_wire
 from .protocol import deserialise, serialise
 
 logger = logging.getLogger(__name__)
-
-
-def _literal_value(raw: str) -> Any:
-    """JSON-decode one query value, or keep it as the raw string when it does not parse."""
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw
-
-
-def _session_params(query_params: QueryParams) -> dict[str, Any]:
-    """Decode session query params into pipeline-config override kwargs (dotted keys reach nested args)."""
-    items = query_params.multi_items()
-    if len(items) != len(dict(query_params)):
-        counts = Counter(key for key, _ in items)
-        dupes = sorted(key for key, n in counts.items() if n > 1)
-        raise ValueError(f'Duplicate session param keys: {dupes}')
-    return {key: _literal_value(raw) for key, raw in items}
 
 
 class _ServedTiming:
@@ -225,7 +203,7 @@ class PolicyServer:
         try:
             model = self._model
             assert model is not None, 'A session arrived before the model loaded'
-            pipeline = self._session_pipeline(_session_params(conn.query_params))
+            pipeline = self._session_pipeline(spec.parse_params(conn.query_params))
             session_id = uuid4().hex
             meta = {
                 **conn.served_address.meta,

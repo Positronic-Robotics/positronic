@@ -19,6 +19,7 @@ from typing import Any, ClassVar, final, overload
 
 import numpy as np
 from PIL import Image as PilImage
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, JpegEncoding, encode_images, encode_jpeg
 from positronic_model_server.spec import ARGS, NAME, PAR, SEQ, VERSION
 
 from positronic import geom, telemetry, telemetry_keys
@@ -151,6 +152,49 @@ class Codec:
         if isinstance(other, Codec):
             return _ParallelCodec(self, other)
         return NotImplemented
+
+
+class EncodeImages(Codec):
+    """JPEG-encode uint8 RGB observations recursively, or restrict encoding to explicit paths.
+
+    Automatic selection matches ``(..., H, W, 3)`` arrays with positive height and width. ``paths=[]``
+    selects nothing. Decoded native results pass through unchanged.
+    """
+
+    WIRE_NAME = 'encode_images'
+
+    def __init__(self, paths: list[list[str | int]] | None = None, quality: int = DEFAULT_JPEG_QUALITY):
+        if type(quality) is not int or not 0 <= quality <= 100:
+            raise ValueError('JPEG quality must be an integer between 0 and 100')
+        self._images = None if paths is None else tuple(JpegEncoding(tuple(path), quality) for path in paths)
+        self._quality = quality
+
+    def _encode_value(self, value: Any) -> Any:
+        if (
+            isinstance(value, np.ndarray)
+            and value.dtype == np.uint8
+            and value.ndim >= 3
+            and value.shape[-1] == 3
+            and min(value.shape[-3:-1]) > 0
+        ):
+            return encode_jpeg(value, self._quality)
+        if isinstance(value, cabc.Mapping):
+            return {key: self._encode_value(item) for key, item in value.items()}
+        if isinstance(value, list | tuple):
+            return type(value)(self._encode_value(item) for item in value)
+        return value
+
+    def encode(self, data: dict) -> dict:
+        return self._encode_value(data) if self._images is None else encode_images(data, self._images)
+
+    def decode(self, data: Any) -> Any:
+        return data
+
+    def to_spec(self) -> dict[str, Any]:
+        args: dict[str, Any] = {'quality': self._quality}
+        if self._images is not None:
+            args['paths'] = [list(image.path) for image in self._images]
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
 def _meta_conflicts(left: dict, right: dict, prefix: str = '') -> list[str]:

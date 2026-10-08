@@ -15,7 +15,8 @@ from unittest.mock import MagicMock, patch
 import configuronic as cfn
 import pytest
 from platform_client.policy_container import AUTH_TOKEN_ENV
-from positronic_model_server import protocol
+from positronic_model_server import keys as offboard_keys
+from positronic_model_server import protocol, server_wire, websocket_wire
 from positronic_model_server.spec import ARGS
 from positronic_wire import registry, wire
 from positronic_wire import websocket as client_websocket
@@ -25,8 +26,6 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.http11 import Response
 from websockets.sync.client import connect, unix_connect
 
-from positronic.offboard import keys as offboard_keys
-from positronic.offboard import server_wire, websocket_wire
 from positronic.offboard.client import ConnectRetries, InferenceClient, InferenceSession
 from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, PolicyServer, bearer
@@ -889,8 +888,7 @@ def test_a_token_that_could_never_gate_fails_closed_at_startup(make_mock_model, 
 
 
 def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_server, make_mock_model):
-    """A header carries bytes, and Starlette hands them over latin-1 decoded, so a peer can put a
-    non-ASCII ``str`` in front of the token comparison."""
+    """HTTP header bytes are latin-1 decoded before the token comparison."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:

@@ -2,9 +2,9 @@ from typing import Any
 
 import numpy as np
 import torch
+from positronic_model_server import keys as offboard_keys
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard.spec import Model
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs

@@ -11,11 +11,11 @@ import configuronic as cfn
 import numpy as np
 import pos3
 from huggingface_hub import snapshot_download
+from positronic_model_server import keys as offboard_keys
 from positronic_wire import roboarena as roboarena_wire
 from positronic_wire import wire
 
 from pimm.logging import init_logging
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready

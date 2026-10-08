@@ -6,13 +6,13 @@ from threading import Lock, Thread
 from typing import Any
 
 import numpy as np
+from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import ProtocolVersion
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
 from positronic import telemetry, telemetry_keys
-from positronic.offboard import keys as offboard_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
@@ -136,16 +136,20 @@ class RemotePolicy(Policy):
             registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout
         )
         self._server_meta: dict[str, Any] | None = None
+        self._client_meta: dict[str, Any] = {}
         self._jpeg_quality = jpeg_quality
 
     def meta(self) -> dict[str, Any]:
         if self._server_meta is None:
-            session = self._client.new_session()
-            try:
-                self._server_meta = dict(session.metadata)
-            finally:
-                session.close()
-        meta: dict[str, Any] = {policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
+            with closing(self._client.new_session()) as session:
+                server_meta = dict(session.metadata)
+                client_meta = (
+                    declared_stack(server_meta, session.protocol_version).meta()
+                    if session.protocol_version is ProtocolVersion.V3
+                    else {}
+                )
+            self._server_meta, self._client_meta = server_meta, client_meta
+        meta: dict[str, Any] = {**self._client_meta, policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
         if self._server_meta.get(offboard_keys.COMPRESS_IMAGES):
             meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
         return flatten_dict(meta)
@@ -154,10 +158,13 @@ class RemotePolicy(Policy):
         session = self._client.new_session()
         connection_lock = Lock()
         try:
-            meta = session.metadata
-            self._server_meta = dict(meta)
-            stack = declared_stack(meta, session.protocol_version)
-            compress_images = bool(meta.get(offboard_keys.COMPRESS_IMAGES))
+            server_meta = dict(session.metadata)
+            stack = declared_stack(server_meta, session.protocol_version)
+            client_meta = stack.meta() if session.protocol_version is ProtocolVersion.V3 else {}
+            self._server_meta, self._client_meta = server_meta, client_meta
+            compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
+                server_meta.get(offboard_keys.COMPRESS_IMAGES)
+            )
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
                 with connection_lock:
