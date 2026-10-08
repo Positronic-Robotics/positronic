@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.24.0"
+uv add "positronic-platform-client==0.24.1"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
