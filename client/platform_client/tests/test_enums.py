@@ -158,3 +158,12 @@ def test_the_wires_a_record_names_are_the_wires_the_registry_dials():
     # A name the client takes and the registry lacks is a record no dial can open, and a registry wire
     # the client lacks is one no record can name.
     assert set(members_by_slug(Wire)) == set(registry.CLIENT_WIRES)
+
+
+def test_billing_modes_keep_the_stored_numbers_and_publish_unambiguous_names():
+    assert BillingMode(1) is BillingMode.packaged
+    assert BillingMode(2) is BillingMode.pay_as_you_go
+    assert members_by_slug(BillingMode) == {
+        'packaged': BillingMode.packaged,
+        'pay_as_you_go': BillingMode.pay_as_you_go,
+    }
