@@ -237,7 +237,7 @@ def test_purchases_reads_the_named_member_account(platform, run_command, capsys)
 
 
 ME_WITHOUT_PERSONAL_ORG = {'user_id': 'a0', 'tenant': 't', 'plan': 'p', 'quota': []}
-ME = {**ME_WITHOUT_PERSONAL_ORG, 'personal_org': 'user-a0'}
+ME = {**ME_WITHOUT_PERSONAL_ORG, 'personal_org': 'user-a0', 'organizations': ['acme', 'user-a0']}
 ACCOUNT = {
     'org': 'user-a0',
     'mode': 'pay_as_you_go',
