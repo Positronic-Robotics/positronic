@@ -1478,6 +1478,20 @@ def test_a_ready_call_answers_the_release_instruction_while_the_emergency_stop_i
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
 
 
+def _started_with_error(
+    driver: franka.Robot, arm: FakeArm, world: pimm.World
+) -> tuple[Iterator[pimm.Command], pimm.calls.Caller[None, None]]:
+    """Run ``driver`` through init and the opening move, put ``arm`` in error, and return the run and a ready caller."""
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    ready = _readier(world, driver)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    return loop, ready
+
+
 def test_a_ready_call_runs_no_recovery_on_an_error_while_the_emergency_stop_is_pressed(desk, world):
     arm = FakeArm(PARK)
     desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
@@ -1791,20 +1805,6 @@ def test_the_idle_time_brakes_the_arm_over_the_connection_desk_prepare_opened(de
     assert braking == [Call.STOP, Call.CLOSE_BRAKES], 'the brakes closed on an arm the control loop still drives'
 
 
-def _started_with_error(
-    driver: franka.Robot, arm: FakeArm, world: pimm.World
-) -> tuple[Iterator[pimm.Command], pimm.calls.Caller[None, None]]:
-    """Run ``driver`` through init and the opening move, put ``arm`` in error, and return the run and a ready caller."""
-    clock = MockClock()
-    driver.state._bind(RecordingEmitter(), clock=clock)
-    ready = _readier(world, driver)
-    loop = driver.run(StopFlag(), clock)
-    for _ in range(3):  # init + the opening move
-        next(loop)
-    arm.error = 1
-    return loop, ready
-
-
 def test_a_ready_call_clears_an_error_the_recovery_clears_without_desk_prepare(desk, world):
     arm = FakeArm(PARK)
     arm.recover_clears = True
@@ -1820,7 +1820,7 @@ def test_a_ready_call_clears_an_error_the_recovery_clears_without_desk_prepare(d
 
 
 def test_a_ready_call_on_an_error_the_recovery_leaves_is_answered_after_desk_prepare(desk, world, monkeypatch):
-    """Start takes the step a console's recover call takes, and the run goes on over the new connection."""
+    """An error the recovery leaves sends Start through Desk preparation; the run goes on over the new connection."""
     arm = FakeArm(PARK)
     desk.calls = arm.calls  # one log for both fakes, so the halt, the brakes, FCI and prepare are ordered
     reconnected = FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED)
@@ -1853,15 +1853,17 @@ def test_a_ready_call_on_an_error_the_recovery_leaves_is_answered_after_desk_pre
 
 def test_a_ready_call_answers_the_error_that_desk_prepare_leaves(desk, world, monkeypatch):
     arm = FakeArm(PARK)
+    arm.error_message = 'the error on the connection FCI ended'
     reconnected = FakeArm(PARK)
     reconnected.error = 1  # Desk.prepare() does not clear it either
+    reconnected.error_message = 'the error on the new connection'
     _reconnect_to(monkeypatch, reconnected)
     loop, ready = _started_with_error(_driver(arm), arm, world)
 
     answer = ready(None)
     next(loop)
 
-    with pytest.raises(RuntimeError, match='recovery did not clear'):
+    with pytest.raises(RuntimeError, match='recovery did not clear: the error on the new connection'):
         answer.result()
     assert desk.calls.count(Call.PREPARE) == 2
 

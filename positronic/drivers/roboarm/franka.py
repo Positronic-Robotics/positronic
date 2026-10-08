@@ -867,7 +867,8 @@ class Robot(pimm.ControlSystem):
                 and not arm.robot.recover_from_errors()
                 and self._clear_with_desk_prepare(desk, arm, brakes) is RecoveryOutcome.NOT_CLEARED
             ):
-                raise RuntimeError(f'the arm holds an error that the recovery did not clear: {st.error_message}')
+                remaining = arm.robot.state().error_message  # Desk's step may have replaced the connection
+                raise RuntimeError(f'the arm holds an error that the recovery did not clear: {remaining}')
             arm.clear_held_fault()
             if arm.rejects_moves and not arm.safe_inputs.confirmed_clear:
                 triggered = arm.safe_inputs.triggered
