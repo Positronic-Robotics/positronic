@@ -155,7 +155,7 @@ def test_account_prints_exact_units_and_operator_configured_package_terms(platfo
         'mode': 'pay_as_you_go',
         'billing_role': 'spender',
         'balance': {'posted_units': CREDIT_SCALE, 'reserved_units': 1, 'available_units': CREDIT_SCALE - 1},
-        'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE).model_dump(),
+        'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE, duration_rounding_sec=30).model_dump(),
         'packages': [PACKAGE],
     }
     platform.answer(body)
@@ -243,7 +243,7 @@ ACCOUNT = {
     'mode': 'pay_as_you_go',
     'billing_role': 'spender',
     'balance': {'posted_units': 0, 'reserved_units': 0, 'available_units': 0},
-    'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE).model_dump(),
+    'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE, duration_rounding_sec=30).model_dump(),
     'packages': [PACKAGE],
 }
 

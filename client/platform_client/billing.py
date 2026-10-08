@@ -12,7 +12,6 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field
 CREDIT_SCALE = 60_000_000_000
 NANOSECONDS_PER_MINUTE = 60_000_000_000
 NANOSECONDS_PER_SECOND = 1_000_000_000
-DEFAULT_DURATION_ROUNDING_SEC = 30
 CreditUnits = Annotated[int, Field(strict=True, ge=0, le=INT64_MAX)]
 
 
@@ -32,9 +31,7 @@ class Tariff(BaseModel):
         return hashlib.sha256(content.encode()).hexdigest()
 
     @classmethod
-    def for_rates(
-        cls, episode_units: int, minute_units: int, *, duration_rounding_sec: int = DEFAULT_DURATION_ROUNDING_SEC
-    ) -> Tariff:
+    def for_rates(cls, episode_units: int, minute_units: int, *, duration_rounding_sec: int) -> Tariff:
         return cls(
             version=cls.content_hash(episode_units, minute_units, duration_rounding_sec),
             episode_units=episode_units,

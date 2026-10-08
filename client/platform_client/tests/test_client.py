@@ -109,7 +109,9 @@ def test_billing_account_reads_the_member_role_balance_and_explicit_package_mone
             'mode': 'pay_as_you_go',
             'billing_role': 'none',
             'balance': {'posted_units': 60, 'reserved_units': 12},
-            'tariff': Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE).model_dump(mode='json'),
+            'tariff': Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE, duration_rounding_sec=30).model_dump(
+                mode='json'
+            ),
             'packages': [PURCHASE_PACKAGE],
         },
     )

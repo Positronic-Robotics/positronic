@@ -55,12 +55,13 @@ tailnet: pass `--plaintext-http` to reach it.
 One credit is `60_000_000_000` integer units.
 The account response carries the operator-configured tariff for recorded episodes and duration.
 The gateway freezes the accepted request's quote and reserves its full maximum before execution.
-New tariffs round each episode duration up to `duration_rounding_sec`, with a default of 30 seconds.
+The gateway configures `duration_rounding_sec`, with a default of 30 seconds, and rounds each episode duration up to that interval.
+`Tariff.for_rates` requires an explicit interval. Use zero for exact nanosecond pricing.
 The quote reserves the charge for the rounded cap. Zero duration adds no duration charge.
 Tariffs without that field retain exact nanosecond pricing and their original version hash.
 
-The prepaid balance belongs to the organization. `QuotaLimit` values from `users.me` describe independent limits and use each limit's own `scale`.
-The period credits meter uses six units per credit. Its remaining quota does not describe or fund the prepaid balance.
+The credit balance belongs to the organization. `QuotaLimit` values from `users.me` describe independent limits and use each limit's own `scale`.
+The period credits meter uses six units per credit. Its remaining quota does not describe or fund the credit balance.
 The `packaged` mode uses the organization's configured invoice terms. The `pay_as_you_go` mode spends the frozen request quote against its credit balance.
 
 `PlatformClient.create_purchase` takes a `BillingPurchaseCreateRequest` with an organization, package id, and transaction key.
@@ -216,7 +217,7 @@ the plan lays out that scene and that table, and runs the episodes in that order
 names each task and what it lacks. Name a preset the rig carries: `production` serves each
 episode from one of the plan's endpoints.
 
-`submissions.resolve` takes the same plan and answers with `resolved` alone. For a prepaid
+`submissions.resolve` takes the same plan and answers with `resolved` alone. For a pay_as_you_go
 organization, that `ResolvedPlan` carries a `credit_quote`. It files nothing, spends no quota and
 returns no submission id. A plan with a `transaction_key` draws from that key,
 so a dry run shows the draws a submission under the same key then makes. Without a key, the draws
