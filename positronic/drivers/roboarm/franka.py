@@ -316,6 +316,11 @@ class _Arm(DriverRun[command.CommandType]):
         self.emit_state()
 
     @property
+    def rejects_moves(self) -> bool:
+        """Whether the arm refused the goal the last reading found, with no goal sent since."""
+        return self._refused
+
+    @property
     def stop_pressed(self) -> bool:
         """Whether the last reading found the emergency stop pressed."""
         return self.safe_inputs.level(EMERGENCY_STOP_INPUT) is _SafeInputLevel.INACTIVE
@@ -441,27 +446,6 @@ class _Arm(DriverRun[command.CommandType]):
                 'the arm holds a fault that rejects every move, and the recovery did not clear it: '
                 'clear the error in Desk, then start the run again'
             )
-
-    def ready(self, call: pimm.calls.Call[None, None]) -> None:
-        """Answer ``call`` once the arm takes moves, clearing a fault it holds first.
-
-        Answer with the error instead when it stays. It expects the recovery on an error to have run, so it answers
-        an error it finds as it stands.
-        """
-        with pimm.calls.raise_to(call):
-            if self.stop_pressed:
-                raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
-            st = self.robot.state()
-            if st.error != 0:
-                raise RuntimeError(f'the arm holds an error that the recovery did not clear: {st.error_message}')
-            self.clear_held_fault()
-            if self._refused and not self.safe_inputs.confirmed_clear:
-                triggered = self.safe_inputs.triggered
-                cause = (
-                    f'safe inputs {triggered} are triggered' if triggered else 'no reading shows every safe input clear'
-                )
-                raise RuntimeError(f'the arm rejects every move, and its fault stays: {cause}')
-            call.set_result(None)
 
     def move_to(
         self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
@@ -869,15 +853,29 @@ class Robot(pimm.ControlSystem):
         return outcome
 
     def _ready(self, desk: Desk | None, arm: _Arm, brakes: _Brakes, call: pimm.calls.Call[None, None]) -> None:
-        """Run the recovery on an error the arm holds, then answer ``call`` as ``_Arm.ready`` does.
+        """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
 
-        Where the recovery leaves the error, ``_clear_with_desk_prepare`` runs, as it does for a console's recover
-        call. A pressed emergency stop gets no recovery: ``_Arm.ready`` answers it with the release instruction.
+        Where the recovery leaves the error, ``_clear_with_desk_prepare`` runs. Answer with the error instead when it
+        stays. A pressed emergency stop gets the release instruction, and no recovery.
         """
         with pimm.calls.raise_to(call):
-            if not arm.stop_pressed and arm.robot.state().error != 0 and not arm.robot.recover_from_errors():
-                self._clear_with_desk_prepare(desk, arm, brakes)
-            arm.ready(call)
+            if arm.stop_pressed:
+                raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
+            st = arm.robot.state()
+            if (
+                st.error != 0
+                and not arm.robot.recover_from_errors()
+                and self._clear_with_desk_prepare(desk, arm, brakes) is RecoveryOutcome.NOT_CLEARED
+            ):
+                raise RuntimeError(f'the arm holds an error that the recovery did not clear: {st.error_message}')
+            arm.clear_held_fault()
+            if arm.rejects_moves and not arm.safe_inputs.confirmed_clear:
+                triggered = arm.safe_inputs.triggered
+                cause = (
+                    f'safe inputs {triggered} are triggered' if triggered else 'no reading shows every safe input clear'
+                )
+                raise RuntimeError(f'the arm rejects every move, and its fault stays: {cause}')
+            call.set_result(None)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
