@@ -106,7 +106,7 @@ def test_billing_account_reads_the_member_role_balance_and_explicit_package_mone
         200,
         {
             'org': 'acme',
-            'mode': 'prepaid',
+            'mode': 'pay_as_you_go',
             'billing_role': 'none',
             'balance': {'posted_units': 60, 'reserved_units': 12},
             'tariff': Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE).model_dump(mode='json'),
@@ -274,12 +274,12 @@ def test_me_sends_the_bearer_token_and_parses_every_limit():
 def test_create_submission_sends_the_run_defining_fields(prepaid):
     body: dict[str, object] = {'submission_id': '1f', 'status': 'pending', 'policy_image_digest': 'sha256:abc'}
     quote = {
-        'terms': Tariff.for_rates(1, CREDIT_SCALE).model_dump(),
+        'terms': Tariff.for_rates(1, CREDIT_SCALE, duration_rounding_sec=0).model_dump(),
         'lines': [{'task_pos': 0, 'endpoint': 'candidate', 'count': 1, 'cap_ns': 1, 'max_units': 2}],
         'total_units': 2,
     }
     if prepaid:
-        body['billing'] = {'mode': 'prepaid', 'state': 'held', 'quote': quote}
+        body['billing'] = {'mode': 'pay_as_you_go', 'state': 'held', 'quote': quote}
     gateway = Gateway(200, body)
     client = make_client(gateway)
 
@@ -354,7 +354,7 @@ def test_resolve_plan_posts_the_plan_and_reads_the_resolved_plan_back(prepaid):
     }
     if prepaid:
         resolved['credit_quote'] = {
-            'terms': Tariff.for_rates(1, CREDIT_SCALE).model_dump(),
+            'terms': Tariff.for_rates(1, CREDIT_SCALE, duration_rounding_sec=0).model_dump(),
             'lines': [{'task_pos': 0, 'endpoint': 'a', 'count': 2, 'cap_ns': 1, 'max_units': 4}],
             'total_units': 4,
         }

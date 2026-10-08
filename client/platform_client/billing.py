@@ -11,6 +11,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field
 
 CREDIT_SCALE = 60_000_000_000
 NANOSECONDS_PER_MINUTE = 60_000_000_000
+NANOSECONDS_PER_SECOND = 1_000_000_000
+DEFAULT_DURATION_ROUNDING_SEC = 30
 CreditUnits = Annotated[int, Field(strict=True, ge=0, le=INT64_MAX)]
 
 
@@ -20,22 +22,40 @@ class Tariff(BaseModel):
     version: str
     episode_units: CreditUnits
     minute_units: CreditUnits
+    duration_rounding_sec: int = Field(default=0, strict=True, ge=0, le=INT64_MAX // NANOSECONDS_PER_SECOND)
 
     @staticmethod
-    def content_hash(episode_units: int, minute_units: int) -> str:
-        return hashlib.sha256(f'v1:{CREDIT_SCALE}:{episode_units}:{minute_units}'.encode()).hexdigest()
+    def content_hash(episode_units: int, minute_units: int, duration_rounding_sec: int = 0) -> str:
+        content = f'v1:{CREDIT_SCALE}:{episode_units}:{minute_units}'
+        if duration_rounding_sec:
+            content = f'v2:{CREDIT_SCALE}:{episode_units}:{minute_units}:{duration_rounding_sec}'
+        return hashlib.sha256(content.encode()).hexdigest()
 
     @classmethod
-    def for_rates(cls, episode_units: int, minute_units: int) -> Tariff:
+    def for_rates(
+        cls, episode_units: int, minute_units: int, *, duration_rounding_sec: int = DEFAULT_DURATION_ROUNDING_SEC
+    ) -> Tariff:
         return cls(
-            version=cls.content_hash(episode_units, minute_units),
+            version=cls.content_hash(episode_units, minute_units, duration_rounding_sec),
             episode_units=episode_units,
             minute_units=minute_units,
+            duration_rounding_sec=duration_rounding_sec,
         )
+
+    def charge_units(self, duration_ns: int) -> int:
+        if type(duration_ns) is not int or not 0 <= duration_ns <= INT64_MAX:
+            raise ValueError('duration must be an integer nanosecond count within the storage limit')
+        if self.duration_rounding_sec:
+            step_ns = self.duration_rounding_sec * NANOSECONDS_PER_SECOND
+            duration_ns = (duration_ns + step_ns - 1) // step_ns * step_ns
+        units = self.episode_units + duration_ns * self.minute_units // NANOSECONDS_PER_MINUTE
+        if units > INT64_MAX:
+            raise ValueError('episode credits exceed the storage limit')
+        return units
 
     @model_validator(mode='after')
     def _version_binds_the_rates(self) -> Self:
-        if self.version != self.content_hash(self.episode_units, self.minute_units):
+        if self.version != self.content_hash(self.episode_units, self.minute_units, self.duration_rounding_sec):
             raise ValueError('tariff version does not match its rates')
         return self
 
@@ -63,9 +83,7 @@ class CreditQuote(BaseModel):
         if len(set(bindings)) != len(bindings):
             raise ValueError('quote repeats a task endpoint')
         for line in self.lines:
-            maximum = line.count * (
-                self.terms.episode_units + line.cap_ns * self.terms.minute_units // NANOSECONDS_PER_MINUTE
-            )
+            maximum = line.count * self.terms.charge_units(line.cap_ns)
             if line.max_units != maximum:
                 raise ValueError('quote line does not match its tariff')
         if self.total_units != sum(line.max_units for line in self.lines):
@@ -82,10 +100,10 @@ class RequestBilling(BaseModel):
 
     @model_validator(mode='after')
     def _mode_has_the_matching_quote(self) -> Self:
-        if (self.mode is BillingMode.prepaid) != (self.quote is not None):
-            raise ValueError('a prepaid request requires a quote, and a legacy request cannot carry one')
-        if self.mode is BillingMode.legacy and self.state is not BillingState.settled:
-            raise ValueError('a legacy request holds no credits')
+        if (self.mode is BillingMode.pay_as_you_go) != (self.quote is not None):
+            raise ValueError('a pay_as_you_go request requires a quote, and a packaged request cannot carry one')
+        if self.mode is BillingMode.packaged and self.state is not BillingState.settled:
+            raise ValueError('a packaged request holds no credits')
         return self
 
 

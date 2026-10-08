@@ -936,10 +936,10 @@ def test_a_view_from_a_gateway_that_sends_no_outcome_reads_as_none():
 
 
 def test_billing_terms_round_trip_with_exact_integer_units():
-    terms = Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE)
+    terms = Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE, duration_rounding_sec=0)
     line = QuoteLine(task_pos=0, endpoint='candidate', count=2, cap_ns=1, max_units=2 * (CREDIT_SCALE // 6 + 1))
     quote = CreditQuote(terms=terms, lines=(line,), total_units=line.max_units)
-    accepted = RequestBilling(mode=BillingMode.prepaid, quote=quote, state=BillingState.held)
+    accepted = RequestBilling(mode=BillingMode.pay_as_you_go, quote=quote, state=BillingState.held)
     assert RequestBilling.model_validate_json(accepted.model_dump_json()) == accepted
     balance = CreditBalance(posted_units=12, reserved_units=10)
     assert balance.model_dump()['available_units'] == 2
@@ -951,7 +951,7 @@ def test_billing_account_and_purchase_keep_exact_package_and_member_identity():
     )
     account = BillingAccount(
         org=OrgSlug('acme'),
-        mode=BillingMode.prepaid,
+        mode=BillingMode.pay_as_you_go,
         billing_role=BillingRole.none,
         balance=CreditBalance(posted_units=CREDIT_SCALE, reserved_units=CREDIT_SCALE // 6),
         tariff=Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE),
@@ -1032,9 +1032,9 @@ def test_billing_task_positions_reject_storage_overflow():
 
 def test_billing_modes_require_the_matching_hold_state():
     with pytest.raises(ValidationError, match='quote'):
-        RequestBilling(mode=BillingMode.prepaid, state=BillingState.held)
+        RequestBilling(mode=BillingMode.pay_as_you_go, state=BillingState.held)
     with pytest.raises(ValidationError, match='holds no credits'):
-        RequestBilling(mode=BillingMode.legacy, state=BillingState.held)
+        RequestBilling(mode=BillingMode.packaged, state=BillingState.held)
 
 
 def test_a_credit_balance_refuses_reserved_credits_above_posted_credits():

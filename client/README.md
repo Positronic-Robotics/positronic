@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.24.1"
+uv add "positronic-platform-client==0.25.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -55,14 +55,20 @@ tailnet: pass `--plaintext-http` to reach it.
 One credit is `60_000_000_000` integer units.
 The account response carries the operator-configured tariff for recorded episodes and duration.
 The gateway freezes the accepted request's quote and reserves its full maximum before execution.
+New tariffs round each episode duration up to `duration_rounding_sec`, with a default of 30 seconds.
+The quote reserves the charge for the rounded cap. Zero duration adds no duration charge.
+Tariffs without that field retain exact nanosecond pricing and their original version hash.
 
 The prepaid balance belongs to the organization. `QuotaLimit` values from `users.me` describe independent limits and use each limit's own `scale`.
 The period credits meter uses six units per credit. Its remaining quota does not describe or fund the prepaid balance.
-Legacy organizations continue with usage invoices. Prepaid organizations spend their frozen request quote against the prepaid balance.
+The `packaged` mode uses the organization's configured invoice terms. The `pay_as_you_go` mode spends the frozen request quote against its credit balance.
 
 `PlatformClient.create_purchase` takes a `BillingPurchaseCreateRequest` with an organization, package id, and transaction key.
 Reuse the same key to read the same owned purchase after a lost response. A new purchase requires the billing spender role.
 The configured package fixes its credit units, currency, and amount in currency minor units.
+`currency` is the lowercase ISO 4217 code used to verify the Stripe price and payment.
+For example, `amount_minor=17` means 17 yen for `jpy`, or 0.17 dollars for `usd`.
+The currency does not change the package's credit units.
 The response carries a Checkout URL only when the initiating member can still pay the purchase.
 Credits appear after the gateway verifies the payment. A browser redirect does not grant credits.
 
@@ -75,13 +81,13 @@ An organization member can read purchase history. A reviewed or credited purchas
 ```bash
 positronic account credits account --org=acme
 positronic account credits buy --org=acme --package-id=<configured-package> --transaction-key=<stable-key>
-positronic account credits purchase --id=<purchase-id>
-positronic account credits purchases --org=acme
-positronic account credits purchases --org=acme --limit=50 --after='"last-purchase-id"'
+positronic account credits get-purchase --id=<purchase-id>
+positronic account credits list-purchases --org=acme
+positronic account credits list-purchases --org=acme --limit=50 --after='"last-purchase-id"'
 ```
 
 `users.me` names the caller's personal organization in `personal_org` when the platform keeps one.
-The caller owns that organization alone. `account`, `buy` and `purchases` use it when the caller gives no `--org`.
+The caller owns that organization alone. `account`, `buy` and `list-purchases` use it when the caller gives no `--org`.
 Each of these commands prints the organization it uses on stderr, for example `org: user-a0 (personal org)`.
 A platform that keeps no personal organization for the caller requires `--org`.
 
