@@ -282,10 +282,7 @@ class RegisterResponse(BaseModel):
 
 
 class MeResponse(BaseModel):
-    """`users.me`. `client` is the client a grant lets the caller file rig plans for, unset without one.
-
-    `personal_org` is the org that the caller owns alone, unset where the platform keeps none for the caller.
-    """
+    """`users.me`. `client` is the client a grant lets the caller file rig plans for, unset without one."""
 
     user_id: UserId
     alias: str | None = None
@@ -293,7 +290,6 @@ class MeResponse(BaseModel):
     plan: str
     quota: list[QuotaLimit]
     client: str | None = None
-    personal_org: OrgSlug | None = None
     organizations: list[Annotated[OrgSlug, Field(min_length=1)]] = Field(default_factory=list)
 
     def quota_for(self, key: str) -> QuotaLimit | None:

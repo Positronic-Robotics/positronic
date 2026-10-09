@@ -255,7 +255,7 @@ MODELS: list[BaseModel] = [
     RegisterResponse(user_id=USER, artifact_location='s3://pp-artifacts/users/a0/', key_status=KeyStatus.existing),
     MeResponse(user_id=USER, alias='demo', tenant='nebius-2026', plan='nebius_competition_2026', quota=[DAILY]),
     MeResponse(user_id=USER, tenant='t', plan='p', quota=[DAILY], client='acme'),
-    MeResponse(user_id=USER, tenant='t', plan='p', quota=[DAILY], personal_org=OrgSlug('user-a0')),
+    MeResponse(user_id=USER, tenant='t', plan='p', quota=[DAILY], organizations=[OrgSlug('user-a0')]),
     SubmissionCreateResponse(submission_id=SUB, status=SubmissionStatus.pending, policy_image_digest='sha256:abc'),
     SubmissionCreateResponse(
         submission_id=SUB, status=SubmissionStatus.errored, reason_code=ReasonCode.image_unpullable
@@ -753,24 +753,18 @@ def test_a_limit_is_found_by_its_rule_key():
     assert me.quota_for(QUOTA_SUBMISSIONS_CONCURRENT) is None
 
 
-def test_an_answer_from_a_platform_without_personal_orgs_names_none():
-    answer = {'user_id': 'a0', 'tenant': 't', 'plan': 'p', 'quota': []}
-    assert MeResponse.model_validate(answer).personal_org is None
-
-
-def test_identity_lists_shared_and_personal_organizations_without_changing_the_default():
-    answer = {
-        'user_id': USER.to_str(),
-        'tenant': 't',
-        'plan': 'p',
-        'quota': [],
-        'organizations': ['acme', 'user-a'],
-        'personal_org': 'user-a',
-    }
+def test_identity_lists_shared_and_personal_organizations():
+    answer = {'user_id': USER.to_str(), 'tenant': 't', 'plan': 'p', 'quota': [], 'organizations': ['acme', 'user-a']}
     me = MeResponse.model_validate(answer)
     assert me.organizations == [OrgSlug('acme'), OrgSlug('user-a')]
-    assert me.personal_org == 'user-a'
     assert MeResponse.model_validate_json(me.model_dump_json()) == me
+
+
+def test_identity_ignores_a_personal_org_field_from_an_older_platform():
+    answer = {'user_id': USER.to_str(), 'tenant': 't', 'plan': 'p', 'quota': [], 'personal_org': 'user-a'}
+    me = MeResponse.model_validate(answer)
+    assert me.organizations == []
+    assert 'personal_org' not in me.model_dump()
 
 
 def test_identity_from_an_older_platform_has_an_independent_empty_list():

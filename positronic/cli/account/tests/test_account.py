@@ -236,8 +236,8 @@ def test_purchases_reads_the_named_member_account(platform, run_command, capsys)
     assert printed.err == 'org: acme (from --org)\n'
 
 
-ME_WITHOUT_PERSONAL_ORG = {'user_id': 'a0', 'tenant': 't', 'plan': 'p', 'quota': []}
-ME = {**ME_WITHOUT_PERSONAL_ORG, 'personal_org': 'user-a0', 'organizations': ['acme', 'user-a0']}
+ME_WITHOUT_MEMBERSHIPS = {'user_id': 'a0', 'tenant': 't', 'plan': 'p', 'quota': []}
+ME = {**ME_WITHOUT_MEMBERSHIPS, 'organizations': ['acme', 'user-a0']}
 ACCOUNT = {
     'org': 'user-a0',
     'mode': 'pay_as_you_go',
@@ -256,11 +256,11 @@ ACCOUNT = {
         (list_purchases, {}, routes.BILLING_PURCHASES_LIST, {'purchases': [], 'next': None}),
     ],
 )
-@pytest.mark.parametrize(('org', 'personal_org'), [('user-a0', 'user-a0'), ('acme', None)])
+@pytest.mark.parametrize('org', ['user-a0', 'acme'])
 def test_a_credit_command_without_an_org_uses_the_sole_membership(
-    command, args, route, answer, org, personal_org, platform, run_command, capsys
+    command, args, route, answer, org, platform, run_command, capsys
 ):
-    me = {**ME, 'personal_org': personal_org, 'organizations': [org]}
+    me = {**ME, 'organizations': [org]}
     if command is account:
         answer = {**answer, 'org': org}
     platform.answer_by_route({routes.USERS_ME: (me, 200), route: (answer, 200)})
@@ -275,7 +275,7 @@ def test_a_credit_command_without_an_org_uses_the_sole_membership(
     assert printed.err == f'org: {org} (sole organization)\n'
 
 
-def test_a_named_org_is_used_without_asking_for_the_personal_org(platform, run_command):
+def test_a_named_org_is_used_without_fetching_memberships(platform, run_command):
     platform.answer(ACCOUNT)
 
     run_command(account, org='acme')
@@ -289,13 +289,8 @@ def test_a_named_org_is_used_without_asking_for_the_personal_org(platform, run_c
 )
 @pytest.mark.parametrize(
     'me',
-    [
-        ME,
-        {**ME, 'personal_org': None},
-        {**ME, 'organizations': []},
-        {**ME_WITHOUT_PERSONAL_ORG, 'personal_org': 'user-a0'},
-    ],
-    ids=['several-with-personal', 'several-without-personal', 'empty-memberships', 'missing-memberships'],
+    [ME, {**ME, 'organizations': []}, ME_WITHOUT_MEMBERSHIPS],
+    ids=['several-memberships', 'empty-memberships', 'missing-memberships'],
 )
 def test_credit_commands_require_an_org_without_a_sole_membership(command, args, me, platform, run_command):
     platform.answer(me)
@@ -307,7 +302,7 @@ def test_credit_commands_require_an_org_without_a_sole_membership(command, args,
 
 
 def test_a_purchase_for_no_org_is_never_created(platform, run_command):
-    platform.answer(ME_WITHOUT_PERSONAL_ORG)
+    platform.answer(ME_WITHOUT_MEMBERSHIPS)
 
     with pytest.raises(SystemExit, match='--org'):
         run_command(buy, package_id='package', transaction_key='retry-key')
