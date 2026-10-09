@@ -1,4 +1,6 @@
 import numpy as np
+import pytest
+from positronic_model_server import serialization
 
 from positronic import keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
@@ -7,8 +9,46 @@ from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import ACTION
+from positronic.policy.spec import from_spec
 from positronic.vendors import gr00t
-from positronic.vendors.gr00t.codecs import DroidCodec, droid
+from positronic.vendors.gr00t.codecs import ActionChunk, DroidCodec, droid
+
+
+@pytest.mark.parametrize('horizon', [0, 1, 40])
+@pytest.mark.parametrize('wire_round_trip', [False, True])
+def test_native_actions_preserve_every_field_and_step(horizon, wire_round_trip):
+    actions = {
+        name: np.arange(horizon * dim, dtype=np.float32).reshape(1, horizon, dim)
+        for name, dim in gr00t.STATE_DIMS.items()
+    }
+    native = (actions, {'confidence': np.ones((1, horizon), dtype=np.float32)})
+    result = serialization.deserialise(serialization.serialise(native)) if wire_round_trip else native
+    codec = from_spec(ActionChunk().to_spec())
+    decoded = codec.decode(result)
+    assert len(decoded) == horizon
+    for index, row in enumerate(decoded):
+        assert row.keys() == actions.keys()
+        for name, value in row.items():
+            np.testing.assert_array_equal(value, actions[name][0, index])
+    observation = {gr00t.STATE: actions}
+    assert codec.encode(observation) is observation
+
+
+@pytest.mark.parametrize(
+    'actions, message',
+    [
+        ({}, 'no action fields'),
+        ({gr00t.GRIP: np.zeros((2, 40, 1))}, 'shape'),
+        ({gr00t.GRIP: np.zeros((0, 40, 1))}, 'shape'),
+        ({gr00t.GRIP: np.zeros((40, 1))}, 'shape'),
+        ({gr00t.GRIP: np.zeros((1, 40, 1, 1))}, 'shape'),
+        ({gr00t.GRIP: [[[0.0]]]}, 'shape'),
+        ({gr00t.GRIP: np.zeros((1, 40, 1)), gr00t.JOINT_POSITION: np.zeros((1, 20, 7))}, 'one horizon'),
+    ],
+)
+def test_native_actions_reject_invalid_batches_and_mismatched_horizons(actions, message):
+    with pytest.raises(ValueError, match=message):
+        ActionChunk().decode((actions, {}))
 
 
 def test_droid_decodes_full_chunk_and_binarizes_grip():

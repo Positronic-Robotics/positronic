@@ -1,10 +1,12 @@
 """DROID observations and joint-position actions for GR00T."""
 
 from functools import partial
+from typing import Any
 
 import configuronic as cfn
 import numpy as np
 from PIL import Image
+from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
@@ -35,6 +37,8 @@ class DroidCodec(Codec):
     Training uses recorded pose/joint/gripper trajectories as absolute action labels. GR00T's
     checkpoint processor converts those labels to relative actions and back during inference.
     """
+
+    WIRE_NAME = 'gr00t_droid'
 
     # Matches GR00T's gr00t/data/state_action/droid_frame.py; row-based rot6d follows this correction.
     _ROTATION_CORRECTION = np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]], dtype=np.float64)
@@ -138,6 +142,37 @@ class DroidCodec(Codec):
     @property
     def meta(self):
         return {self.IMAGE_SIZES: dict.fromkeys(self.image_mappings.values(), gr00t.IMAGE_SIZE)}
+
+    def to_spec(self):
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'image_mappings': dict(self.image_mappings)}}
+
+
+class ActionChunk(Codec):
+    """Decode GR00T's native ``(actions, info)`` result into ordered action rows for one robot.
+
+    Each action array has shape ``(1, T, D)`` with a shared horizon ``T``. Observation data passes
+    through unchanged. The auxiliary ``info`` mapping is not part of the robot commands.
+    """
+
+    WIRE_NAME = 'gr00t_action_chunk'
+
+    def encode(self, data: dict) -> dict:
+        return data
+
+    def decode(self, data: Any) -> list[dict[str, np.ndarray]]:
+        actions, _info = data
+        if not actions:
+            raise ValueError('GR00T returned no action fields')
+        for name, values in actions.items():
+            if not isinstance(values, np.ndarray) or values.ndim != 3 or values.shape[0] != 1:
+                raise ValueError(f'GR00T action {name!r} must have shape (1, T, D)')
+        lengths = {values.shape[1] for values in actions.values()}
+        if len(lengths) != 1:
+            raise ValueError(f'GR00T action fields must share one horizon, got {sorted(lengths)}')
+        return [{name: values[0, i] for name, values in actions.items()} for i in range(lengths.pop())]
+
+    def to_spec(self):
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
 @cfn.config(
