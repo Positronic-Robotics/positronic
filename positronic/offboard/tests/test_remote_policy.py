@@ -29,10 +29,12 @@ from positronic.offboard.client import (
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
+from positronic.policy.action import AbsoluteJointsAction, JointDeltaAction
 from positronic.policy.base import Obs, Step
 from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.observation import ObservationCodec
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, RTCSchedule, TemporalStack, max_delay
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
@@ -812,6 +814,59 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
             run.close()
     assert inputs[0] == inputs[1] == inputs[2]
     assert outputs[0] == outputs[1] == outputs[2]
+
+
+def _joints_codec(action: Codec) -> Codec:
+    return ObservationCodec(state={}, images={}) & action
+
+
+def _rtc(*, codec: Codec | None = None) -> Sequential:
+    schedule = RTCSchedule(fps=10, call_after_sec=0.2, prefix_duration=max_delay(max_sec=0.4))
+    return Sequential(PauseOnUnavailable(), schedule, *([] if codec is None else [codec]))
+
+
+class PrefixRecordingModel(Model):
+    def __init__(self):
+        self.observations: list[Obs] = []
+
+    def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, np.ndarray]]:
+        self.observations.append(obs)
+        return [{'action': np.full(8, float(i), dtype=np.float32)} for i in range(10)]
+
+
+@pytest.mark.parametrize('server_codec', [True, False], ids=['server_codec', 'client_codec'])
+def test_rtc_prefix_reaches_the_model_in_its_action_format(served, server_codec):
+    codec = _joints_codec(AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP))
+    placement = {'codec': codec, 'local': _rtc()} if server_codec else {'local': _rtc(codec=codec)}
+    address, model, pipeline = served(model=PrefixRecordingModel(), **placement)
+    assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    run = runtime.start(RemotePolicy('websocket', address))
+    try:
+        run.send({})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+        now[0] = 300_000_000  # The first chunk counts from its answer, read 0.3 s after its call.
+        run.send({})
+        now[0] = 500_000_000  # call_after_sec after the first chunk starts: the prefix is 0.3 s of it.
+        run.send({})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+    finally:
+        runtime.close()
+        run.close()
+    first, second = (obs[policy_keys.ACTION_PREFIX] for obs in model.observations)
+    assert first == []
+    assert [action['action'].tolist() for action in second] == [[float(i)] * 8 for i in (2, 3, 4)]
+
+
+def test_a_relative_action_codec_refuses_the_first_rtc_call(served):
+    address, _, _ = served(codec=_joints_codec(JointDeltaAction()), local=_rtc())
+    session = InferenceClient(registry.client_wire('websocket'), address).new_session()
+    try:
+        with pytest.raises(RuntimeError, match='relative'):
+            session.infer({policy_keys.ACTION_PREFIX: []})
+    finally:
+        session.close()
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():

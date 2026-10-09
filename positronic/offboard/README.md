@@ -171,7 +171,9 @@ This metadata tells the client:
 - `local_stack` — processors and codecs composed by `"seq"`, with the first outermost.
   `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
   `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits
-  the chunk's execution horizon. The harness emits each step's commands immediately.
+  the chunk's execution horizon. `RTCSchedule` asks for the next chunk while the current one runs,
+  and puts a prefix of the current chunk into each observation. The harness emits each step's commands
+  immediately.
   A codec outside the scheduler runs on every policy call and decodes each emitted command set,
   preserving the step's wake-up time. A codec inside the scheduler runs with submitted inference
   and decodes whole chunks. Codec specs also support `"par"` composition.
@@ -259,6 +261,11 @@ Keys are flat strings — the dots are literal, not nesting. Arrays travel as nu
   }
 }
 ```
+
+An observation from `RTCSchedule` also holds `"action_prefix"`: a list of command dicts, in the format of
+`result` below. They are the commands the robot executes while the server computes. A server codec converts
+them to the model's action format with `encode_commands`. Only a codec with absolute actions converts a
+prefix; any other codec refuses the request.
 
 **Server → Client (Actions):**
 

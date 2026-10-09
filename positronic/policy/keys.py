@@ -19,3 +19,7 @@ POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'
 
 OBS_TIME_NS = 'obs_time_ns'
+# The observation key of an RTC prefix: the commands the robot executes while the model computes. A codec converts it
+# to the model's action format.
+# TODO: decide how a model declares that it reads a prefix, and refuse a prefix stack when it does not.
+ACTION_PREFIX = 'action_prefix'

@@ -8,8 +8,8 @@ from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
-from positronic.geom import Rotation
-from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
+from positronic.geom import Rotation, Transform3D
+from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
 from positronic.policy.codec import BinarizeGripInference, BinarizeGripTraining, Codec, FlipGrip, Metadata
 from positronic.policy.observation import ObservationCodec
 
@@ -131,6 +131,51 @@ def test_absolute_joints_action_encode_decode():
     assert isinstance(command, cmd_module.JointPosition)
     np.testing.assert_allclose(command.positions, joints[0], atol=1e-6)
     assert np.isclose(target_grip, g[0])
+
+
+def test_absolute_position_action_encodes_a_command_to_the_vector_it_decodes():
+    act = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip', Rotation.Representation.ROTVEC)
+    vec = np.array([0.1, -0.2, 0.3, 0.0, 0.0, 0.4, 1.0], dtype=np.float32)
+
+    [encoded] = act.encode_commands([act._decode_single({'action': vec})])
+
+    assert encoded['action'].dtype == np.float32
+    np.testing.assert_allclose(encoded['action'], vec, atol=1e-6)
+
+
+def test_absolute_joints_action_encodes_a_command_to_the_vector_it_decodes():
+    act = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7)
+    vec = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7, 0.0], dtype=np.float32)
+
+    [encoded] = act.encode_commands([act._decode_single({'action': vec})])
+
+    np.testing.assert_allclose(encoded['action'], vec, atol=1e-6)
+
+
+def test_an_absolute_action_codec_refuses_a_command_of_another_type():
+    act = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip')
+    command = cmd_module.CartesianPosition(pose=Transform3D.identity)
+    with pytest.raises(ValueError, match='JointPosition'):
+        act.encode_commands([{obs_keys.ROBOT_COMMAND: command, 'target_grip': 0.0}])
+
+
+def test_composed_codecs_encode_commands_as_the_inverse_of_decode():
+    obs = ObservationCodec(state={'observation.state': {obs_keys.GRIP: 1}}, images={})
+    action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip', Rotation.Representation.QUAT)
+    composed = Metadata({'action_fps': 15}) | FlipGrip() | (BinarizeGripInference() | (obs & action))
+    vec = np.concatenate([[0.1, -0.2, 0.3], Rotation.identity.as_quat, [1.0]]).astype(np.float32)
+
+    [encoded] = composed.encode_commands(composed.decode([{'action': vec}]))
+
+    assert set(encoded) == {'action'}
+    np.testing.assert_allclose(encoded['action'], vec, atol=1e-6)
+
+
+@pytest.mark.parametrize('codec', [JointDeltaAction(), Codec()], ids=['relative', 'no_inverse'])
+def test_a_codec_with_no_command_inverse_refuses_even_an_empty_prefix(codec):
+    composed = ObservationCodec(state={}, images={}) & codec
+    with pytest.raises(ValueError, match=type(codec).__name__):
+        composed.encode_commands([])
 
 
 class _PassthroughCodec(Codec):

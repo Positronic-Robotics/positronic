@@ -8,6 +8,7 @@ from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
+from positronic.policy.base import Commands
 from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_action
 
 RotRep = geom.Rotation.Representation
@@ -32,6 +33,15 @@ class AbsolutePositionAction(Codec):
         target_pose = geom.Transform3D.from_vector(action_vector[:-1], self.rot_rep)
         target_grip = action_vector[-1].item()
         return {keys.ROBOT_COMMAND: command.CartesianPosition(pose=target_pose), keys.TARGET_GRIP: target_grip}
+
+    def encode_commands(self, commands):
+        return [{ACTION: self._action_vector(c)} for c in commands]
+
+    def _action_vector(self, commands: Commands) -> np.ndarray:
+        cmd = commands[keys.ROBOT_COMMAND]
+        if not isinstance(cmd, command.CartesianPosition):
+            raise ValueError(f'{type(self).__name__} converts a CartesianPosition, got {type(cmd).__name__}')
+        return np.append(cmd.pose.as_vector(self.rot_rep), commands[keys.TARGET_GRIP]).astype(np.float32)
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         pose = episode[self.tgt_ee_pose_key]
@@ -80,6 +90,15 @@ class AbsoluteJointsAction(Codec):
         joint_positions = action_vector[: self.num_joints]
         target_grip = action_vector[-1].item()
         return {keys.ROBOT_COMMAND: command.JointPosition(positions=joint_positions), keys.TARGET_GRIP: target_grip}
+
+    def encode_commands(self, commands):
+        return [{ACTION: self._action_vector(c)} for c in commands]
+
+    def _action_vector(self, commands: Commands) -> np.ndarray:
+        cmd = commands[keys.ROBOT_COMMAND]
+        if not isinstance(cmd, command.JointPosition):
+            raise ValueError(f'{type(self).__name__} converts a JointPosition, got {type(cmd).__name__}')
+        return np.append(cmd.positions, commands[keys.TARGET_GRIP]).astype(np.float32)
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         return transforms.concat(
@@ -132,6 +151,9 @@ class IKJointsAction(Codec):
     def _decode_single(self, data: dict) -> dict:
         return data
 
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
+
     def _derive_joints(self, episode: Episode):
         return ik_joints_from_episode(episode, self.solver_cls, self.tgt_ee_pose_key, self.current_q_key)
 
@@ -177,6 +199,12 @@ class JointDeltaAction(Codec):
         velocities = action_vector[: self.num_joints] * self.MAX_JOINT_DELTA
         grip = 1.0 if action_vector[self.num_joints].item() > 0.5 else 0.0
         return {keys.ROBOT_COMMAND: command.JointDelta(velocities=velocities), keys.TARGET_GRIP: grip}
+
+    def encode_commands(self, commands):
+        raise ValueError(
+            f'{type(self).__name__} decodes relative actions, and no command converts back to one: '
+            'an RTCSchedule prefix needs a codec with absolute actions'
+        )
 
     def to_spec(self):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'num_joints': self.num_joints}}

@@ -214,22 +214,48 @@ PrefixDuration = Callable[[Sequence[float]], float]
 A delay is the time from a call to its answer. Returns the prefix length in seconds."""
 
 
-def mean_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
+class DelayStatistic(Enum):
+    MEAN = 'mean'
+    MAX = 'max'
+
+
+class DelayEstimate:
+    """A `PrefixDuration` that has a wire spec: a statistic of the last `last` delays, but not more than `max_sec`."""
+
+    STATISTIC_ARG = 'statistic'
+    LAST_ARG = 'last'
+    MAX_SEC_ARG = 'max_sec'
+
+    def __init__(self, statistic: DelayStatistic, last: int = 5, max_sec: float = 0.4) -> None:
+        if last < 1:
+            raise ValueError('last must be at least 1')
+        if not max_sec >= 0:
+            raise ValueError('max_sec must not be negative')
+        self._statistic = statistic
+        self._last = last
+        self._max_sec = max_sec
+
+    def __call__(self, delays: Sequence[float]) -> float:
+        recent = delays[-self._last :]
+        value = fmean(recent) if self._statistic is DelayStatistic.MEAN else max(recent)
+        return min(value, self._max_sec)
+
+    def to_spec(self) -> dict[str, Any]:
+        return {self.STATISTIC_ARG: self._statistic.value, self.LAST_ARG: self._last, self.MAX_SEC_ARG: self._max_sec}
+
+    @classmethod
+    def from_spec(cls, spec: Mapping[str, Any]) -> 'DelayEstimate':
+        return cls(DelayStatistic(spec[cls.STATISTIC_ARG]), spec[cls.LAST_ARG], spec[cls.MAX_SEC_ARG])
+
+
+def mean_delay(last: int = 5, max_sec: float = 0.4) -> DelayEstimate:
     """The mean of the last `last` delays, but not more than `max_sec`."""
-    if last < 1:
-        raise ValueError('last must be at least 1')
-    if not max_sec >= 0:
-        raise ValueError('max_sec must not be negative')
-    return lambda delays: min(fmean(delays[-last:]), max_sec)
+    return DelayEstimate(DelayStatistic.MEAN, last, max_sec)
 
 
-def max_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
+def max_delay(last: int = 5, max_sec: float = 0.4) -> DelayEstimate:
     """The longest of the last `last` delays, but not more than `max_sec`. The RTC paper does this."""
-    if last < 1:
-        raise ValueError('last must be at least 1')
-    if not max_sec >= 0:
-        raise ValueError('max_sec must not be negative')
-    return lambda delays: min(max(delays[-last:]), max_sec)
+    return DelayEstimate(DelayStatistic.MAX, last, max_sec)
 
 
 class PrefixSampling(Enum):
@@ -331,11 +357,11 @@ class RTCSchedule(Policy):
     its observation + i / `fps`. The policy executes each action when its due time comes.
 
     `call_after_sec` after T0, the policy takes the observation T1 and calls `infer`.
-    The call also gets a prefix: the old chunk read at the new chunk's due times T1,
-    T1 + 1 / `fps`, ..., before T1 + `prefix_duration(delays)`, and not past the end of
-    the old chunk. The prefix tells the model what the robot does while the model
-    computes. Its length is the delay estimate: the server reads it as the number of
-    prefix actions / `fps`. The server decides how to use the prefix.
+    The observation also holds a prefix under `ACTION_PREFIX`: the old chunk read at
+    the new chunk's due times T1, T1 + 1 / `fps`, ..., before T1 + `prefix_duration(delays)`,
+    and not past the end of the old chunk. The prefix tells the model what the robot does
+    while the model computes. Its length is the delay estimate: the server reads it as the
+    number of prefix actions / `fps`. The server decides how to use the prefix.
 
     When T1 falls between two old due times, each new due time falls between two old
     actions. `prefix_sampling` decides which value the prefix holds there; see
@@ -351,13 +377,20 @@ class RTCSchedule(Policy):
     The first call has no old chunk, so its prefix is empty, and the robot executes no
     action until its answer arrives (-- in the drawing).
 
-    `infer` gets the observation and the prefix, in the command format that `infer`
-    returns, and converts both to the model's format.
+    The prefix is in the command format that `infer` returns. `infer` converts it to the
+    model's format with the rest of the observation.
 
     Only a model with absolute actions works with this policy. No codec converts a
     command back to a relative model action, so the prefix cannot be given to a
     model with relative actions.
     """
+
+    WIRE_NAME = 'rtc_schedule'
+    WIRE_VERSION = 1
+    FPS_ARG = 'fps'
+    CALL_AFTER_SEC_ARG = 'call_after_sec'
+    PREFIX_DURATION_ARG = 'prefix_duration'
+    PREFIX_SAMPLING_ARG = 'prefix_sampling'
 
     def __init__(
         self,
@@ -371,11 +404,12 @@ class RTCSchedule(Policy):
         if not isfinite(call_after_sec) or call_after_sec < 0:
             raise ValueError('call_after_sec must be finite and not negative')
         self._fps = fps
+        self._call_after_sec = call_after_sec
         self._call_after_ns = round(call_after_sec * 1e9)
         self._prefix_duration = prefix_duration
         self._prefix_sampling = prefix_sampling
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         delays: list[float] = []
         answer: Answer[Sequence[Commands]] | None = None
         called_at_ns = 0
@@ -398,7 +432,7 @@ class RTCSchedule(Policy):
                     if chunk is not None:
                         prefix = chunk.prefix(now_ns, self._prefix_duration(delays), self._prefix_sampling)
                     called_at_ns = now_ns
-                    answer = runtime.submit(infer, obs, prefix)
+                    answer = runtime.submit(infer, {**obs, policy_keys.ACTION_PREFIX: prefix})
 
                 commands = {} if chunk is None else chunk.take_due(now_ns)
                 next_due_ns = None if chunk is None else chunk.next_due_ns()
@@ -416,6 +450,27 @@ class RTCSchedule(Policy):
 
     def meta(self) -> dict[str, Any]:
         return {policy_keys.ACTION_FPS: self._fps}
+
+    def to_spec(self) -> dict[str, Any]:
+        if not isinstance(self._prefix_duration, DelayEstimate):
+            raise ValueError('Only a DelayEstimate prefix_duration has a wire spec; use mean_delay or max_delay')
+        args = {
+            self.FPS_ARG: self._fps,
+            self.CALL_AFTER_SEC_ARG: self._call_after_sec,
+            self.PREFIX_DURATION_ARG: self._prefix_duration.to_spec(),
+            self.PREFIX_SAMPLING_ARG: self._prefix_sampling.value,
+        }
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+
+    @classmethod
+    def from_spec_args(
+        cls,
+        fps: float,
+        call_after_sec: float,
+        prefix_duration: Mapping[str, Any],
+        prefix_sampling: str = PrefixSampling.PREVIOUS.value,
+    ) -> 'RTCSchedule':
+        return cls(fps, call_after_sec, DelayEstimate.from_spec(prefix_duration), PrefixSampling(prefix_sampling))
 
 
 class _StackedObs(Mapping[str, Any]):
