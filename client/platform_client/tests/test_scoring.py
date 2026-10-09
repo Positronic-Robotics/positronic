@@ -122,6 +122,23 @@ def test_a_success_recorded_beside_a_timeout_does_not_count():
     assert recorded_task_and_success({**TIMED_OUT, SUCCESS: True}, TASK) == (CUP, False)
 
 
+def test_a_success_of_the_wrong_type_beside_a_timeout_is_logged_and_the_trial_still_fails(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    (episode,) = _episodes(tmp_path, {**TIMED_OUT, SUCCESS: 'yes'})
+    with caplog.at_level(logging.DEBUG, logger='platform_client.scoring'):
+        assert molmo_outcome(episode) == Outcome(CUP, False)
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert SUCCESS in caplog.records[0].getMessage()
+
+
+def test_a_bool_success_beside_a_timeout_logs_nothing(tmp_path: Path, caplog: pytest.LogCaptureFixture):
+    (episode,) = _episodes(tmp_path, {**TIMED_OUT, SUCCESS: True})
+    with caplog.at_level(logging.DEBUG, logger='platform_client.scoring'):
+        assert molmo_outcome(episode) == Outcome(CUP, False)
+    assert caplog.records == []
+
+
 @pytest.mark.parametrize('static', ['{ truncated upload', '[true, "pick up the cup."]', b'{"task": "\xff"}'])
 def test_statics_that_are_not_a_json_object_are_unscored_rather_than_fatal(tmp_path: Path, static: str | bytes):
     (episode,) = _episodes(tmp_path, static)

@@ -408,7 +408,7 @@ A `finished` submission carries `scores.primary`, the value a leaderboard ranks 
 
 | link | content | present |
 |---|---|---|
-| `result` | the run id, the attempt that scored, and `scores` with a `per_task` breakdown | on a finished run, and on an errored run that wrote its records |
+| `result` | the run id, the attempt that scored, and `scores` with `primary`, `episodes` and `unscored` | on a finished run, and on an errored run that wrote its records |
 | `policy_log` | your container's stdout and stderr, from the attempt that decided the run | on the same runs as `result`, when the container printed anything |
 | `diagnostics` | why the run failed, and the state of the box | on an errored run whose record was written |
 

@@ -73,26 +73,25 @@ def read_static(episode: Path) -> dict[str, object] | None:
 def recorded_task_and_success(static: Mapping[str, object], task_key: str) -> tuple[str, bool] | None:
     """The task under `task_key` and the recorded success, or None when either is missing or of the wrong type.
 
-    A trial that ran out of time failed, as a real-robot episode that runs out of time does.
+    A trial that ran out of time failed, as a real-robot episode that runs out of time does. Its recorded
+    success does not count, and a success of the wrong type is still logged.
     """
     terminated = static.get(TERMINATED)
     if TERMINATED in static and not isinstance(terminated, bool):
         log.error('%s=%r is not a bool; reading it as absent', TERMINATED, terminated)
-    ran_out_of_time = terminated is False
-    success = False if ran_out_of_time else static.get(SUCCESS)
+    success = False if terminated is False else static.get(SUCCESS)
     task = static.get(task_key)
-    checked = ((task_key, str),) if ran_out_of_time else ((SUCCESS, bool), (task_key, str))
+    recorded = (task, success) if isinstance(task, str) and isinstance(success, bool) else None
     misrecorded = [
         f'{key}={static[key]!r} is not a {kind.__name__}'
-        for key, kind in checked
+        for key, kind in ((SUCCESS, bool), (task_key, str))
         if key in static and not isinstance(static[key], kind)
     ]
     if misrecorded:
         # One damaged record leaves the other episodes scorable, so this is logged, not raised.
-        log.error('%s; scoring this episode as unscored', '; '.join(misrecorded))
-    if not isinstance(success, bool) or not isinstance(task, str):
-        return None
-    return task, success
+        verdict = 'unscored' if recorded is None else 'failed, because it ran out of time'
+        log.error('%s; scoring this episode as %s', '; '.join(misrecorded), verdict)
+    return recorded
 
 
 def molmo_outcome(episode: Path) -> Outcome | None:
