@@ -23,6 +23,12 @@ class PackObservationFields(Codec):
 
     Layout leaves name literal input keys. Arrays retain their dtype; other values gain list layers.
     Training columns and decoded actions pass through unchanged.
+
+    Example::
+
+        PackObservationFields(
+            {'state': {'joints': 'robot_state.q'}, 'language': {'instruction': 'task'}}, leading_dims=2
+        )
     """
 
     WIRE_NAME = 'pack_observation_fields'

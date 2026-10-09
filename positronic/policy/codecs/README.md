@@ -99,22 +99,6 @@ provide JSON component descriptions.
 The [metadata module](metadata.py) also provides `lerobot_vector`, `lerobot_image` and
 `lerobot_action` to describe dataset features. These helpers return metadata dictionaries, not codecs.
 
-### Packing model inputs
-
-`PackObservationFields` describes the output as nested dictionaries. Each leaf names a literal input key;
-dots and slashes do not select nested input fields. Only selected fields appear in the output.
-
-```python
-PackObservationFields(
-    {'state': {'joints': 'robot_state.q'}, 'language': {'instruction': 'task'}},
-    leading_dims=2,
-)
-```
-
-This puts a `(7,)` joint array at `state.joints` with shape `(1, 1, 7)` and wraps the prompt in two lists.
-Each added dimension has size one; the codec does not collect observation history or combine requests.
-Empty groups remain present. Missing selected fields raise an error. Training columns and decoded results pass through.
-
 ## Observation and action encoding
 
 The two codecs that do the real work are the **observation encoder** and the **action decoder**.
