@@ -8,7 +8,7 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import ACTION, Codec
+from positronic.policy.codecs import ACTION, Codec
 from positronic.vendors import molmoact2
 
 

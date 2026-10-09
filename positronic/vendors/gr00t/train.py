@@ -7,7 +7,7 @@ import configuronic as cfn
 import pos3
 
 from positronic import utils
-from positronic.policy.codec import GR00T_MODALITY_PATH
+from positronic.policy.codecs import GR00T_MODALITY_PATH
 from positronic.vendors import gr00t
 
 

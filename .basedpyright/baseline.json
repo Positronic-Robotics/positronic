@@ -2282,27 +2282,7 @@
                 }
             }
         ],
-        "./positronic/policy/action.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 30,
-                    "endColumn": 72,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/policy/codec.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 30,
-                    "endColumn": 40,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/policy/observation.py": [
+        "./positronic/policy/codecs/observation.py": [
             {
                 "code": "reportIncompatibleMethodOverride",
                 "range": {

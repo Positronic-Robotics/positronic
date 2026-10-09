@@ -7,9 +7,8 @@ from typing import Any, cast
 
 from positronic_model_server.spec import ARGS, NAME, PAR, SEQ, VERSION
 
-from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
 from positronic.policy.base import Processor
-from positronic.policy.codec import (
+from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
@@ -19,7 +18,9 @@ from positronic.policy.codec import (
     Metadata,
     RestrictImageSize,
 )
-from positronic.policy.observation import ConvertPose, ObservationCodec, RenameObservationFields
+from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
+from positronic.policy.codecs.geometry import ConvertPose
+from positronic.policy.codecs.observation import ObservationCodec, RenameObservationFields
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version

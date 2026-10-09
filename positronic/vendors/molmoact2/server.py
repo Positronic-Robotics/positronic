@@ -7,7 +7,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
-from positronic.policy.codec import RestrictImageSize
+from positronic.policy.codecs import RestrictImageSize
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import (

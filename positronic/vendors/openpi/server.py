@@ -18,7 +18,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codec import ACTION, ChangeEEFrame, RestrictImageSize
+from positronic.policy.codecs import ACTION, ChangeEEFrame, RestrictImageSize
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.vendors import openpi
@@ -27,11 +27,6 @@ from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
 logger = logging.getLogger(__name__)
 
 PREALLOCATE_ENV = 'XLA_PYTHON_CLIENT_PREALLOCATE'
-
-
-###########################################################################################
-# Subprocess manager for OpenPI WebSocket server
-###########################################################################################
 
 
 class OpenpiSubprocess:
@@ -122,11 +117,6 @@ class OpenpiSubprocess:
             self.process = None
 
 
-###########################################################################################
-# Policy
-###########################################################################################
-
-
 class OpenpiModel(Model):
     """A running OpenPI subprocess; ``close()`` stops the subprocess."""
 
@@ -144,11 +134,6 @@ class OpenpiModel(Model):
 
     def close(self):
         self._subproc.stop()
-
-
-###########################################################################################
-# Model and server configs
-###########################################################################################
 
 
 @cfn.config(config_name='pi05_positronic_lowmem', checkpoint=None, openpi_ws_port=8001)

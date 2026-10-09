@@ -5,7 +5,7 @@ import configuronic as cfn
 
 from positronic import keys
 from positronic.cfg import codecs
-from positronic.policy.observation import ObservationCodec
+from positronic.policy.codecs.observation import ObservationCodec
 from positronic.vendors import cosmos3
 
 # The policy learned from DROID recordings at 15 Hz, and it predicts actions at that rate.

@@ -24,8 +24,8 @@ from positronic import geom, keys
 from positronic.cfg import codecs
 from positronic.dataset.transforms import image
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import ACTION, Codec
-from positronic.policy.observation import TASK_FIELD, ObservationCodec, RenameObservationFields
+from positronic.policy.codecs import ACTION, Codec
+from positronic.policy.codecs.observation import TASK_FIELD, ObservationCodec, RenameObservationFields
 from positronic.vendors import openpi
 
 

@@ -12,7 +12,7 @@ from positronic import keys
 from positronic.cfg import codecs as base
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get
-from positronic.policy.codec import Codec
+from positronic.policy.codecs import Codec
 
 
 def _random_uuid(_episode: Episode) -> str:

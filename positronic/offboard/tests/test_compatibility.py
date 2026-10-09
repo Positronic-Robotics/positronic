@@ -21,7 +21,7 @@ from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Step
-from positronic.policy.codec import RestrictImageSize
+from positronic.policy.codecs import RestrictImageSize
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.processors import ChunkedSchedule

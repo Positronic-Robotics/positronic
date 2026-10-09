@@ -1,7 +1,5 @@
 """
-This utility converts Positronic datasets into LeRobot format. Now that
-`lerobot` ships with the Positronic training dependencies, the easiest way to
-run the tool is from the project environment (virtualenv or `uv run`).
+Convert Positronic datasets to LeRobot 0.3.3 format.
 
 Examples:
 - Convert to a new LeRobot dataset
@@ -33,7 +31,7 @@ from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.dataset.episode import select_timeline
 from positronic.dataset.time import Time
-from positronic.policy.codec import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
+from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
@@ -87,7 +85,6 @@ def append_data_to_dataset(
 ):
     _raise_fd_limit()
     lr_dataset.start_image_writer(num_processes=num_workers)
-    # Process each episode file
     total_length_sec = 0
 
     episode_dataset = EpisodeDictDataset(p_dataset, fps=fps)
@@ -165,7 +162,6 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int |
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)
 
-    # Save metadata for append operation
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix='append_metadata')
 
     lr_modality_path = output_dir / GR00T_MODALITY_PATH
@@ -180,7 +176,6 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int |
                 ' must both exist and be equal, or be absent from both.'
             )
     elif ds_modality is not None:
-        # If dataset has modality but lerobot dataset doesn't, this is an error
         raise ValueError("'gr00t_modality' exists in dataset.meta but not in the destination LeRobot dataset.")
 
     append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed)

@@ -67,7 +67,7 @@ LeRobot supports two primary codecs for different observation/action configurati
 - **Want joint feedback**: Use `joints` (may improve performance with joint position information)
 - **Trajectory training**: Use `ee_traj` or `joints_traj` (trains on actual robot trajectory with binarized grip)
 
-See [Codecs Guide](../../../docs/codecs.md) for comprehensive codec documentation.
+See [Codecs Guide](../../policy/codecs/README.md) for comprehensive codec documentation.
 
 ## Configuration Reference
 
@@ -122,7 +122,7 @@ See vendor-specific guides and [Model Selection Guide](../../../docs/model-selec
 
 **Positronic Documentation:**
 - [Model Selection Guide](../../../docs/model-selection.md) — When to use LeRobot vs GR00T vs OpenPI
-- [Codecs Guide](../../../docs/codecs.md) — Understanding observation/action encoding
+- [Codecs Guide](../../policy/codecs/README.md) — Understanding observation/action encoding
 - [Training Workflow](../../../docs/training-workflow.md) — Unified training steps across all models
 - [Inference Guide](../../../docs/inference.md) — Deployment and evaluation patterns
 

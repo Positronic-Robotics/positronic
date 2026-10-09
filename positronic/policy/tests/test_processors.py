@@ -6,33 +6,29 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server import serialization
 
 import pimm
 from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.command import CartesianPosition, Impedance, JointDelta, JointPosition
+from positronic.drivers.roboarm.command import CartesianPosition, JointPosition
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
-from positronic.policy import codec as codec_module
 from positronic.policy import spec
-from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
 from positronic.policy.base import Policy, Step
-from positronic.policy.codec import (
+from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
-    Codec,
     EncodeImages,
     FlipGrip,
     Metadata,
     RestrictImageSize,
-    SetControlMode,
 )
+from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
+from positronic.policy.codecs.geometry import ConvertPose
+from positronic.policy.codecs.observation import ObservationCodec, RenameObservationFields
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.observation import ConvertPose, ObservationCodec, RenameObservationFields
 from positronic.policy.processors import (
     ChunkedSchedule,
     PauseOnUnavailable,
@@ -517,231 +513,15 @@ def test_prefix_durations_read_the_last_delays_and_cap_them(prefix_duration, exp
     assert prefix_duration([0.9, 0.1, 0.3]) == pytest.approx(expected)
 
 
-IMPEDANCE = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
-
-
-class TestCodecComposition:
-    """Codec composition preserves metadata and frame declarations."""
-
-    def test_codec_and_stays_codec_only(self):
-        """& only works between codecs, not layers."""
-        c1 = Metadata({'action_fps': 10.0})
-        c2 = Metadata({'action_fps': 5.0})
-        composed = c1 & c2
-        assert isinstance(composed, Codec)
-
-    def test_agreeing_declarations_merge(self):
-        assert (Metadata({'action_fps': 10.0}) | Metadata({'action_fps': 10.0})).meta['action_fps'] == 10.0
-
-    def test_disagreeing_declarations_have_no_merged_answer(self):
-        composed = Metadata({'action_fps': 10.0}) & Metadata({'action_fps': 5.0})
-        with pytest.raises(ValueError, match='action_fps'):
-            _ = composed.meta
-
-    def test_two_frame_codecs_refuse_to_advertise_one_frame(self):
-        """Poses come out at the product of both transforms, which neither codec's declaration names."""
-        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        b = Transform3D(np.array([0.01, 0.0, 0.02]), Rotation.from_euler([0.0, 0.0, -0.4]))
-        with pytest.raises(ValueError, match=roboarm_keys.EE_FRAME):
-            _ = (ChangeEEFrame(a) | ChangeEEFrame(b)).meta
-
-    def test_the_same_frame_twice_is_still_two_moves(self):
-        """The second move starts where the first left off, so the shared value names neither end of the pair."""
-        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        with pytest.raises(ValueError, match=roboarm_keys.EE_FRAME):
-            _ = (ChangeEEFrame(a) | ChangeEEFrame(a)).meta
-
-    def test_parallel_frame_codecs_keep_the_frame_they_share(self):
-        """Both halves encode the same input, so one move happens and the shared declaration describes it."""
-        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        np.testing.assert_allclose(
-            (ChangeEEFrame(a) & ChangeEEFrame(a)).meta[roboarm_keys.EE_FRAME], a.as_vector(Rotation.Representation.QUAT)
-        )
-
-
-class TestSetControlMode:
-    def test_every_command_in_a_chunk_carries_the_mode(self):
-        chunk = [
-            {keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7))},
-            {keys.ROBOT_COMMAND: JointDelta(velocities=np.ones(7))},
-            {keys.TARGET_GRIP: 0.5},
-        ]
-        decoded = SetControlMode(IMPEDANCE).decode(chunk)
-        assert isinstance(decoded, list)
-        for action in decoded[:2]:
-            assert isinstance(action, dict)
-            assert action[keys.ROBOT_COMMAND].mode == IMPEDANCE
-        assert keys.ROBOT_COMMAND not in decoded[2]
-
-    def test_a_single_action_carries_the_mode(self):
-        decoded = SetControlMode(IMPEDANCE).decode({keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7))})
-        assert isinstance(decoded, dict)
-        assert decoded[keys.ROBOT_COMMAND].mode == IMPEDANCE
-
-    def test_every_arm_channel_is_stamped(self):
-        """A bimanual action names a channel per arm, and both execute under the mode."""
-        action = {
-            f'{keys.ROBOT_COMMAND}.left': JointDelta(velocities=np.zeros(7)),
-            f'{keys.ROBOT_COMMAND}.right': JointDelta(velocities=np.ones(7)),
-            keys.TARGET_JOINTS: np.zeros(7),  # in the command family by name, but a vector
-            'target_grip': 0.5,
-        }
-        decoded = SetControlMode(IMPEDANCE).decode(action)
-        assert isinstance(decoded, dict)
-        assert decoded[f'{keys.ROBOT_COMMAND}.left'].mode == IMPEDANCE
-        assert decoded[f'{keys.ROBOT_COMMAND}.right'].mode == IMPEDANCE
-        np.testing.assert_array_equal(decoded[keys.TARGET_JOINTS], np.zeros(7))
-
-
-def _image(h, w):
-    return np.zeros((h, w, 3), dtype=np.uint8)
-
-
-class TestRestrictImageSize:
-    def test_bounds_every_image(self):
-        result = RestrictImageSize(64, 48).encode({
-            'cam_a': _image(480, 640),
-            'cam_b': _image(240, 320),
-            'state': np.array([1.0]),
-        })
-        assert result['cam_a'].shape == (48, 64, 3)
-        assert result['cam_b'].shape == (48, 64, 3)
-        np.testing.assert_array_equal(result['state'], np.array([1.0]))
-
-    def test_defaults_to_the_standard_bound(self):
-        assert RestrictImageSize().encode({'cam': _image(1080, 1920)})['cam'].shape == (360, 640, 3)
-
-    def test_aspect_is_kept_and_images_only_shrink(self):
-        result = RestrictImageSize(160, 160).encode({'wide': _image(480, 640), 'small': _image(24, 32)})
-        assert result['wide'].shape == (120, 160, 3)
-        assert result['small'].shape == (24, 32, 3)
-
-    def test_image_within_bound_is_the_same_object(self):
-        img = _image(48, 64)
-        assert RestrictImageSize(64, 48).encode({'cam': img})['cam'] is img
-
-    def test_stacked_frames_are_bounded_per_frame(self):
-        stack = np.zeros((3, 480, 640, 3), dtype=np.uint8)
-        assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
-
-    def test_a_threaded_stack_scales_to_the_same_pixels_as_one_thread(self):
-        rng = np.random.default_rng(0)
-        stack = rng.integers(0, 256, size=(RestrictImageSize._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
-        codec = RestrictImageSize(64, 48)
-        one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
-        np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
-
-    def test_a_single_usable_cpu_stays_serial(self, monkeypatch):
-        """A pool wins nothing on a single core, and costs threads to raise."""
-        monkeypatch.setattr(codec_module, '_usable_cpus', lambda: 1)
-        codec = RestrictImageSize(64, 48)
-        assert codec._workers(codec._PARALLEL_FROM + 4) == 1
-
-    def test_the_pool_is_bounded_by_the_cpus_the_process_may_run_on(self, monkeypatch):
-        monkeypatch.setattr(codec_module, '_usable_cpus', lambda: 2)
-        codec = RestrictImageSize(64, 48)
-        assert codec._workers(codec._MAX_WORKERS * 4) == 2
-
-    def test_a_stack_under_the_parallel_bar_still_scales(self):
-        stack = np.zeros((RestrictImageSize._PARALLEL_FROM - 1, 480, 640, 3), dtype=np.uint8)
-        assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape[1:] == (48, 64, 3)
-
-    def test_nested_images_are_reached(self):
-        result = RestrictImageSize(64, 48).encode({'video': {'cam': _image(480, 640)}, 'seq': [_image(480, 640)]})
-        assert result['video']['cam'].shape == (48, 64, 3)
-        assert result['seq'][0].shape == (48, 64, 3)
-
-    def test_non_image_values_pass_through(self):
-        obs = {'state': np.array([1.0, 2.0]), 'task': 'pick cube', 'flag': True}
-        result = RestrictImageSize(64, 48).encode(obs)
-        np.testing.assert_array_equal(result['state'], obs['state'])
-        assert result['task'] == 'pick cube'
-        assert result['flag'] is True
-
-    def test_actions_pass_through_untouched(self):
-        actions = [{'target_grip': 0.5}, {'target_grip': 1.0}]
-        assert RestrictImageSize(64, 48).decode(actions) == actions
-
-    def test_training_encoder_refuses(self):
-        with pytest.raises(NotImplementedError, match='full-resolution'):
-            _ = RestrictImageSize(64, 48).training_encoder
-
-    def test_survives_a_wire_round_trip(self):
-        rebuilt = spec.from_spec(RestrictImageSize(64, 48).to_spec())
-        assert isinstance(rebuilt, RestrictImageSize)
-        assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
-
-
-class TestEncodeImages:
-    @pytest.mark.parametrize('shape', [(8, 12, 3), (2, 8, 12, 3), (2, 3, 8, 12, 3), (0, 8, 12, 3)])
-    def test_automatic_encoding_reaches_nested_images_and_preserves_dimensions(self, shape):
-        image = np.full(shape, 140, dtype=np.uint8)
-        obs = {'video': {'cameras': [image]}, 'frames': (image,), 'task': 'pick cube'}
-        encoded = EncodeImages().encode(obs)
-
-        assert isinstance(encoded['video']['cameras'][0], dict)
-        assert isinstance(encoded['frames'], tuple)
-        assert isinstance(encoded['frames'][0], dict)
-        restored = serialization.deserialise(serialization.serialise(encoded))
-        for decoded in (restored['video']['cameras'][0], restored['frames'][0]):
-            assert decoded.shape == image.shape
-            np.testing.assert_allclose(decoded, image, atol=2)
-        assert restored['task'] == obs['task']
-        assert obs['video']['cameras'][0] is image
-        assert obs['frames'][0] is image
-
-    @pytest.mark.parametrize(
-        'value',
-        [
-            np.ones((8, 12, 3), dtype=np.float32),
-            np.ones((8, 12, 3), dtype=np.uint16),
-            np.ones((3, 8, 12), dtype=np.uint8),
-            np.ones((8, 12, 4), dtype=np.uint8),
-            np.ones((8, 12), dtype=np.uint8),
-            np.ones(3, dtype=np.uint8),
-            np.ones((0, 12, 3), dtype=np.uint8),
-            b'image bytes',
-        ],
-        ids=['float', 'uint16', 'channels-first', 'rgba', 'grayscale', 'vector', 'empty-height', 'bytes'],
-    )
-    def test_automatic_encoding_preserves_values_outside_the_image_rule(self, value):
-        assert EncodeImages().encode({'state': value})['state'] is value
-
-    @pytest.mark.parametrize('paths, compressed', [(None, {'camera'}), ([['selected', 0]], {'selected'}), ([], set())])
-    def test_selection_and_quality_survive_the_component_spec(self, paths, compressed):
-        codec = EncodeImages(paths, quality=73)
-        rebuilt = spec.from_spec(codec.to_spec())
-        assert isinstance(rebuilt, EncodeImages)
-        assert rebuilt.to_spec() == codec.to_spec()
-        image = np.full((8, 12, 3), 140, dtype=np.uint8)
-        selected = image.astype(np.float32)
-        obs = {'camera': image, 'selected': [selected]}
-        encoded = rebuilt.encode(obs)
-        assert isinstance(encoded['camera'], dict) == ('camera' in compressed)
-        assert isinstance(encoded['selected'][0], dict) == ('selected' in compressed)
-        restored = serialization.deserialise(serialization.serialise(encoded))
-        np.testing.assert_allclose(restored['camera'], image, atol=2)
-        np.testing.assert_allclose(restored['selected'][0], selected, atol=2)
-        assert obs['selected'][0] is selected
-        assert rebuilt.decode(obs) is obs
-
-    @pytest.mark.parametrize('quality', [-1, 101, True, 1.5])
-    def test_invalid_quality_is_rejected_before_encoding(self, quality):
-        with pytest.raises(ValueError, match='JPEG quality'):
-            EncodeImages(quality=quality)
-
-
 @pytest.mark.parametrize(
     'definition',
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
         ChunkedSchedule(fps=10, record_stats=False),
-        ObservationCodec(state={'state': {'grip': 1}}, images={}) & AbsolutePositionAction('pose', 'grip'),
-        FlipGrip() | (BinarizeGripInference() & AbsoluteJointsAction('joints', 'grip')),
     ],
 )
-def test_stack_and_codec_specs_round_trip(definition):
+def test_stack_specs_round_trip(definition):
     assert spec.from_spec(definition.to_spec()).to_spec() == definition.to_spec()
 
 
@@ -761,11 +541,6 @@ def test_stack_and_codec_specs_round_trip(definition):
 def test_invalid_stack_specs_are_rejected(node, error):
     with pytest.raises(error):
         spec.from_spec(node)
-
-
-def test_non_deliverable_codec_is_rejected():
-    with pytest.raises(NotImplementedError, match='IKJointsAction'):
-        IKJointsAction(solver_cls=None).to_spec()
 
 
 def test_wire_names_match_the_registered_components():

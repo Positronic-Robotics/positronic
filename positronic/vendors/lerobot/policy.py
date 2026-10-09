@@ -10,8 +10,8 @@ from lerobot.utils.constants import OBS_IMAGES
 from positronic.offboard.spec import Model
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codec import ACTION
-from positronic.policy.observation import TASK_FIELD
+from positronic.policy.codecs import ACTION
+from positronic.policy.codecs.observation import TASK_FIELD
 
 
 def _detect_device() -> str:

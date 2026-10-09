@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
@@ -8,7 +10,9 @@ from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
-from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_action
+
+from .base import Codec
+from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action
 
 RotRep = geom.Rotation.Representation
 
@@ -109,7 +113,7 @@ class IKJointsAction(Codec):
     """Signal-level codec that replaces EE pose targets with joint targets via IK.
 
     Training: replaces ``tgt_ee_pose_key`` with ``tgt_joints_key`` in the episode.
-    Inference: pass-through (robot driver handles IK at runtime).
+    Inference: pass-through.
     Compose with AbsoluteJointsAction for inference decoding.
     """
 
@@ -137,7 +141,9 @@ class IKJointsAction(Codec):
 
     @property
     def training_encoder(self):
-        return Group(Derive(**{self.tgt_joints_key: self._derive_joints}), Identity(remove=[self.tgt_ee_pose_key]))
+        return Group(
+            Derive(meta=None, **{self.tgt_joints_key: self._derive_joints}), Identity(remove=[self.tgt_ee_pose_key])
+        )
 
 
 class JointDeltaAction(Codec):
@@ -180,3 +186,27 @@ class JointDeltaAction(Codec):
 
     def to_spec(self):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'num_joints': self.num_joints}}
+
+
+class SetControlMode(Codec):
+    """Sets the control mode a chunk executes under on every robot command it carries (inference only).
+
+    Composes left of an action decoder (``SetControlMode(mode) | action``). Every command of every arm
+    carries the mode, not only the first of the unsuffixed channel.
+    """
+
+    def __init__(self, mode: command.ControlModeType):
+        self._mode = mode
+
+    def encode(self, data):
+        return data
+
+    def _decode_single(self, data: dict) -> dict:
+        # The command family also holds the pose/joint vectors a recording unfolds into, so what carries a
+        # mode is decided by type rather than by name.
+        stamped = {
+            key: replace(cmd, mode=self._mode)
+            for key, cmd in data.items()
+            if keys.is_robot_command(key) and isinstance(cmd, command.CommandType)
+        }
+        return {**data, **stamped} if stamped else data

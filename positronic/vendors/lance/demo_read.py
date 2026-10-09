@@ -15,7 +15,7 @@ import av
 import lance
 import numpy as np
 
-from positronic.policy.codec import ACTION
+from positronic.policy.codecs import ACTION
 
 
 def main(output_dir: str) -> None:

@@ -7,7 +7,7 @@ from positronic_wire import wire
 
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy.observation import TASK_FIELD
+from positronic.policy.codecs.observation import TASK_FIELD
 from positronic.policy.processors import ChunkedSchedule
 
 torch = pytest.importorskip('torch')

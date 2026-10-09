@@ -168,7 +168,7 @@ Point `--dataset.base.path` at a parent directory to compare several runs side b
 
 ## Codecs
 
-A [codec](../../../docs/codecs.md) maps raw recordings into the state/action space a model expects.
+A [codec](../../policy/codecs/README.md) maps raw recordings into the state/action space a model expects.
 DreamZero's codecs (source: [`codecs.py`](./codecs.py)) all share the same observation encoder
 (3 cameras + joint state) and the same inference decode — the model emits a flat `(joints+grip)` vector
 that decodes to a `JointPosition` command. They differ only in how **training labels** are built:
@@ -184,7 +184,7 @@ Each codec has a same-named serving pipeline (see [`server.py`](./server.py)), s
 subcommand. Since the four `joints*` codecs decode inference identically, `joints` serves any of their
 checkpoints; the `droid` subcommand serves the pretrained DROID model through the `droid` pipeline, which
 sends its required 320×180 frames and executes each chunk under DROID's impedance gains (`codecs.droid_execution`; see
-[Control mode](../../../docs/codecs.md#control-mode)).
+[Control mode](../../policy/codecs/README.md#control-mode)).
 
 ## Session parameters
 

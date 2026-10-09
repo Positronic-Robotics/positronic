@@ -134,6 +134,6 @@ Run inference with recording, review in Positronic server, score manually (succe
 ## See Also
 
 - [Training Workflow](training-workflow.md) – Preparing data and training
-- [Codecs Guide](codecs.md) – Observation/action encoding
+- [Codecs Guide](../positronic/policy/codecs/README.md) – Observation/action encoding
 - [Offboard README](../positronic/offboard/README.md) – the session protocol and both wires
 - Vendor guides: [OpenPI](../positronic/vendors/openpi/README.md) | [GR00T](../positronic/vendors/gr00t/README.md) | [SmolVLA](../positronic/vendors/lerobot/README.md) | [LeRobot ACT](../positronic/vendors/lerobot_0_3_3/README.md)

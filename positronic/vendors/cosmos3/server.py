@@ -26,7 +26,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codec import ACTION, Codec, RestrictImageSize
+from positronic.policy.codecs import ACTION, Codec, RestrictImageSize
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors import cosmos3
 from positronic.vendors.cosmos3 import codecs

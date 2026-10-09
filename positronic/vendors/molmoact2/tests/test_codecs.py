@@ -3,7 +3,7 @@ import pytest
 
 from positronic import keys
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import ACTION
+from positronic.policy.codecs import ACTION
 from positronic.vendors import molmoact2
 from positronic.vendors.molmoact2.codecs import BimanualJointsAction, MolmoAct2BimanualObservationCodec
 

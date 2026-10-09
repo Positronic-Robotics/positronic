@@ -30,7 +30,7 @@ from positronic.offboard.client import (
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
-from positronic.policy.codec import ChangeEEFrame, Codec, RestrictImageSize
+from positronic.policy.codecs import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip

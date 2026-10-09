@@ -8,7 +8,7 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 from positronic.offboard.spec import Model
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codec import ACTION
+from positronic.policy.codecs import ACTION
 from positronic.vendors import molmoact2
 
 # Both checkpoints take three views, at the 378x378 the model tiles every image to.

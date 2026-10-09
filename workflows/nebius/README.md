@@ -127,7 +127,7 @@ To inspect or wipe this filesystem later, see
 ## Convert a Positronic dataset
 
 Each model family expects a specific dataset format. `convert.sh` runs the right converter
-with the right [codec](../../docs/codecs.md) for the model you choose, dispatched by the
+with the right [codec](../../positronic/policy/codecs/README.md) for the model you choose, dispatched by the
 vendor positional:
 
 | Model | `<vendor>` arg | Converter | Codec namespace |

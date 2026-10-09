@@ -108,7 +108,7 @@ Positronic's goal is to **democratize ML/AI in robotics**. You shouldn't be lock
 
 ### Do I need to re-record data for different models?
 
-No! Positronic's dataset library stores data in a format-agnostic way. Record once, then use [codecs](codecs.md) to project your data to different model formats. You can:
+No! Positronic's dataset library stores data in a format-agnostic way. Record once, then use [codecs](../positronic/policy/codecs/README.md) to project your data to different model formats. You can:
 - Train LeRobot ACT for fast baseline
 - Train GR00T for comparison
 - Train OpenPI for best performance
@@ -136,7 +136,7 @@ Positronic's architecture is extensible. We'll continue adding foundation models
 
 1. **Choose your model** using the decision tree above
 2. **Review the model-specific README** for detailed workflow
-3. **Check the [Codecs Guide](codecs.md)** to understand observation/action encoding
+3. **Check the [Codecs Guide](../positronic/policy/codecs/README.md)** to understand observation/action encoding
 4. **Follow the [Training Workflow](training-workflow.md)** for end-to-end steps
 
 ## See Also
@@ -145,5 +145,5 @@ Positronic's architecture is extensible. We'll continue adding foundation models
 - [GR00T Documentation](../positronic/vendors/gr00t/README.md)
 - [SmolVLA Documentation](../positronic/vendors/lerobot/README.md)
 - [LeRobot ACT Documentation](../positronic/vendors/lerobot_0_3_3/README.md)
-- [Codecs Guide](codecs.md) — Understanding observation encoding and action decoding
+- [Codecs Guide](../positronic/policy/codecs/README.md) — Understanding observation encoding and action decoding
 - [Training Workflow](training-workflow.md) — Unified training steps across all models

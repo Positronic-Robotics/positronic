@@ -1,6 +1,6 @@
 # Data Collection Guide
 
-Positronic provides unified data collection for simulation (MuJoCo) and hardware (Franka, Kinova, SO101, DROID). All demonstrations are recorded as immutable raw datasets that can be projected to any model format using [codecs](codecs.md).
+Positronic provides unified data collection for simulation (MuJoCo) and hardware (Franka, Kinova, SO101, DROID). All demonstrations are recorded as immutable raw datasets that can be projected to any model format using [codecs](../positronic/policy/codecs/README.md).
 
 ## Quick Start
 
@@ -105,7 +105,7 @@ After collection: **Review** data in server → **Curate** by removing failures 
 ## See Also
 
 - [Training Workflow](training-workflow.md) – Converting and training
-- [Codecs Guide](codecs.md) – Format projection
+- [Codecs Guide](../positronic/policy/codecs/README.md) – Format projection
 - [Inference Guide](inference.md) – Policy deployment
 - [Dataset Library](../positronic/dataset/README.md) – Raw storage
 - [Drivers](../positronic/drivers/) – Hardware integration

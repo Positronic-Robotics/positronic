@@ -6,7 +6,7 @@ from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import (
+from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
@@ -14,7 +14,7 @@ from positronic.policy.codec import (
     Metadata,
     SetControlMode,
 )
-from positronic.policy.observation import ObservationCodec
+from positronic.policy.codecs.observation import ObservationCodec
 
 RotRep = geom.Rotation.Representation
 
@@ -93,7 +93,7 @@ def compose(
 @cfn.config(rotation_rep=None, tgt_ee_pose_key=keys.TARGET_EE_POSE, tgt_grip_key=keys.TARGET_GRIP)
 def absolute_pos_action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
     """Absolute position action codec for ACT/OpenPI."""
-    from positronic.policy.action import AbsolutePositionAction
+    from positronic.policy.codecs.action import AbsolutePositionAction
 
     rot_rep = RotRep(rotation_rep) if rotation_rep else RotRep.QUAT
     return AbsolutePositionAction(tgt_ee_pose_key, tgt_grip_key, rotation_rep=rot_rep)
@@ -102,14 +102,14 @@ def absolute_pos_action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip
 @cfn.config(num_joints=7)
 def absolute_joints_action(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
     """Absolute joint position action codec."""
-    from positronic.policy.action import AbsoluteJointsAction
+    from positronic.policy.codecs.action import AbsoluteJointsAction
 
     return AbsoluteJointsAction(tgt_joints_key, tgt_grip_key, num_joints=num_joints)
 
 
 @cfn.config(num_joints=7)
 def joint_delta_action(num_joints: int):
-    from positronic.policy.action import JointDeltaAction
+    from positronic.policy.codecs.action import JointDeltaAction
 
     return JointDeltaAction(num_joints=num_joints)
 
@@ -139,7 +139,7 @@ traj_ee_action = absolute_pos_action.override(tgt_ee_pose_key=keys.EE_POSE, tgt_
 def ik_joints_action(solver, tgt_ee_pose_key, tgt_grip_key, current_q_key, num_joints):
     """Joint-space action codec that reconstructs target joints from EE targets via IK."""
     from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
-    from positronic.policy.action import AbsoluteJointsAction, IKJointsAction
+    from positronic.policy.codecs.action import AbsoluteJointsAction, IKJointsAction
 
     tgt_joints_key = keys.TARGET_JOINTS
     solver_map = {'lm': LMIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
