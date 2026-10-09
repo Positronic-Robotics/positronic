@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from typing import get_args
 
@@ -944,11 +945,57 @@ def test_a_view_from_a_gateway_that_sends_no_outcome_reads_as_none():
     assert view.replay is None and view.outcome is None
 
 
+@pytest.mark.parametrize(
+    ('duration_ns', 'seconds'), [(0, 0), (1, 30), (29_999_999_999, 30), (30_000_000_000, 30), (30_000_000_001, 60)]
+)
+def test_thirty_second_tariffs_round_each_episode_up(duration_ns, seconds):
+    terms = Tariff.for_rates(7, CREDIT_SCALE, duration_rounding_sec=30)
+    assert terms.charge_units(duration_ns) == 7 + seconds * 1_000_000_000
+
+
+def test_configured_rounding_binds_the_hash_and_the_reserved_maximum():
+    terms = Tariff.for_rates(7, CREDIT_SCALE, duration_rounding_sec=10)
+    assert terms.version == hashlib.sha256(b'v2:60000000000:7:60000000000:10').hexdigest()
+    assert terms.version != Tariff.for_rates(7, CREDIT_SCALE, duration_rounding_sec=30).version
+    line = QuoteLine(task_pos=0, endpoint='a', count=2, cap_ns=31_000_000_000, max_units=80_000_000_014)
+    quote = CreditQuote(terms=terms, lines=(line,), total_units=line.max_units)
+    assert CreditQuote.model_validate_json(quote.model_dump_json()) == quote
+    with pytest.raises(ValidationError, match='tariff'):
+        CreditQuote(
+            terms=Tariff.for_rates(7, CREDIT_SCALE, duration_rounding_sec=30), lines=(line,), total_units=line.max_units
+        )
+
+
+def test_a_stored_tariff_without_rounding_retains_its_hash_and_exact_duration_charge():
+    version = hashlib.sha256(f'v1:{CREDIT_SCALE}:7:{CREDIT_SCALE}'.encode()).hexdigest()
+    terms = Tariff.model_validate({'version': version, 'episode_units': 7, 'minute_units': CREDIT_SCALE})
+    assert terms.duration_rounding_sec == 0
+    assert terms.charge_units(1) == 8
+    assert Tariff.model_validate_json(terms.model_dump_json()) == terms
+
+
+@pytest.mark.parametrize('step', [-1, True, 1.5, '30', INT64_MAX // 1_000_000_000 + 1])
+def test_rounding_refuses_inexact_or_unbounded_intervals(step):
+    with pytest.raises(ValidationError):
+        Tariff.for_rates(0, 0, duration_rounding_sec=step)
+
+
+@pytest.mark.parametrize('duration', [-1, True, 1.5, '30', INT64_MAX + 1])
+def test_duration_refuses_inexact_or_unbounded_nanoseconds(duration):
+    with pytest.raises(ValueError, match='duration'):
+        Tariff.for_rates(0, 0, duration_rounding_sec=30).charge_units(duration)
+
+
+def test_rounded_charge_refuses_integer_storage_overflow():
+    with pytest.raises(ValueError, match='storage limit'):
+        Tariff.for_rates(INT64_MAX, CREDIT_SCALE, duration_rounding_sec=30).charge_units(1)
+
+
 def test_billing_terms_round_trip_with_exact_integer_units():
-    terms = Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE)
+    terms = Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE, duration_rounding_sec=0)
     line = QuoteLine(task_pos=0, endpoint='candidate', count=2, cap_ns=1, max_units=2 * (CREDIT_SCALE // 6 + 1))
     quote = CreditQuote(terms=terms, lines=(line,), total_units=line.max_units)
-    accepted = RequestBilling(mode=BillingMode.prepaid, quote=quote, state=BillingState.held)
+    accepted = RequestBilling(mode=BillingMode.pay_as_you_go, quote=quote, state=BillingState.held)
     assert RequestBilling.model_validate_json(accepted.model_dump_json()) == accepted
     balance = CreditBalance(posted_units=12, reserved_units=10)
     assert balance.model_dump()['available_units'] == 2
@@ -960,10 +1007,10 @@ def test_billing_account_and_purchase_keep_exact_package_and_member_identity():
     )
     account = BillingAccount(
         org=OrgSlug('acme'),
-        mode=BillingMode.prepaid,
+        mode=BillingMode.pay_as_you_go,
         billing_role=BillingRole.none,
         balance=CreditBalance(posted_units=CREDIT_SCALE, reserved_units=CREDIT_SCALE // 6),
-        tariff=Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE),
+        tariff=Tariff.for_rates(CREDIT_SCALE // 6, CREDIT_SCALE, duration_rounding_sec=30),
         packages=(package,),
     )
     assert BillingAccount.model_validate_json(account.model_dump_json()) == account
@@ -1018,20 +1065,20 @@ def test_billing_queries_and_create_request_share_the_input_boundary():
 def test_billing_terms_reject_wrong_versions_and_inconsistent_quotes():
     with pytest.raises(ValidationError, match='version'):
         Tariff(version='incorrect', episode_units=1, minute_units=1)
-    terms = Tariff.for_rates(CREDIT_SCALE, CREDIT_SCALE)
+    terms = Tariff.for_rates(CREDIT_SCALE, CREDIT_SCALE, duration_rounding_sec=30)
     line = QuoteLine(task_pos=0, endpoint='candidate', count=1, cap_ns=CREDIT_SCALE, max_units=2 * CREDIT_SCALE)
     with pytest.raises(ValidationError, match='total'):
         CreditQuote(terms=terms, lines=(line,), total_units=1)
     with pytest.raises(ValidationError, match='repeats'):
         CreditQuote(terms=terms, lines=(line, line), total_units=4 * CREDIT_SCALE)
     with pytest.raises(ValidationError, match='tariff'):
-        CreditQuote(terms=Tariff.for_rates(0, 0), lines=(line,), total_units=line.max_units)
+        CreditQuote(terms=Tariff.for_rates(0, 0, duration_rounding_sec=30), lines=(line,), total_units=line.max_units)
 
 
 @pytest.mark.parametrize('units', [True, 1.0, '1', -1, INT64_MAX + 1])
 def test_billing_units_reject_coercion_and_overflow(units):
     with pytest.raises(ValidationError):
-        Tariff.for_rates(units, 0)
+        Tariff.for_rates(units, 0, duration_rounding_sec=30)
 
 
 def test_billing_task_positions_reject_storage_overflow():
@@ -1041,9 +1088,9 @@ def test_billing_task_positions_reject_storage_overflow():
 
 def test_billing_modes_require_the_matching_hold_state():
     with pytest.raises(ValidationError, match='quote'):
-        RequestBilling(mode=BillingMode.prepaid, state=BillingState.held)
+        RequestBilling(mode=BillingMode.pay_as_you_go, state=BillingState.held)
     with pytest.raises(ValidationError, match='holds no credits'):
-        RequestBilling(mode=BillingMode.legacy, state=BillingState.held)
+        RequestBilling(mode=BillingMode.packaged, state=BillingState.held)
 
 
 def test_a_credit_balance_refuses_reserved_credits_above_posted_credits():

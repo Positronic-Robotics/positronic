@@ -37,8 +37,8 @@ class ErrorCode(IntEnum):
 @unique
 class BillingMode(IntEnum):
     INVALID = 0
-    legacy = 1
-    prepaid = 2
+    packaged = 1
+    pay_as_you_go = 2
 
 
 @unique

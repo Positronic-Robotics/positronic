@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from positronic.cli.account import commands
 from positronic.cli.account import gateway as gateway_module
-from positronic.cli.account.credits import account, buy, purchase, purchases
+from positronic.cli.account.credits import account, buy, get_purchase, list_purchases
 from positronic.cli.account.register import register
 
 
@@ -152,10 +152,10 @@ PURCHASE = {
 def test_account_prints_exact_units_and_operator_configured_package_terms(platform, run_command, capsys):
     body = {
         'org': 'acme',
-        'mode': 'prepaid',
+        'mode': 'pay_as_you_go',
         'billing_role': 'spender',
         'balance': {'posted_units': CREDIT_SCALE, 'reserved_units': 1, 'available_units': CREDIT_SCALE - 1},
-        'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE).model_dump(),
+        'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE, duration_rounding_sec=30).model_dump(),
         'packages': [PACKAGE],
     }
     platform.answer(body)
@@ -201,7 +201,7 @@ def test_buy_explains_how_to_quote_numeric_text_before_http(field, platform, run
 
 def test_purchase_explains_how_to_quote_numeric_text_before_http(platform, run_command):
     with pytest.raises(SystemExit, match='quote'):
-        run_command(purchase, id=20261005)
+        run_command(get_purchase, id=20261005)
     assert platform.seen is None
 
 
@@ -217,7 +217,7 @@ def test_buy_quote_hint_preserves_the_original_retry_key(argument, platform, run
 
 def test_purchase_reads_an_opaque_id_without_creating_another_checkout(platform, run_command, capsys):
     platform.answer({**PURCHASE, 'checkout_url': None, 'review_reason': 'payment review'})
-    run_command(purchase, id='opaque-purchase')
+    run_command(get_purchase, id='opaque-purchase')
     assert platform.request.method == 'GET'
     assert platform.request.url.path == routes.BILLING_PURCHASES_GET
     assert platform.request.url.params['id'] == 'opaque-purchase'
@@ -226,7 +226,7 @@ def test_purchase_reads_an_opaque_id_without_creating_another_checkout(platform,
 
 def test_purchases_reads_the_named_member_account(platform, run_command, capsys):
     platform.answer({'purchases': [PURCHASE], 'next': 'opaque-purchase'})
-    run_command(purchases, org='acme')
+    run_command(list_purchases, org='acme')
     assert platform.request.url.path == routes.BILLING_PURCHASES_LIST
     assert platform.request.url.params['org'] == 'acme'
     printed = capsys.readouterr()
@@ -240,10 +240,10 @@ ME_WITHOUT_PERSONAL_ORG = {'user_id': 'a0', 'tenant': 't', 'plan': 'p', 'quota':
 ME = {**ME_WITHOUT_PERSONAL_ORG, 'personal_org': 'user-a0'}
 ACCOUNT = {
     'org': 'user-a0',
-    'mode': 'prepaid',
+    'mode': 'pay_as_you_go',
     'billing_role': 'spender',
     'balance': {'posted_units': 0, 'reserved_units': 0, 'available_units': 0},
-    'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE).model_dump(),
+    'tariff': Tariff.for_rates(10_000_000_000, CREDIT_SCALE, duration_rounding_sec=30).model_dump(),
     'packages': [PACKAGE],
 }
 
@@ -253,7 +253,7 @@ ACCOUNT = {
     [
         (account, {}, routes.BILLING_ACCOUNT, ACCOUNT),
         (buy, {'package_id': 'package', 'transaction_key': 'retry-key'}, routes.BILLING_PURCHASES_CREATE, PURCHASE),
-        (purchases, {}, routes.BILLING_PURCHASES_LIST, {'purchases': [], 'next': None}),
+        (list_purchases, {}, routes.BILLING_PURCHASES_LIST, {'purchases': [], 'next': None}),
     ],
 )
 def test_a_credit_command_without_an_org_uses_the_personal_org(
@@ -279,7 +279,7 @@ def test_a_named_org_is_used_without_asking_for_the_personal_org(platform, run_c
     assert platform.paths == [routes.BILLING_ACCOUNT]
 
 
-@pytest.mark.parametrize('command', [account, purchases])
+@pytest.mark.parametrize('command', [account, list_purchases])
 def test_a_platform_that_names_no_personal_org_requires_an_org(command, platform, run_command):
     platform.answer({**ME, 'personal_org': None})
 
@@ -299,12 +299,17 @@ def test_a_purchase_for_no_org_is_never_created(platform, run_command):
 
 
 def test_credit_commands_are_in_the_real_account_tree():
-    assert commands['credits'] == {'account': account, 'buy': buy, 'purchase': purchase, 'purchases': purchases}
+    assert commands['credits'] == {
+        'account': account,
+        'buy': buy,
+        'get-purchase': get_purchase,
+        'list-purchases': list_purchases,
+    }
 
 
 def test_purchase_history_cli_reads_the_page_after_an_opaque_purchase(platform, run_command, capsys):
     platform.answer({'purchases': [], 'next': None})
-    run_command(purchases, org='acme', after='opaque-purchase', limit=3)
+    run_command(list_purchases, org='acme', after='opaque-purchase', limit=3)
     assert dict(platform.request.url.params) == {'org': 'acme', 'after': 'opaque-purchase', 'limit': '3'}
     printed = capsys.readouterr()
     assert json.loads(printed.out) == {'purchases': [], 'next': None}
@@ -316,7 +321,7 @@ def test_personal_purchase_history_cli_keeps_the_continuation(platform, run_comm
         routes.USERS_ME: (ME, 200),
         routes.BILLING_PURCHASES_LIST: ({'purchases': [], 'next': None}, 200),
     })
-    run_command(purchases, after='last-purchase', limit=2)
+    run_command(list_purchases, after='last-purchase', limit=2)
     assert platform.paths == [routes.USERS_ME, routes.BILLING_PURCHASES_LIST]
     assert dict(platform.request.url.params) == {'org': 'user-a0', 'after': 'last-purchase', 'limit': '2'}
     printed = capsys.readouterr()
@@ -327,18 +332,18 @@ def test_personal_purchase_history_cli_keeps_the_continuation(platform, run_comm
 @pytest.mark.parametrize('limit', [0, -1, True, 1.5, '50', None])
 def test_purchase_history_refuses_invalid_limit_before_http(platform, run_command, limit):
     with pytest.raises(SystemExit, match='limit'):
-        run_command(purchases, org='acme', limit=limit)
+        run_command(list_purchases, org='acme', limit=limit)
     assert platform.seen is None
 
 
 @pytest.mark.parametrize('limit', [0, -1, True, 1.5, '50', None])
 def test_personal_purchase_history_refuses_invalid_limit_before_http(platform, run_command, limit):
     with pytest.raises(SystemExit, match='limit'):
-        run_command(purchases, limit=limit)
+        run_command(list_purchases, limit=limit)
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('command', [account, purchases])
+@pytest.mark.parametrize('command', [account, list_purchases])
 def test_personal_credit_commands_hide_values_from_malformed_profile(command, platform, run_command):
     private_value = 'private-response-marker'
     platform.answer({**ME, 'user_id': private_value})
@@ -351,11 +356,11 @@ def test_personal_credit_commands_hide_values_from_malformed_profile(command, pl
     assert platform.paths == [routes.USERS_ME]
 
 
-@pytest.mark.parametrize('command', [purchase, purchases])
+@pytest.mark.parametrize('command', [get_purchase, list_purchases])
 def test_purchase_commands_hide_values_from_malformed_response(command, platform, run_command):
     private_value = 'private-response-marker'
     malformed = {**PURCHASE, 'initiated_by': private_value}
-    if command is purchase:
+    if command is get_purchase:
         platform.answer(malformed)
         args = {'id': 'opaque-purchase'}
     else:
@@ -372,7 +377,7 @@ def test_purchase_commands_hide_values_from_malformed_response(command, platform
 def test_purchase_history_refuses_an_answer_without_continuation(platform, run_command):
     platform.answer({'purchases': []})
     with pytest.raises(SystemExit, match='cannot read: missing'):
-        run_command(purchases, org='acme')
+        run_command(list_purchases, org='acme')
 
 
 def test_billing_response_hides_extra_field_names(platform, run_command):

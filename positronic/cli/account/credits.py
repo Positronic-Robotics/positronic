@@ -68,7 +68,7 @@ def buy(package_id: object, transaction_key: object, org: object = None, platfor
 
 
 @cfn.config()
-def purchase(id: object, platform_url: str | None = None):
+def get_purchase(id: object, platform_url: str | None = None):
     """Print one purchase and any Checkout URL still available to its initiating member."""
     with refusing_bad_input():
         query = BillingPurchaseGetQuery(id=PurchaseId(_text(id, 'id')))
@@ -78,7 +78,7 @@ def purchase(id: object, platform_url: str | None = None):
 
 
 @cfn.config()
-def purchases(
+def list_purchases(
     org: object = None,
     after: object | None = None,
     limit: object = DEFAULT_PURCHASE_PAGE_SIZE,
