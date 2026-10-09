@@ -146,22 +146,23 @@ def test_a_success_or_task_of_the_wrong_type_is_no_outcome_and_is_logged(
     assert misrecorded in caplog.records[0].getMessage()
 
 
-@pytest.mark.parametrize(
-    'static',
-    [
-        {TASK: CUP},
-        {SUCCESS: True},
-        {TASK: CUP, TERMINATED: True},
-        {TASK: CUP, TERMINATED: 'false'},
-        {TERMINATED: False},
-    ],
-)
+@pytest.mark.parametrize('static', [{TASK: CUP}, {SUCCESS: True}, {TASK: CUP, TERMINATED: True}, {TERMINATED: False}])
 def test_a_missing_success_or_task_is_no_outcome_and_logs_nothing(
     static: dict[str, object], caplog: pytest.LogCaptureFixture
 ):
     with caplog.at_level(logging.DEBUG, logger='platform_client.scoring'):
         assert recorded_task_and_success(static, TASK) is None
     assert caplog.records == []
+
+
+@pytest.mark.parametrize(('static', 'expected'), [({TASK: CUP, SUCCESS: True}, (CUP, True)), ({TASK: CUP}, None)])
+def test_a_wrong_typed_timeout_marker_is_logged_and_read_as_absent(
+    static: dict[str, object], expected: tuple[str, bool] | None, caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.ERROR, logger='platform_client.scoring'):
+        assert recorded_task_and_success({**static, TERMINATED: 'false'}, TASK) == expected
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert TERMINATED in caplog.records[0].getMessage()
 
 
 def _graded(episode: Path) -> Outcome | None:

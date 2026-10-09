@@ -90,7 +90,10 @@ def recorded_task_and_success(static: Mapping[str, object], task_key: str) -> tu
 
     A trial that ran out of time failed, as a real-robot episode that runs out of time does.
     """
-    ran_out_of_time = static.get(TERMINATED) is False
+    terminated = static.get(TERMINATED)
+    if TERMINATED in static and not isinstance(terminated, bool):
+        log.error('%s=%r is not a bool; reading it as absent', TERMINATED, terminated)
+    ran_out_of_time = terminated is False
     success = False if ran_out_of_time else static.get(SUCCESS)
     task = static.get(task_key)
     checked = ((task_key, str),) if ran_out_of_time else ((SUCCESS, bool), (task_key, str))
