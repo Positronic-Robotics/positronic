@@ -18,7 +18,7 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
 - ``cartesian_delta``: solves to the same joint targets as the equivalent absolute command, and the composed
   target tracks end-to-end;
 - with ``--num-envs`` above one, the batch: every clone answers its own frame and takes its own command, a
-  clone with no command holds, and the other clones keep stepping after one clone ends its episode.
+  clone with no command holds, and a clone still makes subtask progress after another clone ends its episode.
 
 The transform checks all drive a single clone, whatever ``--num-envs`` asks for; the batch check builds its
 own env, because a clone count is fixed at ``create_env``.
@@ -342,21 +342,35 @@ def _check_batch(num_envs: int) -> None:
 
 
 def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
-    """Clone 0 times out alone, and the batch keeps stepping the other clones.
+    """Clone 0 times out alone, then clone 1 makes subtask progress while clone 0 stays frozen.
 
-    RoboLab freezes a clone at the end of its episode, and from the next step it records only the clones that
-    still run. With different policies one clone always ends first, so every mixed batch reaches this path.
+    RoboLab freezes a clone at the end of its episode. On a later step where a running clone makes subtask
+    progress, its recorder writes the subtask status of the running clones only. With different policies
+    one clone always ends first, so every mixed batch reaches this path. Clone 1 makes its progress here
+    because its banana is dropped into its bowl.
     """
     rl_env = env._env
     rl_env.episode_length_buf[0] = rl_env.max_episode_length - 1
     holds = dict.fromkeys(range(env.num_slots), _HOLD)
-    expected = [True] + [False] * (env.num_slots - 1)
-    for step in range(_SETTLE_STEPS):
+    done = [frame[protocol.FRAME_DONE] for frame in env.step(holds)[protocol.SLOTS]]
+    assert done == [True] + [False] * (env.num_slots - 1), f'clone 0 alone was due to time out; done is {done}'
+
+    banana, bowl = rl_env.scene['banana'], rl_env.scene['bowl']
+    clone_1 = torch.tensor([1], device=rl_env.device)
+    pose = banana.data.root_state_w[1:2, :7].clone()
+    pose[:, :3] = bowl.data.root_pos_w[1:2] + torch.tensor([0.0, 0.0, 0.1], device=rl_env.device)
+    banana.write_root_pose_to_sim(pose, env_ids=clone_1)
+    banana.write_root_velocity_to_sim(torch.zeros(1, 6, device=rl_env.device), env_ids=clone_1)
+
+    best_score = 0.0
+    for _ in range(_HOLD_STEPS):
         frames = env.step(holds)[protocol.SLOTS]
-        done = [frame[protocol.FRAME_DONE] for frame in frames]
-        assert done == expected, f'step {step} after clone 0 was due to time out: done is {done}'
-        assert not frames[0][protocol.FRAME_SUCCESS], 'a timed-out clone reported success'
-    print(f'  batch: OK (clone 0 ended first, and {env.num_slots - 1} clones kept stepping)')
+        best_score = max(best_score, float(frames[1][protocol.FRAME_OBS][keys.OBS_SUBTASK][3]))
+        assert frames[0][protocol.FRAME_DONE] and not frames[0][protocol.FRAME_SUCCESS], 'clone 0 left its time-out'
+        running = [slot for slot in range(2, env.num_slots) if frames[slot][protocol.FRAME_DONE]]
+        assert not running, f'clones {running} ended, but only clones 0 and 1 had a reason to'
+    assert best_score > 0, 'clone 1 made no subtask progress, so the step this checks never ran'
+    print(f'  batch: OK (clone 0 ended first; clone 1 reached subtask score {best_score:.2f} after it)')
 
 
 def main() -> None:
