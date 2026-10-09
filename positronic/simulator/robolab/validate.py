@@ -17,8 +17,8 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
   reported but not fatal;
 - ``cartesian_delta``: solves to the same joint targets as the equivalent absolute command, and the composed
   target tracks end-to-end;
-- with ``--num-envs`` above one, the batch: every clone answers its own frame and takes its own command, and a
-  clone with no command holds.
+- with ``--num-envs`` above one, the batch: every clone answers its own frame and takes its own command, a
+  clone with no command holds, and the other clones keep stepping after one clone ends its episode.
 
 The transform checks all drive a single clone, whatever ``--num-envs`` asks for; the batch check builds its
 own env, because a clone count is fixed at ``create_env``.
@@ -26,7 +26,7 @@ own env, because a clone count is fixed at ``create_env``.
 Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLauncher flags apply)::
 
     PYTHONPATH=positronic/simulator/env_server \
-        uv run --project <robolab clone> positronic/simulator/robolab/validate.py --headless
+        uv run --extra isaac50 --project <robolab clone> positronic/simulator/robolab/validate.py --headless
 """
 
 import math
@@ -336,8 +336,27 @@ def _check_batch(num_envs: int) -> None:
         observed = frame[protocol.FRAME_OBS][keys.OBS_JOINT_POS]
         nearest = int(np.argmin(np.abs(measured - observed).max(axis=1)))
         assert nearest == slot, f'slot {slot} answered the joints of clone {nearest}'
-    env.close()
     print(f'  batch: OK ({num_envs} clones answer their own frames, take their own commands, and hold without one)')
+    _check_a_clone_that_ends_first(env)
+    env.close()
+
+
+def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
+    """Clone 0 times out alone, and the batch keeps stepping the other clones.
+
+    RoboLab freezes a clone at the end of its episode, and from the next step it records only the clones that
+    still run. With different policies one clone always ends first, so every mixed batch reaches this path.
+    """
+    rl_env = env._env
+    rl_env.episode_length_buf[0] = rl_env.max_episode_length - 1
+    holds = dict.fromkeys(range(env.num_slots), _HOLD)
+    expected = [True] + [False] * (env.num_slots - 1)
+    for step in range(_SETTLE_STEPS):
+        frames = env.step(holds)[protocol.SLOTS]
+        done = [frame[protocol.FRAME_DONE] for frame in frames]
+        assert done == expected, f'step {step} after clone 0 was due to time out: done is {done}'
+        assert not frames[0][protocol.FRAME_SUCCESS], 'a timed-out clone reported success'
+    print(f'  batch: OK (clone 0 ended first, and {env.num_slots - 1} clones kept stepping)')
 
 
 def main() -> None:

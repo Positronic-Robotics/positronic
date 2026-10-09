@@ -1,9 +1,9 @@
 """RoboLab — NVIDIA's Isaac Lab manipulation benchmark — behind the env-server protocol.
 
-RoboLab pins ``isaacsim 5.0`` + ``isaaclab 2.2`` into its own uv project, so this never shares positronic's
-venv: the launcher runs ``uv run --project <robolab clone> env.py --host ... --port ... --headless`` with the
-positronic-free ``server``/``protocol`` modules on ``PYTHONPATH``. It imports only robolab + isaaclab, never
-``positronic``.
+RoboLab's ``isaac50`` extra puts ``isaacsim 5.0`` + ``isaaclab 2.2`` in its own uv project, so this never
+shares positronic's venv: the launcher runs ``uv run --project <robolab clone> env.py --host ... --port ...
+--headless`` with the positronic-free ``server``/``protocol`` modules on ``PYTHONPATH``. It imports only robolab
++ isaaclab, never ``positronic``.
 
 One jointpos-substrate env serves every wire command: RoboLab's leaderboard stack drives
 ``DroidJointPositionActionCfg`` (8-dim ``[q1..q7 absolute rad, gripper]`` at 15 Hz), so ``joint_pos`` passes
