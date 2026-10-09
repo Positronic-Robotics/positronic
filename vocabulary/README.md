@@ -7,8 +7,8 @@ An operator scores an episode and marks how far the arm got. Both reach the reco
 console that wrote them, the viewer that colours them, a report that counts them, a coordinator that
 has no robot installed at all.
 
-An episode keeps its statics in one file, and a scorer reads the success and the task from it.
-`eval_vocabulary.episode` names the file and the two keys.
+An episode keeps its statics in one file. A scorer reads from it the success, whether the trial ran
+out of time, and the task. `eval_vocabulary.episode` names the file and the three keys.
 
 This distribution defines those words once. It depends on nothing, so any of those
 programs installs it alone.

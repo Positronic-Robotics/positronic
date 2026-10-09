@@ -7,5 +7,7 @@ The dataset writer and a scorer both import these names, so they cannot disagree
 STATIC_FILE = 'static.json'
 # The success that the env reports when the trial ends.
 SUCCESS = 'eval.success'
+# False when the trial ran out of time before it ended.
+TERMINATED = 'eval.terminated'
 # The instruction that the policy got.
 TASK = 'task'
