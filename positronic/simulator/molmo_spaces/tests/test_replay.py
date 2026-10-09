@@ -77,3 +77,24 @@ def test_an_open_episode_resets_its_articulated_object(episode_index: int):
         finally:
             conn.close()
     assert frame[protocol.FRAME_META][mapping.META_HOUSE_INDEX] == 21
+
+
+_HARD_BENCHMARK = mapping.BenchmarkPath(
+    'molmospaces-bench-v2', 'procthor-10k', 'FrankaOpenHardBench', 'FrankaOpenHardBench_20260212_200ep_json_benchmark'
+)
+
+
+# The DataGen benchmark records one shoulder camera at a fixed pose; the HardBench one randomizes it per episode.
+@pytest.mark.parametrize('bench', [_OPEN_BENCHMARK, _HARD_BENCHMARK], ids=['fixed_left', 'randomized_left'])
+def test_an_episode_serves_both_shoulder_cameras_and_one_right_view_for_any_trial_seed(bench):
+    _skip_unless_present(bench)
+    token = {**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: 1}
+    with launcher.serve_molmo_spaces() as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            frames = [conn.reset({**token, mapping.TOKEN_SEED: seed})[protocol.FRAME_OBS] for seed in (None, 123)]
+        finally:
+            conn.close()
+    for obs in frames:
+        assert any(name in obs for name in mapping.LEFT_SHOULDER_CAMERAS) and mapping.RIGHT_SHOULDER_CAMERA in obs
+    np.testing.assert_array_equal(*(obs[mapping.RIGHT_SHOULDER_CAMERA] for obs in frames))

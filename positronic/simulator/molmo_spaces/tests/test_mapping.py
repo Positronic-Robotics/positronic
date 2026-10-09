@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
 
 from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import mapping
@@ -228,3 +229,74 @@ def test_a_selection_matching_no_benchmark_lists_what_is_there():
         mapping.select_benchmarks(found, {'suite': 'v3'})
     with pytest.raises(ValueError, match='available under benchmarks/: none'):
         mapping.select_benchmarks([], {})
+
+
+# The nominal left shoulder pose of MolmoSpaces' Franka DROID camera systems, in the robot base frame (wxyz), and the
+# randomization FrankaOmniPurposeCameraSystem gives that camera.
+_LEFT_OFFSET = (0.1, 0.57, 0.66)
+_LEFT_QUAT = (-0.3633, -0.1241, 0.4263, 0.8191)
+_POS_NOISE, _ORIENTATION_NOISE_DEG = (-0.05, 0.05), 8.0
+_HARD = mapping.BenchmarkPath('v2', 'procthor-10k', 'FrankaPickHardBench', 'hard_20260212')
+_REFLECT_Y = np.array([1.0, -1.0, 1.0])
+
+
+def _axis_on_the_base_plane(offset, quat) -> tuple[np.ndarray, np.ndarray]:
+    """Where the camera's optical axis meets the robot base's z = 0 plane, and the camera's up direction."""
+    rotation = Rotation.from_quat(quat, scalar_first=True).as_matrix()
+    forward, up = -rotation[:, 2], rotation[:, 1]
+    reach = -offset[2] / forward[2]
+    assert reach > 0, 'the camera looks away from the plane'
+    return np.asarray(offset) + reach * forward, up
+
+
+def _right_pose(bench: mapping.BenchmarkPath, episode_index: int) -> tuple[np.ndarray, np.ndarray]:
+    offset, quat = mapping.mirror_camera_pose(_LEFT_OFFSET, _LEFT_QUAT)
+    rng = mapping.episode_rng(bench, episode_index)
+    return mapping.jitter_camera_pose(offset, quat, _POS_NOISE, _ORIENTATION_NOISE_DEG, rng)
+
+
+def test_the_mirrored_shoulder_camera_looks_at_the_mirrored_point_on_the_table():
+    offset, quat = mapping.mirror_camera_pose(_LEFT_OFFSET, _LEFT_QUAT)
+    np.testing.assert_allclose(offset, [0.1, -0.57, 0.66])
+    np.testing.assert_allclose(quat, [0.8191, 0.4263, -0.1241, -0.3633], atol=1e-4)
+    left_target, left_up = _axis_on_the_base_plane(np.array(_LEFT_OFFSET), _LEFT_QUAT)
+    right_target, right_up = _axis_on_the_base_plane(offset, quat)
+    np.testing.assert_allclose(right_target, left_target * _REFLECT_Y, atol=1e-9)
+    np.testing.assert_allclose(right_up, left_up * _REFLECT_Y, atol=1e-9)
+    assert right_target[0] > 0 and right_up[2] > 0
+
+
+def test_a_fixed_left_camera_leaves_the_right_camera_at_the_mirrored_nominal_pose():
+    offset, quat = mapping.mirror_camera_pose(_LEFT_OFFSET, _LEFT_QUAT)
+    fixed_offset, fixed_quat = mapping.jitter_camera_pose(offset, quat, None, None, mapping.episode_rng(_HARD, 3))
+    np.testing.assert_allclose(fixed_offset, offset)
+    np.testing.assert_allclose(fixed_quat, quat)
+
+
+def test_an_episode_draws_one_right_camera_pose_and_other_episodes_draw_their_own():
+    offset, quat = _right_pose(_HARD, 3)
+    again_offset, again_quat = _right_pose(_HARD, 3)
+    np.testing.assert_array_equal(offset, again_offset)
+    np.testing.assert_array_equal(quat, again_quat)
+    assert not np.allclose(offset, _right_pose(_HARD, 4)[0])
+    assert not np.allclose(offset, _right_pose(_HARD._replace(suite='v1'), 3)[0])
+
+
+def test_the_right_camera_draw_leaves_the_global_numpy_random_state_alone():
+    np.random.seed(0)
+    expected = np.random.random()
+    np.random.seed(0)
+    _right_pose(_HARD, 3)
+    assert np.random.random() == expected
+
+
+def test_the_right_camera_jitter_takes_the_left_camera_ranges_in_the_robot_base_frame():
+    nominal_offset, nominal_quat = mapping.mirror_camera_pose(_LEFT_OFFSET, _LEFT_QUAT)
+    nominal = Rotation.from_quat(nominal_quat, scalar_first=True)
+    poses = [_right_pose(_HARD, i) for i in range(500)]
+    shifts = np.abs([offset - nominal_offset for offset, _ in poses])
+    turns = np.abs([
+        (Rotation.from_quat(q, scalar_first=True) * nominal.inv()).as_euler('xyz', degrees=True) for _, q in poses
+    ])
+    assert 0.045 < shifts.max() <= _POS_NOISE[1]
+    assert 7.5 < turns.max() <= _ORIENTATION_NOISE_DEG + 1e-9

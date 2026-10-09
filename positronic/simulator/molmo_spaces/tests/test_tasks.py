@@ -23,7 +23,7 @@ from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
-from positronic.simulator.molmo_spaces.adapter import CAMERAS
+from positronic.simulator.molmo_spaces.adapter import SHOULDER_CAMERAS, camera_dict
 from positronic.simulator.molmo_spaces.tests.make_fixture import build_payload
 
 _SUITE, _SCENE_DATASET, _TASK_CONFIG, _BENCHMARK = molmo_keys.BENCHMARK_DIMENSIONS
@@ -93,6 +93,25 @@ def test_an_explicit_seed_sweeps_each_episode(asked):
     ev = benchmarks.override(seed=5, trial_count=2).instantiate()
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in ev.tasks()]
     assert [scene[eval_keys.SEED] for scene in scenes] == [5, 6, 5, 6]
+
+
+def _exterior_sides(ev) -> list:
+    return [trial.meta[molmo_keys.EXTERIOR_SIDES] for trial in ev.tasks()]
+
+
+@pytest.mark.parametrize('seed', [None, 3])
+def test_every_trial_of_a_run_shares_one_exterior_order(asked, seed):
+    ev = benchmarks.override(seed=seed, trial_count=2).instantiate()
+    sides = _exterior_sides(ev)
+    assert len(sides) == 4 and all(s == sides[0] for s in sides)
+    assert sorted(sides[0]) == sorted(SHOULDER_CAMERAS)
+    assert {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2} <= ev.embodiment.observations.keys()
+
+
+def test_an_explicit_seed_fixes_the_exterior_order_and_seeds_draw_both_orders(asked):
+    orders = {seed: _exterior_sides(benchmarks.override(seed=seed).instantiate())[0] for seed in range(16)}
+    assert all(_exterior_sides(benchmarks.override(seed=seed).instantiate())[0] == orders[seed] for seed in orders)
+    assert {tuple(order) for order in orders.values()} == {('left', 'right'), ('right', 'left')}
 
 
 def test_a_non_positive_trial_count_is_refused():
@@ -196,7 +215,11 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
     assert last_obs[keys.TASK] == env.INSTRUCTION
     np.testing.assert_array_equal(last_obs[keys.JOINTS], joints)
     assert last_obs[keys.GRIP] == env.observation[mapping.OBS_GRIP]
-    for logical, candidates in CAMERAS.items():
+    dataset = LocalDataset(tmp_path)
+    assert len(dataset) == 1
+    episode = dataset[0]
+    assert isinstance(episode, Episode)
+    for logical, candidates in camera_dict(episode.static[molmo_keys.EXTERIOR_SIDES]).items():
         np.testing.assert_array_equal(last_obs[logical], env.observation[candidates[-1]])
     wires = [protocol.single_arm(action) for action in env.actions]
     commands = [w for w in wires if w[protocol.ROBOT_COMMAND][protocol.COMMAND_TYPE] == protocol.JOINT_POS]
@@ -205,14 +228,11 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
         np.testing.assert_array_equal(wire[protocol.ROBOT_COMMAND][protocol.COMMAND_JOINT_POS], joints)
         assert wire[protocol.TARGET_GRIP] == 0.0
 
-    dataset = LocalDataset(tmp_path)
-    assert len(dataset) == 1
-    episode = dataset[0]
-    assert isinstance(episode, Episode)
     assert episode.static[eval_keys.TERMINATED] is (done_after is not None)
     if done_after is not None:
         assert episode.static[eval_keys.SUCCESS] is False
         assert len(env.actions) == done_after
     else:
         assert eval_keys.SUCCESS not in episode.static
-    assert {keys.JOINTS, keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, mapping.OBS_SIM_STATE} <= episode.signals.keys()
+    recorded = {keys.JOINTS, keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2, mapping.OBS_SIM_STATE}
+    assert recorded <= episode.signals.keys()

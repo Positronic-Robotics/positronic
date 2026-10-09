@@ -16,7 +16,7 @@ from positronic import keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import mapping
-from positronic.simulator.molmo_spaces.adapter import CAMERAS, MolmoAdapter
+from positronic.simulator.molmo_spaces.adapter import SHOULDER_CAMERAS, MolmoAdapter, camera_dict
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
 
@@ -32,7 +32,8 @@ def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
 
 def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 5) -> None:
     """Check the first ``episodes`` matching records over the socket, resetting and stepping each one."""
-    adapter = MolmoAdapter()
+    cameras = camera_dict(sorted(SHOULDER_CAMERAS))
+    adapter = MolmoAdapter(cameras)
     with serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
@@ -43,7 +44,7 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
                 frame = conn.reset({**token, mapping.TOKEN_SEED: None})
                 obs = adapter.observations(frame[protocol.FRAME_OBS])
                 assert keys.ROBOT_STATE in obs and keys.GRIP in obs, f'missing contract keys: {sorted(obs)}'
-                assert all(logical in obs for logical in CAMERAS), f'missing cameras: {sorted(obs)}'
+                assert all(logical in obs for logical in cameras), f'missing cameras: {sorted(obs)}'
                 q = obs[keys.ROBOT_STATE].q
                 assert q.shape == (7,), f'unexpected joint shape {q.shape}'
                 sim_state = _check_sim_state(adapter, frame[protocol.FRAME_OBS])
