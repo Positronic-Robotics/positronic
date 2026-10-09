@@ -27,12 +27,15 @@ _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 
 _ROBOLAB_REPO = 'https://github.com/NVLabs/RoboLab.git'
-_ROBOLAB_COMMIT = '7d45d74904eade3b578a8eb1f2f9f89bc3d40326'
+_ROBOLAB_COMMIT = '93a8e064babe099e49c61aca5ece7f25f585c6a2'  # v0.2.0
 _ROBOLAB_SRC = Path.home() / '.cache' / 'positronic' / 'robolab' / 'src'
 
 # RoboLab declares only ``requires-python = ">=3.11"``, so uv otherwise inherits the interpreter from the
 # calling environment (positronic runs 3.13) — and NVIDIA's index ships no cp313 ``isaaclab`` wheels.
 _ROBOLAB_PYTHON = '3.11'
+
+# RoboLab installs Isaac only through an extra; ``isaac50`` is the IsaacSim 5.0 / IsaacLab 2.2 stack env.py drives.
+_ROBOLAB_ISAAC_EXTRA = 'isaac50'
 
 # RoboLab ships no uv.lock, so ``uv run --project`` re-resolves its dependencies on every fresh box and a
 # day-fresh release can break the install (cffi 2.1.0 published a macOS-only wheel and took down Linux
@@ -77,7 +80,10 @@ def _spawn(host: str, port: int, cameras: str, num_envs: int) -> subprocess.Pope
         # exceeds the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast
         # when warm. The spawn below passes ``--no-sync`` (``uv run`` re-syncs by default), so no resolve or
         # install ever runs outside this lock.
-        subprocess.run(['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON], check=True)
+        subprocess.run(
+            ['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON, '--extra', _ROBOLAB_ISAAC_EXTRA],
+            check=True,
+        )
     command = [
         'uv',
         'run',
