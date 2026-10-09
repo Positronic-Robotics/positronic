@@ -294,6 +294,7 @@ class MeResponse(BaseModel):
     quota: list[QuotaLimit]
     client: str | None = None
     personal_org: OrgSlug | None = None
+    organizations: list[Annotated[OrgSlug, Field(min_length=1)]] = Field(default_factory=list)
 
     def quota_for(self, key: str) -> QuotaLimit | None:
         """The limit under a rule key (`QUOTA_SUBMISSIONS_DAY` and friends), or None where the plan

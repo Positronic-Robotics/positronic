@@ -758,6 +758,35 @@ def test_an_answer_from_a_platform_without_personal_orgs_names_none():
     assert MeResponse.model_validate(answer).personal_org is None
 
 
+def test_identity_lists_shared_and_personal_organizations_without_changing_the_default():
+    answer = {
+        'user_id': USER.to_str(),
+        'tenant': 't',
+        'plan': 'p',
+        'quota': [],
+        'organizations': ['acme', 'user-a'],
+        'personal_org': 'user-a',
+    }
+    me = MeResponse.model_validate(answer)
+    assert me.organizations == [OrgSlug('acme'), OrgSlug('user-a')]
+    assert me.personal_org == 'user-a'
+    assert MeResponse.model_validate_json(me.model_dump_json()) == me
+
+
+def test_identity_from_an_older_platform_has_an_independent_empty_list():
+    answer = {'user_id': USER.to_str(), 'tenant': 't', 'plan': 'p', 'quota': []}
+    first = MeResponse.model_validate(answer)
+    first.organizations.append(OrgSlug('acme'))
+    assert MeResponse.model_validate(answer).organizations == []
+
+
+@pytest.mark.parametrize('organizations', [None, 'acme', [1], ['']])
+def test_identity_refuses_malformed_organization_memberships(organizations):
+    answer = {'user_id': USER.to_str(), 'tenant': 't', 'plan': 'p', 'quota': []}
+    with pytest.raises(ValidationError):
+        MeResponse.model_validate({**answer, 'organizations': organizations})
+
+
 def test_a_quota_refusal_carries_the_whole_rule_that_refused_it():
     err = PlatformError.from_payload(
         429,
