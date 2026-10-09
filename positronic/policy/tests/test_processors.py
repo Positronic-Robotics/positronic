@@ -25,7 +25,12 @@ from positronic.policy.codecs import (
     Metadata,
     RestrictImageSize,
 )
-from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
+from positronic.policy.codecs.action import (
+    AbsoluteJointsAction,
+    AbsolutePositionAction,
+    JointDeltaAction,
+    UnpackActionChunk,
+)
 from positronic.policy.codecs.geometry import ConvertPose
 from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
 from positronic.policy.executor import Executor, _UnchargedAnswer
@@ -560,6 +565,7 @@ def test_wire_names_match_the_registered_components():
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
         'joint_delta_action': JointDeltaAction(),
+        'unpack_action_chunk': UnpackActionChunk({'action': ['prediction']}),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         'convert_pose': ConvertPose('rot6d'),
     }

@@ -7,6 +7,8 @@ import pytest
 import zmq
 from positronic_model_server import keys as offboard_keys
 
+from positronic import keys
+from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.policy.codecs import ACTION
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server as gr00t_server
@@ -63,6 +65,35 @@ def test_msgpack_numpy_preserves_actions_and_camera_arrays():
     image = np.arange(180 * 320 * 3, dtype=np.uint8).reshape(1, 1, 180, 320, 3)
     encoded = gr00t_server.MsgSerializer.to_bytes({gr00t.VIDEO: image})
     np.testing.assert_array_equal(msgpack.unpackb(encoded, object_hook=msgpack_numpy.decode)[gr00t.VIDEO], image)
+
+
+def test_model_returns_native_predictions_and_deployment_codec_builds_commands():
+    backend = Mock()
+    targets = np.arange(14, dtype=np.float32).reshape(1, 2, 7)
+    result = ({gr00t.JOINT_POSITION: targets, gr00t.GRIP: np.array([0.5, 0.9]).reshape(1, 2, 1)}, {})
+    backend.client.get_action.return_value = result
+    model = gr00t_server.Gr00tModel(backend, {})
+    codec = gr00t_server.droid().codec
+    observation = {
+        keys.EE_POSE: np.array([0, 0, 0, 1, 0, 0, 0]),
+        keys.JOINTS: np.zeros(7),
+        keys.GRIP: 0.2,
+        keys.TASK: 'pick',
+        keys.EXTERIOR_IMAGE: np.zeros((180, 320, 3), dtype=np.uint8),
+        keys.WRIST_IMAGE: np.zeros((180, 320, 3), dtype=np.uint8),
+    }
+    encoded = codec.encode(observation)
+
+    native = model(encoded, session_id='session')
+    decoded = codec.decode(native)
+
+    assert native is result
+    backend.client.get_action.assert_called_once_with(encoded)
+    assert len(decoded) == 2
+    for index, action in enumerate(decoded):
+        np.testing.assert_array_equal(action[keys.ROBOT_COMMAND].positions, targets[0, index])
+        assert action[keys.ROBOT_COMMAND].mode == DROID_IMPEDANCE
+        assert action[keys.TARGET_GRIP] == float(index)
 
 
 def test_serializer_rejects_pickle_bearing_arrays():

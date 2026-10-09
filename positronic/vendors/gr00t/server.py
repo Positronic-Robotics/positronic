@@ -196,12 +196,7 @@ class Gr00tModel(Model):
         self._meta = meta
 
     def __call__(self, obs: Obs, *, session_id: str):
-        action_response, _info = self._groot.client.get_action(dict(obs))
-        action = {k: v[0] for k, v in action_response.items()}
-        lengths = {len(v) for v in action.values()}
-        assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
-        time_horizon = lengths.pop()
-        return [{k: v[i] for k, v in action.items()} for i in range(time_horizon)]
+        return self._groot.client.get_action(dict(obs))
 
     def meta(self) -> dict[str, Any]:
         return self._meta

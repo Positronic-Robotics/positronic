@@ -1,6 +1,13 @@
 """Composable observation, action and training-data conversions."""
 
-from .action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction, SetControlMode
+from .action import (
+    AbsoluteJointsAction,
+    AbsolutePositionAction,
+    IKJointsAction,
+    JointDeltaAction,
+    SetControlMode,
+    UnpackActionChunk,
+)
 from .base import Codec
 from .geometry import ChangeEEFrame, ConvertPose
 from .gripper import BinarizeGripInference, BinarizeGripTraining, FlipGrip

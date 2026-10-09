@@ -18,7 +18,12 @@ from positronic.policy.codecs import (
     Metadata,
     RestrictImageSize,
 )
-from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
+from positronic.policy.codecs.action import (
+    AbsoluteJointsAction,
+    AbsolutePositionAction,
+    JointDeltaAction,
+    UnpackActionChunk,
+)
 from positronic.policy.codecs.geometry import ConvertPose
 from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
@@ -47,6 +52,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         AbsolutePositionAction,
         AbsoluteJointsAction,
         JointDeltaAction,
+        UnpackActionChunk,
     )
 }
 
