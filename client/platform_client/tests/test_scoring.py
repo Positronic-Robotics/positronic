@@ -11,10 +11,19 @@ import logging
 from pathlib import Path
 
 import pytest
-from eval_vocabulary.episode import STATIC_FILE, SUCCESS, TASK
+from eval_vocabulary import outcome as verdicts
+from eval_vocabulary.episode import STATIC_FILE, SUCCESS, TASK, TERMINATED
 from platform_client.evals import MOLMO_SCORER, PUBLIC_EVALS, EvalRef, ScorerRef, public_eval
 from platform_client.responses import Scores as PublishedScores
-from platform_client.scoring import PUBLIC_SCORERS, Outcome, Scores, read_static, recorded_task_and_success, score
+from platform_client.scoring import (
+    PUBLIC_SCORERS,
+    Outcome,
+    Scores,
+    molmo_outcome,
+    read_static,
+    recorded_task_and_success,
+    score,
+)
 
 SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'molmo_sweep').glob('*/*') if p.is_dir())
 
@@ -37,6 +46,16 @@ PER_TASK = {
 # being the same string.
 CUP = 'pick up the cup.'
 KETTLE = 'pick up the kettle.'
+
+# What the harness records for a trial that ran out of time, on a sim and on a rig alike.
+TIMED_OUT = {TASK: CUP, TERMINATED: False}
+# A rig's console adds its operator's verdict and item count to the same record.
+RIG_TIMED_OUT = {
+    **TIMED_OUT,
+    verdicts.OUTCOME: verdicts.Outcome.OUT_OF_TIME,
+    verdicts.SUCCESSFUL_ITEMS: 0,
+    verdicts.TOTAL_ITEMS: 1,
+}
 
 
 def score_molmo(episodes: list[Path]) -> Scores:
@@ -91,6 +110,17 @@ def test_a_failed_episode_is_scored_as_a_trial_rather_than_as_nothing(tmp_path: 
     assert scores.per_task[KETTLE].trials == 1
 
 
+def test_a_sim_and_a_rig_trial_that_ran_out_of_time_both_count_as_a_failed_trial(tmp_path: Path):
+    sim, rig = _episodes(tmp_path, TIMED_OUT, RIG_TIMED_OUT)
+    assert molmo_outcome(sim) == molmo_outcome(rig) == Outcome(CUP, False)
+    scores = score_molmo([sim, rig])
+    assert (scores.episodes, scores.unscored, scores.success_rate) == (2, 0, 0.0)
+
+
+def test_a_success_recorded_beside_a_timeout_does_not_count():
+    assert recorded_task_and_success({**TIMED_OUT, SUCCESS: True}, TASK) == (CUP, False)
+
+
 @pytest.mark.parametrize('static', ['{ truncated upload', '[true, "pick up the cup."]', b'{"task": "\xff"}'])
 def test_statics_that_are_not_a_json_object_are_unscored_rather_than_fatal(tmp_path: Path, static: str | bytes):
     (episode,) = _episodes(tmp_path, static)
@@ -116,7 +146,16 @@ def test_a_success_or_task_of_the_wrong_type_is_no_outcome_and_is_logged(
     assert misrecorded in caplog.records[0].getMessage()
 
 
-@pytest.mark.parametrize('static', [{TASK: CUP}, {SUCCESS: True}])
+@pytest.mark.parametrize(
+    'static',
+    [
+        {TASK: CUP},
+        {SUCCESS: True},
+        {TASK: CUP, TERMINATED: True},
+        {TASK: CUP, TERMINATED: 'false'},
+        {TERMINATED: False},
+    ],
+)
 def test_a_missing_success_or_task_is_no_outcome_and_logs_nothing(
     static: dict[str, object], caplog: pytest.LogCaptureFixture
 ):

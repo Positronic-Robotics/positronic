@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
-from eval_vocabulary.episode import STATIC_FILE, SUCCESS, TASK
+from eval_vocabulary.episode import STATIC_FILE, SUCCESS, TASK, TERMINATED
 from platform_client.evals import MOLMO_SCORER, ScorerRef
 from pydantic import BaseModel
 
@@ -86,11 +86,17 @@ def read_static(episode: Path) -> dict[str, object] | None:
 
 
 def recorded_task_and_success(static: Mapping[str, object], task_key: str) -> tuple[str, bool] | None:
-    """The task under `task_key` and the recorded success, or None when either is missing or of the wrong type."""
-    success, task = static.get(SUCCESS), static.get(task_key)
+    """The task under `task_key` and the recorded success, or None when either is missing or of the wrong type.
+
+    A trial that ran out of time failed, as a real-robot episode that runs out of time does.
+    """
+    ran_out_of_time = static.get(TERMINATED) is False
+    success = False if ran_out_of_time else static.get(SUCCESS)
+    task = static.get(task_key)
+    checked = ((task_key, str),) if ran_out_of_time else ((SUCCESS, bool), (task_key, str))
     misrecorded = [
         f'{key}={static[key]!r} is not a {kind.__name__}'
-        for key, kind in ((SUCCESS, bool), (task_key, str))
+        for key, kind in checked
         if key in static and not isinstance(static[key], kind)
     ]
     if misrecorded:
