@@ -18,6 +18,70 @@ from .metadata import LEROBOT_FEATURES, lerobot_image, lerobot_vector
 TASK_FIELD = 'task'
 
 
+class PackObservationFields(Codec):
+    """Select fields into nested dictionaries and add leading singleton dimensions.
+
+    Layout leaves name literal input keys. Arrays retain their dtype; other values gain list layers.
+    ``unsqueeze_dims`` is the number of size-one dimensions added at the front.
+    Training columns and decoded actions pass through unchanged.
+
+    Example::
+
+        PackObservationFields(
+            {'state': {'joints': 'robot_state.q'}, 'language': {'instruction': 'task'}}, unsqueeze_dims=2
+        )
+    """
+
+    WIRE_NAME = 'pack_observation_fields'
+
+    def __init__(self, layout: dict[str, Any], *, unsqueeze_dims: int = 0):
+        if type(unsqueeze_dims) is not int or unsqueeze_dims < 0:
+            raise ValueError('unsqueeze_dims must be a non-negative integer')
+        self._layout = self._copy_layout(layout)
+        self._unsqueeze_dims = unsqueeze_dims
+
+    @staticmethod
+    def _copy_layout(layout: dict[str, Any]) -> dict[str, Any]:
+        result = {}
+        for name, source in layout.items():
+            if not isinstance(name, str) or not isinstance(source, (str, dict)):
+                raise ValueError('Layout entries must have string keys and contain input key names or dictionaries')
+            result[name] = PackObservationFields._copy_layout(source) if isinstance(source, dict) else source
+        return result
+
+    def _pack(self, layout: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+        result = {}
+        for name, source in layout.items():
+            if isinstance(source, dict):
+                result[name] = self._pack(source, data)
+            else:
+                value = data[source]
+                if isinstance(value, np.ndarray):
+                    value = value.reshape((1,) * self._unsqueeze_dims + value.shape)
+                else:
+                    for _ in range(self._unsqueeze_dims):
+                        value = [value]
+                result[name] = value
+        return result
+
+    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
+        return self._pack(self._layout, data)
+
+    def decode(self, data: Any) -> Any:
+        return data
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return Identity()
+
+    def to_spec(self) -> dict[str, Any]:
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'layout': self._copy_layout(self._layout), 'unsqueeze_dims': self._unsqueeze_dims},
+        }
+
+
 class RenameObservationFields(Codec):
     """Rename top-level inference fields with a source-to-destination mapping.
 

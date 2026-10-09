@@ -40,7 +40,11 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
     })
     training = codec.training_encoder(episode)
     encoded = codec.encode(observation)
+    assert set(encoded) == {gr00t.STATE, gr00t.VIDEO, gr00t.LANGUAGE}
+    assert encoded[gr00t.LANGUAGE] == {gr00t.TASK: [[observation[keys.TASK]]]}
     for name, value in encoded[gr00t.STATE].items():
+        assert value.shape == (1, 1, gr00t.STATE_DIMS[name])
+        assert value.dtype == np.float32
         assert np.asarray(training[name][0][0]).dtype == np.float32
         np.testing.assert_allclose(training[name][0][0], value[0, 0], atol=1e-6)
     for name, frames in encoded[gr00t.VIDEO].items():
@@ -48,6 +52,23 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
         np.testing.assert_array_equal(training[name][0][0], frames[0, 0])
     expected_action = np.concatenate([encoded[gr00t.STATE][name][0, 0] for name in gr00t.STATE_DIMS])
     np.testing.assert_allclose(training[ACTION][0][0], expected_action)
+
+
+@pytest.mark.parametrize('image_mappings', [{}, {gr00t.EE_POSE: keys.WRIST_IMAGE}])
+def test_observation_layout_preserves_empty_camera_groups_and_names_shared_with_state(image_mappings, observation):
+    codec = droid(image_mappings=image_mappings)
+    encoded = codec.encode(observation)
+    assert set(encoded[gr00t.VIDEO]) == set(image_mappings)
+    assert encoded[gr00t.STATE][gr00t.EE_POSE].shape == (1, 1, 9)
+    for name in image_mappings:
+        assert encoded[gr00t.VIDEO][name].shape == (1, 1, 180, 320, 3)
+    assert codec.meta[Codec.IMAGE_SIZES] == dict.fromkeys(image_mappings.values(), gr00t.IMAGE_SIZE)
+
+
+def test_observation_layout_requires_a_live_prompt(observation):
+    del observation[keys.TASK]
+    with pytest.raises(KeyError, match=keys.TASK):
+        droid().encode(observation)
 
 
 @pytest.mark.parametrize('task', [None, 'Pick up the cup'])

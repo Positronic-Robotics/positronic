@@ -58,6 +58,7 @@ These are the public codec classes exported by this package. Each name links to 
 |-------|--------------|----------------|
 | [`ObservationCodec`](observation.py) | Concatenates state signals, resizes and pads RGB images, and carries the task prompt. Shares state/image settings between training and inference. | Build named state vectors and image fields from raw robot observations. |
 | [`RenameObservationFields`](observation.py) | Renames literal top-level inference fields. Training columns and decoded actions pass through. | The model's inference input names differ from the training column names. |
+| [`PackObservationFields`](observation.py) | Selects fields into nested dictionaries and adds leading singleton dimensions. Arrays retain their dtype; other values gain list layers. Training and decoding pass through. | A model expects grouped fields or explicit batch/time dimensions, such as GR00T's `video`, `state` and `language` inputs. |
 
 ### Actions
 

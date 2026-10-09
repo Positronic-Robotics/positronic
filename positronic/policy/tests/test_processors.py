@@ -27,7 +27,7 @@ from positronic.policy.codecs import (
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
 from positronic.policy.codecs.geometry import ConvertPose
-from positronic.policy.codecs.observation import ObservationCodec, RenameObservationFields
+from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.processors import (
     ChunkedSchedule,
@@ -555,6 +555,7 @@ def test_wire_names_match_the_registered_components():
         'metadata': Metadata({'action_fps': 15}),
         'restrict_image_size': RestrictImageSize(),
         'observation_codec': ObservationCodec(state={}, images={}),
+        'pack_observation_fields': PackObservationFields({'state': 'input'}),
         'rename_observation_fields': RenameObservationFields({'state': 'input'}),
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
