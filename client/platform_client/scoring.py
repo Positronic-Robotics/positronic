@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,29 +41,15 @@ class Outcome:
 Scorer = Callable[[Path], Outcome | None]
 
 
-class TaskScore(BaseModel):
-    """The trials of one task, with the count beside the share.
-
-    `mean_subtask_score` is None when the scorer grades no episode of the task.
-    """
-
-    trials: int
-    successes: int
-    success_rate: float
-    mean_subtask_score: float | None = None
-
-
 class Scores(BaseModel):
     """The `scores.json` of a run.
 
-    A board ranks on `primary`: the mean episode score. `unscored` counts the episodes that recorded no
-    outcome. The rates do not include them, and do not count them as failures. `responses.Scores` publishes
-    a subset of this record.
+    A board ranks on `primary`: the mean score of the episodes that recorded an outcome. `episodes` counts every
+    episode, and `unscored` counts the ones that recorded no outcome. `primary` does not include those, and does not
+    count them as failures. `responses.Scores` publishes a subset of this record.
     """
 
     primary: float
-    success_rate: float
-    per_task: dict[str, TaskScore]
     episodes: int
     unscored: int
 
@@ -130,34 +115,10 @@ def score(scorer: ScorerRef, episodes: Iterable[Path], scorers: Mapping[ScorerRe
 
 def tally(outcomes: Iterable[Outcome | None]) -> Scores:
     """The scores of a run whose episodes gave `outcomes`. A None outcome counts as unscored."""
-    trials: Counter[str] = Counter()
-    successes: Counter[str] = Counter()
-    scored_sum: defaultdict[str, float] = defaultdict(float)
-    graded: set[str] = set()
-    total = unscored = 0
-    for outcome in outcomes:
-        total += 1
-        if outcome is None:
-            unscored += 1
-            continue
-        trials[outcome.task] += 1
-        successes[outcome.task] += outcome.succeeded
-        scored_sum[outcome.task] += outcome.score
-        if outcome.graded is not None:
-            graded.add(outcome.task)
-    scored = total - unscored
+    recorded = list(outcomes)
+    scored = [outcome.score for outcome in recorded if outcome is not None]
     return Scores(
-        primary=sum(scored_sum.values()) / scored if scored else 0.0,
-        success_rate=successes.total() / scored if scored else 0.0,
-        per_task={
-            task: TaskScore(
-                trials=trials[task],
-                successes=successes[task],
-                success_rate=successes[task] / trials[task],
-                mean_subtask_score=scored_sum[task] / trials[task] if task in graded else None,
-            )
-            for task in sorted(trials)
-        },
-        episodes=total,
-        unscored=unscored,
+        primary=sum(scored) / len(scored) if scored else 0.0,
+        episodes=len(recorded),
+        unscored=len(recorded) - len(scored),
     )
