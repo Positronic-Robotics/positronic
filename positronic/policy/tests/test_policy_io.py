@@ -1,5 +1,8 @@
+import json
+
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation as ScipyRotation
 
 import positronic.drivers.roboarm.command as cmd_module
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
@@ -8,10 +11,115 @@ from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
-from positronic.geom import Rotation
+from positronic.geom import Rotation, Transform3D
+from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
 from positronic.policy.codec import BinarizeGripInference, BinarizeGripTraining, Codec, FlipGrip, Metadata
-from positronic.policy.observation import ObservationCodec
+from positronic.policy.observation import ConvertPose, ObservationCodec, RenameObservationFields
+
+
+@pytest.mark.parametrize('input_rotation', list(Rotation.Representation))
+@pytest.mark.parametrize('output_rotation', list(Rotation.Representation))
+def test_pose_conversion_preserves_translation_and_composes_rotation_on_the_right(input_rotation, output_rotation):
+    rotation = ScipyRotation.from_euler('xyz', [0.3, -0.6, 0.8])
+    offset = ScipyRotation.from_euler('xyz', [-0.7, 0.2, 0.4])
+    pose = Transform3D([0.2, -0.1, 0.5], Rotation.from_quat(rotation.as_quat(scalar_first=True)))
+    inputs = {'pose': pose.as_vector(input_rotation), 'other': np.ones(3)}
+    codec = ConvertPose(
+        output_rotation.value,
+        keys=('pose',),
+        input_rotation=input_rotation.value,
+        rotation_offset=offset.as_quat(scalar_first=True).tolist(),
+    )
+
+    restored = spec.from_spec(json.loads(json.dumps(codec.to_spec())))
+    assert isinstance(restored, ConvertPose)
+    encoded = restored.encode(inputs)
+    converted = Transform3D.from_vector(encoded['pose'], output_rotation)
+    assert encoded['pose'].dtype == np.float32
+    np.testing.assert_allclose(converted.translation, pose.translation)
+    np.testing.assert_allclose(converted.rotation.as_rotation_matrix, (rotation * offset).as_matrix(), atol=3e-7)
+    assert encoded['other'] is inputs['other']
+    np.testing.assert_array_equal(inputs['pose'], pose.as_vector(input_rotation))
+
+
+@pytest.mark.parametrize('sign', [1, -1])
+def test_pose_conversion_uses_row_rot6d(sign):
+    codec = ConvertPose('rot6d', keys=('left', 'right'))
+    pose = [1, 2, 3, sign * 0.5, sign * 0.5, sign * 0.5, sign * 0.5]
+    for value in codec.encode({'left': pose, 'right': pose}).values():
+        np.testing.assert_array_equal(value, [1, 2, 3, 0, 0, 1, 1, 0, 0])
+
+
+def test_pose_conversion_preserves_training_timelines_metadata_and_actions():
+    poses = [[1, 2, 3, 1, 0, 0, 0], [4, 5, 6, 0.5, 0.5, 0.5, 0.5]]
+    signal = DummySignal([[10, 100], [20, 300]], poses, timelines=(RECEIVED_WORLD, RECEIVED_WALL))
+    episode = EpisodeContainer({'pose': signal, 'other': 'label'}, meta={'source': 'fixture'})
+    codec = ConvertPose('rot6d', keys=('pose',))
+    training = codec.training_encoder(episode)
+
+    assert training['pose'].timelines == signal.timelines
+    for timeline in signal.timelines:
+        assert list(training['pose'].timestamps(timeline)) == list(signal.timestamps(timeline))
+    for i, pose in enumerate(poses):
+        np.testing.assert_array_equal(training['pose'][i][0], codec.encode({'pose': pose})['pose'])
+    assert training.meta == episode.meta
+    assert training['other'] == 'label'
+    assert codec.meta == codec.training_encoder.meta == {}
+    result = ({'actions': np.ones((1, 3, 7))}, {'timing': 0.1})
+    assert codec.decode(result) is result
+
+
+@pytest.mark.parametrize('value', [np.ones(6), np.ones(8), np.ones((1, 7))])
+def test_pose_conversion_rejects_wrong_vector_shape(value):
+    with pytest.raises(ValueError, match='pose vector with 7 values'):
+        ConvertPose('rot6d').encode({obs_keys.EE_POSE: value})
+
+
+def test_pose_conversion_requires_selected_fields():
+    with pytest.raises(KeyError):
+        ConvertPose('rot6d', keys=('pose',)).encode({})
+
+
+@pytest.mark.parametrize('input_rotation, output_rotation', [('unknown', 'rot6d'), ('quat', 'unknown')])
+def test_pose_conversion_rejects_unknown_representations(input_rotation, output_rotation):
+    with pytest.raises(ValueError):
+        ConvertPose(output_rotation, input_rotation=input_rotation)
+
+
+def test_observation_renaming_uses_literal_keys_and_preserves_values():
+    codec = RenameObservationFields({'observation.state': 'observation/state', 'task': 'prompt'})
+    state = np.array([1, 2], dtype=np.float32)
+    camera = {'image': np.zeros((2, 3, 3), dtype=np.uint8)}
+    inputs = {'observation.state': state, 'camera': camera}
+
+    encoded = codec.encode(inputs)
+
+    assert set(encoded) == {'observation/state', 'camera'}
+    assert encoded['observation/state'] is state
+    assert encoded['camera'] is camera
+    assert set(inputs) == {'observation.state', 'camera'}
+
+
+def test_observation_renaming_can_swap_names():
+    codec = RenameObservationFields({'left': 'right', 'right': 'left'})
+    assert codec.encode({'left': 1, 'right': 2}) == {'left': 2, 'right': 1}
+
+
+@pytest.mark.parametrize('mapping', [{'a': 'b'}, {'a': 'result', 'b': 'result'}])
+def test_observation_renaming_rejects_overwriting_fields(mapping):
+    codec = RenameObservationFields(mapping)
+    with pytest.raises(ValueError, match='collide'):
+        codec.encode({'a': 1, 'b': 2})
+
+
+def test_observation_renaming_preserves_training_and_native_results():
+    codec = RenameObservationFields({'state': 'input'})
+    episode = EpisodeContainer({'state': DummySignal([100], [[1]])}, meta={'label': 'test'})
+    result = ({'state': np.ones((1, 3, 2))}, {'timing': 0.1})
+
+    assert codec.training_encoder(episode) is episode
+    assert codec.decode(result) is result
 
 
 def test_observation_encode_images_and_state_shapes():
@@ -20,7 +128,7 @@ def test_observation_encode_images_and_state_shapes():
     img = np.full((h, w, 3), 255, dtype=np.uint8)
 
     enc = ObservationCodec(
-        state={'observation.state': ['a', 'b']}, images={'observation.images.left': ('left.image', (w, h))}
+        state={'observation.state': {'a': 2, 'b': 1}}, images={'observation.images.left': ('left.image', (w, h))}
     )
     obs = enc.encode({'left.image': img, 'a': [1, 2], 'b': 3.0})
 
@@ -37,16 +145,16 @@ def test_observation_encode_images_and_state_shapes():
 
 
 def test_observation_encode_missing_or_bad_images_raise():
-    enc = ObservationCodec(state={'observation.state': []}, images={'observation.images.left': ('left.image', (8, 6))})
-    with pytest.raises(KeyError):  # Missing key
+    enc = ObservationCodec(state={'observation.state': {}}, images={'observation.images.left': ('left.image', (8, 6))})
+    with pytest.raises(KeyError):
         enc.encode({})
 
-    with pytest.raises(ValueError):  # Wrong shape
+    with pytest.raises(ValueError):
         enc.encode({'left.image': np.zeros((8, 8), dtype=np.uint8)})
 
 
 def test_observation_encode_missing_state_inputs_raise():
-    enc = ObservationCodec(state={'observation.state': ['missing']}, images={})
+    enc = ObservationCodec(state={'observation.state': {'missing': 1}}, images={})
     with pytest.raises(KeyError):
         enc.encode({})
 
@@ -77,7 +185,7 @@ def test_training_observations_require_world_receipt_for_each_input():
 
 
 def test_observation_encode_task():
-    enc = ObservationCodec(state={'observation.state': ['a']}, images={})
+    enc = ObservationCodec(state={'observation.state': {'a': 1}}, images={})
     obs = enc.encode({'a': 1.0, obs_keys.TASK: 'test_task'})
     assert obs[obs_keys.TASK] == 'test_task'
 
@@ -86,7 +194,6 @@ def test_observation_encode_task():
 
 
 def test_absolute_position_action_encode_decode_quat():
-    # Identity rotation, known translation/grip
     ts = [1000, 2000]
     q = [Rotation.identity for _ in ts]
     t = [np.array([0.1, -0.2, 0.3], dtype=np.float32) for _ in ts]
@@ -112,7 +219,6 @@ def test_absolute_position_action_encode_decode_quat():
 
 
 def test_absolute_joints_action_encode_decode():
-    # Known joint positions and grip
     ts = [1000, 2000]
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
     g = [0.5, 0.6]
@@ -143,7 +249,6 @@ class _PassthroughCodec(Codec):
 
 
 def test_codec_composition():
-    """Test that codecs compose correctly via |."""
     left = _PassthroughCodec('left')
     right = _PassthroughCodec('right')
     composed = left | right
@@ -181,7 +286,6 @@ def test_composed_training_encoder_uses_parallel():
     encoder = composed.training_encoder
     result = encoder(ep)
 
-    # Observation codec's derived keys
     assert 'observation.state' in result
     assert 'observation.images.left' in result
 
@@ -196,7 +300,6 @@ def test_composed_training_encoder_uses_parallel():
     assert 'target_grip' not in result
     assert obs_keys.TARGET_JOINTS not in result
 
-    # Meta should merge from all codecs
     assert encoder.meta.get('action_fps') == 15.0
     assert 'lerobot_features' in encoder.meta
 
@@ -288,7 +391,6 @@ def test_parallel_codec_encode_merges_outputs():
     composed = obs & action
     result = composed.encode({'a': 1.0})
     assert 'observation.state' in result
-    # Action codec returns {} from encode — no passthrough leakage
     assert set(result.keys()) == {'observation.state'}
 
 
@@ -303,7 +405,6 @@ def test_parallel_codec_decode_merges_outputs():
     raw_action[4:7] = [0.1, 0.2, 0.3]
     raw_action[7] = 0.5
     result = composed.decode({'action': raw_action})
-    # Obs returns {} from decode, action returns decoded keys
     assert obs_keys.ROBOT_COMMAND in result
     assert 'target_grip' in result
     assert 'action' not in result
@@ -334,17 +435,14 @@ def test_sequential_into_parallel_training():
     result = composed.training_encoder(ep)
 
     # Binarize runs first — grip (0.7 > 0.5 → 1.0), target_grip (0.3 ≤ 0.5 → 0.0)
-    # Action encoder reads binarized target_grip
     vec = list(result['action'])[0][0]
     assert vec[-1] == pytest.approx(0.0)
 
-    # Obs encoder reads binarized grip in observation.state
     state = list(result['observation.state'])[0][0]
     assert state[-1] == pytest.approx(1.0)
 
 
 def test_compose_training_encoder_produces_only_derived_keys():
-    """Composed codec training encoder must not leak original episode keys into the output."""
     ts = [1000, 2000]
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
     grip = [0.5, 0.6]
@@ -370,7 +468,6 @@ def test_compose_training_encoder_produces_only_derived_keys():
 
     result = codec.training_encoder(ep)
 
-    # Derived keys present
     assert 'observation.state' in result
     assert 'action' in result
 

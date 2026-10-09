@@ -26,27 +26,23 @@ from positronic.policy.codec import (
     lerobot_image,
     lerobot_vector,
 )
+from positronic.policy.observation import ConvertPose
 from positronic.vendors import gr00t
 
 
 class DroidCodec(Codec):
-    """Encode poses in the DROID tool frame and decode upstream's absolute joint targets.
+    """Pack xyz/row-rot6d poses in the DROID tool frame and decode absolute joint targets.
 
     Training uses recorded pose/joint/gripper trajectories as absolute action labels. GR00T's
     checkpoint processor converts those labels to relative actions and back during inference.
     """
 
-    # Matches GR00T's gr00t/data/state_action/droid_frame.py; row-based rot6d follows this correction.
-    _ROTATION_CORRECTION = np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]], dtype=np.float64)
-
     def __init__(self, image_mappings: dict[str, str]):
         self.image_mappings = dict(image_mappings)
 
-    @classmethod
-    def _encode_pose(cls, value):
-        pose = geom.Transform3D.from_vector(np.asarray(value), geom.Rotation.Representation.QUAT)
-        rotation = pose.rotation.as_rotation_matrix @ cls._ROTATION_CORRECTION
-        return np.concatenate([pose.translation, rotation[:2].reshape(6)]).astype(np.float32)
+    @staticmethod
+    def _pose_vector(value):
+        return np.asarray(value, dtype=np.float32).reshape(9)
 
     @staticmethod
     def _encode_image(frame):
@@ -54,7 +50,7 @@ class DroidCodec(Codec):
 
     def encode(self, inputs: dict) -> dict:
         state = {
-            gr00t.EE_POSE: self._encode_pose(inputs[keys.EE_POSE]),
+            gr00t.EE_POSE: self._pose_vector(inputs[keys.EE_POSE]),
             gr00t.GRIP: np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(1),
             gr00t.JOINT_POSITION: np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(7),
         }
@@ -75,7 +71,7 @@ class DroidCodec(Codec):
         }
 
     def _derive_pose(self, episode: Episode):
-        return tf.Elementwise(episode[keys.EE_POSE], tf.lazy_sequence(self._encode_pose))
+        return tf.Elementwise(episode[keys.EE_POSE], tf.lazy_sequence(self._pose_vector))
 
     @staticmethod
     def _derive_grip(episode: Episode):
@@ -150,6 +146,11 @@ def droid(image_mappings: dict[str, str], ee_frame: geom.Transform3D, training_f
         Metadata({policy_keys.ACTION_FPS: training_fps})
         | BinarizeGripInference()
         | ChangeEEFrame(ee_frame)
+        | ConvertPose(
+            geom.Rotation.Representation.ROT6D.value,
+            # GR00T's gr00t/data/state_action/droid_frame.py defines this rotation offset.
+            rotation_offset=geom.Rotation.from_rotation_matrix(np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]])),
+        )
         | DroidCodec(image_mappings)
     )
 
