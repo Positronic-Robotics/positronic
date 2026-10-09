@@ -6,7 +6,7 @@ from typing import Any
 
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.policy.base import Obs, Policy
-from positronic.policy.codec import Codec
+from positronic.policy.codecs import Codec
 
 
 class Model(ABC):

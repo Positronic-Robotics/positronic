@@ -23,7 +23,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Policy, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codec import ACTION, RestrictImageSize
+from positronic.policy.codecs import ACTION, RestrictImageSize
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.vendors.dreamzero import codecs, roboarena
 

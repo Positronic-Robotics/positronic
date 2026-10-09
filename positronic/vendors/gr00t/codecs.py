@@ -14,7 +14,7 @@ from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command, models
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import (
+from positronic.policy.codecs import (
     ACTION,
     GR00T_MODALITY,
     LEROBOT_FEATURES,
@@ -26,7 +26,7 @@ from positronic.policy.codec import (
     lerobot_image,
     lerobot_vector,
 )
-from positronic.policy.observation import ConvertPose
+from positronic.policy.codecs.geometry import ConvertPose
 from positronic.vendors import gr00t
 
 

@@ -21,7 +21,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codec import Codec, RestrictImageSize
+from positronic.policy.codecs import Codec, RestrictImageSize
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.vendors import gr00t

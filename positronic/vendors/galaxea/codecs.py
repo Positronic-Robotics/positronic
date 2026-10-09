@@ -6,7 +6,7 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import Codec
+from positronic.policy.codecs import Codec
 from positronic.vendors.galaxea import protocol
 
 

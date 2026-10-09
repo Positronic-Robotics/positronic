@@ -20,7 +20,7 @@ Example:
 import logging
 import os
 import shutil
-import sys  # noqa: F401 — used in resume path to set sys.argv for lerobot's parser
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,8 +37,8 @@ from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 from pimm.logging import init_logging
 from positronic import utils
 from positronic.policy import Codec
-from positronic.policy import codec as policy_codec
-from positronic.policy.codec import LEROBOT_FEATURES
+from positronic.policy import codecs as policy_codec
+from positronic.policy.codecs import LEROBOT_FEATURES
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 
 # Workaround: HubMixin.save_pretrained unconditionally deletes config.json before

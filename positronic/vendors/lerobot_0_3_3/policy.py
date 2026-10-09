@@ -13,8 +13,8 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from positronic.offboard.spec import Model
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codec import ACTION
-from positronic.policy.observation import TASK_FIELD
+from positronic.policy.codecs import ACTION
+from positronic.policy.codecs.observation import TASK_FIELD
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
 

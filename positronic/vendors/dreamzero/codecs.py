@@ -15,8 +15,7 @@ from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
-from positronic.policy.action import IKJointsAction
-from positronic.policy.codec import (
+from positronic.policy.codecs import (
     ACTION,
     GR00T_MODALITY,
     LEROBOT_FEATURES,
@@ -25,6 +24,7 @@ from positronic.policy.codec import (
     lerobot_image,
     lerobot_vector,
 )
+from positronic.policy.codecs.action import IKJointsAction
 from positronic.vendors.dreamzero import roboarena
 
 IMAGE_WIDTH = 320

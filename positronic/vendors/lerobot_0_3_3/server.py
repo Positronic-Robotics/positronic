@@ -14,7 +14,7 @@ from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import RestrictImageSize
+from positronic.policy.codecs import RestrictImageSize
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all

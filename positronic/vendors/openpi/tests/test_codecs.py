@@ -7,7 +7,7 @@ from positronic import keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
-from positronic.policy.codec import LEROBOT_FEATURES, Codec
+from positronic.policy.codecs import LEROBOT_FEATURES, Codec
 from positronic.policy.spec import from_spec
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs

@@ -4,6 +4,22 @@ A trained model expects its inputs in one particular shape: end-effector pose or
 
 This is what lets you **record once and run any model**. The same raw episode can train and serve a LeRobot policy in end-effector space, a GR00T policy in 6D-rotation joint space, and an OpenPI policy in absolute-position space — you only swap the codec. No re-recording datasets per model, and no throwing data away when you switch formats. See the [Dataset Library](../positronic/dataset/README.md) for how the raw data is stored and transformed lazily.
 
+Reusable implementations live in [`positronic.policy.codecs`](../positronic/policy/codecs/).
+The package root exposes public names; implementations and their tests are grouped by responsibility:
+
+| Module | Responsibility |
+|--------|----------------|
+| `base` | `Codec` and sequential/parallel composition |
+| `observation` | Field names, state vectors and model input assembly |
+| `action` | Prediction decoding, training labels and command control modes |
+| `geometry` | Pose representations and end-effector frames |
+| `gripper` | Grip thresholds and conventions |
+| `image` | Image size limits and JPEG encoding |
+| `metadata` | Metadata attachment and dataset feature descriptors |
+
+Codec tests live under `positronic/policy/codecs/tests/`. Model-specific recipes compose these
+operations under `positronic/vendors/`; configuration presets live under `positronic/cfg/`.
+
 ## One codec, both directions
 
 The interesting part is that a codec defines its transformation for **both** training and inference, in a single place:
@@ -22,9 +38,9 @@ That dual structure is also why codecs **compose**. Each codec is a small piece 
 
 The two codecs that do the real work are the **observation encoder** and the **action decoder**.
 
-**Observation encoding** chooses which raw fields the model sees, and in what form. `ObservationCodec` ([`positronic/policy/observation.py`](../positronic/policy/observation.py)) is configured with state vectors to assemble (e.g. concatenate `robot_state.ee_pose` + `grip`) and images to resize. The same configuration builds the training columns and encodes the live observation, so the two match by construction.
+**Observation encoding** chooses which raw fields the model sees, and in what form. `ObservationCodec` ([`positronic/policy/codecs/observation.py`](../positronic/policy/codecs/observation.py)) is configured with state vectors to assemble (e.g. concatenate `robot_state.ee_pose` + `grip`) and images to resize. The same configuration builds the training columns and encodes the live observation, so the two match by construction.
 
-**Action encoding** chooses what the model predicts and how that maps back to a robot command. This is where the action-space decisions live. Some real examples from [`positronic/policy/action.py`](../positronic/policy/action.py):
+**Action encoding** chooses what the model predicts and how that maps back to a robot command. This is where the action-space decisions live. Some real examples from [`positronic/policy/codecs/action.py`](../positronic/policy/codecs/action.py):
 
 - **Absolute end-effector** (`AbsolutePositionAction`): the model predicts a target pose `[translation, rotation, grip]`. In training the label is the commanded EE pose in the chosen rotation representation; at inference `decode` turns the predicted vector into a `CartesianPosition` command. The model reasons in EE space, the robot is driven in EE space.
 - **Absolute joints** (`AbsoluteJointsAction`): the model predicts joint angles `[q…, grip]` directly, and `decode` produces a `JointPosition` command — no inverse kinematics at runtime.
@@ -57,7 +73,7 @@ A `CartesianDelta` is the one command this cannot convert on its own: a delta ha
 
 ## Control mode
 
-`SetControlMode(mode)` stamps a control mode on every robot command of a decoded chunk, so a checkpoint executes under the law its training data ran under. It composes left of the action decoder: `SetControlMode(mode) | action`. `mode` is `Impedance(kq, kqd, kx, kxd)` or `PositionControl(stiffness=None)` from [`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py); a command without one runs under the arm's native law (see [the wire format](connect-your-model.md#actions-server--client)). Implementation in [`positronic/policy/codec.py`](../positronic/policy/codec.py).
+`SetControlMode(mode)` stamps a control mode on every robot command of a decoded chunk, so a checkpoint executes under the law its training data ran under. It composes left of the action decoder: `SetControlMode(mode) | action`. `mode` is `Impedance(kq, kqd, kx, kxd)` or `PositionControl(stiffness=None)` from [`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py); a command without one runs under the arm's native law (see [the wire format](connect-your-model.md#actions-server--client)). Implementation in [`positronic/policy/codecs/action.py`](../positronic/policy/codecs/action.py).
 
 Two wrappers in [`positronic/cfg/codecs.py`](../positronic/cfg/codecs.py) apply it to an action codec:
 
@@ -70,7 +86,7 @@ GR00T's DROID codec sets `DROID_IMPEDANCE` directly on its joint-position comman
 
 ## Writing custom codecs
 
-Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decode_single()`. The base class returns `{}` from both — observation codecs override `encode()`, action codecs override `_decode_single()`. Middleware codecs that pass data through must explicitly `return data` (e.g. `BinarizeGripTraining`, a pure pass-through at decode that only binarizes via its `training_encoder`); middleware that transforms decoded actions modifies and returns `data` instead (e.g. `BinarizeGripInference`, which thresholds `target_grip` in `_decode_single`). Compose observation and action codecs with `&`, chain middleware with `|`. See the vendor codec files below for reference patterns.
+Subclass `positronic.policy.codecs.Codec` and implement `encode()` and/or `_decode_single()`. The base class returns `{}` from both — observation codecs override `encode()`, action codecs override `_decode_single()`. Middleware codecs that pass data through must explicitly `return data` (e.g. `BinarizeGripTraining`, a pure pass-through at decode that only binarizes via its `training_encoder`); middleware that transforms decoded actions modifies and returns `data` instead (e.g. `BinarizeGripInference`, which thresholds `target_grip` in `_decode_single`). Compose observation and action codecs with `&`, chain middleware with `|`. See the vendor codec files below for reference patterns.
 
 ## Codec catalog by vendor
 

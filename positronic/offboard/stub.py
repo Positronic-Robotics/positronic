@@ -13,7 +13,7 @@ from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.base import Obs
-from positronic.policy.codec import Codec
+from positronic.policy.codecs import Codec
 from positronic.policy.processors import ChunkedSchedule
 
 

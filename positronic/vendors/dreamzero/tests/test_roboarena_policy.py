@@ -11,7 +11,7 @@ from positronic_wire.roboarena import RoboarenaAddress
 from positronic import keys as rig
 from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard.roboarena import RoboarenaClient
-from positronic.policy.codec import ACTION
+from positronic.policy.codecs import ACTION
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.dreamzero import roboarena as wire
 from positronic.vendors.dreamzero import roboarena_policy

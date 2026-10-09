@@ -32,8 +32,8 @@ from lerobot.scripts import train as lerobot_train
 from pimm.logging import init_logging
 from positronic import utils
 from positronic.policy import Codec
-from positronic.policy import codec as policy_codec
-from positronic.policy.codec import LEROBOT_FEATURES
+from positronic.policy import codecs as policy_codec
+from positronic.policy.codecs import LEROBOT_FEATURES
 from positronic.vendors.lerobot_0_3_3 import codecs as lerobot_codecs
 from positronic.vendors.lerobot_0_3_3.backbone import BACKBONES
 

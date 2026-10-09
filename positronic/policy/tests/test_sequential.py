@@ -10,7 +10,7 @@ import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Policy, Step
-from positronic.policy.codec import ChangeEEFrame, Codec, Metadata, RestrictImageSize
+from positronic.policy.codecs import ChangeEEFrame, Codec, Metadata, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.sequential import Sequential

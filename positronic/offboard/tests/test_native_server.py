@@ -13,7 +13,7 @@ from positronic_wire import grpc, websocket, wire
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import EncodeImages
+from positronic.policy.codecs import EncodeImages
 from positronic.policy.remote import RemotePolicy
 from positronic.policy.spec import from_spec
 from positronic.utils.versions import resolve_version

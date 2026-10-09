@@ -9,7 +9,7 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
 from positronic.policy import keys as policy_keys
-from positronic.policy.codec import ACTION
+from positronic.policy.codecs import ACTION
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t.codecs import DroidCodec, droid, droid_three_cameras
 
