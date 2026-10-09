@@ -28,7 +28,7 @@ from platform_client.scoring import (
 
 SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'molmo_sweep').glob('*/*') if p.is_dir())
 
-# Read from the recording: ten tasks over twenty trials, split irregularly. Three tasks ran three times,
+# Read from the recording: ten tasks over twenty trials, split irregularly. Four tasks ran three times,
 # two ran twice, and four ran once.
 PER_TASK = {
     'pick up the bottle.': (2, 0),
