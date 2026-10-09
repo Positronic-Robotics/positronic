@@ -14,13 +14,13 @@ from positronic.policy.spec import from_spec
 
 
 @pytest.mark.parametrize(
-    'leading_dims, shape, prompt', [(0, (2, 3), 'pick'), (1, (1, 2, 3), ['pick']), (2, (1, 1, 2, 3), [['pick']])]
+    'unsqueeze_dims, shape, prompt', [(0, (2, 3), 'pick'), (1, (1, 2, 3), ['pick']), (2, (1, 1, 2, 3), [['pick']])]
 )
-def test_observation_packing_preserves_values_and_adds_dimensions(leading_dims, shape, prompt):
+def test_observation_packing_preserves_values_and_adds_dimensions(unsqueeze_dims, shape, prompt):
     description = component(
         'pack_observation_fields',
         layout={'state': {'value': 'robot.state'}, 'language': {'text': 'task/prompt'}, 'video': {}},
-        leading_dims=leading_dims,
+        unsqueeze_dims=unsqueeze_dims,
     )
     codec = from_spec(json.loads(json.dumps(description)))
     assert isinstance(codec, PackObservationFields)
@@ -43,7 +43,7 @@ def test_observation_packing_preserves_values_and_adds_dimensions(leading_dims, 
 
 def test_observation_packing_handles_images_and_plain_values_without_coercion():
     codec = PackObservationFields(
-        {'image': 'rgb', 'scalar': 'zero', 'sequence': 'items', 'empty': 'none'}, leading_dims=2
+        {'image': 'rgb', 'scalar': 'zero', 'sequence': 'items', 'empty': 'none'}, unsqueeze_dims=2
     )
     pixels = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
     encoded = codec.encode({'rgb': pixels, 'zero': 0.0, 'items': [1, 2], 'none': None})
@@ -68,10 +68,10 @@ def test_observation_packing_keeps_its_layout_and_requires_selected_fields():
         codec.encode({'unselected': 1})
 
 
-@pytest.mark.parametrize('leading_dims', [-1, 1.5, True])
-def test_observation_packing_rejects_invalid_dimensions(leading_dims):
-    with pytest.raises(ValueError, match='leading_dims'):
-        PackObservationFields({}, leading_dims=leading_dims)
+@pytest.mark.parametrize('unsqueeze_dims', [-1, 1.5, True])
+def test_observation_packing_rejects_invalid_dimensions(unsqueeze_dims):
+    with pytest.raises(ValueError, match='unsqueeze_dims'):
+        PackObservationFields({}, unsqueeze_dims=unsqueeze_dims)
 
 
 @pytest.mark.parametrize('layout', [{'state': {'value': 1}}, {'value': ['input']}, {1: 'input'}])
@@ -81,7 +81,7 @@ def test_observation_packing_rejects_invalid_layout_entries(layout):
 
 
 def test_observation_packing_preserves_training_and_native_results():
-    codec = PackObservationFields({'state': {'value': 'input'}}, leading_dims=2)
+    codec = PackObservationFields({'state': {'value': 'input'}}, unsqueeze_dims=2)
     episode = EpisodeContainer({'input': DummySignal([0], [1])}, meta={'label': 'test'})
     result = ({'action': np.ones((1, 3, 2))}, {'timing': 0.1})
 

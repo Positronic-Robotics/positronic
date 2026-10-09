@@ -22,22 +22,23 @@ class PackObservationFields(Codec):
     """Select fields into nested dictionaries and add leading singleton dimensions.
 
     Layout leaves name literal input keys. Arrays retain their dtype; other values gain list layers.
+    ``unsqueeze_dims`` is the number of size-one dimensions added at the front.
     Training columns and decoded actions pass through unchanged.
 
     Example::
 
         PackObservationFields(
-            {'state': {'joints': 'robot_state.q'}, 'language': {'instruction': 'task'}}, leading_dims=2
+            {'state': {'joints': 'robot_state.q'}, 'language': {'instruction': 'task'}}, unsqueeze_dims=2
         )
     """
 
     WIRE_NAME = 'pack_observation_fields'
 
-    def __init__(self, layout: dict[str, Any], *, leading_dims: int = 0):
-        if type(leading_dims) is not int or leading_dims < 0:
-            raise ValueError('leading_dims must be a non-negative integer')
+    def __init__(self, layout: dict[str, Any], *, unsqueeze_dims: int = 0):
+        if type(unsqueeze_dims) is not int or unsqueeze_dims < 0:
+            raise ValueError('unsqueeze_dims must be a non-negative integer')
         self._layout = self._copy_layout(layout)
-        self._leading_dims = leading_dims
+        self._unsqueeze_dims = unsqueeze_dims
 
     @staticmethod
     def _copy_layout(layout: dict[str, Any]) -> dict[str, Any]:
@@ -56,9 +57,9 @@ class PackObservationFields(Codec):
             else:
                 value = data[source]
                 if isinstance(value, np.ndarray):
-                    value = value.reshape((1,) * self._leading_dims + value.shape)
+                    value = value.reshape((1,) * self._unsqueeze_dims + value.shape)
                 else:
-                    for _ in range(self._leading_dims):
+                    for _ in range(self._unsqueeze_dims):
                         value = [value]
                 result[name] = value
         return result
@@ -77,7 +78,7 @@ class PackObservationFields(Codec):
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'layout': self._copy_layout(self._layout), 'leading_dims': self._leading_dims},
+            ARGS: {'layout': self._copy_layout(self._layout), 'unsqueeze_dims': self._unsqueeze_dims},
         }
 
 

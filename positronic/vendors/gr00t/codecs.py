@@ -154,7 +154,7 @@ def droid(image_mappings: dict[str, str], ee_frame: geom.Transform3D, training_f
                 gr00t.STATE: {gr00t.EE_POSE: keys.EE_POSE, gr00t.GRIP: keys.GRIP, gr00t.JOINT_POSITION: keys.JOINTS},
                 gr00t.LANGUAGE: {gr00t.TASK: keys.TASK},
             },
-            leading_dims=2,
+            unsqueeze_dims=2,
         )
     )
 
