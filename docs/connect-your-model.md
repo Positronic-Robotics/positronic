@@ -91,7 +91,7 @@ wake-up time. Generator locals hold episode state.
 
 A `Codec` converts observations and actions, and prepares the same features for
 training. `Sequential` combines codecs and processors such as `ChunkedSchedule`.
-The [Codecs Guide](codecs.md) lists the available conversions.
+The [Codecs Guide](../positronic/policy/codecs/README.md) lists the available conversions.
 
 A server builds one callable `Model` at launch. A `PolicyDeployment` holds the client
 processor stack and an optional server codec, which a session may retune.
@@ -151,7 +151,7 @@ joint/Cartesian law. Omit it — the default — and the arm runs its native law
 driver's: a simulator runs its own law regardless, and a driver that cannot execute the mode raises.
 A server built on positronic sets the mode with the `SetControlMode` codec, composed left of the action
 decoder; `codecs.droid_execution` and `codecs.phail_v1_execution` wrap an action codec that way. See
-[Control mode](codecs.md#control-mode) in the Codec Guide.
+[Control mode](../positronic/policy/codecs/README.md#control-mode) in the Codec Guide.
 
 Which command your model produces is decided by its codec.
 
@@ -283,6 +283,6 @@ mapping `positronic.drivers.roboarm.command.to_wire` produces — `{"type": "car
 ## See Also
 
 - [Offboard Protocol](../positronic/offboard/README.md) – full Protocol v1 specification
-- [Codecs Guide](codecs.md) – all available codecs by vendor
+- [Codecs Guide](../positronic/policy/codecs/README.md) – reusable codecs and vendor recipes
 - [Inference Guide](inference.md) – local and remote inference patterns
 - [Training Workflow](training-workflow.md) – training with public datasets

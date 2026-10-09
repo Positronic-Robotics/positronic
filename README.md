@@ -246,7 +246,7 @@ cd docker && docker compose run --rm lerobot-train expert_only \
 Progress to OpenPI or GR00T when you need more capable models. See:
 - [Training Workflow Guide](docs/training-workflow.md)
 - [Model Selection Guide](docs/model-selection.md)
-- [Codec Selection Guide](docs/codecs.md)
+- [Codec Selection Guide](positronic/policy/codecs/README.md)
 
 ### 4. Run Inference and Iterate
 
@@ -283,7 +283,7 @@ Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs
 
 **Guides:**
 - [Architecture](ARCHITECTURE.md) — the goals and principles behind the design, who owns the control loop, and how foreign components plug in
-- [Model Selection](docs/model-selection.md) | [Codecs](docs/codecs.md) | [Training](docs/training-workflow.md)
+- [Model Selection](docs/model-selection.md) | [Codecs](positronic/policy/codecs/README.md) | [Training](docs/training-workflow.md)
 - [Data Collection](docs/data-collection.md) | [Inference](docs/inference.md)
 
 **Hardware:**

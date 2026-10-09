@@ -68,7 +68,7 @@ Each codec is served as the policy pipeline of the same name (the serve subcomma
 - Quaternion rotation representation (7D)
 - Absolute action space
 
-See [Codecs Guide](../../../docs/codecs.md) for comprehensive codec documentation.
+See [Codecs Guide](../../policy/codecs/README.md) for comprehensive codec documentation.
 
 ## Configuration Reference
 
@@ -124,7 +124,7 @@ dotted paths into the pipeline config with JSON-literal values (e.g. `?fps=10`).
 
 **Positronic Documentation:**
 - [Model Selection Guide](../../../docs/model-selection.md) — When to use SmolVLA vs ACT vs GR00T vs OpenPI
-- [Codecs Guide](../../../docs/codecs.md) — Understanding observation/action encoding
+- [Codecs Guide](../../policy/codecs/README.md) — Understanding observation/action encoding
 - [Training Workflow](../../../docs/training-workflow.md) — Unified training steps across all models
 - [Inference Guide](../../../docs/inference.md) — Deployment and evaluation patterns
 

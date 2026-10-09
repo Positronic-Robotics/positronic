@@ -61,7 +61,7 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
 
 ### Choosing a Codec
 
-See the [Codecs Guide](codecs.md) for detailed codec documentation.
+See the [Codecs Guide](../positronic/policy/codecs/README.md) for detailed codec documentation.
 
 **Quick reference:**
 
@@ -327,6 +327,6 @@ Use `lerobot-convert` for 0.4.x training, `lerobot-0_3_3-convert` for everything
   - [LeRobot ACT (0.3.3)](../positronic/vendors/lerobot_0_3_3/README.md)
 
 - **Related documentation:**
-  - [Codecs Guide](codecs.md) — Understanding observation encoding and action decoding
+  - [Codecs Guide](../positronic/policy/codecs/README.md) — Understanding observation encoding and action decoding
   - [Model Selection](model-selection.md) — Choosing the right model
   - [Inference Guide](inference.md) — Deployment and evaluation patterns

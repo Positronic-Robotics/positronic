@@ -11,7 +11,7 @@ names the frame within it, and under this contract that name is always `default`
 
 Every frame conversion is measured from `default`. A policy trained in some other end-effector frame carries
 the constant transform from `default` to it rather than naming it (`ChangeEEFrame`, see
-[docs/codecs.md](../../../docs/codecs.md#end-effector-frames)) — which is what lets one checkpoint run on any
+[codec guide](../../policy/codecs/README.md#end-effector-frames)) — which is what lets one checkpoint run on any
 embodiment honouring the contract.
 
 The harness checks the declaration on every observation, not once per episode: a remote env publishes its
