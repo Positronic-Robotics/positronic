@@ -9,7 +9,7 @@ from positronic import keys
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode, select_timeline
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, Get
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity
 from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
 
 # The encoded observation's language prompt, under the name LeRobot training and its policies both use. It
@@ -17,8 +17,40 @@ from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lero
 TASK_FIELD = 'task'
 
 
+class RenameObservationFields(Codec):
+    """Rename top-level inference fields with a source-to-destination mapping.
+
+    Absent fields stay absent; unmapped fields keep their names. Names containing dots or slashes
+    are literal keys. Training columns and decoded actions pass through unchanged.
+    """
+
+    WIRE_NAME = 'rename_observation_fields'
+
+    def __init__(self, mapping: dict[str, str]):
+        self._mapping = dict(mapping)
+
+    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
+        renamed: dict[str, Any] = {}
+        for name, value in data.items():
+            destination = self._mapping.get(name, name)
+            if destination in renamed:
+                raise ValueError(f'Observation fields collide at {destination!r}')
+            renamed[destination] = value
+        return renamed
+
+    def decode(self, data: Any) -> Any:
+        return data
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return Identity()
+
+    def to_spec(self) -> dict[str, Any]:
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mapping': dict(self._mapping)}}
+
+
 class ObservationCodec(Codec):
-    """Configurable observation encoder that uses the same keys for training and inference.
+    """Encode state vectors and images for training and inference.
 
     Args:
         state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
@@ -59,9 +91,6 @@ class ObservationCodec(Codec):
     def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
         input_key, (width, height) = self._image_configs[out_name]
         return image.resize_with_pad(width, height, signal=episode[input_key])
-
-    def _decode_single(self, data: dict) -> dict:
-        return {}
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}

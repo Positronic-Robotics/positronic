@@ -8,14 +8,12 @@ OpenPI has different key format expectations for training vs inference:
 - **Inference (OpenPI format)**: Slash-separated keys like `observation/state`, `observation/image`.
   This is what OpenPI's policy classes (e.g., `positronic_policy.py`) expect at inference time.
 
-The `ObservationCodec` class handles both cases:
-- `encode()` (inference): Produces OpenPI-compatible format with slash-separated keys
-- `training_encoder` (training): Produces LeRobot-compatible format with dot-separated keys
+The ordinary observation presets compose shared state/image conversion with inference field renaming.
+Their training encoders retain the LeRobot dataset columns.
 
 Note: `droid` codec is inference-only, designed to work with pretrained DROID models.
 """
 
-from functools import partial
 from typing import Any
 
 import configuronic as cfn
@@ -24,92 +22,11 @@ from PIL import Image as PilImage
 
 from positronic import geom, keys
 from positronic.cfg import codecs
-from positronic.dataset import Signal, transforms
-from positronic.dataset.episode import Episode, select_timeline
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import ACTION, LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
-from positronic.policy.observation import ObservationCodec as GenericObservationCodec
+from positronic.policy.codec import ACTION, Codec
+from positronic.policy.observation import TASK_FIELD, ObservationCodec, RenameObservationFields
 from positronic.vendors import openpi
-
-
-class ObservationCodec(Codec):
-    """Observation encoder that outputs LeRobot keys for training, OpenPI keys for inference."""
-
-    def __init__(
-        self,
-        state_features: dict[str, int],
-        exterior_camera: str = keys.EXTERIOR_IMAGE,
-        wrist_camera: str = keys.WRIST_IMAGE,
-        image_size: tuple[int, int] = (224, 224),
-    ):
-        self._state_features = state_features
-        self._exterior_camera = exterior_camera
-        self._wrist_camera = wrist_camera
-        self._image_size = image_size
-
-        self._derive_transforms = {
-            'observation.state': self._derive_state,
-            'observation.images.left': partial(self._derive_image, wrist_camera),
-            'observation.images.side': partial(self._derive_image, exterior_camera),
-            keys.TASK: Get(keys.TASK, ''),
-        }
-
-        state_dim = sum(state_features.values())
-        w, h = image_size
-        self._training_meta: dict[str, Any] = {
-            LEROBOT_FEATURES: {
-                'observation.state': lerobot_vector(state_dim, list(state_features.keys())),
-                'observation.images.left': lerobot_image(w, h),
-                'observation.images.side': lerobot_image(w, h),
-            }
-        }
-
-    def _derive_state(self, episode: Episode) -> Signal[Any]:
-        signals = [episode[key] for key in self._state_features]
-        timeline = select_timeline(name for signal in signals for name in signal.timelines)
-        return transforms.concat(*signals, timelines=(timeline,), dtype=np.float32)
-
-    def _derive_image(self, input_key: str, episode: Episode) -> Signal[Any]:
-        w, h = self._image_size
-        return image.resize_with_pad(w, h, signal=episode[input_key])
-
-    def _decode_single(self, data: dict) -> dict:
-        return {}
-
-    def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        state_parts: list[np.ndarray] = []
-        for feature_key in self._state_features:
-            if feature_key not in inputs:
-                raise KeyError(f"Missing state input '{feature_key}', available keys: {list(inputs.keys())}")
-            state_parts.append(np.asarray(inputs[feature_key], dtype=np.float32).reshape(-1))
-
-        obs: dict[str, Any] = {
-            openpi.STATE: np.concatenate(state_parts) if state_parts else np.empty((0,), dtype=np.float32),
-            openpi.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs),
-            openpi.IMAGE: self._encode_image(self._exterior_camera, inputs),
-        }
-        if keys.TASK in inputs:
-            obs[openpi.PROMPT] = inputs[keys.TASK]
-        return obs
-
-    def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
-        if input_key not in inputs:
-            raise KeyError(f"Missing image input '{input_key}', available keys: {list(inputs.keys())}")
-        frame = inputs[input_key]
-        if not isinstance(frame, np.ndarray):
-            frame = np.asarray(frame)
-        w, h = self._image_size
-        return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
-
-    @property
-    def meta(self):
-        return {self.IMAGE_SIZES: self._image_size}
-
-    @property
-    def training_encoder(self):
-        return Derive(meta=self._training_meta, **self._derive_transforms)
 
 
 @cfn.config(
@@ -121,8 +38,17 @@ class ObservationCodec(Codec):
 def observation(state_features: dict[str, int], exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]):
     """General OpenPI observation encoder with configurable state features."""
     return ObservationCodec(
-        state_features=state_features, exterior_camera=exterior_camera, wrist_camera=wrist_camera, image_size=image_size
-    )
+        state={openpi.TRAINING_STATE: state_features},
+        images={
+            openpi.TRAINING_WRIST_IMAGE: (wrist_camera, image_size),
+            openpi.TRAINING_IMAGE: (exterior_camera, image_size),
+        },
+    ) | RenameObservationFields({
+        openpi.TRAINING_STATE: openpi.STATE,
+        openpi.TRAINING_WRIST_IMAGE: openpi.WRIST_IMAGE,
+        openpi.TRAINING_IMAGE: openpi.IMAGE,
+        TASK_FIELD: openpi.PROMPT,
+    })
 
 
 ee_obs = observation
@@ -132,7 +58,7 @@ ee_joints_obs = observation.override(state_features={keys.EE_POSE: 7, keys.GRIP:
 # Pretrained DROID models read joints and gripper as separate observation keys and the language
 # prompt under `prompt` (see openpi `droid_policy.DroidInputs`).
 droid_obs = cfn.Config(
-    GenericObservationCodec,
+    ObservationCodec,
     state={openpi.JOINT_POSITION: {keys.JOINTS: 7}, openpi.GRIPPER_POSITION: {keys.GRIP: 1}},
     images={
         openpi.WRIST_IMAGE_LEFT: (keys.WRIST_IMAGE, (224, 224)),
@@ -156,16 +82,12 @@ joints_traj = codecs.compose.override(
     binarize_grip=(keys.GRIP,),
 )
 
-# IK variants: reconstruct joint targets from recorded EE targets via IK
 joints_ik = codecs.compose.override(obs=joints_obs, action=codecs.ik_joints_action)
 joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 
 droid = codecs.compose.override(obs=droid_obs, action=codecs.droid_execution.override(action=codecs.joint_delta_action))
 
-# The DROID jointpos models (openpi `*_droid_jointpos` configs — the RoboLab leaderboard policies): the
-# server returns absolute joint-position chunks ``(action_horizon, 8)`` and RoboLab's client
-# (``policies/pi0_family/client.py``) executes the whole chunk before re-querying, gripper binarized at
-# 0.5 — its ``open_loop_horizon`` defaults equal each variant's ``action_horizon`` (pi05 = 15, pi0 = 10).
+# DROID jointpos checkpoints return absolute joint positions and a gripper channel.
 droid_jointpos = codecs.compose.override(
     obs=droid_obs,
     action=codecs.droid_execution.override(
