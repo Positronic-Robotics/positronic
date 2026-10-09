@@ -12,7 +12,7 @@ The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing e
 only speaks to the platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.27.0"
+uv add "positronic-platform-client==0.28.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -89,7 +89,6 @@ positronic account credits list-purchases --org=acme --limit=50 --after='"last-p
 
 `users.me` lists every organization the caller belongs to in `organizations`.
 Older platforms that omit `organizations` produce an empty list.
-`personal_org` names the organization that the caller owns alone, when the platform keeps one.
 `account`, `buy` and `list-purchases` use the sole membership when the caller gives no `--org`.
 With zero or multiple memberships, they require `--org`, including when the server omits `organizations`.
 An explicit `--org` selects that organization without fetching memberships.
