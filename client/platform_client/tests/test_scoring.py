@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -42,7 +43,7 @@ PER_TASK = {
     'pick up the tissue.': (3, 1),
 }
 
-# Written into a synthetic episode and read back out of `per_task`, so the assertion turns on the two
+# Written into a synthetic episode and read back out of its `Outcome`, so the assertion turns on the two
 # being the same string.
 CUP = 'pick up the cup.'
 KETTLE = 'pick up the kettle.'
@@ -78,25 +79,24 @@ def _episodes(tmp_path: Path, *statics: dict[str, object] | str | bytes | None) 
 
 
 def test_the_sweep_scores_five_of_twenty_in_this_record():
-    per_task = {
-        task: {'trials': trials, 'successes': successes, 'success_rate': successes / trials, 'mean_subtask_score': None}
-        for task, (trials, successes) in PER_TASK.items()
-    }
-    assert score_molmo(SWEEP).model_dump(mode='json') == {
-        'primary': 0.25,
-        'success_rate': 0.25,
-        'per_task': per_task,
-        'episodes': 20,
-        'unscored': 0,
-    }
+    assert score_molmo(SWEEP).model_dump(mode='json') == {'primary': 0.25, 'episodes': 20, 'unscored': 0}
+
+
+def test_each_episode_of_the_sweep_gives_the_task_and_success_it_recorded():
+    outcomes = [molmo_outcome(episode) for episode in SWEEP]
+    scored = [outcome for outcome in outcomes if outcome is not None]
+    trials = Counter(outcome.task for outcome in scored)
+    successes = Counter(outcome.task for outcome in scored if outcome.succeeded)
+    assert len(scored) == len(outcomes)
+    assert {task: (trials[task], successes[task]) for task in trials} == PER_TASK
 
 
 def test_an_episode_that_recorded_no_outcome_is_unscored_rather_than_failed(tmp_path: Path):
     episodes = _episodes(tmp_path, {TASK: CUP, SUCCESS: True}, {TASK: CUP}, None)
+    assert [molmo_outcome(episode) for episode in episodes] == [Outcome(CUP, True), None, None]
     scores = score_molmo(episodes)
     assert (scores.episodes, scores.unscored) == (3, 2)
-    assert scores.success_rate == pytest.approx(1.0)
-    assert scores.per_task[CUP].trials == 1
+    assert scores.primary == pytest.approx(1.0)
 
 
 def test_a_sweep_that_recorded_nothing_scores_zero_rather_than_dividing_by_it(tmp_path: Path):
@@ -105,16 +105,17 @@ def test_a_sweep_that_recorded_nothing_scores_zero_rather_than_dividing_by_it(tm
 
 
 def test_a_failed_episode_is_scored_as_a_trial_rather_than_as_nothing(tmp_path: Path):
-    scores = score_molmo(_episodes(tmp_path, {TASK: KETTLE, SUCCESS: False}))
+    (episode,) = _episodes(tmp_path, {TASK: KETTLE, SUCCESS: False})
+    assert molmo_outcome(episode) == Outcome(KETTLE, False)
+    scores = score_molmo([episode])
     assert (scores.episodes, scores.unscored, scores.primary) == (1, 0, 0.0)
-    assert scores.per_task[KETTLE].trials == 1
 
 
 def test_a_sim_and_a_rig_trial_that_ran_out_of_time_both_count_as_a_failed_trial(tmp_path: Path):
     sim, rig = _episodes(tmp_path, TIMED_OUT, RIG_TIMED_OUT)
     assert molmo_outcome(sim) == molmo_outcome(rig) == Outcome(CUP, False)
     scores = score_molmo([sim, rig])
-    assert (scores.episodes, scores.unscored, scores.success_rate) == (2, 0, 0.0)
+    assert (scores.episodes, scores.unscored, scores.primary) == (2, 0, 0.0)
 
 
 def test_a_success_recorded_beside_a_timeout_does_not_count():
@@ -186,13 +187,12 @@ def test_a_caller_scores_with_its_own_scorer_beside_the_public_ones(tmp_path: Pa
 
     scores = score(graded, episodes, {**PUBLIC_SCORERS, graded: _graded})
 
+    assert [_graded(episode) for episode in episodes] == [Outcome(CUP, True, 1.0), Outcome(CUP, False, 0.5), None]
     assert (scores.episodes, scores.unscored) == (3, 1)
-    assert (scores.primary, scores.success_rate) == (pytest.approx(0.75), pytest.approx(0.5))
-    assert scores.per_task[CUP].mean_subtask_score == pytest.approx(0.75)
-    assert KETTLE not in scores.per_task
+    assert scores.primary == pytest.approx(0.75)
 
 
-def test_an_ungraded_task_reports_no_subtask_score_beside_a_graded_one(tmp_path: Path):
+def test_primary_takes_the_success_of_an_ungraded_episode_beside_a_graded_one(tmp_path: Path):
     def grades_only_the_cup(episode: Path) -> Outcome | None:
         outcome = PUBLIC_SCORERS[MOLMO_SCORER](episode)
         if outcome is None or outcome.task != CUP:
@@ -200,10 +200,10 @@ def test_an_ungraded_task_reports_no_subtask_score_beside_a_graded_one(tmp_path:
         return Outcome(outcome.task, outcome.succeeded, 0.25)
 
     episodes = _episodes(tmp_path, {TASK: CUP, SUCCESS: False}, {TASK: KETTLE, SUCCESS: True})
-    per_task = score(ScorerRef('mixed'), episodes, {ScorerRef('mixed'): grades_only_the_cup}).per_task
+    scores = score(ScorerRef('mixed'), episodes, {ScorerRef('mixed'): grades_only_the_cup})
 
-    assert per_task[CUP].mean_subtask_score == pytest.approx(0.25)
-    assert per_task[KETTLE].mean_subtask_score is None
+    assert [grades_only_the_cup(episode) for episode in episodes] == [Outcome(CUP, False, 0.25), Outcome(KETTLE, True)]
+    assert scores.primary == pytest.approx((0.25 + 1.0) / 2)
 
 
 def test_a_scorer_the_table_does_not_hold_is_refused():

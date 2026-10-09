@@ -294,9 +294,10 @@ time limit.
 
 `platform_client.scoring` makes a run's `scores.json` from its recorded episodes. A scorer reads one
 episode and gives its outcome: the task, the success, and a graded score where the scorer grades one.
-`score(scorer, episodes)` adds the outcomes up into `Scores`. `primary` is the mean episode score,
-and a board ranks on it. An episode that ran out of time counts as a failure, as it does on a real
-robot. An episode that recorded no outcome counts in `unscored`, not as a failure.
+`score(scorer, episodes)` adds the outcomes up into `Scores`, which holds three numbers. `primary` is
+the mean score of the episodes that recorded an outcome, and a board ranks on it. `episodes` counts
+every episode, and `unscored` counts the episodes that recorded no outcome. `primary` does not count
+those as failures. An episode that ran out of time counts as a failure, as it does on a real robot.
 
 `PUBLIC_SCORERS` holds the scorer of each public eval, under the name the definition gives as its
 `scorer`. A caller with scorers of its own passes `score` a table that holds them beside

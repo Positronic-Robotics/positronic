@@ -12,7 +12,7 @@ from typing import cast
 import pos3
 import pytest
 from platform_client.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORER, PUBLIC_EVALS, EvalRef, public_eval
-from platform_client.scoring import score
+from platform_client.scoring import Outcome, molmo_outcome, score
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys
@@ -249,7 +249,8 @@ def test_the_molmo_scorer_reads_the_outcome_that_positronic_records(tmp_path):
 
     scores = score(MOLMO_SCORER, [episode.path])
 
-    assert (scores.unscored, scores.success_rate, list(scores.per_task)) == (0, 1.0, ['pick up the cup.'])
+    assert molmo_outcome(episode.path) == Outcome('pick up the cup.', True)
+    assert (scores.episodes, scores.unscored, scores.primary) == (1, 0, 1.0)
 
 
 @pytest.mark.parametrize('name', ['molmo.held_out', ''])
