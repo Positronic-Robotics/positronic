@@ -1,5 +1,8 @@
+import json
+
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation as ScipyRotation
 
 import positronic.drivers.roboarm.command as cmd_module
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
@@ -8,10 +11,80 @@ from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
-from positronic.geom import Rotation
+from positronic.geom import Rotation, Transform3D
+from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
 from positronic.policy.codec import BinarizeGripInference, BinarizeGripTraining, Codec, FlipGrip, Metadata
-from positronic.policy.observation import ObservationCodec, RenameObservationFields
+from positronic.policy.observation import ConvertPose, ObservationCodec, RenameObservationFields
+
+
+@pytest.mark.parametrize('input_rotation', list(Rotation.Representation))
+@pytest.mark.parametrize('output_rotation', list(Rotation.Representation))
+def test_pose_conversion_preserves_translation_and_composes_rotation_on_the_right(input_rotation, output_rotation):
+    rotation = ScipyRotation.from_euler('xyz', [0.3, -0.6, 0.8])
+    offset = ScipyRotation.from_euler('xyz', [-0.7, 0.2, 0.4])
+    pose = Transform3D([0.2, -0.1, 0.5], Rotation.from_quat(rotation.as_quat(scalar_first=True)))
+    inputs = {'pose': pose.as_vector(input_rotation), 'other': np.ones(3)}
+    codec = ConvertPose(
+        output_rotation.value,
+        keys=('pose',),
+        input_rotation=input_rotation.value,
+        rotation_offset=offset.as_quat(scalar_first=True).tolist(),
+    )
+
+    restored = spec.from_spec(json.loads(json.dumps(codec.to_spec())))
+    assert isinstance(restored, ConvertPose)
+    encoded = restored.encode(inputs)
+    converted = Transform3D.from_vector(encoded['pose'], output_rotation)
+    assert encoded['pose'].dtype == np.float32
+    np.testing.assert_allclose(converted.translation, pose.translation)
+    np.testing.assert_allclose(converted.rotation.as_rotation_matrix, (rotation * offset).as_matrix(), atol=3e-7)
+    assert encoded['other'] is inputs['other']
+    np.testing.assert_array_equal(inputs['pose'], pose.as_vector(input_rotation))
+
+
+@pytest.mark.parametrize('sign', [1, -1])
+def test_pose_conversion_uses_row_rot6d(sign):
+    codec = ConvertPose('rot6d', keys=('left', 'right'))
+    pose = [1, 2, 3, sign * 0.5, sign * 0.5, sign * 0.5, sign * 0.5]
+    for value in codec.encode({'left': pose, 'right': pose}).values():
+        np.testing.assert_array_equal(value, [1, 2, 3, 0, 0, 1, 1, 0, 0])
+
+
+def test_pose_conversion_preserves_training_timelines_metadata_and_actions():
+    poses = [[1, 2, 3, 1, 0, 0, 0], [4, 5, 6, 0.5, 0.5, 0.5, 0.5]]
+    signal = DummySignal([[10, 100], [20, 300]], poses, timelines=(RECEIVED_WORLD, RECEIVED_WALL))
+    episode = EpisodeContainer({'pose': signal, 'other': 'label'}, meta={'source': 'fixture'})
+    codec = ConvertPose('rot6d', keys=('pose',))
+    training = codec.training_encoder(episode)
+
+    assert training['pose'].timelines == signal.timelines
+    for timeline in signal.timelines:
+        assert list(training['pose'].timestamps(timeline)) == list(signal.timestamps(timeline))
+    for i, pose in enumerate(poses):
+        np.testing.assert_array_equal(training['pose'][i][0], codec.encode({'pose': pose})['pose'])
+    assert training.meta == episode.meta
+    assert training['other'] == 'label'
+    assert codec.meta == codec.training_encoder.meta == {}
+    result = ({'actions': np.ones((1, 3, 7))}, {'timing': 0.1})
+    assert codec.decode(result) is result
+
+
+@pytest.mark.parametrize('value', [np.ones(6), np.ones(8), np.ones((1, 7))])
+def test_pose_conversion_rejects_wrong_vector_shape(value):
+    with pytest.raises(ValueError, match='pose vector with 7 values'):
+        ConvertPose('rot6d').encode({obs_keys.EE_POSE: value})
+
+
+def test_pose_conversion_requires_selected_fields():
+    with pytest.raises(KeyError):
+        ConvertPose('rot6d', keys=('pose',)).encode({})
+
+
+@pytest.mark.parametrize('input_rotation, output_rotation', [('unknown', 'rot6d'), ('quat', 'unknown')])
+def test_pose_conversion_rejects_unknown_representations(input_rotation, output_rotation):
+    with pytest.raises(ValueError):
+        ConvertPose(output_rotation, input_rotation=input_rotation)
 
 
 def test_observation_renaming_uses_literal_keys_and_preserves_values():

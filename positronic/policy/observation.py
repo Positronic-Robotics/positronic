@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from functools import partial
 from typing import Any
 
@@ -5,11 +6,11 @@ import numpy as np
 from PIL import Image as PilImage
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
-from positronic import keys
+from positronic import geom, keys
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode, select_timeline
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Group, Identity
 from positronic.policy.codec import LEROBOT_FEATURES, Codec, lerobot_image, lerobot_vector
 
 # The encoded observation's language prompt, under the name LeRobot training and its policies both use. It
@@ -47,6 +48,65 @@ class RenameObservationFields(Codec):
 
     def to_spec(self) -> dict[str, Any]:
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mapping': dict(self._mapping)}}
+
+
+class ConvertPose(Codec):
+    """Convert selected observation poses and recorded pose signals to float32 vectors.
+
+    The offset multiplies each rotation on the right; translation and frame metadata stay unchanged.
+    Wire offsets are wxyz quaternions. Selected fields are required. Decoded actions pass through.
+    """
+
+    WIRE_NAME = 'convert_pose'
+
+    def __init__(
+        self,
+        output_rotation: str,
+        *,
+        keys: Sequence[str] = (keys.EE_POSE,),
+        input_rotation: str = geom.Rotation.Representation.QUAT.value,
+        rotation_offset: geom.Rotation | Sequence[float] = (1, 0, 0, 0),
+    ):
+        self._keys = tuple(keys)
+        self._input_rotation = geom.Rotation.Representation(input_rotation)
+        self._output_rotation = geom.Rotation.Representation(output_rotation)
+        if not isinstance(rotation_offset, geom.Rotation):
+            rotation_offset = geom.Rotation.from_quat(np.asarray(rotation_offset))
+        self._rotation_offset = rotation_offset
+
+    def _convert(self, value: Any) -> np.ndarray:
+        vector = np.asarray(value)
+        expected = 3 + self._input_rotation.size
+        if vector.shape != (expected,):
+            raise ValueError(f'Expected a pose vector with {expected} values, got shape {vector.shape}')
+        pose = geom.Transform3D.from_vector(vector, self._input_rotation)
+        converted = geom.Transform3D(pose.translation, pose.rotation * self._rotation_offset)
+        return converted.as_vector(self._output_rotation).astype(np.float32)
+
+    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
+        return {**data, **{key: self._convert(data[key]) for key in self._keys}}
+
+    def decode(self, data: Any) -> Any:
+        return data
+
+    def _derive_pose(self, key: str, episode: Episode) -> Signal[Any]:
+        return transforms.Elementwise(episode[key], transforms.lazy_sequence(self._convert))
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return Group(Derive(meta=None, **{key: partial(self._derive_pose, key) for key in self._keys}), Identity())
+
+    def to_spec(self) -> dict[str, Any]:
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {
+                'output_rotation': self._output_rotation.value,
+                'keys': list(self._keys),
+                'input_rotation': self._input_rotation.value,
+                'rotation_offset': self._rotation_offset.as_quat.tolist(),
+            },
+        }
 
 
 class ObservationCodec(Codec):

@@ -1,14 +1,43 @@
 import numpy as np
+import pytest
 
-from positronic import keys
+from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm import models
 from positronic.policy import keys as policy_keys
 from positronic.policy.codec import ACTION
 from positronic.vendors import gr00t
-from positronic.vendors.gr00t.codecs import DroidCodec, droid
+from positronic.vendors.gr00t.codecs import DroidCodec, droid, droid_three_cameras
+
+
+@pytest.mark.parametrize('config', [droid, droid_three_cameras])
+def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(config):
+    codec = config(image_mappings={})
+    rng = np.random.default_rng(3)
+    correction = np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]])
+    for _ in range(20):
+        pose = geom.Transform3D(rng.normal(size=3), geom.Rotation.from_quat(rng.normal(size=4)))
+        inputs = {
+            keys.EE_POSE: pose.as_vector(geom.Rotation.Representation.QUAT),
+            keys.JOINTS: np.zeros(7),
+            keys.GRIP: 0.2,
+            keys.TASK: 'pick',
+        }
+        tool_pose = pose * models.DROID_EE_FRAME
+        expected = np.concatenate([
+            tool_pose.translation,
+            (tool_pose.rotation.as_rotation_matrix @ correction)[:2].reshape(6),
+        ]).astype(np.float32)
+        encoded = codec.encode(inputs)[gr00t.STATE][gr00t.EE_POSE][0, 0]
+        np.testing.assert_allclose(encoded, expected, atol=2e-7)
+
+    expected_frame = models.DROID_EE_FRAME.as_vector(geom.Rotation.Representation.QUAT)
+    np.testing.assert_array_equal(codec.meta[roboarm_keys.EE_FRAME], expected_frame)
+    np.testing.assert_array_equal(codec.training_encoder.meta[roboarm_keys.EE_FRAME], expected_frame)
 
 
 def test_droid_decodes_full_chunk_and_binarizes_grip():
@@ -33,7 +62,7 @@ def test_training_cadence_is_preserved_without_timestamp_commands():
 
 
 def test_training_actions_align_recorded_samples():
-    codec = DroidCodec(image_mappings={})
+    codec = droid(image_mappings={}, ee_frame=geom.Transform3D.identity)
     episode = EpisodeContainer({
         keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]]),
         keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)]),
@@ -46,3 +75,13 @@ def test_training_actions_align_recorded_samples():
     np.testing.assert_array_equal(values[:, :9], np.repeat(encoded[gr00t.EE_POSE].values(), 3, axis=0))
     np.testing.assert_array_equal(values[:, 9], [0, 1, 1])
     np.testing.assert_array_equal(values[:, 10:], [np.zeros(7), np.zeros(7), np.ones(7)])
+
+
+def test_droid_packing_requires_xyz_rot6d_poses_for_training_and_inference():
+    codec = DroidCodec(image_mappings={})
+    pose = [0, 0, 0, 1, 0, 0, 0]
+    with pytest.raises(ValueError, match='reshape'):
+        codec.encode({keys.EE_POSE: pose})
+    training = codec.training_encoder(EpisodeContainer({keys.EE_POSE: DummySignal([0], [pose])}))
+    with pytest.raises(ValueError, match='reshape'):
+        training[gr00t.EE_POSE].values()[0]
