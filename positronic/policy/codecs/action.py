@@ -224,6 +224,17 @@ class JointDeltaAction(Codec):
 
     WIRE_NAME = 'joint_delta_action'
 
+    # General DROID form scales each normalized velocity by its own per-joint delta limit, then
+    # renorms the velocity vector so no joint exceeds its limit:
+    #     RELATIVE_MAX_JOIN_DELTA = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
+    #     MAX_JOINT_DELTA = RELATIVE_MAX_JOIN_DELTA.max()
+    #     MAX_JOINT_VEL = RELATIVE_MAX_JOIN_DELTA / MAX_JOINT_DELTA
+    #     max_vel_norm = (np.abs(velocities) / MAX_JOINT_VEL).max()
+    #     if max_vel_norm > 1.0:
+    #         velocities = velocities / max_vel_norm
+    # All seven limits are equal, so MAX_JOINT_VEL is all ones and, on the [-1, 1]-clipped
+    # velocities, max_vel_norm <= 1 — the renorm never fires and the scaling collapses to one
+    # multiply by the scalar below.
     MAX_JOINT_DELTA = 0.2
 
     def __init__(self, num_joints: int = 7):
