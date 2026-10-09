@@ -32,7 +32,7 @@ from positronic.policy.codec import (
     SetControlMode,
 )
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.observation import ObservationCodec, RenameObservationFields
+from positronic.policy.observation import ConvertPose, ObservationCodec, RenameObservationFields
 from positronic.policy.processors import (
     ChunkedSchedule,
     PauseOnUnavailable,
@@ -785,6 +785,7 @@ def test_wire_names_match_the_registered_components():
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
         'joint_delta_action': JointDeltaAction(),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
+        'convert_pose': ConvertPose('rot6d'),
     }
     registered = spec.COMPONENTS
     assert set(instances) == set(registered)
