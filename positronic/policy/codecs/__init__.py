@@ -15,4 +15,4 @@ from .metadata import (
     lerobot_image,
     lerobot_vector,
 )
-from .observation import TASK_FIELD, ObservationCodec, RenameObservationFields
+from .observation import TASK_FIELD, ObservationCodec, PackObservationFields, RenameObservationFields

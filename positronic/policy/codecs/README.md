@@ -58,6 +58,7 @@ These are the public codec classes exported by this package. Each name links to 
 |-------|--------------|----------------|
 | [`ObservationCodec`](observation.py) | Concatenates state signals, resizes and pads RGB images, and carries the task prompt. Shares state/image settings between training and inference. | Build named state vectors and image fields from raw robot observations. |
 | [`RenameObservationFields`](observation.py) | Renames literal top-level inference fields. Training columns and decoded actions pass through. | The model's inference input names differ from the training column names. |
+| [`PackObservationFields`](observation.py) | Selects fields into nested dictionaries and adds leading singleton dimensions. Arrays retain their dtype; other values gain list layers. Training and decoding pass through. | A model expects grouped fields or explicit batch/time dimensions, such as GR00T's `video`, `state` and `language` inputs. |
 
 ### Actions
 
@@ -97,6 +98,22 @@ provide JSON component descriptions.
 
 The [metadata module](metadata.py) also provides `lerobot_vector`, `lerobot_image` and
 `lerobot_action` to describe dataset features. These helpers return metadata dictionaries, not codecs.
+
+### Packing model inputs
+
+`PackObservationFields` describes the output as nested dictionaries. Each leaf names a literal input key;
+dots and slashes do not select nested input fields. Only selected fields appear in the output.
+
+```python
+PackObservationFields(
+    {'state': {'joints': 'robot_state.q'}, 'language': {'instruction': 'task'}},
+    leading_dims=2,
+)
+```
+
+This puts a `(7,)` joint array at `state.joints` with shape `(1, 1, 7)` and wraps the prompt in two lists.
+Each added dimension has size one; the codec does not collect observation history or combine requests.
+Empty groups remain present. Missing selected fields raise an error. Training columns and decoded results pass through.
 
 ## Observation and action encoding
 

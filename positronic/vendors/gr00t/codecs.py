@@ -22,6 +22,7 @@ from positronic.policy.codecs import (
     ChangeEEFrame,
     Codec,
     Metadata,
+    PackObservationFields,
     lerobot_action,
     lerobot_image,
     lerobot_vector,
@@ -31,7 +32,7 @@ from positronic.vendors import gr00t
 
 
 class DroidCodec(Codec):
-    """Pack xyz/row-rot6d poses in the DROID tool frame and decode absolute joint targets.
+    """Prepare DROID state vectors and images, and decode absolute joint targets.
 
     Training uses recorded pose/joint/gripper trajectories as absolute action labels. GR00T's
     checkpoint processor converts those labels to relative actions and back during inference.
@@ -49,17 +50,12 @@ class DroidCodec(Codec):
         return image.resize_with_pad_per_frame(*gr00t.IMAGE_SIZE, Image.Resampling.BILINEAR, np.asarray(frame))
 
     def encode(self, inputs: dict) -> dict:
-        state = {
-            gr00t.EE_POSE: self._pose_vector(inputs[keys.EE_POSE]),
-            gr00t.GRIP: np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(1),
-            gr00t.JOINT_POSITION: np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(7),
-        }
         return {
-            gr00t.VIDEO: {
-                name: self._encode_image(inputs[source])[None, None] for name, source in self.image_mappings.items()
-            },
-            gr00t.STATE: {name: value[None, None] for name, value in state.items()},
-            gr00t.LANGUAGE: {gr00t.TASK: [[inputs[keys.TASK]]]},
+            keys.EE_POSE: self._pose_vector(inputs[keys.EE_POSE]),
+            keys.GRIP: np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(1),
+            keys.JOINTS: np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(7),
+            keys.TASK: inputs[keys.TASK],
+            **{source: self._encode_image(inputs[source]) for source in self.image_mappings.values()},
         }
 
     def _decode_single(self, data: dict) -> dict:
@@ -152,6 +148,14 @@ def droid(image_mappings: dict[str, str], ee_frame: geom.Transform3D, training_f
             rotation_offset=geom.Rotation.from_rotation_matrix(np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]])),
         )
         | DroidCodec(image_mappings)
+        | PackObservationFields(
+            {
+                gr00t.VIDEO: image_mappings,
+                gr00t.STATE: {gr00t.EE_POSE: keys.EE_POSE, gr00t.GRIP: keys.GRIP, gr00t.JOINT_POSITION: keys.JOINTS},
+                gr00t.LANGUAGE: {gr00t.TASK: keys.TASK},
+            },
+            leading_dims=2,
+        )
     )
 
 

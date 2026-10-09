@@ -20,7 +20,7 @@ from positronic.policy.codecs import (
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
 from positronic.policy.codecs.geometry import ConvertPose
-from positronic.policy.codecs.observation import ObservationCodec, RenameObservationFields
+from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
@@ -42,6 +42,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         ChangeEEFrame,
         ConvertPose,
         ObservationCodec,
+        PackObservationFields,
         RenameObservationFields,
         AbsolutePositionAction,
         AbsoluteJointsAction,
