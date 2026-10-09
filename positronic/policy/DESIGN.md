@@ -329,7 +329,7 @@ and should not be added to them.
 ## API
 
 The core interfaces below are abridged from [base.py](base.py),
-[sequential.py](sequential.py), and [codec.py](codec.py).
+[sequential.py](sequential.py), and [codecs/base.py](codecs/base.py).
 
 ### The policy step
 
