@@ -211,21 +211,27 @@ class Harness(pimm.ControlSystem):
         meta[keys.TASK] = task.instruction
         return meta
 
-    @staticmethod
-    def _serialize(name: str, value: Any, serializer: Serializer | None) -> dict[str, Any]:
-        if serializer is not None:
-            value = serializer(value)
-        return {
+    def _append(self, values: dict[str, Any], time: pimm.Time) -> None:
+        if self._writer is None:
+            return
+        with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
+            for name, value in values.items():
+                self._writer.append(name, value, time)
+
+    def _convert_and_record(
+        self, name: str, message: pimm.Message, serializer: Serializer | None, step_ms: dict[str, float] | None = None
+    ) -> dict[str, Any]:
+        started_ns = time.perf_counter_ns()
+        value = serializer(message.data) if serializer is not None else message.data
+        values = {
             full_name: entry.copy() if isinstance(entry, np.ndarray) else entry
             for full_name, entry in expand_suffixed(name, value)
             if entry is not None
         }
-
-    @telemetry.traced(telemetry_keys.SPAN_RECORD_IO)
-    def _append(self, values: dict[str, Any], time: pimm.Time) -> None:
-        assert self._writer is not None
-        for name, value in values.items():
-            self._writer.append(name, value, time)
+        if step_ms is not None:
+            step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = (time.perf_counter_ns() - started_ns) / 1e6
+        self._append(values, message.time)
+        return values
 
     def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
         """Read sensors, reusing each signal's serialized fields until a new message arrives.
@@ -241,8 +247,7 @@ class Harness(pimm.ControlSystem):
         for name, obs in self._embodiment.observations.items():
             read_started_ns = time.perf_counter_ns()
             message = self.observations[name].read()
-            convert_started_ns = time.perf_counter_ns()
-            step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (convert_started_ns - read_started_ns) / 1e6
+            step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (time.perf_counter_ns() - read_started_ns) / 1e6
             if message is None:
                 complete = False
                 continue
@@ -250,11 +255,7 @@ class Harness(pimm.ControlSystem):
                 # A signal returns one instance on many reads, and each raise adds to its traceback. So start a new one.
                 raise message.data.with_traceback(None)
             if message.updated or name not in self._obs_by_signal:
-                self._obs_by_signal[name] = self._serialize(name, message.data, obs.serializer)
-                converted_ns = time.perf_counter_ns() - convert_started_ns
-                step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = converted_ns / 1e6
-                if self._writer is not None:
-                    self._append(self._obs_by_signal[name], message.time)
+                self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
             inputs.update(self._obs_by_signal[name])
         if not complete:
             return None
@@ -270,7 +271,7 @@ class Harness(pimm.ControlSystem):
                 if message is None or isinstance(message.data, pimm.SignalError):
                     continue
                 if message.updated or name not in self._recorded_privileged:
-                    self._append(self._serialize(name, message.data, spec.serializer), message.time)
+                    self._convert_and_record(name, message, spec.serializer)
                     self._recorded_privileged.add(name)
         return obs
 
@@ -302,8 +303,7 @@ class Harness(pimm.ControlSystem):
                 step_ms[telemetry_keys.ATTR_STEP_EMIT_MS] = (time.perf_counter_ns() - emit_started_ns) / 1e6
                 if self._writer is not None:
                     for name, message in messages.items():
-                        values = self._serialize(name, message.data, self._embodiment.commands[name].serializer)
-                        self._append(values, message.time)
+                        self._convert_and_record(name, message, self._embodiment.commands[name].serializer)
             finally:
                 telemetry.set_attrs(span, **step_ms)
         period_sec = (step.resume_at_ns - started_at_ns) / 1e9
