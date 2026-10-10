@@ -10,7 +10,7 @@ from PIL import Image as PilImage
 from positronic import keys
 from positronic.cfg import codecs, layers
 from positronic.dataset import Signal, transforms
-from positronic.dataset.episode import Episode, select_timeline
+from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
@@ -25,6 +25,7 @@ from positronic.policy.codecs import (
     lerobot_vector,
 )
 from positronic.policy.codecs.action import IKJointsAction
+from positronic.recording import select_timeline
 from positronic.vendors.dreamzero import roboarena
 
 IMAGE_WIDTH = 320

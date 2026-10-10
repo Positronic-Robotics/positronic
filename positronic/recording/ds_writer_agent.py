@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
@@ -8,11 +8,10 @@ from typing import Any, TypeAlias
 
 import pimm
 from pimm.time import EMITTED_WALL, Time
+from positronic.dataset.dataset import DatasetFactory, DatasetWriter
+from positronic.dataset.episode import META_PATH, EpisodeWriter
+from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.utils import frozen_keys_dict
-
-from .dataset import DatasetFactory, DatasetWriter
-from .episode import META_PATH, EpisodeWriter
-from .serializers import Serializer, expand_suffixed
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -192,7 +191,7 @@ class DsWriterAgent(pimm.ControlSystem):
             self._serializers[name] = serializer
 
     @property
-    def inputs(self) -> dict[str, pimm.ControlSystemReceiver[Any]]:
+    def inputs(self) -> MutableMapping[str, pimm.ControlSystemReceiver[Any]]:
         return frozen_keys_dict(self._inputs)
 
     def _record(self, ep_writer: EpisodeWriter, name: str, msg: pimm.Message) -> None:

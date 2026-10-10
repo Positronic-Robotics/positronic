@@ -7,10 +7,11 @@ import pytest
 from pimm.time import EMITTED_WORLD, RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.signal import RECORDED_TIME
-from positronic.dataset.time import HARNESS_WORLD, Time, TimeBounds
+from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.transforms import TransformedDataset
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, AbsoluteJointsAction, ObservationCodec
+from positronic.recording import HARNESS_WORLD
 
 lerobot = pytest.importorskip('lerobot')
 if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':

@@ -15,11 +15,12 @@ import numpy as np
 
 from positronic import keys
 from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
-from positronic.dataset.episode import Episode, select_timeline
+from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.video import VideoSignal
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
+from positronic.recording import select_timeline
 from positronic.simulator.mujoco.transforms import load_spec
 from positronic.utils import package_assets_path
 

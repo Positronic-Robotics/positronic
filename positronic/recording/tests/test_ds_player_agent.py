@@ -2,11 +2,11 @@ import pytest
 
 import pimm
 from pimm.time import EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
-from positronic.dataset.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
-from positronic.dataset.time import HARNESS_WORLD
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.recording import HARNESS_WORLD
+from positronic.recording.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter, drive_until
 
 
@@ -16,20 +16,22 @@ def world():
         yield w
 
 
-def create_agent(outputs: dict[str, RecordingEmitter]) -> tuple[DsPlayerAgent, ManualCommandReceiver, RecordingEmitter]:
+def create_agent(
+    world: pimm.World, outputs: dict[str, RecordingEmitter]
+) -> tuple[DsPlayerAgent, ManualCommandReceiver, RecordingEmitter]:
     agent = DsPlayerAgent(poll_hz=1e6)
     command_receiver = ManualCommandReceiver()
-    agent.command = command_receiver
-    agent.outputs.clear()
-    agent.outputs.update(outputs)
+    agent.command._bind(command_receiver)
+    for name, emitter in outputs.items():
+        agent.outputs[name]._bind(emitter, clock=world.clock)
     finished = RecordingEmitter()
-    agent.finished = finished
+    agent.finished._bind(finished, clock=world.clock)
     return agent, command_receiver, finished
 
 
 def test_replays_signals_in_time_order(world):
     outputs = {'a': RecordingEmitter(), 'b': RecordingEmitter()}
-    agent, command_receiver, finished = create_agent(outputs)
+    agent, command_receiver, finished = create_agent(world, outputs)
 
     episode = EpisodeContainer(data={'a': DummySignal([1000, 3000], ['a1', 'a2']), 'b': DummySignal([2000], ['b1'])})
 
@@ -52,7 +54,7 @@ def test_replays_signals_in_time_order(world):
 
 def test_start_ts_defaults_to_episode_start(world):
     outputs = {'a': RecordingEmitter(), 'b': RecordingEmitter()}
-    agent, command_receiver, finished = create_agent(outputs)
+    agent, command_receiver, finished = create_agent(world, outputs)
 
     episode = EpisodeContainer(
         data={'a': DummySignal([1000, 3000], ['drop', 'keep']), 'b': DummySignal([2000], ['b1'])}
@@ -76,7 +78,7 @@ def test_start_ts_defaults_to_episode_start(world):
 
 def test_respects_end_timestamp(world):
     outputs = {'a': RecordingEmitter()}
-    agent, command_receiver, _ = create_agent(outputs)
+    agent, command_receiver, _ = create_agent(world, outputs)
 
     episode = EpisodeContainer(data={'a': DummySignal([1000, 2000, 3000], ['first', 'excluded', 'after'])})
     command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000, end_ts=2000))
@@ -98,7 +100,7 @@ def test_respects_end_timestamp(world):
 )
 def test_selected_timeline_controls_bounds_and_scheduling(world, timeline, start_ts, end_ts, expected):
     outputs = {'a': RecordingEmitter(), 'b': RecordingEmitter()}
-    agent, command_receiver, finished = create_agent(outputs)
+    agent, command_receiver, finished = create_agent(world, outputs)
     episode = EpisodeContainer({
         'a': DummySignal([[1000, 1], [3000, 2], [5000, 3]], ['a1', 'a2', 'a3'], timelines=(timeline, 'tick')),
         'b': DummySignal([[2000, 10], [4000, 20], [6000, 30]], ['b1', 'b2', 'b3'], timelines=(timeline, 'tick')),
@@ -115,7 +117,7 @@ def test_selected_timeline_controls_bounds_and_scheduling(world, timeline, start
 
 def test_abort_stops_without_emitting_finished(world):
     outputs = {'a': RecordingEmitter()}
-    agent, command_receiver, finished = create_agent(outputs)
+    agent, command_receiver, finished = create_agent(world, outputs)
 
     episode = EpisodeContainer(data={'a': DummySignal([1000, 2000], ['first', 'second'])})
     command_receiver.push(DsPlayerStartCommand(episode, start_ts=1000))
@@ -142,7 +144,7 @@ def test_abort_stops_without_emitting_finished(world):
 
 def test_raises_for_static_only_output(world):
     outputs = {'static': RecordingEmitter()}
-    agent, command_receiver, _ = create_agent(outputs)
+    agent, command_receiver, _ = create_agent(world, outputs)
 
     episode = EpisodeContainer(data={'dynamic': DummySignal([1000], [1]), 'static': 42})
 
@@ -157,7 +159,7 @@ def test_raises_for_static_only_output(world):
 @pytest.mark.parametrize('axis', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
 def test_default_axis_plays_new_and_legacy_recordings(world, axis):
     outputs = {'a': RecordingEmitter()}
-    agent, commands, finished = create_agent(outputs)
+    agent, commands, finished = create_agent(world, outputs)
     episode = EpisodeContainer({'a': DummySignal([100, 300], [1, 2], timelines=(axis,))})
     commands.push(DsPlayerStartCommand(episode))
     drive_until(world.interleave(agent.run), lambda: bool(finished.emitted))
@@ -166,7 +168,7 @@ def test_default_axis_plays_new_and_legacy_recordings(world, axis):
 
 def test_default_axis_uses_world_receipt(world):
     outputs = {'a': RecordingEmitter()}
-    agent, commands, finished = create_agent(outputs)
+    agent, commands, finished = create_agent(world, outputs)
     episode = EpisodeContainer({
         'a': DummySignal([[100, 1000], [300, 9000]], [1, 2], timelines=(RECEIVED_WORLD, RECEIVED_WALL))
     })
@@ -177,7 +179,7 @@ def test_default_axis_uses_world_receipt(world):
 
 def test_default_playback_aligns_inputs_and_commands_on_harness_world(world):
     outputs = {name: RecordingEmitter() for name in ('state', 'command')}
-    agent, commands, finished = create_agent(outputs)
+    agent, commands, finished = create_agent(world, outputs)
     episode = EpisodeContainer({
         'state': DummySignal(
             [[90, 100, 100], [290, 300, 300]], [1, 2], timelines=(EMITTED_WORLD, RECEIVED_WORLD, HARNESS_WORLD)
@@ -193,7 +195,7 @@ def test_default_playback_aligns_inputs_and_commands_on_harness_world(world):
 @pytest.mark.parametrize('axis', [RECEIVED_WALL, 'legacy.clock'])
 def test_other_timelines_require_explicit_selection(world, axis):
     outputs = {'a': RecordingEmitter()}
-    agent, commands, finished = create_agent(outputs)
+    agent, commands, finished = create_agent(world, outputs)
     episode = EpisodeContainer({'a': DummySignal([100, 300], [1, 2], timelines=(axis,))})
     commands.push(DsPlayerStartCommand(episode))
     with pytest.raises(ValueError, match='explicit timeline'):

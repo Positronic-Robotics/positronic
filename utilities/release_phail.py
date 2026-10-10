@@ -31,8 +31,8 @@ import pos3
 from pimm.logging import init_logging
 from positronic.cfg import analysis as analysis_cfg
 from positronic.dataset.dataset import Dataset
-from positronic.dataset.episode import select_timeline
 from positronic.dataset.utilities.migrate_remote import migrate_dataset
+from positronic.recording import select_timeline
 from positronic.utils import PUBLIC
 from positronic.utils.checkpoints import get_latest_checkpoint
 

@@ -29,9 +29,9 @@ from pimm.logging import init_logging
 from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
-from positronic.dataset.episode import select_timeline
 from positronic.dataset.time import Time
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
+from positronic.recording import select_timeline
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:

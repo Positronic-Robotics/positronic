@@ -27,9 +27,9 @@ from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
 from positronic.dataset import Time
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
-from positronic.dataset.signal import RECORDED_TIME
-from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.dataset.video import VideoSignal
+from positronic.recording import HARNESS_WALL, HARNESS_WORLD
 
 
 @pytest.fixture(params=['legacy', 'harness'])

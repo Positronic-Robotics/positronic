@@ -18,8 +18,8 @@ from fastapi.testclient import TestClient
 from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset.episode import META_PATH, META_UID, EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.server import positronic_server
 from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.positronic_server import (

@@ -1,19 +1,21 @@
 import json
+import uuid
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from pimm.time import RECEIVED_WALL
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
-from positronic.dataset.vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY
+from positronic.dataset.vector import RECORDED_TIME, SIGNAL_VERSION, SIGNAL_VERSION_KEY, TIMESTAMP_PREFIX
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder
+from positronic.recording import HARNESS_WORLD
 from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, vcs_wheel
 
 
@@ -676,21 +678,30 @@ def test_writer_records_immutable_timestamps(tmp_path, data):
 
 
 @pytest.mark.parametrize('data', [42, np.zeros((32, 32, 3), dtype=np.uint8)], ids=['scalar', 'image'])
-def test_timestamp_values_preserve_storage_and_named_queries(tmp_path, data):
+@pytest.mark.parametrize('rename', [False, True], ids=['known-names', 'arbitrary-names'])
+def test_storage_and_queries_are_independent_of_timeline_names(tmp_path, data, rename):
+    first, second = (uuid.uuid4().hex, uuid.uuid4().hex) if rename else (HARNESS_WORLD, RECEIVED_WALL)
     path = tmp_path / 'episode'
     with DiskEpisodeWriter(path) as writer:
-        writer.append('signal', data, Time(world=10, wall=200))
-        writer.append('signal', data + 1, Time(wall=300, world=30))
-    signal = DiskEpisode(path)['signal']
-    assert signal.timelines == ('world', 'wall')
-    assert [time['world'] for time in signal.timestamps(('world',))] == [10, 30]
-    value, timestamp = signal.time[Time(**{'world': 20})]
-    assert timestamp == Time(world=10, wall=200)
+        writer.append('signal', data, Time(**{first: 10, second: 200}))
+        writer.append('signal', data + 1, Time(**{second: 300, first: 30}))
+    episode = DiskEpisode(path)
+    signal = episode['signal']
+    assert signal.timelines == (first, second)
+    assert list(signal.timestamps(first)) == [10, 30]
+    assert episode.bounds(second) == (200, 300)
+    query = Time(**{first: 20})
+    value, timestamp = signal.time[query]
+    assert timestamp == Time(**{first: 10, second: 200})
     np.testing.assert_array_equal(value, data)
+    np.testing.assert_array_equal(episode.time[query]['signal'], data)
+    sample = signal.time[[query]][0]
+    assert sample[1] == Time(**{first: 20, second: 200})
+    np.testing.assert_array_equal(sample[0], data)
     video = isinstance(data, np.ndarray)
     table = pq.read_table(path / ('signal.frames.parquet' if video else 'signal.parquet'))
-    main_column = 'ts.world'
-    assert set(table.column_names) == {main_column, 'ts.wall'} | (set() if video else {'value'})
-    assert table[main_column].to_pylist() == [10, 30]
-    assert table['ts.wall'].to_pylist() == [200, 300]
+    first_column, second_column = TIMESTAMP_PREFIX + first, TIMESTAMP_PREFIX + second
+    assert set(table.column_names) == {first_column, second_column} | (set() if video else {'value'})
+    assert table[first_column].to_pylist() == [10, 30]
+    assert table[second_column].to_pylist() == [200, 300]
     assert table.schema.metadata[SIGNAL_VERSION_KEY] == SIGNAL_VERSION

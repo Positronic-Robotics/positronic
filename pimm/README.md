@@ -109,7 +109,7 @@ Examples:
 Because the newest value overwrites older ones, Pimm keeps signals lightweight and
 non-blocking. You can treat them as "push the latest observation" rather than
 "append to a queue". When you *do* need historical data (e.g., recording datasets)
-that logic lives in a dedicated control system such as `positronic.dataset.ds_writer_agent`.
+that logic lives in a dedicated control system such as `positronic.recording.ds_writer_agent`.
 
 Signals also expose freshness straight on the payload: every `Message` has an
 `updated` flag that is `True` only when the value changed since the previous read.

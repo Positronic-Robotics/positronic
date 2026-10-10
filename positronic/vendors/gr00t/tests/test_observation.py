@@ -8,9 +8,9 @@ from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.time import Time
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import models
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
 from positronic.vendors import gr00t

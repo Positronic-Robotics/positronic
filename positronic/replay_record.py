@@ -13,13 +13,13 @@ import positronic.cfg.simulator
 from pimm.logging import init_logging
 from positronic import geom, keys, wire
 from positronic.dataset import Dataset, Episode, transforms
-from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
-from positronic.dataset.ds_writer_agent import DsWriterCommand
-from positronic.dataset.episode import select_timeline
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers import roboarm
 from positronic.gui import dpg_ui
+from positronic.recording import select_timeline
+from positronic.recording.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
+from positronic.recording.ds_writer_agent import DsWriterCommand
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path

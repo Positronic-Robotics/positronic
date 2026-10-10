@@ -15,8 +15,8 @@ from positronic.dataset.local_dataset import (
     load_all_datasets,
     load_dataset,
 )
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.time import Time
+from positronic.dataset.vector import RECORDED_TIME
 
 from .test_dataset import build_dataset_with_signal, episode_ids
 

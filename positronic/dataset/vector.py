@@ -7,7 +7,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .signal import RECORDED_TIME, TIMELINE_METADATA_KEY, IndicesLike, Signal, SignalWriter
+from .signal import TIMELINE_METADATA_KEY, IndicesLike, Signal, SignalWriter
 from .time import Time, TimeArray, TimeBounds, search_timestamps, validate_timeline
 
 T = TypeVar('T')
@@ -16,6 +16,8 @@ T = TypeVar('T')
 SIGNAL_VERSION_KEY = b'positronic.signal_version'
 SIGNAL_VERSION = b'2'
 TIMESTAMP_PREFIX = 'ts.'
+# Timeline name for legacy files without timeline metadata.
+RECORDED_TIME = 'recorded'
 
 
 def timestamp_table(columns: Mapping[str, Sequence[int]]) -> pa.Table:

@@ -7,11 +7,12 @@ from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom, keys
 from positronic.dataset import transforms
-from positronic.dataset.episode import Episode, select_timeline
+from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
+from positronic.recording import select_timeline
 
 from .base import Codec
 from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action

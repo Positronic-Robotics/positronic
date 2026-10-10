@@ -19,12 +19,12 @@ from positronic.cfg.server import single_arm_replay_layout
 from positronic.dataset import Time
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers, expand_suffixed
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
-from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.eval import keys as eval_keys
+from positronic.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,

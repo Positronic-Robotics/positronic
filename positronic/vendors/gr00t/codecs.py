@@ -9,7 +9,7 @@ from PIL import Image
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset import transforms as tf
-from positronic.dataset.episode import Episode, select_timeline
+from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command, models
@@ -29,6 +29,7 @@ from positronic.policy.codecs import (
     lerobot_vector,
 )
 from positronic.policy.codecs.geometry import ConvertPose
+from positronic.recording import select_timeline
 from positronic.vendors import gr00t
 
 

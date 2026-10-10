@@ -7,9 +7,10 @@ from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
 from positronic.dataset import Signal, transforms
-from positronic.dataset.episode import Episode, select_timeline
+from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity
+from positronic.recording import select_timeline
 
 from .base import Codec
 from .metadata import LEROBOT_FEATURES, lerobot_image, lerobot_vector

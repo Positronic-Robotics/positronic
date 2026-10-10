@@ -29,9 +29,10 @@ import tqdm
 from positronic import keys
 from positronic.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.signal import RECORDED_TIME, Kind
+from positronic.dataset.signal import Kind
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Group, Identity, Rename
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.dataset.video import VideoSignal
 
 

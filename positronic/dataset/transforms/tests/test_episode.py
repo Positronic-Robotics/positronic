@@ -2,9 +2,9 @@ import numpy as np
 import pytest
 
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import Elementwise, TransformedEpisode
 from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, Rename
+from positronic.dataset.vector import RECORDED_TIME
 
 from ...tests.utils import DummySignal, DummyTransform
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import pimm
 from positronic.dataset import Episode, Time
-from positronic.dataset.episode import select_timeline
+from positronic.recording import select_timeline
 
 
 @dataclass

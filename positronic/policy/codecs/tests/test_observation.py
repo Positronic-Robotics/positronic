@@ -7,11 +7,11 @@ from positronic_model_server.spec import ARGS, component
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys as obs_keys
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
-from positronic.dataset.time import HARNESS_WORLD
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
 from positronic.policy.spec import from_spec
+from positronic.recording import HARNESS_WORLD
 
 
 @pytest.mark.parametrize(

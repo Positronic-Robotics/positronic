@@ -17,9 +17,9 @@ from scipy.spatial.transform import Rotation as ScipyRotation
 
 from positronic import geom
 from positronic.dataset import transforms
-from positronic.dataset.episode import select_timeline
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.recording import select_timeline
 
 _QUAT = geom.Rotation.Representation.QUAT
 

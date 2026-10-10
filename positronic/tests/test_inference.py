@@ -26,7 +26,6 @@ from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys, wire
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
 from positronic.dataset.video import VideoSignal
 from positronic.drivers import keyboard
 from positronic.eval import Embodiment, Observation, Task
@@ -37,6 +36,7 @@ from positronic.inference import KeyboardOperator, TrialForwarder, real, web
 from positronic.policy import Policy
 from positronic.policy.base import Step
 from positronic.policy.harness import Harness, Rollout
+from positronic.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 
 

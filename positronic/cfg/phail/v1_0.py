@@ -19,8 +19,9 @@ from positronic.cfg.ds import group, local_all, transform
 from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, ROBOT_SIGNAL_POINTERS
 from positronic.cfg.eval.real.tasks import UNIFIED_TASK
 from positronic.dataset import Episode
-from positronic.dataset.episode import META_CREATED_TS_NS, select_timeline
+from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
+from positronic.recording import select_timeline
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main

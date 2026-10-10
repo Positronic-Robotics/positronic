@@ -12,7 +12,6 @@ from positronic.utils.lazy import LazySequence
 
 from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timelines
 
-RECORDED_TIME = 'recorded'
 TIMELINE_METADATA_KEY = b'positronic.timeline'
 TIMELINES_KEY = 'timelines'
 

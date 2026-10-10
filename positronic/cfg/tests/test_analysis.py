@@ -5,8 +5,8 @@ import pytest
 from positronic.cfg import analysis
 from positronic.cfg.analysis import ckpt
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.server.positronic_server import app_state_restored, configure_tables
 
 
