@@ -18,6 +18,7 @@ from positronic.drivers.roboarm.command import (
 )
 
 # Serializer contract for values:
+# - Serializers are stateless: the output depends only on the input value.
 # - Used by `DsWriterAgent.add_signal(name, serializer=None)` (recording) and the
 #   Harness observation channels (policy input). In both cases `serializer=None`
 #   passes the value through unchanged; a callable is invoked as serializer(value)
@@ -28,31 +29,6 @@ from positronic.drivers.roboarm.command import (
 #         - any dict entry with value None is skipped
 #     * None -> the sample is dropped
 Serializer = Callable[[Any], Any | dict[str, Any]]
-
-
-class StatefulSerializer:
-    """Base for serializers registered with ``DsWriterAgent``.
-
-    ``reset`` is called automatically at the start of each episode.
-    The default implementation is a no-op, suitable for pure serializers.
-    Subclasses that maintain per-episode state should override ``reset``.
-    """
-
-    def reset(self) -> None:
-        pass
-
-    def __call__(self, value: Any) -> Any | dict[str, Any]:
-        raise NotImplementedError
-
-
-class _PureSerializer(StatefulSerializer):
-    """Wraps a plain callable so every serializer has a uniform interface."""
-
-    def __init__(self, fn: Callable[[Any], Any | dict[str, Any]]):
-        self._fn = fn
-
-    def __call__(self, value: Any) -> Any | dict[str, Any]:
-        return self._fn(value)
 
 
 class Serializers:
@@ -67,26 +43,6 @@ class Serializers:
     def transform_3d(x: geom.Transform3D) -> np.ndarray:
         """Serialize a Transform3D into a 7D vector [tx, ty, tz, qw, qx, qy, qz]."""
         return x.as_vector(geom.Rotation.Representation.QUAT)
-
-    class ContinuousTransform3D(StatefulSerializer):
-        """Stateful serializer that canonicalises quaternion signs for temporal continuity.
-
-        Each quaternion is flipped to the sign closest to the previous frame,
-        avoiding arbitrary sign jumps from the double-cover ambiguity.
-        """
-
-        def __init__(self):
-            self._prev: geom.Rotation | None = None
-
-        def reset(self):
-            self._prev = None
-
-        def __call__(self, x: geom.Transform3D) -> np.ndarray:
-            rotation = x.rotation
-            if self._prev is not None:
-                rotation = geom.quat_closest(rotation, self._prev)
-            self._prev = rotation
-            return geom.Transform3D(x.translation, rotation).as_vector(geom.Rotation.Representation.QUAT)
 
     @staticmethod
     def robot_state(state: State) -> dict[str, np.ndarray | RobotStatus]:

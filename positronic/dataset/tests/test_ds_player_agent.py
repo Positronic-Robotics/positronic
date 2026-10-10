@@ -1,11 +1,12 @@
 import pytest
 
 import pimm
-from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
+from pimm.time import EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic.dataset.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.time import HARNESS_WORLD
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter, drive_until
 
 
@@ -153,7 +154,7 @@ def test_raises_for_static_only_output(world):
         next(scheduler)
 
 
-@pytest.mark.parametrize('axis', [RECEIVED_WORLD, RECORDED_TIME])
+@pytest.mark.parametrize('axis', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
 def test_default_axis_plays_new_and_legacy_recordings(world, axis):
     outputs = {'a': RecordingEmitter()}
     agent, commands, finished = create_agent(outputs)
@@ -172,6 +173,21 @@ def test_default_axis_uses_world_receipt(world):
     commands.push(DsPlayerStartCommand(episode))
     drive_until(world.interleave(agent.run), lambda: bool(finished.emitted))
     assert [time['playback.scheduled'] for time, _ in outputs['a'].emitted] == [0, 200]
+
+
+def test_default_playback_aligns_inputs_and_commands_on_harness_world(world):
+    outputs = {name: RecordingEmitter() for name in ('state', 'command')}
+    agent, commands, finished = create_agent(outputs)
+    episode = EpisodeContainer({
+        'state': DummySignal(
+            [[90, 100, 100], [290, 300, 300]], [1, 2], timelines=(EMITTED_WORLD, RECEIVED_WORLD, HARNESS_WORLD)
+        ),
+        'command': DummySignal([[110, 110], [310, 310]], [3, 4], timelines=(EMITTED_WORLD, HARNESS_WORLD)),
+    })
+    commands.push(DsPlayerStartCommand(episode))
+    drive_until(world.interleave(agent.run), lambda: bool(finished.emitted))
+    assert [(time['playback.scheduled'], value) for time, value in outputs['state'].emitted] == [(0, 1), (200, 2)]
+    assert [(time['playback.scheduled'], value) for time, value in outputs['command'].emitted] == [(10, 3), (210, 4)]
 
 
 @pytest.mark.parametrize('axis', [RECEIVED_WALL, 'legacy.clock'])

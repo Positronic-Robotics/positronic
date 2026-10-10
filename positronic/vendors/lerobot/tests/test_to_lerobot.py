@@ -4,8 +4,13 @@ import os
 import numpy as np
 import pytest
 
+from pimm.time import EMITTED_WORLD, RECEIVED_WORLD
+from positronic import keys
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.signal import RECORDED_TIME
-from positronic.dataset.time import Time, TimeBounds
+from positronic.dataset.time import HARNESS_WORLD, Time, TimeBounds
+from positronic.dataset.transforms import TransformedDataset
+from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, AbsoluteJointsAction, ObservationCodec
 
 lerobot = pytest.importorskip('lerobot')
 if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':
@@ -16,7 +21,42 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 import torch  # noqa: E402
 from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 
-from positronic.vendors.lerobot.to_lerobot import append_data_to_dataset  # noqa: E402
+from positronic.vendors.lerobot.to_lerobot import EpisodeDictDataset, append_data_to_dataset  # noqa: E402
+
+
+def test_export_keeps_actions_and_observations_aligned_on_harness_time(tmp_path):
+    source = tmp_path / 'source'
+    with LocalDatasetWriter(source) as dataset, dataset.new_episode() as writer:
+        for i in range(1, 4):
+            received = i * 100_000_000
+            emitted = received + 10_000_000
+            writer.append(
+                keys.JOINTS,
+                np.array([i]),
+                Time(**{EMITTED_WORLD: received - 10_000_000, RECEIVED_WORLD: received, HARNESS_WORLD: received}),
+            )
+            time = Time(**{EMITTED_WORLD: emitted, HARNESS_WORLD: emitted})
+            writer.append(keys.TARGET_JOINTS, np.array([i * 10]), time)
+            writer.append(keys.TARGET_GRIP, i / 10, time)
+    codec = ObservationCodec(state={'state': {keys.JOINTS: 1}}, images={}) & AbsoluteJointsAction(
+        keys.TARGET_JOINTS, keys.TARGET_GRIP, num_joints=1
+    )
+    encoder = codec.training_encoder
+    dataset = TransformedDataset(LocalDataset(source), encoder)
+    rows = EpisodeDictDataset(dataset, fps=20)[0]
+    np.testing.assert_array_equal(rows['state'], [[1], [1], [2], [2]])
+    np.testing.assert_allclose(rows[ACTION], [[10, 0.1], [10, 0.1], [20, 0.2], [20, 0.2]])
+
+    output = tmp_path / 'lerobot'
+    target = LeRobotDataset.create(
+        repo_id='local', fps=20, root=output, use_videos=False, features=encoder.meta[LEROBOT_FEATURES]
+    )
+    append_data_to_dataset(target, dataset, fps=20, task='test task', num_workers=0)
+    loaded = LeRobotDataset(repo_id='local', root=output)
+    assert len(loaded) == 4
+    for index in range(4):
+        np.testing.assert_allclose(loaded[index][ACTION].numpy(), rows[ACTION][index])
+        np.testing.assert_array_equal(loaded[index]['state'].numpy(), rows['state'][index])
 
 
 class _MockTimeIndex:

@@ -143,6 +143,9 @@ Pimm stamps `emitted.wall` before forwarding data and `received.wall` on the rec
 first delivery. Reading the cached value keeps its time. Each receiver has its own receipt time.
 `wall` uses a monotonic clock in nanoseconds; it is elapsed time, not a UTC date.
 
+`emit(data)` returns a `Message` with the source value and its emission timestamps, plus any producer timelines.
+It has no receipt timestamps. Receivers add their own receipt timestamps without changing the returned message.
+
 `world` is the application's clock: wall time on hardware and simulated time in simulation.
 On hardware, `emitted.world` equals `emitted.wall`, and `received.world` equals `received.wall`.
 Background simulation endpoints have no access to simulation time and supply only wall coordinates.

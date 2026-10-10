@@ -10,6 +10,9 @@ from pimm.time import Time, validate_timelines
 from pimm.time import validate_timeline as validate_timeline
 from positronic.utils.lazy import LazySequence
 
+HARNESS_WORLD = 'harness.world'
+HARNESS_WALL = 'harness.wall'
+
 Coordinate = TypeVar('Coordinate', int, Time)
 
 

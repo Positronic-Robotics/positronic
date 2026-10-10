@@ -1,14 +1,17 @@
 import mujoco as mj
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
 from integration_tests import act_stack
 from integration_tests.act_stack import (
+    CAMERAS,
     CUBE_POSES,
     EPISODE_SECONDS,
     FINGER_BODIES,
     RECORDED_SIGNALS,
     REFERENCE_FILENAME,
+    ROBOT_COMMANDS,
     SUPPORTED,
     TIME_SUFFIX,
     capture,
@@ -18,31 +21,48 @@ from integration_tests.act_stack import (
     is_supported_stack,
     write_npz,
 )
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys
 from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
 from positronic.dataset import Time
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
+from positronic.dataset.video import VideoSignal
 
 
-@pytest.fixture
-def recorded_signals(monkeypatch, tmp_path):
+@pytest.fixture(params=['legacy', 'harness'])
+def recorded_signals(monkeypatch, tmp_path, request):
     times = np.arange(0, EPISODE_SECONDS * 1_000_000_000 + 1, 100_000_000)
+    timeline = RECORDED_TIME if request.param == 'legacy' else HARNESS_WORLD
     with DiskEpisodeWriter(tmp_path / 'episode') as writer:
         for name in RECORDED_SIGNALS:
-            sample_times = times[::10] if name in (keys.TARGET_EE_POSE, keys.TARGET_GRIP) else times
+            sample_times = times[::10] if name in ROBOT_COMMANDS else times
             for timestamp in sample_times:
-                writer.append(name, 0.0, Time(**{RECORDED_TIME: int(timestamp)}))
+                coordinates = {
+                    EMITTED_WORLD: int(timestamp),
+                    EMITTED_WALL: int(timestamp),
+                    HARNESS_WORLD: int(timestamp),
+                    HARNESS_WALL: int(timestamp),
+                }
+                if request.param == 'legacy':
+                    coordinates = {RECORDED_TIME: int(timestamp)}
+                elif name not in ROBOT_COMMANDS:
+                    coordinates.update({RECEIVED_WORLD: int(timestamp), RECEIVED_WALL: int(timestamp)})
+                writer.append(name, 0.0, Time(**coordinates))
+        for name in CAMERAS:
+            for i, timestamp in enumerate(times[::75]):
+                writer.append(name, np.full((16, 16, 3), i * 80, dtype=np.uint8), Time(**{timeline: int(timestamp)}))
     signals = DiskEpisode(tmp_path / 'episode').signals
     monkeypatch.setattr(
         act_stack,
         'cube_trace',
         lambda episode: {
             CUBE_POSES: np.zeros((len(times), 2, 7)),
-            CUBE_POSES + TIME_SUFFIX: times - episode.bounds(RECORDED_TIME).start,
+            CUBE_POSES + TIME_SUFFIX: times - episode.bounds(timeline).start,
             SUPPORTED: np.ones(len(times), dtype=bool),
-            SUPPORTED + TIME_SUFFIX: times - episode.bounds(RECORDED_TIME).start,
+            SUPPORTED + TIME_SUFFIX: times - episode.bounds(timeline).start,
         },
     )
     monkeypatch.setattr(act_stack, 'read_episode', lambda output, seed: EpisodeContainer(signals))
@@ -73,6 +93,22 @@ def test_complete_observations_and_sparse_commands_can_be_captured(recorded_sign
     reference = tmp_path / 'reference'
     capture(output_dir=str(tmp_path), reference_dir=str(reference), seeds=[4])
     check_episode(tmp_path, 4, reference, success_only=False)
+
+
+@pytest.mark.parametrize('name', CAMERAS)
+@pytest.mark.parametrize('count', [0, 2])
+def test_invalid_video_index_fails_success_check_and_capture(recorded_signals, tmp_path, name, count):
+    camera = recorded_signals[name]
+    assert isinstance(camera, VideoSignal)
+    table = pq.read_table(camera.frames_index_path)
+    pq.write_table(table.slice(0, count), camera.frames_index_path)
+    recorded_signals[name] = VideoSignal(camera.video_path, camera.frames_index_path)
+    with pytest.raises(ValueError, match=f'{name}:'):
+        check_episode(tmp_path, 4, tmp_path, success_only=True)
+    reference = tmp_path / 'reference'
+    with pytest.raises(ValueError, match=f'{name}:'):
+        capture(output_dir=str(tmp_path), reference_dir=str(reference), seeds=[4])
+    assert not reference.exists()
 
 
 def test_failed_validation_leaves_capture_retryable(recorded_signals, monkeypatch, tmp_path):

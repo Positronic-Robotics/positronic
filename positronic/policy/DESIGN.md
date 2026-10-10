@@ -315,8 +315,16 @@ goal is for the recording to reconstruct both flows after the episode:
 what each part saw, what it returned, and when. That includes inference inputs
 and outputs on other machines, and values a run chooses to record itself.
 
-The framework records sensor and executed-command signals as an episode dataset.
-The recorder stores `runtime.metadata` with the policy definition metadata.
+The harness records sensor, privileged, and emitted-command signals in one episode dataset.
+It records new inputs before each policy call and commands after emission. Between calls it
+samples every millisecond; each sampling pass resets that deadline. Reused inputs keep their
+original timestamps and are not written twice. Privileged inputs stay outside policy observations.
+Inputs include receipt timestamps; commands use the emission timestamps returned by `emit()`.
+Harness adds `harness.world` and `harness.wall` to every record: first receipt for inputs,
+emission for commands. These coordinates align training, replay, and viewing without changing
+the original message timestamps. Producer timelines cannot use these two names.
+Writing is synchronous and may slow execution. An episode's answer waits for recording to close.
+The harness stores `runtime.metadata` with the policy definition metadata before policy cleanup.
 Inference input/output recording and custom signal recording are deferred.
 
 Timing is part of logging: framework spans cover processor resumptions, codecs,

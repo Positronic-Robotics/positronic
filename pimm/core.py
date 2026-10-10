@@ -60,8 +60,8 @@ class SignalEmitter(ABC, Generic[T]):
         return self._clock
 
     @final
-    def emit(self, data: T, *, time: Time | None = None):
-        """Emit host-available data, optionally attaching producer-owned timelines."""
+    def emit(self, data: T, *, time: Time | None = None) -> Message[T]:
+        """Emit host-available data and return its message with emission and optional producer timestamps."""
         if time is not None:
             if not isinstance(time, Time):
                 raise TypeError('Producer timestamps must be a Time')
@@ -70,7 +70,9 @@ class SignalEmitter(ABC, Generic[T]):
         coordinates = {f'{EMITTED_PREFIX}{k}': v for k, v in self._emission_clock.time().items()}
         if time is not None:
             coordinates.update(time)
-        self._emit(data, Time(**coordinates))
+        message = Message(data, Time(**coordinates))
+        self._emit(message.data, message.time)
+        return message
 
     @abstractmethod
     def _emit(self, data: T, time: Time):

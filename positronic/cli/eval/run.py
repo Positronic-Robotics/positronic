@@ -105,8 +105,6 @@ class TaskDriver(pimm.ControlSystem):
                     if attempt == MAX_ATTEMPTS_PER_TASK:
                         raise
                     logger.warning(f'A device gave no data, so the task runs again: {e}')
-        # Let the recorder commit the final episode before this return brings the world down.
-        yield pimm.Sleep(0.5)
 
 
 def run_world(
@@ -121,28 +119,24 @@ def run_world(
 
     An attended run and an unattended one differ only by their driver: any control system with a ``perform_task``
     caller — a plan walked to its end, a person at a keyboard, a console of somebody's own. The driver reads what it
-    decides from itself, so the runner wires nothing of it but that call. ``record`` off keeps the recorder out of
-    the world, so a run that writes nothing costs the producers nothing. ``done`` ends an episode from outside the
-    policy: the env's terminal in a sim eval, the operator in an attended run.
+    decides from itself, so the runner wires nothing of it but that call. ``record`` off disables recording and
+    leaves privileged sources disconnected. Each rollout names its output path, or ``None`` to write nothing.
+    ``done`` ends an episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
     """
-    harness = Harness(embodiment)
+    privileged = (privileged or {}) if record else {}
+    if record:
+        embodiment.video_encoder.ensure_available()
+    harness = Harness(embodiment, privileged=privileged, record=record)
     with pimm.World(virtual_time=embodiment.simulated) as world:
-        ds_agent = wire.wire_embodiment(world, harness, embodiment, record=record, privileged=privileged, done=done)
+        wire.wire_embodiment(world, harness, embodiment, privileged=privileged, done=done)
         world.connect(driver.perform_task, harness.perform_task)
-        if ds_agent is not None:
-            world.connect(harness.ds_command, ds_agent.command)
 
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         if embodiment.simulated:
-            # Why this order:
-            # - Each scheduler pass is one instant: everything emitted in it shares a timestamp.
-            # - The harness tells the recorder when an episode opens, so the recorder runs after it and opens
-            #   in that same pass.
-            # - The producers run last, so what the recorder finds on the channels is the frame the reset
-            #   published, with no step in between.
-            world.run([driver, harness, ds_agent, *producers])
+            # Read the frame published by preparation before the next producer step.
+            world.run([driver, harness, *producers])
         else:
-            world.run([driver, harness], [*producers, ds_agent])
+            world.run([driver, harness], [*producers])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
