@@ -18,7 +18,7 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.dataset.serializers import Serializer, StatefulSerializer, expand_suffixed
+from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Observation, Task
@@ -135,7 +135,7 @@ class Harness(pimm.ControlSystem):
         self._recording_period_ns = round(1e9 / recording_hz)
         self._writer: EpisodeWriter | None = None
         self._recorded_privileged: set[str] = set()
-        self._obs_by_signal: dict[str, dict[str, Any]] = {}
+        self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
         self._telemetry = _EpisodeTelemetry()
         # A ready call the harness made between episodes, by device name, until the device answers it.
         self._repairs: dict[str, pimm.calls.Answer[None]] = {}
@@ -236,38 +236,18 @@ class Harness(pimm.ControlSystem):
         self._append(values, message.time)
         return values
 
-    def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
-        """Read sensors, reusing each signal's serialized fields until a new message arrives.
-
-        Copy updated arrays because devices may reuse their buffers while inference still reads them.
-        Return ``None`` if a required signal has no message. Raise the ``pimm.SignalError`` a signal carries.
-        Conversion errors propagate.
-        Put each signal's read and conversion durations into ``step_ms``.
-        """
-        inputs: dict[str, Any] = {}
-        complete = True
-        assert_default_frame(self._statics())
+    def _sample(self, step_ms: dict[str, float] | None = None) -> None:
         for name, obs in self._embodiment.observations.items():
             read_started_ns = time.perf_counter_ns()
             message = self.observations[name].read()
-            step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (time.perf_counter_ns() - read_started_ns) / 1e6
-            if message is None:
-                complete = False
-                continue
-            if isinstance(message.data, pimm.SignalError):
-                # A signal returns one instance on many reads, and each raise adds to its traceback. So start a new one.
-                raise message.data.with_traceback(None)
-            if message.updated or name not in self._obs_by_signal:
+            if step_ms is not None:
+                step_ms[telemetry_keys.ATTR_STEP_READ_MS_PREFIX + name] = (
+                    time.perf_counter_ns() - read_started_ns
+                ) / 1e6
+            if message is None or isinstance(message.data, pimm.SignalError):
+                self._obs_by_signal[name] = message.data if message is not None else None
+            elif message.updated or not isinstance(self._obs_by_signal.get(name), dict):
                 self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
-            inputs.update(self._obs_by_signal[name])
-        if not complete:
-            return None
-        inputs[keys.TASK] = task.instruction
-        inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
-        return frozen_view(inputs)
-
-    def _sample(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
-        obs = self.read_obs(task, step_ms)
         if self._writer is not None:
             for name, spec in self._privileged.items():
                 message = self.privileged[name].read()
@@ -276,7 +256,32 @@ class Harness(pimm.ControlSystem):
                 if message.updated or name not in self._recorded_privileged:
                     self._convert_and_record(name, message, spec.serializer)
                     self._recorded_privileged.add(name)
-        return obs
+
+    def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
+        """Read sensors, reusing each signal's serialized fields until a new message arrives.
+
+        Copy updated arrays because devices may reuse their buffers while inference still reads them.
+        Return ``None`` if a required signal has no message. Raise the ``pimm.SignalError`` a signal carries.
+        Conversion errors propagate.
+        Put each signal's read and conversion durations into ``step_ms``.
+        """
+        assert_default_frame(self._statics())
+        self._sample(step_ms)
+        inputs: dict[str, Any] = {}
+        complete = True
+        for values in self._obs_by_signal.values():
+            if isinstance(values, pimm.SignalError):
+                # Repeated raises of a cached error must not accumulate traceback frames.
+                raise values.with_traceback(None)
+            if values is None:
+                complete = False
+            else:
+                inputs.update(values)
+        if not complete:
+            return None
+        inputs[keys.TASK] = task.instruction
+        inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
+        return frozen_view(inputs)
 
     def _step(self, task: Task, runtime: Executor, policy_run: PolicyRun, due_ns: int | None) -> int | None:
         """Read sensors, call the policy, emit commands, and return its clamped next wake-up time.
@@ -290,7 +295,7 @@ class Harness(pimm.ControlSystem):
                 if due_ns is not None and runtime.time_ns >= due_ns:
                     step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = (runtime.time_ns - due_ns) / 1e6
                 observe_started_ns = time.perf_counter_ns()
-                obs = self._sample(task, step_ms)
+                obs = self.read_obs(task, step_ms)
                 policy_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
                 if obs is None:
@@ -348,14 +353,6 @@ class Harness(pimm.ControlSystem):
 
     @contextmanager
     def _recording(self, path: Path | None) -> Iterator[None]:
-        serializers = [
-            spec.serializer
-            for specs in (self._embodiment.observations, self._embodiment.commands, self._privileged)
-            for spec in specs.values()
-        ]
-        for serializer in serializers:
-            if isinstance(serializer, StatefulSerializer):
-                serializer.reset()
         try:
             with ExitStack() as stack:
                 if path is not None and self._dataset_factory is not None:
@@ -387,7 +384,7 @@ class Harness(pimm.ControlSystem):
                 resume_at_ns = self._step(task, runtime, policy_run, resume_at_ns)
                 sample_at_ns = sampled_ns + self._recording_period_ns
             elif self._writer is not None and sampled_ns >= sample_at_ns:
-                self._sample(task, {})
+                self._sample()
                 sample_at_ns = sampled_ns + self._recording_period_ns
             # No complete observation yet: read the sensors again after one poll period.
             wake_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9) if resume_at_ns is None else resume_at_ns
@@ -406,7 +403,7 @@ class Harness(pimm.ControlSystem):
                 EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL,
             )
         if self._writer is not None:
-            self._sample(task, {})
+            self._sample()
         return payload
 
     def _run_episode(

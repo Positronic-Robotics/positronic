@@ -562,6 +562,36 @@ def test_an_observation_error_discards_the_episode_and_an_old_value_does_not(epi
     assert isinstance(next(h.loop), pimm.Sleep)
 
 
+@pytest.mark.parametrize('record', [False, True])
+@pytest.mark.parametrize('finish', [False, True])
+def test_recorder_polls_do_not_fail_on_errors_between_policy_calls(episode_harness, record, finish):
+    h = episode_harness
+    policy = Positions()
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('move', None), policy, h.output_path if record else None))
+    next(h.loop)
+
+    h.world.clock.advance_to_ns(1_000_000)
+    h.observation.emit(pimm.SignalError('transient'))
+    if finish:
+        h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    if finish:
+        assert answer.result() == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+        assert policy.seen == [1]
+    else:
+        assert not answer.done()
+        h.world.clock.advance_to_ns(2_000_000)
+        h.observation.emit(2)
+        next(h.loop)
+        h.world.clock.advance_to_ns(100_000_000)
+        next(h.loop)
+        assert not answer.done()
+        assert policy.seen == [1, 2]
+    if record:
+        assert [value for name, value, _ in h.dataset.episodes[0].records if name == POSITION] == policy.seen
+
+
 def test_an_ask_while_an_observation_carries_an_error_is_refused_and_the_next_one_runs(episode_harness):
     h = episode_harness
     policy = Positions()
