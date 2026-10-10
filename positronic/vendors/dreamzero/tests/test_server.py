@@ -3,9 +3,10 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server import keys as offboard_keys
 from positronic_wire import roboarena as roboarena_wire
 from positronic_wire import wire
+
+from positronic.policy import keys as policy_keys
 
 pytest.importorskip('huggingface_hub')
 
@@ -81,7 +82,7 @@ def test_a_huggingface_repo_is_addressed_by_its_whole_name(holding):
 
     model = server.dreamzero_model(model_path='GEAR-Dreams/DreamZero-DROID')
 
-    assert model.meta()[offboard_keys.CHECKPOINT_ID] == 'GEAR-Dreams/DreamZero-DROID'
+    assert model.meta()[policy_keys.CHECKPOINT_ID] == 'GEAR-Dreams/DreamZero-DROID'
     assert _experiment_name('GEAR-Dreams/DreamZero-DROID') == 'DreamZero-DROID'
 
 
@@ -90,7 +91,7 @@ def test_a_pinned_checkpoint_directory_is_addressed_by_its_step(holding):
 
     model = server.dreamzero_model(model_path='s3://bucket/exp/checkpoint-40000')
 
-    assert model.meta()[offboard_keys.CHECKPOINT_ID] == '40000'
+    assert model.meta()[policy_keys.CHECKPOINT_ID] == '40000'
     assert _checkpoint_id('checkpoint-005000') == '005000'
 
 
@@ -100,7 +101,7 @@ def test_a_zero_padded_step_is_reached_by_the_name_its_directory_carries(holding
     model = server.dreamzero_model(model_path=RUN_DIR, backbone='wan2.2')
 
     assert downloaded == [RUN_DIR + 'checkpoint-005000']
-    assert model.meta()[offboard_keys.CHECKPOINT_ID] == '005000'
+    assert model.meta()[policy_keys.CHECKPOINT_ID] == '005000'
 
 
 def test_warmup_observation_follows_the_cameras_the_server_announced():

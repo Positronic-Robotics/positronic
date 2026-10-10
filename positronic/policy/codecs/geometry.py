@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-from functools import partial
 from typing import Any
 
 import numpy as np
@@ -7,14 +6,10 @@ from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom
 from positronic import keys as obs_keys
-from positronic.dataset import Signal
-from positronic.dataset.episode import Episode
-from positronic.dataset.transforms import Elementwise, lazy_sequence
-from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
-from positronic.drivers.roboarm import command
+from positronic.dataset.transforms.episode import EpisodeTransform, map_signals
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.ik import change_frame
+from positronic.policy import training
 
 from .base import Codec
 
@@ -36,47 +31,6 @@ class ChangeEEFrame(Codec):
 
     WIRE_NAME = 'change_ee_frame'
 
-    @staticmethod
-    def _move(value: Any, transform: geom.Transform3D) -> Any:
-        """A pose vector or an arm command, re-expressed through ``transform``."""
-        match value:
-            case command.CartesianPosition(pose, mode):
-                return command.CartesianPosition(pose=pose * transform, mode=mode)
-            case command.CartesianDelta(delta, frame, mode):
-                return command.CartesianDelta(delta=delta, frame=transform.inv * frame, mode=mode)
-            case command.JointPosition() | command.JointDelta():
-                return value
-            case _:
-                return change_frame(value, transform)
-
-    class _ChangeEpisodeFrames(EpisodeTransform):
-        """Move episode pose signals into the policy frame and record their frame."""
-
-        def __init__(self, codec: 'ChangeEEFrame'):
-            self._codec = codec
-
-        def _derive_pose(self, key: str, episode):
-            codec = self._codec
-            return Elementwise(episode[key], lazy_sequence(partial(codec._move, transform=codec._transform)))
-
-        def __call__(self, episode):
-            codec = self._codec
-            assert_default_frame(episode)
-            existing = ee_frame(episode)
-            if not np.allclose(existing.as_matrix, np.eye(4)):
-                raise ValueError(
-                    f'episode poses already sit at {existing.as_vector(_QUAT).tolist()} relative to '
-                    f'{DEFAULT_FRAME!r}; ``transform`` names the policy frame from there, so re-expressing an '
-                    'episode a codec already moved would train on a frame the checkpoint does not declare'
-                )
-            derived: dict[str, Any] = {roboarm_keys.EE_FRAME: FromValue(codec._transform.as_vector(_QUAT))}
-            derived.update({key: partial(self._derive_pose, key) for key in codec._keys if key in episode})
-            return Group(Derive(**derived), Identity())(episode)
-
-        @property
-        def meta(self):
-            return self._codec.meta
-
     def __init__(
         self,
         transform: geom.Transform3D | Sequence[float],
@@ -88,7 +42,7 @@ class ChangeEEFrame(Codec):
         self._keys = tuple(keys)
 
     def _apply(self, data: dict, transform: geom.Transform3D) -> dict:
-        moved = {key: self._move(data[key], transform) for key in self._keys if key in data}
+        moved = {key: change_frame(data[key], transform) for key in self._keys if key in data}
         return {**data, **moved} if moved else data
 
     def encode(self, data):
@@ -99,7 +53,7 @@ class ChangeEEFrame(Codec):
 
     @property
     def training_encoder(self) -> EpisodeTransform:
-        return ChangeEEFrame._ChangeEpisodeFrames(self)
+        return training.ChangeEEFrame(self._transform, self._keys)
 
     @property
     def meta(self):
@@ -144,7 +98,7 @@ class ConvertPose(Codec):
         if vector.shape != (expected,):
             raise ValueError(f'Expected a pose vector with {expected} values, got shape {vector.shape}')
         pose = geom.Transform3D.from_vector(vector, self._input_rotation)
-        converted = geom.Transform3D(pose.translation, pose.rotation * self._rotation_offset)
+        converted = pose * geom.Transform3D(rotation=self._rotation_offset)
         return converted.as_vector(self._output_rotation).astype(np.float32)
 
     def encode(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -153,12 +107,9 @@ class ConvertPose(Codec):
     def decode(self, data: Any) -> Any:
         return data
 
-    def _derive_pose(self, key: str, episode: Episode) -> Signal[Any]:
-        return Elementwise(episode[key], lazy_sequence(self._convert))
-
     @property
     def training_encoder(self) -> EpisodeTransform:
-        return Group(Derive(meta=None, **{key: partial(self._derive_pose, key) for key in self._keys}), Identity())
+        return map_signals(self._convert, self._keys)
 
     def to_spec(self) -> dict[str, Any]:
         return {

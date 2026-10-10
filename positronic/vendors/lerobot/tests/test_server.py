@@ -6,8 +6,8 @@ pytest.importorskip('lerobot', minversion='0.4')
 
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.act.configuration_act import ACTConfig
-from positronic_model_server import keys as offboard_keys
 
+from positronic.policy import keys as policy_keys
 from positronic.policy.codecs.observation import TASK_FIELD
 from positronic.vendors.lerobot import server
 from positronic.vendors.lerobot.policy import LerobotModel, warm_observation
@@ -26,7 +26,7 @@ def unloaded(monkeypatch):
 @pytest.mark.parametrize('configured, expected', [(None, '42'), ('41', '41')])
 def test_the_configured_checkpoint_is_served_else_the_latest(unloaded, configured, expected):
     model = server.lerobot_model(checkpoints_dir='s3://bucket/exp', checkpoint=configured, device='cpu')
-    assert model.meta()[offboard_keys.CHECKPOINT_ID] == expected
+    assert model.meta()[policy_keys.CHECKPOINT_ID] == expected
 
 
 def test_a_configured_checkpoint_the_directory_lacks_is_refused(unloaded):

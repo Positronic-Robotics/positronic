@@ -14,6 +14,7 @@ from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import EncodeImages
+from positronic.policy.keys import ACTION_FPS
 from positronic.policy.remote import RemotePolicy
 from positronic.policy.spec import from_spec
 from positronic.utils.versions import resolve_version
@@ -111,8 +112,8 @@ def test_remote_policy_derives_client_metadata_without_changing_the_server_repor
     with serving(EchoModel) as (client, address):
         policy = RemotePolicy(client.NAME, address)
         metadata = policy.meta()
-        assert metadata[policy_keys.ACTION_FPS] == 20
-        assert f'{policy_keys.SERVER}.{policy_keys.ACTION_FPS}' not in metadata
+        assert metadata[ACTION_FPS] == 20
+        assert f'{policy_keys.SERVER}.{ACTION_FPS}' not in metadata
         assert metadata[f'{policy_keys.SERVER}.{keys.EFFECTIVE_PARAMS}.fps'] == 20
 
 

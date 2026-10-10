@@ -32,6 +32,8 @@ from positronic.dataset import Dataset
 from positronic.dataset.episode import select_timeline
 from positronic.dataset.time import Time
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
+from positronic.policy.codecs.metadata import MODEL_SETTINGS, MODEL_SETTINGS_PATH
+from positronic.policy.keys import ACTION_FPS
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
@@ -121,13 +123,20 @@ def append_data_to_dataset(
     logging.info(f'Total length of the dataset: {seconds_to_str(total_length_sec)}')
 
 
+def _export_fps(dataset: Dataset, fps: int | None) -> int:
+    if fps is None:
+        assert ACTION_FPS in dataset.meta, '--fps not provided and dataset has no action_fps metadata'
+        fps = int(dataset.meta[ACTION_FPS])
+    if MODEL_SETTINGS in dataset.meta and fps != dataset.meta[ACTION_FPS]:
+        raise ValueError('Export fps must match the training recipe action_fps; change the recipe settings')
+    return fps
+
+
 @cfn.config(video=True, dataset=apply_codec, fps=None, share=1.0, seed=42)
 def convert_to_lerobot_dataset(
     output_dir: str, fps: int | None, video: bool, dataset: Dataset, task=None, share=1.0, seed=42
 ):
-    if fps is None:
-        assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
-        fps = int(dataset.meta['action_fps'])
+    fps = _export_fps(dataset, fps)
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     assert dataset.meta[LEROBOT_FEATURES] is not None, f'dataset.meta[{LEROBOT_FEATURES!r}] is required'
 
@@ -143,6 +152,11 @@ def convert_to_lerobot_dataset(
     # otherwise the former will complain about the directory not being empty.
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
 
+    if MODEL_SETTINGS in dataset.meta:
+        settings_path = output_dir / MODEL_SETTINGS_PATH
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(dataset.meta[MODEL_SETTINGS], indent=2, allow_nan=False))
+
     if GR00T_MODALITY in dataset.meta:
         modality = dataset.meta.get(GR00T_MODALITY)
         if modality is not None:
@@ -156,16 +170,20 @@ def convert_to_lerobot_dataset(
 
 @cfn.config(dataset=apply_codec, fps=None, share=1.0, seed=42)
 def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int | None, task=None, share=1.0, seed=42):
-    if fps is None:
-        assert 'action_fps' in dataset.meta, "--fps not provided and dataset has no 'action_fps' metadata"
-        fps = int(dataset.meta['action_fps'])
+    fps = _export_fps(dataset, fps)
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)
+    if MODEL_SETTINGS in dataset.meta and lr_dataset.fps != fps:
+        raise ValueError('Existing LeRobot dataset and appended data have different frame rates')
 
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix='append_metadata')
 
     lr_modality_path = output_dir / GR00T_MODALITY_PATH
     ds_modality = dataset.meta.get(GR00T_MODALITY, None)
+    settings_path = output_dir / MODEL_SETTINGS_PATH
+    existing_settings = json.loads(settings_path.read_text()) if settings_path.exists() else None
+    if existing_settings != dataset.meta.get(MODEL_SETTINGS):
+        raise ValueError('Existing LeRobot dataset and appended data have different model settings')
     if lr_modality_path.exists():
         with lr_modality_path.open(encoding='utf-8') as f:
             lr_modality = json.load(f)

@@ -5,13 +5,13 @@ import msgpack_numpy
 import numpy as np
 import pytest
 import zmq
-from positronic_model_server import keys as offboard_keys
 
 from positronic import keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
+from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import ACTION
-from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server as gr00t_server
+from positronic.vendors.gr00t import serving as gr00t
 
 
 def _modalities(cameras: list[str]) -> dict:
@@ -51,7 +51,7 @@ def test_zero_padded_checkpoints_are_served_under_their_step(monkeypatch, checkp
 
     model = gr00t_server.gr00t_model(model_source='s3://bucket/exp', checkpoint=checkpoint)
 
-    assert model.meta()[offboard_keys.CHECKPOINT_ID] == expected
+    assert model.meta()[policy_keys.CHECKPOINT_ID] == expected
     # The raw suffix survives only where it is needed — reaching the directory.
     assert downloaded == [f's3://bucket/exp/{directory}']
 
@@ -109,7 +109,7 @@ def test_published_checkpoint_is_served_without_a_local_checkpoint_scan(monkeypa
     monkeypatch.setattr(gr00t_server, 'list_checkpoints', Mock(side_effect=AssertionError('scanned')))
     _backend(monkeypatch, _modalities([gr00t.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE]))
 
-    assert gr00t_server.gr00t_model().meta()[offboard_keys.CHECKPOINT_ID] == gr00t.BASE_MODEL
+    assert gr00t_server.gr00t_model().meta()[policy_keys.CHECKPOINT_ID] == gr00t.BASE_MODEL
 
 
 @pytest.mark.parametrize('checkpoint_cameras', [2, 3])

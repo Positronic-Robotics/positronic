@@ -11,7 +11,6 @@ import configuronic as cfn
 import numpy as np
 import pos3
 from huggingface_hub import snapshot_download
-from positronic_model_server import keys as offboard_keys
 from positronic_wire import roboarena as roboarena_wire
 from positronic_wire import wire
 
@@ -258,7 +257,7 @@ def dreamzero_model(
     return DreamZeroModel(
         sp,
         {
-            offboard_keys.CHECKPOINT_ID: _checkpoint_id(checkpoint_path),
+            policy_keys.CHECKPOINT_ID: _checkpoint_id(checkpoint_path),
             policy_keys.TYPE: 'dreamzero',
             'backbone': backbone,
             'num_gpus': num_gpus,

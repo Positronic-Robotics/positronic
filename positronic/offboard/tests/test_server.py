@@ -33,6 +33,7 @@ from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import Served
 from positronic.policy import Codec
+from positronic.policy import keys as policy_keys
 from positronic.policy.processors import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
@@ -213,7 +214,7 @@ def test_an_idle_server_stops_itself(make_mock_model):
 
 @pytest.fixture
 def stub_server(start_server, make_mock_model) -> tuple[str, int, PolicyServer, MagicMock]:
-    meta = {'model_name': 'stub', 'type': 'stub', offboard_keys.CHECKPOINT_ID: 'stub'}
+    meta = {'model_name': 'stub', 'type': 'stub', policy_keys.CHECKPOINT_ID: 'stub'}
     policy = make_mock_model([{'action': [1, 2, 3]}], meta)
     host, port, server, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)))
     return host, port, server, policy
@@ -229,7 +230,7 @@ def test_full_inference_cycle(stub_server):
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata['type'] == 'stub'
         assert session.metadata['local_stack'] == {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}
-        assert offboard_keys.POSITRONIC_VERSION in session.metadata
+        assert policy_keys.POSITRONIC_VERSION in session.metadata
 
         obs = {'image': 'test'}
         result = session.infer(obs)
@@ -246,7 +247,7 @@ def test_a_deployment_asks_for_jpeg_frames_unless_it_says_otherwise(stub_server)
     )
     session = client.new_session()
     try:
-        assert session.metadata[offboard_keys.COMPRESS_IMAGES] is True
+        assert session.metadata[policy_keys.COMPRESS_IMAGES] is True
     finally:
         session.close()
 
@@ -710,7 +711,7 @@ def test_session_param_retunes_the_client_schedule(start_server):
 
 
 def test_the_model_is_built_once_and_serves_every_session(make_mock_model):
-    policy = make_mock_model([{'action': [1, 2, 3]}], {offboard_keys.CHECKPOINT_ID: '100'})
+    policy = make_mock_model([{'action': [1, 2, 3]}], {policy_keys.CHECKPOINT_ID: '100'})
     build = MagicMock(return_value=policy)
     server = PolicyServer(build, cfn.Config(_fps_pipe))
     ws = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
@@ -723,7 +724,7 @@ def test_the_model_is_built_once_and_serves_every_session(make_mock_model):
         for query in ([], [('fps', '5')]):
             session = _param_session('localhost', port, query)
             try:
-                assert session.metadata[offboard_keys.CHECKPOINT_ID] == '100'
+                assert session.metadata[policy_keys.CHECKPOINT_ID] == '100'
             finally:
                 session.close()
         build.assert_called_once_with()
@@ -839,7 +840,7 @@ def test_auth_accepts_the_token(authed_endpoint):
     try:
         # Reaching the handshake metadata means the upgrade completed and the server's first frame arrived.
         # An ingress that drops ``Upgrade`` never gets that far: it answers the handshake with a plain 200.
-        assert offboard_keys.POSITRONIC_VERSION in session.metadata
+        assert policy_keys.POSITRONIC_VERSION in session.metadata
     finally:
         session.close()
 

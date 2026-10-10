@@ -22,6 +22,8 @@ from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
     JointDeltaAction,
+    JointPositionAction,
+    SetControlMode,
     UnpackActionChunk,
 )
 from positronic.policy.codecs.geometry import ConvertPose
@@ -52,6 +54,8 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         AbsolutePositionAction,
         AbsoluteJointsAction,
         JointDeltaAction,
+        JointPositionAction,
+        SetControlMode,
         UnpackActionChunk,
     )
 }

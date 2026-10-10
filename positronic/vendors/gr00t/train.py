@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -8,7 +9,8 @@ import pos3
 
 from positronic import utils
 from positronic.policy.codecs import GR00T_MODALITY_PATH
-from positronic.vendors import gr00t
+from positronic.policy.codecs.metadata import MODEL_SETTINGS_PATH
+from positronic.vendors.gr00t import serving as gr00t
 
 
 def cleanup_old_optimizers(output_dir: Path, keep_last_n: int = 2):
@@ -48,6 +50,16 @@ def main(
         video_keys = list(json.load(f)[gr00t.VIDEO])
     output_path = output_path.rstrip('/')
     output_dir = pos3.sync(output_path + '/' + exp_name, delete_remote=not resume)
+    settings_path = Path(dataset_local_path) / MODEL_SETTINGS_PATH
+    output_settings = output_dir / MODEL_SETTINGS_PATH
+    settings = json.loads(settings_path.read_text()) if settings_path.exists() else None
+    if resume and output_settings.exists() and json.loads(output_settings.read_text()) != settings:
+        raise ValueError('Dataset model settings do not match the resumed training run')
+    if settings is not None:
+        output_settings.parent.mkdir(parents=True, exist_ok=True)
+        output_settings.write_text(json.dumps(settings, indent=2, allow_nan=False))
+    elif not resume:
+        output_settings.unlink(missing_ok=True)
     prefix = 'resume_metadata' if resume else 'run_metadata'
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix=prefix)
 
@@ -75,6 +87,12 @@ def main(
     env = os.environ.copy()
     print(f'Running command: {command}')
     subprocess.run(command, check=True, cwd=str(groot_root), env=env)
+
+    if output_settings.exists():
+        for checkpoint in output_dir.glob(f'{gr00t.CHECKPOINT_PREFIX}*'):
+            destination = checkpoint / MODEL_SETTINGS_PATH
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(output_settings, destination)
 
     cleanup_old_optimizers(Path(output_dir), keep_last_n=keep_optimizers_for_last_n)
 

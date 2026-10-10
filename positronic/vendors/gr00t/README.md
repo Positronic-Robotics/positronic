@@ -59,7 +59,10 @@ From Positronic's `docker` directory:
 ```bash
 mkdir -p "$PWD/groot-data"
 docker compose run --rm --pull never -v "$PWD/groot-data:/data" lerobot-0_3_3-convert convert \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.droid \
+  --dataset=@positronic.cfg.ds.transform \
+  --dataset.base=@positronic.cfg.ds.local \
+  --dataset.base.path=/data/recordings \
+  --dataset.transforms='["@positronic.vendors.gr00t.recipes.droid"]' \
   --output_dir=/data/datasets/my_task
 
 docker compose run --rm --pull never -v "$PWD/groot-data:/data" groot-train \
@@ -69,9 +72,44 @@ docker compose run --rm --pull never -v "$PWD/groot-data:/data" groot-train \
   --num_train_steps=10000
 ```
 
-Supply the conversion command's dataset configuration for your recordings as usual.
-For three views, replace the codec with `positronic.vendors.gr00t.codecs.droid_three_cameras`.
+Set `--dataset.base.path` to your recordings, or select another dataset configuration with `--dataset.base`.
+For three views, set `--dataset.transforms='["@positronic.vendors.gr00t.recipes.droid_three_cameras"]'`.
+The [training recipe](recipes.py) builds an episode transform. The [inference recipe](serving/recipe.py)
+builds a JSON-compatible description using only the lightweight wrapper.
+Both use [shared Python settings](serving/settings.py): observation keys, image size, camera mappings, tool frame,
+rotation offset, and cadence.
+`settings.droid()` returns a fresh dictionary, and `settings.droid_three_cameras()` derives the three-view variant.
+This module uses only the standard library; the common model-server wrapper has no GR00T settings definitions.
+The settings also contain the control mode, which only inference uses.
+The training transform preserves the recorded absolute pose, grip, and joint trajectories as action labels.
+GR00T's checkpoint processor converts these labels to relative actions and restores absolute actions during inference.
+
 The launcher reads camera keys from `meta/modality.json`; no separate modality selection is needed.
+The exporter saves shared settings to `meta/positronic_model_settings.json`.
+The file layout is a Positronic dataset convention defined beside the exporter metadata in
+[`policy/codecs/metadata.py`](../../policy/codecs/metadata.py). The GR00T description names client
+metadata fields without importing Positronic; its tests verify that the client and exporter read them.
+Export frame rates must match the recipe's `action_fps`; change that setting to select a different rate.
+Training copies this file into the experiment directory and, after a successful run, into each checkpoint.
+Resume rejects settings that differ from those recorded in the experiment directory.
+Datasets without this optional file retain their existing training behavior.
+
+Customize settings in Python and pass the same dictionary to each recipe:
+
+```python
+from positronic.vendors.gr00t import recipes
+from positronic.vendors.gr00t.serving import recipe
+from positronic.vendors.gr00t.serving import settings as model_settings
+
+settings = model_settings.droid(overrides={model_settings.IMAGE_SIZE: [160, 90]})
+training = recipes.droid(settings=settings)
+description = recipe.inference(settings)
+```
+
+The JSON saved with datasets and checkpoints records the resolved settings for reproducibility.
+For a fine-tuned checkpoint, configure serving to match those recorded settings.
+Selecting a checkpoint does not select its settings.
+The image size describes preprocessing before the native checkpoint processor, which also applies its own transforms.
 
 `--base_model` defaults to `nvidia/GR00T-N1.7-DROID`. Standard controls are `--batch_size`,
 `--learning_rate`, `--num_train_steps`, `--save_steps`, `--num_workers` and `--resume=True`.

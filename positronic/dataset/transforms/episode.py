@@ -1,10 +1,12 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
+from functools import partial
 from typing import Any, final
 
 from positronic.dataset.transforms import signals
 from positronic.dataset.transforms.signals import NpSignal
 from positronic.utils import merge_dicts
+from positronic.utils.lazy import lazy_sequence
 
 from ..episode import Episode, EpisodeContainer
 from ..signal import Signal
@@ -221,7 +223,7 @@ class Identity(EpisodeTransform):
     """Select specific keys from an episode, or pass through unchanged if no keys specified.
 
     Example:
-        Identity('robot_state', 'image')  # Only keep these two keys
+        Identity(select=['robot_state', 'image'])  # Only keep these two keys
         Identity()  # Pass through all keys unchanged
     """
 
@@ -252,6 +254,15 @@ class Identity(EpisodeTransform):
                 continue
             container[k] = v
         return EpisodeContainer(container, episode.meta)
+
+
+def map_signals(function: Callable[[Any], Any], fields: Sequence[str]) -> EpisodeTransform:
+    """Apply a value conversion to each selected signal, preserving other fields and timelines."""
+
+    def derive(key: str, episode: Episode):
+        return signals.Elementwise(episode[key], lazy_sequence(function))
+
+    return Group(Derive(meta=None, **{key: partial(derive, key) for key in fields}), Identity())
 
 
 class Concat:

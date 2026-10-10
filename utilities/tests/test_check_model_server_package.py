@@ -2,6 +2,7 @@
 
 from functools import partial
 from importlib.metadata import distributions
+from pathlib import Path
 
 import pytest
 
@@ -63,3 +64,68 @@ def test_test_tools_are_not_allowed_in_the_runtime_check(install_metadata):
     install_metadata('pytest')
     with pytest.raises(SystemExit, match='pytest.*before installing test tools'):
         gate.check_runtime_dependencies([])
+
+
+@pytest.fixture
+def wrapper(tmp_path):
+    package = tmp_path / 'wrapper'
+    package.mkdir()
+    (package / 'keys.py').write_text("FIELD = 'field'\n")
+    return package
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        'from . import keys\ndef response(): return {keys.FIELD: 1}\n',
+        'from .keys import FIELD\ndef response(): return {FIELD: 1}\n',
+        'from .keys import FIELD as field\ndef response(): return {field: 1}\n',
+        'import wrapper.keys as fields\ndef response(): return {fields.FIELD: 1}\n',
+        'import wrapper.keys\ndef response(): return {wrapper.keys.FIELD: 1}\n',
+    ],
+)
+def test_constant_used_by_wrapper_code_passes(wrapper, source):
+    (wrapper / 'server.py').write_text(source)
+    gate.check_internal_constants(wrapper)
+
+
+@pytest.mark.parametrize('path', ['keys.py', 'spec.py', 'vendor_keys.py', 'nested/settings.py'])
+@pytest.mark.parametrize('definition', ["MODEL_SETTING = 'setting'", "MODEL_SETTING: str = 'setting'"])
+def test_constants_in_any_wrapper_module_need_internal_use(wrapper, path, definition):
+    (wrapper / 'keys.py').write_text("FIELD = 'field'\ndef response(): return {FIELD: 1}\n")
+    target = wrapper / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open('a') as output:
+        output.write(definition + '\n')
+    with pytest.raises(SystemExit, match='MODEL_SETTING.*owning modules'):
+        gate.check_internal_constants(wrapper)
+
+
+@pytest.mark.parametrize('path', ['tests/test_keys.py', 'examples/serve.py', 'test_keys.py', 'keys_test.py'])
+def test_tests_and_examples_do_not_count_as_internal_use(wrapper, path):
+    target = wrapper / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('from wrapper import keys\nassert keys.FIELD\n')
+    with pytest.raises(SystemExit, match='wrapper.keys.FIELD'):
+        gate.check_internal_constants(wrapper)
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        'from .keys import FIELD\n',
+        'from . import keys\nFIELD = keys.FIELD\n',
+        "from .keys import FIELD\n__all__ = ['FIELD']\n",
+        'from .keys import FIELD\n__all__ = [FIELD]\n',
+        'import unrelated.keys\ndef response(): return {unrelated.keys.FIELD: 1}\n',
+        'FIELD = "another field"\ndef response(): return {FIELD: 1}\n',
+    ],
+)
+def test_reexports_and_unrelated_names_do_not_count_as_internal_use(wrapper, source):
+    (wrapper / '__init__.py').write_text(source)
+    with pytest.raises(SystemExit, match='wrapper.keys.FIELD'):
+        gate.check_internal_constants(wrapper)
+
+
+def test_model_server_constants_have_internal_production_uses():
+    gate.check_internal_constants(Path(gate.spec.__file__).parent)
