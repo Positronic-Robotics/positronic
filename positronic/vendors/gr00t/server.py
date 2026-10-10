@@ -312,6 +312,7 @@ def gr00t_model(
 @cfn.config(settings=model_settings.droid())
 def pipeline(settings: dict, fps: float | None = None, horizon_sec: float = 1.0):
     """Schedule DROID joint commands while the server codec performs checkpoint-specific conversion."""
+    # TODO: Bind session settings to checkpoint metadata when migrating this adapter to ModelServer.
     codec = spec.from_spec(recipe.inference(settings))
     assert isinstance(codec, Codec)
     fps = settings[model_settings.ACTION_FPS] if fps is None else fps

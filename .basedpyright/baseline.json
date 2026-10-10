@@ -2282,16 +2282,6 @@
                 }
             }
         ],
-        "./positronic/policy/codecs/observation.py": [
-            {
-                "code": "reportIncompatibleMethodOverride",
-                "range": {
-                    "startColumn": 8,
-                    "endColumn": 14,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/server/positronic_server.py": [
             {
                 "code": "reportOperatorIssue",

@@ -5,6 +5,7 @@ from typing import Any
 from positronic_model_server.spec import component, parallel, sequence
 
 from . import EE_POSE, GRIP, JOINT_POSITION, LANGUAGE, STATE, STATE_DIMS, TASK, VIDEO
+from . import keys as obs_keys
 from . import settings as model_settings
 
 
@@ -30,12 +31,16 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
             keys=[observation_keys[EE_POSE]],
         ),
         parallel(
-            component(
-                'observation_codec',
-                state=state,
-                images={source: [source, settings[model_settings.IMAGE_SIZE]] for source in image_mappings.values()},
-                task_field=observation_keys[TASK],
-                task_source=observation_keys[TASK],
+            sequence(
+                component('rename_observation_fields', mapping={observation_keys[TASK]: obs_keys.TASK}),
+                component(
+                    'observation_codec',
+                    state=state,
+                    images={
+                        source: [source, settings[model_settings.IMAGE_SIZE]] for source in image_mappings.values()
+                    },
+                    task_field=observation_keys[TASK],
+                ),
             ),
             sequence(
                 component('set_control_mode', mode=settings[model_settings.CONTROL_MODE]),

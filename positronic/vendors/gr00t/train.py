@@ -53,8 +53,10 @@ def main(
     settings_path = Path(dataset_local_path) / MODEL_SETTINGS_PATH
     output_settings = output_dir / MODEL_SETTINGS_PATH
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else None
-    if resume and output_settings.exists() and json.loads(output_settings.read_text()) != settings:
-        raise ValueError('Dataset model settings do not match the resumed training run')
+    if resume:
+        recorded_settings = json.loads(output_settings.read_text()) if output_settings.exists() else None
+        if settings_path.exists() != output_settings.exists() or recorded_settings != settings:
+            raise ValueError('Dataset model settings do not match the resumed training run')
     if settings is not None:
         output_settings.parent.mkdir(parents=True, exist_ok=True)
         output_settings.write_text(json.dumps(settings, indent=2, allow_nan=False))

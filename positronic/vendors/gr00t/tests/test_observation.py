@@ -19,6 +19,7 @@ from positronic.policy.codecs.metadata import MODEL_SETTINGS
 from positronic.policy.keys import ACTION_FPS
 from positronic.vendors.gr00t import recipes, server
 from positronic.vendors.gr00t import serving as gr00t
+from positronic.vendors.gr00t.serving import keys as serving_keys
 from positronic.vendors.gr00t.serving import recipe
 from positronic.vendors.gr00t.serving import settings as model_settings
 
@@ -116,6 +117,12 @@ def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monk
     action = encoded[ACTION][0][0]
     for name, bounds in encoder.meta[GR00T_MODALITY][ACTION].items():
         np.testing.assert_allclose(action[bounds['start'] : bounds['end']], encoded[name][0][0])
+
+
+def test_standalone_observation_names_match_the_client():
+    for name, value in vars(serving_keys).items():
+        if name.isupper():
+            assert value == getattr(keys, name)
 
 
 def test_python_settings_drive_independent_training_and_inference_recipes(observation):

@@ -80,6 +80,8 @@ Both use [shared Python settings](serving/settings.py): observation keys, image 
 rotation offset, and cadence.
 `settings.droid()` returns a fresh dictionary, and `settings.droid_three_cameras()` derives the three-view variant.
 This module uses only the standard library; the common model-server wrapper has no GR00T settings definitions.
+The standalone recipe's observation names live in [`serving/keys.py`](serving/keys.py).
+Tests check their agreement with the Positronic client without adding a server dependency on Positronic.
 The settings also contain the control mode, which only inference uses.
 The training transform preserves the recorded absolute pose, grip, and joint trajectories as action labels.
 GR00T's checkpoint processor converts these labels to relative actions and restores absolute actions during inference.
@@ -91,8 +93,9 @@ The file layout is a Positronic dataset convention defined beside the exporter m
 metadata fields without importing Positronic; its tests verify that the client and exporter read them.
 Export frame rates must match the recipe's `action_fps`; change that setting to select a different rate.
 Training copies this file into the experiment directory and, after a successful run, into each checkpoint.
-Resume rejects settings that differ from those recorded in the experiment directory.
-Datasets without this optional file retain their existing training behavior.
+Resume requires matching settings in the dataset and experiment directory, or no settings file in either.
+If only one side has settings, resume is rejected before training or changing the recorded settings.
+Datasets without this optional file can start new training runs or resume experiments without settings.
 
 Customize settings in Python and pass the same dictionary to each recipe:
 

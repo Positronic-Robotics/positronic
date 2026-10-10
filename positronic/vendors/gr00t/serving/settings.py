@@ -3,6 +3,7 @@
 from typing import Any
 
 from . import EE_POSE, EXTERIOR_IMAGE, EXTERIOR_IMAGE_2, GRIP, JOINT_POSITION, TASK, WRIST_IMAGE
+from . import keys as obs_keys
 
 MODEL_SETTINGS = 'model_settings'
 ACTION_FPS = 'action_fps'
@@ -16,9 +17,14 @@ CONTROL_MODE = 'control_mode'
 
 def droid() -> dict[str, Any]:
     return {
-        OBSERVATION_KEYS: {EE_POSE: 'robot_state.ee_pose', JOINT_POSITION: 'robot_state.q', GRIP: 'grip', TASK: 'task'},
+        OBSERVATION_KEYS: {
+            EE_POSE: obs_keys.EE_POSE,
+            JOINT_POSITION: obs_keys.JOINTS,
+            GRIP: obs_keys.GRIP,
+            TASK: obs_keys.TASK,
+        },
         IMAGE_SIZE: [320, 180],
-        IMAGE_MAPPINGS: {EXTERIOR_IMAGE: 'image.exterior', WRIST_IMAGE: 'image.wrist'},
+        IMAGE_MAPPINGS: {EXTERIOR_IMAGE: obs_keys.EXTERIOR_IMAGE, WRIST_IMAGE: obs_keys.WRIST_IMAGE},
         EE_FRAME: [0.0, 0.0, -0.085225977, 0.38268343245394154, 0.0, 0.0, 0.9238795324744832],
         ROTATION_OFFSET: [0.5, 0.5, -0.5, -0.5],
         CONTROL_MODE: {
@@ -32,7 +38,7 @@ def droid() -> dict[str, Any]:
     }
 
 
-def droid_three_cameras(exterior_2: str = 'image.exterior_2') -> dict[str, Any]:
+def droid_three_cameras(exterior_2: str = obs_keys.EXTERIOR_IMAGE_2) -> dict[str, Any]:
     settings = droid()
     cameras = settings[IMAGE_MAPPINGS]
     settings[IMAGE_MAPPINGS] = {

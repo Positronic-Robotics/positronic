@@ -98,9 +98,11 @@ def test_finetuning_forwards_dataset_cameras_and_resume_to_gr00t(
         (dataset / MODEL_SETTINGS_PATH).write_text(json.dumps(prepared_dataset.meta[MODEL_SETTINGS]))
     output = tmp_path / 'output'
     output.mkdir()
-    if not resume:
+    if not resume or has_settings:
         (output / MODEL_SETTINGS_PATH).parent.mkdir()
-        (output / MODEL_SETTINGS_PATH).write_text(json.dumps({'stale': True}))
+        (output / MODEL_SETTINGS_PATH).write_text(
+            json.dumps(prepared_dataset.meta[MODEL_SETTINGS] if resume else {'stale': True})
+        )
     sync = Mock(return_value=output)
     run = Mock(side_effect=lambda *args, **kwargs: (output / 'checkpoint-2').mkdir())
     monkeypatch.setattr(train.pos3, 'download', lambda _: dataset)
@@ -123,15 +125,31 @@ def test_finetuning_forwards_dataset_cameras_and_resume_to_gr00t(
         assert json.loads((output / 'checkpoint-2' / MODEL_SETTINGS_PATH).read_text()) == expected_settings
 
 
-def test_resume_rejects_different_dataset_settings(tmp_path, monkeypatch, prepared_dataset):
+@pytest.mark.parametrize('dataset_settings, experiment_settings', [(True, True), (True, False), (False, True)])
+def test_resume_rejects_different_or_missing_settings(
+    tmp_path, monkeypatch, prepared_dataset, dataset_settings, experiment_settings
+):
     dataset = tmp_path / 'dataset'
     (dataset / 'meta').mkdir(parents=True)
     (dataset / GR00T_MODALITY_PATH).write_text(json.dumps(prepared_dataset.meta[GR00T_MODALITY]))
-    (dataset / MODEL_SETTINGS_PATH).write_text(json.dumps(prepared_dataset.meta[MODEL_SETTINGS]))
+    if dataset_settings:
+        (dataset / MODEL_SETTINGS_PATH).write_text(json.dumps(prepared_dataset.meta[MODEL_SETTINGS]))
     output = tmp_path / 'output'
     (output / 'meta').mkdir(parents=True)
-    (output / MODEL_SETTINGS_PATH).write_text(json.dumps(model_settings.droid()))
+    if experiment_settings:
+        (output / MODEL_SETTINGS_PATH).write_text(json.dumps(model_settings.droid()))
+    checkpoint = output / 'checkpoint-1'
+    checkpoint.mkdir()
+    before = {path.relative_to(output): path.read_bytes() for path in output.rglob('*') if path.is_file()}
+    run = Mock()
+    save_metadata = Mock()
     monkeypatch.setattr(train.pos3, 'download', lambda _: dataset)
     monkeypatch.setattr(train.pos3, 'sync', lambda *args, **kwargs: output)
+    monkeypatch.setattr(train.subprocess, 'run', run)
+    monkeypatch.setattr(train.utils, 'save_run_metadata', save_metadata)
     with pytest.raises(ValueError, match='resumed training run'):
         train.main(input_path=str(dataset), output_path=str(output), exp_name='droid', resume=True)
+    run.assert_not_called()
+    save_metadata.assert_not_called()
+    assert {path.relative_to(output): path.read_bytes() for path in output.rglob('*') if path.is_file()} == before
+    assert list(checkpoint.iterdir()) == []
