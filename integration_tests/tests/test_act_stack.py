@@ -32,24 +32,21 @@ from positronic.dataset.video import VideoSignal
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 
 
-@pytest.fixture(params=['legacy', 'harness'])
+@pytest.fixture(params=[RECORDED_TIME, RECEIVED_WORLD, HARNESS_WORLD])
 def recorded_signals(monkeypatch, tmp_path, request):
     times = np.arange(0, EPISODE_SECONDS * 1_000_000_000 + 1, 100_000_000)
-    timeline = RECORDED_TIME if request.param == 'legacy' else HARNESS_WORLD
+    timeline = request.param
     with DiskEpisodeWriter(tmp_path / 'episode') as writer:
         for name in RECORDED_SIGNALS:
             sample_times = times[::10] if name in ROBOT_COMMANDS else times
             for timestamp in sample_times:
-                coordinates = {
-                    EMITTED_WORLD: int(timestamp),
-                    EMITTED_WALL: int(timestamp),
-                    HARNESS_WORLD: int(timestamp),
-                    HARNESS_WALL: int(timestamp),
-                }
-                if request.param == 'legacy':
+                coordinates = {EMITTED_WORLD: int(timestamp), EMITTED_WALL: int(timestamp)}
+                if timeline == RECORDED_TIME:
                     coordinates = {RECORDED_TIME: int(timestamp)}
-                elif name not in ROBOT_COMMANDS:
+                elif timeline == RECEIVED_WORLD or name not in ROBOT_COMMANDS:
                     coordinates.update({RECEIVED_WORLD: int(timestamp), RECEIVED_WALL: int(timestamp)})
+                if timeline == HARNESS_WORLD:
+                    coordinates.update({HARNESS_WORLD: int(timestamp), HARNESS_WALL: int(timestamp)})
                 writer.append(name, 0.0, Time(**coordinates))
         for name in CAMERAS:
             for i, timestamp in enumerate(times[::75]):
@@ -58,7 +55,7 @@ def recorded_signals(monkeypatch, tmp_path, request):
     monkeypatch.setattr(
         act_stack,
         'cube_trace',
-        lambda episode: {
+        lambda episode, timeline: {
             CUBE_POSES: np.zeros((len(times), 2, 7)),
             CUBE_POSES + TIME_SUFFIX: times - episode.bounds(timeline).start,
             SUPPORTED: np.ones(len(times), dtype=bool),
