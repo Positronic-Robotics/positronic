@@ -5,9 +5,9 @@ The wrapper owns transport, sessions, serialization and cleanup. Vendor scripts 
 model directly in the same process and describe the client pipeline as plain data.
 
 ```bash
-uv pip install "positronic-model-server==0.2.0"
-uv pip install "positronic-model-server[websocket]==0.2.0"
-uv pip install "positronic-model-server[grpc]==0.2.0"
+uv pip install "positronic-model-server==0.2.1"
+uv pip install "positronic-model-server[websocket]==0.2.1"
+uv pip install "positronic-model-server[grpc]==0.2.1"
 ```
 
 The core depends on NumPy, Pillow, msgpack and `positronic-wire`'s dependency-free transport
