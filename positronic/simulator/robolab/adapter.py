@@ -39,11 +39,13 @@ class RobolabAdapter(WireCommandAdapter):
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env reports the eef pose in the control frame IK drives; ``eef_quat`` is scalar-first (wxyz),
         # so ``from_quat`` is the matching decode.
-        eef_pose = geom.Transform3D(raw_obs['eef_pos'], geom.Rotation.from_quat(raw_obs['eef_quat']))
+        eef_pose = geom.Transform3D(
+            raw_obs[robolab_keys.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[robolab_keys.OBS_EEF_QUAT])
+        )
         ee_pose = eef_pose * self.env_control_frame.inv
         state = MujocoFrankaState()
-        state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
-        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs['grip'])}
+        state.encode(raw_obs[robolab_keys.OBS_JOINT_POS], raw_obs[robolab_keys.OBS_JOINT_VEL], ee_pose)
+        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[robolab_keys.OBS_GRIP])}
         for logical, env_key in self._camera_dict.items():
             if env_key not in raw_obs:
                 rendered = sorted(k for k, v in raw_obs.items() if isinstance(v, np.ndarray) and v.ndim == 3)
@@ -58,7 +60,7 @@ class RobolabAdapter(WireCommandAdapter):
         return obs
 
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        return {'subtask': raw_obs['subtask']}
+        return {robolab_keys.OBS_SUBTASK: raw_obs[robolab_keys.OBS_SUBTASK]}
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` covers termination and truncation, so the trial ends either way; ``success`` is True only

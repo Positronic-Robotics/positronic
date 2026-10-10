@@ -7,9 +7,11 @@ the dumb ``server``/``protocol`` without dragging in positronic; ``robolab`` its
 project.
 """
 
+import argparse
 import fcntl
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -17,19 +19,23 @@ from functools import partial
 from pathlib import Path
 
 from positronic.drivers.roboarm.models import bundled_franka_model
-from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
+from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess, terminate
 from positronic.simulator.env_server.protocol import encode
+from positronic.simulator.robolab import keys
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 
 _ROBOLAB_REPO = 'https://github.com/NVLabs/RoboLab.git'
-_ROBOLAB_COMMIT = '7d45d74904eade3b578a8eb1f2f9f89bc3d40326'
+_ROBOLAB_COMMIT = '93a8e064babe099e49c61aca5ece7f25f585c6a2'  # v0.2.0
 _ROBOLAB_SRC = Path.home() / '.cache' / 'positronic' / 'robolab' / 'src'
 
 # RoboLab declares only ``requires-python = ">=3.11"``, so uv otherwise inherits the interpreter from the
 # calling environment (positronic runs 3.13) — and NVIDIA's index ships no cp313 ``isaaclab`` wheels.
 _ROBOLAB_PYTHON = '3.11'
+
+# RoboLab installs Isaac only through an extra; ``isaac50`` is the IsaacSim 5.0 / IsaacLab 2.2 stack env.py drives.
+_ROBOLAB_ISAAC_EXTRA = 'isaac50'
 
 # RoboLab ships no uv.lock, so ``uv run --project`` re-resolves its dependencies on every fresh box and a
 # day-fresh release can break the install (cffi 2.1.0 published a macOS-only wheel and took down Linux
@@ -67,14 +73,17 @@ def _checkout_lock() -> Iterator[None]:
         yield
 
 
-def _spawn(host: str, port: int, cameras: str) -> subprocess.Popen:
+def _spawn(host: str, port: int, cameras: str, num_envs: int) -> subprocess.Popen:
     with _checkout_lock():
         src = _ensure_robolab_src()
         # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
         # exceeds the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast
         # when warm. The spawn below passes ``--no-sync`` (``uv run`` re-syncs by default), so no resolve or
         # install ever runs outside this lock.
-        subprocess.run(['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON], check=True)
+        subprocess.run(
+            ['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON, '--extra', _ROBOLAB_ISAAC_EXTRA],
+            check=True,
+        )
     command = [
         'uv',
         'run',
@@ -90,6 +99,8 @@ def _spawn(host: str, port: int, cameras: str) -> subprocess.Popen:
         str(port),
         '--cameras',
         cameras,
+        '--num-envs',
+        str(num_envs),
         '--headless',
     ]
     # The DROID rig's model (URDF + meshes + gripper) for the viewer and offline IK. env.py runs in RoboLab's
@@ -112,10 +123,32 @@ def _spawn(host: str, port: int, cameras: str) -> subprocess.Popen:
     return subprocess.Popen(command, env=env)
 
 
-def serve_robolab(cameras: str, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
+def serve_robolab(
+    cameras: str, host: str = 'localhost', *, num_envs: int = 1
+) -> AbstractContextManager[tuple[str, int]]:
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
     ``cameras`` names the set in ``keys.CAMERA_SETS`` the server renders; RoboLab bakes it into the
     registered task, so one server serves one set.
+
+    ``num_envs`` is how many clones of the scene the one Isaac process steps together.
     """
-    return serve_subprocess(partial(_spawn, cameras=cameras), host)
+    return serve_subprocess(partial(_spawn, cameras=cameras, num_envs=num_envs), host)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Serve RoboLab to several evals, one scene clone each.')
+    parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
+    parser.add_argument('--num-envs', type=int, required=True, help='scene clones, one per eval that connects')
+    parser.add_argument('--host', default='localhost')
+    parser.add_argument('--port', type=int, required=True)
+    args = parser.parse_args()
+    proc = _spawn(args.host, args.port, args.cameras, args.num_envs)
+    try:
+        sys.exit(proc.wait())
+    finally:
+        terminate(proc)
+
+
+if __name__ == '__main__':
+    main()

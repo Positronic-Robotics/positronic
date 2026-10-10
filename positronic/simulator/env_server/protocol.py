@@ -54,6 +54,8 @@ FRAME_ROBOT_META = 'robot_meta'
 FRAME_CONTROL_DT = 'control_dt'
 FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
+# An env answers the server one entry per slot under this field; the wire to a client carries one slot's frame.
+SLOTS = 'slots'
 
 
 def single_arm_action(command: dict[str, Any], grip: float) -> dict[str, Any]:
@@ -67,6 +69,11 @@ def single_arm(action: dict[str, Any]) -> dict[str, Any]:
     if extra:
         raise ValueError(f'a single-arm env cannot act on channels {sorted(extra)}')
     return action
+
+
+def slot_frame(answer: dict[str, Any], slot: int) -> dict[str, Any]:
+    """The frame of one slot of an env's answer: that slot's own fields beside the fields of the whole batch."""
+    return {**{key: value for key, value in answer.items() if key != SLOTS}, **answer[SLOTS][slot]}
 
 
 def _pack(obj):

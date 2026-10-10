@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 import configuronic as cfn
 
 from positronic import keys
@@ -22,8 +24,10 @@ def _camera_dict(cameras: str) -> dict[str, str]:
     return wire
 
 
-@cfn.config(cameras=robolab_keys.WRIST_LEFT_RIGHT, instruction_type='default', trial_count=1, timeout=None)
-def _robolab_eval(task, instruction_type, trial_count, timeout, cameras):
+@cfn.config(
+    cameras=robolab_keys.WRIST_LEFT_RIGHT, instruction_type='default', trial_count=1, timeout=None, env_server=None
+)
+def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_server):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
     RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: tabletop manipulation
@@ -40,6 +44,10 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras):
     ``cameras`` names the set the run renders, one of ``keys.CAMERA_SETS``: both exteriors and the wrist, or
     one exterior and the wrist. RoboLab bakes the set into the registered task, so a run holds one set.
 
+    ``env_server`` is the ``host:port`` of a RoboLab env server that already runs, which this eval shares with
+    other evals: each drives one clone of its scene. The server's camera set must be ``cameras``. Without it,
+    the eval launches a server of its own.
+
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name + instruction type ride each trial's reset token. There is no
     per-trial seed: RoboLab's eval path exposes no seed hook, so trial params carry none. The env's live
@@ -47,7 +55,12 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras):
     fed to the policy).
     """
     camera_dict = _camera_dict(cameras)
-    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab(cameras))
+    if env_server is None:
+        serve = serve_robolab(cameras)
+    else:
+        host, port = env_server.rsplit(':', 1)
+        serve = nullcontext((host, int(port)))
+    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve)
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
@@ -64,7 +77,10 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras):
         return number_trials(trials)
 
     return Eval(
-        embodiment, tasks, privileged={'subtask': Observation(proxy.privileged['subtask'], None)}, done=proxy.done
+        embodiment,
+        tasks,
+        privileged={robolab_keys.OBS_SUBTASK: Observation(proxy.privileged[robolab_keys.OBS_SUBTASK], None)},
+        done=proxy.done,
     )
 
 

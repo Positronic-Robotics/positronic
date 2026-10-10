@@ -117,7 +117,7 @@ def test_transport_is_transparent(env_server):
     seed = 7
 
     direct = make_mujoco_env(list(CAMERAS.values()))
-    direct_reset = direct.reset(seed)
+    direct_reset = protocol.slot_frame(direct.reset(seed), 0)
     base = np.asarray(direct_reset[protocol.FRAME_OBS]['q'])
     actions = [
         protocol.single_arm_action(
@@ -125,7 +125,7 @@ def test_transport_is_transparent(env_server):
         )
         for i in range(1, 6)
     ]
-    direct_steps = [direct.step(action) for action in actions]
+    direct_steps = [protocol.slot_frame(direct.step({0: action}), 0) for action in actions]
     direct.close()
 
     conn = EnvConnection(host, port)
@@ -270,9 +270,9 @@ _HOLD = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
 
 def _settle(env, action: dict, steps: int) -> np.ndarray:
     """Apply the action once, hold for ``steps`` ticks, and return the settled end-effector position."""
-    out = env.step(action)
+    out = protocol.slot_frame(env.step({0: action}), 0)
     for _ in range(steps):
-        out = env.step(_HOLD)
+        out = protocol.slot_frame(env.step({0: _HOLD}), 0)
     return np.asarray(out[protocol.FRAME_OBS]['ee_pos'])
 
 
@@ -478,7 +478,7 @@ def test_cartesian_delta_matches_absolute_target():
     lift = np.array([0.0, 0.0, 0.04])
 
     abs_env = make_mujoco_env(list(CAMERAS.values()))
-    reset = abs_env.reset(seed)
+    reset = protocol.slot_frame(abs_env.reset(seed), 0)
     ee0 = np.asarray(reset[protocol.FRAME_OBS]['ee_pos'])
     target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset[protocol.FRAME_OBS]['ee_quat']))
     absolute = protocol.single_arm_action(
@@ -524,18 +524,19 @@ class _CountdownEnv(EnvProtocol):
         self._steps = 0
         meta = {'task': _COUNTDOWN}
         return {
-            protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)},
+            protocol.SLOTS: [{protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)}}],
             protocol.FRAME_META: meta,
             protocol.FRAME_ROBOT_META: {},
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
-    def step(self, action):
+    def step(self, actions):
         self._steps += 1
         done = self._done_after is not None and self._steps >= self._done_after
         return {
-            protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)},
-            protocol.FRAME_DONE: done,
+            protocol.SLOTS: [
+                {protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)}, protocol.FRAME_DONE: done}
+            ],
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
