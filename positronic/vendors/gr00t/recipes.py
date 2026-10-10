@@ -19,10 +19,10 @@ from positronic.policy.codecs import (
     lerobot_image,
     lerobot_vector,
 )
+from positronic.policy.codecs.metadata import MODEL_SETTINGS
 from positronic.policy.keys import ACTION_FPS
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import settings as model_settings
-from positronic.vendors.gr00t.serving.settings import MODEL_SETTINGS
 
 
 def _derive_pose(source: str, episode: Episode):
