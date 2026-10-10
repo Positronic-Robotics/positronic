@@ -509,30 +509,29 @@ class LocalDatasetWriter(DatasetWriter):
 
 
 def load_dataset(root: Path) -> EditedDataset:
-    """Open a local dataset with its edit log applied.
+    """Open a local dataset with its edit logs applied.
 
-    `LocalDataset` reads the raw recordings; `EditedDataset` reads the `edits.jsonl` beside them and applies it —
-    dropped episodes hidden, static edits overlaid. The returned view also amends the log via
-    `set_static`/`drop`/`undrop`, each returning a fresh view over the same recordings.
+    `LocalDataset` reads the raw recordings; `EditedDataset` reads the dataset's `edits.jsonl` and each episode's
+    own one, and applies them — dropped episodes hidden, static edits overlaid. The returned view also amends the
+    episodes' logs via `set_static`/`drop`/`undrop`, each returning a fresh view over the same recordings.
     """
     ds = LocalDataset(root)
-    # Read and write edits at the dataset's resolved root, not the caller's literal path (which may be `~`-relative).
-    return EditedDataset(ds, ds.root)
+    # Read the dataset's log at its resolved root, not the caller's literal path (which may be `~`-relative).
+    return EditedDataset(ds, (ds.root,))
 
 
 def load_all_datasets(root: Path) -> EditedDataset:
-    """Load every LocalDataset under a directory tree, edit logs composed level by level.
+    """Load every LocalDataset under a directory tree as one edit-curated view.
 
-    Each directory's `edits.jsonl` overlays its whole subtree: the directory's own recordings (when it is a
-    dataset) and its child datasets are concatenated, then wrapped in that directory's edit log. Edits are
-    uid-keyed, so a log at any level reaches the episodes it names wherever they live, and each log is applied
-    exactly once — by the wrap at its own directory.
+    The datasets follow path order, each directory's own recordings before its subdirectories'. The `edits.jsonl` of
+    each directory that holds a dataset applies to the episodes under it, after the logs of the directories below
+    it, and each episode's own log applies last.
 
     Args:
         root: Path to directory that may be a dataset and/or contain dataset subdirectories
 
     Returns:
-        EditedDataset: the combined, edit-curated view, amendable at `root` via `set_static`/`drop`/`undrop`.
+        EditedDataset: the combined, edit-curated view, amendable via `set_static`/`drop`/`undrop`.
 
     Raises:
         FileNotFoundError: If root does not exist
@@ -543,35 +542,31 @@ def load_all_datasets(root: Path) -> EditedDataset:
         raise FileNotFoundError(f'Directory {root} does not exist')
     if not root.is_dir():
         raise ValueError(f'{root} is not a directory')
-    combined = _load_subtree(root)
-    if combined is None:
+    datasets: list[Dataset] = []
+    log_dirs: list[Path] = []
+    _collect_subtree(root, datasets, log_dirs)
+    if not datasets:
         raise ValueError(f'No valid datasets found in {root}')
-    return combined
+    base = datasets[0] if len(datasets) == 1 else ConcatDataset(*datasets)
+    return EditedDataset(base, log_dirs)
 
 
-def _load_subtree(directory: Path) -> EditedDataset | None:
-    """Edit-curated view of one directory's subtree, or None when it holds no datasets.
-
-    The directory's own recordings (if it is a dataset) lead, followed by each child subtree's already-curated
-    view; the directory's own `edits.jsonl` is applied once by the wrap here.
-    """
-    members: list[Dataset] = []
-    # Corrupt content (e.g. a bad edit log) propagates. Validity is judged on the raw recordings: a dataset
-    # whose episodes are all dropped by edits is still a dataset — it loads as an empty curated view.
+def _collect_subtree(directory: Path, datasets: list[Dataset], log_dirs: list[Path]) -> None:
+    """Append the datasets under `directory` in path order, and `directory` itself to `log_dirs` after the
+    directories below it when its subtree holds a dataset."""
+    found = len(datasets)
+    # Validity is judged on the raw recordings: a dataset whose episodes are all dropped by edits is still a
+    # dataset — it loads as an empty curated view.
     try:
         base = LocalDataset(directory)
         if len(base) > 0:
-            members.append(base)
+            datasets.append(base)
     except FileNotFoundError:
         pass
 
     # Numeric subdirs are dataset block internals, not nested datasets.
     for sub in sorted(p for p in directory.iterdir() if p.is_dir() and not _is_numeric_dir(p)):
-        child = _load_subtree(sub)
-        if child is not None:
-            members.append(child)
+        _collect_subtree(sub, datasets, log_dirs)
 
-    if not members:
-        return None
-    combined = members[0] if len(members) == 1 else ConcatDataset(*members)
-    return EditedDataset(combined, directory)
+    if len(datasets) > found:
+        log_dirs.append(directory)
