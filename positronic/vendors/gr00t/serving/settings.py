@@ -1,6 +1,5 @@
 """GR00T recipe settings shared by dataset preparation, training and serving."""
 
-from copy import deepcopy
 from typing import Any
 
 from . import EE_POSE, EXTERIOR_IMAGE, EXTERIOR_IMAGE_2, GRIP, JOINT_POSITION, TASK, WRIST_IMAGE
@@ -15,8 +14,8 @@ OBSERVATION_KEYS = 'observation_keys'
 CONTROL_MODE = 'control_mode'
 
 
-def droid(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    settings = {
+def droid() -> dict[str, Any]:
+    return {
         OBSERVATION_KEYS: {EE_POSE: 'robot_state.ee_pose', JOINT_POSITION: 'robot_state.q', GRIP: 'grip', TASK: 'task'},
         IMAGE_SIZE: [320, 180],
         IMAGE_MAPPINGS: {EXTERIOR_IMAGE: 'image.exterior', WRIST_IMAGE: 'image.wrist'},
@@ -31,22 +30,14 @@ def droid(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         },
         ACTION_FPS: 15.0,
     }
-    if overrides is not None:
-        unknown = overrides.keys() - settings.keys()
-        if unknown:
-            raise ValueError(f'Unknown GR00T settings: {sorted(unknown)}')
-        settings.update(overrides)
-    return deepcopy(settings)
 
 
-def droid_three_cameras(
-    overrides: dict[str, Any] | None = None, default_exterior_2: str = 'image.exterior_2'
-) -> dict[str, Any]:
-    settings = droid(overrides)
+def droid_three_cameras(exterior_2: str = 'image.exterior_2') -> dict[str, Any]:
+    settings = droid()
     cameras = settings[IMAGE_MAPPINGS]
     settings[IMAGE_MAPPINGS] = {
         EXTERIOR_IMAGE: cameras[EXTERIOR_IMAGE],
-        EXTERIOR_IMAGE_2: cameras.get(EXTERIOR_IMAGE_2, default_exterior_2),
+        EXTERIOR_IMAGE_2: exterior_2,
         WRIST_IMAGE: cameras[WRIST_IMAGE],
     }
     return settings

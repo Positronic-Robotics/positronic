@@ -44,18 +44,7 @@ def raw_dataset():
 def prepared_dataset(raw_dataset):
     return transform(
         base=raw_dataset,
-        transforms=[
-            recipes.droid.override(
-                settings=model_settings.droid(
-                    overrides={
-                        ACTION_FPS: 20,
-                        model_settings.IMAGE_MAPPINGS: model_settings.droid_three_cameras()[
-                            model_settings.IMAGE_MAPPINGS
-                        ],
-                    }
-                )
-            )
-        ],
+        transforms=[recipes.droid_three_cameras.override(**{f'settings.{model_settings.ACTION_FPS}': 20})],
     )
 
 

@@ -69,17 +69,18 @@ def test_droid_decodes_native_chunk_and_binarizes_grip(config, horizon):
         assert 'timestamp' not in item
 
 
-def test_training_cadence_metadata():
-    training = recipes.droid(settings=model_settings.droid(overrides={ACTION_FPS: 20}))
+@pytest.mark.parametrize('config', [recipes.droid, recipes.droid_three_cameras])
+def test_training_cadence_metadata(config):
+    training = config(**{f'settings.{model_settings.ACTION_FPS}': 20})
     assert training.meta[ACTION_FPS] == 20
+    assert config().meta[ACTION_FPS] == 15
 
 
 def test_training_actions_align_recorded_samples():
-    training = recipes.droid(
-        settings=model_settings.droid(
-            overrides={model_settings.IMAGE_MAPPINGS: {}, model_settings.EE_FRAME: [0, 0, 0, 1, 0, 0, 0]}
-        )
-    )
+    training = recipes.droid(**{
+        f'settings.{model_settings.IMAGE_MAPPINGS}': {},
+        f'settings.{model_settings.EE_FRAME}': [0, 0, 0, 1, 0, 0, 0],
+    })
     episode = EpisodeContainer({
         keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]]),
         keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)]),

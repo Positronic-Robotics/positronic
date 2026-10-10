@@ -309,7 +309,7 @@ def gr00t_model(
     return policy
 
 
-@cfn.config(settings=cfn.Config(model_settings.droid))
+@cfn.config(settings=model_settings.droid())
 def pipeline(settings: dict, fps: float | None = None, horizon_sec: float = 1.0):
     """Schedule DROID joint commands while the server codec performs checkpoint-specific conversion."""
     codec = spec.from_spec(recipe.inference(settings))
@@ -326,7 +326,7 @@ def pipeline(settings: dict, fps: float | None = None, horizon_sec: float = 1.0)
 
 
 droid = pipeline
-droid_three_cameras = pipeline.override(settings=cfn.Config(model_settings.droid_three_cameras))
+droid_three_cameras = pipeline.override(settings=model_settings.droid_three_cameras())
 COMMANDS = {
     'serve': serve.override(model=gr00t_model, pipeline=droid),
     'droid': serve.override(model=gr00t_model, pipeline=droid),

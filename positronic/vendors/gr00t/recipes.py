@@ -24,8 +24,6 @@ from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import settings as model_settings
 from positronic.vendors.gr00t.serving.settings import MODEL_SETTINGS
 
-settings = cfn.Config(model_settings.droid)
-
 
 def _derive_pose(source: str, episode: Episode):
     return tf.Elementwise(
@@ -38,7 +36,7 @@ def _derive_grip(source: str, episode: Episode):
     return tf.Elementwise(episode[source], lambda values: np.asarray(values, dtype=np.float32).reshape(-1, 1))
 
 
-@cfn.config(settings=settings)
+@cfn.config(settings=model_settings.droid())
 def droid(settings: dict) -> EpisodeTransform:
     """Prepare recorded absolute trajectories and metadata for GR00T fine-tuning."""
     image_mappings = settings[model_settings.IMAGE_MAPPINGS]
@@ -112,4 +110,4 @@ def droid(settings: dict) -> EpisodeTransform:
     )
 
 
-droid_three_cameras = droid.override(settings=cfn.Config(model_settings.droid_three_cameras))
+droid_three_cameras = droid.override(settings=model_settings.droid_three_cameras())

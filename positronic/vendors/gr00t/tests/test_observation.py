@@ -66,9 +66,9 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
 
 @pytest.mark.parametrize('image_mappings', [{}, {gr00t.EE_POSE: keys.WRIST_IMAGE}])
 def test_observation_layout_preserves_empty_camera_groups_and_names_shared_with_state(image_mappings, observation):
-    codec = spec.from_spec(
-        recipe.inference(model_settings.droid(overrides={model_settings.IMAGE_MAPPINGS: image_mappings}))
-    )
+    settings = model_settings.droid()
+    settings[model_settings.IMAGE_MAPPINGS] = image_mappings
+    codec = spec.from_spec(recipe.inference(settings))
     assert isinstance(codec, Codec)
     encoded = codec.encode(observation)
     assert set(encoded[gr00t.VIDEO]) == set(image_mappings)
@@ -119,15 +119,14 @@ def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monk
 
 
 def test_python_settings_drive_independent_training_and_inference_recipes(observation):
-    settings = model_settings.droid(
-        overrides={
-            model_settings.IMAGE_SIZE: [160, 90],
-            model_settings.IMAGE_MAPPINGS: {'custom_camera': keys.EXTERIOR_IMAGE_2},
-            model_settings.EE_FRAME: [0, 0, 0, 1, 0, 0, 0],
-            model_settings.ROTATION_OFFSET: [1, 0, 0, 0],
-            ACTION_FPS: 20,
-        }
-    )
+    settings = {
+        **model_settings.droid(),
+        model_settings.IMAGE_SIZE: [160, 90],
+        model_settings.IMAGE_MAPPINGS: {'custom_camera': keys.EXTERIOR_IMAGE_2},
+        model_settings.EE_FRAME: [0, 0, 0, 1, 0, 0, 0],
+        model_settings.ROTATION_OFFSET: [1, 0, 0, 0],
+        ACTION_FPS: 20,
+    }
     for name, source in settings[model_settings.OBSERVATION_KEYS].items():
         renamed = f'custom.{name}'
         observation[renamed] = observation.pop(source)
@@ -150,13 +149,16 @@ def test_python_settings_drive_independent_training_and_inference_recipes(observ
 
 
 @pytest.mark.parametrize('config', [server.droid, server.droid_three_cameras])
-def test_images_are_bounded_before_remote_without_changing_model_pixels(config, observation):
-    pipeline = config()
+@pytest.mark.parametrize('image_size', [[320, 180], [160, 90]])
+def test_images_are_bounded_before_remote_without_changing_model_pixels(config, observation, image_size):
+    pipeline = config(**{f'settings.{model_settings.IMAGE_SIZE}': image_size})
     local, codec = pipeline.local, pipeline.codec
     assert codec is not None
     resize = next(layer for layer in local._components if isinstance(layer, RestrictImageSize))
     wire_observation = resize.encode(observation)
     settings = codec.meta[MODEL_SETTINGS]
+    assert settings[model_settings.IMAGE_SIZE] == image_size
+    assert config().codec.meta[MODEL_SETTINGS][model_settings.IMAGE_SIZE] == [320, 180]
     for source in settings[model_settings.IMAGE_MAPPINGS].values():
         assert wire_observation[source].shape[0] <= settings[model_settings.IMAGE_SIZE][1]
         assert wire_observation[source].shape[1] <= settings[model_settings.IMAGE_SIZE][0]

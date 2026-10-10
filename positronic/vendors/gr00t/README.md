@@ -101,10 +101,16 @@ from positronic.vendors.gr00t import recipes
 from positronic.vendors.gr00t.serving import recipe
 from positronic.vendors.gr00t.serving import settings as model_settings
 
-settings = model_settings.droid(overrides={model_settings.IMAGE_SIZE: [160, 90]})
+settings = model_settings.droid()
+settings[model_settings.IMAGE_SIZE] = [160, 90]
 training = recipes.droid(settings=settings)
 description = recipe.inference(settings)
 ```
+
+The training and serving configurations use these dictionaries directly as Configuronic defaults.
+Use `.override()` for named variants and dotted overrides for individual settings:
+`--dataset.transforms.0.settings.image_size='[160, 90]'` for conversion and
+`--pipeline.settings.image_size='[160, 90]'` for serving.
 
 The JSON saved with datasets and checkpoints records the resolved settings for reproducibility.
 For a fine-tuned checkpoint, configure serving to match those recorded settings.
