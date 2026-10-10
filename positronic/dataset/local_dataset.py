@@ -524,8 +524,8 @@ def load_all_datasets(root: Path) -> EditedDataset:
     """Load every LocalDataset under a directory tree as one edit-curated view.
 
     The datasets follow path order, each directory's own recordings before its subdirectories'. The `edits.jsonl` of
-    each directory that holds a dataset applies after the logs of the directories below it, and the episodes' own
-    logs apply last. Edits are uid-keyed, so a log reaches the episodes it names wherever they live.
+    each directory that holds a dataset applies to the episodes under it, after the logs of the directories below
+    it, and each episode's own log applies last.
 
     Args:
         root: Path to directory that may be a dataset and/or contain dataset subdirectories

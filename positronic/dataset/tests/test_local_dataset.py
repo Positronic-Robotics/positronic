@@ -695,6 +695,45 @@ def test_load_all_datasets_undrop_restores_an_episode_of_a_child_dataset(tmp_pat
     assert episode_ids(load_all_datasets(tmp_path).undrop(uid)[:]) == [0, 1, 2]
 
 
+def _write_copy(root: Path, uid: str, value: int) -> None:
+    """A dataset at `root` holding one episode with `uid`, as a copy of an episode keeps its uid."""
+    with LocalDatasetWriter(root) as w, w.new_episode(uid=uid) as ew:
+        ew.set_static('id', value)
+
+
+def test_load_all_datasets_applies_a_directory_log_only_under_that_directory(tmp_path):
+    uid = build_dataset_with_signal(tmp_path / 'a', [0])[0].meta['uid']
+    _write_copy(tmp_path / 'b', uid, 1)
+    _write_log(tmp_path / 'a', {'op': 'drop', 'v': 1, 'ep': uid})
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [1]
+
+
+def test_load_all_datasets_applies_an_ancestor_log_to_every_copy_under_it(tmp_path):
+    uid = build_dataset_with_signal(tmp_path / 'group' / 'a', [0])[0].meta['uid']
+    _write_copy(tmp_path / 'group' / 'b', uid, 1)
+    _write_log(tmp_path / 'group', {'op': 'set_static', 'v': 1, 'ep': uid, 'data': {'verdict': 'success'}})
+    assert [ep['verdict'] for ep in load_all_datasets(tmp_path)] == ['success', 'success']
+
+
+def test_each_copy_of_an_episode_reads_its_own_log(tmp_path):
+    uid = build_dataset_with_signal(tmp_path / 'a', [0])[0].meta['uid']
+    _write_copy(tmp_path / 'b', uid, 1)
+    load_dataset(tmp_path / 'a').set_static(uid, {'verdict': 'success'})
+
+    copies = load_all_datasets(tmp_path)
+    assert [ep.static.get('verdict') for ep in copies] == ['success', None]
+    assert not (tmp_path / 'b' / '000000000000' / '000000000000' / edits.EDITS_FILE).exists()
+
+
+def test_an_edit_through_a_view_of_two_copies_goes_to_both(tmp_path):
+    uid = build_dataset_with_signal(tmp_path / 'a', [0])[0].meta['uid']
+    _write_copy(tmp_path / 'b', uid, 1)
+
+    load_all_datasets(tmp_path).drop(uid)
+
+    assert len(load_dataset(tmp_path / 'a')) == 0 and len(load_dataset(tmp_path / 'b')) == 0
+
+
 def test_load_all_datasets_propagates_corrupt_top_level_edit_log(tmp_path):
     build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
     (tmp_path / edits.EDITS_FILE).write_text('garbage', encoding='utf-8')
