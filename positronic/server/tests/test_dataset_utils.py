@@ -491,7 +491,7 @@ def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):
     assert _line_names(listed) == {f'/signals/{keys.TARGET_GRIP}': [keys.TARGET_GRIP]}
 
 
-def test_the_single_arm_layout_charts_every_signal_an_arm_command_records():
+def test_the_single_arm_layout_charts_the_motion_signals_of_each_kind_of_arm_command():
     one_of_each_kind = (
         command.CartesianPosition(geom.Transform3D.identity),
         command.CartesianDelta(geom.Transform3D.identity),
