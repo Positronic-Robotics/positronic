@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING
 import configuronic as cfn
 
 import positronic.cfg.hardware.motors
+from positronic.drivers.fakes.franka import FakeFranka
 from positronic.drivers.roboarm import command
-from positronic.drivers.roboarm.franka_fake import FakeFranka
 
 if TYPE_CHECKING:
     from positronic.drivers.roboarm.yam.settle import SettleTuning

@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
-from positronic.drivers.camera.zed_fake import FakeSLCamera
+from positronic.drivers.fakes.zed import FakeSLCamera
 
 
 @cfn.config()

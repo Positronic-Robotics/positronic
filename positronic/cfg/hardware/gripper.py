@@ -1,6 +1,6 @@
 import configuronic as cfn
 
-from positronic.drivers.gripper.robotiq_fake import FakeRobotiq2F
+from positronic.drivers.fakes.robotiq import FakeRobotiq2F
 
 
 @cfn.config(port='/dev/ttyUSB0')
