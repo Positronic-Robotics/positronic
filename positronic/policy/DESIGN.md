@@ -315,10 +315,12 @@ goal is for the recording to reconstruct both flows after the episode:
 what each part saw, what it returned, and when. That includes inference inputs
 and outputs on other machines, and values a run chooses to record itself.
 
-The harness records sensor, privileged, and executed-command signals in one episode dataset.
+The harness records sensor, privileged, and emitted-command signals in one episode dataset.
 It records new inputs before each policy call and commands after emission. Between calls it
 samples every millisecond; each sampling pass resets that deadline. Reused inputs keep their
 original timestamps and are not written twice. Privileged inputs stay outside policy observations.
+Inputs include receipt timestamps; commands use the emission timestamps returned by `emit()`.
+TODO: Adapt training codecs and default replay to command emission timelines.
 Writing is synchronous and may slow execution. An episode's answer waits for recording to close.
 The harness stores `runtime.metadata` with the policy definition metadata before policy cleanup.
 Inference input/output recording and custom signal recording are deferred.

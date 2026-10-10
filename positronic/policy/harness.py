@@ -88,16 +88,6 @@ class _EpisodeTelemetry:
         telemetry.force_flush()
 
 
-class _CommandEmitter(pimm.ControlSystemEmitter):
-    """Retain the emitted message for synchronous recording after command delivery."""
-
-    message: pimm.Message | None = None
-
-    def _emit(self, data, time: pimm.Time):
-        super()._emit(data, time)
-        self.message = pimm.Message(data, time)._received(self._emission_clock)
-
-
 class Harness(pimm.ControlSystem):
     """Run episode lifecycles and emit each policy step's commands immediately.
 
@@ -150,7 +140,7 @@ class Harness(pimm.ControlSystem):
         self._repairs: dict[str, pimm.calls.Answer[None]] = {}
 
         self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
-        self.commands = {name: _CommandEmitter(self) for name in embodiment.commands}
+        self.commands = pimm.EmitterDict(self, names=embodiment.commands)
         self.privileged = pimm.ReceiverDict(self, names=self._privileged)
         self.ready = pimm.calls.CallerDict[None, None](self, names=embodiment.ready_handlers)
         self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
@@ -308,13 +298,10 @@ class Harness(pimm.ControlSystem):
                 emit_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (emit_started_ns - policy_started_ns) / 1e6
                 self._telemetry.step()
-                for name, value in step.commands.items():
-                    self.commands[name].emit(value)
+                messages = {name: self.commands[name].emit(value) for name, value in step.commands.items()}
                 step_ms[telemetry_keys.ATTR_STEP_EMIT_MS] = (time.perf_counter_ns() - emit_started_ns) / 1e6
                 if self._writer is not None:
-                    for name in step.commands:
-                        message = self.commands[name].message
-                        assert message is not None
+                    for name, message in messages.items():
                         values = self._serialize(name, message.data, self._embodiment.commands[name].serializer)
                         self._append(values, message.time)
             finally:

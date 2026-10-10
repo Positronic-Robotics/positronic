@@ -22,7 +22,7 @@ from positronic import keys, telemetry, telemetry_keys, wire
 from positronic.cli.eval.run import run_world
 from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import Episode, EpisodeWriter
-from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.video import LibavEncoder
 from positronic.drivers.roboarm import RobotStatus
@@ -1279,7 +1279,7 @@ def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):
             list(loop)
     command = LocalDataset(tmp_path)[0][MOTOR]
     assert list(command.timestamps(EMITTED_WORLD)) == [0]
-    assert list(command.timestamps(RECEIVED_WORLD)) == [0]
+    assert set(command.timelines) == {EMITTED_WALL, EMITTED_WORLD}
 
 
 def test_policy_completion_resets_the_sampling_deadline(episode_harness):
@@ -1366,8 +1366,9 @@ def test_disabled_recording_does_not_read_privileged_data_or_add_sampling_wakeup
         h.dataset_factory.assert_not_called()
 
 
-def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_instant(episode_harness):
+def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_instant(episode_harness, tmp_path):
     h = episode_harness
+    h.harness._dataset_factory = LocalDatasetWriter
 
     class Chain(Policy):
         def run(self, runtime):
@@ -1380,12 +1381,19 @@ def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_ins
                 yield Step({}, runtime.time_ns + 100_000_000)
 
     h.observation.emit(0)
-    h.caller(Rollout(Task('move', None, charge_inference_time=False), Chain(), h.output_path))
+    answer = h.caller(Rollout(Task('move', None, charge_inference_time=False), Chain(), tmp_path))
     next(h.loop)
-    records = h.dataset.episodes[0].records
-    assert [value for name, value, _ in records if name == MOTOR] == list(range(5))
-    assert [time[EMITTED_WORLD] for name, _, time in records if name == MOTOR] == [0] * 5
-    assert [name for name, _, _ in records].count(POSITION) == 1
+    assert h.world.clock.now_ns() == 0
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert answer.result() == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+    episode = LocalDataset(tmp_path)[0]
+    commands = episode[MOTOR]
+    assert list(commands.values()) == list(range(5))
+    assert set(commands.timelines) == {EMITTED_WALL, EMITTED_WORLD}
+    assert list(commands.timestamps(EMITTED_WORLD)) == [0] * 5
+    assert np.all(np.diff(commands.timestamps(EMITTED_WALL)) > 0)
+    assert len(episode[POSITION]) == 1
 
 
 def test_inputs_are_written_before_the_policy_and_commands_after_emission(episode_harness):
@@ -1422,7 +1430,11 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
     h.observation.emit(frame)
     next(h.loop)
     assert [data.tolist() for _, data, _ in episode.records] == [[10], [1], [20], [2]]
-    assert all(set(ts) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD} for _, _, ts in episode.records)
+    for name, _, ts in episode.records:
+        expected = {EMITTED_WALL, EMITTED_WORLD}
+        if name == POSITION:
+            expected |= {RECEIVED_WALL, RECEIVED_WORLD}
+        assert set(ts) == expected
 
 
 @pytest.mark.parametrize('failure', ['append', 'metadata', 'close'])
