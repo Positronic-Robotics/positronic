@@ -83,8 +83,6 @@ class EpisodeSignals:
     # Width over height of each camera's frames.
     camera_aspects: dict[str, float] = field(default_factory=dict)
     neither_numeric_nor_text: list[str] = field(default_factory=list)
-    # Set where a signal of the episode carries `received.world`, the timeline the replay opens on.
-    on_received_world: bool = False
 
     @property
     def plotted(self) -> dict[str, int]:
@@ -212,7 +210,6 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
         joint_set.add(ep.static[_SINGULAR_JOINT_SIGNAL])
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[], joints=[])
     for name, sig in ep.signals.items():
-        signals.on_received_world |= RECEIVED_WORLD in sig.timelines
         if sig.kind == Kind.IMAGE:
             try:
                 height, width = np.asarray(sig[0][0]).shape[:2]
@@ -681,11 +678,12 @@ def _log_video_signals(
     ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_resolution: int, max_hz: float
 ) -> Iterator[bytes]:
     """Log stored videos as frame references and raw images as a video stream."""
+    on_received_world = RECEIVED_WORLD in ep.timelines
     for name in signals.videos:
         sig = ep.signals[name]
         if not len(sig):
             continue
-        timestamps = _timestamp_columns(sig, signals.on_received_world)
+        timestamps = _timestamp_columns(sig, on_received_world)
         if isinstance(sig, VideoSignal):
             kept = _sample_indices(timestamps, max_hz)
             video_bytes = _mp4_reduced_to(sig.video_path, max_resolution, kept if len(kept) < len(sig) else None)
@@ -746,13 +744,14 @@ def _log_numeric_signals(
     pose_data = {}
     unplotted = signals.unplotted
 
+    on_received_world = RECEIVED_WORLD in ep.timelines
     for key in signals.numerics:
         if key in unplotted and key not in stash_keys:  # nothing would read the values
             continue
         sig = ep.signals[key]
         if len(sig) == 0:
             continue
-        timestamps = _timestamp_columns(sig, signals.on_received_world)
+        timestamps = _timestamp_columns(sig, on_received_world)
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
@@ -941,11 +940,12 @@ def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStre
     """
     plotted = signals.plotted_texts
     ep_signals = ep.signals  # `Episode.signals` builds a new dict on every read
+    on_received_world = RECEIVED_WORLD in ep.timelines
     for key in signals.texts:
         sig = ep_signals[key]
         if not len(sig):
             continue
-        timestamps = _timestamp_columns(sig, signals.on_received_world)
+        timestamps = _timestamp_columns(sig, on_received_world)
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
         time_idx = _rerun_indexes({name: values[changes] for name, values in timestamps.items()})
