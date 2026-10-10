@@ -365,6 +365,7 @@ class Harness(pimm.ControlSystem):
         finally:
             self._writer = None
             self._recorded_privileged.clear()
+            self._obs_by_signal.clear()
 
     def _rollout(
         self,
@@ -444,7 +445,6 @@ class Harness(pimm.ControlSystem):
                 logging.info('Closing the policy')
                 policy_run.close()
                 logging.info('Policy closed')
-            self._obs_by_signal.clear()
 
         self._telemetry.end(clock.now())
         if payload is not None:

@@ -933,6 +933,37 @@ def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(epi
         assert meta['inference.policy.events'] == ['started']
 
 
+def test_policy_cleanup_failure_keeps_recording_and_next_episode_inputs(episode_harness, tmp_path):
+    class FailsOnClose(Hold):
+        def run(self, runtime):
+            try:
+                yield from super().run(runtime)
+            finally:
+                raise RuntimeError('policy cleanup failed')
+
+    h = episode_harness
+    h.harness._dataset_factory = LocalDatasetWriter
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('move', None), FailsOnClose(), tmp_path))
+    next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    with pytest.raises(RuntimeError, match='policy cleanup failed'):
+        answer.result()
+    episode = LocalDataset(tmp_path)[0]
+    assert episode.static[eval_keys.SUCCESS] is True
+    assert list(episode[POSITION].values()) == [1]
+
+    answer = h.caller(Rollout(Task('again', None), Hold(), tmp_path))
+    next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert answer.result()[eval_keys.SUCCESS] is True
+    dataset = LocalDataset(tmp_path)
+    assert len(dataset) == 2
+    assert list(dataset[1][POSITION].values()) == [1]
+
+
 def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
     h = episode_harness
     task = Task('move', 0.01, prepare_args={RESET: 'home', eval_keys.SCENE: 42})
