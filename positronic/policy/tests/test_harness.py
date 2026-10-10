@@ -307,8 +307,7 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
         )
         dataset = MemoryDataset()
         dataset_factory = Mock(return_value=dataset)
-        privileged_specs = {name: Observation(pimm.ControlSystemEmitter(source), None) for name in privileged}
-        harness = Harness(embodiment, dataset_factory=dataset_factory, privileged=privileged_specs)
+        harness = Harness(embodiment, dataset_factory=dataset_factory)
         for name, handler in readiness.items():
             wire_call(world, harness.ready[name], handler)
         for name, handler in preparation.items():
@@ -327,9 +326,9 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             harness.observations[name]._bind(physical_receiver)
             device_observations[name] = emitter
         privileged_emitters = {}
-        for name, receiver in harness.privileged.items():
+        for name in privileged:
             emitter, physical_receiver = world.local_pipe()
-            receiver._bind(physical_receiver)
+            harness.privileged[name]._bind(physical_receiver)
             privileged_emitters[name] = emitter
         ports = SimpleNamespace(
             world=world,
@@ -1241,10 +1240,17 @@ def test_shutdown_drains_work_before_closing_policy_resources(episode_harness):
         answer.result()
 
 
-def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
+@pytest.mark.parametrize('record_privileged', [False, True])
+def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_privileged):
+    observations = []
+
     class Move(Policy):
         def run(self, runtime):
-            return ChunkedSchedule(fps=10).run(runtime, lambda obs: [{MOTOR: 1}, {MOTOR: 2}])
+            def infer(obs):
+                observations.append(obs)
+                return [{MOTOR: 1}, {MOTOR: 2}]
+
+            return ChunkedSchedule(fps=10).run(runtime, infer)
 
     with pimm.World(virtual_time=True) as world:
         motion = Motion()
@@ -1258,7 +1264,8 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
             simulated=True,
         )
         harness = Harness(embodiment)
-        wire.wire_embodiment(world, harness, embodiment)
+        privileged = {GROUND_TRUTH: motion.position} if record_privileged else {}
+        wire.wire_embodiment(world, harness, embodiment, privileged=privileged)
         caller = world.pair(harness.perform_task)
         loop = world.start([harness, motion])
         answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), Move(), tmp_path))
@@ -1283,10 +1290,24 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path):
     assert all(recorded[ns] == value for ns, value in motion.positions if ns in recorded)
     assert 1 in np.diff(list(positions.values()))
     assert 2 in np.diff(list(positions.values()))
+    assert observations
+    assert all(GROUND_TRUTH not in obs for obs in observations)
+    assert (GROUND_TRUTH in episode) == record_privileged
+    if record_privileged:
+        assert list(episode[GROUND_TRUTH].values()) == list(positions.values())
+        assert list(episode[GROUND_TRUTH].timestamps(HARNESS_WORLD)) == list(positions.timestamps(HARNESS_WORLD))
     schedule = f'{policy_keys.POLICY_META}.{eval_keys.SCHEDULE}'
     assert episode.static[f'{schedule}.{eval_keys.SCHEDULED}'] == 4
     assert episode.static[f'{schedule}.{eval_keys.EMITTED}'] == 3
     assert episode.static[f'{schedule}.{eval_keys.DROPPED}'] == 0
+
+
+@pytest.mark.parametrize('name', [POSITION, MOTOR])
+def test_wiring_rejects_privileged_names_shared_with_policy_signals(episode_harness, name):
+    h = episode_harness
+    privileged = {name: h.embodiment.observations[POSITION].source}
+    with pytest.raises(ValueError, match='signal names must be distinct'):
+        wire.wire_embodiment(h.world, h.harness, h.embodiment, privileged=privileged)
 
 
 def test_recorder_refuses_an_encoder_this_host_cannot_run():

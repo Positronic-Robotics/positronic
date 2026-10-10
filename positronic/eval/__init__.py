@@ -125,5 +125,5 @@ class Eval:
 
     embodiment: Embodiment
     tasks: Callable[[], Iterable[Task]]
-    privileged: dict[str, Observation] = field(default_factory=dict)
+    privileged: dict[str, pimm.ControlSystemEmitter] = field(default_factory=dict)
     done: pimm.ControlSystemEmitter | None = None

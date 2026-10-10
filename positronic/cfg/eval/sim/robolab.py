@@ -2,7 +2,7 @@ import configuronic as cfn
 
 from positronic import keys
 from positronic.cfg.eval import number_trials, spec
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import Eval, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabAdapter
@@ -63,9 +63,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras):
             trials += [(trial, {**params, robolab_keys.INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
         return number_trials(trials)
 
-    return Eval(
-        embodiment, tasks, privileged={'subtask': Observation(proxy.privileged['subtask'], None)}, done=proxy.done
-    )
+    return Eval(embodiment, tasks, privileged={'subtask': proxy.privileged['subtask']}, done=proxy.done)
 
 
 # Every task the benchmark holds, in one run.

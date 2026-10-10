@@ -21,7 +21,7 @@ from positronic.cfg.eval import unset
 from positronic.cli.account.gateway import refusing_bad_input
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
-from positronic.eval import Embodiment, Eval, Observation, Task
+from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
@@ -112,7 +112,7 @@ def run_world(
     driver,
     *,
     record: bool = True,
-    privileged: dict[str, Observation] | None = None,
+    privileged: dict[str, pimm.ControlSystemEmitter] | None = None,
     done: pimm.ControlSystemEmitter | None = None,
 ) -> None:
     """Wire one embodiment under a fresh Harness + World, and run it until a control system returns.
@@ -126,7 +126,7 @@ def run_world(
     privileged = (privileged or {}) if record else {}
     if record:
         embodiment.video_encoder.ensure_available()
-    harness = Harness(embodiment, privileged=privileged, record=record)
+    harness = Harness(embodiment, record=record)
     with pimm.World(virtual_time=embodiment.simulated) as world:
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged, done=done)
         world.connect(driver.perform_task, harness.perform_task)

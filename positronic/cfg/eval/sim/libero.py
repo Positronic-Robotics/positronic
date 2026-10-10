@@ -3,7 +3,7 @@ import configuronic as cfn
 from positronic import keys
 from positronic.cfg.eval import build_tasks, spec
 from positronic.drivers.roboarm.models import bundled_panda_model
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import Eval, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.libero import keys as libero_keys
 from positronic.simulator.libero.adapter import LiberoAdapter
@@ -54,7 +54,7 @@ def _libero_eval(
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.libero.franka', static_meta=bundled_panda_model()
     )
-    privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
+    privileged = {'sim_state': proxy.privileged['sim_state']}
     # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
     task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout)
 

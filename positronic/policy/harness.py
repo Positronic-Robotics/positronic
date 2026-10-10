@@ -21,7 +21,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.ik import assert_default_frame
-from positronic.eval import Embodiment, Observation, Task
+from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Obs, Policy, PolicyRun
@@ -116,7 +116,6 @@ class Harness(pimm.ControlSystem):
         embodiment: Embodiment,
         *,
         static_meta: dict[str, Any] | None = None,
-        privileged: dict[str, Observation] | None = None,
         dataset_factory: DatasetFactory | None = None,
         recording_hz: float = 1000,
         record: bool = True,
@@ -125,10 +124,9 @@ class Harness(pimm.ControlSystem):
             raise ValueError('recording_hz must be positive and at most 1 GHz')
         self._embodiment = embodiment
         self._static_meta = static_meta or {}
-        self._privileged = privileged or {}
-        names = [*embodiment.observations, *embodiment.commands, *self._privileged]
+        names = [*embodiment.observations, *embodiment.commands]
         if len(names) != len(set(names)):
-            raise ValueError('Observation, command and privileged signal names must be distinct')
+            raise ValueError('Observation and command signal names must be distinct')
         self._dataset_factory = (
             (dataset_factory or partial(LocalDatasetWriter, video_encoder=embodiment.video_encoder)) if record else None
         )
@@ -142,7 +140,7 @@ class Harness(pimm.ControlSystem):
 
         self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
         self.commands = pimm.EmitterDict(self, names=embodiment.commands)
-        self.privileged = pimm.ReceiverDict(self, names=self._privileged)
+        self.privileged = pimm.ReceiverDict(self)
         self.ready = pimm.calls.CallerDict[None, None](self, names=embodiment.ready_handlers)
         self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
 
@@ -249,12 +247,12 @@ class Harness(pimm.ControlSystem):
             elif message.updated or not isinstance(self._obs_by_signal.get(name), dict):
                 self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
         if self._writer is not None:
-            for name, spec in self._privileged.items():
-                message = self.privileged[name].read()
+            for name, receiver in self.privileged.items():
+                message = receiver.read()
                 if message is None or isinstance(message.data, pimm.SignalError):
                     continue
                 if message.updated or name not in self._recorded_privileged:
-                    self._convert_and_record(name, message, spec.serializer)
+                    self._convert_and_record(name, message, None)
                     self._recorded_privileged.add(name)
 
     def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:

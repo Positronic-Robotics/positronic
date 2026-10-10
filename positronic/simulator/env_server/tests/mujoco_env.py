@@ -20,7 +20,7 @@ import positronic.cfg.simulator
 from pimm.world import LocalQueueEmitter, LocalQueueReceiver, VirtualClock
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -215,8 +215,5 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
     embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
     plan = [Task(instruction_source='Pick up the green cube and place it on the red cube.', timeout_sec=15.0)]
     return Eval(
-        embodiment,
-        partial(iter, plan),
-        privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
-        done=proxy.done,
+        embodiment, partial(iter, plan), privileged={'sim_state': proxy.privileged['sim_state']}, done=proxy.done
     )

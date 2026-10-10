@@ -6,7 +6,7 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent
-from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
+from positronic.eval import ROBOT_STATIC_META, Embodiment
 from positronic.policy.harness import Harness
 
 __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
@@ -70,11 +70,13 @@ def wire_embodiment(
     harness: Harness,
     embodiment: Embodiment,
     *,
-    privileged: dict[str, Observation] | None = None,
+    privileged: dict[str, pimm.ControlSystemEmitter] | None = None,
     done: pimm.SignalEmitter | None = None,
 ):
     """Connect policy inputs, commands, lifecycle handlers and recording-only privileged signals."""
     privileged = privileged or {}
+    if privileged.keys() & (embodiment.observations.keys() | embodiment.commands.keys()):
+        raise ValueError('Observation, command and privileged signal names must be distinct')
     for name, obs in embodiment.observations.items():
         world.connect(obs.source, harness.observations[name])
     for name, cmd in embodiment.commands.items():
@@ -88,5 +90,5 @@ def wire_embodiment(
     if done is not None:
         world.connect(done, harness.done)
 
-    for name, observation in privileged.items():
-        world.connect(observation.source, harness.privileged[name])
+    for name, source in privileged.items():
+        world.connect(source, harness.privileged[name])
