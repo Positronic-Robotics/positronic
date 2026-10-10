@@ -28,18 +28,24 @@ from positronic.dataset import Time
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
 from positronic.dataset.video import VideoSignal
 
 
-@pytest.fixture(params=['legacy', 'emission'])
+@pytest.fixture(params=['legacy', 'harness'])
 def recorded_signals(monkeypatch, tmp_path, request):
     times = np.arange(0, EPISODE_SECONDS * 1_000_000_000 + 1, 100_000_000)
-    timeline = RECORDED_TIME if request.param == 'legacy' else RECEIVED_WORLD
+    timeline = RECORDED_TIME if request.param == 'legacy' else HARNESS_WORLD
     with DiskEpisodeWriter(tmp_path / 'episode') as writer:
         for name in RECORDED_SIGNALS:
             sample_times = times[::10] if name in ROBOT_COMMANDS else times
             for timestamp in sample_times:
-                coordinates = {EMITTED_WORLD: int(timestamp), EMITTED_WALL: int(timestamp)}
+                coordinates = {
+                    EMITTED_WORLD: int(timestamp),
+                    EMITTED_WALL: int(timestamp),
+                    HARNESS_WORLD: int(timestamp),
+                    HARNESS_WALL: int(timestamp),
+                }
                 if request.param == 'legacy':
                     coordinates = {RECORDED_TIME: int(timestamp)}
                 elif name not in ROBOT_COMMANDS:

@@ -26,6 +26,7 @@ from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys, wire
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
 from positronic.dataset.video import VideoSignal
 from positronic.drivers import keyboard
 from positronic.eval import Embodiment, Observation, Task
@@ -409,7 +410,15 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
             camera = dataset[number - 1][keys.WRIST_IMAGE]
             assert isinstance(camera, VideoSignal)
             assert len(camera) >= 5
-            assert set(camera.timelines) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, _CAMERA_FRAME}
+            assert set(camera.timelines) == {
+                EMITTED_WALL,
+                EMITTED_WORLD,
+                RECEIVED_WALL,
+                RECEIVED_WORLD,
+                HARNESS_WALL,
+                HARNESS_WORLD,
+                _CAMERA_FRAME,
+            }
             times = camera.timestamps(camera.timelines)
             assert times[0][_CAMERA_FRAME] >= last_frame
             with av.open(str(camera.video_path)) as video:
@@ -420,6 +429,8 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
                     assert timestamp[EMITTED_WALL] == timestamp[EMITTED_WORLD]
                     assert timestamp[RECEIVED_WALL] == timestamp[RECEIVED_WORLD]
                     assert timestamp[EMITTED_WALL] <= timestamp[RECEIVED_WALL]
+                    assert timestamp[HARNESS_WORLD] == timestamp[RECEIVED_WORLD]
+                    assert timestamp[HARNESS_WALL] == timestamp[RECEIVED_WALL]
             assert all(before < after for before, after in pairwise(times))
             assert np.all(np.diff(camera.timestamps(_CAMERA_FRAME)) > 0)
             last_frame = times[-1][_CAMERA_FRAME]

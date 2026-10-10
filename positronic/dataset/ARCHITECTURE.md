@@ -30,8 +30,11 @@ Ordering and arithmetic match coordinates by name and require identical name set
 Writers require this value on each append. Each signal fixes its timeline set on its first record:
 all records contain every coordinate, never decrease any, and strictly increase at least one.
 There is no main or default query timeline. Signals in an episode may have overlapping or disjoint sets;
-`episode.timelines` is their union. Viewing and playback select `received.world`, or `recorded`
-for legacy data. Other timelines require an explicit name. Consumers pass that name explicitly to queries.
+`episode.timelines` is their union. Viewing and playback prefer `harness.world`, then `received.world`,
+then `recorded` for legacy data.
+Harness copies first-receipt coordinates for inputs and emission coordinates for commands into
+`harness.world` and `harness.wall`, retaining all original coordinates. These names are reserved
+for Harness. Other timelines require an explicit name. Consumers pass that name explicitly to queries.
 
 Queries use `Time` values to name their timelines explicitly. Point lookup selects the last record
 satisfying all named upper bounds and returns its complete original coordinates. Batch sampling replaces queried

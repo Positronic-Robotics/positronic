@@ -22,8 +22,8 @@ The default checks:
   their episode-relative timestamps match the committed reference arrays. The comparison reports the
   first differing field, sample time and value.
 
-Command traces use `emitted.world`; observations use `received.world`. Legacy recordings use
-their recorded timeline. Comparisons exclude wall time, which varies between runs.
+Traces use `harness.world`: command emission and input receipt time. Recordings without it use
+`received.world` or legacy `recorded`. Comparisons exclude wall time, which varies between runs.
 
 The references are tied to the environment in `fixtures/act_stack/provenance.json`. Exact matching
 across other GPUs or rendering environments is unverified. `--success_only=True` explicitly runs the task

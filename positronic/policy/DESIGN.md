@@ -320,7 +320,9 @@ It records new inputs before each policy call and commands after emission. Betwe
 samples every millisecond; each sampling pass resets that deadline. Reused inputs keep their
 original timestamps and are not written twice. Privileged inputs stay outside policy observations.
 Inputs include receipt timestamps; commands use the emission timestamps returned by `emit()`.
-TODO: Adapt training codecs and default replay to command emission timelines.
+Harness adds `harness.world` and `harness.wall` to every record: first receipt for inputs,
+emission for commands. These coordinates align training, replay, and viewing without changing
+the original message timestamps. Producer timelines cannot use these two names.
 Writing is synchronous and may slow execution. An episode's answer waits for recording to close.
 The harness stores `runtime.metadata` with the policy definition metadata before policy cleanup.
 Inference input/output recording and custom signal recording are deferred.

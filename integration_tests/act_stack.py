@@ -13,7 +13,6 @@ import configuronic as cfn
 import mujoco as mj
 import numpy as np
 
-from pimm.time import EMITTED_WORLD
 from positronic import keys
 from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
 from positronic.dataset.episode import Episode, select_timeline
@@ -131,9 +130,8 @@ def read_trace(episode: Episode) -> dict[str, np.ndarray]:
     for name in RECORDED_SIGNALS:
         signal = episode[name]
         trace[name] = np.asarray(list(signal.values()))
-        timeline = EMITTED_WORLD if name in ROBOT_COMMANDS and EMITTED_WORLD in signal.timelines else None
         trace[name + TIME_SUFFIX] = (
-            np.asarray(signal.timestamps(select_timeline(signal.timelines, timeline=timeline)), dtype=np.int64)
+            np.asarray(signal.timestamps(select_timeline(signal.timelines)), dtype=np.int64)
             - episode.bounds(select_timeline(episode.timelines)).start
         )
     for name, values in trace.items():

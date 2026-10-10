@@ -9,6 +9,7 @@ from positronic import keys as obs_keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.time import HARNESS_WORLD
 from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
 from positronic.policy.spec import from_spec
 
@@ -162,8 +163,8 @@ def test_observation_encode_missing_state_inputs_raise():
         enc.encode({})
 
 
-@pytest.mark.parametrize('axis', [RECEIVED_WORLD, RECORDED_TIME])
-def test_training_observations_align_on_world_receipt_or_legacy_recorded_time(axis):
+@pytest.mark.parametrize('axis', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+def test_training_observations_align_on_the_recording_clock(axis):
     episode = EpisodeContainer({
         'a': DummySignal([[0, 100], [10, 200]], [[1], [2]], timelines=(axis, RECEIVED_WALL)),
         'b': DummySignal([[0, 150], [10, 250]], [[3], [4]], timelines=(axis, RECEIVED_WALL)),

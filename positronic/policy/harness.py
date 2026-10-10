@@ -13,12 +13,13 @@ import numpy as np
 from opentelemetry.trace import Span
 
 import pimm
-from pimm.time import EMITTED_WALL, EMITTED_WORLD
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializer, StatefulSerializer, expand_suffixed
+from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
@@ -214,9 +215,11 @@ class Harness(pimm.ControlSystem):
     def _append(self, values: dict[str, Any], time: pimm.Time) -> None:
         if self._writer is None:
             return
+        world, wall = (RECEIVED_WORLD, RECEIVED_WALL) if RECEIVED_WORLD in time else (EMITTED_WORLD, EMITTED_WALL)
+        timestamps = pimm.Time(**time, **{HARNESS_WORLD: time[world], HARNESS_WALL: time[wall]})
         with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
             for name, value in values.items():
-                self._writer.append(name, value, time)
+                self._writer.append(name, value, timestamps)
 
     def _convert_and_record(
         self, name: str, message: pimm.Message, serializer: Serializer | None, step_ms: dict[str, float] | None = None

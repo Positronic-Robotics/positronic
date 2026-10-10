@@ -346,6 +346,8 @@ Each line of `edits.jsonl` is one JSON record carrying its op. `{"op": "set_stat
 
 `DsWriterAgent` records data collection and replay runs. Inference recording belongs to
 [`Harness`](../policy/harness.py), which writes through the same dataset interfaces.
+Harness adds `harness.world` and `harness.wall`: first receipt for inputs, emission for commands.
+These coordinates align inputs and commands while preserving the original message timestamps.
 The agent is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends updated inputs with their `pimm.Message.time` timestamps.
 
 Key ideas
@@ -355,8 +357,8 @@ Key ideas
 - Recording is best effort, and this is a deliberate trade rather than an oversight. Each input arrives over a one-slot `pimm` signal where a new value overwrites one still unread, so a recorder that stalls for longer than the gap between two samples loses the older one — commands exactly as much as camera frames or arm state. An episode is what the recorder managed to observe, not a guaranteed-complete log of what happened; treat a missing sample as possible in any analysis that counts them.
 - A separate `command` channel controls episode lifecycle.
 - Every message coordinate is saved: emission, first delivery, and optional producer timelines.
-  Policy joins, viewing, and playback use `received.world`: wall time on hardware and simulation
-  time in simulation. Legacy datasets use `recorded` without conversion or renaming.
+  Policy joins, viewing, and playback prefer `harness.world`, then `received.world`: wall time
+  on hardware and simulation time in simulation. Legacy datasets use `recorded` without conversion or renaming.
   Viewing and playback also accept an explicit timeline.
 
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
@@ -398,7 +400,7 @@ Component layout
 
 Playback semantics
 - `timeline` selects the nanosecond clock used for scheduling and command bounds. When omitted,
-  playback selects `received.world` from the requested outputs, or `recorded` for legacy data.
+  playback prefers `harness.world`, then `received.world`, then `recorded` for legacy data.
   Other timelines require an explicit name. Every requested output must expose the selected
   timeline. Window selection uses the dataset's carry-back semantics.
 - Playback anchors the first sample to the world clock when `START` is handled and preserves

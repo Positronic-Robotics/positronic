@@ -24,6 +24,7 @@ from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import Episode, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
 from positronic.dataset.video import LibavEncoder
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -1279,7 +1280,7 @@ def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):
             list(loop)
     command = LocalDataset(tmp_path)[0][MOTOR]
     assert list(command.timestamps(EMITTED_WORLD)) == [0]
-    assert set(command.timelines) == {EMITTED_WALL, EMITTED_WORLD}
+    assert set(command.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
 
 
 def test_policy_completion_resets_the_sampling_deadline(episode_harness):
@@ -1354,6 +1355,9 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         assert all(GROUND_TRUTH not in obs for obs in policy.observations)
         assert [data for name, data, _ in episode.records if name == POSITION] == [0, 1]
         assert [data.tolist() for name, data, _ in episode.records if name == GROUND_TRUTH] == [[10], [20], [30]]
+        for _, _, timestamps in episode.records:
+            assert timestamps[HARNESS_WORLD] == timestamps[RECEIVED_WORLD]
+            assert timestamps[HARNESS_WALL] == timestamps[RECEIVED_WALL]
 
 
 def test_disabled_recording_does_not_read_privileged_data_or_add_sampling_wakeups():
@@ -1390,7 +1394,7 @@ def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_ins
     episode = LocalDataset(tmp_path)[0]
     commands = episode[MOTOR]
     assert list(commands.values()) == list(range(5))
-    assert set(commands.timelines) == {EMITTED_WALL, EMITTED_WORLD}
+    assert set(commands.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
     assert list(commands.timestamps(EMITTED_WORLD)) == [0] * 5
     assert np.all(np.diff(commands.timestamps(EMITTED_WALL)) > 0)
     assert len(episode[POSITION]) == 1
@@ -1431,10 +1435,46 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
     next(h.loop)
     assert [data.tolist() for _, data, _ in episode.records] == [[10], [1], [20], [2]]
     for name, _, ts in episode.records:
-        expected = {EMITTED_WALL, EMITTED_WORLD}
+        expected = {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
         if name == POSITION:
             expected |= {RECEIVED_WALL, RECEIVED_WORLD}
+            assert ts[HARNESS_WORLD] == ts[RECEIVED_WORLD]
+            assert ts[HARNESS_WALL] == ts[RECEIVED_WALL]
+        else:
+            assert ts[HARNESS_WORLD] == ts[EMITTED_WORLD]
+            assert ts[HARNESS_WALL] == ts[EMITTED_WALL]
         assert set(ts) == expected
+
+
+def test_recording_keeps_first_receipt_times_and_does_not_change_messages(episode_harness):
+    h = episode_harness
+    h.observation.emit(1)
+    h.world.clock.advance_to_ns(1_000_000)
+    message = h.harness.observations[POSITION].read()
+    original_time = message.time
+    h.world.clock.advance_to_ns(2_000_000)
+    h.caller(Rollout(Task('move', None), Hold(), h.output_path))
+    next(h.loop)
+    h.world.clock.advance_to_ns(3_000_000)
+    next(h.loop)
+    records = h.dataset.episodes[0].records
+    assert len(records) == 1
+    _, _, timestamps = records[0]
+    assert timestamps[HARNESS_WORLD] == original_time[RECEIVED_WORLD] == 1_000_000
+    assert timestamps[HARNESS_WALL] == original_time[RECEIVED_WALL]
+    assert message.time is original_time
+    assert HARNESS_WORLD not in message.time and HARNESS_WALL not in message.time
+
+
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, HARNESS_WALL])
+def test_producer_cannot_overwrite_harness_recording_timestamps(episode_harness, timeline):
+    h = episode_harness
+    h.observation.emit(1, time=pimm.Time(**{timeline: 123}))
+    answer = h.caller(Rollout(Task('move', None), Hold(), h.output_path))
+    next(h.loop)
+    with pytest.raises(TypeError, match=timeline):
+        answer.result()
+    assert h.dataset.episodes[0].aborted
 
 
 @pytest.mark.parametrize('failure', ['append', 'metadata', 'close'])

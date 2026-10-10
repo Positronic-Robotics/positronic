@@ -21,6 +21,7 @@ from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, Loc
 from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.time import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.eval import keys as eval_keys
@@ -232,7 +233,16 @@ def test_numeric_pose_and_video_samples_keep_their_coordinates_after_thinning(tm
 
 
 def test_timeline_kinds_preserve_integer_precision():
-    names = [EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, RECORDED_TIME, 'tick']
+    names = [
+        EMITTED_WALL,
+        EMITTED_WORLD,
+        RECEIVED_WALL,
+        RECEIVED_WORLD,
+        HARNESS_WALL,
+        HARNESS_WORLD,
+        RECORDED_TIME,
+        'tick',
+    ]
     values = np.array([2**53 + 1, 2**53 + 3], dtype=np.int64)
     indexes = dataset_utils._rerun_indexes(dict.fromkeys(names, values))
     for index in indexes:
@@ -246,10 +256,11 @@ def test_timeline_kinds_preserve_integer_precision():
     [
         ((RECORDED_TIME,), RECORDED_TIME),
         ((EMITTED_WALL, RECEIVED_WORLD, RECORDED_TIME), RECEIVED_WORLD),
+        ((EMITTED_WORLD, RECEIVED_WORLD, RECORDED_TIME, HARNESS_WALL, HARNESS_WORLD), HARNESS_WORLD),
         (('tick',), 'tick'),
     ],
 )
-def test_initial_timeline_uses_world_then_legacy_clock_then_an_available_axis(tmp_path, names, expected):
+def test_initial_timeline_prefers_harness_then_receipt_then_legacy_world_time(tmp_path, names, expected):
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         writer.append('value', 1, Time(**dict.fromkeys(names, 1)))
     ep = DiskEpisode(tmp_path / 'ep')
