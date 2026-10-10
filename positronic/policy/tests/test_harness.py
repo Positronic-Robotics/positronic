@@ -1446,6 +1446,34 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
         assert set(ts) == expected
 
 
+def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_harness, tmp_path):
+    h = episode_harness
+    h.harness._dataset_factory = LocalDatasetWriter
+    observations = []
+
+    class Normalize(Policy):
+        def run(self, runtime):
+            obs = yield
+            while True:
+                observations.append(obs[POSITION])
+                obs[POSITION][:] = 99
+                obs = yield Step({}, runtime.time_ns + 5_000_000)
+
+    frame = np.array([10])
+    h.observation.emit(frame)
+    answer = h.caller(Rollout(Task('move', None), Normalize(), tmp_path))
+    next(h.loop)
+    frame[:] = 20
+    h.world.clock.advance_to_ns(5_000_000)
+    h.observation.emit(frame)
+    next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert answer.result()[eval_keys.TERMINATED]
+    np.testing.assert_array_equal(observations, [[99], [99]])
+    np.testing.assert_array_equal(LocalDataset(tmp_path)[0][POSITION].values(), [[10], [20]])
+
+
 def test_recording_keeps_first_receipt_times_and_does_not_change_messages(episode_harness):
     h = episode_harness
     h.observation.emit(1)

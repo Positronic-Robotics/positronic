@@ -219,7 +219,7 @@ class Harness(pimm.ControlSystem):
         timestamps = pimm.Time(**time, **{HARNESS_WORLD: time[world], HARNESS_WALL: time[wall]})
         with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
             for name, value in values.items():
-                self._writer.append(name, value, timestamps)
+                self._writer.append(name, value.copy() if isinstance(value, np.ndarray) else value, timestamps)
 
     def _convert_and_record(
         self, name: str, message: pimm.Message, serializer: Serializer | None, step_ms: dict[str, float] | None = None
