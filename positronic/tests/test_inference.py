@@ -9,9 +9,11 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from functools import partial
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+import av
 import httpx
 import numpy as np
 import pos3
@@ -20,9 +22,11 @@ from websockets.sync.client import connect
 
 import pimm
 from pimm.shared_memory import NumpySMAdapter
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys, wire
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.video import VideoSignal
 from positronic.drivers import keyboard
 from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
@@ -286,6 +290,9 @@ def test_a_verdict_after_its_trial_was_answered_is_refused():
         bench.answers[1].result()
 
 
+_CAMERA_FRAME = 'camera.frame'
+
+
 class _Camera(pimm.ControlSystem):
     """A camera that sends a new frame 15 times a second."""
 
@@ -296,15 +303,14 @@ class _Camera(pimm.ControlSystem):
         adapter = None
         count = 0
         while not should_stop.value:
-            adapter = NumpySMAdapter.lazy_init(np.full((120, 160, 3), count % 256, dtype=np.uint8), adapter)
-            self.frame.emit(adapter)
+            adapter = NumpySMAdapter.lazy_init(np.full((120, 160, 3), (count * 37) % 256, dtype=np.uint8), adapter)
+            self.frame.emit(adapter, time=pimm.Time(**{_CAMERA_FRAME: count}))
             count += 1
             yield pimm.Sleep(1 / 15)
 
 
 class _MarkingPolicy(Policy):
-    """Commands nothing, and creates ``marks/episode-<n>`` when the n-th episode's first observation reaches it,
-    so a test outside the run knows that the episode is open."""
+    """Checks array snapshots and marks each episode after five policy steps."""
 
     def __init__(self, marks: Path):
         self._marks = marks
@@ -313,10 +319,16 @@ class _MarkingPolicy(Policy):
     def run(self, runtime):
         self._episodes += 1
         number = self._episodes
-        yield
-        (self._marks / f'episode-{number}').touch()
+        obs = yield
+        steps = 0
         while True:
-            yield Step({}, runtime.time_ns + 100_000_000)
+            snapshots = [(value, value.copy()) for value in obs.values() if isinstance(value, np.ndarray)]
+            obs = yield Step({}, runtime.time_ns + 100_000_000)
+            for value, snapshot in snapshots:
+                np.testing.assert_array_equal(value, snapshot)
+            steps += 1
+            if steps == 5:
+                (self._marks / f'episode-{number}').touch()
 
 
 def _serve_station(port: int, output_dir: Path, marks: Path) -> None:
@@ -389,8 +401,28 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
 
         override = InstructionBody(override='pick up the red cube').model_dump()
         httpx.post(f'{base}/instruction', json=override).raise_for_status()
-        assert _run_episode(base, marks, 1, Outcome.PASS).outcome is Outcome.PASS
-        assert _run_episode(base, marks, 2, Outcome.FAIL).outcome is Outcome.FAIL
+        last_frame = -1
+        for number, verdict in enumerate((Outcome.PASS, Outcome.FAIL), start=1):
+            assert _run_episode(base, marks, number, verdict).outcome is verdict
+            dataset = LocalDataset(output_dir)
+            assert len(dataset) == number
+            camera = dataset[number - 1][keys.WRIST_IMAGE]
+            assert isinstance(camera, VideoSignal)
+            assert len(camera) >= 5
+            assert set(camera.timelines) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, _CAMERA_FRAME}
+            times = camera.timestamps(camera.timelines)
+            assert times[0][_CAMERA_FRAME] >= last_frame
+            with av.open(str(camera.video_path)) as video:
+                for frame, timestamp in zip(video.decode(video=0), times, strict=True):
+                    pixels = frame.to_ndarray(format='rgb24')
+                    assert pixels.shape == (120, 160, 3)
+                    np.testing.assert_allclose(pixels, (timestamp[_CAMERA_FRAME] * 37) % 256, atol=3)
+                    assert timestamp[EMITTED_WALL] == timestamp[EMITTED_WORLD]
+                    assert timestamp[RECEIVED_WALL] == timestamp[RECEIVED_WORLD]
+                    assert timestamp[EMITTED_WALL] <= timestamp[RECEIVED_WALL]
+            assert all(before < after for before, after in pairwise(times))
+            assert np.all(np.diff(camera.timestamps(_CAMERA_FRAME)) > 0)
+            last_frame = times[-1][_CAMERA_FRAME]
     finally:
         if run.pid is not None and run.is_alive():
             os.kill(run.pid, signal.SIGINT)

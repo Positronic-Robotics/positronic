@@ -3,18 +3,22 @@
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from itertools import pairwise
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import ZIP_LZMA, ZipFile
 
+import av
 import configuronic as cfn
 import mujoco as mj
 import numpy as np
 
+from pimm.time import EMITTED_WORLD
 from positronic import keys
 from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
 from positronic.dataset.episode import Episode, select_timeline
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.video import VideoSignal
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.simulator.mujoco.transforms import load_spec
@@ -35,7 +39,9 @@ CUBE_POSES = 'cube_poses'
 SUPPORTED = 'stack_supported'
 TIME_SUFFIX = '.time_ns'
 ROBOT_OBSERVATIONS = (keys.EE_POSE, keys.JOINTS, keys.GRIP)
-RECORDED_SIGNALS = (keys.TARGET_EE_POSE, keys.TARGET_GRIP, *ROBOT_OBSERVATIONS)
+ROBOT_COMMANDS = (keys.TARGET_EE_POSE, keys.TARGET_GRIP)
+RECORDED_SIGNALS = (*ROBOT_COMMANDS, *ROBOT_OBSERVATIONS)
+CAMERAS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
 SEED_DIRECTORY = 'seed_{seed}'
 REFERENCE_FILENAME = SEED_DIRECTORY + '.npz'
 
@@ -125,8 +131,9 @@ def read_trace(episode: Episode) -> dict[str, np.ndarray]:
     for name in RECORDED_SIGNALS:
         signal = episode[name]
         trace[name] = np.asarray(list(signal.values()))
+        timeline = EMITTED_WORLD if name in ROBOT_COMMANDS and EMITTED_WORLD in signal.timelines else None
         trace[name + TIME_SUFFIX] = (
-            np.asarray(signal.timestamps(select_timeline(signal.timelines)), dtype=np.int64)
+            np.asarray(signal.timestamps(select_timeline(signal.timelines, timeline=timeline)), dtype=np.int64)
             - episode.bounds(select_timeline(episode.timelines)).start
         )
     for name, values in trace.items():
@@ -179,8 +186,24 @@ def compare_trace(actual: Mapping[str, np.ndarray], expected: Mapping[str, np.nd
             )
 
 
+def check_images(episode: Episode) -> None:
+    for name in CAMERAS:
+        camera = episode[name]
+        if not isinstance(camera, VideoSignal):
+            raise TypeError(f'{name}: expected a video signal')
+        times = camera.timestamps(camera.timelines)
+        if not len(times) or any(not before < after for before, after in pairwise(times)):
+            raise ValueError(f'{name}: expected nonempty, ordered frame timestamps')
+        with av.open(str(camera.video_path)) as video:
+            count = sum(1 for _ in video.decode(video=0))
+        if count != len(times):
+            raise ValueError(f'{name}: decoded {count} frames, expected {len(times)}')
+
+
 def check_episode(output: Path, seed: int, reference: Path, success_only: bool) -> dict[str, np.ndarray]:
-    trace = read_trace(read_episode(output, seed))
+    episode = read_episode(output, seed)
+    check_images(episode)
+    trace = read_trace(episode)
     completed_at = check_stacking(trace)
     if not success_only:
         with np.load(reference / REFERENCE_FILENAME.format(seed=seed), allow_pickle=False) as expected:

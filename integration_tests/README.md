@@ -10,15 +10,20 @@ Each seed (4 and 8) runs in its own eval process for 15 simulated seconds. Simul
 inference, so network and model latency do not change the trial's time budget.
 This covers the ACT stacking path; other policies and error handling need their own tests.
 
-The default checks both:
+The default checks:
 
 - **Task success:** the green cube touches the red cube, sits 15–25 mm above its center, and touches
   neither finger, continuously for at least 0.5 seconds. The check reconstructs every recorded physics
   sample; it also requires a complete episode with the requested seed and checkpoint. Robot pose,
   joints and gripper observations must each contain one sample at every physics step.
+- **Camera recordings:** both camera videos decode completely and their frame counts match their
+  timestamp indexes. Frame timestamps must be nonempty and ordered.
 - **Exact behavior:** commands, robot pose, joints, gripper state, both cube poses, support state and
   their episode-relative timestamps match the committed reference arrays. The comparison reports the
   first differing field, sample time and value.
+
+Command traces use `emitted.world`; observations use `received.world`. Legacy recordings use
+their recorded timeline. Comparisons exclude wall time, which varies between runs.
 
 The references are tied to the environment in `fixtures/act_stack/provenance.json`. Exact matching
 across other GPUs or rendering environments is unverified. `--success_only=True` explicitly runs the task
@@ -91,4 +96,18 @@ The CPU checks for the checker itself can be run separately:
 
 ```bash
 uv run --locked pytest integration_tests/tests -n0
+```
+
+## Background camera recording
+
+The process-level test in `positronic/tests/test_inference.py` runs a synthetic camera through
+pimm shared memory and records two consecutive episodes. It checks that policy image snapshots
+remain stable while the camera reuses its buffer. Each completed episode is opened immediately;
+decoded frame pixels must match their producer frame IDs, and every indexed frame must decode.
+The test also checks emission and receipt timestamps and episode metadata.
+
+This test runs in the normal pytest suite and needs no physical camera or model server:
+
+```bash
+uv run --locked pytest positronic/tests/test_inference.py::test_the_web_console_records_each_episode_with_its_instruction_and_verdict -n0
 ```
