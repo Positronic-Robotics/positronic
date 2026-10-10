@@ -438,6 +438,10 @@ def test_load_dataset_edits_with_tilde_path(tmp_path):
 # --- Edit log tests ---
 
 
+def _write_log(directory: Path, *records: dict) -> None:
+    (directory / edits.EDITS_FILE).write_text(''.join(json.dumps(r) + '\n' for r in records), encoding='utf-8')
+
+
 def test_episode_meta_has_unique_uid(tmp_path):
     ds = build_dataset_with_signal(tmp_path / 'ds', [0, 1])
     uids = [ds[i].meta['uid'] for i in range(2)]
@@ -483,6 +487,38 @@ def test_set_static_edit_applies_on_read(tmp_path):
     assert DiskEpisode(root / '000000000000' / '000000000000').static == {'id': 0}
 
 
+def test_edit_is_written_to_the_episodes_own_directory(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+
+    load_dataset(root).set_static(ds[0].meta['uid'], {'verdict': 'success'}).drop(ds[1].meta['uid'])
+
+    first, second = (root / '000000000000' / f'{i:012d}' / edits.EDITS_FILE for i in range(2))
+    assert [json.loads(line)['op'] for line in first.read_text(encoding='utf-8').splitlines()] == ['set_static']
+    assert [json.loads(line)['op'] for line in second.read_text(encoding='utf-8').splitlines()] == ['drop']
+    assert not (root / edits.EDITS_FILE).exists()
+    assert not (root / '000000000000' / edits.EDITS_FILE).exists()
+
+
+def test_episode_log_applies_after_the_dataset_log(tmp_path):
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1])
+    first, second = ds[0].meta['uid'], ds[1].meta['uid']
+    _write_log(
+        root,
+        {'op': 'set_static', 'v': 1, 'ep': first, 'data': {'verdict': 'fail', 'notes': 'kept'}},
+        {'op': 'drop', 'v': 1, 'ep': second},
+    )
+    assert episode_ids(load_dataset(root)[:]) == [0]
+
+    load_dataset(root).set_static(first, {'verdict': 'success'}).undrop(second)
+
+    ds = load_dataset(root)
+    assert episode_ids(ds[:]) == [0, 1]
+    assert ds[0]['verdict'] == 'success'
+    assert ds[0]['notes'] == 'kept'
+
+
 def test_set_static_edit_last_write_wins(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0])
@@ -508,13 +544,17 @@ def test_set_static_edit_colliding_with_signal_raises(tmp_path):
         _ = ds[0]['signal']
 
 
-def test_set_static_edit_for_unknown_uid_is_inert(tmp_path):
+def test_edit_for_unknown_uid_is_refused(tmp_path):
     root = tmp_path / 'ds'
     build_dataset_with_signal(root, [0])
-    load_dataset(root).set_static('no-such-uid', {'verdict': 'success'})
-
     ds = load_dataset(root)
-    assert ds[0].static == {'id': 0}
+    with pytest.raises(ValueError, match="No episode with uid 'no-such-uid'"):
+        ds.set_static('no-such-uid', {'verdict': 'success'})
+    with pytest.raises(ValueError, match="No episode with uid 'no-such-uid'"):
+        ds.drop('no-such-uid')
+
+    assert not list(root.rglob(edits.EDITS_FILE))
+    assert load_dataset(root)[0].static == {'id': 0}
 
 
 def test_set_static_edit_rejects_invalid_values(tmp_path):
@@ -560,13 +600,6 @@ def test_drop_edit_hides_episode_with_invalid_static_edit(tmp_path):
     assert episode_ids(load_dataset(root)[:]) == [0]
 
 
-def test_drop_edit_for_unknown_uid_is_inert(tmp_path):
-    root = tmp_path / 'ds'
-    build_dataset_with_signal(root, [0])
-    load_dataset(root).drop('no-such-uid')
-    assert episode_ids(load_dataset(root)[:]) == [0]
-
-
 def test_overlay_skips_dropped_episode_with_colliding_edit(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0, 1])
@@ -599,10 +632,13 @@ def test_drop_edit_rejects_invalid_uid(tmp_path):
         load_dataset(root).drop('')
 
 
-def test_corrupt_edit_record_raises(tmp_path):
+@pytest.mark.parametrize('log_dir', ['.', '000000000000/000000000000'])
+def test_corrupt_edit_record_raises(tmp_path, log_dir):
     root = tmp_path / 'ds'
     build_dataset_with_signal(root, [0])
-    (root / edits.EDITS_FILE).write_text('{"op": "set_static", "v": 1, "ep": "x", "data": {', encoding='utf-8')
+    (root / log_dir / edits.EDITS_FILE).write_text(
+        '{"op": "set_static", "v": 1, "ep": "x", "data": {', encoding='utf-8'
+    )
     with pytest.raises(ValueError, match='Corrupt edit record'):
         load_dataset(root)
 
@@ -627,15 +663,36 @@ def test_load_all_datasets_applies_top_level_edits(tmp_path):
     ds1 = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
     build_dataset_with_signal(tmp_path / 'ds2', [2])
     # The search root is not itself a dataset; a top-level edit log there overlays the whole combined view.
-    load_all_datasets(tmp_path).drop(ds1[0].meta['uid'])
+    _write_log(tmp_path, {'op': 'drop', 'v': 1, 'ep': ds1[0].meta['uid']})
     assert episode_ids(load_all_datasets(tmp_path)[:]) == [1, 2]
 
 
 def test_load_all_datasets_applies_intermediate_edits(tmp_path):
     ds = build_dataset_with_signal(tmp_path / 'group' / 'ds1', [0, 1])
     # Curation written at an intermediate collection directory must still apply when loading from an ancestor.
-    load_all_datasets(tmp_path / 'group').drop(ds[0].meta['uid'])
+    _write_log(tmp_path / 'group', {'op': 'drop', 'v': 1, 'ep': ds[0].meta['uid']})
     assert episode_ids(load_all_datasets(tmp_path)[:]) == [1]
+
+
+def test_load_all_datasets_applies_inner_logs_then_outer_logs_then_episode_logs(tmp_path):
+    ds = build_dataset_with_signal(tmp_path / 'group' / 'ds1', [0])
+    uid = ds[0].meta['uid']
+    _write_log(tmp_path / 'group' / 'ds1', {'op': 'set_static', 'v': 1, 'ep': uid, 'data': {'a': 'ds1', 'b': 'ds1'}})
+    _write_log(tmp_path, {'op': 'set_static', 'v': 1, 'ep': uid, 'data': {'a': 'top', 'c': 'top'}})
+    assert load_all_datasets(tmp_path)[0].static == {'id': 0, 'a': 'top', 'b': 'ds1', 'c': 'top'}
+
+    load_all_datasets(tmp_path).set_static(uid, {'c': 'episode'})
+    assert load_all_datasets(tmp_path)[0].static == {'id': 0, 'a': 'top', 'b': 'ds1', 'c': 'episode'}
+
+
+def test_load_all_datasets_undrop_restores_an_episode_of_a_child_dataset(tmp_path):
+    ds1 = build_dataset_with_signal(tmp_path / 'ds1', [0, 1])
+    build_dataset_with_signal(tmp_path / 'ds2', [2])
+    uid = ds1[0].meta['uid']
+    load_all_datasets(tmp_path).drop(uid)
+    assert episode_ids(load_all_datasets(tmp_path)[:]) == [1, 2]
+
+    assert episode_ids(load_all_datasets(tmp_path).undrop(uid)[:]) == [0, 1, 2]
 
 
 def test_load_all_datasets_propagates_corrupt_top_level_edit_log(tmp_path):

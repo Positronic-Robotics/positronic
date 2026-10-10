@@ -1,8 +1,9 @@
-"""Edit log over immutable recordings.
+"""Edit logs over immutable recordings.
 
 Episodes are never modified after recording. Post-hoc facts — operator verdicts, analysis scores — are *edits*:
-declarative records appended to an `edits.jsonl` file beside a dataset and applied as a view on read. `EditedDataset`
-is that view and the handle that amends it: it reads the log and applies the edits, and its methods append new ones.
+declarative records appended to an `edits.jsonl` file in the episode's own directory and applied as a view on read.
+`EditedDataset` is that view and the handle that amends it: it reads the logs and applies the edits, and its methods
+append new ones.
 
 Each line is one JSON record carrying its op and version, so a log replays forever. The ops, targeting episodes by
 `meta['uid']`:
@@ -12,51 +13,60 @@ Each line is one JSON record carrying its op and version, so a log replays forev
 - `{"op": "drop", "v": 1, "ep": "<uid>"}` — remove the episode from the view; the recording stays on disk.
 - `{"op": "undrop", "v": 1, "ep": "<uid>"}` — restore a dropped episode (the last drop/undrop per episode wins).
 
-The format is plain appendable JSON so external tools can write it; the directory has a single writer.
+A dataset directory can hold an `edits.jsonl` with records for any episode under it. That log is read and never
+written, and the episodes' own logs apply after it.
+
+The format is plain appendable JSON so external tools can write it; an episode directory has a single writer.
 """
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 from .dataset import Dataset, FilterDataset
-from .episode import META_UID, Episode, _is_valid_static_value, _static_decode_hook, _StaticEncoder
+from .episode import META_PATH, META_UID, Episode, _is_valid_static_value, _static_decode_hook, _StaticEncoder
 from .signal import Signal
 
 EDITS_FILE = 'edits.jsonl'
 
 
-def _load_edits(edits_dir: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
-    """Read the edit log and return merged static edits per episode uid plus the set of dropped uids.
+def _load_edits(logs: Iterable[Path]) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    """Read the edit logs in order and return merged static edits per episode uid plus the set of dropped uids.
 
-    Records apply in log order: the last write per static key wins, and the last drop/undrop per episode wins.
+    Records apply in order across the logs: the last write per static key wins, and the last drop/undrop per episode
+    wins. A log that does not exist holds no records.
     """
-    edits_path = Path(edits_dir) / EDITS_FILE
     statics: dict[str, dict[str, Any]] = {}
     dropped: set[str] = set()
-    if not edits_path.exists():
-        return statics, dropped
-    with edits_path.open('r', encoding='utf-8') as f:
-        for line_no, line in enumerate(f, start=1):
-            try:
-                record = json.loads(line, object_hook=_static_decode_hook)
-            except json.JSONDecodeError as e:
-                raise ValueError(f'Corrupt edit record at {edits_path}:{line_no}') from e
-            match record:
-                case {'op': 'set_static', 'v': 1, 'ep': str(ep_uid), 'data': dict(data)}:
-                    if not _is_valid_static_value(data):
-                        raise ValueError(
-                            f'Invalid static values in edit record at {edits_path}:{line_no}: {line.strip()}'
-                        )
-                    statics.setdefault(ep_uid, {}).update(data)
-                case {'op': 'drop', 'v': 1, 'ep': str(ep_uid)}:
-                    dropped.add(ep_uid)
-                case {'op': 'undrop', 'v': 1, 'ep': str(ep_uid)}:
-                    dropped.discard(ep_uid)
-                case _:
-                    raise ValueError(f'Unsupported edit record at {edits_path}:{line_no}: {line.strip()}')
+    for edits_path in logs:
+        if not edits_path.exists():
+            continue
+        with edits_path.open('r', encoding='utf-8') as f:
+            for line_no, line in enumerate(f, start=1):
+                try:
+                    record = json.loads(line, object_hook=_static_decode_hook)
+                except json.JSONDecodeError as e:
+                    raise ValueError(f'Corrupt edit record at {edits_path}:{line_no}') from e
+                match record:
+                    case {'op': 'set_static', 'v': 1, 'ep': str(ep_uid), 'data': dict(data)}:
+                        if not _is_valid_static_value(data):
+                            raise ValueError(
+                                f'Invalid static values in edit record at {edits_path}:{line_no}: {line.strip()}'
+                            )
+                        statics.setdefault(ep_uid, {}).update(data)
+                    case {'op': 'drop', 'v': 1, 'ep': str(ep_uid)}:
+                        dropped.add(ep_uid)
+                    case {'op': 'undrop', 'v': 1, 'ep': str(ep_uid)}:
+                        dropped.discard(ep_uid)
+                    case _:
+                        raise ValueError(f'Unsupported edit record at {edits_path}:{line_no}: {line.strip()}')
     return statics, dropped
+
+
+def _episode_dirs(base: Dataset) -> dict[str, Path]:
+    """The directory of each episode of `base` that has one, by uid. Each directory holds that episode's log."""
+    return {ep.meta[META_UID]: Path(ep.meta[META_PATH]) for ep in base if META_PATH in ep.meta}
 
 
 def _validate_uid(uid: str) -> None:
@@ -95,18 +105,21 @@ class EditedEpisode(Episode):
 
 
 class EditedDataset(Dataset):
-    """A dataset with its edit log applied as a view, and the handle that amends the log.
+    """A dataset with its edit logs applied as a view, and the handle that amends the logs.
 
-    Reads are curated: `len()`/indexing apply the edit log, so consumers see the corrected dataset. The same object
-    amends the log — its edit methods (`set_static`/`drop`/`undrop`) append a record to `edits_dir` and return a *new*
-    `EditedDataset` over the same recordings, so a held reference keeps its shape while the returned one reflects the
-    edit. `edits_dir` is where the log lives; it can equal the recordings directory.
+    Reads are curated: `len()`/indexing apply the edit logs, so consumers see the corrected dataset. The same object
+    amends them — its edit methods (`set_static`/`drop`/`undrop`) append a record to the episode's own log and return
+    a *new* `EditedDataset` over the same recordings, so a held reference keeps its shape while the returned one
+    reflects the edit. The dataset-level log in each of `dataset_log_dirs` applies first, in that order, and the
+    episodes' own logs apply after them.
     """
 
-    def __init__(self, base: Dataset, edits_dir: Path):
+    def __init__(self, base: Dataset, dataset_log_dirs: Sequence[Path] = ()):
         self._base = base
-        self._edits_dir = Path(edits_dir)
-        self._statics, self._dropped = _load_edits(self._edits_dir)
+        self._dataset_log_dirs = tuple(Path(directory) for directory in dataset_log_dirs)
+        self._episode_dirs = _episode_dirs(base)
+        logs = [directory / EDITS_FILE for directory in (*self._dataset_log_dirs, *self._episode_dirs.values())]
+        self._statics, self._dropped = _load_edits(logs)
         self._kept = FilterDataset(base, lambda ep: ep.meta[META_UID] not in self._dropped)
 
     def __len__(self) -> int:
@@ -116,7 +129,7 @@ class EditedDataset(Dataset):
         return self.overlay(self._kept[index])
 
     def overlay(self, episode: Episode) -> Episode:
-        """Apply this log's edits to an episode of the underlying recordings, addressed by uid.
+        """Apply these logs' edits to an episode of the underlying recordings, addressed by uid.
 
         A dropped episode is returned untouched — its edits are irrelevant to the curated view, and skipping the
         overlay lets the editor navigate to a dropped row (to undrop it) even when an edit collides with a signal.
@@ -137,7 +150,7 @@ class EditedDataset(Dataset):
     # these from the public edit API.
     @property
     def dropped(self) -> frozenset[str]:
-        """Uids the log currently drops from the view."""
+        """Uids the logs currently drop from the view."""
         return frozenset(self._dropped)
 
     @property
@@ -149,19 +162,22 @@ class EditedDataset(Dataset):
         _validate_uid(uid)
         if not (isinstance(data, dict) and _is_valid_static_value(data)):
             raise ValueError(f'Edit data must be a mapping of static items to JSON-serializable values\n{data=!r}')
-        return self._append({'op': 'set_static', 'v': 1, 'ep': uid, 'data': data})
+        return self._append(uid, {'op': 'set_static', 'v': 1, 'ep': uid, 'data': data})
 
     def drop(self, uid: str) -> 'EditedDataset':
         """Append a `drop` edit removing the episode from the view; the recording stays on disk."""
         _validate_uid(uid)
-        return self._append({'op': 'drop', 'v': 1, 'ep': uid})
+        return self._append(uid, {'op': 'drop', 'v': 1, 'ep': uid})
 
     def undrop(self, uid: str) -> 'EditedDataset':
         """Append an `undrop` edit restoring a previously dropped episode to the view."""
         _validate_uid(uid)
-        return self._append({'op': 'undrop', 'v': 1, 'ep': uid})
+        return self._append(uid, {'op': 'undrop', 'v': 1, 'ep': uid})
 
-    def _append(self, record: dict[str, Any]) -> 'EditedDataset':
-        with (self._edits_dir / EDITS_FILE).open('a', encoding='utf-8') as f:
+    def _append(self, uid: str, record: dict[str, Any]) -> 'EditedDataset':
+        directory = self._episode_dirs.get(uid)
+        if directory is None:
+            raise ValueError(f'No episode with uid {uid!r} and a directory for its edit log')
+        with (directory / EDITS_FILE).open('a', encoding='utf-8') as f:
             f.write(json.dumps(record, cls=_StaticEncoder) + '\n')
-        return EditedDataset(self._base, self._edits_dir)
+        return EditedDataset(self._base, self._dataset_log_dirs)
