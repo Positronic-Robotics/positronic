@@ -5,8 +5,8 @@ from pimm.time import EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.recording import HARNESS_WORLD
-from positronic.recording.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand
+from positronic.drivers.recording import HARNESS_WORLD
+from positronic.drivers.recording.ds_player_agent import DsPlayerAbortCommand, DsPlayerAgent, DsPlayerStartCommand
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter, drive_until
 
 

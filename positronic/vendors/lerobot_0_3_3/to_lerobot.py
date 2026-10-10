@@ -31,8 +31,8 @@ from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
-from positronic.recording import HARNESS_WORLD
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:

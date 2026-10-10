@@ -6,11 +6,11 @@ from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import ACTION
-from positronic.recording import HARNESS_WORLD
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t.codecs import DroidCodec, droid, droid_three_cameras
 

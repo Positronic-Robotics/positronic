@@ -21,10 +21,10 @@ from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, Loc
 from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.eval import keys as eval_keys
-from positronic.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,

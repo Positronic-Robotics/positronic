@@ -18,9 +18,9 @@ from scipy.spatial.transform import Rotation as ScipyRotation
 from positronic import geom
 from positronic.dataset import transforms
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.recording import HARNESS_WORLD
 
 _QUAT = geom.Rotation.Representation.QUAT
 

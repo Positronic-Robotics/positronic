@@ -8,7 +8,7 @@ import pimm
 from pimm.time import validate_timeline
 from positronic.dataset import Episode, Time
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.recording import HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_WORLD
 
 
 @dataclass

@@ -29,7 +29,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.dataset.video import VideoSignal
-from positronic.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 
 
 @pytest.fixture(params=['legacy', 'harness'])

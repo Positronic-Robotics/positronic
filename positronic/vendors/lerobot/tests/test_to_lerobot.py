@@ -10,8 +10,8 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, AbsoluteJointsAction, ObservationCodec
-from positronic.recording import HARNESS_WORLD
 
 lerobot = pytest.importorskip('lerobot')
 if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':

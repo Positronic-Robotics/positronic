@@ -13,10 +13,10 @@ from positronic.dataset import DatasetWriter, EpisodeWriter, Time
 from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as rcmd
 from positronic.drivers.roboarm.tests.fakes import FakeRobotState
-from positronic.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.tests.testing_coutils import run_scripted_agent
 
 # Where a scripted episode records; a fake dataset opens the same one whatever the path.

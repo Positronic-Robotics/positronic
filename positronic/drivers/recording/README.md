@@ -2,10 +2,10 @@
 
 ## `DsWriterAgent` (streaming recorder)
 
-Import from `positronic.recording.ds_writer_agent`.
+Import from `positronic.drivers.recording.ds_writer_agent`.
 
 `DsWriterAgent` records data collection and replay runs. Inference recording belongs to
-[`Harness`](../policy/harness.py), which writes through the same dataset interfaces.
+[`Harness`](../../policy/harness.py), which writes through the same dataset interfaces.
 Harness adds `harness.world` and `harness.wall`: first receipt for inputs, emission for commands.
 These coordinates align inputs and commands while preserving the original message timestamps.
 The agent is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends updated inputs with their `pimm.Message.time` timestamps.
@@ -47,7 +47,7 @@ Lifecycle
 
 ## `DsPlayerAgent` (dataset player)
 
-Import from `positronic.recording.ds_player_agent`.
+Import from `positronic.drivers.recording.ds_player_agent`.
 
 `DsPlayerAgent` replays recorded `Episode` objects back into a live `pimm` world by streaming signal values on demand. It mirrors the lifecycle style of `DsWriterAgent`, making it easy to pipe existing datasets through simulators, robots, or other consumers.
 
@@ -69,6 +69,6 @@ Playback semantics
   their actual emission and first delivery times.
 
 Typical use cases
-- Driving robots or simulators from a stored episode while optionally recording the run again. See [`positronic/replay_record.py`](../../positronic/replay_record.py) where `DsPlayerAgent` feeds a Mujoco simulation and simultaneously streams into a `DsWriterAgent` to capture the replay.
+- Driving robots or simulators from a stored episode while optionally recording the run again. See [`positronic/replay_record.py`](../../replay_record.py) where `DsPlayerAgent` feeds a Mujoco simulation and simultaneously streams into a `DsWriterAgent` to capture the replay.
 - Scrubbing subsets of an episode (via `start_ts`/`end_ts`) for debugging or visualization tools without rewriting the dataset.
 - Streaming into analysis pipelines that expect live `pimm` signals; consumers just connect to `player.outputs[...]` as if they were real hardware feeds.

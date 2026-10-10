@@ -5,7 +5,7 @@ from pathlib import Path
 import positronic.dataset
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 
 _DATASET_ROOT = Path(positronic.dataset.__file__).parent
 
@@ -73,8 +73,8 @@ def test_dataset_has_no_application_timeline_dependencies():
                 line = node.lineno
             for name in imports:
                 if (
-                    name == 'positronic.recording'
-                    or name.startswith('positronic.recording.')
+                    name == 'positronic.drivers.recording'
+                    or name.startswith('positronic.drivers.recording.')
                     or name == 'pimm.time'
                     or (name.startswith('pimm.time.') and name.removeprefix('pimm.time.') not in time_api)
                     or (name.endswith('.RECORDED_TIME') and not legacy_reader)

@@ -17,10 +17,10 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers import roboarm
+from positronic.drivers.recording import HARNESS_WORLD
+from positronic.drivers.recording.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
+from positronic.drivers.recording.ds_writer_agent import DsWriterCommand
 from positronic.gui import dpg_ui
-from positronic.recording import HARNESS_WORLD
-from positronic.recording.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
-from positronic.recording.ds_writer_agent import DsWriterCommand
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path

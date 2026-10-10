@@ -11,9 +11,9 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
-from positronic.recording import HARNESS_WORLD
 
 from .base import Codec
 from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action

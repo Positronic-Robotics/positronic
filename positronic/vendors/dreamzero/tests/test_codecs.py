@@ -7,8 +7,8 @@ from positronic import keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy.codecs import ACTION
-from positronic.recording import HARNESS_WORLD
 from positronic.vendors.dreamzero.codecs import DreamZeroActionCodec, DreamZeroObservationCodec
 
 

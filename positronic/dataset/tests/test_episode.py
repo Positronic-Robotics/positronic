@@ -15,7 +15,7 @@ from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME, SIGNAL_VERSION, SIGNAL_VERSION_KEY, TIMESTAMP_PREFIX
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder
-from positronic.recording import HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, vcs_wheel
 
 

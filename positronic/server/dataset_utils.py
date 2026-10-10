@@ -35,9 +35,9 @@ from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.dataset.video import VideoSignal
 from positronic.drivers.camera import CAPTURE_TIME
+from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.eval import keys as eval_keys
-from positronic.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.utils.rerun_compat import flatten_numeric, log_series_styles
 
 # TODO: 3D visualization roles (pose_signals, joint_signals) are currently read from episode

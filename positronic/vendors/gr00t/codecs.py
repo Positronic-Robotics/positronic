@@ -13,6 +13,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import command, models
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import (
@@ -30,7 +31,6 @@ from positronic.policy.codecs import (
     lerobot_vector,
 )
 from positronic.policy.codecs.geometry import ConvertPose
-from positronic.recording import HARNESS_WORLD
 from positronic.vendors import gr00t
 
 

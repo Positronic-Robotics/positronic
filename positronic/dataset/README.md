@@ -341,7 +341,7 @@ Each line of `edits.jsonl` is one JSON record carrying its op. `{"op": "set_stat
 `EditedDataset(base, edits_dir)` reads the log at `edits_dir`, hides dropped episodes, and overlays each remaining episode's static edits; `load_dataset`/`load_all_datasets` compose it over a `LocalDataset`, while `LocalDataset` itself always reads the raw recordings. The log is plain appendable JSON so external tools can write it; the dataset directory has a single writer.
 
 Recording and playback are application consumers of this library. See
-[`positronic.recording`](../recording/README.md) for the PIMM agents and timeline conventions.
+[`positronic.drivers.recording`](../drivers/recording/README.md) for the PIMM agents and timeline conventions.
 
 ## Transforms
 

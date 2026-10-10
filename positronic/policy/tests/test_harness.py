@@ -25,6 +25,7 @@ from positronic.dataset.episode import Episode, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.video import LibavEncoder
+from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, from_wire, to_wire
@@ -41,7 +42,6 @@ from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
-from positronic.recording import HARNESS_WALL, HARNESS_WORLD
 
 MOTOR = 'motor'
 POSITION = 'position'

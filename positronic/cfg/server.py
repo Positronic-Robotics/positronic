@@ -13,9 +13,9 @@ from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.recording import HARNESS_WORLD
 from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig

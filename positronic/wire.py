@@ -5,9 +5,9 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.recording.ds_writer_agent import DsWriterAgent
 from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
 from positronic.policy.harness import Harness
-from positronic.recording.ds_writer_agent import DsWriterAgent
 
 __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
 

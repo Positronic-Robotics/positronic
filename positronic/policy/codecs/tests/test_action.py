@@ -12,12 +12,12 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation
 from positronic.policy.codecs import ACTION, ObservationCodec, SetControlMode, UnpackActionChunk
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
 from positronic.policy.spec import from_spec
-from positronic.recording import HARNESS_WORLD
 
 
 @pytest.mark.parametrize('positions', [False, True])

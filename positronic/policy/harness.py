@@ -19,13 +19,13 @@ from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
+from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Obs, Policy, PolicyRun
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.utils import flatten_dict, frozen_view
 
 # Harness wake-up intervals on the world's clock.

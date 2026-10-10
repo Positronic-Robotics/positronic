@@ -32,7 +32,7 @@ all records contain every coordinate, never decrease any, and strictly increase 
 There is no main or default query timeline. Signals in an episode may have overlapping or disjoint sets;
 `episode.timelines` is their union. Dataset queries and transforms require explicit timeline names.
 Names have no clock semantics or preference within the library. Applications choose their names
-and units; recording and playback conventions belong to [`positronic.recording`](../recording/README.md).
+and units; recording and playback conventions belong to [`positronic.drivers.recording`](../drivers/recording/README.md).
 
 Queries use `Time` values to name their timelines explicitly. Point lookup selects the last record
 satisfying all named upper bounds and returns its complete original coordinates. Batch sampling replaces queried

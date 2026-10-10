@@ -11,7 +11,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.recording import HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_WORLD
 
 from .base import Codec
 from .metadata import LEROBOT_FEATURES, lerobot_image, lerobot_vector

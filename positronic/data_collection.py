@@ -24,10 +24,10 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers import roboarm
+from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
 from positronic.gui import dpg_ui
-from positronic.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
