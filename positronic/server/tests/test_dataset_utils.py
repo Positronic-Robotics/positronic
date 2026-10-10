@@ -15,7 +15,6 @@ import rerun.recording as rr_recording
 
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys
-from positronic.cfg.server import single_arm_replay_layout
 from positronic.dataset import Time
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers, expand_suffixed
@@ -27,6 +26,7 @@ from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
+    ARM_CHARTS,
     ReplayLayout,
     _build_blueprint,
     _collect_signal_groups,
@@ -465,7 +465,7 @@ def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):
     assert _line_names(listed) == {f'/signals/{keys.TARGET_GRIP}': [keys.TARGET_GRIP]}
 
 
-def test_the_single_arm_layout_charts_the_motion_signals_of_each_kind_of_arm_command():
+def test_the_arm_charts_plot_the_motion_signals_of_each_kind_of_arm_command():
     one_of_each_kind = (
         command.CartesianPosition(geom.Transform3D.identity),
         command.CartesianDelta(geom.Transform3D.identity),
@@ -480,7 +480,7 @@ def test_the_single_arm_layout_charts_the_motion_signals_of_each_kind_of_arm_com
     }
     charted = {
         signal
-        for signals in single_arm_replay_layout.instantiate().charts.values()
+        for signals in ARM_CHARTS.values()
         for signal in (signals.values() if isinstance(signals, dict) else signals)
     }
 
