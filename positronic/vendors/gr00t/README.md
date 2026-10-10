@@ -76,11 +76,10 @@ Set `--dataset.base.path` to your recordings, or select another dataset configur
 For three views, set `--dataset.transforms='["@positronic.vendors.gr00t.recipes.droid_three_cameras"]'`.
 The [training recipe](recipes.py) builds an episode transform. The [inference recipe](serving/recipe.py)
 builds a JSON-compatible description using only the lightweight wrapper.
-Both read [shared settings](serving/droid.json): observation keys, image size, camera mappings, tool frame,
+Both use [shared Python settings](serving/settings.py): observation keys, image size, camera mappings, tool frame,
 rotation offset, and cadence.
-Their names and loading live in [serving/settings.py](serving/settings.py),
-which both training and serving import. This module uses only the standard library; the common
-model-server wrapper has no GR00T settings definitions.
+`settings.droid()` returns a fresh dictionary, and `settings.droid_three_cameras()` derives the three-view variant.
+This module uses only the standard library; the common model-server wrapper has no GR00T settings definitions.
 The settings also contain the control mode, which only inference uses.
 The training transform preserves the recorded absolute pose, grip, and joint trajectories as action labels.
 GR00T's checkpoint processor converts these labels to relative actions and restores absolute actions during inference.
@@ -95,10 +94,21 @@ Training copies this file into the experiment directory and, after a successful 
 Resume rejects settings that differ from those recorded in the experiment directory.
 Datasets without this optional file retain their existing training behavior.
 
-To use a settings file for conversion, set `--dataset.transforms.0.settings.path=/data/settings.json`.
-To use the same file for serving, set `--pipeline.settings.path=/data/settings.json`.
-For a fine-tuned checkpoint, use its `meta/positronic_model_settings.json` file.
-The serving command requires this explicit path for custom settings; selecting a checkpoint does not select its settings.
+Customize settings in Python and pass the same dictionary to each recipe:
+
+```python
+from positronic.vendors.gr00t import recipes
+from positronic.vendors.gr00t.serving import recipe
+from positronic.vendors.gr00t.serving import settings as model_settings
+
+settings = model_settings.droid(overrides={model_settings.IMAGE_SIZE: [160, 90]})
+training = recipes.droid(settings=settings)
+description = recipe.inference(settings)
+```
+
+The JSON saved with datasets and checkpoints records the resolved settings for reproducibility.
+For a fine-tuned checkpoint, configure serving to match those recorded settings.
+Selecting a checkpoint does not select its settings.
 The image size describes preprocessing before the native checkpoint processor, which also applies its own transforms.
 
 `--base_model` defaults to `nvidia/GR00T-N1.7-DROID`. Standard controls are `--batch_size`,

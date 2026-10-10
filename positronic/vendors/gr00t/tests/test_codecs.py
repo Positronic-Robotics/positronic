@@ -17,7 +17,7 @@ from positronic.vendors.gr00t.serving import recipe
 from positronic.vendors.gr00t.serving import settings as model_settings
 
 
-@pytest.mark.parametrize('config', [model_settings.load_settings, model_settings.three_camera_settings])
+@pytest.mark.parametrize('config', [model_settings.droid, model_settings.droid_three_cameras])
 def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(config):
     settings = config()
     settings[model_settings.IMAGE_MAPPINGS] = {}
@@ -46,7 +46,7 @@ def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(conf
     np.testing.assert_array_equal(recipes.droid(settings=settings).meta[roboarm_keys.EE_FRAME], expected_frame)
 
 
-@pytest.mark.parametrize('config', [model_settings.load_settings, model_settings.three_camera_settings])
+@pytest.mark.parametrize('config', [model_settings.droid, model_settings.droid_three_cameras])
 @pytest.mark.parametrize('horizon', [0, 1, 40])
 def test_droid_decodes_native_chunk_and_binarizes_grip(config, horizon):
     codec = spec.from_spec(recipe.inference(config()))
@@ -70,13 +70,13 @@ def test_droid_decodes_native_chunk_and_binarizes_grip(config, horizon):
 
 
 def test_training_cadence_metadata():
-    training = recipes.droid(settings=model_settings.load_settings(overrides={ACTION_FPS: 20}))
+    training = recipes.droid(settings=model_settings.droid(overrides={ACTION_FPS: 20}))
     assert training.meta[ACTION_FPS] == 20
 
 
 def test_training_actions_align_recorded_samples():
     training = recipes.droid(
-        settings=model_settings.load_settings(
+        settings=model_settings.droid(
             overrides={model_settings.IMAGE_MAPPINGS: {}, model_settings.EE_FRAME: [0, 0, 0, 1, 0, 0, 0]}
         )
     )

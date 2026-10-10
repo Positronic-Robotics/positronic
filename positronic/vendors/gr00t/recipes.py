@@ -24,7 +24,7 @@ from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import settings as model_settings
 from positronic.vendors.gr00t.serving.settings import MODEL_SETTINGS
 
-settings = cfn.Config(model_settings.load_settings)
+settings = cfn.Config(model_settings.droid)
 
 
 def _derive_pose(source: str, episode: Episode):
@@ -112,4 +112,4 @@ def droid(settings: dict) -> EpisodeTransform:
     )
 
 
-droid_three_cameras = droid.override(settings=cfn.Config(model_settings.three_camera_settings))
+droid_three_cameras = droid.override(settings=cfn.Config(model_settings.droid_three_cameras))

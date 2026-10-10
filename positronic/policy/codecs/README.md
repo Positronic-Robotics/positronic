@@ -26,14 +26,15 @@ Use the [reusable codec catalog](#reusable-codec-catalog) to assemble a recipe, 
 
 ## Training and inference recipes
 
-GR00T has independent training and inference recipes. Both read [shared settings](../../vendors/gr00t/serving/droid.json):
+GR00T has independent training and inference recipes. Both use
+[shared Python settings](../../vendors/gr00t/serving/settings.py):
 
 ```python
 from positronic.vendors.gr00t import recipes
 from positronic.vendors.gr00t.serving import recipe
-from positronic.vendors.gr00t.serving.settings import load_settings
+from positronic.vendors.gr00t.serving.settings import droid
 
-settings = load_settings()
+settings = droid()
 training = recipes.droid(settings=settings)  # EpisodeTransform
 description = recipe.inference(settings)     # JSON-compatible component description
 ```

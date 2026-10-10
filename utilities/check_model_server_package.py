@@ -125,7 +125,7 @@ def main() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'positronic' / 'vendors' / 'gr00t'))
     settings = import_module('serving.settings')
     recipe = import_module('serving.recipe')
-    description = recipe.inference(settings.load_settings())
+    description = recipe.inference(settings.droid())
     spec.validate(description)
     assert serialization.deserialise(serialization.serialise(description)) == description
     assert 'positronic' not in sys.modules

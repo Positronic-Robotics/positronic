@@ -239,7 +239,7 @@ def _warm_observation(modalities: dict) -> dict[str, Any]:
     if language_key != gr00t.TASK:
         raise ValueError(f'Checkpoint instruction key {language_key} does not match codec key {gr00t.TASK}')
     # TODO: Use session settings for warm-up when this adapter moves to ModelServer.
-    width, height = model_settings.load_settings()[model_settings.IMAGE_SIZE]
+    width, height = model_settings.droid()[model_settings.IMAGE_SIZE]
     state = {name: np.zeros((1, 1, gr00t.STATE_DIMS[name]), dtype=np.float32) for name in state_keys}
     if gr00t.EE_POSE in state:
         state[gr00t.EE_POSE][..., 3:] = [1, 0, 0, 0, 1, 0]
@@ -309,7 +309,7 @@ def gr00t_model(
     return policy
 
 
-@cfn.config(settings=cfn.Config(model_settings.load_settings))
+@cfn.config(settings=cfn.Config(model_settings.droid))
 def pipeline(settings: dict, fps: float | None = None, horizon_sec: float = 1.0):
     """Schedule DROID joint commands while the server codec performs checkpoint-specific conversion."""
     codec = spec.from_spec(recipe.inference(settings))
@@ -326,7 +326,7 @@ def pipeline(settings: dict, fps: float | None = None, horizon_sec: float = 1.0)
 
 
 droid = pipeline
-droid_three_cameras = pipeline.override(settings=cfn.Config(model_settings.three_camera_settings))
+droid_three_cameras = pipeline.override(settings=cfn.Config(model_settings.droid_three_cameras))
 COMMANDS = {
     'serve': serve.override(model=gr00t_model, pipeline=droid),
     'droid': serve.override(model=gr00t_model, pipeline=droid),

@@ -46,10 +46,10 @@ def prepared_dataset(raw_dataset):
         base=raw_dataset,
         transforms=[
             recipes.droid.override(
-                settings=model_settings.load_settings(
+                settings=model_settings.droid(
                     overrides={
                         ACTION_FPS: 20,
-                        model_settings.IMAGE_MAPPINGS: model_settings.three_camera_settings()[
+                        model_settings.IMAGE_MAPPINGS: model_settings.droid_three_cameras()[
                             model_settings.IMAGE_MAPPINGS
                         ],
                     }
@@ -141,7 +141,7 @@ def test_resume_rejects_different_dataset_settings(tmp_path, monkeypatch, prepar
     (dataset / MODEL_SETTINGS_PATH).write_text(json.dumps(prepared_dataset.meta[MODEL_SETTINGS]))
     output = tmp_path / 'output'
     (output / 'meta').mkdir(parents=True)
-    (output / MODEL_SETTINGS_PATH).write_text(json.dumps(model_settings.load_settings()))
+    (output / MODEL_SETTINGS_PATH).write_text(json.dumps(model_settings.droid()))
     monkeypatch.setattr(train.pos3, 'download', lambda _: dataset)
     monkeypatch.setattr(train.pos3, 'sync', lambda *args, **kwargs: output)
     with pytest.raises(ValueError, match='resumed training run'):

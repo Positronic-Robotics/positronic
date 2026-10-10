@@ -37,15 +37,12 @@ def observation():
     }
 
 
-@pytest.mark.parametrize('config', [model_settings.load_settings, model_settings.three_camera_settings])
-def test_training_and_inference_encode_the_same_absolute_state_and_images(config, observation, tmp_path):
+@pytest.mark.parametrize('config', [model_settings.droid, model_settings.droid_three_cameras])
+def test_training_and_inference_encode_the_same_absolute_state_and_images(config, observation):
     settings = config()
     if gr00t.EXTERIOR_IMAGE_2 in settings[model_settings.IMAGE_MAPPINGS]:
         settings[model_settings.IMAGE_MAPPINGS][gr00t.EXTERIOR_IMAGE_2] = 'alternate_view'
         observation['alternate_view'] = observation.pop(keys.EXTERIOR_IMAGE_2)
-    path = tmp_path / 'settings.json'
-    path.write_text(json.dumps(settings))
-    settings = config(path=path)
     codec = spec.from_spec(recipe.inference(settings))
     assert isinstance(codec, Codec)
     episode = EpisodeContainer({
@@ -70,7 +67,7 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
 @pytest.mark.parametrize('image_mappings', [{}, {gr00t.EE_POSE: keys.WRIST_IMAGE}])
 def test_observation_layout_preserves_empty_camera_groups_and_names_shared_with_state(image_mappings, observation):
     codec = spec.from_spec(
-        recipe.inference(model_settings.load_settings(overrides={model_settings.IMAGE_MAPPINGS: image_mappings}))
+        recipe.inference(model_settings.droid(overrides={model_settings.IMAGE_MAPPINGS: image_mappings}))
     )
     assert isinstance(codec, Codec)
     encoded = codec.encode(observation)
@@ -84,7 +81,7 @@ def test_observation_layout_preserves_empty_camera_groups_and_names_shared_with_
 def test_observation_layout_requires_a_live_prompt(observation):
     del observation[keys.TASK]
     with pytest.raises(KeyError, match=keys.TASK):
-        spec.from_spec(recipe.inference(model_settings.load_settings())).encode(observation)
+        spec.from_spec(recipe.inference(model_settings.droid())).encode(observation)
 
 
 @pytest.mark.parametrize('task', [None, 'Pick up the cup'])
@@ -99,14 +96,14 @@ def test_training_episode_materializes_without_requiring_a_recorded_task(observa
 
 
 def test_three_camera_configuration_uses_a_distinct_second_external_image(observation):
-    encoded = spec.from_spec(recipe.inference(model_settings.three_camera_settings())).encode(observation)
+    encoded = spec.from_spec(recipe.inference(model_settings.droid_three_cameras())).encode(observation)
     assert len(encoded[gr00t.VIDEO]) == 3
     np.testing.assert_array_equal(
         encoded[gr00t.VIDEO][gr00t.EXTERIOR_IMAGE_2][0, 0], observation[keys.EXTERIOR_IMAGE_2]
     )
     del observation[keys.EXTERIOR_IMAGE_2]
     with pytest.raises(KeyError):
-        spec.from_spec(recipe.inference(model_settings.three_camera_settings())).encode(observation)
+        spec.from_spec(recipe.inference(model_settings.droid_three_cameras())).encode(observation)
 
 
 def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monkeypatch, observation):
@@ -121,8 +118,8 @@ def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monk
         np.testing.assert_allclose(action[bounds['start'] : bounds['end']], encoded[name][0][0])
 
 
-def test_saved_settings_drive_independent_training_and_inference_recipes(tmp_path, observation):
-    settings = model_settings.load_settings(
+def test_python_settings_drive_independent_training_and_inference_recipes(observation):
+    settings = model_settings.droid(
         overrides={
             model_settings.IMAGE_SIZE: [160, 90],
             model_settings.IMAGE_MAPPINGS: {'custom_camera': keys.EXTERIOR_IMAGE_2},
@@ -135,10 +132,8 @@ def test_saved_settings_drive_independent_training_and_inference_recipes(tmp_pat
         renamed = f'custom.{name}'
         observation[renamed] = observation.pop(source)
         settings[model_settings.OBSERVATION_KEYS][name] = renamed
-    path = tmp_path / 'settings.json'
-    path.write_text(json.dumps(settings))
-    training = recipes.droid(settings=model_settings.load_settings(path))
-    description = json.loads(json.dumps(recipe.inference(model_settings.load_settings(path))))
+    training = recipes.droid(settings=settings)
+    description = json.loads(json.dumps(recipe.inference(settings)))
     codec = spec.from_spec(description)
     assert isinstance(codec, Codec)
     episode = EpisodeContainer({
@@ -188,7 +183,7 @@ def test_droid_frame_and_pixels_match_upstream_robot_client(observation):
         tool_pose.translation,
         Rotation.from_matrix(tool_pose.rotation.as_rotation_matrix).as_euler('XYZ'),
     ])
-    encoded = spec.from_spec(recipe.inference(model_settings.load_settings())).encode(observation)
+    encoded = spec.from_spec(recipe.inference(model_settings.droid())).encode(observation)
     np.testing.assert_allclose(
         encoded[gr00t.STATE][gr00t.EE_POSE][0, 0], loaded['frame'].compute_eef_9d(upstream_pose), atol=1e-6
     )

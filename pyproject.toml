@@ -316,7 +316,6 @@ positronic = [
   "gui/static/**",
   "server/static/**",
   "server/templates/**",
-  "vendors/gr00t/serving/*.json",
   # The launcher needs these dependency constraints in installed distributions too.
   "simulator/molmo_spaces/molmo_constraints.txt",
 ]
