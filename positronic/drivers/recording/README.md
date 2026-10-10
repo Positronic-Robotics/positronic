@@ -19,6 +19,7 @@ Key ideas
 - Every message coordinate is saved: emission, first delivery, and optional producer timelines.
   Training joins, export, and playback use `harness.world` when present and otherwise `recorded`.
   Replay of data collection recordings requires an explicit `received.world` timeline.
+  Pass `--timeline=received.world` to `positronic/replay_record.py` for these recordings.
 
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
 - A serializer receives the latest value for the input and can return:
