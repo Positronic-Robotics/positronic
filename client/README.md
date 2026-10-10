@@ -8,8 +8,9 @@ endpoint.
 > and nothing here is covered by a backwards-compatibility guarantee. Pin the exact version you
 > tested against, and expect to edit your code when you move off it.
 
-The library depends on `pydantic`, `httpx` and `typing-extensions` and nothing else, so a service that
-only speaks to the platform installs it on its own, at the exact version it was written against:
+The library depends on `pydantic`, `httpx`, `typing-extensions` and `positronic-eval-vocabulary`, which
+has no dependencies. So a service that only speaks to the platform installs it on its own, at the exact
+version it was written against:
 
 ```bash
 uv add "positronic-platform-client==0.28.0"
@@ -287,6 +288,19 @@ offers evals that it does not publish, and `public_eval` refuses their names.
 your machine. The run uses the positronic you installed. It warns when that positronic is not the
 commit the definition names, because the two runs can then differ. A local run does not stop at the
 time limit.
+
+## Scoring a run
+
+`platform_client.scoring` makes a run's `scores.json` from its recorded episodes. A scorer reads one
+episode and gives its outcome: the task, the success, and a graded score where the scorer grades one.
+`score(scorer, episodes)` adds the outcomes up into `Scores`, which holds three numbers. `primary` is
+the mean score of the episodes that recorded an outcome, and a board ranks on it. `episodes` counts
+every episode, and `unscored` counts the episodes that recorded no outcome. `primary` does not count
+those as failures. An episode that ran out of time counts as a failure, as it does on a real robot.
+
+`PUBLIC_SCORERS` holds the scorer of each public eval, under the name the definition gives as its
+`scorer`. A caller with scorers of its own passes `score` a table that holds them beside
+`PUBLIC_SCORERS`.
 
 ## From the command line
 

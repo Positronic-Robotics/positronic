@@ -1,5 +1,8 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
+from eval_vocabulary.episode import SUCCESS as SUCCESS
+from eval_vocabulary.episode import TERMINATED as TERMINATED
+
 # The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
 # is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}`` and its grippers
 # ``gripper.{side}``. ``SCENE`` means the world this trial runs in is ready, drawn by whichever handler the
@@ -18,8 +21,6 @@ MOUNTS = 'mounts'
 # True when a terminal was delivered inside the budget, False when the budget ran out. ``SUCCESS``
 # rides in the terminal payload an env's adapter returns, so an env that reports it only on success
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
-SUCCESS = 'eval.success'
-TERMINATED = 'eval.terminated'
 # Whether the trial charged each model call the wall time it really took. True on a real rig whatever the
 # task asked, since it cannot hold the world still while the model thinks.
 CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'

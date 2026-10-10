@@ -49,7 +49,7 @@ dependencies = [
     "positronic-wire[websocket,grpc]==0.12.0",
     "positronic-model-server[websocket,grpc]==0.2.0",
     # The words an attended rollout records, which the rollouts viewer colours and counts.
-    "positronic-eval-vocabulary==0.1.0",
+    "positronic-eval-vocabulary==0.2.0",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",

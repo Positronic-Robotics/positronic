@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+import eval_vocabulary
+
 from positronic import keys
 from positronic.eval import keys as eval_keys
 from positronic.simulator.libero import keys as libero_keys
@@ -71,14 +73,31 @@ def test_no_guarded_key_literals():
     assert not offenders, f'Guarded key literals found — import the constant from its module:\n{listing}'
 
 
-def test_keys_modules_import_nothing():
-    # A keys module must stay a dependency-free leaf so an out-of-repo consumer can depend on it alone,
-    # without dragging in the rest of positronic (or its optional torch/lerobot deps). Any import statement
-    # appearing in one breaks that contract.
+def _lines_importing_outside_the_vocabulary(source: str) -> list[int]:
+    lines = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            modules = [node.module or '']
+        else:
+            continue
+        if any(module.split('.')[0] != eval_vocabulary.__name__ for module in modules):
+            lines.append(node.lineno)
+    return lines
+
+
+def test_keys_modules_import_only_from_the_vocabulary():
+    # A keys module may import only from `eval_vocabulary`, which depends on nothing. So an out-of-repo
+    # consumer can depend on it without the rest of positronic or its optional torch/lerobot deps.
     imports = [
-        f'{path.relative_to(_REPO_ROOT)}:{node.lineno}'
+        f'{path.relative_to(_REPO_ROOT)}:{line}'
         for path in _KEY_MODULES
-        for node in ast.walk(ast.parse(path.read_text(), filename=str(path)))
-        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for line in _lines_importing_outside_the_vocabulary(path.read_text())
     ]
-    assert not imports, 'A keys module must import nothing (dependency-free leaf module):\n' + '\n'.join(imports)
+    assert not imports, 'A keys module may import only from eval_vocabulary:\n' + '\n'.join(imports)
+
+
+def test_an_import_from_outside_the_vocabulary_is_found():
+    source = 'from eval_vocabulary.episode import TASK\nimport os\nfrom eval_vocabulary_x import a\nfrom . import b\n'
+    assert _lines_importing_outside_the_vocabulary(source) == [2, 3, 4]

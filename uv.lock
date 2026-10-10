@@ -5378,7 +5378,7 @@ dev = [
 
 [[package]]
 name = "positronic-eval-vocabulary"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "vocabulary" }
 
 [[package]]
@@ -5431,6 +5431,7 @@ version = "0.28.0"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
+    { name = "positronic-eval-vocabulary" },
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
@@ -5438,6 +5439,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "positronic-eval-vocabulary", editable = "vocabulary" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "typing-extensions", specifier = ">=4.12.2" },
 ]
