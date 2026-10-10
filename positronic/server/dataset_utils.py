@@ -24,7 +24,6 @@ from av.video.stream import VideoStream
 from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
 from rerun.urdf import UrdfTree
 
-from pimm import Time
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset.dataset import Dataset
@@ -84,6 +83,8 @@ class EpisodeSignals:
     # Width over height of each camera's frames.
     camera_aspects: dict[str, float] = field(default_factory=dict)
     neither_numeric_nor_text: list[str] = field(default_factory=list)
+    # Set where a signal of the episode carries `received.world`, the timeline the replay opens on.
+    on_received_world: bool = False
 
     @property
     def plotted(self) -> dict[str, int]:
@@ -211,6 +212,7 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
         joint_set.add(ep.static[_SINGULAR_JOINT_SIGNAL])
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[], joints=[])
     for name, sig in ep.signals.items():
+        signals.on_received_world |= RECEIVED_WORLD in sig.timelines
         if sig.kind == Kind.IMAGE:
             try:
                 height, width = np.asarray(sig[0][0]).shape[:2]
@@ -569,8 +571,15 @@ def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, 
     return max(_MIN_ENCODED_SIDE, int(width * scale) // 2 * 2), max(_MIN_ENCODED_SIDE, int(height * scale) // 2 * 2)
 
 
-def _timestamp_columns(sig: Signal) -> dict[str, np.ndarray]:
-    return {name: np.asarray(sig.timestamps(name), dtype=np.int64) for name in sig.timelines}
+def _timestamp_columns(sig: Signal, on_received_world: bool) -> dict[str, np.ndarray]:
+    """Each timeline of `sig`. In an episode on `received.world`, a signal on `recorded` alone is on it too.
+
+    `recorded` is the world clock a writer named before timelines had names, so the coordinates are the same.
+    """
+    columns = {name: np.asarray(sig.timestamps(name), dtype=np.int64) for name in sig.timelines}
+    if on_received_world and RECORDED_TIME in columns and RECEIVED_WORLD not in columns:
+        columns[RECEIVED_WORLD] = columns[RECORDED_TIME]
+    return columns
 
 
 def _rerun_indexes(timestamps: dict[str, np.ndarray]) -> list[rr.TimeColumn]:
@@ -591,15 +600,18 @@ def _sample_indices(timestamps: dict[str, np.ndarray], max_hz: float) -> np.ndar
     return _decimation_indices(timestamps[timeline].astype('timedelta64[ns]'), max_hz)
 
 
-def _encode_frames_as_video(entity_path: str, sig: Signal, max_resolution: int, max_hz: float) -> None:
+def _encode_frames_as_video(
+    entity_path: str, sig: Signal, columns: dict[str, np.ndarray], max_resolution: int, max_hz: float
+) -> None:
     codec = rr.VideoCodec.H265
     # A frame may produce 0, 1 or more packets, and so may the final flush.
-    times_by_pts: dict[int, Time] = {}
+    index_by_pts: dict[int, int] = {}
 
     def _log_encoded(packets: Iterable[av.Packet]) -> None:
         for packet in packets:
             assert packet.pts is not None
-            timestamps = {name: np.array([value], dtype=np.int64) for name, value in times_by_pts[packet.pts].items()}
+            index = index_by_pts[packet.pts]
+            timestamps = {name: values[index : index + 1] for name, values in columns.items()}
             rr.send_columns(
                 entity_path, indexes=_rerun_indexes(timestamps), columns=rr.VideoStream.columns(sample=[bytes(packet)])
             )
@@ -607,7 +619,7 @@ def _encode_frames_as_video(entity_path: str, sig: Signal, max_resolution: int, 
     first_frame = np.asarray(sig[0][0])
     h, w = first_frame.shape[:2]
     width, height = _size_capped_to(w, h, max_resolution)
-    kept = set(_sample_indices(_timestamp_columns(sig), max_hz).tolist())
+    kept = set(_sample_indices(columns, max_hz).tolist())
     with av.open('/dev/null', 'w', format='hevc') as container:
         stream = cast(VideoStream, container.add_stream('libx265', rate=30))
         stream.width = width
@@ -617,12 +629,12 @@ def _encode_frames_as_video(entity_path: str, sig: Signal, max_resolution: int, 
 
         rr.log(entity_path, rr.VideoStream(codec=codec), static=True)
 
-        for position, (val, ts) in enumerate(sample for index, sample in enumerate(sig) if index in kept):
+        for position, (index, (val, _)) in enumerate((i, sample) for i, sample in enumerate(sig) if i in kept):
             frame = av.VideoFrame.from_ndarray(np.asarray(val), format='rgb24')
             if (width, height) != (w, h):
                 frame = frame.reformat(width=width, height=height)
             frame.pts, frame.time_base = position, _FRAME_INDEX_TIME_BASE
-            times_by_pts[position] = ts
+            index_by_pts[position] = index
             _log_encoded(stream.encode(frame))
 
         _log_encoded(stream.encode())
@@ -673,8 +685,8 @@ def _log_video_signals(
         sig = ep.signals[name]
         if not len(sig):
             continue
+        timestamps = _timestamp_columns(sig, signals.on_received_world)
         if isinstance(sig, VideoSignal):
-            timestamps = _timestamp_columns(sig)
             kept = _sample_indices(timestamps, max_hz)
             video_bytes = _mp4_reduced_to(sig.video_path, max_resolution, kept if len(kept) < len(sig) else None)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
@@ -687,7 +699,7 @@ def _log_video_signals(
                 columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
             )
         else:
-            _encode_frames_as_video(name, sig, max_resolution, max_hz)
+            _encode_frames_as_video(name, sig, timestamps, max_resolution, max_hz)
         yield from drainer.drain()
 
 
@@ -740,7 +752,7 @@ def _log_numeric_signals(
         sig = ep.signals[key]
         if len(sig) == 0:
             continue
-        timestamps = _timestamp_columns(sig)
+        timestamps = _timestamp_columns(sig, signals.on_received_world)
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
@@ -933,7 +945,7 @@ def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStre
         sig = ep_signals[key]
         if not len(sig):
             continue
-        timestamps = _timestamp_columns(sig)
+        timestamps = _timestamp_columns(sig, signals.on_received_world)
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
         time_idx = _rerun_indexes({name: values[changes] for name, values in timestamps.items()})
