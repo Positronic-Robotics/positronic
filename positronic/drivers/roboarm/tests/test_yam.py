@@ -947,7 +947,7 @@ def motors(rig, monkeypatch):
         opened.append(FakeMotorInterface(rig.vendor, refuses, **kwargs))
         return opened[-1]
 
-    monkeypatch.setattr(yam, 'DMSingleMotorCanInterface', open_interface)
+    monkeypatch.setattr('i2rt.motor_drivers.dm_driver.DMSingleMotorCanInterface', open_interface)
     return opened, refuses
 
 
@@ -996,7 +996,9 @@ def test_the_motors_are_disabled_even_when_closing_the_chain_raises(rig, motors,
 
 def test_a_chain_with_no_motors_opens_no_interface(rig, monkeypatch):
     opened = []
-    monkeypatch.setattr(yam, 'DMSingleMotorCanInterface', lambda **kwargs: opened.append(kwargs))
+    monkeypatch.setattr(
+        'i2rt.motor_drivers.dm_driver.DMSingleMotorCanInterface', lambda **kwargs: opened.append(kwargs)
+    )
     rig.raise_arm()
     rig.finish()
     assert not opened
@@ -1211,7 +1213,9 @@ def test_a_verified_park_releases_even_when_its_report_fails(caplog):
 def chains(monkeypatch) -> dict[str, yam._FakeYam]:
     """The fake chain each driver opens, keyed by its CAN channel."""
     opened: dict[str, yam._FakeYam] = {}
-    monkeypatch.setattr(yam, 'get_yam_robot', lambda channel, **_: opened.setdefault(channel, yam._FakeYam()))
+    monkeypatch.setattr(
+        'i2rt.robots.get_robot.get_yam_robot', lambda channel, **_: opened.setdefault(channel, yam._FakeYam())
+    )
     return opened
 
 
@@ -1313,7 +1317,7 @@ def _gravity_by_channel(monkeypatch, rig) -> dict:
         factors[channel] = gravity_comp_factor
         return yam._FakeYam()
 
-    monkeypatch.setattr(yam, 'get_yam_robot', get_yam_robot)
+    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
     with pimm.World() as world:
         loop = world.start(
             list(rig.override(cameras={}, video_encoder=video_encoder.libx264_veryfast).instantiate().control_systems)
