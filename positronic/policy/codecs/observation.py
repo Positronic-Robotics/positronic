@@ -3,6 +3,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image as PilImage
+from positronic_model_server import spec
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -32,7 +33,7 @@ class PackObservationFields(Codec):
         )
     """
 
-    WIRE_NAME = 'pack_observation_fields'
+    WIRE_NAME = spec.PACK_OBSERVATION_FIELDS
 
     def __init__(self, layout: dict[str, Any], *, unsqueeze_dims: int = 0):
         if type(unsqueeze_dims) is not int or unsqueeze_dims < 0:
@@ -121,23 +122,26 @@ class ObservationCodec(Codec):
         state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
         images: mapping from output image name to tuple (input_key, (width, height)).
         task_field: output key carrying the language prompt at inference.
+        task_source: input key carrying the language prompt.
     """
 
-    WIRE_NAME = 'observation_codec'
+    WIRE_NAME = spec.OBSERVATION_CODEC
 
     def __init__(
         self,
         state: dict[str, dict[str, int]],
         images: dict[str, tuple[str, tuple[int, int]]],
         task_field: str = TASK_FIELD,
+        task_source: str = keys.TASK,
     ):
         self._state = state
         self._image_configs = images
         self._task_field = task_field
+        self._task_source = task_source
 
         self._derive_transforms: dict[str, Any] = {k: partial(self._derive_state, k) for k in state.keys()}
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
-        self._derive_transforms[TASK_FIELD] = Get(keys.TASK, '')
+        self._derive_transforms[TASK_FIELD] = Get(task_source, '')
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():
@@ -160,8 +164,8 @@ class ObservationCodec(Codec):
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 
-        if keys.TASK in inputs:
-            obs[self._task_field] = inputs[keys.TASK]
+        if self._task_source in inputs:
+            obs[self._task_field] = inputs[self._task_source]
 
         for out_name, (input_key, (width, height)) in self._image_configs.items():
             if input_key not in inputs:
@@ -199,5 +203,10 @@ class ObservationCodec(Codec):
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'state': self._state, 'images': images, 'task_field': self._task_field},
+            ARGS: {
+                'state': self._state,
+                'images': images,
+                'task_field': self._task_field,
+                'task_source': self._task_source,
+            },
         }

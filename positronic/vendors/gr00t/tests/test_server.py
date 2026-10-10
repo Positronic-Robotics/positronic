@@ -10,8 +10,8 @@ from positronic_model_server import keys as offboard_keys
 from positronic import keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.policy.codecs import ACTION
-from positronic.vendors import gr00t
 from positronic.vendors.gr00t import server as gr00t_server
+from positronic.vendors.gr00t import serving as gr00t
 
 
 def _modalities(cameras: list[str]) -> dict:

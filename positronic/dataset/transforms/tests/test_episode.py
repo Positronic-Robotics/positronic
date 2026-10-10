@@ -4,9 +4,30 @@ import pytest
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import Elementwise, TransformedEpisode
-from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, Rename
+from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, Rename, map_signals
 
 from ...tests.utils import DummySignal, DummyTransform
+
+
+def test_map_signals_is_lazy_and_preserves_other_fields_and_timestamps():
+    calls = []
+
+    def convert(value):
+        calls.append(value)
+        return value * 2
+
+    signal = DummySignal([10, 30], [1, 2])
+    episode = EpisodeContainer({'selected': signal, 'other': signal, 'task': 'pick'}, meta={'uid': 'fixture'})
+    result = map_signals(convert, ('selected',))(episode)
+    assert result.meta == episode.meta
+    assert result['task'] == 'pick'
+    assert result['other'] is signal
+    mapped = result['selected']
+    assert calls == []
+    assert list(mapped.timestamps(signal.timelines)) == list(signal.timestamps(signal.timelines))
+    assert calls == []
+    assert list(mapped.values()) == [2, 4]
+    assert calls == [1, 2]
 
 
 @pytest.fixture

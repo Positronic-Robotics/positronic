@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from positronic_model_server.keys import ACTION_FPS
 
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
@@ -8,15 +9,19 @@ from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
-from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import ACTION
-from positronic.vendors import gr00t
-from positronic.vendors.gr00t.codecs import DroidCodec, droid, droid_three_cameras
+from positronic.policy import spec
+from positronic.policy.codecs import ACTION, Codec
+from positronic.vendors.gr00t import recipes
+from positronic.vendors.gr00t import serving as gr00t
+from positronic.vendors.gr00t.serving import recipe
 
 
-@pytest.mark.parametrize('config', [droid, droid_three_cameras])
+@pytest.mark.parametrize('config', [recipe.load_settings, recipe.three_camera_settings])
 def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(config):
-    codec = config(image_mappings={})
+    settings = config()
+    settings[recipe.IMAGE_MAPPINGS] = {}
+    codec = spec.from_spec(recipe.inference(settings))
+    assert isinstance(codec, Codec)
     rng = np.random.default_rng(3)
     correction = np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]])
     for _ in range(20):
@@ -37,13 +42,14 @@ def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(conf
 
     expected_frame = models.DROID_EE_FRAME.as_vector(geom.Rotation.Representation.QUAT)
     np.testing.assert_array_equal(codec.meta[roboarm_keys.EE_FRAME], expected_frame)
-    np.testing.assert_array_equal(codec.training_encoder.meta[roboarm_keys.EE_FRAME], expected_frame)
+    np.testing.assert_array_equal(recipes.droid(settings=settings).meta[roboarm_keys.EE_FRAME], expected_frame)
 
 
-@pytest.mark.parametrize('config', [droid, droid_three_cameras])
+@pytest.mark.parametrize('config', [recipe.load_settings, recipe.three_camera_settings])
 @pytest.mark.parametrize('horizon', [0, 1, 40])
 def test_droid_decodes_native_chunk_and_binarizes_grip(config, horizon):
-    codec = config()
+    codec = spec.from_spec(recipe.inference(config()))
+    assert isinstance(codec, Codec)
     targets = np.arange(horizon * 7, dtype=np.float32).reshape(horizon, 7) / 100
     output = (
         {
@@ -63,31 +69,23 @@ def test_droid_decodes_native_chunk_and_binarizes_grip(config, horizon):
 
 
 def test_training_cadence_metadata():
-    codec = droid(training_fps=20)
-    assert codec.training_encoder.meta[policy_keys.ACTION_FPS] == 20
+    training = recipes.droid(settings=recipe.load_settings(overrides={ACTION_FPS: 20}))
+    assert training.meta[ACTION_FPS] == 20
 
 
 def test_training_actions_align_recorded_samples():
-    codec = droid(image_mappings={}, ee_frame=geom.Transform3D.identity)
+    training = recipes.droid(
+        settings=recipe.load_settings(overrides={recipe.IMAGE_MAPPINGS: {}, recipe.EE_FRAME: [0, 0, 0, 1, 0, 0, 0]})
+    )
     episode = EpisodeContainer({
         keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]]),
         keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)]),
         keys.GRIP: DummySignal([100, 200], [0.0, 1.0]),
     })
-    encoded = codec.training_encoder(episode)
+    encoded = training(episode)
     action = encoded[ACTION]
     assert list(action.timestamps(RECORDED_TIME)) == [100, 200, 300]
     values = np.asarray(action.values())
     np.testing.assert_array_equal(values[:, :9], np.repeat(encoded[gr00t.EE_POSE].values(), 3, axis=0))
     np.testing.assert_array_equal(values[:, 9], [0, 1, 1])
     np.testing.assert_array_equal(values[:, 10:], [np.zeros(7), np.zeros(7), np.ones(7)])
-
-
-def test_droid_packing_requires_xyz_rot6d_poses_for_training_and_inference():
-    codec = DroidCodec(image_mappings={})
-    pose = [0, 0, 0, 1, 0, 0, 0]
-    with pytest.raises(ValueError, match='reshape'):
-        codec.encode({keys.EE_POSE: pose})
-    training = codec.training_encoder(EpisodeContainer({keys.EE_POSE: DummySignal([0], [pose])}))
-    with pytest.raises(ValueError, match='reshape'):
-        training[gr00t.EE_POSE].values()[0]

@@ -7,6 +7,7 @@ from functools import partial
 import numpy as np
 import pytest
 from positronic_model_server import grpc_wire, keys, protocol, serialization, server_wire, spec, websocket_wire
+from positronic_model_server.keys import ACTION_FPS
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_wire import grpc, websocket, wire
 
@@ -111,8 +112,8 @@ def test_remote_policy_derives_client_metadata_without_changing_the_server_repor
     with serving(EchoModel) as (client, address):
         policy = RemotePolicy(client.NAME, address)
         metadata = policy.meta()
-        assert metadata[policy_keys.ACTION_FPS] == 20
-        assert f'{policy_keys.SERVER}.{policy_keys.ACTION_FPS}' not in metadata
+        assert metadata[ACTION_FPS] == 20
+        assert f'{policy_keys.SERVER}.{ACTION_FPS}' not in metadata
         assert metadata[f'{policy_keys.SERVER}.{keys.EFFECTIVE_PARAMS}.fps'] == 20
 
 

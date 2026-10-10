@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+from positronic_model_server import spec
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic.dataset.transforms.episode import EpisodeTransform, Identity
@@ -34,7 +35,7 @@ def lerobot_action(dim: int) -> dict[str, Any]:
 class Metadata(Codec):
     """Attach metadata to a codec and its training transform without changing the data."""
 
-    WIRE_NAME = 'metadata'
+    WIRE_NAME = spec.METADATA
 
     def __init__(self, values: dict[str, Any]):
         self._values = dict(values)

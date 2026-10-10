@@ -1,4 +1,5 @@
 import numpy as np
+from positronic_model_server import spec
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys as obs_keys
@@ -61,7 +62,7 @@ class BinarizeGripInference(Codec):
         BinarizeGripInference() | obs & action
     """
 
-    WIRE_NAME = 'binarize_grip_inference'
+    WIRE_NAME = spec.BINARIZE_GRIP_INFERENCE
 
     def __init__(self, threshold: float = 0.5, key: str = obs_keys.TARGET_GRIP):
         self._threshold = threshold

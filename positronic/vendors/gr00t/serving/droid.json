@@ -1,0 +1,23 @@
+{
+  "observation_keys": {
+    "eef_9d": "robot_state.ee_pose",
+    "joint_position": "robot_state.q",
+    "gripper_position": "grip",
+    "annotation.language.language_instruction": "task"
+  },
+  "image_size": [320, 180],
+  "image_mappings": {
+    "exterior_image_1_left": "image.exterior",
+    "wrist_image_left": "image.wrist"
+  },
+  "ee_frame": [0.0, 0.0, -0.085225977, 0.38268343245394154, 0.0, 0.0, 0.9238795324744832],
+  "rotation_offset": [0.5, 0.5, -0.5, -0.5],
+  "control_mode": {
+    "type": "impedance",
+    "kq": [40.0, 30.0, 50.0, 25.0, 35.0, 25.0, 10.0],
+    "kqd": [4.0, 6.0, 5.0, 5.0, 3.0, 2.0, 1.0],
+    "kx": [750.0, 750.0, 750.0, 15.0, 15.0, 15.0],
+    "kxd": [37.0, 37.0, 37.0, 2.0, 2.0, 2.0]
+  },
+  "action_fps": 15.0
+}

@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server import protocol, spec
+from positronic_model_server.keys import ACTION_FPS
 from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
@@ -765,7 +766,7 @@ def test_training_metadata_does_not_change_inference_data():
     for actual, reference in zip(decoded, trained, strict=True):
         assert 'timestamp' not in actual
         assert legacy_protocol.serialise(actual) == legacy_protocol.serialise(reference)
-    assert training_codec.training_encoder.meta[policy_keys.ACTION_FPS] == 15
+    assert training_codec.training_encoder.meta[ACTION_FPS] == 15
     rebuilt = from_spec(data_codec.to_spec())
     assert isinstance(rebuilt, Codec)
     assert rebuilt.to_spec() == data_codec.to_spec()
@@ -967,7 +968,7 @@ def test_invalid_v3_stack_does_not_cache_metadata(runtime, start_run):
 
     session.metadata = CHUNKED_STACK
     metadata = policy.meta()
-    assert metadata[policy_keys.ACTION_FPS] == 10
+    assert metadata[ACTION_FPS] == 10
     assert policy.meta() == metadata
     assert session.close.call_count == 3
 
@@ -985,7 +986,7 @@ def test_failed_metadata_session_close_does_not_cache_metadata():
     session.close.side_effect = None
     session.metadata = {offboard_keys.LOCAL_STACK: ChunkedSchedule(fps=20).to_spec()}
     metadata = policy.meta()
-    assert metadata[policy_keys.ACTION_FPS] == 20
+    assert metadata[ACTION_FPS] == 20
     assert policy.meta() == metadata
     assert session.close.call_count == 3
 

@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable, Generator, Mapping
 from typing import Any, overload
 
+from positronic_model_server.keys import ACTION_FPS
 from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION
 
 from positronic.policy import keys as policy_keys
@@ -96,13 +97,13 @@ def from_v1_spec(node: dict[str, Any], server_meta: Mapping[str, Any]) -> Proces
         else:
             parts.append(part)
     if ChunkedSchedule.FPS_ARG not in timing:
-        if policy_keys.ACTION_FPS not in server_meta:
+        if ACTION_FPS not in server_meta:
             logger.warning(
                 'The v1 server declares no action_timestamp and sends no action_fps; the client assumes %s '
                 'actions per second. Rebuild the server on current positronic so that it declares its rate.',
                 V1_SERVER_DEFAULT_ACTION_FPS,
             )
-        timing[ChunkedSchedule.FPS_ARG] = server_meta.get(policy_keys.ACTION_FPS, V1_SERVER_DEFAULT_ACTION_FPS)
+        timing[ChunkedSchedule.FPS_ARG] = server_meta.get(ACTION_FPS, V1_SERVER_DEFAULT_ACTION_FPS)
     if ChunkedSchedule.HORIZON_SEC_ARG not in timing and server_meta.get(policy_keys.ACTION_HORIZON_SEC) is not None:
         timing[ChunkedSchedule.HORIZON_SEC_ARG] = server_meta[policy_keys.ACTION_HORIZON_SEC]
 

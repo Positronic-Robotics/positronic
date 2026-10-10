@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 from positronic_model_server import protocol
+from positronic_model_server.keys import ACTION_FPS
 from positronic_wire import wire
 
 from positronic import keys
@@ -18,7 +19,6 @@ from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Step
 from positronic.policy.codecs import RestrictImageSize
@@ -103,7 +103,7 @@ def test_v1_timing_preserves_horizon_and_chunk_boundary(controlled_runtime, decl
 def test_v1_server_without_action_fps_runs_at_the_default_rate_and_warns(caplog):
     with caplog.at_level(logging.WARNING, logger='positronic.policy.compatibility'):
         stack = from_v1_spec({'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}, {})
-    assert flatten_dict(stack.meta())[policy_keys.ACTION_FPS] == V1_SERVER_DEFAULT_ACTION_FPS
+    assert flatten_dict(stack.meta())[ACTION_FPS] == V1_SERVER_DEFAULT_ACTION_FPS
     assert 'Rebuild the server on current positronic' in caplog.text
 
 

@@ -14,11 +14,11 @@ from threading import Lock
 from typing import Any
 
 import numpy as np
+from positronic_model_server.keys import ACTION_FPS
 from positronic_wire import roboarena as roboarena_wire
 
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
-from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import ACTION
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.dreamzero import codecs, roboarena
@@ -102,7 +102,7 @@ def local_stack(config: Mapping[str, Any]) -> Sequential:
     is unavailable.
     """
     codec = CODEC.override(**{IMAGE_SIZE_OVERRIDE: image_size(config)}).instantiate()
-    return Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=codec.meta[policy_keys.ACTION_FPS]), codec)
+    return Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=codec.meta[ACTION_FPS]), codec)
 
 
 # The keys the chunk can arrive under in the server's reply, which is a mapping. The first key that the reply

@@ -59,7 +59,10 @@ From Positronic's `docker` directory:
 ```bash
 mkdir -p "$PWD/groot-data"
 docker compose run --rm --pull never -v "$PWD/groot-data:/data" lerobot-0_3_3-convert convert \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.droid \
+  --dataset=@positronic.cfg.ds.transform \
+  --dataset.base=@positronic.cfg.ds.local \
+  --dataset.base.path=/data/recordings \
+  --dataset.transforms='["@positronic.vendors.gr00t.recipes.droid"]' \
   --output_dir=/data/datasets/my_task
 
 docker compose run --rm --pull never -v "$PWD/groot-data:/data" groot-train \
@@ -69,9 +72,28 @@ docker compose run --rm --pull never -v "$PWD/groot-data:/data" groot-train \
   --num_train_steps=10000
 ```
 
-Supply the conversion command's dataset configuration for your recordings as usual.
-For three views, replace the codec with `positronic.vendors.gr00t.codecs.droid_three_cameras`.
+Set `--dataset.base.path` to your recordings, or select another dataset configuration with `--dataset.base`.
+For three views, set `--dataset.transforms='["@positronic.vendors.gr00t.recipes.droid_three_cameras"]'`.
+The [training recipe](recipes.py) builds an episode transform. The [inference recipe](serving/recipe.py)
+builds a JSON-compatible description using only the lightweight wrapper.
+Both read [shared settings](serving/droid.json): observation keys, image size, camera mappings, tool frame,
+rotation offset, and cadence.
+The settings also contain the control mode, which only inference uses.
+The training transform preserves the recorded absolute pose, grip, and joint trajectories as action labels.
+GR00T's checkpoint processor converts these labels to relative actions and restores absolute actions during inference.
+
 The launcher reads camera keys from `meta/modality.json`; no separate modality selection is needed.
+The exporter saves shared settings to `meta/positronic_model_settings.json`.
+Export frame rates must match the recipe's `action_fps`; change that setting to select a different rate.
+Training copies this file into the experiment directory and, after a successful run, into each checkpoint.
+Resume rejects settings that differ from those recorded in the experiment directory.
+Datasets without this optional file retain their existing training behavior.
+
+To use a settings file for conversion, set `--dataset.transforms.0.settings.path=/data/settings.json`.
+To use the same file for serving, set `--pipeline.settings.path=/data/settings.json`.
+For a fine-tuned checkpoint, use its `meta/positronic_model_settings.json` file.
+The serving command requires this explicit path for custom settings; selecting a checkpoint does not select its settings.
+The image size describes preprocessing before the native checkpoint processor, which also applies its own transforms.
 
 `--base_model` defaults to `nvidia/GR00T-N1.7-DROID`. Standard controls are `--batch_size`,
 `--learning_rate`, `--num_train_steps`, `--save_steps`, `--num_workers` and `--resume=True`.

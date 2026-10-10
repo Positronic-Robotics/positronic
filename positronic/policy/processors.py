@@ -23,6 +23,7 @@ from statistics import fmean
 from typing import Any, TypeVar
 
 import numpy as np
+from positronic_model_server.keys import ACTION_FPS
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -195,7 +196,7 @@ class ChunkedSchedule(Policy):
                 answer.cancel()
 
     def meta(self) -> dict[str, Any]:
-        meta = {policy_keys.ACTION_FPS: self._fps}
+        meta = {ACTION_FPS: self._fps}
         if self._horizon_sec is not None:
             meta[policy_keys.ACTION_HORIZON_SEC] = self._horizon_sec
         return meta
@@ -415,7 +416,7 @@ class RTCSchedule(Policy):
                 answer.cancel()
 
     def meta(self) -> dict[str, Any]:
-        return {policy_keys.ACTION_FPS: self._fps}
+        return {ACTION_FPS: self._fps}
 
 
 class _StackedObs(Mapping[str, Any]):

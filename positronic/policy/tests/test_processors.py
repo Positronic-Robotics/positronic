@@ -6,12 +6,13 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from positronic_model_server.spec import JOINT_POSITION_ACTION, SET_CONTROL_MODE
 
 import pimm
 from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, JointPosition
+from positronic.drivers.roboarm.command import CartesianPosition, JointPosition, PositionControl
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
@@ -29,6 +30,8 @@ from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
     JointDeltaAction,
+    JointPositionAction,
+    SetControlMode,
     UnpackActionChunk,
 )
 from positronic.policy.codecs.geometry import ConvertPose
@@ -565,6 +568,8 @@ def test_wire_names_match_the_registered_components():
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
         'joint_delta_action': JointDeltaAction(),
+        JOINT_POSITION_ACTION: JointPositionAction('joints', 'grip'),
+        SET_CONTROL_MODE: SetControlMode(PositionControl()),
         'unpack_action_chunk': UnpackActionChunk({'action': ['prediction']}),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         'convert_pose': ConvertPose('rot6d'),

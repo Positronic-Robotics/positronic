@@ -2,9 +2,12 @@
 
 import argparse
 import re
+import sys
 from collections.abc import Sequence
+from importlib import import_module
 from importlib.metadata import distributions
 from importlib.util import find_spec
+from pathlib import Path
 
 from positronic_model_server import protocol, serialization, server, spec
 from positronic_wire import registry, wire
@@ -48,6 +51,13 @@ def main() -> None:
     for name in args.wire:
         assert registry.client_wire(name).NAME == name
     assert server.ModelServer
+    # Only the adapter subtree is available, as in a vendor model image.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'positronic' / 'vendors' / 'gr00t'))
+    recipe = import_module('serving.recipe')
+    description = recipe.inference(recipe.load_settings())
+    spec.validate(description)
+    assert serialization.deserialise(serialization.serialise(description)) == description
+    assert 'positronic' not in sys.modules
     if 'websocket' in args.wire:
         assert websocket_wire.WebsocketWire
     else:

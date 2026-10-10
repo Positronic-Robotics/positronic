@@ -1,9 +1,11 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 
 import numpy as np
 import pytest
+from positronic_model_server.keys import ACTION_FPS, MODEL_SETTINGS
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
@@ -12,10 +14,11 @@ from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.time import Time
 from positronic.drivers.roboarm import models
+from positronic.policy import spec
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
-from positronic.vendors import gr00t
-from positronic.vendors.gr00t import server
-from positronic.vendors.gr00t.codecs import droid, droid_three_cameras
+from positronic.vendors.gr00t import recipes, server
+from positronic.vendors.gr00t import serving as gr00t
+from positronic.vendors.gr00t.serving import recipe
 
 
 @pytest.fixture
@@ -32,13 +35,21 @@ def observation():
     }
 
 
-@pytest.mark.parametrize('config', [droid, droid_three_cameras])
-def test_training_and_inference_encode_the_same_absolute_state_and_images(config, observation):
-    codec = config()
+@pytest.mark.parametrize('config', [recipe.load_settings, recipe.three_camera_settings])
+def test_training_and_inference_encode_the_same_absolute_state_and_images(config, observation, tmp_path):
+    settings = config()
+    if gr00t.EXTERIOR_IMAGE_2 in settings[recipe.IMAGE_MAPPINGS]:
+        settings[recipe.IMAGE_MAPPINGS][gr00t.EXTERIOR_IMAGE_2] = 'alternate_view'
+        observation['alternate_view'] = observation.pop(keys.EXTERIOR_IMAGE_2)
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps(settings))
+    settings = config(path=path)
+    codec = spec.from_spec(recipe.inference(settings))
+    assert isinstance(codec, Codec)
     episode = EpisodeContainer({
         name: value if name == keys.TASK else DummySignal([0, 1], [value, value]) for name, value in observation.items()
     })
-    training = codec.training_encoder(episode)
+    training = recipes.droid(settings=settings)(episode)
     encoded = codec.encode(observation)
     assert set(encoded) == {gr00t.STATE, gr00t.VIDEO, gr00t.LANGUAGE}
     assert encoded[gr00t.LANGUAGE] == {gr00t.TASK: [[observation[keys.TASK]]]}
@@ -56,19 +67,20 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
 
 @pytest.mark.parametrize('image_mappings', [{}, {gr00t.EE_POSE: keys.WRIST_IMAGE}])
 def test_observation_layout_preserves_empty_camera_groups_and_names_shared_with_state(image_mappings, observation):
-    codec = droid(image_mappings=image_mappings)
+    codec = spec.from_spec(recipe.inference(recipe.load_settings(overrides={recipe.IMAGE_MAPPINGS: image_mappings})))
+    assert isinstance(codec, Codec)
     encoded = codec.encode(observation)
     assert set(encoded[gr00t.VIDEO]) == set(image_mappings)
     assert encoded[gr00t.STATE][gr00t.EE_POSE].shape == (1, 1, 9)
     for name in image_mappings:
         assert encoded[gr00t.VIDEO][name].shape == (1, 1, 180, 320, 3)
-    assert codec.meta[Codec.IMAGE_SIZES] == dict.fromkeys(image_mappings.values(), gr00t.IMAGE_SIZE)
+    assert codec.meta[Codec.IMAGE_SIZES] == ((320, 180) if image_mappings else {})
 
 
 def test_observation_layout_requires_a_live_prompt(observation):
     del observation[keys.TASK]
     with pytest.raises(KeyError, match=keys.TASK):
-        droid().encode(observation)
+        spec.from_spec(recipe.inference(recipe.load_settings())).encode(observation)
 
 
 @pytest.mark.parametrize('task', [None, 'Pick up the cup'])
@@ -77,33 +89,65 @@ def test_training_episode_materializes_without_requiring_a_recorded_task(observa
     fields = {name: DummySignal([0, 1], [value, value]) for name, value in observation.items()}
     if task is not None:
         fields[keys.TASK] = task
-    training = droid().training_encoder(EpisodeContainer(fields))
+    training = recipes.droid()(EpisodeContainer(fields))
     frame = training.time[[Time(**{RECORDED_TIME: 0})]]
     assert frame[keys.TASK] == (task or '')
 
 
 def test_three_camera_configuration_uses_a_distinct_second_external_image(observation):
-    encoded = droid_three_cameras().encode(observation)
+    encoded = spec.from_spec(recipe.inference(recipe.three_camera_settings())).encode(observation)
     assert len(encoded[gr00t.VIDEO]) == 3
     np.testing.assert_array_equal(
         encoded[gr00t.VIDEO][gr00t.EXTERIOR_IMAGE_2][0, 0], observation[keys.EXTERIOR_IMAGE_2]
     )
     del observation[keys.EXTERIOR_IMAGE_2]
     with pytest.raises(KeyError):
-        droid_three_cameras().encode(observation)
+        spec.from_spec(recipe.inference(recipe.three_camera_settings())).encode(observation)
 
 
 def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monkeypatch, observation):
     monkeypatch.setattr(gr00t, 'STATE_DIMS', dict(reversed(list(gr00t.STATE_DIMS.items()))))
-    codec = droid()
     episode = EpisodeContainer({
         name: value if name == keys.TASK else DummySignal([0, 1], [value, value]) for name, value in observation.items()
     })
-    encoder = codec.training_encoder
+    encoder = recipes.droid()
     encoded = encoder(episode)
     action = encoded[ACTION][0][0]
     for name, bounds in encoder.meta[GR00T_MODALITY][ACTION].items():
         np.testing.assert_allclose(action[bounds['start'] : bounds['end']], encoded[name][0][0])
+
+
+def test_saved_settings_drive_independent_training_and_inference_recipes(tmp_path, observation):
+    settings = recipe.load_settings(
+        overrides={
+            recipe.IMAGE_SIZE: [160, 90],
+            recipe.IMAGE_MAPPINGS: {'custom_camera': keys.EXTERIOR_IMAGE_2},
+            recipe.EE_FRAME: [0, 0, 0, 1, 0, 0, 0],
+            recipe.ROTATION_OFFSET: [1, 0, 0, 0],
+            ACTION_FPS: 20,
+        }
+    )
+    for name, source in settings[recipe.OBSERVATION_KEYS].items():
+        renamed = f'custom.{name}'
+        observation[renamed] = observation.pop(source)
+        settings[recipe.OBSERVATION_KEYS][name] = renamed
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps(settings))
+    training = recipes.droid(settings=recipe.load_settings(path))
+    description = json.loads(json.dumps(recipe.inference(recipe.load_settings(path))))
+    codec = spec.from_spec(description)
+    assert isinstance(codec, Codec)
+    episode = EpisodeContainer({
+        name: value if name == settings[recipe.OBSERVATION_KEYS][gr00t.TASK] else DummySignal([0], [value])
+        for name, value in observation.items()
+    })
+    prepared = training(episode)
+    encoded = codec.encode(observation)
+    assert prepared[keys.TASK] == encoded[gr00t.LANGUAGE][gr00t.TASK][0][0]
+    assert encoded[gr00t.VIDEO]['custom_camera'].shape == (1, 1, 90, 160, 3)
+    np.testing.assert_array_equal(prepared['custom_camera'][0][0], encoded[gr00t.VIDEO]['custom_camera'][0, 0])
+    np.testing.assert_array_equal(prepared[gr00t.EE_POSE][0][0], encoded[gr00t.STATE][gr00t.EE_POSE][0, 0])
+    assert training.meta[MODEL_SETTINGS] == codec.meta[MODEL_SETTINGS] == settings
 
 
 @pytest.mark.parametrize('config', [server.droid, server.droid_three_cameras])
@@ -113,9 +157,10 @@ def test_images_are_bounded_before_remote_without_changing_model_pixels(config, 
     assert codec is not None
     resize = next(layer for layer in local._components if isinstance(layer, RestrictImageSize))
     wire_observation = resize.encode(observation)
-    for source in codec.meta[Codec.IMAGE_SIZES]:
-        assert wire_observation[source].shape[0] <= gr00t.IMAGE_SIZE[1]
-        assert wire_observation[source].shape[1] <= gr00t.IMAGE_SIZE[0]
+    settings = codec.meta[MODEL_SETTINGS]
+    for source in settings[recipe.IMAGE_MAPPINGS].values():
+        assert wire_observation[source].shape[0] <= settings[recipe.IMAGE_SIZE][1]
+        assert wire_observation[source].shape[1] <= settings[recipe.IMAGE_SIZE][0]
     direct = codec.encode(observation)
     remote_encoded = codec.encode(wire_observation)
     for name in direct[gr00t.VIDEO]:
@@ -128,10 +173,10 @@ def test_droid_frame_and_pixels_match_upstream_robot_client(observation):
         pytest.skip('Set GR00T_REFERENCE_ROOT to the GR00T checkout for cross-repository parity')
     loaded = {}
     for name, path in {'frame': 'gr00t/data/state_action/droid_frame.py', 'image': 'examples/DROID/utils.py'}.items():
-        spec = importlib.util.spec_from_file_location(name, Path(reference) / path)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module_spec = importlib.util.spec_from_file_location(name, Path(reference) / path)
+        assert module_spec is not None and module_spec.loader is not None
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
         loaded[name] = module
     raw_pose = geom.Transform3D.from_vector(observation[keys.EE_POSE], geom.Rotation.Representation.QUAT)
     tool_pose = raw_pose * models.DROID_EE_FRAME
@@ -139,7 +184,7 @@ def test_droid_frame_and_pixels_match_upstream_robot_client(observation):
         tool_pose.translation,
         Rotation.from_matrix(tool_pose.rotation.as_rotation_matrix).as_euler('XYZ'),
     ])
-    encoded = droid().encode(observation)
+    encoded = spec.from_spec(recipe.inference(recipe.load_settings())).encode(observation)
     np.testing.assert_allclose(
         encoded[gr00t.STATE][gr00t.EE_POSE][0, 0], loaded['frame'].compute_eef_9d(upstream_pose), atol=1e-6
     )
