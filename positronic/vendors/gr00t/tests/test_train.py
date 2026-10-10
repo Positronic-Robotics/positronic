@@ -85,6 +85,14 @@ def test_training_builds_and_materializes_without_inference_or_codec_training(mo
     assert np.asarray(dataset[0][ACTION].values()).shape == (2, 17)
 
 
+@pytest.mark.parametrize('image_name', [*gr00t.STATE_DIMS, ACTION, keys.TASK])
+def test_training_rejects_image_names_that_overwrite_other_columns(image_name):
+    settings = model_settings.droid()
+    settings[model_settings.IMAGE_MAPPINGS] = {image_name: keys.WRIST_IMAGE}
+    with pytest.raises(ValueError, match='Image names overlap training columns'):
+        recipes.droid(settings=settings)
+
+
 @pytest.mark.parametrize('resume', [False, True])
 @pytest.mark.parametrize('has_settings', [False, True])
 def test_finetuning_forwards_dataset_cameras_and_resume_to_gr00t(

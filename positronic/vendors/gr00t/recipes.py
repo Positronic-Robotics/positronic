@@ -40,6 +40,9 @@ def _derive_grip(source: str, episode: Episode):
 def droid(settings: dict) -> EpisodeTransform:
     """Prepare recorded absolute trajectories and metadata for GR00T fine-tuning."""
     image_mappings = settings[model_settings.IMAGE_MAPPINGS]
+    conflicts = image_mappings.keys() & (gr00t.STATE_DIMS.keys() | {ACTION, keys.TASK})
+    if conflicts:
+        raise ValueError(f'Image names overlap training columns: {sorted(conflicts)}')
     observation_keys = settings[model_settings.OBSERVATION_KEYS]
     image_size = settings[model_settings.IMAGE_SIZE]
     frame = geom.Transform3D.from_vector(
