@@ -5,8 +5,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import pimm
+from pimm.time import validate_timeline
 from positronic.dataset import Episode, Time
-from positronic.recording import select_timeline
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.recording import HARNESS_WORLD
 
 
 @dataclass
@@ -123,9 +125,10 @@ class _Playback:
             if name in episode.static:
                 raise ValueError(f'Requested output {name!r} is static and cannot be emitted')
             selected.append(episode.signals[name])
-        timeline = select_timeline(
-            (name for signal in selected for name in signal.timelines), timeline=command.timeline
-        )
+        timeline = command.timeline
+        if timeline is None:
+            timeline = HARNESS_WORLD if any(HARNESS_WORLD in signal.timelines for signal in selected) else RECORDED_TIME
+        validate_timeline(timeline)
         playback = cls(command, start_clock_ns, timeline)
         start = Time(**{timeline: command.start_ts}) if command.start_ts is not None else None
         end = Time(**{timeline: command.end_ts}) if command.end_ts is not None else None

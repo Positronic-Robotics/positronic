@@ -25,7 +25,8 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 from positronic.vendors.lerobot.to_lerobot import EpisodeDictDataset, append_data_to_dataset  # noqa: E402
 
 
-def test_export_keeps_actions_and_observations_aligned_on_harness_time(tmp_path):
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECORDED_TIME])
+def test_export_keeps_actions_and_observations_aligned_on_the_recording_clock(tmp_path, timeline):
     source = tmp_path / 'source'
     with LocalDatasetWriter(source) as dataset, dataset.new_episode() as writer:
         for i in range(1, 4):
@@ -34,9 +35,9 @@ def test_export_keeps_actions_and_observations_aligned_on_harness_time(tmp_path)
             writer.append(
                 keys.JOINTS,
                 np.array([i]),
-                Time(**{EMITTED_WORLD: received - 10_000_000, RECEIVED_WORLD: received, HARNESS_WORLD: received}),
+                Time(**{EMITTED_WORLD: received - 10_000_000, RECEIVED_WORLD: received, timeline: received}),
             )
-            time = Time(**{EMITTED_WORLD: emitted, HARNESS_WORLD: emitted})
+            time = Time(**{EMITTED_WORLD: emitted, timeline: emitted})
             writer.append(keys.TARGET_JOINTS, np.array([i * 10]), time)
             writer.append(keys.TARGET_GRIP, i / 10, time)
     codec = ObservationCodec(state={'state': {keys.JOINTS: 1}}, images={}) & AbsoluteJointsAction(
@@ -58,6 +59,14 @@ def test_export_keeps_actions_and_observations_aligned_on_harness_time(tmp_path)
     for index in range(4):
         np.testing.assert_allclose(loaded[index][ACTION].numpy(), rows[ACTION][index])
         np.testing.assert_array_equal(loaded[index]['state'].numpy(), rows['state'][index])
+
+
+def test_export_prefers_harness_time_when_both_timelines_exist(tmp_path):
+    with LocalDatasetWriter(tmp_path) as dataset, dataset.new_episode() as writer:
+        for i in range(3):
+            writer.append('value', i, Time(**{HARNESS_WORLD: i * 100_000_000, RECORDED_TIME: i * 1_000_000_000}))
+    rows = EpisodeDictDataset(LocalDataset(tmp_path), fps=20)[0]
+    np.testing.assert_array_equal(rows['value'], [0, 0, 1, 1])
 
 
 class _MockTimeIndex:

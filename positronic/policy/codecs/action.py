@@ -10,9 +10,10 @@ from positronic.dataset import transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
-from positronic.recording import select_timeline
+from positronic.recording import HARNESS_WORLD
 
 from .base import Codec
 from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action
@@ -110,12 +111,9 @@ class AbsolutePositionAction(Codec):
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         pose = episode[self.tgt_ee_pose_key]
         pose = transforms.recode_transform(RotRep.QUAT, self.rot_rep, pose)
-        return transforms.concat(
-            pose,
-            episode[self.tgt_grip_key],
-            dtype=np.float32,
-            timelines=(select_timeline(pose.timelines + episode[self.tgt_grip_key].timelines),),
-        )
+        grip = episode[self.tgt_grip_key]
+        timeline = HARNESS_WORLD if HARNESS_WORLD in pose.timelines + grip.timelines else RECORDED_TIME
+        return transforms.concat(pose, grip, dtype=np.float32, timelines=(timeline,))
 
     @property
     def training_encoder(self):
@@ -156,12 +154,9 @@ class AbsoluteJointsAction(Codec):
         return {keys.ROBOT_COMMAND: command.JointPosition(positions=joint_positions), keys.TARGET_GRIP: target_grip}
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
-        return transforms.concat(
-            episode[self.tgt_joints_key],
-            episode[self.tgt_grip_key],
-            dtype=np.float32,
-            timelines=(select_timeline(episode[self.tgt_joints_key].timelines + episode[self.tgt_grip_key].timelines),),
-        )
+        joints, grip = episode[self.tgt_joints_key], episode[self.tgt_grip_key]
+        timeline = HARNESS_WORLD if HARNESS_WORLD in joints.timelines + grip.timelines else RECORDED_TIME
+        return transforms.concat(joints, grip, dtype=np.float32, timelines=(timeline,))
 
     @property
     def training_encoder(self):

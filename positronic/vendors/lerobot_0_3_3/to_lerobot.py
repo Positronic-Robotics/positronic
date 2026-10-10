@@ -30,8 +30,9 @@ from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.dataset.time import Time
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
-from positronic.recording import select_timeline
+from positronic.recording import HARNESS_WORLD
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
@@ -69,7 +70,7 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         episode = self.dataset[idx]
-        timeline = select_timeline(episode.timelines)
+        timeline = HARNESS_WORLD if HARNESS_WORLD in episode.timelines else RECORDED_TIME
         start, finish = episode.bounds(timeline)
         timestamps = [Time(**{timeline: ts}) for ts in np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)]
         return episode.time[timestamps]

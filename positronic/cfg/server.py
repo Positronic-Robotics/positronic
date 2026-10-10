@@ -12,9 +12,10 @@ from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.recording import select_timeline
+from positronic.recording import HARNESS_WORLD
 from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
@@ -75,7 +76,7 @@ def uph(ep: Episode) -> float | None:
     items = ep['units']
     if items == 0:
         return None
-    first, last = ep.bounds(select_timeline(ep.timelines))
+    first, last = ep.bounds(HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME)
     return items / ((last - first) / 1e9 / 3600)
 
 
@@ -138,7 +139,7 @@ def finetune_group_by_task():
     def group_fn(episodes: list[Episode]):
         duration, units = 0, 0
         for ep in episodes:
-            first, last = ep.bounds(select_timeline(ep.timelines))
+            first, last = ep.bounds(HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME)
             duration += (last - first) / 1e9 / 3600
             units += ep['units']
 

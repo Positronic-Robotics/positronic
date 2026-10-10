@@ -17,9 +17,8 @@ Key ideas
 - Recording is best effort, and this is a deliberate trade rather than an oversight. Each input arrives over a one-slot `pimm` signal where a new value overwrites one still unread, so a recorder that stalls for longer than the gap between two samples loses the older one — commands exactly as much as camera frames or arm state. An episode is what the recorder managed to observe, not a guaranteed-complete log of what happened; treat a missing sample as possible in any analysis that counts them.
 - A separate `command` channel controls episode lifecycle.
 - Every message coordinate is saved: emission, first delivery, and optional producer timelines.
-  Policy joins, viewing, and playback prefer `harness.world`, then `received.world`: wall time
-  on hardware and simulation time in simulation. Legacy datasets use `recorded` without conversion or renaming.
-  Viewing and playback also accept an explicit timeline.
+  Training joins, export, and playback use `harness.world` when present and otherwise `recorded`.
+  Replay of data collection recordings requires an explicit `received.world` timeline.
 
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
 - A serializer receives the latest value for the input and can return:
@@ -62,7 +61,7 @@ Component layout
 
 Playback semantics
 - `timeline` selects the nanosecond clock used for scheduling and command bounds. When omitted,
-  playback prefers `harness.world`, then `received.world`, then `recorded` for legacy data.
+  playback uses `harness.world` when present and otherwise `recorded` for legacy data.
   Other timelines require an explicit name. Every requested output must expose the selected
   timeline. Window selection uses the dataset's carry-back semantics.
 - Playback anchors the first sample to the world clock when `START` is handled and preserves

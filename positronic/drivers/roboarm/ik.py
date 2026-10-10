@@ -17,9 +17,10 @@ from scipy.spatial.transform import Rotation as ScipyRotation
 
 from positronic import geom
 from positronic.dataset import transforms
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.recording import select_timeline
+from positronic.recording import HARNESS_WORLD
 
 _QUAT = geom.Rotation.Representation.QUAT
 
@@ -468,9 +469,6 @@ def ik_joints_from_episode(episode, solver_cls, tgt_ee_pose_key, current_q_key):
     solver = solver_cls(episode[roboarm_keys.URDF], episode[roboarm_keys.JOINT_NAMES], frame)
     move = partial(change_frame, transform=offset.inv)
     targets = transforms.Elementwise(episode[tgt_ee_pose_key], transforms.lazy_sequence(move))
-    return transforms.pairwise(
-        episode[current_q_key],
-        targets,
-        solver.solve,
-        timelines=(select_timeline(episode[current_q_key].timelines + targets.timelines),),
-    )
+    current_q = episode[current_q_key]
+    timeline = HARNESS_WORLD if HARNESS_WORLD in current_q.timelines + targets.timelines else RECORDED_TIME
+    return transforms.pairwise(current_q, targets, solver.solve, timelines=(timeline,))

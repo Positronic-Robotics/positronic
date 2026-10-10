@@ -156,7 +156,7 @@ def test_raises_for_static_only_output(world):
         next(scheduler)
 
 
-@pytest.mark.parametrize('axis', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+@pytest.mark.parametrize('axis', [HARNESS_WORLD, RECORDED_TIME])
 def test_default_axis_plays_new_and_legacy_recordings(world, axis):
     outputs = {'a': RecordingEmitter()}
     agent, commands, finished = create_agent(world, outputs)
@@ -166,15 +166,16 @@ def test_default_axis_plays_new_and_legacy_recordings(world, axis):
     assert [(time['playback.scheduled'], value) for time, value in outputs['a'].emitted] == [(0, 1), (200, 2)]
 
 
-def test_default_axis_uses_world_receipt(world):
+@pytest.mark.parametrize('timeline, expected', [(None, [0, 200]), (RECORDED_TIME, [0, 8000])])
+def test_playback_prefers_harness_time_unless_explicitly_overridden(world, timeline, expected):
     outputs = {'a': RecordingEmitter()}
     agent, commands, finished = create_agent(world, outputs)
     episode = EpisodeContainer({
-        'a': DummySignal([[100, 1000], [300, 9000]], [1, 2], timelines=(RECEIVED_WORLD, RECEIVED_WALL))
+        'a': DummySignal([[100, 1000], [300, 9000]], [1, 2], timelines=(HARNESS_WORLD, RECORDED_TIME))
     })
-    commands.push(DsPlayerStartCommand(episode))
+    commands.push(DsPlayerStartCommand(episode, timeline=timeline))
     drive_until(world.interleave(agent.run), lambda: bool(finished.emitted))
-    assert [time['playback.scheduled'] for time, _ in outputs['a'].emitted] == [0, 200]
+    assert [time['playback.scheduled'] for time, _ in outputs['a'].emitted] == expected
 
 
 def test_default_playback_aligns_inputs_and_commands_on_harness_world(world):
@@ -192,14 +193,15 @@ def test_default_playback_aligns_inputs_and_commands_on_harness_world(world):
     assert [(time['playback.scheduled'], value) for time, value in outputs['command'].emitted] == [(10, 3), (210, 4)]
 
 
-@pytest.mark.parametrize('axis', [RECEIVED_WALL, 'legacy.clock'])
+@pytest.mark.parametrize('axis', [RECEIVED_WORLD, RECEIVED_WALL, 'legacy.clock'])
 def test_other_timelines_require_explicit_selection(world, axis):
     outputs = {'a': RecordingEmitter()}
     agent, commands, finished = create_agent(world, outputs)
     episode = EpisodeContainer({'a': DummySignal([100, 300], [1, 2], timelines=(axis,))})
     commands.push(DsPlayerStartCommand(episode))
-    with pytest.raises(ValueError, match='explicit timeline'):
+    with pytest.raises(KeyError) as error:
         next(world.interleave(agent.run))
+    assert error.value.args == (RECORDED_TIME,)
     commands.push(DsPlayerStartCommand(episode, timeline=axis))
     drive_until(world.interleave(agent.run), lambda: bool(finished.emitted))
     assert [time['playback.scheduled'] for time, _ in outputs['a'].emitted] == [0, 200]

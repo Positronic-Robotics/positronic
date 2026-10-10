@@ -12,6 +12,7 @@ from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import command, models
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import (
@@ -29,7 +30,7 @@ from positronic.policy.codecs import (
     lerobot_vector,
 )
 from positronic.policy.codecs.geometry import ConvertPose
-from positronic.recording import select_timeline
+from positronic.recording import HARNESS_WORLD
 from positronic.vendors import gr00t
 
 
@@ -116,7 +117,7 @@ class DroidCodec(Codec):
 
         def derive_action(episode):
             signals = [derive(episode) for derive in state_encoders.values()]
-            timeline = select_timeline(name for signal in signals for name in signal.timelines)
+            timeline = HARNESS_WORLD if any(HARNESS_WORLD in signal.timelines for signal in signals) else RECORDED_TIME
             return tf.concat(*signals, timelines=(timeline,), dtype=np.float32)
 
         return Derive(

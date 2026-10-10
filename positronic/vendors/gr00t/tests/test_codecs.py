@@ -10,6 +10,7 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import ACTION
+from positronic.recording import HARNESS_WORLD
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t.codecs import DroidCodec, droid, droid_three_cameras
 
@@ -67,16 +68,17 @@ def test_training_cadence_metadata():
     assert codec.training_encoder.meta[policy_keys.ACTION_FPS] == 20
 
 
-def test_training_actions_align_recorded_samples():
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECORDED_TIME])
+def test_training_actions_align_on_the_recording_clock(timeline):
     codec = droid(image_mappings={}, ee_frame=geom.Transform3D.identity)
     episode = EpisodeContainer({
-        keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]]),
-        keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)]),
-        keys.GRIP: DummySignal([100, 200], [0.0, 1.0]),
+        keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]], timelines=(timeline,)),
+        keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)], timelines=(timeline,)),
+        keys.GRIP: DummySignal([100, 200], [0.0, 1.0], timelines=(timeline,)),
     })
     encoded = codec.training_encoder(episode)
     action = encoded[ACTION]
-    assert list(action.timestamps(RECORDED_TIME)) == [100, 200, 300]
+    assert list(action.timestamps(timeline)) == [100, 200, 300]
     values = np.asarray(action.values())
     np.testing.assert_array_equal(values[:, :9], np.repeat(encoded[gr00t.EE_POSE].values(), 3, axis=0))
     np.testing.assert_array_equal(values[:, 9], [0, 1, 1])

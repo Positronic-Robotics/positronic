@@ -13,6 +13,7 @@ from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
 from positronic.policy.codecs import (
@@ -25,7 +26,7 @@ from positronic.policy.codecs import (
     lerobot_vector,
 )
 from positronic.policy.codecs.action import IKJointsAction
-from positronic.recording import select_timeline
+from positronic.recording import HARNESS_WORLD
 from positronic.vendors.dreamzero import roboarena
 
 IMAGE_WIDTH = 320
@@ -175,14 +176,9 @@ class DreamZeroActionCodec(Codec):
         return transforms.Elementwise(episode[self._tgt_grip_key], _reshape_grip)
 
     def _encode_action(self, episode: Episode):
-        return transforms.concat(
-            episode[self._tgt_joints_key],
-            episode[self._tgt_grip_key],
-            timelines=(
-                select_timeline(episode[self._tgt_joints_key].timelines + episode[self._tgt_grip_key].timelines),
-            ),
-            dtype=np.float32,
-        )
+        joints, grip = episode[self._tgt_joints_key], episode[self._tgt_grip_key]
+        timeline = HARNESS_WORLD if HARNESS_WORLD in joints.timelines + grip.timelines else RECORDED_TIME
+        return transforms.concat(joints, grip, timelines=(timeline,), dtype=np.float32)
 
     def _decode_single(self, data: dict) -> dict:
         action = data[ACTION]

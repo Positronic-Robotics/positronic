@@ -10,7 +10,8 @@ from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity
-from positronic.recording import select_timeline
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.recording import HARNESS_WORLD
 
 from .base import Codec
 from .metadata import LEROBOT_FEATURES, lerobot_image, lerobot_vector
@@ -151,7 +152,7 @@ class ObservationCodec(Codec):
     def _derive_state(self, out_name: str, episode: Episode) -> Signal[Any]:
         state_features = self._state[out_name]
         signals = [episode[k] for k in state_features]
-        timeline = select_timeline(name for signal in signals for name in signal.timelines)
+        timeline = HARNESS_WORLD if any(HARNESS_WORLD in signal.timelines for signal in signals) else RECORDED_TIME
         return transforms.concat(*signals, dtype=np.float32, timelines=(timeline,))
 
     def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:

@@ -26,7 +26,6 @@ from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_ma
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm.models import bundled_franka_model, bundled_panda_model
 from positronic.eval import keys as eval_keys
-from positronic.recording import select_timeline
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
 
@@ -218,12 +217,10 @@ full = concat_ds.override(datasets=[droid, sim])
 
 # Per-frame quality signals (visible as time-series in Rerun viewer)
 _quality_signals = Derive(
-    quality_idle=lambda ep: idle_mask(ep, timelines=(select_timeline(ep[keys.JOINTS].timelines),)),
-    quality_jerk=lambda ep: jerk(ep, timelines=(select_timeline(ep[keys.JOINTS].timelines),)),
-    quality_cmd_lag=lambda ep: cmd_lag(
-        ep, timelines=(select_timeline(ep[keys.TARGET_EE_POSE].timelines + ep[keys.EE_POSE].timelines),)
-    ),
-    quality_cmd_vel=lambda ep: cmd_velocity(ep, timelines=(select_timeline(ep[keys.TARGET_EE_POSE].timelines),)),
+    quality_idle=lambda ep: idle_mask(ep, timelines=(RECORDED_TIME,)),
+    quality_jerk=lambda ep: jerk(ep, timelines=(RECORDED_TIME,)),
+    quality_cmd_lag=lambda ep: cmd_lag(ep, timelines=(RECORDED_TIME,)),
+    quality_cmd_vel=lambda ep: cmd_velocity(ep, timelines=(RECORDED_TIME,)),
 )
 
 # Scalar metrics (visible as columns in episode table).

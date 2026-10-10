@@ -15,9 +15,10 @@ from positronic import geom, keys, wire
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers import roboarm
 from positronic.gui import dpg_ui
-from positronic.recording import select_timeline
+from positronic.recording import HARNESS_WORLD
 from positronic.recording.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
 from positronic.recording.ds_writer_agent import DsWriterCommand
 from positronic.simulator.mujoco.sim import MujocoSim
@@ -157,9 +158,10 @@ def main(
 
             sim_iter = world.start([sim, replay, ds_agent], gui)
             ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
-            player_cmd.emit(DsPlayerStartCommand(episode))
+            timeline = HARNESS_WORLD if HARNESS_WORLD in episode.timelines else RECORDED_TIME
+            player_cmd.emit(DsPlayerStartCommand(episode, timeline=timeline))
 
-            first, last = episode.bounds(select_timeline(episode.timelines))
+            first, last = episode.bounds(timeline)
             p_bar = tqdm.tqdm(total=round((last - first) / 1e9, 1), unit='s')
 
             for _ in sim_iter:
