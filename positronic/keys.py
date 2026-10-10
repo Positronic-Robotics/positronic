@@ -61,3 +61,11 @@ WRIST_LEFT_IMAGE = f'{IMAGE_PREFIX}wrist_left'
 WRIST_RIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_right'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
+# What a camera's own control chose, read back from the sensor and recorded beside its frames: the exposure,
+# the gain and the white-balance temperature an automatic mode settled on.
+CAMERA_STATE_PREFIX = 'camera_state.'
+
+
+def camera_state(image_key: str) -> str:
+    """The signal a camera's read-back state records under: ``image.wrist`` records as ``camera_state.wrist``."""
+    return f'{CAMERA_STATE_PREFIX}{image_key.removeprefix(IMAGE_PREFIX)}'

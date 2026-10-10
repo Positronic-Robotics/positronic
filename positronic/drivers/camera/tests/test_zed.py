@@ -1,8 +1,10 @@
-"""The ZED driver with the SDK faked: its open path, the error it keeps for a lost camera, and its ready call."""
+"""The ZED driver with the SDK faked: its open path, the error it keeps for a lost camera, its ready call, and the
+settings it reads back."""
 
 import enum
 import importlib.util
 import inspect
+import logging
 import sys
 import types
 from contextlib import nullcontext
@@ -27,6 +29,14 @@ class ErrorCode(enum.Enum):
     CAMERA_REBOOTING = 'CAMERA REBOOTING'
     INVALID_FUNCTION_CALL = 'INVALID FUNCTION CALL'
     FAILURE = 'FAILURE'
+
+
+class VideoSettings(enum.Enum):
+    EXPOSURE = enum.auto()
+    GAIN = enum.auto()
+    WHITEBALANCE_TEMPERATURE = enum.auto()
+    AEC_AGC = enum.auto()
+    WHITEBALANCE_AUTO = enum.auto()
 
 
 class FakeSdk:
@@ -58,6 +68,7 @@ class FakeSdk:
 def zed_module(monkeypatch):
     """Load `zed.py` under a private name against a fake `pyzed`, so no other test sees the fake."""
     sl = types.ModuleType('pyzed.sl')
+    sl.__dict__.update(VIDEO_SETTINGS=VideoSettings)
     pyzed = types.ModuleType('pyzed')
     monkeypatch.setitem(sys.modules, 'pyzed', pyzed)
     monkeypatch.setitem(sys.modules, 'pyzed.sl', sl)
@@ -206,6 +217,7 @@ class FakeCamera:
         self._sdk = sdk
         self.opened_at: float | None = None
         self.closed_at: float | None = None
+        self.settings_reads = 0
 
     def open(self, _init_params) -> ErrorCode:
         if not self._sdk.is_listed():
@@ -236,6 +248,26 @@ class FakeCamera:
         if self.opened_at < self._sdk.images_stop_at <= self._sdk.clock.now():
             return ErrorCode.FAILURE
         return ErrorCode.SUCCESS
+
+    def get_camera_settings(self, setting: VideoSettings) -> tuple[ErrorCode, int]:
+        self.settings_reads += 1
+        return ErrorCode.SUCCESS, SETTINGS[setting]
+
+
+SETTINGS = {
+    VideoSettings.EXPOSURE: 45,
+    VideoSettings.GAIN: 12,
+    VideoSettings.WHITEBALANCE_TEMPERATURE: 4700,
+    VideoSettings.AEC_AGC: 1,
+    VideoSettings.WHITEBALANCE_AUTO: 1,
+}
+STATE = {
+    'exposure': 45,
+    'gain': 12,
+    'white_balance_temperature': 4700,
+    'auto_exposure_gain': True,
+    'auto_white_balance': True,
+}
 
 
 class FakeInitParameters:
@@ -417,3 +449,62 @@ def test_the_world_stopping_while_the_camera_is_away_ends_the_loop(zed_module):
     stop.stopped = True
     _drive(loop, clock, until=clock.now() + 1.0)
     assert _returned(loop)
+
+
+class SettingsCamera:
+    """Answers each setting with the value it holds, and refuses the ones it does not."""
+
+    def __init__(self, values: dict[VideoSettings, int]):
+        self._values = values
+
+    def get_camera_settings(self, setting: VideoSettings) -> tuple[ErrorCode, int]:
+        if setting in self._values:
+            return ErrorCode.SUCCESS, self._values[setting]
+        return ErrorCode.FAILURE, -1
+
+
+def test_the_state_read_reports_every_setting_the_camera_answers(zed_module):
+    zed_module.sl.ERROR_CODE = ErrorCode
+    state = zed_module.SLCamera._read_state(SettingsCamera(SETTINGS))
+    assert state == STATE
+    assert {name: type(value) for name, value in state.items()} == {name: type(value) for name, value in STATE.items()}
+
+
+def test_the_state_read_logs_and_leaves_out_a_setting_the_camera_refuses(zed_module, caplog):
+    zed_module.sl.ERROR_CODE = ErrorCode
+    camera = SettingsCamera({VideoSettings.EXPOSURE: 45})
+    assert zed_module.SLCamera._read_state(camera) == {'exposure': 45}
+    refused = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(refused) == len(STATE) - 1
+    assert 'gain setting: ErrorCode.FAILURE' in ' '.join(refused)
+
+
+def test_the_camera_sends_its_settings_once_a_period_while_something_receives_them(zed_module):
+    clock, stop, frames, states = MockClock(), StopFlag(), RecordingEmitter(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER)
+    camera = _camera(zed_module, sdk, frames)
+    camera.state._bind(states, clock=clock)
+    _drive(camera.run(stop, clock), clock, until=2.5)
+    assert [data for _, data in states.emitted] == [STATE] * 3
+
+
+def test_a_camera_whose_settings_nothing_receives_does_not_read_them(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER)
+    _drive(_camera(zed_module, sdk, frames).run(stop, clock), clock, until=2.5)
+    (camera,) = sdk.cameras
+    assert camera.settings_reads == 0
+
+
+def test_a_ready_call_that_reopens_the_camera_sends_its_settings_before_it_answers(zed_module, world):
+    clock, stop, frames, states = MockClock(), StopFlag(), RecordingEmitter(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=LISTED_AGAIN_AT)
+    camera = _camera(zed_module, sdk, frames)
+    camera.state._bind(states, clock=clock)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=10.0)
+    answer = _readier(world, camera)(None)
+    _drive(loop, clock, until=clock.now() + 0.001)
+    assert answer.result() is None
+    _, reopened = sdk.cameras
+    assert reopened.settings_reads == len(STATE)

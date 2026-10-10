@@ -22,6 +22,7 @@ def test_the_fake_droid_builds_without_the_vendor_packages():
 
     assert set(built.observations) == {keys.ROBOT_STATE, keys.GRIP, *camera.droid}
     assert set(built.ready_handlers) == {eval_keys.ARM, *camera.droid}
+    assert set(built.readbacks) == {keys.camera_state(name) for name in camera.droid}
 
 
 def test_the_fake_droid_declares_what_the_real_droid_declares():
@@ -34,6 +35,9 @@ def test_the_fake_droid_declares_what_the_real_droid_declares():
         name: obs.serializer for name, obs in real.observations.items()
     }
     assert set(fake.ready_handlers) == set(real.ready_handlers)
+    assert {name: obs.serializer for name, obs in fake.readbacks.items()} == {
+        name: obs.serializer for name, obs in real.readbacks.items()
+    }
 
 
 def test_loading_the_configs_imports_no_yam_code():

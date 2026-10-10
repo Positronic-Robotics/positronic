@@ -43,6 +43,7 @@ class SLCamera(pimm.ControlSystem):
         depth_mask: bool = False,
         image_enhancement: bool = False,
         mono: bool = False,
+        state_period_sec: float = 1.0,
     ):
         """
         StereoLabs camera driver.
@@ -58,6 +59,10 @@ class SLCamera(pimm.ControlSystem):
             depth_mask: (bool) If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
             mono: (bool) Open a single-sensor camera (e.g. ZED X One) via ``sl.CameraOne``. Mono cameras
                   support only ``view='left'``, ``depth_mode='none'`` and no image enhancement.
+            state_period_sec: (float) How often ``state`` reports the exposure, gain and white balance the
+                  camera runs at. Automatic control moves them as the scene changes, so one reading per
+                  episode is not enough; each reading is a control request to the camera, so once a frame
+                  is too many.
         """
         super().__init__()
         # IMPORTANT: This control system may be spawned under multiprocessing "spawn".
@@ -71,6 +76,7 @@ class SLCamera(pimm.ControlSystem):
         self._image_enhancement = image_enhancement
         self._depth_mask_requested = depth_mask
         self._mono = mono
+        self._state_period_sec = state_period_sec
 
         self.max_depth = max_depth
 
@@ -84,6 +90,11 @@ class SLCamera(pimm.ControlSystem):
 
         self.depth_mask: pimm.ControlSystemEmitter = pimm.ControlSystemEmitter(self)
         self._depth_mask_adapter = None  # Lazy init
+
+        # The exposure, gain and white balance the camera runs at, read back from it every ``state_period_sec``
+        # while something receives them.
+        self.state: pimm.ControlSystemEmitter[dict[str, int | bool]] = pimm.ControlSystemEmitter(self)
+        self._state_due_at = float('-inf')
 
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         # The camera a run holds open, the error it keeps until a ready call repairs the camera, and the time of
@@ -194,7 +205,8 @@ class SLCamera(pimm.ControlSystem):
     ) -> Generator[pimm.Sleep, None, None]:
         """Answer ``call`` at once while the last frame is recent.
 
-        Otherwise reopen the camera, and answer once it sends a frame, or with the error that it holds.
+        Otherwise reopen the camera, and answer once it sends a frame and its settings, or with the error that it
+        holds.
         """
         if self._error is None and self._frame_at is not None and clock.now() - self._frame_at <= self.STALE_FRAME_SEC:
             call.set_result(None)
@@ -205,6 +217,7 @@ class SLCamera(pimm.ControlSystem):
             self._camera = None
         yield from self._open_or_hold(should_stop)
         if self._error is None and self._grab_frame(clock) is GrabOutcome.SENT:
+            self._emit_state(clock)
             call.set_result(None)
             return
         error = self._error
@@ -287,6 +300,44 @@ class SLCamera(pimm.ControlSystem):
             self._emit_depth(camera, capture_time)
         return GrabOutcome.SENT
 
+    # The settings a camera's automatic control moves, keyed by the name each records under, with the type each
+    # records as. ``auto_exposure_gain`` is the SDK's one switch for automatic exposure and gain together, and
+    # ``auto_white_balance`` is its switch for the white balance.
+    STATE_SETTINGS = {
+        'exposure': (sl.VIDEO_SETTINGS.EXPOSURE, int),
+        'gain': (sl.VIDEO_SETTINGS.GAIN, int),
+        'white_balance_temperature': (sl.VIDEO_SETTINGS.WHITEBALANCE_TEMPERATURE, int),
+        'auto_exposure_gain': (sl.VIDEO_SETTINGS.AEC_AGC, bool),
+        'auto_white_balance': (sl.VIDEO_SETTINGS.WHITEBALANCE_AUTO, bool),
+    }
+
+    @staticmethod
+    def _read_state(camera) -> dict[str, int | bool]:
+        """What ``camera`` reports for each of ``STATE_SETTINGS`` now.
+
+        A setting the SDK refuses is logged and left out, so the settings it reports still record.
+        """
+        state = {}
+        for name, (setting, recorded_type) in SLCamera.STATE_SETTINGS.items():
+            error_code, value = camera.get_camera_settings(setting)
+            if error_code == sl.ERROR_CODE.SUCCESS:
+                state[name] = recorded_type(value)
+            else:
+                logger.error('The camera refused to report its %s setting: %s', name, error_code)
+        return state
+
+    def _emit_state(self, clock: pimm.Clock) -> None:
+        """Send the settings the open camera runs at, and read them next ``state_period_sec`` later."""
+        if self.state.num_bound == 0:
+            return
+        assert self._camera is not None, 'a camera that holds no error is open'
+        self.state.emit(self._read_state(self._camera))
+        self._state_due_at = clock.now() + self._state_period_sec
+
+    def _emit_state_when_due(self, clock: pimm.Clock) -> None:
+        if self._error is None and clock.now() >= self._state_due_at:
+            self._emit_state(clock)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         fps_counter = pimm.utils.RateCounter('Camera')
 
@@ -314,6 +365,7 @@ class SLCamera(pimm.ControlSystem):
             if self._error is None:
                 self._grab_frame(clock)
                 fps_counter.tick()
+                self._emit_state_when_due(clock)
             for call in self.ready.incoming():
                 yield from self._make_ready(call, clock, should_stop)
             yield pimm.Sleep(0.01)
