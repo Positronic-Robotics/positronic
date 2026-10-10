@@ -64,6 +64,7 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
+| [`UnpackActionChunk`](action.py) | Selects prediction arrays, removes leading size-one dimensions, and splits a shared time axis into action records. Observations and training pass through. | A model returns batched or nested prediction arrays that action decoders need one timestep at a time. |
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
 | [`IKJointsAction`](action.py) | Training: replaces pose targets with joint targets through inverse kinematics. Inference: passes through. | Train a joint-position model from recorded pose targets; compose before `AbsoluteJointsAction`. |

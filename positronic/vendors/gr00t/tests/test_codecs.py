@@ -40,23 +40,29 @@ def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(conf
     np.testing.assert_array_equal(codec.training_encoder.meta[roboarm_keys.EE_FRAME], expected_frame)
 
 
-def test_droid_decodes_full_chunk_and_binarizes_grip():
-    codec = droid()
-    targets = np.arange(40 * 7, dtype=np.float32).reshape(40, 7) / 100
-    output = [
-        {gr00t.JOINT_POSITION: q, gr00t.GRIP: [0.5 if i % 2 else 0.51], gr00t.EE_POSE: np.zeros(9)}
-        for i, q in enumerate(targets)
-    ]
+@pytest.mark.parametrize('config', [droid, droid_three_cameras])
+@pytest.mark.parametrize('horizon', [0, 1, 40])
+def test_droid_decodes_native_chunk_and_binarizes_grip(config, horizon):
+    codec = config()
+    targets = np.arange(horizon * 7, dtype=np.float32).reshape(horizon, 7) / 100
+    output = (
+        {
+            gr00t.JOINT_POSITION: targets[np.newaxis],
+            gr00t.GRIP: np.array([0.5 if i % 2 else 0.51 for i in range(horizon)]).reshape(1, horizon, 1),
+        },
+        {},
+    )
     decoded = codec.decode(output)
-    assert len(decoded) == 40
+    assert len(decoded) == horizon
     for i, item in enumerate(decoded):
         np.testing.assert_array_equal(item[keys.ROBOT_COMMAND].positions, targets[i])
+        assert item[keys.ROBOT_COMMAND].positions.dtype == np.float32
         assert item[keys.ROBOT_COMMAND].mode == DROID_IMPEDANCE
         assert item[keys.TARGET_GRIP] == (0.0 if i % 2 else 1.0)
         assert 'timestamp' not in item
 
 
-def test_training_cadence_is_preserved_without_timestamp_commands():
+def test_training_cadence_metadata():
     codec = droid(training_fps=20)
     assert codec.training_encoder.meta[policy_keys.ACTION_FPS] == 20
 

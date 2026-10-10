@@ -23,6 +23,7 @@ from positronic.policy.codecs import (
     Codec,
     Metadata,
     PackObservationFields,
+    UnpackActionChunk,
     lerobot_action,
     lerobot_image,
     lerobot_vector,
@@ -156,6 +157,7 @@ def droid(image_mappings: dict[str, str], ee_frame: geom.Transform3D, training_f
             },
             unsqueeze_dims=2,
         )
+        | UnpackActionChunk({name: [0, name] for name in (gr00t.JOINT_POSITION, gr00t.GRIP)}, squeeze_dims=1)
     )
 
 
