@@ -236,8 +236,11 @@ You can make one submission per day. The count starts again at 00:00 UTC each da
 
 ## Read the outcome
 
-A submission goes from `pending` to `running`, and then to `finished`, `errored` or `cancelled`. A
-`running` submission reports its `stage`:
+A submission goes from `pending` to `running`, and then to `finished`, `errored` or `cancelled`. Before
+it ends, a submission can also show `blocked`. A `blocked` submission waits on what its `reason` names,
+and the platform changes its status later. `positronic eval status` prints the `reason`.
+
+A `running` submission reports its `stage`:
 
 | stage | meaning |
 |---|---|
@@ -249,19 +252,21 @@ When a submission gets to `evaluating`, your image works. A lost simulator machi
 can go back from `evaluating` to `provisioning`. An image submission reports `episodes` as `0/0` and
 `runs` as an empty list, because those fields do not apply to it.
 
-A `finished` submission has `scores.primary`, the value that the leaderboard ranks. A `finished` or an
-`errored` submission also has `artifacts`, with signed links to these files:
+A `finished` submission has `scores.primary`, the value that the leaderboard ranks. It also has
+`artifacts`, with signed links to the files of the run. An `errored` submission has `artifacts` only if
+the run wrote its files. If the run failed before that, the submission has no links, and `reason_code`
+and `reason` tell you why it failed.
 
-| link | content |
-|---|---|
-| `result` | the run, the attempt that scored, and the scores for each task |
-| `policy_log` | the stdout and stderr of your container |
-| `diagnostics` | on a failed run: why it failed, and the state of the machine |
+| link | content | when it is there |
+|---|---|---|
+| `result` | the run, the attempt that scored, and the scores for each task | in all `artifacts` |
+| `policy_log` | the stdout and stderr of your container | when your container printed something |
+| `diagnostics` | why the run failed, and the state of the machine | on a failed run, when the run wrote it |
 
 The links expire after 15 minutes. Run `positronic eval status` again to get new links. On a failed run,
-read `policy_log` first. In `diagnostics`, a `vram_peak_mib` near 25 means that the container failed
-before the model got to the GPU. `container_oom_killed` tells you if the memory limit stopped the
-container.
+read `policy_log` first, if it is there. In `diagnostics`, a `vram_peak_mib` near 25 means that the
+container failed before the model got to the GPU. `container_oom_killed` tells you if the memory limit
+stopped the container.
 
 ### Failure reasons
 
