@@ -519,23 +519,6 @@ class Rotation(metaclass=RotationMeta):
         return np.allclose(self._quat, other._quat)
 
 
-def convert_pose(
-    value: Sequence[float] | np.ndarray,
-    *,
-    input_rotation: Rotation.Representation,
-    output_rotation: Rotation.Representation,
-    rotation_offset: Rotation,
-) -> np.ndarray:
-    """Convert a pose vector to float32, multiplying its rotation by the offset on the right."""
-    vector = np.asarray(value)
-    expected = 3 + input_rotation.size
-    if vector.shape != (expected,):
-        raise ValueError(f'Expected a pose vector with {expected} values, got shape {vector.shape}')
-    pose = Transform3D.from_vector(vector, input_rotation)
-    converted = Transform3D(pose.translation, pose.rotation * rotation_offset)
-    return converted.as_vector(output_rotation).astype(np.float32)
-
-
 def quat_closest(q: Rotation, reference: Rotation) -> Rotation:
     """Return the equivalent quaternion closest to *reference*.
 

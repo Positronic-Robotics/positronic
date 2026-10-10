@@ -44,7 +44,7 @@ def droid(settings: dict) -> EpisodeTransform:
     observation_keys = settings[recipe.OBSERVATION_KEYS]
     image_size = settings[recipe.IMAGE_SIZE]
     frame = geom.Transform3D.from_vector(np.asarray(settings[recipe.EE_FRAME]), geom.Rotation.Representation.QUAT)
-    offset = geom.Rotation.from_quat(settings[recipe.ROTATION_OFFSET])
+    offset = geom.Transform3D(rotation=geom.Rotation.from_quat(settings[recipe.ROTATION_OFFSET]))
     state_encoders = {
         gr00t.EE_POSE: partial(_derive_pose, observation_keys[gr00t.EE_POSE]),
         gr00t.GRIP: partial(_derive_grip, observation_keys[gr00t.GRIP]),
@@ -92,16 +92,19 @@ def droid(settings: dict) -> EpisodeTransform:
             },
         },
     )
-    pose = partial(
-        geom.convert_pose,
-        input_rotation=geom.Rotation.Representation.QUAT,
-        output_rotation=geom.Rotation.Representation.ROT6D,
-        rotation_offset=offset,
-    )
+
+    def encode_pose(value):
+        vector = np.asarray(value)
+        expected = 3 + geom.Rotation.Representation.QUAT.size
+        if vector.shape != (expected,):
+            raise ValueError(f'Expected a pose vector with {expected} values, got shape {vector.shape}')
+        pose = geom.Transform3D.from_vector(vector, geom.Rotation.Representation.QUAT)
+        return (pose * offset).as_vector(geom.Rotation.Representation.ROT6D).astype(np.float32)
+
     return (
         Identity(meta={ACTION_FPS: settings[ACTION_FPS], MODEL_SETTINGS: settings})
         | training.ChangeEEFrame(frame, (observation_keys[gr00t.EE_POSE],))
-        | map_signals(pose, (observation_keys[gr00t.EE_POSE],))
+        | map_signals(encode_pose, (observation_keys[gr00t.EE_POSE],))
         | columns
     )
 

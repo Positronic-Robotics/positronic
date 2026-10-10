@@ -94,12 +94,13 @@ class ConvertPose(Codec):
         self._rotation_offset = rotation_offset
 
     def _convert(self, value: Any) -> np.ndarray:
-        return geom.convert_pose(
-            value,
-            input_rotation=self._input_rotation,
-            output_rotation=self._output_rotation,
-            rotation_offset=self._rotation_offset,
-        )
+        vector = np.asarray(value)
+        expected = 3 + self._input_rotation.size
+        if vector.shape != (expected,):
+            raise ValueError(f'Expected a pose vector with {expected} values, got shape {vector.shape}')
+        pose = geom.Transform3D.from_vector(vector, self._input_rotation)
+        converted = pose * geom.Transform3D(rotation=self._rotation_offset)
+        return converted.as_vector(self._output_rotation).astype(np.float32)
 
     def encode(self, data: dict[str, Any]) -> dict[str, Any]:
         return {**data, **{key: self._convert(data[key]) for key in self._keys}}
