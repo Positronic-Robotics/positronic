@@ -49,7 +49,7 @@ def eval_table():
     }
 
 
-# The arm's state as tabs, the target grip beside the grip, and each command.
+# The arm's state as tabs, the target grip beside the grip, and each kind of arm command.
 single_arm_replay_layout = cfn.Config(
     ReplayLayout,
     split_shares=(3, 1),
@@ -60,7 +60,12 @@ single_arm_replay_layout = cfn.Config(
         'Robot State/Joints Vel': [keys.JOINT_VEL],
         'Grip': {'Target': keys.TARGET_GRIP, 'Current': keys.GRIP},
         'Robot Commands – Joints': [keys.TARGET_JOINTS],
+        'Robot Commands – Joint Deltas': [keys.TARGET_JOINT_DELTAS],
         'Robot Commands – End Effector': [keys.TARGET_EE_POSE],
+        'Robot Commands – End Effector Delta': {
+            'Delta': keys.TARGET_EE_POSE_DELTA,
+            'Frame': keys.TARGET_EE_POSE_DELTA_FRAME,
+        },
     },
 )
 
