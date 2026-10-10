@@ -17,8 +17,15 @@ STATUS_SUFFIX = '.status'
 # serializer's (see ``Serializers.robot_command`` and ``expand_suffixed``), so the names derive from the
 # channel rather than restating it.
 ROBOT_COMMAND = 'robot_command'
+JOINT_TARGETS_SUFFIX = '.joints'
+JOINT_DELTAS_SUFFIX = '.joint_deltas'
+POSE_DELTA_SUFFIX = '.pose_delta'
+POSE_DELTA_FRAME_SUFFIX = '.pose_delta_frame'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}{POSE_SUFFIX}'
-TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
+TARGET_JOINTS = f'{ROBOT_COMMAND}{JOINT_TARGETS_SUFFIX}'
+TARGET_JOINT_DELTAS = f'{ROBOT_COMMAND}{JOINT_DELTAS_SUFFIX}'
+TARGET_EE_POSE_DELTA = f'{ROBOT_COMMAND}{POSE_DELTA_SUFFIX}'
+TARGET_EE_POSE_DELTA_FRAME = f'{ROBOT_COMMAND}{POSE_DELTA_FRAME_SUFFIX}'
 
 # The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
 TARGET_GRIP = 'target_grip'
@@ -27,7 +34,7 @@ TARGET_GRIP = 'target_grip'
 def is_robot_command(name: str) -> bool:
     """Whether ``name`` is in the robot-command family: ``robot_command``, or an arm's ``robot_command.{side}``.
 
-    ``TARGET_EE_POSE`` and ``TARGET_JOINTS`` are in the family by name while carrying a vector.
+    The ``TARGET_*`` signals are in the family by name while carrying a vector.
     """
     return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
 

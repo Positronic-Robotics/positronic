@@ -125,13 +125,13 @@ class Serializers:
                 entries = {keys.POSE_SUFFIX: Serializers.transform_3d(pose)}
             case CartesianDelta(delta, frame):
                 entries = {
-                    '.pose_delta': Serializers.transform_3d(delta),
-                    '.pose_delta_frame': Serializers.transform_3d(frame),
+                    keys.POSE_DELTA_SUFFIX: Serializers.transform_3d(delta),
+                    keys.POSE_DELTA_FRAME_SUFFIX: Serializers.transform_3d(frame),
                 }
             case JointPosition(positions):
-                entries = {'.joints': positions}
+                entries = {keys.JOINT_TARGETS_SUFFIX: positions}
             case JointDelta(delta):
-                entries = {'.joint_deltas': delta}
+                entries = {keys.JOINT_DELTAS_SUFFIX: delta}
         if command.mode is not None:
             entries.update(Serializers._mode_entries(command.mode))
         return entries

@@ -1,4 +1,5 @@
 import io
+import typing
 import xml.etree.ElementTree as ET
 from dataclasses import replace
 from pathlib import Path
@@ -13,11 +14,14 @@ import rerun.blueprint as rrb
 import rerun.recording as rr_recording
 
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
-from positronic import keys
+from positronic import geom, keys
+from positronic.cfg.server import single_arm_replay_layout
 from positronic.dataset import Time
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
+from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
@@ -485,6 +489,28 @@ def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):
         f'/signals/{keys.JOINTS}/1': ['State j2'],
     }
     assert _line_names(listed) == {f'/signals/{keys.TARGET_GRIP}': [keys.TARGET_GRIP]}
+
+
+def test_the_single_arm_layout_charts_every_signal_an_arm_command_records():
+    one_of_each_kind = (
+        command.CartesianPosition(geom.Transform3D.identity),
+        command.CartesianDelta(geom.Transform3D.identity),
+        command.JointPosition(np.zeros(7)),
+        command.JointDelta(np.zeros(7)),
+    )
+    assert {type(cmd) for cmd in one_of_each_kind} == set(typing.get_args(command.CommandType))
+    recorded = {
+        name
+        for cmd in one_of_each_kind
+        for name, _ in expand_suffixed(keys.ROBOT_COMMAND, Serializers.robot_command(cmd))
+    }
+    charted = {
+        signal
+        for signals in single_arm_replay_layout.instantiate().charts.values()
+        for signal in (signals.values() if isinstance(signals, dict) else signals)
+    }
+
+    assert recorded <= charted
 
 
 def test_a_chart_plots_the_signals_the_episode_records_and_a_chart_with_none_is_left_out(tmp_path):
