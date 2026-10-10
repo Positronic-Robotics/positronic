@@ -12,6 +12,7 @@ import pyarrow as pa
 import pytest
 import rerun.blueprint as rrb
 import rerun.recording as rr_recording
+from eval_vocabulary.progress import STATE_SIGNAL
 
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys
@@ -116,6 +117,7 @@ def test_notice_names_every_unplotted_signal_and_its_width():
 
 _STATES = ['floating', 'floating', 'reaching', 'contact', 'reaching', 'reaching', 'at-target']
 _STATE_LEGEND = '0 floating, 1 reaching, 2 contact, 3 at-target'
+_DELIVERED = f'{STATE_SIGNAL.partition(".")[0]}.delivered'
 
 
 def _text_episode(ep_dir, texts: dict[str, list[Any]]) -> DiskEpisode:
@@ -527,31 +529,31 @@ def test_with_unnamed_signals_off_only_the_charts_show(tmp_path):
 
 
 def test_a_chart_plots_a_text_signal_by_the_index_of_its_value_and_shows_the_legend_that_names_each_value(tmp_path):
-    ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
+    ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: _STATES})
 
-    (view,) = _bottom_row(ep, _layout({'Progress': ['progress.state']}, show_unnamed_signals=False))
+    (view,) = _bottom_row(ep, _layout({'Progress': [STATE_SIGNAL]}, show_unnamed_signals=False))
 
-    assert view.contents == ['/signals/progress.state/**']
-    assert _line_names(view) == {'/signals/progress.state': [f'progress.state: {_STATE_LEGEND}']}
+    assert view.contents == [f'/signals/{STATE_SIGNAL}/**']
+    assert _line_names(view) == {f'/signals/{STATE_SIGNAL}': [f'{STATE_SIGNAL}: {_STATE_LEGEND}']}
     assert _legend_visible(view)
 
 
 def test_a_dict_names_a_text_line_by_its_key_and_keeps_the_names_of_its_values(tmp_path):
-    ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
+    ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: _STATES})
 
-    (view,) = _bottom_row(ep, _layout({'Progress': {'State': 'progress.state'}}, show_unnamed_signals=False))
+    (view,) = _bottom_row(ep, _layout({'Progress': {'State': STATE_SIGNAL}}, show_unnamed_signals=False))
 
-    assert _line_names(view) == {'/signals/progress.state': [f'State: {_STATE_LEGEND}']}
+    assert _line_names(view) == {f'/signals/{STATE_SIGNAL}': [f'State: {_STATE_LEGEND}']}
 
 
 def test_the_text_log_of_a_charted_text_signal_follows_in_other(tmp_path):
-    ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
+    ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: _STATES})
 
-    chart, other = _bottom_row(ep, _layout({'Progress': ['progress.state']}))
+    chart, other = _bottom_row(ep, _layout({'Progress': [STATE_SIGNAL]}))
 
     (group,) = other.contents
     assert chart.name == 'Progress'
-    assert [(type(view), view.name) for view in group.contents] == [(rrb.TextLogView, 'progress.state')]
+    assert [(type(view), view.name) for view in group.contents] == [(rrb.TextLogView, STATE_SIGNAL)]
 
 
 def _default_column(ep: DiskEpisode) -> Any:
@@ -582,8 +584,8 @@ def test_the_default_puts_the_views_in_one_grid_and_the_arm_charts_in_a_column_o
 
 
 def test_the_default_gives_each_arm_of_a_two_arm_robot_its_charts_as_a_tab(tmp_path):
-    widths = {f'robot_state.{arm}.q': 6 for arm in ('left', 'right')}
-    widths |= {f'{grip}.{arm}': 1 for grip in (keys.GRIP, keys.TARGET_GRIP) for arm in ('left', 'right')}
+    widths = {f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}': 6 for arm in keys.BIMANUAL_ARMS}
+    widths |= {keys.arm_channel(grip, arm): 1 for grip in (keys.GRIP, keys.TARGET_GRIP) for arm in keys.BIMANUAL_ARMS}
     ep = _episode(tmp_path / 'ep', {**widths, 'device.level': 1})
 
     column = _default_column(ep)
@@ -593,17 +595,21 @@ def test_the_default_gives_each_arm_of_a_two_arm_robot_its_charts_as_a_tab(tmp_p
     assert [arm.name for arm in arms.contents] == ['Left', 'Right']
     assert [[_title(cell) for cell in arm.contents] for arm in arms.contents] == [['Robot State', 'Grip']] * 2
     assert [arm.contents[1].contents for arm in arms.contents] == [
-        ['/signals/target_grip.left/**', '/signals/grip.left/**'],
-        ['/signals/target_grip.right/**', '/signals/grip.right/**'],
+        [f'/signals/{keys.arm_channel(keys.TARGET_GRIP, arm)}/**', f'/signals/{keys.arm_channel(keys.GRIP, arm)}/**']
+        for arm in keys.BIMANUAL_ARMS
     ]
     assert _title(other) == 'Other'
 
 
 def test_an_arm_is_found_by_its_state_and_no_other_signal_makes_one():
-    names = [keys.JOINTS, 'robot_state.right.ee_pose', 'robot_state.left.dq', keys.ROBOT_STATUS]
-    names += ['robot_state.left.status', 'robot_command.mid.pose', 'grip.wrist']
+    left, right = keys.BIMANUAL_ARMS
+    names = [keys.JOINTS, f'{keys.arm_channel(keys.ROBOT_STATE, right)}{keys.EE_POSE_SUFFIX}', keys.ROBOT_STATUS]
+    names += [
+        f'{keys.arm_channel(keys.ROBOT_STATE, left)}{suffix}' for suffix in (keys.JOINT_VEL_SUFFIX, keys.STATUS_SUFFIX)
+    ]
+    names += [f'{keys.arm_channel(keys.ROBOT_COMMAND, "mid")}{keys.POSE_SUFFIX}', keys.arm_channel(keys.GRIP, 'wrist')]
 
-    assert dataset_utils._recorded_arms(names) == [None, 'left', 'right']
+    assert dataset_utils._recorded_arms(names) == [None, left, right]
 
 
 def test_the_default_shows_the_signals_of_a_recording_with_no_arm_in_other(tmp_path):
@@ -619,22 +625,22 @@ def test_the_default_shows_the_signals_of_a_recording_with_no_arm_in_other(tmp_p
 def test_the_default_charts_the_progress_marks_and_keeps_only_their_text_log_in_other(tmp_path):
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for i, state in enumerate(_STATES):
-            writer.append('progress.state', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
-            writer.append('progress.delivered', float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append(STATE_SIGNAL, state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append(_DELIVERED, float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
             writer.append('device.level', float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
     ep = DiskEpisode(tmp_path / 'ep')
 
     progress, other = _default_column(ep).contents
 
     assert progress.name == 'Progress'
-    assert progress.contents == ['/signals/progress.delivered/**', '/signals/progress.state/**']
+    assert progress.contents == [f'/signals/{_DELIVERED}/**', f'/signals/{STATE_SIGNAL}/**']
     assert _line_names(progress) == {
-        '/signals/progress.delivered': ['progress.delivered'],
-        '/signals/progress.state': [f'progress.state: {_STATE_LEGEND}'],
+        f'/signals/{_DELIVERED}': [_DELIVERED],
+        f'/signals/{STATE_SIGNAL}': [f'{STATE_SIGNAL}: {_STATE_LEGEND}'],
     }
     assert [(type(view), view.name) for view in other.contents[0].contents] == [
         (rrb.TimeSeriesView, 'device.level'),
-        (rrb.TextLogView, 'progress.state'),
+        (rrb.TextLogView, STATE_SIGNAL),
     ]
 
 
