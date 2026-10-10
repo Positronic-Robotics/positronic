@@ -1,12 +1,12 @@
 from unittest.mock import MagicMock
 
 import pytest
-from positronic_model_server import keys as offboard_keys
 from positronic_model_server import server_wire
 from positronic_wire import wire
 
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
+from positronic.policy import keys as policy_keys
 from positronic.policy.codecs.observation import TASK_FIELD
 from positronic.policy.processors import ChunkedSchedule
 
@@ -45,7 +45,7 @@ def test_handshake_metadata_names_the_loaded_checkpoint(monkeypatch):
     monkeypatch.setattr(lerobot_server, 'warmup', lambda *_args, **_kwargs: None)
     model = lerobot_server.act_model(checkpoints_dir='s3://bucket/exp', device='cpu')
     assert model.meta() == {
-        offboard_keys.CHECKPOINT_ID: '42',
+        policy_keys.CHECKPOINT_ID: '42',
         'type': 'act',
         'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model',
         'experiment_name': 'exp',
@@ -97,7 +97,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
     ready = deserialise(connection.send.await_args_list[0].args[0])
     assert ready['status'] == 'ready'
-    assert ready['meta'][offboard_keys.CHECKPOINT_ID] == '42'
+    assert ready['meta'][policy_keys.CHECKPOINT_ID] == '42'
 
 
 def test_lerobot_server_rejects_missing_configured_checkpoint_at_startup(monkeypatch):

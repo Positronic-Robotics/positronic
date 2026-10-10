@@ -6,7 +6,6 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server.spec import JOINT_POSITION_ACTION, SET_CONTROL_MODE
 
 import pimm
 from pimm.world import VirtualClock
@@ -568,8 +567,8 @@ def test_wire_names_match_the_registered_components():
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
         'joint_delta_action': JointDeltaAction(),
-        JOINT_POSITION_ACTION: JointPositionAction('joints', 'grip'),
-        SET_CONTROL_MODE: SetControlMode(PositionControl()),
+        'joint_position_action': JointPositionAction('joints', 'grip'),
+        'set_control_mode': SetControlMode(PositionControl()),
         'unpack_action_chunk': UnpackActionChunk({'action': ['prediction']}),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         'convert_pose': ConvertPose('rot6d'),

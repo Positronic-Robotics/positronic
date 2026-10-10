@@ -14,12 +14,12 @@ from threading import Lock
 from typing import Any
 
 import numpy as np
-from positronic_model_server.keys import ACTION_FPS
 from positronic_wire import roboarena as roboarena_wire
 
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
 from positronic.policy.codecs import ACTION
+from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.vendors.dreamzero import codecs, roboarena
 

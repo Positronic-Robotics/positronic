@@ -10,16 +10,6 @@ NAME = 'name'
 ARGS = 'args'
 VERSION = 'version'
 
-METADATA = 'metadata'
-BINARIZE_GRIP_INFERENCE = 'binarize_grip_inference'
-CHANGE_EE_FRAME = 'change_ee_frame'
-CONVERT_POSE = 'convert_pose'
-OBSERVATION_CODEC = 'observation_codec'
-SET_CONTROL_MODE = 'set_control_mode'
-JOINT_POSITION_ACTION = 'joint_position_action'
-PACK_OBSERVATION_FIELDS = 'pack_observation_fields'
-UNPACK_ACTION_CHUNK = 'unpack_action_chunk'
-
 
 def component(name: str, /, *, version: int = 1, **args: Any) -> dict[str, Any]:
     """Describe a component without importing it; arguments must survive a JSON round trip."""

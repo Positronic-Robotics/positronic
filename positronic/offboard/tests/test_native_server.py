@@ -7,7 +7,6 @@ from functools import partial
 import numpy as np
 import pytest
 from positronic_model_server import grpc_wire, keys, protocol, serialization, server_wire, spec, websocket_wire
-from positronic_model_server.keys import ACTION_FPS
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_wire import grpc, websocket, wire
 
@@ -15,6 +14,7 @@ from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import EncodeImages
+from positronic.policy.keys import ACTION_FPS
 from positronic.policy.remote import RemotePolicy
 from positronic.policy.spec import from_spec
 from positronic.utils.versions import resolve_version

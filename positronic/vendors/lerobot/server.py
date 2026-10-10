@@ -2,7 +2,6 @@ import logging
 
 import configuronic as cfn
 import pos3
-from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
@@ -36,7 +35,7 @@ def lerobot_model(checkpoints_dir: str, checkpoint: str | None, device: str | No
         str(local),
         device,
         extra_meta={
-            offboard_keys.CHECKPOINT_ID: checkpoint_id,
+            policy_keys.CHECKPOINT_ID: checkpoint_id,
             policy_keys.CHECKPOINT_PATH: checkpoint_path,
             policy_keys.EXPERIMENT_NAME: experiment_dir.split('/')[-1],
             'device': device,

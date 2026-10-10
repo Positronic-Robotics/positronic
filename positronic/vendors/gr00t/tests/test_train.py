@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, Mock
 
 import numpy as np
 import pytest
-from positronic_model_server.keys import ACTION_FPS, MODEL_SETTINGS, MODEL_SETTINGS_PATH
 
 from positronic import keys
 from positronic.cfg.ds import transform
@@ -12,9 +11,12 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES, Codec
+from positronic.policy.codecs.metadata import MODEL_SETTINGS, MODEL_SETTINGS_PATH
+from positronic.policy.keys import ACTION_FPS
 from positronic.vendors.gr00t import recipes, train
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import recipe
+from positronic.vendors.gr00t.serving import settings as model_settings
 
 
 @pytest.fixture
@@ -44,10 +46,12 @@ def prepared_dataset(raw_dataset):
         base=raw_dataset,
         transforms=[
             recipes.droid.override(
-                settings=recipe.load_settings(
+                settings=model_settings.load_settings(
                     overrides={
                         ACTION_FPS: 20,
-                        recipe.IMAGE_MAPPINGS: recipe.three_camera_settings()[recipe.IMAGE_MAPPINGS],
+                        model_settings.IMAGE_MAPPINGS: model_settings.three_camera_settings()[
+                            model_settings.IMAGE_MAPPINGS
+                        ],
                     }
                 )
             )
@@ -137,7 +141,7 @@ def test_resume_rejects_different_dataset_settings(tmp_path, monkeypatch, prepar
     (dataset / MODEL_SETTINGS_PATH).write_text(json.dumps(prepared_dataset.meta[MODEL_SETTINGS]))
     output = tmp_path / 'output'
     (output / 'meta').mkdir(parents=True)
-    (output / MODEL_SETTINGS_PATH).write_text(json.dumps(recipe.load_settings()))
+    (output / MODEL_SETTINGS_PATH).write_text(json.dumps(model_settings.load_settings()))
     monkeypatch.setattr(train.pos3, 'download', lambda _: dataset)
     monkeypatch.setattr(train.pos3, 'sync', lambda *args, **kwargs: output)
     with pytest.raises(ValueError, match='resumed training run'):

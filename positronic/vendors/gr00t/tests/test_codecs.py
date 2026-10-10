@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-from positronic_model_server.keys import ACTION_FPS
 
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
@@ -11,15 +10,17 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
 from positronic.policy import spec
 from positronic.policy.codecs import ACTION, Codec
+from positronic.policy.keys import ACTION_FPS
 from positronic.vendors.gr00t import recipes
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import recipe
+from positronic.vendors.gr00t.serving import settings as model_settings
 
 
-@pytest.mark.parametrize('config', [recipe.load_settings, recipe.three_camera_settings])
+@pytest.mark.parametrize('config', [model_settings.load_settings, model_settings.three_camera_settings])
 def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(config):
     settings = config()
-    settings[recipe.IMAGE_MAPPINGS] = {}
+    settings[model_settings.IMAGE_MAPPINGS] = {}
     codec = spec.from_spec(recipe.inference(settings))
     assert isinstance(codec, Codec)
     rng = np.random.default_rng(3)
@@ -45,7 +46,7 @@ def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(conf
     np.testing.assert_array_equal(recipes.droid(settings=settings).meta[roboarm_keys.EE_FRAME], expected_frame)
 
 
-@pytest.mark.parametrize('config', [recipe.load_settings, recipe.three_camera_settings])
+@pytest.mark.parametrize('config', [model_settings.load_settings, model_settings.three_camera_settings])
 @pytest.mark.parametrize('horizon', [0, 1, 40])
 def test_droid_decodes_native_chunk_and_binarizes_grip(config, horizon):
     codec = spec.from_spec(recipe.inference(config()))
@@ -69,13 +70,15 @@ def test_droid_decodes_native_chunk_and_binarizes_grip(config, horizon):
 
 
 def test_training_cadence_metadata():
-    training = recipes.droid(settings=recipe.load_settings(overrides={ACTION_FPS: 20}))
+    training = recipes.droid(settings=model_settings.load_settings(overrides={ACTION_FPS: 20}))
     assert training.meta[ACTION_FPS] == 20
 
 
 def test_training_actions_align_recorded_samples():
     training = recipes.droid(
-        settings=recipe.load_settings(overrides={recipe.IMAGE_MAPPINGS: {}, recipe.EE_FRAME: [0, 0, 0, 1, 0, 0, 0]})
+        settings=model_settings.load_settings(
+            overrides={model_settings.IMAGE_MAPPINGS: {}, model_settings.EE_FRAME: [0, 0, 0, 1, 0, 0, 0]}
+        )
     )
     episode = EpisodeContainer({
         keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]]),

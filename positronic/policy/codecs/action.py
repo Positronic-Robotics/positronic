@@ -3,7 +3,6 @@ from dataclasses import replace
 from typing import Any
 
 import numpy as np
-from positronic_model_server import spec
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom, keys
@@ -30,7 +29,7 @@ class UnpackActionChunk(Codec):
     Observations and training columns pass through unchanged.
     """
 
-    WIRE_NAME = spec.UNPACK_ACTION_CHUNK
+    WIRE_NAME = 'unpack_action_chunk'
 
     def __init__(self, fields: Mapping[str, Sequence[str | int]], *, squeeze_dims: int = 0):
         if not fields:
@@ -90,7 +89,7 @@ class UnpackActionChunk(Codec):
 class JointPositionAction(Codec):
     """Decode named joint and grip predictions into an absolute robot command."""
 
-    WIRE_NAME = spec.JOINT_POSITION_ACTION
+    WIRE_NAME = 'joint_position_action'
 
     def __init__(self, joints_key: str, grip_key: str, num_joints: int = 7):
         self._joints_key = joints_key
@@ -290,7 +289,7 @@ class SetControlMode(Codec):
     Composes left of an action decoder (``SetControlMode(mode) | action``).
     """
 
-    WIRE_NAME = spec.SET_CONTROL_MODE
+    WIRE_NAME = 'set_control_mode'
 
     def __init__(self, mode: command.ControlModeType | dict[str, Any]):
         parsed = command.from_wire(mode) if isinstance(mode, dict) else mode

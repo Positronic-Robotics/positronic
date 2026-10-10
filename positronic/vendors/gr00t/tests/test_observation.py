@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from positronic_model_server.keys import ACTION_FPS, MODEL_SETTINGS
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
@@ -16,9 +15,12 @@ from positronic.dataset.time import Time
 from positronic.drivers.roboarm import models
 from positronic.policy import spec
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
+from positronic.policy.codecs.metadata import MODEL_SETTINGS
+from positronic.policy.keys import ACTION_FPS
 from positronic.vendors.gr00t import recipes, server
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import recipe
+from positronic.vendors.gr00t.serving import settings as model_settings
 
 
 @pytest.fixture
@@ -35,11 +37,11 @@ def observation():
     }
 
 
-@pytest.mark.parametrize('config', [recipe.load_settings, recipe.three_camera_settings])
+@pytest.mark.parametrize('config', [model_settings.load_settings, model_settings.three_camera_settings])
 def test_training_and_inference_encode_the_same_absolute_state_and_images(config, observation, tmp_path):
     settings = config()
-    if gr00t.EXTERIOR_IMAGE_2 in settings[recipe.IMAGE_MAPPINGS]:
-        settings[recipe.IMAGE_MAPPINGS][gr00t.EXTERIOR_IMAGE_2] = 'alternate_view'
+    if gr00t.EXTERIOR_IMAGE_2 in settings[model_settings.IMAGE_MAPPINGS]:
+        settings[model_settings.IMAGE_MAPPINGS][gr00t.EXTERIOR_IMAGE_2] = 'alternate_view'
         observation['alternate_view'] = observation.pop(keys.EXTERIOR_IMAGE_2)
     path = tmp_path / 'settings.json'
     path.write_text(json.dumps(settings))
@@ -67,7 +69,9 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
 
 @pytest.mark.parametrize('image_mappings', [{}, {gr00t.EE_POSE: keys.WRIST_IMAGE}])
 def test_observation_layout_preserves_empty_camera_groups_and_names_shared_with_state(image_mappings, observation):
-    codec = spec.from_spec(recipe.inference(recipe.load_settings(overrides={recipe.IMAGE_MAPPINGS: image_mappings})))
+    codec = spec.from_spec(
+        recipe.inference(model_settings.load_settings(overrides={model_settings.IMAGE_MAPPINGS: image_mappings}))
+    )
     assert isinstance(codec, Codec)
     encoded = codec.encode(observation)
     assert set(encoded[gr00t.VIDEO]) == set(image_mappings)
@@ -80,7 +84,7 @@ def test_observation_layout_preserves_empty_camera_groups_and_names_shared_with_
 def test_observation_layout_requires_a_live_prompt(observation):
     del observation[keys.TASK]
     with pytest.raises(KeyError, match=keys.TASK):
-        spec.from_spec(recipe.inference(recipe.load_settings())).encode(observation)
+        spec.from_spec(recipe.inference(model_settings.load_settings())).encode(observation)
 
 
 @pytest.mark.parametrize('task', [None, 'Pick up the cup'])
@@ -95,14 +99,14 @@ def test_training_episode_materializes_without_requiring_a_recorded_task(observa
 
 
 def test_three_camera_configuration_uses_a_distinct_second_external_image(observation):
-    encoded = spec.from_spec(recipe.inference(recipe.three_camera_settings())).encode(observation)
+    encoded = spec.from_spec(recipe.inference(model_settings.three_camera_settings())).encode(observation)
     assert len(encoded[gr00t.VIDEO]) == 3
     np.testing.assert_array_equal(
         encoded[gr00t.VIDEO][gr00t.EXTERIOR_IMAGE_2][0, 0], observation[keys.EXTERIOR_IMAGE_2]
     )
     del observation[keys.EXTERIOR_IMAGE_2]
     with pytest.raises(KeyError):
-        spec.from_spec(recipe.inference(recipe.three_camera_settings())).encode(observation)
+        spec.from_spec(recipe.inference(model_settings.three_camera_settings())).encode(observation)
 
 
 def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monkeypatch, observation):
@@ -118,27 +122,27 @@ def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monk
 
 
 def test_saved_settings_drive_independent_training_and_inference_recipes(tmp_path, observation):
-    settings = recipe.load_settings(
+    settings = model_settings.load_settings(
         overrides={
-            recipe.IMAGE_SIZE: [160, 90],
-            recipe.IMAGE_MAPPINGS: {'custom_camera': keys.EXTERIOR_IMAGE_2},
-            recipe.EE_FRAME: [0, 0, 0, 1, 0, 0, 0],
-            recipe.ROTATION_OFFSET: [1, 0, 0, 0],
+            model_settings.IMAGE_SIZE: [160, 90],
+            model_settings.IMAGE_MAPPINGS: {'custom_camera': keys.EXTERIOR_IMAGE_2},
+            model_settings.EE_FRAME: [0, 0, 0, 1, 0, 0, 0],
+            model_settings.ROTATION_OFFSET: [1, 0, 0, 0],
             ACTION_FPS: 20,
         }
     )
-    for name, source in settings[recipe.OBSERVATION_KEYS].items():
+    for name, source in settings[model_settings.OBSERVATION_KEYS].items():
         renamed = f'custom.{name}'
         observation[renamed] = observation.pop(source)
-        settings[recipe.OBSERVATION_KEYS][name] = renamed
+        settings[model_settings.OBSERVATION_KEYS][name] = renamed
     path = tmp_path / 'settings.json'
     path.write_text(json.dumps(settings))
-    training = recipes.droid(settings=recipe.load_settings(path))
-    description = json.loads(json.dumps(recipe.inference(recipe.load_settings(path))))
+    training = recipes.droid(settings=model_settings.load_settings(path))
+    description = json.loads(json.dumps(recipe.inference(model_settings.load_settings(path))))
     codec = spec.from_spec(description)
     assert isinstance(codec, Codec)
     episode = EpisodeContainer({
-        name: value if name == settings[recipe.OBSERVATION_KEYS][gr00t.TASK] else DummySignal([0], [value])
+        name: value if name == settings[model_settings.OBSERVATION_KEYS][gr00t.TASK] else DummySignal([0], [value])
         for name, value in observation.items()
     })
     prepared = training(episode)
@@ -158,9 +162,9 @@ def test_images_are_bounded_before_remote_without_changing_model_pixels(config, 
     resize = next(layer for layer in local._components if isinstance(layer, RestrictImageSize))
     wire_observation = resize.encode(observation)
     settings = codec.meta[MODEL_SETTINGS]
-    for source in settings[recipe.IMAGE_MAPPINGS].values():
-        assert wire_observation[source].shape[0] <= settings[recipe.IMAGE_SIZE][1]
-        assert wire_observation[source].shape[1] <= settings[recipe.IMAGE_SIZE][0]
+    for source in settings[model_settings.IMAGE_MAPPINGS].values():
+        assert wire_observation[source].shape[0] <= settings[model_settings.IMAGE_SIZE][1]
+        assert wire_observation[source].shape[1] <= settings[model_settings.IMAGE_SIZE][0]
     direct = codec.encode(observation)
     remote_encoded = codec.encode(wire_observation)
     for name in direct[gr00t.VIDEO]:
@@ -184,7 +188,7 @@ def test_droid_frame_and_pixels_match_upstream_robot_client(observation):
         tool_pose.translation,
         Rotation.from_matrix(tool_pose.rotation.as_rotation_matrix).as_euler('XYZ'),
     ])
-    encoded = spec.from_spec(recipe.inference(recipe.load_settings())).encode(observation)
+    encoded = spec.from_spec(recipe.inference(model_settings.load_settings())).encode(observation)
     np.testing.assert_allclose(
         encoded[gr00t.STATE][gr00t.EE_POSE][0, 0], loaded['frame'].compute_eef_9d(upstream_pose), atol=1e-6
     )

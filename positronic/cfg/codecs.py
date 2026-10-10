@@ -1,7 +1,6 @@
 """Configuration for policy codecs (observation encoders and action decoders)."""
 
 import configuronic as cfn
-from positronic_model_server.keys import ACTION_FPS
 
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
@@ -15,6 +14,7 @@ from positronic.policy.codecs import (
     SetControlMode,
 )
 from positronic.policy.codecs.observation import ObservationCodec
+from positronic.policy.keys import ACTION_FPS
 
 RotRep = geom.Rotation.Representation
 

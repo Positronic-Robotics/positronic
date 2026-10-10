@@ -106,7 +106,7 @@ jobs:
           uv venv --python ${{ matrix.python }} /tmp/model-package
           uv pip install --python /tmp/model-package --no-index --find-links /tmp/model-wheels --no-deps positronic-wire positronic-model-server
           uv pip install --python /tmp/model-package --find-links /tmp/model-wheels "positronic-model-server${{ matrix.transport.extra }}" 'numpy==1.26.4'
-      - name: Check runtime dependency allowlist, imports and serialization
+      - name: Check runtime dependencies, constant ownership, imports and serialization
         run: /tmp/model-package/bin/python -I utilities/check_model_server_package.py --wire ${{ matrix.transport.wires }}
       - name: Install test tools and run package tests
         run: |

@@ -24,7 +24,6 @@ import pos3
 import torch
 import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from positronic_model_server.keys import ACTION_FPS, MODEL_SETTINGS, MODEL_SETTINGS_PATH
 
 from pimm.logging import init_logging
 from positronic import keys, utils
@@ -33,6 +32,8 @@ from positronic.dataset import Dataset
 from positronic.dataset.episode import select_timeline
 from positronic.dataset.time import Time
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
+from positronic.policy.codecs.metadata import MODEL_SETTINGS, MODEL_SETTINGS_PATH
+from positronic.policy.keys import ACTION_FPS
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:

@@ -2,7 +2,6 @@ from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
-from positronic_model_server import spec
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom
@@ -30,7 +29,7 @@ class ChangeEEFrame(Codec):
     of the observation/action codecs.
     """
 
-    WIRE_NAME = spec.CHANGE_EE_FRAME
+    WIRE_NAME = 'change_ee_frame'
 
     def __init__(
         self,
@@ -76,7 +75,7 @@ class ConvertPose(Codec):
     Wire offsets are wxyz quaternions. Selected fields are required. Decoded actions pass through.
     """
 
-    WIRE_NAME = spec.CONVERT_POSE
+    WIRE_NAME = 'convert_pose'
 
     def __init__(
         self,

@@ -7,11 +7,11 @@ import time
 from typing import Any
 
 import configuronic as cfn
-from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.spec import Model, PolicyDeployment
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codecs import Codec
 from positronic.policy.processors import ChunkedSchedule
@@ -22,7 +22,7 @@ class StubModel(Model):
         return [{}]
 
     def meta(self) -> dict[str, Any]:
-        return {'model_name': 'stub', offboard_keys.CHECKPOINT_ID: 'stub'}
+        return {'model_name': 'stub', policy_keys.CHECKPOINT_ID: 'stub'}
 
 
 class Delay(Codec):

@@ -31,8 +31,9 @@ GR00T has independent training and inference recipes. Both read [shared settings
 ```python
 from positronic.vendors.gr00t import recipes
 from positronic.vendors.gr00t.serving import recipe
+from positronic.vendors.gr00t.serving.settings import load_settings
 
-settings = recipe.load_settings()
+settings = load_settings()
 training = recipes.droid(settings=settings)  # EpisodeTransform
 description = recipe.inference(settings)     # JSON-compatible component description
 ```

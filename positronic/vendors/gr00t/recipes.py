@@ -4,7 +4,6 @@ from functools import partial
 
 import configuronic as cfn
 import numpy as np
-from positronic_model_server.keys import ACTION_FPS, MODEL_SETTINGS
 
 from positronic import geom, keys
 from positronic.dataset import transforms as tf
@@ -20,10 +19,12 @@ from positronic.policy.codecs import (
     lerobot_image,
     lerobot_vector,
 )
+from positronic.policy.keys import ACTION_FPS
 from positronic.vendors.gr00t import serving as gr00t
-from positronic.vendors.gr00t.serving import recipe
+from positronic.vendors.gr00t.serving import settings as model_settings
+from positronic.vendors.gr00t.serving.settings import MODEL_SETTINGS
 
-settings = cfn.Config(recipe.load_settings)
+settings = cfn.Config(model_settings.load_settings)
 
 
 def _derive_pose(source: str, episode: Episode):
@@ -40,11 +41,13 @@ def _derive_grip(source: str, episode: Episode):
 @cfn.config(settings=settings)
 def droid(settings: dict) -> EpisodeTransform:
     """Prepare recorded absolute trajectories and metadata for GR00T fine-tuning."""
-    image_mappings = settings[recipe.IMAGE_MAPPINGS]
-    observation_keys = settings[recipe.OBSERVATION_KEYS]
-    image_size = settings[recipe.IMAGE_SIZE]
-    frame = geom.Transform3D.from_vector(np.asarray(settings[recipe.EE_FRAME]), geom.Rotation.Representation.QUAT)
-    offset = geom.Transform3D(rotation=geom.Rotation.from_quat(settings[recipe.ROTATION_OFFSET]))
+    image_mappings = settings[model_settings.IMAGE_MAPPINGS]
+    observation_keys = settings[model_settings.OBSERVATION_KEYS]
+    image_size = settings[model_settings.IMAGE_SIZE]
+    frame = geom.Transform3D.from_vector(
+        np.asarray(settings[model_settings.EE_FRAME]), geom.Rotation.Representation.QUAT
+    )
+    offset = geom.Transform3D(rotation=geom.Rotation.from_quat(settings[model_settings.ROTATION_OFFSET]))
     state_encoders = {
         gr00t.EE_POSE: partial(_derive_pose, observation_keys[gr00t.EE_POSE]),
         gr00t.GRIP: partial(_derive_grip, observation_keys[gr00t.GRIP]),
@@ -102,11 +105,11 @@ def droid(settings: dict) -> EpisodeTransform:
         return (pose * offset).as_vector(geom.Rotation.Representation.ROT6D).astype(np.float32)
 
     return (
-        Identity(meta={ACTION_FPS: settings[ACTION_FPS], MODEL_SETTINGS: settings})
+        Identity(meta={ACTION_FPS: settings[model_settings.ACTION_FPS], MODEL_SETTINGS: settings})
         | training.ChangeEEFrame(frame, (observation_keys[gr00t.EE_POSE],))
         | map_signals(encode_pose, (observation_keys[gr00t.EE_POSE],))
         | columns
     )
 
 
-droid_three_cameras = droid.override(settings=cfn.Config(recipe.three_camera_settings))
+droid_three_cameras = droid.override(settings=cfn.Config(model_settings.three_camera_settings))

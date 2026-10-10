@@ -23,7 +23,6 @@ from statistics import fmean
 from typing import Any, TypeVar
 
 import numpy as np
-from positronic_model_server.keys import ACTION_FPS
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -32,6 +31,7 @@ from positronic.drivers.roboarm.command import interpolate_commands
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Commands, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime, Step
+from positronic.policy.keys import ACTION_FPS
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once

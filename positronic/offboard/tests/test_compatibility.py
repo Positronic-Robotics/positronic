@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 from positronic_model_server import protocol
-from positronic_model_server.keys import ACTION_FPS
 from positronic_wire import wire
 
 from positronic import keys
@@ -24,6 +23,7 @@ from positronic.policy.base import Step
 from positronic.policy.codecs import RestrictImageSize
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
+from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
 from positronic.utils import flatten_dict

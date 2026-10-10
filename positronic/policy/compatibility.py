@@ -8,12 +8,12 @@ import time
 from collections.abc import Callable, Generator, Mapping
 from typing import Any, overload
 
-from positronic_model_server.keys import ACTION_FPS
 from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION
 
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
 from positronic.policy.codecs import Codec
+from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec

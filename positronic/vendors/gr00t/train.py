@@ -6,10 +6,10 @@ from pathlib import Path
 
 import configuronic as cfn
 import pos3
-from positronic_model_server.keys import MODEL_SETTINGS_PATH
 
 from positronic import utils
 from positronic.policy.codecs import GR00T_MODALITY_PATH
+from positronic.policy.codecs.metadata import MODEL_SETTINGS_PATH
 from positronic.vendors.gr00t import serving as gr00t
 
 

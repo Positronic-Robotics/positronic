@@ -78,12 +78,18 @@ The [training recipe](recipes.py) builds an episode transform. The [inference re
 builds a JSON-compatible description using only the lightweight wrapper.
 Both read [shared settings](serving/droid.json): observation keys, image size, camera mappings, tool frame,
 rotation offset, and cadence.
+Their names and loading live in [serving/settings.py](serving/settings.py),
+which both training and serving import. This module uses only the standard library; the common
+model-server wrapper has no GR00T settings definitions.
 The settings also contain the control mode, which only inference uses.
 The training transform preserves the recorded absolute pose, grip, and joint trajectories as action labels.
 GR00T's checkpoint processor converts these labels to relative actions and restores absolute actions during inference.
 
 The launcher reads camera keys from `meta/modality.json`; no separate modality selection is needed.
 The exporter saves shared settings to `meta/positronic_model_settings.json`.
+The file layout is a Positronic dataset convention defined beside the exporter metadata in
+[`policy/codecs/metadata.py`](../../policy/codecs/metadata.py). The GR00T description names client
+metadata fields without importing Positronic; its tests verify that the client and exporter read them.
 Export frame rates must match the recipe's `action_fps`; change that setting to select a different rate.
 Training copies this file into the experiment directory and, after a successful run, into each checkpoint.
 Resume rejects settings that differ from those recorded in the experiment directory.

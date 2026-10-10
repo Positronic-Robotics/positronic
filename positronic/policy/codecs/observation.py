@@ -3,7 +3,6 @@ from typing import Any
 
 import numpy as np
 from PIL import Image as PilImage
-from positronic_model_server import spec
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -33,7 +32,7 @@ class PackObservationFields(Codec):
         )
     """
 
-    WIRE_NAME = spec.PACK_OBSERVATION_FIELDS
+    WIRE_NAME = 'pack_observation_fields'
 
     def __init__(self, layout: dict[str, Any], *, unsqueeze_dims: int = 0):
         if type(unsqueeze_dims) is not int or unsqueeze_dims < 0:
@@ -125,7 +124,7 @@ class ObservationCodec(Codec):
         task_source: input key carrying the language prompt.
     """
 
-    WIRE_NAME = spec.OBSERVATION_CODEC
+    WIRE_NAME = 'observation_codec'
 
     def __init__(
         self,

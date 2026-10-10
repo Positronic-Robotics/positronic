@@ -15,7 +15,6 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 from platform_client.policy_container import PROVISIONING_DEADLINE_S
-from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
 from positronic import keys
@@ -90,7 +89,7 @@ def cosmos3_model(checkpoint: str, revision: str | None, nvidia_python: str, bac
     if revision is not None:
         command += ['--hf-revision', revision]
     backend = subprocess.Popen(command)
-    meta = {offboard_keys.CHECKPOINT_ID: checkpoint, policy_keys.TYPE: 'cosmos3', 'revision': revision}
+    meta = {policy_keys.CHECKPOINT_ID: checkpoint, policy_keys.TYPE: 'cosmos3', 'revision': revision}
     model = Cosmos3Model(backend, backend_port, meta)
     try:
         probe = RoboarenaClient(BACKEND_HOST, backend_port)

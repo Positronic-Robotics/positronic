@@ -17,7 +17,6 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 from platform_client.policy_container import PROVISIONING_DEADLINE_S
-from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
 from positronic import keys
@@ -102,7 +101,7 @@ def flux3_action_model(
             command += [flag, value]
     backend = subprocess.Popen(command)
     meta = {
-        offboard_keys.CHECKPOINT_ID: checkpoint,
+        policy_keys.CHECKPOINT_ID: checkpoint,
         policy_keys.TYPE: 'flux3_action',
         'revision': revision,
         'subfolder': subfolder,

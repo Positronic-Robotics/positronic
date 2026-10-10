@@ -11,8 +11,6 @@ import msgpack_numpy as mnp
 import numpy as np
 import pos3
 import zmq
-from positronic_model_server import keys as offboard_keys
-from positronic_model_server.keys import ACTION_FPS
 
 from pimm.logging import init_logging
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
@@ -27,6 +25,7 @@ from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import recipe
+from positronic.vendors.gr00t.serving import settings as model_settings
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +239,7 @@ def _warm_observation(modalities: dict) -> dict[str, Any]:
     if language_key != gr00t.TASK:
         raise ValueError(f'Checkpoint instruction key {language_key} does not match codec key {gr00t.TASK}')
     # TODO: Use session settings for warm-up when this adapter moves to ModelServer.
-    width, height = recipe.load_settings()[recipe.IMAGE_SIZE]
+    width, height = model_settings.load_settings()[model_settings.IMAGE_SIZE]
     state = {name: np.zeros((1, 1, gr00t.STATE_DIMS[name]), dtype=np.float32) for name in state_keys}
     if gr00t.EE_POSE in state:
         state[gr00t.EE_POSE][..., 3:] = [1, 0, 0, 0, 1, 0]
@@ -295,7 +294,7 @@ def gr00t_model(
         policy = Gr00tModel(
             groot,
             {
-                offboard_keys.CHECKPOINT_ID: checkpoint_id,
+                policy_keys.CHECKPOINT_ID: checkpoint_id,
                 policy_keys.TYPE: 'groot',
                 policy_keys.CHECKPOINT_PATH: str(model_path),
                 'embodiment': gr00t.EMBODIMENT,
@@ -310,22 +309,24 @@ def gr00t_model(
     return policy
 
 
-@cfn.config(settings=cfn.Config(recipe.load_settings))
+@cfn.config(settings=cfn.Config(model_settings.load_settings))
 def pipeline(settings: dict, fps: float | None = None, horizon_sec: float = 1.0):
     """Schedule DROID joint commands while the server codec performs checkpoint-specific conversion."""
     codec = spec.from_spec(recipe.inference(settings))
     assert isinstance(codec, Codec)
-    fps = settings[ACTION_FPS] if fps is None else fps
+    fps = settings[model_settings.ACTION_FPS] if fps is None else fps
     return PolicyDeployment(
         Sequential(
-            PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(*settings[recipe.IMAGE_SIZE])
+            PauseOnUnavailable(),
+            ChunkedSchedule(fps, horizon_sec),
+            RestrictImageSize(*settings[model_settings.IMAGE_SIZE]),
         ),
         codec,
     )
 
 
 droid = pipeline
-droid_three_cameras = pipeline.override(settings=cfn.Config(recipe.three_camera_settings))
+droid_three_cameras = pipeline.override(settings=cfn.Config(model_settings.three_camera_settings))
 COMMANDS = {
     'serve': serve.override(model=gr00t_model, pipeline=droid),
     'droid': serve.override(model=gr00t_model, pipeline=droid),

@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server import protocol, spec
-from positronic_model_server.keys import ACTION_FPS
 from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
@@ -33,6 +32,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
@@ -435,7 +435,7 @@ class TestADroppedConnectionReconnects:
         clock = [0.0]
         loading = legacy_protocol.serialise({
             protocol.STATUS: protocol.ServerStatus.LOADING,
-            protocol.MESSAGE: 'loading',
+            legacy_protocol.MESSAGE: 'loading',
         })
 
         def recv_loading(timeout: float | None = None) -> bytes:
@@ -906,7 +906,7 @@ def test_a_session_close_past_the_bound_lets_the_run_end_and_logs_a_late_failure
 @pytest.mark.parametrize('compressed', [False, True])
 def test_compression_follows_the_handshake(runtime, compressed):
     policy, session = _mock_remote_policy(
-        {**CHUNKED_STACK, offboard_keys.COMPRESS_IMAGES: compressed}, infer_return=[{'value': 42}]
+        {**CHUNKED_STACK, policy_keys.COMPRESS_IMAGES: compressed}, infer_return=[{'value': 42}]
     )
     run = runtime.start(policy)
     try:
@@ -925,7 +925,7 @@ def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
     monkeypatch.setattr(
         'positronic.policy.remote.encode_jpeg', lambda image, quality: qualities.append(quality) or {'jpeg': b''}
     )
-    session = _mock_session({**CHUNKED_STACK, offboard_keys.COMPRESS_IMAGES: True})
+    session = _mock_session({**CHUNKED_STACK, policy_keys.COMPRESS_IMAGES: True})
     session.infer.return_value = [{'value': 42}]
     policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
     policy._client = MagicMock()
@@ -944,7 +944,7 @@ def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
 def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(compressed):
     policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
     policy._client = MagicMock()
-    policy._client.new_session.return_value = _mock_session({offboard_keys.COMPRESS_IMAGES: compressed})
+    policy._client.new_session.return_value = _mock_session({policy_keys.COMPRESS_IMAGES: compressed})
     meta = policy.meta()
     if compressed:
         assert meta[policy_keys.JPEG_QUALITY] == 75

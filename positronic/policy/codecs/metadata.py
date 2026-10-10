@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any
 
-from positronic_model_server import spec
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic.dataset.transforms.episode import EpisodeTransform, Identity
@@ -10,6 +9,8 @@ from .base import Codec
 
 GR00T_MODALITY_PATH = Path('meta/modality.json')
 GR00T_MODALITY = 'gr00t_modality'
+MODEL_SETTINGS = 'model_settings'
+MODEL_SETTINGS_PATH = Path('meta/positronic_model_settings.json')
 LEROBOT_FEATURES = 'lerobot_features'
 ACTION = 'action'
 
@@ -35,7 +36,7 @@ def lerobot_action(dim: int) -> dict[str, Any]:
 class Metadata(Codec):
     """Attach metadata to a codec and its training transform without changing the data."""
 
-    WIRE_NAME = spec.METADATA
+    WIRE_NAME = 'metadata'
 
     def __init__(self, values: dict[str, Any]):
         self._values = dict(values)

@@ -86,7 +86,7 @@ def _ckpt_act(ep: Episode) -> str:
 
 
 def _ckpt_remote(ep: Episode) -> str:
-    checkpoint_id = ep.get(f'{policy_keys.SERVER_META}.{offboard_keys.CHECKPOINT_ID}', '')
+    checkpoint_id = ep.get(f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_ID}', '')
     if checkpoint_id:
         return str(checkpoint_id)
     raw_path = ep.get(f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_PATH}', '')
@@ -627,7 +627,7 @@ def phail_uph(ep: Episode) -> float | None:
 
 def phail_variant(ep: Episode) -> str:
     exp = ep.get(f'{policy_keys.SERVER_META}.{policy_keys.EXPERIMENT_NAME}', '')
-    ckpt = ep.get(f'{policy_keys.SERVER_META}.{offboard_keys.CHECKPOINT_ID}', '')
+    ckpt = ep.get(f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_ID}', '')
     if exp and ckpt:
         return f'{exp}:{ckpt}'
     if exp:
@@ -662,7 +662,7 @@ phail_inference = base_cfg.transform.override(
                     'eval.object',
                     f'{policy_keys.POLICY_META}.{offboard_keys.PORT}',
                     f'{policy_keys.POLICY_META}.{offboard_keys.HOST}',
-                    f'{policy_keys.SERVER_META}.{offboard_keys.CHECKPOINT_ID}',
+                    f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_ID}',
                     f'{policy_keys.SERVER_META}.{policy_keys.CONFIG_NAME}',
                     f'{policy_keys.SERVER_META}.{policy_keys.EXPERIMENT_NAME}',
                     f'{policy_keys.SERVER_META}.{policy_keys.TYPE}',
