@@ -94,9 +94,9 @@ submission.
 - The image holds two Python environments. positronic's server answers on port 8000. It starts BFL's
   own server in BFL's environment, on port 9000 inside the container, and sends it each observation.
 - The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
-  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab,
-  MolmoSpaces or a DROID rig, runs better on `droid_3cam`: to select it in your own image, change
-  `droid` to `droid_3cam` in the recipe's `ENTRYPOINT`.
+  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
+  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
+  `droid_3cam` in the recipe's `ENTRYPOINT`.
 - BFL's server compiles the model for about 140 s, and port 8000 binds after it. The GPU memory peaks
   at about 33 000 MiB.
 
@@ -110,9 +110,9 @@ published image as a submission.
   NVIDIA's server in NVIDIA's environment, on port 9000 inside the container, and sends it each
   observation.
 - The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
-  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab,
-  MolmoSpaces or a DROID rig, runs better on `droid_3cam`: to select it in your own image, change
-  `droid` to `droid_3cam` in the recipe's `ENTRYPOINT`.
+  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
+  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
+  `droid_3cam` in the recipe's `ENTRYPOINT`.
 - The client plays each chunk of 32 actions in full, and a gripper value above 0.5 closes the
   gripper, as in NVIDIA's RoboLab client.
 - The guardrails are off. Their model repository is gated, and they serve only the video and text
