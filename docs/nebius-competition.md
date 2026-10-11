@@ -67,14 +67,33 @@ platform needs from the image, and how to build one from an example.
 
 ### Test the image
 
-Start the image with the network denied. This test needs no GPU, and it uses no submission.
+Start the image with the network denied, and wait for its server. This test needs no GPU, and it uses
+no submission.
 
 ```bash
-docker run --rm --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
+docker run -d --name policy --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
+deadline=$((SECONDS + 900))
+until docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
+  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', \
+  headers={'Authorization': 'Bearer test'}), timeout=5).read().decode())" 2>/dev/null; do
+  [ "$(docker inspect -f '{{.State.Running}}' policy)" = true ] || { echo "the server exited"; break; }
+  [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
+  sleep 5
+done
+docker logs --tail 30 policy
+docker rm -f policy
 ```
 
-A correct image loads its weights. With no GPU, the server then stops on the missing GPU, or it serves on
-the CPU. It must not print a DNS error, and it must not hang. The full test on a GPU machine is in
+The loop calls the keepalive route every 5 s, for up to 900 s. A model loads more slowly on a CPU than on
+a GPU. The loop ends in one of three ways:
+
+- `{"alive_seconds": ...}`: the server loaded its weights, and it serves on the CPU.
+- `the server exited`: read the log. A correct image loads its weights, and then it stops on the missing
+  GPU.
+- `no answer in 900 s`: the server hung. Read the log for the step where it stopped.
+
+The log must not show a DNS error. The `docker exec` line uses the Python of the example images. In your
+own image, use any HTTP client that the image has. The full test on a GPU machine is in
 [Test the image on a GPU](#test-the-image-on-a-gpu).
 
 ### Submit
@@ -183,13 +202,17 @@ docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
 ### A private image
 
 Push to a private repository, and give the platform a read-only credential for it. First write the
-password into a file of its own. Paste the token, press Enter, and then press Ctrl-D:
+password into a file of its own. Run these commands in your own terminal, paste the token at the prompt,
+and press Enter:
 
 ```bash
 mkdir -p ~/.config/positronic
 install -m 600 /dev/null ~/.config/positronic/registry-password
-cat > ~/.config/positronic/registry-password
+printf 'Registry token: '; read -rs token; echo
+printf %s "$token" > ~/.config/positronic/registry-password; unset token
 ```
+
+`read -s` keeps the token off the screen and out of a terminal or agent transcript.
 
 Then add `--registry-username=<user>` and `--registry-password-file=~/.config/positronic/registry-password`
 to `positronic eval run`.
@@ -218,17 +241,30 @@ What the platform does with your credential:
 
 ## Test the image on a GPU
 
-On a machine with a GPU, serve the image with the network denied. Then call the keepalive route from
-inside the container, with the token:
+On a machine with a GPU, serve the image with the network denied. Then wait until the keepalive route
+answers, from inside the container, with the token:
 
 ```bash
 docker network create --internal noegress
 docker run -d --name policy --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
-docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', headers={'Authorization': 'Bearer test'})).read())"
+deadline=$((SECONDS + 600))
+until docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
+  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', \
+  headers={'Authorization': 'Bearer test'}), timeout=5).read().decode())" 2>/dev/null; do
+  [ "$(docker inspect -f '{{.State.Running}}' policy)" = true ] || { echo "the server exited"; break; }
+  [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
+  sleep 5
+done
+docker logs --tail 30 policy
+docker rm -f policy
 ```
 
+- The loop calls the route every 5 s, for up to 600 s. A slow model binds port 8000 late: FLUX 3 Action
+  binds it after about 140 s.
 - The route answers `{"alive_seconds": ...}` when the model has loaded and warmed.
+- `the server exited` means that the server crashed. The log shows why.
+- `no answer in 600 s` means that the server hung, or that it starts too slowly. On the platform, machine
+  boot, the image pull and the server's start share one deadline of 1800 s.
 - A server that checks the token answers `401` when the request has no token.
 - The `docker exec` line uses the Python of the example images. In your own image, use any HTTP client
   that the image has.

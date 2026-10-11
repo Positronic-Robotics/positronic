@@ -7,8 +7,8 @@ GPU beside a simulator, plays an eval against it, and scores the result. An eval
 tasks from the platform's catalog.
 
 The container gets no network access. Bake every package, weight and tokenizer into the image, and
-test that the image starts with the network denied before you submit:
-`docker run --rm --network none <image>`.
+test that the image starts with the network denied before you submit
+([Test the image before you submit](#test-the-image-before-you-submit)).
 
 ## Example images
 
@@ -139,7 +139,8 @@ Write the password into a file of its own and name the file:
 ```bash
 mkdir -p ~/.config/positronic
 install -m 600 /dev/null ~/.config/positronic/registry-password
-printf %s "<the registry access token>" > ~/.config/positronic/registry-password
+printf 'Registry token: '; read -rs token; echo        # paste the token at the prompt
+printf %s "$token" > ~/.config/positronic/registry-password; unset token
 uv run positronic eval run --eval=<eval> \
     --policy-image=<registry>/<you>/<image>@sha256:<digest> \
     --registry-username=<user> \
@@ -147,7 +148,8 @@ uv run positronic eval run --eval=<eval> \
 ```
 
 - The password is in the file and never on the command line, where every `ps` on the machine
-  reads it and every shell history keeps it.
+  reads it and every shell history keeps it. `read -s` keeps it off the screen and out of a
+  terminal or agent transcript, so run it in your own terminal.
 - One trailing line ending goes, so a file written with `echo` needs no trimming. Everything
   else in the file is the password, a leading or trailing space included.
 - Give the credential read on that one repository. A registry issues a token for exactly this:
@@ -244,11 +246,26 @@ holds each value below. The platform runs every image under them.
 
 ## Test the image before you submit
 
-Run it with the network denied. This reproduces the platform's own conditions and needs no GPU:
+Run it with the network denied, and wait for its server. This reproduces the platform's own
+conditions and needs no GPU:
 
 ```bash
-docker run --rm --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
+docker run -d --name policy --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
+deadline=$((SECONDS + 900))
+until docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
+  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', \
+  headers={'Authorization': 'Bearer test'}), timeout=5).read().decode())" 2>/dev/null; do
+  [ "$(docker inspect -f '{{.State.Running}}' policy)" = true ] || { echo "the server exited"; break; }
+  [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
+  sleep 5
+done
+docker logs --tail 30 policy
+docker rm -f policy
 ```
+
+The loop calls the keepalive route every 5 s, for up to 900 s, because a model loads more slowly
+on a CPU. A ready server prints `{"alive_seconds": ...}`. A server that stops prints
+`the server exited`, and a hung one prints `no answer in 900 s`. The log follows each of them.
 
 In a correct image, the server pins its checkpoint, starts the model process, and reads the
 weights from the image. The GR00T recipe then fails on the missing GPU with
@@ -256,23 +273,34 @@ weights from the image. The GR00T recipe then fails on the missing GPU with
 CPU and serve. For the FLUX 3 Action recipe, BFL's server exits on the missing GPU, and the server
 reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano recipe, NVIDIA's server exits
 the same way, and the server reports `Cosmos3 backend exited with code 1`. Everything you control is then
-correct. The run must not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it
-must not hang. albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2
-prints `A new version of the following files was downloaded` when `transformers` copies the model's code
+correct. The log must not show `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
+albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints
+`A new version of the following files was downloaded` when `transformers` copies the model's code
 into its module cache; no download occurs.
 
-On a machine with a GPU, serve it with the network denied and call the keepalive route from inside
-the container with the token:
+On a machine with a GPU, serve it with the network denied, and wait until the keepalive route
+answers from inside the container with the token:
 
 ```bash
 docker network create --internal noegress
 docker run -d --name policy --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
-docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', headers={'Authorization': 'Bearer test'})).read())"
+deadline=$((SECONDS + 600))
+until docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
+  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', \
+  headers={'Authorization': 'Bearer test'}), timeout=5).read().decode())" 2>/dev/null; do
+  [ "$(docker inspect -f '{{.State.Running}}' policy)" = true ] || { echo "the server exited"; break; }
+  [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
+  sleep 5
+done
+docker logs --tail 30 policy
+docker rm -f policy
 ```
 
 The route answers `{"alive_seconds": ...}` with the token once the model has loaded and warmed.
-A server that checks the token answers `401` without it.
+A server that checks the token answers `401` without it. The loop waits up to 600 s: FLUX 3
+Action binds port 8000 after about 140 s, and GR00T loads in about 151 s. `no answer in 600 s`
+means a hung server, or one too slow for the provisioning deadline, which it shares with VM boot
+and the pull.
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
