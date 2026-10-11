@@ -1,9 +1,8 @@
 """The label of an episode, its views, and the labelers, against a recorded MolmoSpaces sweep.
 
 The fixture holds 20 episodes of one sweep of `pi05_droid_jointpos`, in the `<block>/<episode>` layout that positronic
-records. Each episode keeps its `static.json`, the id from its `meta.json`, and the time column of its
-`robot_state.q` signal. The sweep is older than `eval.duration`, so the labeler reads each episode's end from that
-signal.
+records: each `static.json`, the id from each `meta.json`, and the time column of each `robot_state.q` signal. The
+sweep is older than `eval.duration`, so the labeler reads each end from that signal.
 """
 
 from __future__ import annotations

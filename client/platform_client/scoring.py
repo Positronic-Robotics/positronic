@@ -1,7 +1,7 @@
 """How an eval scores a run: its labelers in precedence order, and one metric over the labels they give.
 
-`episode_score` gives what one label adds to a mean, from 0 to 1. `score` gives the `Scores` of a run from the
-labels of its episodes. A score is a function of the labels, so no file holds it.
+`episode_score` gives what one label adds to a mean, from 0 to 1, and `score` gives a run's `Scores` from the
+labels of its episodes. No file holds a score.
 """
 
 from __future__ import annotations
