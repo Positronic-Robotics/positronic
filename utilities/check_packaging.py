@@ -57,6 +57,14 @@ for pkg_name in CORE_PACKAGES:
         except Exception as e:
             failures.append((info.name, e))
 
+# Package data the MolmoSpaces sim server reads when it starts; no import above reads it.
+try:
+    from positronic.simulator.molmo_spaces import mapping
+
+    mapping.load_right_view_blocked()
+except Exception as e:
+    failures.append(('positronic.simulator.molmo_spaces right view list', e))
+
 if failures:
     for name, e in failures:
         print(f'FAIL: {name}: {e}')

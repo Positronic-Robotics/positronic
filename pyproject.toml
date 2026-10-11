@@ -318,4 +318,6 @@ positronic = [
   "server/templates/**",
   # The launcher needs these dependency constraints in installed distributions too.
   "simulator/molmo_spaces/molmo_constraints.txt",
+  # The MolmoSpaces sim server reads this list when it starts.
+  "simulator/molmo_spaces/right_view_blocked.json",
 ]
