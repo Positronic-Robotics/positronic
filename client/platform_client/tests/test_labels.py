@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -192,14 +194,49 @@ def test_a_label_refuses_a_field_or_an_event_it_does_not_know(change: dict[str, 
         Label.model_validate({**CUBES.model_dump(mode='json'), **change})
 
 
-def test_a_label_refuses_a_delivered_count_above_the_total_items():
+# Each count that a label carries, the total that bounds it, and the label fields that hold the count.
+COUNTS_AND_TOTALS = [
+    pytest.param(
+        'items delivered',
+        'total_items',
+        lambda count: {'events': (ItemsDelivered(seconds=1.0, delivered=count),)},
+        id='delivered',
+    ),
+    pytest.param(
+        'items at a stage mark',
+        'total_items',
+        lambda count: {'events': (StageReached(seconds=1.0, stage=Stage.contact, items=StageItems(count=count)),)},
+        id='stage-items',
+    ),
+    pytest.param('items lost', 'total_items', lambda count: {'lost_items': count}, id='lost'),
+    pytest.param(
+        'subtasks achieved',
+        'total_subtasks',
+        lambda count: {'events': (SubtaskAchieved(seconds=1.0, achieved=count),)},
+        id='achieved',
+    ),
+]
+_OTHER_TOTAL = {'total_items': 'total_subtasks', 'total_subtasks': 'total_items'}
+
+
+@pytest.mark.parametrize(('what', 'total', 'counted'), COUNTS_AND_TOTALS)
+def test_a_label_refuses_a_count_above_its_total(what: str, total: str, counted: Callable[[int], dict[str, Any]]):
+    with pytest.raises(ValidationError, match=f'3 {what} is more than the total of 2'):
+        _label(**counted(3), **{total: 2})
+
+
+@pytest.mark.parametrize(('what', 'total', 'counted'), COUNTS_AND_TOTALS)
+def test_a_label_takes_a_count_up_to_its_total_and_holds_it_to_no_other_total(
+    what: str, total: str, counted: Callable[[int], dict[str, Any]]
+):
+    _label(**counted(2), **{total: 2})
+    _label(**counted(5))
+    _label(**counted(5), **{_OTHER_TOTAL[total]: 2})
+
+
+def test_a_fall_in_the_delivered_count_does_not_hide_an_earlier_count_above_the_total():
     with pytest.raises(ValidationError, match='more than the total of 2'):
         _label(ItemsDelivered(seconds=1.0, delivered=3), ItemsDelivered(seconds=2.0, delivered=2), total_items=2)
-
-
-def test_a_label_takes_a_delivered_count_up_to_the_total_items_or_with_no_total():
-    assert _label(ItemsDelivered(seconds=1.0, delivered=2), total_items=2).delivered == 2
-    assert _label(ItemsDelivered(seconds=1.0, delivered=5)).delivered == 5
 
 
 def test_a_label_refuses_a_time_that_is_not_finite():

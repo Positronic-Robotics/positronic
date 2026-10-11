@@ -190,13 +190,6 @@ class Attempt(NamedTuple):
     stage_seconds: dict[Stage, float]  # the first mark of each stage in this part, from the trial start
 
 
-def _first_marks(marks: Iterable[StageReached]) -> dict[Stage, float]:
-    first: dict[Stage, float] = {}
-    for mark in marks:
-        first.setdefault(mark.stage, mark.seconds)
-    return first
-
-
 # The order of two end events at the same time: the first in this tuple decides the outcome.
 _SAME_TIME_ORDER = (Outcome.safety, Outcome.fail, Outcome.success)
 
@@ -234,10 +227,20 @@ class Label(BaseModel):
         return self
 
     @model_validator(mode='after')
-    def _delivered_counts_stay_within_the_total(self) -> Self:
-        delivered = max((event.delivered for event in self.events if isinstance(event, ItemsDelivered)), default=0)
-        if self.total_items is not None and delivered > self.total_items:
-            raise ValueError(f'{delivered} items delivered is more than the total of {self.total_items}')
+    def _counts_stay_within_their_totals(self) -> Self:
+        item_counts = [(self.lost_items, 'items lost')]
+        subtask_counts: list[tuple[int, str]] = []
+        for event in self.events:
+            if isinstance(event, ItemsDelivered):
+                item_counts.append((event.delivered, 'items delivered'))
+            elif isinstance(event, StageReached) and event.items is not None:
+                item_counts.append((event.items.count, 'items at a stage mark'))
+            elif isinstance(event, SubtaskAchieved):
+                subtask_counts.append((event.achieved, 'subtasks achieved'))
+        for total, counts in ((self.total_items, item_counts), (self.total_subtasks, subtask_counts)):
+            for count, what in counts:
+                if total is not None and count > total:
+                    raise ValueError(f'{count} {what} is more than the total of {total}')
         return self
 
     def until(self, seconds: float) -> Label:
@@ -267,10 +270,17 @@ class Label(BaseModel):
     def seconds_to_success(self) -> float | None:
         return self.seconds_to_outcome if self.outcome is Outcome.success else None
 
+    @staticmethod
+    def _first_marks(marks: Iterable[StageReached]) -> dict[Stage, float]:
+        first: dict[Stage, float] = {}
+        for mark in marks:
+            first.setdefault(mark.stage, mark.seconds)
+        return first
+
     @property
     def stage_seconds(self) -> dict[Stage, float]:
         """The first mark of each stage."""
-        return _first_marks(event for event in self.events if isinstance(event, StageReached))
+        return self._first_marks(event for event in self.events if isinstance(event, StageReached))
 
     @property
     def furthest_stage(self) -> Stage | None:
@@ -314,7 +324,7 @@ class Label(BaseModel):
             if isinstance(event, StageReached):
                 marks[bisect_right(start_times, event.seconds) - 1].append(event)
         return tuple(
-            Attempt(done, start, end, _first_marks(part))
+            Attempt(done, start, end, self._first_marks(part))
             for (start, done), end, part in zip(starts, ends, marks, strict=True)
         )
 
