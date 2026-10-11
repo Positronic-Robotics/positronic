@@ -372,8 +372,8 @@ def sweep_right_view(env: MolmoSpacesEnv, cases: list[str], progress: Path, bloc
     """Check the right view on each episode of ``cases``, then record the blocked episodes of each swept benchmark.
 
     A case is a benchmark path with an optional ``:EPISODES`` list. ``progress`` holds one JSON line per check; a
-    rerun skips an episode whose last line is a result. A benchmark whose episodes all have a result gets its entry
-    in ``blocked_list``.
+    rerun takes an episode's last result as is and does not check it again, whatever simulator or assets made it. A
+    benchmark whose episodes all have a result gets its entry in ``blocked_list``.
     """
     parse_line = TypeAdapter(RightViewResult | RightViewFailure).validate_json
     lines = progress.read_text().splitlines() if progress.exists() else []
@@ -407,7 +407,12 @@ def main() -> None:
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int)
     parser.add_argument('--sweep', nargs='+', metavar='BENCH[:EPISODES]', help='check the right view instead')
-    parser.add_argument('--progress', type=Path, help="the sweep's JSON lines, one per checked episode")
+    parser.add_argument(
+        '--progress',
+        type=Path,
+        help="the sweep's JSON lines, one per checked episode; a rerun reuses each result as is, "
+        'so give a new file when the simulator or the assets change',
+    )
     parser.add_argument('--blocked-list', type=Path, default=mapping.RIGHT_VIEW_BLOCKED_PATH)
     args = parser.parse_args()
     if (args.port is None) == (args.sweep is None) or (args.sweep is not None) != (args.progress is not None):
