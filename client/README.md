@@ -18,6 +18,8 @@ uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/
 ```
 
 The package is not on PyPI yet. Until it is, use the second line, pinned to a tag or a commit. The
+client pins `positronic-eval-vocabulary` exactly, and the index supplies it. So a git install of an
+unreleased client needs that vocabulary version released first. The
 platform serves the same contract as an OpenAPI schema at `<platform>/openapi.json`, and `/docs`
 browses it.
 
