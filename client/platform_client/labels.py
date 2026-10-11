@@ -66,6 +66,7 @@ class LabelerRef(str):
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
+# rules-allow: earn-its-place — the API word; `eval_vocabulary.outcome` keeps the recorded word; a labeler maps them
 @unique
 class Outcome(IntEnum):
     """How an episode ended, as the events of its label say."""
@@ -77,6 +78,7 @@ class Outcome(IntEnum):
     safety = 4
 
 
+# rules-allow: earn-its-place — the API word; `eval_vocabulary.progress` keeps the recorded word; a labeler maps them
 @unique
 class Stage(IntEnum):
     """The ladder a task passes through. A higher number is a higher stage."""
@@ -215,6 +217,7 @@ class Label(BaseModel):
     uid: str = Field(min_length=1)  # the id that the episode's meta records
     task: str  # the task a metric groups by
     # The labeler that gave the label. None: the publisher withholds the name.
+    # rules-allow: earn-its-place — a stored label keeps its labeler, and `label()` returns its own key for precedence
     annotator: LabelerRef | None = None
     seconds_to_end: NonNegativeFloat
     total_items: PositiveInt | None = None
