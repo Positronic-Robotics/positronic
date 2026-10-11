@@ -1,7 +1,7 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
-# What a trial reports when it ends, in its episode's statics. The harness writes ``TERMINATED``, False when the
-# budget ran out. An env's terminal carries ``SUCCESS``, and can leave it absent on a failure.
+# The verdict a trial writes in its episode's statics: the harness's ``TERMINATED``, False when the budget ran out,
+# and the env's ``SUCCESS``, which a failure can leave absent.
 from eval_vocabulary.episode import ENDED_BY as ENDED_BY
 from eval_vocabulary.episode import ENDED_BY_OPERATOR as ENDED_BY_OPERATOR
 from eval_vocabulary.episode import SUCCESS as SUCCESS

@@ -1,7 +1,6 @@
 """Where an episode records its statics, its meta and its signals, and the names that a labeler reads there.
 
-A labeler imports these names, and so does the dataset writer. A test pins the copy of `EMITTED_WORLD` that pimm
-keeps. So the writer and a labeler cannot disagree about them.
+The dataset writer imports these names, and a test pins pimm's `EMITTED_WORLD` to the one here.
 """
 
 # The file in an episode's directory that holds its statics as one JSON object.
@@ -20,11 +19,11 @@ ENDED_BY_OPERATOR = 'operator'
 # The instruction that the policy got.
 TASK = 'task'
 
-# A recorded signal is the file `<signal name><SIGNAL_FILE_SUFFIX>`. It keeps the time of each sample, in nanoseconds,
-# on each timeline `<name>` in the column `<TIMESTAMP_COLUMN_PREFIX><name>`. On `EMITTED_WORLD`, the time is when the
-# sample was made, on the world clock that a trial runs on. A signal file in the format before named timelines keeps
-# one world time per sample, in the column `LEGACY_TIME_COLUMN`.
+# A recorded signal is the file `<signal name><SIGNAL_FILE_SUFFIX>`.
 SIGNAL_FILE_SUFFIX = '.parquet'
+# Each sample's time on the timeline `<name>`, in nanoseconds, is in the column `<TIMESTAMP_COLUMN_PREFIX><name>`.
 TIMESTAMP_COLUMN_PREFIX = 'ts.'
+# The timeline of when each sample was made, on the world clock that a trial runs on.
 EMITTED_WORLD = 'emitted.world'
+# The one time column of a signal file in the format before named timelines, on the world clock.
 LEGACY_TIME_COLUMN = 'timestamp'
