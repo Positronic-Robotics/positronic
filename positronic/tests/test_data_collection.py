@@ -7,10 +7,10 @@ import pytest
 import pimm
 from positronic import data_collection, keys, wire
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.webxr import WebXR
 from positronic.geom import Rotation, Transform3D

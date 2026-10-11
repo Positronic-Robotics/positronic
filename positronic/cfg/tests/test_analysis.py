@@ -2,11 +2,15 @@ from pathlib import Path
 
 import pytest
 
+from pimm.time import RECEIVED_WORLD
+from positronic import keys
 from positronic.cfg import analysis
 from positronic.cfg.analysis import ckpt
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
+from positronic.eval import keys as eval_keys
 from positronic.server.positronic_server import app_state_restored, configure_tables
 
 
@@ -67,11 +71,56 @@ def test_ckpt_remote_resolves_lerobot_pretrained_model_path():
 
 
 @pytest.mark.parametrize('held_ns', [200_000_000, 300_000_000])
-def test_success_duration_uses_recorded_coordinate(held_ns):
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+def test_success_duration_uses_the_recording_clock(held_ns, timeline):
     signal = DummySignal(
-        [[0, 0], [100_000_000, 1], [100_000_000 + held_ns, 2]], [0.0, 1.0, 1.0], timelines=(RECORDED_TIME, 'tick')
+        [[0, 0], [100_000_000, 1], [100_000_000 + held_ns, 2]], [0.0, 1.0, 1.0], timelines=(timeline, 'tick')
     )
     episode = EpisodeContainer({'stacking_success': signal})
     assert analysis.success(episode) == (held_ns >= 250_000_000)
     expected = (100_000_000 + held_ns) / 1e9 if held_ns >= 250_000_000 else None
     assert analysis.success_time(episode) == expected
+
+
+@pytest.mark.parametrize(
+    'timelines',
+    [
+        (HARNESS_WORLD,),
+        (RECEIVED_WORLD,),
+        (RECORDED_TIME,),
+        (RECEIVED_WORLD, RECORDED_TIME),
+        (HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME),
+    ],
+)
+def test_analysis_derives_duration_and_rates_on_the_recording_clock(timelines):
+    signal = DummySignal(
+        [[0] * len(timelines), [10_000_000_000 * (i + 1) for i in range(len(timelines))]], [0, 1], timelines=timelines
+    )
+    episode = EpisodeContainer({
+        'state': signal,
+        'eval.successful_items': 2,
+        'eval.total_items': 2,
+        'eval.outcome': 'Success',
+        'checkpoint': 'test',
+        'model': 'test',
+    })
+    assert analysis.uph(episode) == 720
+    assert analysis.unified_uph(episode) == 720
+    assert analysis.phail_uph(episode) == 720
+    assert analysis._baseline_uph(episode, items=2) == 720
+    assert analysis._effective_duration(eval_keys.DURATION, episode) == 10
+    table = analysis.checkpoint_table()
+    assert table.group_fn([episode])['UPH'] == 720
+
+
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+def test_item_counting_samples_the_recording_clock(timeline):
+    times = [0, 100_000_000, 200_000_000, 300_000_000, 400_000_000]
+    episode = EpisodeContainer({
+        keys.TASK: 'test task',
+        keys.TARGET_GRIP: DummySignal(times, [0, 1, 1, 0, 0], timelines=(timeline,)),
+        keys.EE_POSE: DummySignal(
+            times, [[0, 0, 0], [0, 0, 0], [0.2, 0, 0.1], [0.3, 0, 0.1], [0.3, 0, 0.1]], timelines=(timeline,)
+        ),
+    })
+    assert analysis.calculate_units(episode) == 1

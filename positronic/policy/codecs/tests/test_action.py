@@ -6,14 +6,55 @@ from positronic_model_server import serialization
 from positronic_model_server.spec import ARGS, component
 
 import positronic.drivers.roboarm.command as cmd_module
+from pimm.time import EMITTED_WORLD, RECEIVED_WORLD
 from positronic import keys as obs_keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.time import Time
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation
-from positronic.policy.codecs import ACTION, JointPositionAction, SetControlMode, UnpackActionChunk
+from positronic.policy.codecs import ACTION, JointPositionAction, ObservationCodec, SetControlMode, UnpackActionChunk
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
 from positronic.policy.spec import from_spec
+
+
+@pytest.mark.parametrize('positions', [False, True])
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD])
+def test_training_rows_align_observations_and_commands_on_the_recording_clock(positions, timeline):
+    pose = np.array([1, 2, 3, 0, 0, 0, 1], dtype=np.float32)
+    target = obs_keys.TARGET_EE_POSE if positions else obs_keys.TARGET_JOINTS
+    commands = [pose] * 3 if positions else [np.array([10]), np.array([20]), np.array([30])]
+    episode = EpisodeContainer({
+        obs_keys.JOINTS: DummySignal(
+            [[90, 100, 1000], [190, 200, 2000], [290, 300, 3000]],
+            [[1], [2], [3]],
+            timelines=(EMITTED_WORLD, timeline, RECORDED_TIME),
+        ),
+        target: DummySignal(
+            [[110, 110, 1000], [210, 210, 2000], [310, 310, 3000]],
+            commands,
+            timelines=(EMITTED_WORLD, timeline, RECORDED_TIME),
+        ),
+        obs_keys.TARGET_GRIP: DummySignal(
+            [[110, 110, 1000], [210, 210, 2000], [310, 310, 3000]],
+            [0.1, 0.2, 0.3],
+            timelines=(EMITTED_WORLD, timeline, RECORDED_TIME),
+        ),
+    })
+    observation = ObservationCodec(state={'state': {obs_keys.JOINTS: 1}}, images={})
+    action = (
+        AbsolutePositionAction(target, obs_keys.TARGET_GRIP)
+        if positions
+        else AbsoluteJointsAction(target, obs_keys.TARGET_GRIP, num_joints=1)
+    )
+    encoded = (observation & action).training_encoder(episode)
+    rows = encoded.time[[Time(**{timeline: ts}) for ts in (110, 160, 210, 260)]]
+    np.testing.assert_array_equal(rows['state'], [[1], [1], [2], [2]])
+    np.testing.assert_allclose(np.asarray(rows[ACTION])[:, -1], [0.1, 0.1, 0.2, 0.2])
+    if not positions:
+        np.testing.assert_array_equal(np.asarray(rows[ACTION])[:, 0], [10, 10, 20, 20])
 
 
 @pytest.mark.parametrize('horizon', [0, 1, 40])

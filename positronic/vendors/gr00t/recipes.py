@@ -5,11 +5,14 @@ from functools import partial
 import configuronic as cfn
 import numpy as np
 
+from pimm.time import RECEIVED_WORLD
 from positronic import geom, keys
 from positronic.dataset import transforms as tf
-from positronic.dataset.episode import Episode, select_timeline
+from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity, map_signals
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy import training
 from positronic.policy.codecs import (
     ACTION,
@@ -81,7 +84,9 @@ def droid(settings: dict) -> EpisodeTransform:
 
     def derive_action(episode):
         signals = [derive(episode) for derive in state_encoders.values()]
-        timeline = select_timeline(name for signal in signals for name in signal.timelines)
+        timelines = {name for signal in signals for name in signal.timelines}
+        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
         return tf.concat(*signals, timelines=(timeline,), dtype=np.float32)
 
     columns = Derive(

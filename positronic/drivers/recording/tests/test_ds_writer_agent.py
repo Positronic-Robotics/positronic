@@ -10,9 +10,10 @@ import pimm
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter, EpisodeWriter, Time
-from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand
+from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as rcmd
 from positronic.drivers.roboarm.tests.fakes import FakeRobotState
@@ -70,7 +71,6 @@ class FakeDatasetWriter(DatasetWriter):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.lifecycle.append('exit')
-        return False
 
 
 def build_agent_with_pipes(signals_spec: dict[str, Any], dataset_factory: DatasetFactory, world: pimm.World):
@@ -329,15 +329,15 @@ def test_a_start_that_names_no_dataset_writes_no_episode(world):
     assert ds.created == []
 
 
-def test_inputs_mapping_is_immutable(world):
+def test_inputs_mapping_has_fixed_keys_and_mutable_values(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
     # Cannot add new key
     with pytest.raises(TypeError):
-        agent.inputs['b'] = pimm.NoOpReceiver()
+        agent.inputs['b'] = pimm.ControlSystemReceiver(agent)
     # Can modify existing key's value
-    new_em, new_rd = world.local_pipe(maxsize=8)
+    new_rd = pimm.ControlSystemReceiver(agent)
     agent.inputs['a'] = new_rd
     assert agent.inputs['a'] is new_rd
     # Deleting keys is not allowed

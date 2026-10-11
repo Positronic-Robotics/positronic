@@ -3,22 +3,25 @@
 import numpy as np
 import pytest
 
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy.codecs import ACTION
 from positronic.vendors.dreamzero.codecs import DreamZeroActionCodec, DreamZeroObservationCodec
 
 
-def test_training_actions_align_recorded_samples():
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+def test_training_actions_align_on_the_recording_clock(timeline):
     codec = DreamZeroActionCodec(keys.TARGET_JOINTS, keys.TARGET_GRIP, num_joints=2)
     episode = EpisodeContainer({
-        keys.TARGET_JOINTS: DummySignal([100, 300], [[1, 2], [3, 4]]),
-        keys.TARGET_GRIP: DummySignal([100, 200], [0.0, 1.0]),
+        keys.TARGET_JOINTS: DummySignal([100, 300], [[1, 2], [3, 4]], timelines=(timeline,)),
+        keys.TARGET_GRIP: DummySignal([100, 200], [0.0, 1.0], timelines=(timeline,)),
     })
     action = codec.training_encoder(episode)[ACTION]
-    assert list(action.timestamps(RECORDED_TIME)) == [100, 200, 300]
+    assert list(action.timestamps(timeline)) == [100, 200, 300]
     np.testing.assert_array_equal(action.values(), [[1, 2, 0], [1, 2, 1], [3, 4, 1]])
 
 

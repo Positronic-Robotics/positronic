@@ -34,8 +34,9 @@ from positronic import utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.dataset.episode import Episode
-from positronic.dataset.signal import RECORDED_TIME, Kind
+from positronic.dataset.signal import Kind
 from positronic.dataset.time import Time
+from positronic.dataset.vector import RECORDED_TIME
 
 
 def _write_mp4(path: Path, frames: Iterable[np.ndarray], fps: int) -> dict:

@@ -4,8 +4,14 @@ import os
 import numpy as np
 import pytest
 
-from positronic.dataset.signal import RECORDED_TIME
+from pimm.time import EMITTED_WORLD, RECEIVED_WORLD
+from positronic import keys
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.time import Time, TimeBounds
+from positronic.dataset.transforms import TransformedDataset
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
+from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, AbsoluteJointsAction, ObservationCodec
 
 lerobot = pytest.importorskip('lerobot')
 if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':
@@ -16,7 +22,56 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 import torch  # noqa: E402
 from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 
-from positronic.vendors.lerobot.to_lerobot import append_data_to_dataset  # noqa: E402
+from positronic.vendors.lerobot.to_lerobot import EpisodeDictDataset, append_data_to_dataset  # noqa: E402
+
+
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+def test_export_keeps_actions_and_observations_aligned_on_the_recording_clock(tmp_path, timeline):
+    source = tmp_path / 'source'
+    with LocalDatasetWriter(source) as dataset, dataset.new_episode() as writer:
+        for i in range(1, 4):
+            received = i * 100_000_000
+            emitted = received + 10_000_000
+            state_time = {timeline: received}
+            command_time = {timeline: emitted}
+            if timeline != RECORDED_TIME:
+                state_time.update({EMITTED_WORLD: received - 10_000_000, RECEIVED_WORLD: received})
+                command_time[EMITTED_WORLD] = emitted
+            writer.append(keys.JOINTS, np.array([i]), Time(**state_time))
+            time = Time(**command_time)
+            writer.append(keys.TARGET_JOINTS, np.array([i * 10]), time)
+            writer.append(keys.TARGET_GRIP, i / 10, time)
+    codec = ObservationCodec(state={'state': {keys.JOINTS: 1}}, images={}) & AbsoluteJointsAction(
+        keys.TARGET_JOINTS, keys.TARGET_GRIP, num_joints=1
+    )
+    encoder = codec.training_encoder
+    dataset = TransformedDataset(LocalDataset(source), encoder)
+    rows = EpisodeDictDataset(dataset, fps=20)[0]
+    np.testing.assert_array_equal(rows['state'], [[1], [1], [2], [2]])
+    np.testing.assert_allclose(rows[ACTION], [[10, 0.1], [10, 0.1], [20, 0.2], [20, 0.2]])
+
+    output = tmp_path / 'lerobot'
+    target = LeRobotDataset.create(
+        repo_id='local', fps=20, root=output, use_videos=False, features=encoder.meta[LEROBOT_FEATURES]
+    )
+    append_data_to_dataset(target, dataset, fps=20, task='test task', num_workers=0)
+    loaded = LeRobotDataset(repo_id='local', root=output)
+    assert len(loaded) == 4
+    for index in range(4):
+        np.testing.assert_allclose(loaded[index][ACTION].numpy(), rows[ACTION][index])
+        np.testing.assert_array_equal(loaded[index]['state'].numpy(), rows['state'][index])
+
+
+@pytest.mark.parametrize(
+    ('preferred', 'other'),
+    [(HARNESS_WORLD, RECEIVED_WORLD), (HARNESS_WORLD, RECORDED_TIME), (RECEIVED_WORLD, RECORDED_TIME)],
+)
+def test_export_uses_the_preferred_clock(tmp_path, preferred, other):
+    with LocalDatasetWriter(tmp_path) as dataset, dataset.new_episode() as writer:
+        for i in range(3):
+            writer.append('value', i, Time(**{preferred: i * 100_000_000, other: i * 1_000_000_000}))
+    rows = EpisodeDictDataset(LocalDataset(tmp_path), fps=20)[0]
+    np.testing.assert_array_equal(rows['value'], [0, 0, 1, 1])
 
 
 class _MockTimeIndex:

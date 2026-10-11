@@ -1,12 +1,45 @@
-"""The rollouts preset: what it derives, and what the page does with each cell it writes."""
+"""Server presets: derived episode values and table cells."""
 
+import pytest
 from eval_vocabulary.outcome import OUTCOME, Outcome
 from eval_vocabulary.progress import LADDER, STAGE_LABELS, STATE_SIGNAL, Stage
 
+from pimm.time import RECEIVED_WORLD
+from positronic import keys
 from positronic.cfg import server as cfg_server
 from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.server.positronic_server import filter_spelling
 from positronic.server.rollouts import NO_RATE, NO_STAGE, StageCell
+
+
+@pytest.mark.parametrize(
+    'timelines',
+    [
+        (HARNESS_WORLD,),
+        (RECEIVED_WORLD,),
+        (RECORDED_TIME,),
+        (HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME),
+        (RECEIVED_WORLD, RECORDED_TIME),
+    ],
+)
+def test_finetuning_rates_use_the_recording_clock(timelines):
+    episode = EpisodeContainer({
+        keys.GRIP: DummySignal(
+            [[0] * len(timelines), [60_000_000_000 * (i + 1) for i in range(len(timelines))]],
+            [0, 1],
+            timelines=timelines,
+        ),
+        keys.TASK: 'pick',
+        'units': 2,
+    })
+    assert cfg_server.uph(episode) == pytest.approx(120)
+    row = cfg_server.finetune_group_by_task().group_fn([episode, episode])
+    assert row['duration'] == pytest.approx(2 / 60)
+    assert row['uph'] == pytest.approx(120)
+    assert row['count'] == 2
 
 
 def _with_stages(*codes):

@@ -22,9 +22,9 @@ from positronic.dataset import Dataset, Time
 from positronic.dataset.dataset import FilterDataset
 from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform, Identity
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.server import export, positronic_server
 from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.export import (

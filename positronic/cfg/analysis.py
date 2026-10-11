@@ -9,12 +9,16 @@ from positronic_model_server import keys as offboard_keys
 
 import positronic.cfg.ds as base_cfg
 from pimm.logging import init_logging
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.cfg.ds import internal
 from positronic.cfg.eval.real import tasks
-from positronic.dataset.episode import META_CREATED_TS_NS, Episode, select_timeline
+from positronic.dataset.episode import META_CREATED_TS_NS, Episode
 from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
+from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
@@ -126,7 +130,10 @@ def uph(ep: Episode) -> float | None:
     u = units(ep)
     if not u:
         return None
-    first, last = ep.bounds(select_timeline(ep.timelines))
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    first, last = ep.bounds(timeline)
     return u / ((last - first) / 1e9 / 3600)
 
 
@@ -160,7 +167,10 @@ def unified_uph(ep: Episode) -> float | None:
         items = ep['eval.successful_items']
         if items == 0:
             return None
-        first, last = ep.bounds(select_timeline(ep.timelines))
+        timelines = ep.timelines
+        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+        first, last = ep.bounds(timeline)
         return items / ((last - first) / 1e9 / 3600)
     if 'stacking_success' in ep:
         t = success_time(ep)
@@ -226,9 +236,13 @@ def episodes_table():
 def checkpoint_table():
     def group_fn(episodes: list[Episode]):
         count = len(episodes)
-        total_duration = sum(
-            (last - first) / 1e9 for first, last in (ep.bounds(select_timeline(ep.timelines)) for ep in episodes)
-        )
+        total_duration = 0.0
+        for ep in episodes:
+            timelines = ep.timelines
+            # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+            timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+            first, last = ep.bounds(timeline)
+            total_duration += (last - first) / 1e9
 
         if 'stacking_success' in episodes[0]:
             successful_count = sum(1 for ep in episodes if success(ep))
@@ -295,9 +309,13 @@ def success(episode: Episode, score_threshold: float = 0.95) -> bool:
 
     in_success = False
     success_start_ts = None
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next(
+        (name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in success_signal.timelines), RECORDED_TIME
+    )
 
     for value, timestamps in success_signal:
-        timestamp = timestamps[select_timeline(success_signal.timelines)]
+        timestamp = timestamps[timeline]
         if value >= score_threshold:
             if not in_success:
                 in_success = True
@@ -322,15 +340,19 @@ def success_time(episode: Episode, score_threshold: float = 0.95) -> float | Non
     threshold_ns = int(0.25 * 1e9)  # 0.25 seconds in nanoseconds
     in_success = False
     success_start_ts = None
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next(
+        (name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in success_signal.timelines), RECORDED_TIME
+    )
 
     for value, timestamps in success_signal:
-        timestamp = timestamps[select_timeline(success_signal.timelines)]
+        timestamp = timestamps[timeline]
         if value >= score_threshold:
             if not in_success:
                 in_success = True
                 success_start_ts = timestamp
             elif timestamp - success_start_ts >= threshold_ns:
-                return (timestamp - episode.bounds(select_timeline(episode.timelines)).start) / 1e9
+                return (timestamp - episode.bounds(timeline).start) / 1e9
         else:
             in_success = False
             success_start_ts = None
@@ -428,7 +450,10 @@ def _effective_duration(key: str, ep: Episode) -> float:
     t = ep.get(key)
     if t is not None:
         return t
-    first, last = ep.bounds(select_timeline(ep.timelines))
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    first, last = ep.bounds(timeline)
     return (last - first) / 1e9
 
 
@@ -520,8 +545,11 @@ def calculate_units(episode: Episode) -> int:  # noqa: C901
     pose_sig = episode.signals[keys.EE_POSE]
 
     # Sample signals at 10Hz to reduce noise and computation
-    first, last = episode.bounds(select_timeline(episode.timelines))
-    times = [Time(**{select_timeline(episode.timelines): t}) for t in range(first, last, int(1e8))]
+    timelines = episode.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    first, last = episode.bounds(timeline)
+    times = [Time(**{timeline: t}) for t in range(first, last, int(1e8))]
     if len(times) == 0:
         return 0
 
@@ -616,10 +644,10 @@ def phail_uph(ep: Episode) -> float | None:
     items = ep.get('eval.successful_items', 0)
     if not items:
         return None
-    duration = (
-        ep.get('eval.duration')
-        or (ep.bounds(select_timeline(ep.timelines)).finish - ep.bounds(select_timeline(ep.timelines)).start) / 1e9
-    )
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    duration = ep.get(eval_keys.DURATION) or (ep.bounds(timeline).finish - ep.bounds(timeline).start) / 1e9
     if not duration:
         return None
     return items / (duration / 3600)
@@ -683,7 +711,10 @@ phail_inference = base_cfg.transform.override(
 def _baseline_uph(ep: Episode, items: int) -> float | None:
     if not items:
         return None
-    first, last = ep.bounds(select_timeline(ep.timelines))
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    first, last = ep.bounds(timeline)
     return items / ((last - first) / 1e9 / 3600)
 
 
@@ -874,7 +905,7 @@ def phail_episodes_table():
 def phail_leaderboard():
     def group_fn(episodes: list[Episode]):
         count = len(episodes)
-        total_duration = sum(_effective_duration('eval.duration', ep) for ep in episodes)
+        total_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in episodes)
         failed_count = sum(1 for ep in episodes if ep['status'] != 'Pass')
 
         # Per-object aggregation: compute UPH and completion per object type, then average equally.
@@ -885,7 +916,7 @@ def phail_leaderboard():
         object_uphs = []
         object_completions = []
         for obj_eps in by_object.values():
-            obj_duration = sum(_effective_duration('eval.duration', ep) for ep in obj_eps)
+            obj_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in obj_eps)
             obj_items = sum(ep['eval.successful_items'] for ep in obj_eps)
             obj_possible = sum(ep['eval.total_items'] for ep in obj_eps)
             if obj_duration > 0:

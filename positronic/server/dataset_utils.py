@@ -30,10 +30,12 @@ from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.dataset.signal import RECORDED_TIME, Kind, Signal
+from positronic.dataset.signal import Kind, Signal
 from positronic.dataset.transforms import TransformedDataset
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.dataset.video import VideoSignal
 from positronic.drivers.camera import CAPTURE_TIME
+from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.eval import keys as eval_keys
 from positronic.utils.rerun_compat import flatten_numeric, log_series_styles
@@ -483,7 +485,16 @@ def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Vertical:
 
 
 # In preference order for playback and rate limiting. Unrecognized timelines retain integer units.
-_DURATION_TIMELINES = (RECEIVED_WORLD, RECORDED_TIME, EMITTED_WORLD, RECEIVED_WALL, EMITTED_WALL, CAPTURE_TIME)
+_DURATION_TIMELINES = (
+    HARNESS_WORLD,
+    RECEIVED_WORLD,
+    RECORDED_TIME,
+    EMITTED_WORLD,
+    HARNESS_WALL,
+    RECEIVED_WALL,
+    EMITTED_WALL,
+    CAPTURE_TIME,
+)
 
 
 def duration_timeline(timelines: Iterable[str]) -> str | None:

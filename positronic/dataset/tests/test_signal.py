@@ -5,10 +5,16 @@ import pytest
 
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
-from positronic.dataset.signal import RECORDED_TIME, TIMELINE_METADATA_KEY, Kind
+from positronic.dataset.signal import TIMELINE_METADATA_KEY, Kind
 from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.transforms.signals import Join, diff, norm
-from positronic.dataset.vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY, SimpleSignal, SimpleSignalWriter
+from positronic.dataset.vector import (
+    RECORDED_TIME,
+    SIGNAL_VERSION,
+    SIGNAL_VERSION_KEY,
+    SimpleSignal,
+    SimpleSignalWriter,
+)
 from positronic.utils.lazy import LazySequence
 
 from .utils import DummySignal

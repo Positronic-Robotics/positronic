@@ -4,9 +4,10 @@ from typing import Any, cast
 import numpy as np
 
 from positronic.dataset.episode import Episode, EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME, IndicesLike, Signal
+from positronic.dataset.signal import IndicesLike, Signal
 from positronic.dataset.time import TimeArray
 from positronic.dataset.transforms import Elementwise, EpisodeTransform
+from positronic.dataset.vector import RECORDED_TIME
 
 
 class DummySignal(Signal[Any]):

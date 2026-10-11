@@ -6,7 +6,7 @@ from positronic.dataset import Time
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
 from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.signal import RECORDED_TIME
+from positronic.dataset.vector import RECORDED_TIME
 
 
 def episode_ids(episodes):

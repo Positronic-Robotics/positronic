@@ -8,8 +8,8 @@ from positronic import keys
 from positronic.cfg.ds import transform
 from positronic.dataset import Dataset
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES, Codec
 from positronic.policy.codecs.metadata import MODEL_SETTINGS, MODEL_SETTINGS_PATH
 from positronic.policy.keys import ACTION_FPS

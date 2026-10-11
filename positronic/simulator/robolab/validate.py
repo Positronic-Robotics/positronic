@@ -68,7 +68,7 @@ _OBS_SPECS = {
     'eef_pos': ((3,), np.float32),
     'eef_quat': ((4,), np.float32),
     **dict.fromkeys(keys.CAMERA_SETS[args.cameras], ((720, 1280, 3), np.uint8)),
-    'subtask': ((4,), np.float32),
+    keys.SUBTASK: ((4,), np.float32),
 }
 
 

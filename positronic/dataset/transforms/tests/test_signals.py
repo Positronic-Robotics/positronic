@@ -5,7 +5,6 @@ import pytest
 
 from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.time import Time
 from positronic.dataset.transforms import (
     Elementwise,
@@ -19,7 +18,7 @@ from positronic.dataset.transforms import (
     view,
 )
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
-from positronic.dataset.vector import SimpleSignal, SimpleSignalWriter
+from positronic.dataset.vector import RECORDED_TIME, SimpleSignal, SimpleSignalWriter
 from positronic.geom import Rotation
 
 from ...tests.utils import DummySignal
@@ -714,5 +713,5 @@ def test_quality_transforms_select_timelines(timelines, transform, expected):
         keys.EE_POSE: DummySignal(coordinates, state, timelines=names),
         keys.TARGET_EE_POSE: DummySignal(coordinates, command, timelines=names),
     })
-    signal = transform(episode) if timelines == (RECORDED_TIME,) else transform(episode, timelines=timelines)
+    signal = transform(episode, timelines=timelines)
     np.testing.assert_allclose(signal.values()[:-1], expected)

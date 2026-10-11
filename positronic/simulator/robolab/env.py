@@ -388,7 +388,7 @@ class RobolabEnv(EnvProtocol):
             'eef_quat': proprio['eef_quat'][0].cpu().numpy(),
             'grip': float(proprio['gripper_pos'][0, 0]),
             **{name: frame[0].cpu().numpy() for name, frame in images.items()},
-            'subtask': subtask,
+            keys.SUBTASK: subtask,
         }
 
     def close(self) -> None:

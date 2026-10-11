@@ -3,20 +3,27 @@
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from itertools import pairwise
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import ZIP_LZMA, ZipFile
 
+import av
 import configuronic as cfn
 import mujoco as mj
 import numpy as np
 
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
-from positronic.dataset.episode import Episode, select_timeline
+from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.dataset.video import VideoSignal
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
+from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION
 from positronic.simulator.mujoco.transforms import load_spec
 from positronic.utils import package_assets_path
 
@@ -35,7 +42,9 @@ CUBE_POSES = 'cube_poses'
 SUPPORTED = 'stack_supported'
 TIME_SUFFIX = '.time_ns'
 ROBOT_OBSERVATIONS = (keys.EE_POSE, keys.JOINTS, keys.GRIP)
-RECORDED_SIGNALS = (keys.TARGET_EE_POSE, keys.TARGET_GRIP, *ROBOT_OBSERVATIONS)
+ROBOT_COMMANDS = (keys.TARGET_EE_POSE, keys.TARGET_GRIP)
+RECORDED_SIGNALS = (*ROBOT_COMMANDS, *ROBOT_OBSERVATIONS)
+CAMERAS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
 SEED_DIRECTORY = 'seed_{seed}'
 REFERENCE_FILENAME = SEED_DIRECTORY + '.npz'
 
@@ -93,7 +102,7 @@ def is_supported_stack(model: mj.MjModel, data: mj.MjData, red: int, green: int,
 
 
 def cube_trace(
-    episode: Episode, scene_key: str = 'scene_xml', state_key: str = f'sim_state.{STATE_SPEC.name}'
+    episode: Episode, timeline: str, scene_key: str = SCENE_XML, state_key: str = SIM_STATE_INTEGRATION
 ) -> dict[str, np.ndarray]:
     spec, _ = load_spec(episode.static[scene_key], Path(package_assets_path('assets/mujoco')))
     model = spec.compile()
@@ -101,10 +110,7 @@ def cube_trace(
     red, green = model.body(STACK_RED_CUBE.body_name).id, model.body(STACK_GREEN_CUBE.body_name).id
     fingers = {model.body(name).id for name in FINGER_BODIES}
     state_signal = episode[state_key]
-    times = (
-        np.asarray(state_signal.timestamps(select_timeline(state_signal.timelines)), dtype=np.int64)
-        - episode.bounds(select_timeline(episode.timelines)).start
-    )
+    times = np.asarray(state_signal.timestamps(timeline), dtype=np.int64) - episode.bounds(timeline).start
     if np.any(np.diff(times) > np.ceil(model.opt.timestep * 1e9) + 1):
         raise ValueError(f'{state_key}: recording skips physics steps')
     poses = np.empty((len(times), 2, 7))
@@ -121,14 +127,15 @@ def cube_trace(
 
 
 def read_trace(episode: Episode) -> dict[str, np.ndarray]:
-    trace = cube_trace(episode)
+    timelines = episode.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    trace = cube_trace(episode, timeline)
+    start = episode.bounds(timeline).start
     for name in RECORDED_SIGNALS:
         signal = episode[name]
         trace[name] = np.asarray(list(signal.values()))
-        trace[name + TIME_SUFFIX] = (
-            np.asarray(signal.timestamps(select_timeline(signal.timelines)), dtype=np.int64)
-            - episode.bounds(select_timeline(episode.timelines)).start
-        )
+        trace[name + TIME_SUFFIX] = np.asarray(signal.timestamps(timeline), dtype=np.int64) - start
     for name, values in trace.items():
         if not len(values) or not np.isfinite(values).all():
             raise ValueError(f'{name}: empty or non-finite recording')
@@ -179,8 +186,24 @@ def compare_trace(actual: Mapping[str, np.ndarray], expected: Mapping[str, np.nd
             )
 
 
+def check_images(episode: Episode) -> None:
+    for name in CAMERAS:
+        camera = episode[name]
+        if not isinstance(camera, VideoSignal):
+            raise TypeError(f'{name}: expected a video signal')
+        times = camera.timestamps(camera.timelines)
+        if not len(times) or any(not before < after for before, after in pairwise(times)):
+            raise ValueError(f'{name}: expected nonempty, ordered frame timestamps')
+        with av.open(str(camera.video_path)) as video:
+            count = sum(1 for _ in video.decode(video=0))
+        if count != len(times):
+            raise ValueError(f'{name}: decoded {count} frames, expected {len(times)}')
+
+
 def check_episode(output: Path, seed: int, reference: Path, success_only: bool) -> dict[str, np.ndarray]:
-    trace = read_trace(read_episode(output, seed))
+    episode = read_episode(output, seed)
+    check_images(episode)
+    trace = read_trace(episode)
     completed_at = check_stacking(trace)
     if not success_only:
         with np.load(reference / REFERENCE_FILENAME.format(seed=seed), allow_pickle=False) as expected:

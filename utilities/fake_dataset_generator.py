@@ -8,9 +8,9 @@ import pos3
 import pimm
 from positronic import geom, keys
 from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.eval import keys as eval_keys
 
 # --- Metadata Templates ---
@@ -137,7 +137,7 @@ class FakeGenerator(pimm.ControlSystem):
                 'eval.successful_items': successful_items,
                 'eval.outcome': outcome,
                 'eval.notes': notes,
-                'eval.duration': episode_duration,
+                eval_keys.DURATION: episode_duration,
                 'eval.cap_per_item': self.cap_per_item,
                 'eval.tote_placement': random.choice(['left', 'right']),
                 'eval.external_camera': random.choices(['left', 'right', 'NA'], [5, 5, 1])[0],

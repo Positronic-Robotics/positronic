@@ -1,11 +1,13 @@
 import numpy as np
 import pytest
 
+from pimm.time import RECEIVED_WORLD
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset.episode import EpisodeContainer
-from positronic.dataset.signal import RECORDED_TIME
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
 from positronic.policy import spec
@@ -76,19 +78,20 @@ def test_training_cadence_metadata(config):
     assert config().meta[ACTION_FPS] == 15
 
 
-def test_training_actions_align_recorded_samples():
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+def test_training_actions_align_on_the_recording_clock(timeline):
     training = recipes.droid(**{
         f'settings.{model_settings.IMAGE_MAPPINGS}': {},
         f'settings.{model_settings.EE_FRAME}': [0, 0, 0, 1, 0, 0, 0],
     })
     episode = EpisodeContainer({
-        keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]]),
-        keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)]),
-        keys.GRIP: DummySignal([100, 200], [0.0, 1.0]),
+        keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]], timelines=(timeline,)),
+        keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)], timelines=(timeline,)),
+        keys.GRIP: DummySignal([100, 200], [0.0, 1.0], timelines=(timeline,)),
     })
     encoded = training(episode)
     action = encoded[ACTION]
-    assert list(action.timestamps(RECORDED_TIME)) == [100, 200, 300]
+    assert list(action.timestamps(timeline)) == [100, 200, 300]
     values = np.asarray(action.values())
     np.testing.assert_array_equal(values[:, :9], np.repeat(encoded[gr00t.EE_POSE].values(), 3, axis=0))
     np.testing.assert_array_equal(values[:, 9], [0, 1, 1])

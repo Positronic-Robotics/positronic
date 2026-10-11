@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
@@ -8,20 +8,16 @@ from typing import Any, TypeAlias
 
 import pimm
 from pimm.time import EMITTED_WALL, Time
+from positronic.dataset.dataset import DatasetFactory, DatasetWriter
+from positronic.dataset.episode import META_PATH, EpisodeWriter
+from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.utils import frozen_keys_dict
-
-from .dataset import DatasetWriter
-from .episode import META_PATH, EpisodeWriter
-from .serializers import Serializer, StatefulSerializer, _PureSerializer, expand_suffixed
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # A factory of context managers the caller brackets each record-flush I/O section with (default inert).
 ContextFactory: TypeAlias = Callable[[], AbstractContextManager[Any]]
-
-# A factory of dataset writers, one per path a command names.
-DatasetFactory: TypeAlias = Callable[[Path], DatasetWriter]
 
 
 class DsWriterCommandType(Enum):
@@ -75,9 +71,8 @@ class _Recording:
     the state it finds is ignored with a log message.
     """
 
-    def __init__(self, dataset_factory: DatasetFactory, serializers: dict[str, StatefulSerializer]):
+    def __init__(self, dataset_factory: DatasetFactory):
         self._dataset_factory = dataset_factory
-        self._serializers = serializers
         self._datasets: dict[Path, DatasetWriter] = {}
         self._open_datasets = ExitStack()
         self._episode_open = False
@@ -106,8 +101,6 @@ class _Recording:
         self._episode_open = True
         if cmd.output_path is None:
             return
-        for ser in self._serializers.values():
-            ser.reset()
         if cmd.output_path not in self._datasets:  # a dataset numbers its episodes, off the disk it holds
             ds_writer = self._dataset_factory(cmd.output_path)
             self._datasets[cmd.output_path] = self._open_datasets.enter_context(ds_writer)
@@ -190,17 +183,15 @@ class DsWriterAgent(pimm.ControlSystem):
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
-        self._serializers: dict[str, StatefulSerializer] = {}
+        self._serializers: dict[str, Serializer] = {}
 
-    def add_signal(self, name: str, serializer: Serializer | StatefulSerializer | None = None):
+    def add_signal(self, name: str, serializer: Serializer | None = None):
         self._inputs[name] = pimm.ControlSystemReceiver[Any](self)
         if serializer is not None:
-            if not isinstance(serializer, StatefulSerializer):
-                serializer = _PureSerializer(serializer)
             self._serializers[name] = serializer
 
     @property
-    def inputs(self) -> dict[str, pimm.ControlSystemReceiver[Any]]:
+    def inputs(self) -> MutableMapping[str, pimm.ControlSystemReceiver[Any]]:
         return frozen_keys_dict(self._inputs)
 
     def _record(self, ep_writer: EpisodeWriter, name: str, msg: pimm.Message) -> None:
@@ -231,7 +222,7 @@ class DsWriterAgent(pimm.ControlSystem):
         """Main loop: process commands and append updated inputs to the episode."""
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
         pace = (lambda: pimm.Yield()) if self._virtual_time else limiter.wait
-        recording = _Recording(self._dataset_factory, self._serializers)
+        recording = _Recording(self._dataset_factory)
         sampled: EpisodeWriter | None = None  # the writer this loop last took a window for
 
         try:

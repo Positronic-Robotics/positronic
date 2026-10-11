@@ -13,12 +13,13 @@ import positronic.cfg.simulator
 from pimm.logging import init_logging
 from positronic import geom, keys, wire
 from positronic.dataset import Dataset, Episode, transforms
-from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
-from positronic.dataset.ds_writer_agent import DsWriterCommand
-from positronic.dataset.episode import select_timeline
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.transforms.episode import Derive, Group, Identity
+from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers import roboarm
+from positronic.drivers.recording import HARNESS_WORLD
+from positronic.drivers.recording.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
+from positronic.drivers.recording.ds_writer_agent import DsWriterCommand
 from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
@@ -102,6 +103,7 @@ def main(
     output_dir: str | None = None,
     show_gui: bool = False,
     fps: int = 30,
+    timeline: str | None = None,
 ):
     """Replay and optionally record episodes from a dataset.
 
@@ -118,6 +120,7 @@ def main(
         output_dir: Directory to write recorded episodes (if None, no recording)
         show_gui: Whether to display GUI visualization during replay
         fps: Frames per second for camera rendering
+        timeline: Replay clock; defaults to harness.world, then recorded. Use received.world for data collection.
     """
     indices = parse_episodes(episodes, dataset)
 
@@ -129,6 +132,10 @@ def main(
     for ep_index in indices:
         episode = dataset[ep_index]
         assert isinstance(episode, Episode), 'an integer index names one episode'
+        selected_timeline = timeline
+        if selected_timeline is None:
+            selected_timeline = HARNESS_WORLD if HARNESS_WORLD in episode.timelines else RECORDED_TIME
+        first, last = episode.bounds(selected_timeline)
 
         sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
         sim.load_state(episode.static)
@@ -157,9 +164,8 @@ def main(
 
             sim_iter = world.start([sim, replay, ds_agent], gui)
             ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
-            player_cmd.emit(DsPlayerStartCommand(episode))
+            player_cmd.emit(DsPlayerStartCommand(episode, timeline=selected_timeline))
 
-            first, last = episode.bounds(select_timeline(episode.timelines))
             p_bar = tqdm.tqdm(total=round((last - first) / 1e9, 1), unit='s')
 
             for _ in sim_iter:

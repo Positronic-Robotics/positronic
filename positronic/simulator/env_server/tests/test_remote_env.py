@@ -44,6 +44,7 @@ from positronic.simulator.env_server.tests.mujoco_env import (
     make_mujoco_env,
     remote_stack_cubes_eval,
 )
+from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE, SIM_STATE_INTEGRATION
 from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.tests.testing_coutils import drive_scheduler
 
@@ -82,9 +83,9 @@ def _assert_obs_equal(a: dict, b: dict) -> None:
     assert a['cameras'].keys() == b['cameras'].keys()
     for name in a['cameras']:
         np.testing.assert_array_equal(a['cameras'][name], b['cameras'][name])
-    assert a['sim_state'].keys() == b['sim_state'].keys()
-    for key in a['sim_state']:
-        np.testing.assert_array_equal(a['sim_state'][key], b['sim_state'][key])
+    assert a[SIM_STATE].keys() == b[SIM_STATE].keys()
+    for key in a[SIM_STATE]:
+        np.testing.assert_array_equal(a[SIM_STATE][key], b[SIM_STATE][key])
 
 
 @pytest.mark.timeout(30.0)
@@ -670,11 +671,11 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     assert eval_keys.SUCCESS not in episode.static
     assert episode.static[eval_keys.UNIVERSE] == 'sim'
     assert episode.static[eval_keys.EMBODIMENT] == 'remote.mujoco.franka'
-    assert episode.static['scene_xml'].startswith('<mujoco')
+    assert episode.static[SCENE_XML].startswith('<mujoco')
     signals = episode.signals
     assert keys.EXTERIOR_IMAGE in signals
     assert keys.TARGET_JOINTS in signals
-    assert 'sim_state.mjSTATE_INTEGRATION' in signals
+    assert SIM_STATE_INTEGRATION in signals
 
 
 @pytest.mark.parametrize(

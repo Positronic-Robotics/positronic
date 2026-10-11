@@ -4,9 +4,10 @@ import pytest
 
 from positronic.dataset import Time
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.signal import RECORDED_TIME, TIMELINE_METADATA_KEY
+from positronic.dataset.signal import TIMELINE_METADATA_KEY
 from positronic.dataset.transforms import Elementwise, TransformedDataset
 from positronic.dataset.transforms.episode import Derive
+from positronic.dataset.vector import RECORDED_TIME
 from utilities.convert_ds import main
 
 

@@ -20,7 +20,7 @@ CHILD_LINE = 'init-logging-child-line'
 CUSTOM_LEVEL, CUSTOM_LEVEL_NAME = 15, 'PIMMTRACE'
 # One of the loggers `pimm.logging` pins, named here so the test does not reach for a private tuple.
 A_NOISY_LIBRARY = 'websockets'
-# Stands for a module that sets its own level at import, as `positronic.dataset.ds_writer_agent`
+# Stands for a module that sets its own level at import, as `positronic.drivers.recording.ds_writer_agent`
 # does: its records clear its own logger, so only a handler's threshold can stop them.
 A_SELF_LEVELLED_COMPONENT = 'pimm.tests.a-self-levelled-component'
 # Stands for a driver addressed by name, logged from a child under that same name.

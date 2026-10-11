@@ -62,7 +62,7 @@ class LiberoAdapter(WireCommandAdapter):
         return obs
 
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        return {'sim_state': raw_obs['sim_state']}
+        return {libero_keys.SIM_STATE: raw_obs[libero_keys.SIM_STATE]}
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` is LIBERO's success check rather than a step limit, so reaching it is the success.

@@ -2,7 +2,7 @@ import configuronic as cfn
 
 from positronic import keys
 from positronic.cfg.eval import number_trials, spec
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import Eval, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabAdapter
@@ -64,7 +64,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras):
         return number_trials(trials)
 
     return Eval(
-        embodiment, tasks, privileged={'subtask': Observation(proxy.privileged['subtask'], None)}, done=proxy.done
+        embodiment, tasks, privileged={robolab_keys.SUBTASK: proxy.privileged[robolab_keys.SUBTASK]}, done=proxy.done
     )
 
 

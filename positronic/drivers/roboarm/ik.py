@@ -16,9 +16,11 @@ import numpy as np
 from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation as ScipyRotation
 
+from pimm.time import RECEIVED_WORLD
 from positronic import geom
 from positronic.dataset import transforms
-from positronic.dataset.episode import select_timeline
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
@@ -480,9 +482,8 @@ def ik_joints_from_episode(episode, solver_cls, tgt_ee_pose_key, current_q_key):
     solver = solver_cls(episode[roboarm_keys.URDF], episode[roboarm_keys.JOINT_NAMES], frame)
     move = partial(change_frame, transform=offset.inv)
     targets = transforms.Elementwise(episode[tgt_ee_pose_key], transforms.lazy_sequence(move))
-    return transforms.pairwise(
-        episode[current_q_key],
-        targets,
-        solver.solve,
-        timelines=(select_timeline(episode[current_q_key].timelines + targets.timelines),),
-    )
+    current_q = episode[current_q_key]
+    timelines = current_q.timelines + targets.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    return transforms.pairwise(current_q, targets, solver.solve, timelines=(timeline,))

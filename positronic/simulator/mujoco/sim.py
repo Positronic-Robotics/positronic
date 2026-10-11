@@ -18,6 +18,9 @@ from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_sp
 
 logger = logging.getLogger(__name__)
 
+SCENE_XML = 'scene_xml'
+SIM_STATE = 'sim_state'
+SIM_STATE_INTEGRATION = f'{SIM_STATE}.{mj.mjtState.mjSTATE_INTEGRATION.name}'
 
 # mjSTATE_INTEGRATION is MuJoCo's complete integrable state (qpos, qvel, act, ctrl, warm-start, ...):
 # the minimal subset that restores the sim and reproduces its forward trajectory exactly. The other
@@ -267,7 +270,7 @@ class MujocoSim(pimm.ControlSystem):
     def _emit_robot_meta(self):
         # Emit the full robot model (URDF + meshes + frames + gripper) at record time, like franka.py,
         # plus the per-episode scene_xml that restores the MuJoCo scene.
-        self.robot_meta.emit({**bundled_panda_model(), 'scene_xml': self.scene_xml})
+        self.robot_meta.emit({**bundled_panda_model(), SCENE_XML: self.scene_xml})
 
     def _publish_frame(self):
         """Emit every observation stream once for the current scene."""
@@ -324,8 +327,8 @@ class MujocoSim(pimm.ControlSystem):
         this sim's own model draw, so only ``qpos``-borne (freejointed) randomization replays
         faithfully for them.
         """
-        if 'scene_xml' in state:
-            self.scene_xml = state['scene_xml']
+        if SCENE_XML in state:
+            self.scene_xml = state[SCENE_XML]
             scene, self.metadata = load_spec(self.scene_xml, Path(self.mujoco_model_path).parent)
             self.model = scene.compile()
             self._bind_model()

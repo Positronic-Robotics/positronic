@@ -69,7 +69,13 @@ def test_message_times_are_snapshots_of_emission_and_first_delivery(transport):
         clock = world.clock
         assert isinstance(clock, VirtualClock)
         clock.advance_to_ns(10)
-        emitter.emit(DummySMValue(42) if transport == 'shared_memory' else 42, time=Time(capture=7))
+        data = DummySMValue(42) if transport == 'shared_memory' else 42
+        emitted = emitter.emit(data, time=Time(capture=7))
+        assert emitted.data is data
+        assert emitted.updated
+        assert set(emitted.time) == {EMITTED_WALL, EMITTED_WORLD, 'capture'}
+        assert emitted.time[EMITTED_WORLD] == 10
+        assert emitted.time['capture'] == 7
         clock.advance_to_ns(20)
         first = receiver.read()
         assert first is not None
@@ -77,6 +83,8 @@ def test_message_times_are_snapshots_of_emission_and_first_delivery(transport):
         assert first.time[RECEIVED_WORLD] == 20
         assert first.time['capture'] == 7
         assert first.time[EMITTED_WALL] <= first.time[RECEIVED_WALL]
+        assert first.time[emitted.time.timelines] == emitted.time
+        assert set(emitted.time) == {EMITTED_WALL, EMITTED_WORLD, 'capture'}
 
         clock.advance_to_ns(30)
         cached = receiver.read()
@@ -132,12 +140,14 @@ def test_fanout_preserves_emission_but_stamps_each_receiver(monkeypatch):
         first_receiver = world.pair(system.emitter, emitter_wrapper=pimm_map(increment))
         second_receiver = world.pair(system.emitter)
         world.start(system)
-        system.emitter.emit(42)
+        emitted = system.emitter.emit(42)
         first = first_receiver.read()
         second = second_receiver.read()
         assert first is not None and second is not None
         assert first.data == 43 and second.data == 42
-        assert first.time[(EMITTED_WALL, EMITTED_WORLD)] == second.time[(EMITTED_WALL, EMITTED_WORLD)]
+        assert emitted.data == 42
+        assert first.time[emitted.time.timelines] == second.time[emitted.time.timelines] == emitted.time
+        assert set(emitted.time) == {EMITTED_WALL, EMITTED_WORLD}
         assert first.time[RECEIVED_WALL] < second.time[RECEIVED_WALL]
         cached = first_receiver.read()
         assert cached is not None and cached.time == first.time
