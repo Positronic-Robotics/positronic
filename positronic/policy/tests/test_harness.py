@@ -1709,9 +1709,17 @@ def test_writer_failure_reaches_the_episode_caller(episode_harness, failure, mon
     assert h.deadlines.values[-1][1] is None
 
 
-def test_a_readback_reaches_the_recorder_and_not_the_policy():
-    """A device read-back the embodiment lists under ``readbacks`` is a recorder input under its own name, expanded
-    as its serializer says, and no observation the harness reads."""
+def test_a_readback_records_each_entry_its_serializer_expands_and_never_reaches_the_policy(tmp_path):
+    observations = []
+
+    class Move(Policy):
+        def run(self, runtime):
+            def infer(obs):
+                observations.append(obs)
+                return [{MOTOR: 1}]
+
+            return ChunkedSchedule(fps=10).run(runtime, infer)
+
     camera_state = keys.camera_state(f'{keys.IMAGE_PREFIX}{CAMERA}')
     with pimm.World(virtual_time=True) as world:
         motion = Motion()
@@ -1723,16 +1731,42 @@ def test_a_readback_reaches_the_recorder_and_not_the_policy():
             static_meta={},
             meta_source=None,
             simulated=True,
-            readbacks={camera_state: Observation(motion.position, None)},
+            readbacks={
+                camera_state: Observation(
+                    motion.position, lambda position: Serializers.camera_state({'exposure': position})
+                )
+            },
         )
         harness = Harness(embodiment)
-        recorder = wire.wire_embodiment(world, harness, embodiment)
+        wire.wire_embodiment(world, harness, embodiment)
+        caller = world.pair(harness.perform_task)
+        loop = world.start([harness, motion])
+        answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), Move(), tmp_path))
+        try:
+            for _ in range(1000):
+                next(loop)
+                if answer.done():
+                    break
+            assert answer.result() == {eval_keys.TERMINATED: False}
+        finally:
+            world.request_stop()
+            list(loop)
+    episode = LocalDataset(tmp_path)[0]
+    exposure = episode['camera_state.camera.exposure']
+    positions = episode[POSITION]
+    assert list(exposure.values()) == list(positions.values())
+    assert list(exposure.timestamps(HARNESS_WORLD)) == list(positions.timestamps(HARNESS_WORLD))
+    assert observations
+    assert all(camera_state not in obs and 'camera_state.camera.exposure' not in obs for obs in observations)
 
-    assert recorder is not None
-    assert camera_state == 'camera_state.camera'
-    assert set(recorder.inputs) == {POSITION, MOTOR, camera_state}
-    assert set(harness.observations) == {POSITION}
-    assert Serializers.camera_state({'exposure': 45, 'gain': 12}) == {'.exposure': 45, '.gain': 12}
+
+@pytest.mark.parametrize('name', [POSITION, MOTOR, GROUND_TRUTH])
+def test_wiring_rejects_a_readback_named_like_another_signal(episode_harness, name):
+    h = episode_harness
+    source = h.embodiment.observations[POSITION].source
+    embodiment = replace(h.embodiment, readbacks={name: Observation(source, None)})
+    with pytest.raises(ValueError, match='signal names must be distinct'):
+        wire.wire_embodiment(h.world, h.harness, embodiment, privileged={GROUND_TRUTH: source})
 
 
 def test_cartesian_delta_wire_roundtrip():

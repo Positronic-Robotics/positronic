@@ -2,6 +2,7 @@ import functools
 from collections.abc import Mapping
 
 import pimm
+from pimm.utils import identity
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.serializers import Serializers
@@ -73,10 +74,11 @@ def wire_embodiment(
     privileged: dict[str, pimm.ControlSystemEmitter] | None = None,
     done: pimm.SignalEmitter | None = None,
 ):
-    """Connect policy inputs, commands, lifecycle handlers and recording-only privileged signals."""
+    """Connect policy inputs, commands, lifecycle handlers, and the recording-only read-backs and privileged signals."""
     privileged = privileged or {}
-    if privileged.keys() & (embodiment.observations.keys() | embodiment.commands.keys()):
-        raise ValueError('Observation, command and privileged signal names must be distinct')
+    names = [*embodiment.observations, *embodiment.commands, *embodiment.readbacks, *privileged]
+    if len(names) != len(set(names)):
+        raise ValueError('Observation, command, read-back and privileged signal names must be distinct')
     for name, obs in embodiment.observations.items():
         world.connect(obs.source, harness.observations[name])
     for name, cmd in embodiment.commands.items():
@@ -92,3 +94,7 @@ def wire_embodiment(
 
     for name, source in privileged.items():
         world.connect(source, harness.privileged[name])
+    # The harness records a privileged value unchanged, so the receiver applies a read-back's serializer.
+    for name, readback in embodiment.readbacks.items():
+        serialize = pimm.map(readback.serializer) if readback.serializer is not None else identity
+        world.connect(readback.source, harness.privileged[name], receiver_wrapper=serialize)
