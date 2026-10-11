@@ -237,6 +237,13 @@ class Label(BaseModel):
             raise ValueError(f'an event at {times[-1]} s falls after the episode end at {self.seconds_to_end} s')
         return self
 
+    @model_validator(mode='after')
+    def _delivered_counts_stay_within_the_total(self) -> Self:
+        delivered = max((event.delivered for event in self.events if isinstance(event, ItemsDelivered)), default=0)
+        if self.total_items is not None and delivered > self.total_items:
+            raise ValueError(f'{delivered} items delivered is more than the total of {self.total_items}')
+        return self
+
     def until(self, seconds: float) -> Label:
         """The label as it stood at `seconds`: the events at or before it, and the earlier of the two ends."""
         if not seconds >= 0:

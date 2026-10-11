@@ -182,6 +182,16 @@ def test_a_label_refuses_a_field_or_an_event_it_does_not_know(change: dict[str, 
         Label.model_validate({**CUBES.model_dump(mode='json'), **change})
 
 
+def test_a_label_refuses_a_delivered_count_above_the_total_items():
+    with pytest.raises(ValidationError, match='more than the total of 2'):
+        _label(ItemsDelivered(seconds=1.0, delivered=3), ItemsDelivered(seconds=2.0, delivered=2), total_items=2)
+
+
+def test_a_label_takes_a_delivered_count_up_to_the_total_items_or_with_no_total():
+    assert _label(ItemsDelivered(seconds=1.0, delivered=2), total_items=2).delivered == 2
+    assert _label(ItemsDelivered(seconds=1.0, delivered=5)).delivered == 5
+
+
 def test_a_label_refuses_a_time_that_is_not_finite():
     with pytest.raises(ValidationError):
         _label(Success(seconds=1.0), seconds_to_end=float('inf'))
