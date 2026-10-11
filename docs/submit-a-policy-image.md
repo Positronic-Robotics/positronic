@@ -131,9 +131,8 @@ published image as a submission.
 
 ### A private image
 
-Push to a private repository and hand the platform a read-only credential for it. The platform
-copies the image into its own registry, runs it from there, and discards the credential. Nothing
-of yours stays readable to anyone else.
+Push to a private repository and hand the platform a read-only credential for it. The run pulls
+the image from your registry with that credential.
 
 Write the password into a file of its own and name the file:
 
@@ -153,13 +152,32 @@ uv run positronic eval run --eval=<eval> \
   else in the file is the password, a leading or trailing space included.
 - Give the credential read on that one repository. A registry issues a token for exactly this:
   Docker Hub calls it an access token, and a cloud registry a service account key.
-- The credential opens the registry for the copy and for nothing else. It is not written to the
-  run's VM, and the policy container never sees it.
+
+What the platform does with the credential:
+
+1. At submission, the platform reads the image with it. A credential your registry refuses fails
+   the submission with `image_unpullable`, charged.
+2. After that read, the platform stores the credential as one secret for this submission. The
+   submission record holds a reference to the secret. No response and no log holds the password.
+3. When the run starts, the platform copies the credential into the run's own secret. The policy
+   VM of that run reads it before it denies the container the network.
+4. The VM writes the credential to a file that only root reads, and logs in to your registry. It
+   deletes the file, pulls the digest, and logs out. The policy container never gets the credential.
+5. When the submission ends, the platform deletes both secrets. The secret store keeps a deleted
+   secret until it purges it.
+
+- Only the platform's run services, the policy VM of that run and a platform administrator can
+  read the credential. They can read it until the purge.
+- Keep the image and the credential valid until the submission ends. A run that cannot pull
+  the image fails with `image_unpullable`. Revoke the token after the submission ends.
+- A retry with the same transaction key returns the first submission, also with a changed
+  credential. To submit with a new credential, use a new transaction key.
 
 ## Life of a submission
 
 1. The platform resolves your image reference to a digest at submission and records it as
-   `policy_image_digest`. The run uses those bytes.
+   `policy_image_digest`. The run pulls that digest from your registry when its VM starts. The
+   platform keeps no copy of the image.
 2. It refuses an image it cannot pull — anonymously, or with the credential you named
    (`image_unpullable`) — and one whose compressed size, config and layers summed, is over 50 GB
    (`image_too_large`). Both are charged to your quota. The image has two more budgets, in

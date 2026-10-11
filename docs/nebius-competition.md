@@ -138,7 +138,8 @@ eval against the server in the image.
   session for each episode at `/api/v1/session`.
 - If a route refuses the token of the run, the run fails with `policy_setup_crash`.
 - The GPU is one `3g.40gb` slice of an NVIDIA H100, with 40448 MiB of memory.
-- The platform runs the image digest that it found when you submitted.
+- The platform runs the image digest that it found when you submitted. It pulls that digest from your
+  registry when the run starts, and it keeps no copy of the image.
 - The [rules](https://physical-ai-competition.positronic.ro/rules.html#limits) give the other limits on
   the image.
 
@@ -194,7 +195,22 @@ to `positronic eval run`.
 - The password stays in the file. It is not on the command line, where other processes and the shell
   history can read it.
 - The command removes one line ending from the end of the file. All other characters are the password.
-- The platform uses the credential only to read and pull your image. Your container never gets it.
+
+What the platform does with your credential:
+
+- When you submit, the platform reads your image with the credential. If your registry refuses it, the
+  submission fails with `image_unpullable`, and the submission counts.
+- The platform keeps the credential as a secret for that one submission. No API response and no log
+  shows the password.
+- When the run starts, the machine that runs your image logs in to your registry with the credential. It
+  pulls the image, and then it logs out. Your container never gets the credential.
+- The platform deletes the credential when the submission ends. The secret store keeps a deleted secret
+  until it purges it.
+- Only the services that start the run, the machine that runs your image and the platform administrators
+  can read the credential.
+- Keep the image and the credential valid until the submission ends. Then you can revoke the token.
+- A retry with the same `--transaction-key` returns the first submission, also with a new credential. To
+  use a new credential, use a new transaction key.
 
 ## Test the image on a GPU
 
