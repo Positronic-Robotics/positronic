@@ -197,7 +197,12 @@ services:
   groot-server: &groot-server-common
     <<: *groot-common
     container_name: groot-server
-    entrypoint: ["uv", "run", "--python", "3.12", "python", "-m", "positronic.vendors.gr00t.server"]
+    entrypoint: ["/opt/gr00t-venv/bin/python", "-m", "gr00t_serving.server"]
+    stop_signal: SIGINT
+    working_dir: /opt/positronic-vendors
+    environment:
+      HOME: /root
+      PYTHONPATH: /opt/positronic-vendors
     ports:
       - "8000:8000"
 

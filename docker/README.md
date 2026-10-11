@@ -44,8 +44,8 @@ docker/build.sh
 
 `make build-groot` pulls the published `positro/gr00t-base:latest` image. The fork image contains
 CUDA 12.8 and the upstream Python 3.12 environment at `/opt/gr00t-venv`.
-Positronic installs its environment at `/positronic/.venv` on startup, reusing the mounted uv cache.
-Both training and serving launch GR00T in its separate environment.
+Training installs Positronic at `/positronic/.venv` on startup, reusing the mounted uv cache.
+Serving runs the standalone adapter in `/opt/gr00t-venv`, without importing Positronic.
 
 Build the Positronic image:
 

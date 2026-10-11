@@ -45,7 +45,9 @@ export IMAGE_TAG=local
 `build-groot` pulls `positro/gr00t-base:latest`, published by the fork's GitHub workflow.
 
 The GR00T environment is `/opt/gr00t-venv` (Python 3.12, upstream locked dependencies).
-Positronic creates its separate environment at `/positronic/.venv` on startup using the mounted uv cache.
+The server runs there as `python -m gr00t_serving.server`. It imports the standalone `serving/` directory and the lightweight wrapper.
+Positronic is not importable in this environment. The Docker build fails if installing the adapter requires changes to native package versions.
+Training uses a separate Positronic environment at `/positronic/.venv`, created with the mounted uv cache.
 Training and serving require a CUDA GPU.
 
 The checkpoint also loads the gated `nvidia/Cosmos-Reason2-2B` backbone. The Hugging Face account
@@ -143,7 +145,29 @@ docker compose run --rm --service-ports --pull never -v "$PWD/groot-data:/data" 
 
 Select `droid_three_cameras` for a checkpoint trained on three views.
 Use `--model.checkpoint=10000` to select a saved step. Omit it to serve the latest.
-A Hugging Face source uses `--model.model_source=hf://owner/model`.
+The server resolves the selection once, before loading. Each server serves one checkpoint until it exits.
+The source can name an experiment directory, a checkpoint directory, or their S3 paths.
+A Hugging Face source uses `--model.model_source=hf://owner/model`; `--model.revision=<commit>` pins its revision.
+
+The adapter checks camera roles, state fields, action layout and recorded model settings before it binds its listeners.
+Conflicting model settings fail startup. Checkpoints without recorded settings use the selected Python preset.
+Camera source names, observation source keys and controller settings can differ from training.
+
+Native loading, warm-up and inference run on the wrapper's model thread, in the same process.
+The `ready` handshake includes the client recipe and resolved session parameters.
+The client performs pose conversion, image resize, optional JPEG encoding, action decoding and scheduling.
+The server deserializes the model input and calls `Gr00tPolicy.get_action` directly.
+
+Session query parameters can override `fps`, `horizon_sec`, `image_mappings`, `compress_images` and `jpeg_quality`.
+The camera mapping must keep the checkpoint's camera roles. It can select different source observations for those roles.
+These controls do not change native input dimensions, weights or model conventions.
+Set launch defaults through `--pipeline.fps=10`, for example. The default execution horizon is one second.
+Use `--pipeline.horizon_sec=None` to execute the full action chunk.
+
+WebSocket listens on port 8000. Set `--websocket.served_address.port=9000` to choose another port.
+Add `--grpc=@gr00t_serving.server.grpc --grpc.served_address.port=8001` to serve gRPC too.
+`AUTH_TOKEN` enables bearer authentication. `--idle_timeout_min=20` enables idle shutdown.
+Keepalive requests renew the idle timer. Docker stop sends SIGINT so the wrapper finishes active work and closes sessions.
 
 ## Adapter parity tests
 

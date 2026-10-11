@@ -9,10 +9,9 @@
 #
 # The endpoint gets no public IP: Nebius fronts every HTTP container port with a
 # managed https:// URL, which is what this polls for and prints. The container
-# itself takes ~10-15 min more to finish uv sync and load the model into GPU
-# memory after the URL appears.
+# itself must load the model and finish warm-up after the URL appears.
 #
-# The endpoint serves the websocket wire on 8000, and the gRPC wire on the port
+# The endpoint serves the websocket wire on 8000 by default, and the gRPC wire on the port
 # `--grpc.served_address.port` names. The create declares the gRPC port as an ordinary HTTP port;
 # a `/tcp` port gets a front gRPC refuses. The offboard README says what each
 # front does to a session.
@@ -25,9 +24,7 @@
 # in-process: `nebius ai endpoint create --auth token` strips the WebSocket
 # upgrade headers and passes no inference session.
 #
-# Hardcoded: GPU platform, websocket port. Vendor selects image + uv extra. One
-# setting of its own, via env: NEBIUS_PRESET. Everything shared with the other
-# scripts here lives in common.sh.
+# Vendor selects the image and Python environment. Shared settings live in common.sh.
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -35,6 +32,7 @@ source "$(dirname "$0")/common.sh"
 # Nebius GPU preset. Default is one H100; multi-GPU presets must match the server's GPU count
 # (DreamZero's --num_gpus runs torchrun --nproc_per_node, so an 8-GPU server needs an 8-GPU preset).
 PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
+PLATFORM="${NEBIUS_PLATFORM:-gpu-h100-sxm}"
 
 if [ $# -lt 2 ]; then
   cat >&2 <<'EOF'
@@ -43,7 +41,7 @@ Usage: bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
 Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero | molmoact2
 
 The endpoint name must be unique in the project (lowercase alphanumeric + dashes).
-Remaining arguments forward to positronic.vendors.<vendor>.server.
+Remaining arguments forward to the vendor's server CLI.
 
 Examples:
 
@@ -74,18 +72,25 @@ VENDOR="$1"
 NAME="$2"
 shift 2
 
-UV_ARGS="run --python 3.13"
-HF_FLAGS=()
+SERVER_LAUNCH=(uv run --python 3.13)
+SERVER_MODULE="positronic.vendors.${VENDOR}.server"
+WORKING_DIR=/positronic
+ENV_FLAGS=()
+GRPC_CONFIG=positronic.offboard.server.grpc
 case "$VENDOR" in
-  lerobot_0_3_3) IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot_0_3_3 " ;;
-  lerobot)       IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra lerobot " ;;
+  lerobot_0_3_3) IMAGE="positro/positronic:${IMAGE_TAG}"; SERVER_LAUNCH+=(--extra lerobot_0_3_3 python) ;;
+  lerobot)       IMAGE="positro/positronic:${IMAGE_TAG}"; SERVER_LAUNCH+=(--extra lerobot python) ;;
   # openpi.server imports `openpi_client` at module top → needs --extra openpi
-  openpi)        IMAGE="positro/openpi:${IMAGE_TAG}";     EXTRA="--extra openpi " ;;
-  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}";      EXTRA=""
-                 UV_ARGS="$GR00T_UV_ARGS"; HF_FLAGS=("${HF_ENV_FLAGS[@]}") ;;
+  openpi)        IMAGE="positro/openpi:${IMAGE_TAG}"; SERVER_LAUNCH+=(--extra openpi python) ;;
+  gr00t)         IMAGE="positro/gr00t:${IMAGE_TAG}"
+                 SERVER_LAUNCH=(/opt/gr00t-venv/bin/python)
+                 SERVER_MODULE=gr00t_serving.server
+                 WORKING_DIR=/opt/positronic-vendors
+                 GRPC_CONFIG=gr00t_serving.server.grpc
+                 ENV_FLAGS=("${HF_ENV_FLAGS[@]}" --env PYTHONPATH=/opt/positronic-vendors) ;;
   # dreamzero.server imports `huggingface_hub` at module top → needs --extra dreamzero
-  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}";  EXTRA="--extra dreamzero " ;;
-  molmoact2)     IMAGE="positro/positronic:${IMAGE_TAG}"; EXTRA="--extra molmoact2 " ;;
+  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}"; SERVER_LAUNCH+=(--extra dreamzero python) ;;
+  molmoact2)     IMAGE="positro/positronic:${IMAGE_TAG}"; SERVER_LAUNCH+=(--extra molmoact2 python) ;;
   *)
     echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero | molmoact2" >&2
     exit 1
@@ -101,12 +106,16 @@ case " $* " in
 esac
 
 # The websocket port: the create declares it, and the poll below selects the managed URL that fronts it.
-WS_PORT=8000
+ARGS=" $* "
+case "$ARGS" in
+  *" --websocket.served_address.port="*|*" --websocket.served_address.port "*)
+    WS_PORT=${ARGS#*--websocket.served_address.port}; WS_PORT=${WS_PORT#[= ]}; WS_PORT=${WS_PORT%% *} ;;
+  *) WS_PORT=8000 ;;
+esac
 
 # gRPC is the server's opt-in wire, so the endpoint declares its port only where one is served. A
 # caller's own --grpc.served_address.port names it; NEBIUS_GRPC_PORT= (empty) serves the websocket
 # wire alone.
-ARGS=" $* "
 case "$ARGS" in
   *" --grpc.served_address.port="*|*" --grpc.served_address.port "*)
     # configuronic takes a value after `=` or after a space, so every flag read here reads both.
@@ -115,7 +124,7 @@ case "$ARGS" in
     # wire itself. A port on its own would declare a container port nothing answers on.
     case "$ARGS" in
       *" --grpc="*|*" --grpc "*) ;;
-      *) set -- "$@" "--grpc=@positronic.offboard.server.grpc" ;;
+      *) set -- "$@" "--grpc=@${GRPC_CONFIG}" ;;
     esac
     ;;
   *" --grpc="*|*" --grpc "*)
@@ -124,7 +133,7 @@ case "$ARGS" in
   *)
     GRPC_PORT=${NEBIUS_GRPC_PORT-9000}
     if [ -n "$GRPC_PORT" ]; then
-      set -- "$@" "--grpc=@positronic.offboard.server.grpc" "--grpc.served_address.port=${GRPC_PORT}"
+      set -- "$@" "--grpc=@${GRPC_CONFIG}" "--grpc.served_address.port=${GRPC_PORT}"
     fi
     ;;
 esac
@@ -132,7 +141,7 @@ esac
 PORT_ARGS=(--container-port "${WS_PORT}")
 if [ -n "$GRPC_PORT" ]; then PORT_ARGS+=(--container-port "${GRPC_PORT}"); fi
 
-SERVER_ARGS="${UV_ARGS} ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
+SERVER_LAUNCH+=(-m "$SERVER_MODULE" "$@")
 
 echo "Creating $VENDOR endpoint '$NAME'..."
 nebius ai endpoint create \
@@ -140,22 +149,20 @@ nebius ai endpoint create \
   --subnet-id "$SUBNET_ID" \
   --name "$NAME" \
   --image "$IMAGE" \
-  --container-command uv \
-  --args "$SERVER_ARGS" \
+  --container-command "${SERVER_LAUNCH[0]}" \
+  --args "${SERVER_LAUNCH[*]:1}" \
   "${PORT_ARGS[@]}" \
-  --platform gpu-h100-sxm \
+  --platform "$PLATFORM" \
   --preset "$PRESET" \
-  --working-dir /positronic \
+  --working-dir "$WORKING_DIR" \
   --volume "${CACHE_FS}:/cache:rw" \
   --env UV_CACHE_DIR=/cache/uv \
   --env HF_HOME=/cache/hf \
   --env OPENPI_DATA_HOME=/cache/openpi \
   --env-secret "${AUTH_TOKEN_KEY}=${AUTH_TOKEN_SECRET}" \
-  ${HF_FLAGS[@]+"${HF_FLAGS[@]}"} \
+  ${ENV_FLAGS[@]+"${ENV_FLAGS[@]}"} \
   "${S3_ENV_FLAGS[@]}"
-# Left on stdout, not discarded: `create` reports `Endpoint ID:` as soon as the resource exists and can
-# still fail afterwards — a container that will not start does exactly that — so a caller logging this
-# output learns what to release even on the paths where this script never reaches its banner.
+# Preserve stdout: create can print the endpoint ID before failing.
 
 ID=$(nebius ai endpoint list --parent-id "$PARENT_ID" --format json \
   | jq -r --arg n "$NAME" '.items[]? | select(.metadata.name==$n) | .metadata.id')
@@ -219,8 +226,7 @@ ${GRPC_BANNER}  Endpoint ID:   $ID
   Vendor:        $VENDOR
 ==============================================================
 
-The container is still warming up (image pull + uv sync + checkpoint load,
-~10-15 min total). Follow startup logs:
+The container must finish model loading and warm-up before it accepts sessions. Follow startup logs:
 
   nebius ai endpoint logs $ID --follow
 

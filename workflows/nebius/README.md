@@ -12,8 +12,8 @@ running inference from your robot or simulator against the served policy — wor
 reached at a managed `https://` URL and gated on a bearer token: see
 [Authenticated inference](#authenticated-inference).
 
-GR00T training and serving install Positronic's Python 3.12 environment on startup using the shared uv cache.
-The model runs in the base image's separate GR00T environment.
+GR00T training installs Positronic's Python 3.12 environment on startup using the shared uv cache.
+Serving runs the standalone adapter directly in the base image's GR00T environment, without importing Positronic.
 They inject `HF_TOKEN` from the MysteryBox secret `huggingface-read-token`.
 Override its name with `NEBIUS_HF_TOKEN_SECRET`; the payload key must be `HF_TOKEN`.
 The token's account must have access to the gated `nvidia/Cosmos-Reason2-2B` backbone.
@@ -230,8 +230,10 @@ flow to your account directly via the API key — they aren't synced to S3.
 
 ## Serve a checkpoint as an endpoint
 
-`serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage)
-running `python -m positronic.vendors.<vendor>.server` on H100. The endpoint gets no public IP:
+`serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage) on H100 by default.
+GR00T runs `gr00t_serving.server` with `/opt/gr00t-venv/bin/python`.
+Other vendors run `positronic.vendors.<vendor>.server` through their configured uv environment.
+The endpoint gets no public IP:
 Nebius fronts each container port with its own managed `https://` URL, which terminates TLS and is
 the contact address. The server listens on port 8000 for the WebSocket wire, and on port 9000 for
 the gRPC one, so the endpoint returns two URLs. `--grpc.served_address.port=<port>` moves the second one, and
@@ -287,9 +289,8 @@ bash workflows/nebius/serve.sh gr00t groot-server droid \
 `serve.sh` blocks until the managed URLs appear (typically <1 min), then prints a banner with both
 of them, the endpoint ID, and the commands to follow logs and tear down. A rig points at either wire:
 the `https://` host on the `websocket_tls` wire, or the port-9000 host on the `grpc_tls` wire, port 443 either way.
-The banner prints the gRPC URL ready to paste. The container takes
-another ~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started
-server process` appears in `nebius ai endpoint logs`, sanity-check with (`AUTH_TOKEN` loaded as
+The banner prints the gRPC URL ready to paste. The container must finish model loading and warm-up before it accepts sessions.
+Check startup in `nebius ai endpoint logs`, then sanity-check with (`AUTH_TOKEN` loaded as
 in [Authenticated inference](#authenticated-inference)):
 
 ```bash
@@ -500,7 +501,9 @@ project — **external users must override them** with their own project + subne
 | `NEBIUS_IMAGE_REPO` | `positro/robolab` | *(`eval.sh` only)* Image repository the RoboLab eval job pulls, without the tag. Defaults to the Docker Hub `positro/robolab`; set it to an in-region Nebius Container Registry path (`cr.<region>.nebius.cloud/<registry-id>/robolab`) to skip the cross-cloud Docker Hub pull. `<registry-id>` is the Container Registry ID **without** the `registry-` prefix (from `nebius registry list`) — NOT the project ID. Combined with `NEBIUS_IMAGE_TAG` as `${NEBIUS_IMAGE_REPO}:${NEBIUS_IMAGE_TAG}`. |
 | `NEBIUS_IMAGE_TAG` | `latest` | Docker image tag the job/endpoint pulls (`positro/<image>:<tag>`). `cd docker && make push-* IMAGE_TAG=<branch>` pushes that tag unconditionally; set `NEBIUS_IMAGE_TAG=<branch>` to run a branch build remotely without clobbering `:latest`. `make push-*` only updates `:latest` when run with `CI` set. Note `convert.sh openpi` chains a stats job on the `positro/openpi` image, so with `NEBIUS_IMAGE_TAG=<branch>` you must also have pushed `positro/openpi:<branch>` (not just `positro/positronic:<branch>`); otherwise leave `NEBIUS_IMAGE_TAG` unset so stats uses `:latest`. |
 
-Settings with no environment override — platform, preset, the AWS MysteryBox secret names, the S3
+For `serve.sh`, `NEBIUS_PLATFORM` defaults to `gpu-h100-sxm` and `NEBIUS_PRESET` defaults to `1gpu-16vcpu-200gb`.
+
+Settings with no environment override — the AWS MysteryBox secret names, the S3
 endpoint URL and region — are changed by editing `common.sh` if they are shared, or the script
 itself if they are its own. The vendor positional arg selects the container image and `uv` extras:
 

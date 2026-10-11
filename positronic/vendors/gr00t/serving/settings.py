@@ -1,11 +1,15 @@
 """GR00T recipe settings shared by dataset preparation, training and serving."""
 
+import json
+import math
+from pathlib import Path
 from typing import Any
 
 from . import EE_POSE, EXTERIOR_IMAGE, EXTERIOR_IMAGE_2, GRIP, JOINT_POSITION, TASK, WRIST_IMAGE
 from . import keys as obs_keys
 
 MODEL_SETTINGS = 'model_settings'
+MODEL_SETTINGS_PATH = Path('meta/positronic_model_settings.json')
 ACTION_FPS = 'action_fps'
 IMAGE_SIZE = 'image_size'
 IMAGE_MAPPINGS = 'image_mappings'
@@ -13,6 +17,26 @@ EE_FRAME = 'ee_frame'
 ROTATION_OFFSET = 'rotation_offset'
 OBSERVATION_KEYS = 'observation_keys'
 CONTROL_MODE = 'control_mode'
+
+
+def validate(settings: dict[str, Any], checkpoint: Path) -> None:
+    """Check preprocessing dimensions and agreement with recorded checkpoint conventions."""
+    dimensions = settings[IMAGE_SIZE]
+    if len(dimensions) != 2 or any(type(value) is not int or value <= 0 for value in dimensions):
+        raise ValueError('image_size must contain positive integer width and height')
+    fps = settings[ACTION_FPS]
+    if isinstance(fps, bool) or not isinstance(fps, int | float) or not 0 < fps < math.inf:
+        raise ValueError('action_fps must be positive and finite')
+    recorded_path = checkpoint / MODEL_SETTINGS_PATH
+    if recorded_path.exists():
+        recorded = json.loads(recorded_path.read_text())
+        conflicts = [
+            name for name in (IMAGE_SIZE, EE_FRAME, ROTATION_OFFSET, ACTION_FPS) if recorded.get(name) != settings[name]
+        ]
+        if set(recorded[IMAGE_MAPPINGS]) != set(settings[IMAGE_MAPPINGS]):
+            conflicts.append(IMAGE_MAPPINGS)
+        if conflicts:
+            raise ValueError(f'Launch settings conflict with checkpoint conventions: {sorted(conflicts)}')
 
 
 def droid() -> dict[str, Any]:
@@ -38,12 +62,12 @@ def droid() -> dict[str, Any]:
     }
 
 
-def droid_three_cameras(exterior_2: str = obs_keys.EXTERIOR_IMAGE_2) -> dict[str, Any]:
+def droid_three_cameras() -> dict[str, Any]:
     settings = droid()
     cameras = settings[IMAGE_MAPPINGS]
     settings[IMAGE_MAPPINGS] = {
         EXTERIOR_IMAGE: cameras[EXTERIOR_IMAGE],
-        EXTERIOR_IMAGE_2: exterior_2,
+        EXTERIOR_IMAGE_2: obs_keys.EXTERIOR_IMAGE_2,
         WRIST_IMAGE: cameras[WRIST_IMAGE],
     }
     return settings
