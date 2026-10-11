@@ -182,6 +182,16 @@ def test_a_label_refuses_a_field_or_an_event_it_does_not_know(change: dict[str, 
         Label.model_validate({**CUBES.model_dump(mode='json'), **change})
 
 
+def test_a_label_refuses_a_time_that_is_not_finite():
+    with pytest.raises(ValidationError):
+        _label(Success(seconds=1.0), seconds_to_end=float('inf'))
+
+
+def test_a_label_cannot_stand_at_a_time_before_the_trial_start():
+    with pytest.raises(ValueError, match='before the trial start'):
+        CUBES.until(-1.0)
+
+
 def test_until_names_fields_that_the_label_has():
     assert {'events', 'seconds_to_end'} <= set(Label.model_fields)
 
@@ -344,6 +354,17 @@ def test_a_duration_of_the_wrong_type_is_logged_and_the_signals_give_the_end(
     assert [record.getMessage() for record in caplog.records] == [
         f"{DURATION}='long' is not a count of seconds; reading it as absent"
     ]
+
+
+@pytest.mark.parametrize('duration', ['1e400', '-1.0', 'NaN'])
+def test_a_duration_that_is_not_a_finite_count_of_seconds_is_logged_and_the_signals_give_the_end(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, duration: str
+):
+    (episode,) = _episodes(tmp_path, f'{{"{TASK}": "{CUP}", "{SUCCESS}": true, "{DURATION}": {duration}}}')
+    _write_signal(episode, 'grip', [0, 2_000_000_000])
+    with caplog.at_level(logging.ERROR, logger=labels.__name__):
+        assert molmo_label(episode) == _label(Success(seconds=2.0), seconds_to_end=2.0, annotator=MOLMO_LABELER)
+    assert DURATION in caplog.records[0].getMessage()
 
 
 def test_an_older_recording_with_no_timed_signal_has_no_label_and_is_logged(

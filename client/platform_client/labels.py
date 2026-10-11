@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from bisect import bisect_right
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import IntEnum, unique
@@ -90,7 +91,7 @@ class Stage(IntEnum):
     at_target = 50
 
 
-_LABEL_CONFIG = ConfigDict(extra='forbid', frozen=True)
+_LABEL_CONFIG = ConfigDict(extra='forbid', frozen=True, allow_inf_nan=False)
 
 # An item as the task's object list names it.
 ItemName = NewType('ItemName', str)
@@ -238,6 +239,8 @@ class Label(BaseModel):
 
     def until(self, seconds: float) -> Label:
         """The label as it stood at `seconds`: the events at or before it, and the earlier of the two ends."""
+        if seconds < 0:
+            raise ValueError(f'a label cannot stand at {seconds} s, before the trial start')
         kept = tuple(event for event in self.events if event.seconds <= seconds)
         return self.model_copy(update={'events': kept, 'seconds_to_end': min(self.seconds_to_end, seconds)})
 
@@ -385,7 +388,7 @@ def recorded_seconds_to_end(episode: Path, static: Mapping[str, object]) -> floa
     reading the signals needs the `pyarrow` extra.
     """
     duration = static.get(DURATION)
-    if isinstance(duration, int | float) and not isinstance(duration, bool) and duration >= 0:
+    if isinstance(duration, int | float) and not isinstance(duration, bool) and 0 <= duration < math.inf:
         return float(duration)
     if DURATION in static:
         log.error('%s=%r is not a count of seconds; reading it as absent', DURATION, duration)
