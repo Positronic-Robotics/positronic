@@ -73,7 +73,7 @@ _OBS_SPECS = {
     keys.OBS_EEF_POS: ((3,), np.float32),
     keys.OBS_EEF_QUAT: ((4,), np.float32),
     **dict.fromkeys(keys.CAMERA_SETS[args.cameras], ((720, 1280, 3), np.uint8)),
-    keys.OBS_SUBTASK: ((4,), np.float32),
+    keys.SUBTASK: ((4,), np.float32),
 }
 
 
@@ -323,7 +323,7 @@ def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
     best_score = 0.0
     for _ in range(_HOLD_STEPS):
         frames = env.step(holds)[protocol.SLOTS]
-        best_score = max(best_score, float(frames[1][protocol.FRAME_OBS][keys.OBS_SUBTASK][3]))
+        best_score = max(best_score, float(frames[1][protocol.FRAME_OBS][keys.SUBTASK][3]))
         assert frames[0][protocol.FRAME_DONE] and not frames[0][protocol.FRAME_SUCCESS], 'clone 0 left its time-out'
         running = [slot for slot in range(2, env.num_slots) if frames[slot][protocol.FRAME_DONE]]
         assert not running, f'clones {running} ended, but only clones 0 and 1 had a reason to'

@@ -8,7 +8,6 @@ top-level ``keys`` from its own directory. The eval config reads it as ``positro
 EPISODE_LENGTH = 'robolab.episode_length'
 # The phrasing of the instruction, which the eval config owns and ``_reset_token`` reads back.
 INSTRUCTION_TYPE = 'robolab.instruction_type'
-SUBTASK = 'subtask'
 
 # The observation fields the env publishes per slot, beside one entry per camera.
 OBS_JOINT_POS = 'joint_pos'
@@ -17,7 +16,7 @@ OBS_EEF_POS = 'eef_pos'
 OBS_EEF_QUAT = 'eef_quat'
 OBS_GRIP = 'grip'
 # [status, completed, total, score] for the task's subtask chain.
-OBS_SUBTASK = 'subtask'
+SUBTASK = 'subtask'
 
 # The cameras RoboLab renders, named as the env's ``image_obs`` group names them.
 OVER_SHOULDER_LEFT_CAMERA = 'over_shoulder_left_camera'

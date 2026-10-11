@@ -66,7 +66,9 @@ def _replay_episode(conn: EnvConnection, actions: np.ndarray, initial_state: dic
         out = conn.step(protocol.single_arm_action(joints, float(action[7])))
         if out['done']:
             return bool(out['success'])
-    print(f'  no terminal; final subtask [status, completed, total, score]: {out["obs"]["subtask"].tolist()}')
+    print(
+        f'  no terminal; final subtask [status, completed, total, score]: {out["obs"][robolab_keys.SUBTASK].tolist()}'
+    )
     return False
 
 

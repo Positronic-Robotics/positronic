@@ -455,7 +455,7 @@ class RobolabEnv(EnvProtocol):
                 keys.OBS_EEF_QUAT: proprio['eef_quat'][slot].cpu().numpy(),
                 keys.OBS_GRIP: float(proprio['gripper_pos'][slot, 0]),
                 **{name: frame[slot].cpu().numpy() for name, frame in images.items()},
-                keys.OBS_SUBTASK: subtask[slot],
+                keys.SUBTASK: subtask[slot],
             }
             for slot in range(self._num_envs)
         ]

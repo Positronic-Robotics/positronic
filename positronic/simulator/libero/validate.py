@@ -111,7 +111,7 @@ def _check_serve(env: LiberoEnv, token: dict) -> None:
     out = _reset(env, token)
     for _ in range(5):
         out = _step(env, protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
-    expected = {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'grip', 'sim_state'}
+    expected = {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'grip', keys.SIM_STATE}
     assert expected <= out[protocol.FRAME_OBS].keys()
     print('  serve smoke: OK (5 hold steps, obs keys present)')
 

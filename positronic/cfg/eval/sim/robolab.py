@@ -77,10 +77,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_ser
         return number_trials(trials)
 
     return Eval(
-        embodiment,
-        tasks,
-        privileged={robolab_keys.OBS_SUBTASK: Observation(proxy.privileged[robolab_keys.OBS_SUBTASK], None)},
-        done=proxy.done,
+        embodiment, tasks, privileged={robolab_keys.SUBTASK: proxy.privileged[robolab_keys.SUBTASK]}, done=proxy.done
     )
 
 
