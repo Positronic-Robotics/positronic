@@ -406,6 +406,6 @@ def test_no_public_eval_pins_an_episode_the_committed_list_blocks():
         if definition.config != MOLMO_CONFIG:
             continue
         bench = mapping.BenchmarkPath(*(str(definition.args[d]) for d in mapping.BenchmarkPath._fields))
-        episodes = definition.args['episodes']
+        episodes = definition.args[mapping.SELECT_EPISODES]
         assert isinstance(episodes, list)
         assert not set(episodes) & blocked.get(bench, frozenset()), name
