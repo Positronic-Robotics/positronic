@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from bisect import bisect_right
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import IntEnum, unique
@@ -16,8 +15,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, ClassVar, Literal, NamedTuple, NewType, Self
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from eval_vocabulary.episode import (
-    DURATION,
+    EMITTED_WORLD,
     ENDED_BY,
     ENDED_BY_OPERATOR,
     LEGACY_TIME_COLUMN,
@@ -27,6 +28,7 @@ from eval_vocabulary.episode import (
     SUCCESS,
     TASK,
     TERMINATED,
+    TIMESTAMP_COLUMN_PREFIX,
     UID,
 )
 from platform_client.slug import Slugged
@@ -41,12 +43,6 @@ from pydantic import (
     model_validator,
 )
 from pydantic_core import core_schema
-
-try:
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-except ModuleNotFoundError:  # The `pyarrow` extra. Only a recording that has no `eval.duration` needs it.
-    pa = pq = None
 
 log = logging.getLogger(__name__)
 
@@ -388,29 +384,23 @@ def recorded_task_and_outcome(static: Mapping[str, object], task_key: str) -> tu
     return recorded
 
 
-def recorded_seconds_to_end(episode: Path, static: Mapping[str, object]) -> float | None:
-    """The seconds from the trial's start to its end, or None when the recording does not say.
+_WORLD_TIME_COLUMN = f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WORLD}'
 
-    A recording that has no `eval.duration` gives the time from the first to the last sample of its signals, and
-    reading the signals needs the `pyarrow` extra.
+
+def recorded_seconds_to_end(episode: Path) -> float | None:
+    """The seconds from the first sample of the episode's signals to the last, on the world clock.
+
+    It can exceed the trial by up to one control step.
+    None when no signal file holds a world time, or one does not parse.
     """
-    duration = static.get(DURATION)
-    if isinstance(duration, int | float) and not isinstance(duration, bool) and 0 <= duration < math.inf:
-        return float(duration)
-    if DURATION in static:
-        log.error('%s=%r is not a count of seconds; reading it as absent', DURATION, duration)
-    return _signal_seconds(episode)
-
-
-def _signal_seconds(episode: Path) -> float | None:
-    if pa is None or pq is None:
-        raise ModuleNotFoundError(f'{episode} records no {DURATION}, and reading its signals needs the `pyarrow` extra')
     firsts, lasts = [], []
     for signal in sorted(episode.glob(f'*{SIGNAL_FILE_SUFFIX}')):
         try:
-            if LEGACY_TIME_COLUMN not in pq.read_schema(signal).names:
+            names = pq.read_schema(signal).names
+            column = next((name for name in (_WORLD_TIME_COLUMN, LEGACY_TIME_COLUMN) if name in names), None)
+            if column is None:
                 continue
-            times = pq.read_table(signal, columns=[LEGACY_TIME_COLUMN]).column(LEGACY_TIME_COLUMN)
+            times = pq.read_table(signal, columns=[column]).column(column)
         except pa.ArrowInvalid:
             # One damaged upload leaves the other episodes labelled, so this is logged, not raised.
             log.error('%s does not parse; this episode has no label', signal)
@@ -420,9 +410,9 @@ def _signal_seconds(episode: Path) -> float | None:
             lasts.append(times[-1].as_py())
     if not lasts:
         log.error(
-            '%s records no %s and no sample in a %r column; this episode has no label',
+            '%s holds no sample in a %r or a %r column; this episode has no label',
             episode,
-            DURATION,
+            _WORLD_TIME_COLUMN,
             LEGACY_TIME_COLUMN,
         )
         return None
@@ -444,7 +434,7 @@ def molmo_label(episode: Path) -> Label | None:
         return None
     recorded = recorded_task_and_outcome(static, TASK)
     uid = recorded_uid(episode) if recorded is not None else None
-    seconds_to_end = recorded_seconds_to_end(episode, static) if uid is not None else None
+    seconds_to_end = recorded_seconds_to_end(episode) if uid is not None else None
     if recorded is None or uid is None or seconds_to_end is None:
         return None
     task, outcome = recorded

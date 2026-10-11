@@ -16,6 +16,7 @@ from platform_client.labels import MOLMO_LABELER, Label, Success, label
 from platform_client.scoring import score
 
 import pimm
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.cfg.eval.real import droid as real_droid
@@ -249,7 +250,9 @@ def test_the_molmo_labeler_reads_the_outcome_that_positronic_records(tmp_path):
         episode.set_static(keys.TASK, 'pick up the cup.')
         episode.set_static(eval_keys.SUCCESS, True)
         episode.set_static(eval_keys.TERMINATED, True)
-        episode.set_static(eval_keys.DURATION, 4.5)
+        # Ten seconds pass on the wall clock for each second on the world clock, as in a sim slower than real time.
+        for world_ns in (2_000_000_000, 4_000_000_000, 6_500_000_000):
+            episode.append(keys.GRIP, 0.0, Time(**{EMITTED_WORLD: world_ns, EMITTED_WALL: 10 * world_ns}))
 
     given = label(episode.path, MOLMO_SCORING.labelers)
 

@@ -1,12 +1,13 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
 # What a trial reports when it ends, in its episode's statics. The harness writes ``TERMINATED``, False when the
-# budget ran out, and ``DURATION``. An env's terminal carries ``SUCCESS``, and can leave it absent on a failure.
-from eval_vocabulary.episode import DURATION as DURATION
+# budget ran out. An env's terminal carries ``SUCCESS``, and can leave it absent on a failure.
 from eval_vocabulary.episode import ENDED_BY as ENDED_BY
 from eval_vocabulary.episode import ENDED_BY_OPERATOR as ENDED_BY_OPERATOR
 from eval_vocabulary.episode import SUCCESS as SUCCESS
 from eval_vocabulary.episode import TERMINATED as TERMINATED
+
+DURATION = 'eval.duration'
 
 # The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
 # is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}`` and its grippers

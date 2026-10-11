@@ -318,20 +318,13 @@ class Harness(pimm.ControlSystem):
 
     @staticmethod
     def _trial_terminal(
-        done: pimm.Message[dict] | None, now_ns: int, started_ns: int, deadline_ns: int | None, timeline: str
+        done: pimm.Message[dict] | None, now_ns: int, deadline_ns: int | None, timeline: str
     ) -> dict[str, Any] | None:
-        """A done signal timestamped after the deadline counts as a timeout, not a success.
-
-        The trial ends at the done signal's timestamp, or at the deadline.
-        """
+        """A done signal timestamped after the deadline counts as a timeout, not a success."""
         if done is not None and done.data and (deadline_ns is None or done.time[timeline] <= deadline_ns):
-            return {
-                **done.data,
-                eval_keys.TERMINATED: True,
-                eval_keys.DURATION: (done.time[timeline] - started_ns) / 1e9,
-            }
+            return {**done.data, eval_keys.TERMINATED: True}
         if deadline_ns is not None and now_ns >= deadline_ns:
-            return {eval_keys.TERMINATED: False, eval_keys.DURATION: (deadline_ns - started_ns) / 1e9}
+            return {eval_keys.TERMINATED: False}
         return None
 
     def _wait_for_next_tick(self, runtime: Executor, resume_at_ns: int) -> pimm.Run[tuple[Answer[Any], ...]]:
@@ -378,7 +371,6 @@ class Harness(pimm.ControlSystem):
         task: Task,
         runtime: Executor,
         policy_run: PolicyRun,
-        started_ns: int,
         deadline_ns: int | None,
     ) -> pimm.Run[dict[str, Any] | None]:
         payload = None
@@ -406,7 +398,6 @@ class Harness(pimm.ControlSystem):
             payload = self._trial_terminal(
                 pimm.read_updated(self.done),
                 runtime.time_ns,
-                started_ns,
                 deadline_ns,
                 EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL,
             )
@@ -431,13 +422,12 @@ class Harness(pimm.ControlSystem):
         policy_run = None
         try:
             policy_run = runtime.start(rollout.policy)
-            started_ns = clock.now_ns()
-            deadline_ns = started_ns + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
+            deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
             try:
                 with self._recording(rollout.output_path):
-                    payload = yield from self._rollout(should_stop, task, runtime, policy_run, started_ns, deadline_ns)
+                    payload = yield from self._rollout(should_stop, task, runtime, policy_run, deadline_ns)
                     if self._writer is not None:
                         for name, value in (self._build_episode_meta(rollout, runtime) | (payload or {})).items():
                             self._writer.set_static(name, value)

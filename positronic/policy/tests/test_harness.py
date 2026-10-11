@@ -411,7 +411,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     with pytest.raises(RuntimeError, match='already running'):
         overlapping.result()
     next(h.loop)
-    assert first.result() == {'success': True, eval_keys.TERMINATED: True, eval_keys.DURATION: 0.005}
+    assert first.result() == {'success': True, eval_keys.TERMINATED: True}
     assert h.dataset.episodes[-1].static[keys.TASK] == 'first'
 
     frame[0] = 2  # No new signal: the next episode must rebuild its observation cache.
@@ -576,7 +576,7 @@ def test_recorder_polls_do_not_fail_on_errors_between_policy_calls(episode_harne
         h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
     if finish:
-        assert answer.result() == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True, eval_keys.DURATION: 0.001}
+        assert answer.result() == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
         assert policy.seen == [1]
     else:
         assert not answer.done()
@@ -898,7 +898,6 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     assert eval_keys.TIMEOUT not in meta
     assert meta[eval_keys.SUCCESS] is True
     assert answer.result()[eval_keys.TERMINATED] is True
-    assert meta[eval_keys.DURATION] == answer.result()[eval_keys.DURATION] == 0.0
 
 
 def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(episode_harness, tmp_path):
@@ -986,7 +985,7 @@ def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
     assert list(h.prepare[eval_keys.SCENE].incoming()) == []
     back.set_result(None)
     next(h.loop)
-    assert answer.result() == {eval_keys.TERMINATED: False, eval_keys.DURATION: 0.01}
+    assert answer.result() == {eval_keys.TERMINATED: False}
 
 
 @pytest.mark.parametrize('failure', ['unknown', 'prepare', 'return'])
@@ -1045,7 +1044,7 @@ def test_every_device_is_asked_to_be_ready_before_each_episode_and_before_its_pr
         next(h.loop)
         next(h.prepare[RESET].incoming()).set_result(None)
         next(h.loop)
-        assert answer.result() == {eval_keys.TERMINATED: False, eval_keys.DURATION: 0.01}
+        assert answer.result() == {eval_keys.TERMINATED: False}
 
 
 @pytest.mark.parametrize('error', [pimm.SignalError('camera lost'), RuntimeError('the arm holds a fault')])
@@ -1275,7 +1274,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
                 next(loop)
                 if answer.done():
                     break
-            assert answer.result() == {eval_keys.TERMINATED: False, eval_keys.DURATION: 0.21}
+            assert answer.result() == {eval_keys.TERMINATED: False}
         finally:
             world.request_stop()
             list(loop)
@@ -1473,7 +1472,7 @@ def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_ins
     assert h.world.clock.now_ns() == 0
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
-    assert answer.result() == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True, eval_keys.DURATION: 0.0}
+    assert answer.result() == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
     episode = LocalDataset(tmp_path)[0]
     commands = episode[MOTOR]
     assert list(commands.values()) == list(range(5))
@@ -1757,7 +1756,7 @@ def test_real_sleep_stops_at_episode_deadline(episode_harness):
     next(h.loop)
     assert h.deadlines.values[-1] == (20_000_000, None)
     next(h.loop)
-    assert answer.result() == {eval_keys.TERMINATED: False, eval_keys.DURATION: 0.02}
+    assert answer.result() == {eval_keys.TERMINATED: False}
 
 
 def test_a_missing_observation_is_read_again_after_one_poll_period(episode_harness):
@@ -1792,4 +1791,4 @@ def test_a_missing_observation_still_ends_the_episode_at_its_deadline(episode_ha
     next(h.loop)
     assert h.deadlines.values[-1] == (50_000_000, None)
     next(h.loop)
-    assert answer.result() == {eval_keys.TERMINATED: False, eval_keys.DURATION: 0.05}
+    assert answer.result() == {eval_keys.TERMINATED: False}

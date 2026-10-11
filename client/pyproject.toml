@@ -15,11 +15,9 @@ dependencies = [
     # The names an episode records, which `labels` reads. It has no dependencies, and the root pins it
     # exactly at the same version.
     "positronic-eval-vocabulary==0.2.0",
+    # `labels` reads the time of each sample from an episode's signal files.
+    "pyarrow",
 ]
-
-[project.optional-dependencies]
-# `labels` reads the signal files of a recording that has no `eval.duration`. Nothing else needs it.
-pyarrow = ["pyarrow"]
 
 [project.scripts]
 platform-register = "platform_client.github_device_flow:main"

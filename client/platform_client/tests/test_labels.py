@@ -2,7 +2,7 @@
 
 The fixture holds 20 episodes of one sweep of `pi05_droid_jointpos`, in the `<block>/<episode>` layout that positronic
 records: each `static.json`, the id from each `meta.json`, and the time column of each `robot_state.q` signal. The
-sweep is older than `eval.duration`, so the labeler reads each end from that signal.
+labeler reads each end from that signal.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from eval_vocabulary.episode import (
-    DURATION,
+    EMITTED_WORLD,
     ENDED_BY,
     ENDED_BY_OPERATOR,
     LEGACY_TIME_COLUMN,
@@ -25,6 +25,7 @@ from eval_vocabulary.episode import (
     SUCCESS,
     TASK,
     TERMINATED,
+    TIMESTAMP_COLUMN_PREFIX,
     UID,
 )
 from platform_client import labels
@@ -106,8 +107,17 @@ def _episodes(
     return made
 
 
-def _write_signal(episode: Path, name: str, times: list[int]) -> None:
-    pq.write_table(pa.table({LEGACY_TIME_COLUMN: times}), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
+def _write_signal(episode: Path, name: str, times: list[int], column: str = LEGACY_TIME_COLUMN) -> None:
+    pq.write_table(pa.table({column: times}), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
+
+
+def _write_timed_signal(episode: Path, name: str, world: list[int]) -> None:
+    """A signal in the format with named timelines, slower than real time: ten wall seconds to each world second."""
+    columns = {
+        f'{TIMESTAMP_COLUMN_PREFIX}emitted.wall': [10 * t for t in world],
+        f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WORLD}': world,
+    }
+    pq.write_table(pa.table(columns), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
 
 
 # --- the API words
@@ -327,24 +337,33 @@ def test_each_episode_of_the_sweep_has_a_label_at_the_end_that_its_signal_record
     )
 
 
-def test_an_untimed_verdict_sits_at_the_end_that_eval_duration_records(tmp_path: Path):
-    succeeded, failed = _episodes(
-        tmp_path, {TASK: CUP, SUCCESS: True, TERMINATED: True, DURATION: 12.5}, {TASK: CUP, SUCCESS: False, DURATION: 3}
-    )
+def test_an_untimed_verdict_sits_at_the_end_that_the_signals_record(tmp_path: Path):
+    succeeded, failed = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, TERMINATED: True}, {TASK: CUP, SUCCESS: False})
+    _write_timed_signal(succeeded, 'grip', [1_000_000_000, 13_500_000_000])
+    _write_timed_signal(failed, 'grip', [0, 3_000_000_000])
     assert molmo_label(succeeded) == _label(Success(seconds=12.5), seconds_to_end=12.5, annotator=MOLMO_LABELER)
     assert molmo_label(failed) == _label(Fail(seconds=3.0), seconds_to_end=3.0, annotator=MOLMO_LABELER)
 
 
 def test_a_trial_that_ran_out_of_time_has_a_label_with_no_end_event(tmp_path: Path):
-    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, TERMINATED: False, DURATION: 60.0})
+    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, TERMINATED: False})
+    _write_timed_signal(episode, 'grip', [0, 60_000_000_000])
     ran_out = molmo_label(episode)
     assert ran_out == _label(seconds_to_end=60.0, annotator=MOLMO_LABELER)
     assert ran_out is not None and ran_out.outcome is Outcome.out_of_time
 
 
 def test_a_trial_that_an_operator_ended_has_no_label(tmp_path: Path):
-    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, ENDED_BY: ENDED_BY_OPERATOR, DURATION: 1.0})
+    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, ENDED_BY: ENDED_BY_OPERATOR})
+    _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
     assert molmo_label(episode) is None
+
+
+def test_the_end_is_the_span_of_all_signals_on_the_world_clock(tmp_path: Path):
+    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True})
+    _write_timed_signal(episode, 'grip', [2_000_000_000, 3_000_000_000])
+    _write_timed_signal(episode, 'robot_state.q', [1_000_000_000, 4_500_000_000])
+    assert molmo_label(episode) == _label(Success(seconds=3.5), seconds_to_end=3.5, annotator=MOLMO_LABELER)
 
 
 def test_an_older_recording_takes_its_end_from_the_first_and_last_samples_of_its_signals(tmp_path: Path):
@@ -355,38 +374,13 @@ def test_an_older_recording_takes_its_end_from_the_first_and_last_samples_of_its
     assert molmo_label(episode) == _label(Success(seconds=3.5), seconds_to_end=3.5, annotator=MOLMO_LABELER)
 
 
-def test_a_duration_of_the_wrong_type_is_logged_and_the_signals_give_the_end(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-):
-    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: False, DURATION: 'long'})
-    _write_signal(episode, 'grip', [0, 2_000_000_000])
-    with caplog.at_level(logging.ERROR, logger=labels.__name__):
-        assert molmo_label(episode) == _label(Fail(seconds=2.0), seconds_to_end=2.0, annotator=MOLMO_LABELER)
-    assert [record.getMessage() for record in caplog.records] == [
-        f"{DURATION}='long' is not a count of seconds; reading it as absent"
-    ]
-
-
-@pytest.mark.parametrize('duration', ['1e400', '-1.0', 'NaN'])
-def test_a_duration_that_is_not_a_finite_count_of_seconds_is_logged_and_the_signals_give_the_end(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, duration: str
-):
-    (episode,) = _episodes(tmp_path, f'{{"{TASK}": "{CUP}", "{SUCCESS}": true, "{DURATION}": {duration}}}')
-    _write_signal(episode, 'grip', [0, 2_000_000_000])
-    with caplog.at_level(logging.ERROR, logger=labels.__name__):
-        assert molmo_label(episode) == _label(Success(seconds=2.0), seconds_to_end=2.0, annotator=MOLMO_LABELER)
-    assert DURATION in caplog.records[0].getMessage()
-
-
-def test_an_older_recording_with_no_timed_signal_has_no_label_and_is_logged(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-):
+def test_a_recording_with_no_world_time_has_no_label_and_is_logged(tmp_path: Path, caplog: pytest.LogCaptureFixture):
     (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True})
-    pq.write_table(pa.table({'ts.received.world': [0, 1]}), episode / f'grip{SIGNAL_FILE_SUFFIX}')
+    _write_signal(episode, 'grip', [0, 1_000_000_000], column=f'{TIMESTAMP_COLUMN_PREFIX}emitted.wall')
     with caplog.at_level(logging.ERROR, logger=labels.__name__):
         assert molmo_label(episode) is None
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
-    assert DURATION in caplog.records[0].getMessage()
+    assert EMITTED_WORLD in caplog.records[0].getMessage()
 
 
 def test_a_signal_that_does_not_parse_leaves_the_episode_without_a_label(
@@ -399,19 +393,11 @@ def test_a_signal_that_does_not_parse_leaves_the_episode_without_a_label(
     assert 'does not parse' in caplog.records[0].getMessage()
 
 
-def test_reading_an_older_recording_without_the_pyarrow_extra_names_the_extra(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True})
-    monkeypatch.setattr(labels, 'pq', None)
-    with pytest.raises(ModuleNotFoundError, match='`pyarrow` extra'):
-        molmo_label(episode)
-
-
 def test_a_recording_whose_meta_holds_no_id_has_no_label_and_is_logged(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ):
-    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, DURATION: 1.0})
+    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True})
+    _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
     (episode / META_FILE).write_text(json.dumps({'created_ts_ns': 1}))
     with caplog.at_level(logging.ERROR, logger=labels.__name__):
         assert molmo_label(episode) is None

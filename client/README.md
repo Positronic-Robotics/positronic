@@ -8,9 +8,9 @@ endpoint.
 > and nothing here is covered by a backwards-compatibility guarantee. Pin the exact version you
 > tested against, and expect to edit your code when you move off it.
 
-The library depends on `pydantic`, `httpx`, `typing-extensions` and `positronic-eval-vocabulary`, which
-has no dependencies. So a service that only speaks to the platform installs it on its own, at the exact
-version it was written against:
+The library depends on `pydantic`, `httpx`, `typing-extensions`, `pyarrow` and
+`positronic-eval-vocabulary`, which has no dependencies. So a service that only speaks to the platform
+installs it on its own, at the exact version it was written against:
 
 ```bash
 uv add "positronic-platform-client==0.29.0"
@@ -309,9 +309,9 @@ episode, and `unscored` counts the episodes that no labeler labelled. `primary` 
 as failures. No file holds a score: a score is a function of the labels.
 
 `PUBLIC_LABELERS` holds the labeler of each public eval. A caller with labelers of its own passes
-`label` a table that holds them beside `PUBLIC_LABELERS`. The MolmoSpaces labeler reads the end of a
-trial from `eval.duration`. A recording without that key gives its end from its signal files, and
-to read them, install the `pyarrow` extra.
+`label` a table that holds them beside `PUBLIC_LABELERS`. The MolmoSpaces labeler takes the end of a
+trial from the episode's signal files: the time from the first sample to the last, on the world clock.
+That time can exceed the trial by up to one control step.
 
 ## From the command line
 

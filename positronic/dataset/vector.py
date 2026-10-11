@@ -6,7 +6,7 @@ from typing import Any, TypeVar, cast
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from eval_vocabulary.episode import LEGACY_TIME_COLUMN
+from eval_vocabulary.episode import LEGACY_TIME_COLUMN, TIMESTAMP_COLUMN_PREFIX
 
 from .signal import TIMELINE_METADATA_KEY, IndicesLike, Signal, SignalWriter
 from .time import Time, TimeArray, TimeBounds, search_timestamps, validate_timeline
@@ -16,16 +16,15 @@ T = TypeVar('T')
 
 SIGNAL_VERSION_KEY = b'positronic.signal_version'
 SIGNAL_VERSION = b'2'
-TIMESTAMP_PREFIX = 'ts.'
 # Timeline name for legacy files without timeline metadata.
 RECORDED_TIME = 'recorded'
 VALUE_COLUMN = 'value'
 
 
 def timestamp_table(columns: Mapping[str, Sequence[int]]) -> pa.Table:
-    fields = [pa.field(TIMESTAMP_PREFIX + name, pa.int64(), nullable=False) for name in columns]
+    fields = [pa.field(TIMESTAMP_COLUMN_PREFIX + name, pa.int64(), nullable=False) for name in columns]
     schema = pa.schema(fields, metadata={SIGNAL_VERSION_KEY: SIGNAL_VERSION})
-    return pa.table({TIMESTAMP_PREFIX + name: values for name, values in columns.items()}, schema=schema)
+    return pa.table({TIMESTAMP_COLUMN_PREFIX + name: values for name, values in columns.items()}, schema=schema)
 
 
 class ParquetTimeIndex:
@@ -55,8 +54,8 @@ class ParquetTimeIndex:
             raise ValueError(f'Unsupported signal format version: {version!r}')
         columns = {}
         for field in schema:
-            if field.name.startswith(TIMESTAMP_PREFIX):
-                name = field.name[len(TIMESTAMP_PREFIX) :]
+            if field.name.startswith(TIMESTAMP_COLUMN_PREFIX):
+                name = field.name[len(TIMESTAMP_COLUMN_PREFIX) :]
                 validate_timeline(name)
                 if field.type != pa.int64() or field.nullable:
                     raise ValueError('Timeline columns must be non-null int64')
