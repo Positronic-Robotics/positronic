@@ -24,6 +24,34 @@ Codec tests live in [`tests/`](tests/). Model-specific recipes compose these ope
 Use the [reusable codec catalog](#reusable-codec-catalog) to assemble a recipe, or the
 [vendor recipes](#codec-catalog-by-vendor) to choose a configured pipeline.
 
+## Training and inference recipes
+
+GR00T has independent training and inference recipes. Both use
+[shared Python settings](../../vendors/gr00t/serving/settings.py):
+
+```python
+from positronic.vendors.gr00t import recipes
+from positronic.vendors.gr00t.serving import recipe
+from positronic.vendors.gr00t.serving.settings import droid
+
+settings = droid()
+training = recipes.droid(settings=settings)  # EpisodeTransform
+description = recipe.inference(settings)     # JSON-compatible component description
+```
+
+The inference builder imports only the lightweight wrapper and the Python standard library.
+The client constructs its codecs from the description with `positronic.policy.spec.from_spec`.
+The training builder uses Positronic episode transforms. It does not construct inference codecs.
+Both recipes use the shared camera, frame, rotation-offset, and cadence settings.
+Training chooses recorded action labels, aligns signal timestamps, and supplies feature and modality metadata.
+Inference packs model inputs and decodes predictions into robot commands.
+Recipes can differ deliberately: GR00T keeps continuous grip labels in training and thresholds grip during inference.
+Construct either pipeline alone. Dataset conversion uses `positronic.cfg.ds.transform`; see the
+[GR00T training guide](../../vendors/gr00t/README.md#convert-and-fine-tune).
+
+TODO: Migrate the remaining vendor presets to independent builders, then remove `Codec.training_encoder` and `apply_codec`.
+Their current interface is described below.
+
 ## One codec, both directions
 
 A codec can define transformations for training and inference in one place:
@@ -67,6 +95,7 @@ These are the public codec classes exported by this package. Each name links to 
 | [`UnpackActionChunk`](action.py) | Selects prediction arrays, removes leading size-one dimensions, and splits a shared time axis into action records. Observations and training pass through. | A model returns batched or nested prediction arrays that action decoders need one timestep at a time. |
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
+| [`JointPositionAction`](action.py) | Decodes separate joint and grip fields into an absolute command. | The model returns named predictions; training labels are defined independently. |
 | [`IKJointsAction`](action.py) | Training: replaces pose targets with joint targets through inverse kinematics. Inference: passes through. | Train a joint-position model from recorded pose targets; compose before `AbsoluteJointsAction`. |
 | [`JointDeltaAction`](action.py) | Inference: clips and scales normalized DROID joint velocities into `JointDelta` commands, and thresholds grip. | Serve a checkpoint using the DROID joint-delta action convention. |
 | [`SetControlMode`](action.py) | Inference: stamps a supplied control mode on each decoded arm command. | Require explicit impedance or position control; compose to the left of the action decoder. |
@@ -94,8 +123,7 @@ These are the public codec classes exported by this package. Each name links to 
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
 
 Image transport codecs belong in the serving stack. Use `ObservationCodec` for image preparation
-shared with training. `IKJointsAction` and `SetControlMode` require Python construction; they do not
-provide JSON component descriptions.
+shared with training. `IKJointsAction` requires Python construction; it does not provide a JSON component description.
 
 The [metadata module](metadata.py) also provides `lerobot_vector`, `lerobot_image` and
 `lerobot_action` to describe dataset features. These helpers return metadata dictionaries, not codecs.
@@ -133,7 +161,7 @@ It is declared in two places, for the two things it does:
 - **Training** — `compose(ee_frame=DROID_EE_FRAME)` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it. It defaults to unset, which trains in `default`.
 - **Serving** — the OpenPI pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts and the server stays frame-agnostic. It has no default: every deployment states its frame — `None` for a checkpoint trained in `default`, or one that speaks joints, which are unambiguous. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
 
-Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. GR00T's DROID codec uses `DROID_EE_FRAME` for both dataset conversion and serving. Its pipeline exposes this through `codec.ee_frame`.
+Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as a translation and wxyz quaternion.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 
@@ -148,7 +176,7 @@ Two wrappers in [`positronic/cfg/codecs.py`](../../cfg/codecs.py) apply it to an
 | `droid_execution(action)` | `SetControlMode(DROID_IMPEDANCE) \| action` ([the DROID gains](../../cfg/hardware/roboarm/__init__.py)) | the `droid` pipelines of OpenPI, DreamZero and MolmoAct2, and OpenPI's `droid_jointpos` |
 | `phail_v1_execution(action)` | `SetControlMode(PositionControl()) \| action` | the `phail_v1` pipelines of LeRobot, OpenPI and DreamZero |
 
-GR00T's DROID codec sets `DROID_IMPEDANCE` directly on its joint-position commands.
+GR00T's inference recipe composes `SetControlMode` with `JointPositionAction` to apply the DROID impedance gains.
 
 ## Writing custom codecs
 
@@ -158,7 +186,9 @@ Subclass `positronic.policy.codecs.Codec` and implement `encode()` and/or `_deco
 
 The recipes below show how vendors configure and combine codecs. `compose` combines observation and action conversion, optional grip/frame conversion, and training cadence metadata. `ChunkedSchedule` owns inference cadence and the execution horizon; codecs return full chunks without timestamps.
 
-At conversion time a codec is referenced by import path (`--dataset.codec=@positronic.vendors.<vendor>.codecs.<name>`). At serving time each vendor's server exposes its codecs as **named pipelines**, each one a server subcommand of the same name, so the same name selects the same codec on both sides.
+GR00T selects an independent training recipe through `--dataset.transforms`; see the [GR00T workflow](../../vendors/gr00t/README.md).
+Other vendors select a codec through `--dataset.codec=@positronic.vendors.<vendor>.codecs.<name>`.
+At serving time, each vendor exposes named pipelines as server subcommands.
 
 ### LeRobot (ACT — 0.3.3)
 
@@ -194,9 +224,9 @@ cd docker && docker compose run --rm lerobot-convert convert \
 
 ### GR00T
 
-See [`positronic/vendors/gr00t/codecs.py`](../../vendors/gr00t/codecs.py).
+See [`positronic/vendors/gr00t/recipes.py`](../../vendors/gr00t/recipes.py).
 
-| Codec | Cameras | State and training actions | Inference actions |
+| Preset | Cameras | State and training actions | Inference actions |
 |-------|---------|----------------------------|-------------------|
 | `droid` | Exterior + wrist | Absolute EEF pose (XYZ + row-based rot6d), gripper, 7 joints | Absolute joint targets + binary gripper |
 | `droid_three_cameras` | Two exteriors + wrist | Same as `droid` | Same as `droid` |

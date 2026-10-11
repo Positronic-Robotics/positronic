@@ -19,6 +19,7 @@ from positronic.utils.versions import Version
 
 CURRENT_VERSION = ProtocolVersion.V2
 VERSIONS = {version.value: Version(version) for version in (ProtocolVersion.V1, ProtocolVersion.V2)}
+MESSAGE = 'message'
 
 
 _CMD = b'__cmd__'

@@ -13,7 +13,6 @@ def bearer(token: str) -> str:
 # The top-level keys of every server-to-client message: ``STATUS`` until the server reports itself ready
 # and hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference.
 STATUS = 'status'
-MESSAGE = 'message'
 META = 'meta'
 RESULT = 'result'
 ERROR = 'error'

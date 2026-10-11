@@ -150,7 +150,7 @@ class RemotePolicy(Policy):
                 )
             self._server_meta, self._client_meta = server_meta, client_meta
         meta: dict[str, Any] = {**self._client_meta, policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
-        if self._server_meta.get(offboard_keys.COMPRESS_IMAGES):
+        if self._server_meta.get(policy_keys.COMPRESS_IMAGES):
             meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
         return flatten_dict(meta)
 
@@ -163,7 +163,7 @@ class RemotePolicy(Policy):
             client_meta = stack.meta() if session.protocol_version is ProtocolVersion.V3 else {}
             self._server_meta, self._client_meta = server_meta, client_meta
             compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
-                server_meta.get(offboard_keys.COMPRESS_IMAGES)
+                server_meta.get(policy_keys.COMPRESS_IMAGES)
             )
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:

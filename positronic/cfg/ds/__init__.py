@@ -60,7 +60,8 @@ def apply_codec(dataset: Dataset, codec):
         positronic-to-lerobot convert \\
           --dataset=@positronic.cfg.ds.apply_codec \\
           --dataset.dataset=.internal.droid \\
-          --dataset.codec=@positronic.vendors.gr00t.codecs.droid \\
+          --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \\
           --output_dir=/data/lerobot_dataset
     """
+    # TODO: Migrate the remaining vendor presets to episode transforms and remove apply_codec.
     return TransformedDataset(dataset, codec.training_encoder)

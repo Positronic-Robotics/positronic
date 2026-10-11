@@ -86,6 +86,32 @@ class UnpackActionChunk(Codec):
         }
 
 
+class JointPositionAction(Codec):
+    """Decode named joint and grip predictions into an absolute robot command."""
+
+    WIRE_NAME = 'joint_position_action'
+
+    def __init__(self, joints_key: str, grip_key: str, num_joints: int = 7):
+        self._joints_key = joints_key
+        self._grip_key = grip_key
+        self._num_joints = num_joints
+
+    def _decode_single(self, data: dict) -> dict:
+        return {
+            keys.ROBOT_COMMAND: command.JointPosition(
+                positions=np.asarray(data[self._joints_key]).reshape(self._num_joints)
+            ),
+            keys.TARGET_GRIP: np.asarray(data[self._grip_key]).item(),
+        }
+
+    def to_spec(self):
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'joints_key': self._joints_key, 'grip_key': self._grip_key, 'num_joints': self._num_joints},
+        }
+
+
 class AbsolutePositionAction(Codec):
     WIRE_NAME = 'absolute_position_action'
 
@@ -263,8 +289,13 @@ class SetControlMode(Codec):
     Composes left of an action decoder (``SetControlMode(mode) | action``).
     """
 
-    def __init__(self, mode: command.ControlModeType):
-        self._mode = mode
+    WIRE_NAME = 'set_control_mode'
+
+    def __init__(self, mode: command.ControlModeType | dict[str, Any]):
+        parsed = command.from_wire(mode) if isinstance(mode, dict) else mode
+        if not isinstance(parsed, command.ControlModeType):
+            raise ValueError('Expected an arm control mode')
+        self._mode = parsed
 
     def encode(self, data):
         return data
@@ -278,3 +309,6 @@ class SetControlMode(Codec):
             if keys.is_robot_command(key) and isinstance(cmd, command.CommandType)
         }
         return {**data, **stamped} if stamped else data
+
+    def to_spec(self):
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mode': command.to_wire(self._mode)}}

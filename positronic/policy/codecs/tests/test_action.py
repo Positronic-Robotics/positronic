@@ -11,7 +11,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation
-from positronic.policy.codecs import ACTION, SetControlMode, UnpackActionChunk
+from positronic.policy.codecs import ACTION, JointPositionAction, SetControlMode, UnpackActionChunk
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
 from positronic.policy.spec import from_spec
 
@@ -103,6 +103,25 @@ def test_unpack_action_chunk_preserves_observations_and_training_columns():
     assert codec.meta == {}
 
 
+@pytest.mark.parametrize('num_joints', [6, 7])
+def test_joint_position_action_preserves_values_and_does_not_threshold_grip(num_joints):
+    codec = JointPositionAction('prediction.joints', 'prediction.grip', num_joints)
+    restored = from_spec(json.loads(json.dumps(codec.to_spec())))
+    assert isinstance(restored, JointPositionAction)
+    positions = np.arange(num_joints, dtype=np.float32)
+    decoded = restored.decode({'prediction.joints': positions, 'prediction.grip': np.array([0.25])})
+    np.testing.assert_array_equal(decoded[obs_keys.ROBOT_COMMAND].positions, positions)
+    assert decoded[obs_keys.ROBOT_COMMAND].positions.dtype == positions.dtype
+    assert decoded[obs_keys.ROBOT_COMMAND].mode is None
+    assert decoded[obs_keys.TARGET_GRIP] == 0.25
+
+
+@pytest.mark.parametrize('joints, grip', [(np.zeros(6), [0]), (np.zeros(7), [0, 1])])
+def test_joint_position_action_requires_the_configured_joint_count_and_one_grip(joints, grip):
+    with pytest.raises(ValueError):
+        JointPositionAction('q', 'g').decode({'q': joints, 'g': grip})
+
+
 def test_absolute_position_action_encode_decode_quat():
     ts = [1000, 2000]
     q = [Rotation.identity for _ in ts]
@@ -153,6 +172,16 @@ IMPEDANCE = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0
 
 
 class TestSetControlMode:
+    def test_wire_description_restores_the_control_mode(self):
+        restored = from_spec(json.loads(json.dumps(SetControlMode(IMPEDANCE).to_spec())))
+        assert isinstance(restored, SetControlMode)
+        decoded = restored.decode({obs_keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7))})
+        assert decoded[obs_keys.ROBOT_COMMAND].mode == IMPEDANCE
+
+    def test_rejects_a_command_as_the_control_mode(self):
+        with pytest.raises(ValueError, match='control mode'):
+            SetControlMode(cmd_module.to_wire(cmd_module.JointPosition(np.zeros(7))))
+
     def test_every_command_in_a_chunk_carries_the_mode(self):
         chunk = [
             {obs_keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7))},

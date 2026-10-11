@@ -44,13 +44,23 @@ EOF
   exit 1
 fi
 
+CONVERT_CONFIG=()
 case "$VENDOR" in
   lerobot_0_3_3) CODEC=positronic.vendors.lerobot_0_3_3.codecs.ee ;;
   lerobot)       CODEC=positronic.vendors.lerobot.codecs.ee ;;
   openpi)        CODEC=positronic.vendors.openpi.codecs.ee ;;
-  gr00t)         CODEC=positronic.vendors.gr00t.codecs.droid ;;
+  gr00t)
+    CONVERT_CONFIG=(
+      --dataset=@positronic.cfg.ds.transform
+      "--dataset.base=${DATASET}"
+      '--dataset.transforms=["@positronic.vendors.gr00t.recipes.droid"]'
+    )
+    ;;
   *) echo "Unknown vendor '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t" >&2; exit 1 ;;
 esac
+if [ "$VENDOR" != "gr00t" ]; then
+  CONVERT_CONFIG=("--dataset.dataset=${DATASET}" "--dataset.codec=@${CODEC}")
+fi
 
 mkdir -p "$LOG_ROOT"
 DATASET_DIR="$S3_BASE/$VENDOR/dataset/"
@@ -81,8 +91,7 @@ wait_job() {
 # ---- 1. Convert (convert.sh openpi additionally chains a stats job) ----
 note "convert -> $DATASET_DIR"
 CONVERT_OUT=$(bash "$SCRIPT_DIR/convert.sh" "$VENDOR" \
-  "--dataset.dataset=${DATASET}" \
-  "--dataset.codec=@${CODEC}" \
+  "${CONVERT_CONFIG[@]}" \
   "--output_dir=${DATASET_DIR}" 2>&1)
 echo "$CONVERT_OUT" >> "$LOG"
 CONVERT_ID=$(extract_job_id "$CONVERT_OUT")

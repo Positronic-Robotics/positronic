@@ -42,6 +42,7 @@ class Codec:
 
     @property
     def training_encoder(self) -> EpisodeTransform:
+        # TODO: Remove this interface and its composition after all model recipes build training independently.
         return Derive()
 
     @property

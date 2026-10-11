@@ -130,12 +130,12 @@ Each model family expects a specific dataset format. `convert.sh` runs the right
 with the right [codec](../../positronic/policy/codecs/README.md) for the model you choose, dispatched by the
 vendor positional:
 
-| Model | `<vendor>` arg | Converter | Codec namespace |
+| Model | `<vendor>` arg | Converter | Codec or training recipe namespace |
 |---|---|---|---|
 | ACT | `lerobot_0_3_3` | `positronic.vendors.lerobot_0_3_3.to_lerobot` | `@positronic.vendors.lerobot_0_3_3.codecs.*` |
 | SmolVLA | `lerobot` | `positronic.vendors.lerobot.to_lerobot` | `@positronic.vendors.lerobot.codecs.*` |
 | OpenPI | `openpi` | `positronic.vendors.lerobot_0_3_3.to_lerobot` (re-used) | `@positronic.vendors.openpi.codecs.*` |
-| GR00T | `gr00t` | `positronic.vendors.lerobot_0_3_3.to_lerobot` (re-used) | `@positronic.vendors.gr00t.codecs.*` |
+| GR00T | `gr00t` | `positronic.vendors.lerobot_0_3_3.to_lerobot` (re-used) | `@positronic.vendors.gr00t.recipes.*` |
 
 The job runs on CPU (`cpu-e2`, `8vcpu-32gb`) — conversion is video-encoding heavy; a GPU would
 be wasted.
@@ -160,8 +160,9 @@ bash workflows/nebius/convert.sh openpi \
   --output_dir=s3://<your-bucket>/sim_stack_cubes_openpi/
 
 bash workflows/nebius/convert.sh gr00t \
-  --dataset.dataset=@positronic.cfg.ds.sim.sim_stack_cubes \
-  --dataset.codec=@positronic.vendors.gr00t.codecs.droid \
+  --dataset=@positronic.cfg.ds.transform \
+  --dataset.base=@positronic.cfg.ds.sim.sim_stack_cubes \
+  --dataset.transforms='["@positronic.vendors.gr00t.recipes.droid"]' \
   --output_dir=s3://<your-bucket>/sim_stack_cubes_gr00t/
 ```
 

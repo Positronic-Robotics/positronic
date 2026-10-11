@@ -285,10 +285,9 @@ cd docker && docker compose run --rm lerobot-convert convert \
   --dataset.codec=@positronic.vendors.lerobot.codecs.ee \
   --output_dir=~/datasets/lerobot/my_task
 
-# ACT, GR00T, OpenPI — use lerobot-0_3_3-convert
+# ACT and OpenPI — use lerobot-0_3_3-convert
 cd docker && for pair in \
   "lerobot_0_3_3.codecs.ee ~/datasets/lerobot_act/my_task" \
-  "gr00t.codecs.droid ~/datasets/groot/my_task" \
   "openpi.codecs.ee ~/datasets/openpi/my_task"; do
   set -- $pair
   docker compose run --rm lerobot-0_3_3-convert convert \
@@ -296,6 +295,14 @@ cd docker && for pair in \
     --dataset.codec=@positronic.vendors.$1 \
     --output_dir=$2
 done
+
+# GR00T uses a model recipe with an independent training pipeline
+cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
+  --dataset=@positronic.cfg.ds.transform \
+  --dataset.base=@positronic.cfg.ds.local \
+  --dataset.base.path=~/datasets/my_task \
+  --dataset.transforms='["@positronic.vendors.gr00t.recipes.droid"]' \
+  --output_dir=~/datasets/groot/my_task
 
 # Train all models (can run in parallel)
 cd docker && docker compose run --rm lerobot-train expert_only --input_path=~/datasets/lerobot/my_task ...

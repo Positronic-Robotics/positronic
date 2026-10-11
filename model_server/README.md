@@ -5,9 +5,9 @@ The wrapper owns transport, sessions, serialization and cleanup. Vendor scripts 
 model directly in the same process and describe the client pipeline as plain data.
 
 ```bash
-uv pip install "positronic-model-server==0.2.0"
-uv pip install "positronic-model-server[websocket]==0.2.0"
-uv pip install "positronic-model-server[grpc]==0.2.0"
+uv pip install "positronic-model-server==0.2.1"
+uv pip install "positronic-model-server[websocket]==0.2.1"
+uv pip install "positronic-model-server[grpc]==0.2.1"
 ```
 
 The core depends on NumPy, Pillow, msgpack and `positronic-wire`'s dependency-free transport
@@ -21,7 +21,6 @@ In a checkout, install the workspace packages together: `uv pip install ./wire .
 This test server returns each observation as a one-element result list:
 
 ```python
-from positronic_model_server import keys
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.spec import component
@@ -37,7 +36,7 @@ class EchoSession(Session):
 
 class EchoModel(Model):
     def __init__(self):
-        super().__init__(parameters={"fps": 20}, metadata={keys.CHECKPOINT_ID: "example"})
+        super().__init__(parameters={"fps": 20}, metadata={"checkpoint_id": "example"})
 
     def prepare_session(self, params):
         if params["fps"] <= 0:
@@ -134,6 +133,13 @@ JSON. `sequence` and `parallel` reject empty compositions. Component names and a
 belong to the client registry; these helpers do not resolve classes or validate model parameters.
 The structural keys (`NAME`, `VERSION`, `ARGS`, `SEQ`, `PAR`) have one definition in `spec`.
 
+The wrapper defines only constants used by its own production code. Vendor settings belong to small
+vendor modules that training and serving can both import; dataset file conventions belong to the
+Positronic exporters and their producers. Client component
+names belong to the client implementations; vendor descriptions spell those names as part of the
+client's wire contract. Validate each description against the real client registry in vendor tests.
+The wrapper forwards model metadata and parameter values without owning their field names.
+
 ## Serialization
 
 ```python
@@ -183,3 +189,9 @@ installed distribution against the per-transport allowlist in
 whether direct or indirect, including dependencies introduced by upstream package updates.
 Transport dependencies must stay optional. Changes to the allowlist require explicit design
 review; do not expand it merely to make CI pass. The dependency check uses only the standard library.
+
+The same check scans every wrapper Python module for module-level constants with no internal use.
+Adding one fails CI, including in a new module. Test/example references and imports or assignments
+that only re-export a constant do not count. Move such definitions to their owning vendor, client or
+legacy protocol module; do not add artificial uses to satisfy the check. Source references establish
+use, while review checks that the behavior itself belongs to the wrapper.

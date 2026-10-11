@@ -5,7 +5,6 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -15,6 +14,7 @@ from positronic.policy.codecs import (
     SetControlMode,
 )
 from positronic.policy.codecs.observation import ObservationCodec
+from positronic.policy.keys import ACTION_FPS
 
 RotRep = geom.Rotation.Representation
 
@@ -87,7 +87,7 @@ def compose(
 ):
     """Data conversions with the sampling cadence recorded in training metadata."""
     result = compose_data(obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame)
-    return Metadata({policy_keys.ACTION_FPS: training_fps}) | result
+    return Metadata({ACTION_FPS: training_fps}) | result
 
 
 @cfn.config(rotation_rep=None, tgt_ee_pose_key=keys.TARGET_EE_POSE, tgt_grip_key=keys.TARGET_GRIP)

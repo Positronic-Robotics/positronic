@@ -24,6 +24,7 @@ from positronic_wire import wire
 from positronic import telemetry
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.spec import Model, PolicyDeployment
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 
 from .protocol import deserialise, serialise
@@ -211,8 +212,8 @@ class PolicyServer:
                 **(pipeline.codec.meta if pipeline.codec is not None else {}),
                 **pipeline.local.meta(),
                 offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
-                offboard_keys.COMPRESS_IMAGES: pipeline.compress_images,
-                offboard_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
+                policy_keys.COMPRESS_IMAGES: pipeline.compress_images,
+                policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
             infer = partial(model, session_id=session_id)
             infer = telemetry.traced(protocol.MODEL_CALL)(infer)

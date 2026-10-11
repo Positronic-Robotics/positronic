@@ -9,6 +9,7 @@ Three solvers for reconstructing joint-space targets from recorded EE targets:
 
 import xml.etree.ElementTree as ET
 from functools import lru_cache, partial
+from typing import Any
 
 import mujoco as mj
 import numpy as np
@@ -18,6 +19,7 @@ from scipy.spatial.transform import Rotation as ScipyRotation
 from positronic import geom
 from positronic.dataset import transforms
 from positronic.dataset.episode import select_timeline
+from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
 
@@ -105,9 +107,19 @@ def frame_transform(urdf_xml: str, from_frame: str, to_frame: str) -> geom.Trans
     return _site_transform(data, from_site).inv * _site_transform(data, to_site)
 
 
-def change_frame(pose_vec, transform: geom.Transform3D) -> np.ndarray:
-    """Recompose a ``[tx,ty,tz,qw,qx,qy,qz]`` pose through ``pose * transform``."""
-    return (geom.Transform3D.from_vector(np.asarray(pose_vec, dtype=np.float64), _QUAT) * transform).as_vector(_QUAT)
+def change_frame(value: Any, transform: geom.Transform3D) -> Any:
+    """Re-express a pose vector or arm command through the given frame transform."""
+    match value:
+        case command.CartesianPosition(pose, mode):
+            return command.CartesianPosition(pose=pose * transform, mode=mode)
+        case command.CartesianDelta(delta, frame, mode):
+            return command.CartesianDelta(delta=delta, frame=transform.inv * frame, mode=mode)
+        case command.JointPosition() | command.JointDelta():
+            return value
+        case _:
+            return (geom.Transform3D.from_vector(np.asarray(value, dtype=np.float64), _QUAT) * transform).as_vector(
+                _QUAT
+            )
 
 
 def assert_default_frame(statics) -> None:

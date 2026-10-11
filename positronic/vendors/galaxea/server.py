@@ -10,7 +10,6 @@ import configuronic as cfn
 import msgpack
 import numpy as np
 import pos3
-from positronic_model_server import keys as offboard_keys
 from positronic_model_server.serialization import serialize
 from websockets.sync.client import ClientConnection, connect
 
@@ -175,7 +174,7 @@ def galaxea_model(
         backend,
         infer_timeout,
         {
-            offboard_keys.CHECKPOINT_ID: protocol.MODEL_ID,
+            policy_keys.CHECKPOINT_ID: protocol.MODEL_ID,
             policy_keys.CHECKPOINT_PATH: checkpoint_path,
             'usage': 'internal non-commercial evaluation only',
         },

@@ -157,16 +157,16 @@ class ObservationCodec(Codec):
         input_key, (width, height) = self._image_configs[out_name]
         return image.resize_with_pad(width, height, signal=episode[input_key])
 
-    def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
+    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 
-        if keys.TASK in inputs:
-            obs[self._task_field] = inputs[keys.TASK]
+        if keys.TASK in data:
+            obs[self._task_field] = data[keys.TASK]
 
         for out_name, (input_key, (width, height)) in self._image_configs.items():
-            if input_key not in inputs:
-                raise KeyError(f"Missing image input '{input_key}' for '{out_name}', available keys: {inputs.keys()}")
-            frame = inputs[input_key]
+            if input_key not in data:
+                raise KeyError(f"Missing image input '{input_key}' for '{out_name}', available keys: {data.keys()}")
+            frame = data[input_key]
             if not isinstance(frame, np.ndarray):
                 frame = np.asarray(frame)
             if frame.ndim != 3 or frame.shape[2] != 3:
@@ -176,9 +176,9 @@ class ObservationCodec(Codec):
         for out_name, feature_names in self._state.items():
             parts = []
             for f in feature_names:
-                if f not in inputs:
-                    raise KeyError(f"Missing state input '{f}' for '{out_name}', available keys: {list(inputs.keys())}")
-                parts.append(np.asarray(inputs[f], dtype=np.float32).reshape(-1))
+                if f not in data:
+                    raise KeyError(f"Missing state input '{f}' for '{out_name}', available keys: {list(data.keys())}")
+                parts.append(np.asarray(data[f], dtype=np.float32).reshape(-1))
             obs[out_name] = np.concatenate(parts) if parts else np.empty((0,), dtype=np.float32)
 
         return obs
