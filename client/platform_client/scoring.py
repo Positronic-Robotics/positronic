@@ -29,8 +29,8 @@ class EpisodeScore(BaseModel):
     success: Share = 1.0
     # The partial scores below apply when the episode did not succeed.
     stage: dict[Slugged[Stage], Share] = {}  # the score of the furthest stage
-    subtask_score: bool = False  # the last subtask score
-    item_share: bool = False  # delivered / total_items
+    use_subtask_score: bool = False  # the last subtask score
+    use_item_share: bool = False  # delivered / total_items
     zero: frozenset[Slugged[Outcome]] = frozenset()  # outcomes that score 0, whatever progress the episode made
 
 
@@ -86,9 +86,9 @@ def episode_score(label: Label, rule: EpisodeScore, time_limit_s: float | None) 
     partial = []
     if label.furthest_stage is not None:
         partial.append(rule.stage.get(label.furthest_stage, 0.0))
-    if rule.subtask_score and label.subtask_score is not None:
+    if rule.use_subtask_score and label.subtask_score is not None:
         partial.append(label.subtask_score)
-    if rule.item_share and label.total_items is not None:
+    if rule.use_item_share and label.total_items is not None:
         partial.append(label.delivered / label.total_items)
     return max(partial, default=0.0)
 

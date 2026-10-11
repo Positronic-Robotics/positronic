@@ -144,9 +144,9 @@ def test_the_largest_partial_score_counts():
         ItemsDelivered(seconds=3.0, delivered=1),
         total_items=2,
     )
-    rule = EpisodeScore(stage={Stage.contact: 0.1}, subtask_score=True, item_share=True)
+    rule = EpisodeScore(stage={Stage.contact: 0.1}, use_subtask_score=True, use_item_share=True)
     assert episode_score(graded, rule, None) == 0.5
-    assert episode_score(graded, EpisodeScore(stage={Stage.contact: 0.1}, subtask_score=True), None) == 0.25
+    assert episode_score(graded, EpisodeScore(stage={Stage.contact: 0.1}, use_subtask_score=True), None) == 0.25
 
 
 def test_a_stage_mark_with_items_scores_its_stage():
