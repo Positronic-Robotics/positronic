@@ -8,7 +8,7 @@
 #       -f docker/Dockerfile.serve-gr00t-n17-droid -t docker.io/<you>/gr00t-n17-droid:v1 --push .
 #   docker run --rm --network none docker.io/<you>/gr00t-n17-droid:v1        # the offline pre-flight
 #
-# The adapter and weights use `COPY --link`. An adapter-only change builds one layer without pulling cached layers.
+# Source and weights use `COPY --link`; source edits reuse the dependency and weight layers.
 #
 # The Hugging Face token is for `nvidia/Cosmos-Reason2-2B`, the backbone every N1.7 checkpoint
 # loads: the repository is gated, and NVIDIA grants access on the form. The token enters no layer.
@@ -47,12 +47,17 @@ ENV HF_HOME=/opt/hf \
     UV_LINK_MODE=copy \
     UV_HTTP_TIMEOUT=600
 
-COPY wire /opt/positronic-packages/wire
-COPY model_server /opt/positronic-packages/model_server
+# Package metadata and source import paths do not depend on Python source files.
+COPY wire/pyproject.toml wire/README.md /opt/positronic-packages/wire/
+COPY wire/positronic_wire/py.typed /opt/positronic-packages/wire/positronic_wire/
+COPY model_server/pyproject.toml model_server/README.md /opt/positronic-packages/model_server/
+COPY model_server/positronic_model_server/py.typed /opt/positronic-packages/model_server/positronic_model_server/
 COPY docker/install-gr00t-server.sh /opt/positronic-packages/install-gr00t-server.sh
 RUN bash /opt/positronic-packages/install-gr00t-server.sh
 
 WORKDIR /opt/positronic-vendors
+COPY --link wire/positronic_wire /opt/positronic-packages/wire/positronic_wire
+COPY --link model_server/positronic_model_server /opt/positronic-packages/model_server/positronic_model_server
 COPY --link positronic/vendors/gr00t/serving /opt/positronic-vendors/gr00t_serving
 
 # GROOT_PATCH_MISTRAL: transformers asks the Hub about the backbone's tokenizer on every load, with

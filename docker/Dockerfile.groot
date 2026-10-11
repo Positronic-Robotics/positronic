@@ -1,17 +1,23 @@
+# syntax=docker/dockerfile:1.7
 ARG BASE_IMAGE=positro/gr00t-base:latest
 FROM ${BASE_IMAGE}
 
-COPY wire /opt/positronic-packages/wire
-COPY model_server /opt/positronic-packages/model_server
+RUN apt-get update && apt-get install -y --no-install-recommends libturbojpeg && rm -rf /var/lib/apt/lists/*
+
+# Package metadata and source import paths do not depend on Python source files.
+COPY wire/pyproject.toml wire/README.md /opt/positronic-packages/wire/
+COPY wire/positronic_wire/py.typed /opt/positronic-packages/wire/positronic_wire/
+COPY model_server/pyproject.toml model_server/README.md /opt/positronic-packages/model_server/
+COPY model_server/positronic_model_server/py.typed /opt/positronic-packages/model_server/positronic_model_server/
 COPY docker/install-gr00t-server.sh /opt/positronic-packages/install-gr00t-server.sh
 RUN bash /opt/positronic-packages/install-gr00t-server.sh
 
 WORKDIR /positronic
 
-RUN apt-get update && apt-get install -y --no-install-recommends libturbojpeg && rm -rf /var/lib/apt/lists/*
-
-COPY . /positronic
-COPY positronic/vendors/gr00t/serving /opt/positronic-vendors/gr00t_serving
+COPY --link . /positronic
+COPY --link wire/positronic_wire /opt/positronic-packages/wire/positronic_wire
+COPY --link model_server/positronic_model_server /opt/positronic-packages/model_server/positronic_model_server
+COPY --link positronic/vendors/gr00t/serving /opt/positronic-vendors/gr00t_serving
 
 ENV PYTHONPATH=/positronic:/gr00t
 
