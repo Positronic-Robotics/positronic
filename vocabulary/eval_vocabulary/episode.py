@@ -1,6 +1,7 @@
 """Where an episode records its statics, its meta and its signals, and the names that a labeler reads there.
 
-The dataset writer imports these names, and a test pins pimm's `EMITTED_WORLD` to the one here.
+The dataset writer imports these names, so it and a labeler cannot disagree. `EMITTED_WORLD` must equal pimm's name
+for the emitted world timeline.
 """
 
 # The file in an episode's directory that holds its statics as one JSON object.

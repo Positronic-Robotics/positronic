@@ -58,7 +58,7 @@ SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'molmo_sweep').g
 CUP = 'pick up the cup.'
 UID_OF_EPISODE = 'b9887e3fe4e44d0b6b872132588b034b'
 
-# The proposal's example: three cubes go into a bowl, and the second trip carries two cubes at once.
+# Three cubes go into a bowl, and the second trip carries two cubes at once.
 CUBES = Label(
     uid=UID_OF_EPISODE,
     task='cubes-to-bowl',
