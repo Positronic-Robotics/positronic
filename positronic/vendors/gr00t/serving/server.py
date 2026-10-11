@@ -126,7 +126,7 @@ class Gr00tModel(Model):
     ):
         self._policy = policy
         self._settings = json.loads(json.dumps(settings, allow_nan=False))
-        action_horizon = self._validate_modalities()
+        action_horizon = self._validated_action_horizon()
         super().__init__(
             parameters={
                 keys.FPS: settings[model_settings.ACTION_FPS] if fps is None else fps,
@@ -158,7 +158,7 @@ class Gr00tModel(Model):
         policy.reset()
         logger.info('GR00T model is warm')
 
-    def _validate_modalities(self) -> int:
+    def _validated_action_horizon(self) -> int:
         modalities = self._policy.get_modality_config()
         for name, expected in ((VIDEO, set(self._settings[model_settings.IMAGE_MAPPINGS])), (STATE, set(STATE_DIMS))):
             config = modalities[name]
