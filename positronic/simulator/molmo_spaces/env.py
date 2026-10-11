@@ -45,7 +45,7 @@ import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
-from pydantic import BaseModel, ConfigDict  # noqa: E402
+from pydantic import BaseModel, ConfigDict, TypeAdapter  # noqa: E402
 from server import EnvProtocol, EnvServer  # noqa: E402
 
 # Loading the runner first avoids a circular import in json_eval_task_sampler.
@@ -335,50 +335,56 @@ def _parse_episodes(text: str) -> list[int]:
     return indices
 
 
-class RightViewCheck(BaseModel):
-    """One sweep line: what hides the start grasp site from the right shoulder camera, if anything."""
+class RightViewResult(BaseModel):
+    """A sweep line for a checked episode: what hides the start grasp site from the right shoulder camera."""
 
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='forbid')
 
     bench: str
     episode: int
-    right_blocked: bool | None = None
-    blocker: str | None = None
-    error: str | None = None  # Why the episode failed to build or reset.
-
-    @property
-    def clean(self) -> bool:
-        return self.error is None and self.right_blocked is not None
+    blocker: str | None  # None when nothing hides the grasp site.
 
 
-def _check_right_view(env: MolmoSpacesEnv, bench: mapping.BenchmarkPath, index: int) -> RightViewCheck:
+class RightViewFailure(BaseModel):
+    """A sweep line for an episode whose build or reset raised ``error``."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    bench: str
+    episode: int
+    error: str
+
+
+def _check_right_view(
+    env: MolmoSpacesEnv, bench: mapping.BenchmarkPath, index: int
+) -> RightViewResult | RightViewFailure:
     rel = bench.relative.as_posix()
     try:  # rules-allow: swallowed-error — one failed reset must not end the sweep; the check records the error
         frame = env.reset({**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: index, mapping.TOKEN_SEED: None})
         height, width = frame[protocol.FRAME_OBS][mapping.RIGHT_SHOULDER_CAMERA].shape[:2]
         blocker = env.right_view_blocker(width / height)
     except Exception as error:
-        return RightViewCheck(bench=rel, episode=index, error=repr(error))
-    return RightViewCheck(bench=rel, episode=index, right_blocked=blocker is not None, blocker=blocker)
+        return RightViewFailure(bench=rel, episode=index, error=repr(error))
+    return RightViewResult(bench=rel, episode=index, blocker=blocker)
 
 
 def sweep_right_view(env: MolmoSpacesEnv, cases: list[str], progress: Path, blocked_list: Path) -> None:
     """Check the right view on each episode of ``cases``, then record the blocked episodes of each swept benchmark.
 
     A case is a benchmark path with an optional ``:EPISODES`` list. ``progress`` holds one JSON line per check; a
-    rerun skips an episode whose last line is clean. A benchmark whose episodes all have a clean line gets its entry
+    rerun skips an episode whose last line is a result. A benchmark whose episodes all have a result gets its entry
     in ``blocked_list``.
     """
+    parse_line = TypeAdapter(RightViewResult | RightViewFailure).validate_json
     lines = progress.read_text().splitlines() if progress.exists() else []
-    last = {(c.bench, c.episode): c for c in map(RightViewCheck.model_validate_json, lines)}
+    last = {(c.bench, c.episode): c for c in map(parse_line, lines)}
     counts = {}
     for case in cases:
         rel, _, episodes = case.partition(':')
         bench = mapping.BenchmarkPath.parse(rel)
         counts[bench] = env.episode_count(bench)
         for index in _parse_episodes(episodes) if episodes else range(counts[bench]):
-            done = last.get((rel, index))
-            if done is not None and done.clean:
+            if isinstance(last.get((rel, index)), RightViewResult):
                 continue
             check = _check_right_view(env, bench, index)
             last[rel, index] = check
@@ -388,8 +394,9 @@ def sweep_right_view(env: MolmoSpacesEnv, cases: list[str], progress: Path, bloc
     swept = {}
     for bench, count in counts.items():
         checks = [last.get((bench.relative.as_posix(), i)) for i in range(count)]
-        if all(c is not None and c.clean for c in checks):
-            swept[bench] = [c.episode for c in checks if c is not None and c.right_blocked]
+        results = [c for c in checks if isinstance(c, RightViewResult)]
+        if len(results) == count:
+            swept[bench] = [c.episode for c in results if c.blocker is not None]
             print(f'{bench.relative}: {len(swept[bench])} of {count} blocked: {swept[bench]}', flush=True)
     if swept:
         mapping.write_right_view_blocked(swept, blocked_list)

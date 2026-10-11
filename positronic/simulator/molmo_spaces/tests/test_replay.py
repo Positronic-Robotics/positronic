@@ -117,6 +117,6 @@ def test_the_sweep_flags_a_wall_hiding_the_grasp_site_and_clears_an_open_view(tm
     command = [str(launcher.ensure_molmo_venv()), str(Path(mapping.__file__).parent / 'env.py'), *sweep]
     subprocess.run([*command, '--blocked-list', str(blocked_list)], env=launcher.molmo_subprocess_env(), check=True)
     checks = {line['episode']: line for line in map(json.loads, progress.read_text().splitlines())}
-    assert checks[0]['right_blocked'] is False
-    assert checks[6]['right_blocked'] is True and checks[6]['blocker'].startswith('wall')
+    assert checks[0] == {'bench': _PICK_BOARD.relative.as_posix(), 'episode': 0, 'blocker': None}
+    assert checks[6].keys() == checks[0].keys() and checks[6]['blocker'].startswith('wall')
     assert not blocked_list.exists()  # Two of the benchmark's episodes do not sweep it.
