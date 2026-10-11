@@ -25,19 +25,20 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 from positronic.vendors.lerobot.to_lerobot import EpisodeDictDataset, append_data_to_dataset  # noqa: E402
 
 
-@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECORDED_TIME])
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
 def test_export_keeps_actions_and_observations_aligned_on_the_recording_clock(tmp_path, timeline):
     source = tmp_path / 'source'
     with LocalDatasetWriter(source) as dataset, dataset.new_episode() as writer:
         for i in range(1, 4):
             received = i * 100_000_000
             emitted = received + 10_000_000
-            writer.append(
-                keys.JOINTS,
-                np.array([i]),
-                Time(**{EMITTED_WORLD: received - 10_000_000, RECEIVED_WORLD: received, timeline: received}),
-            )
-            time = Time(**{EMITTED_WORLD: emitted, timeline: emitted})
+            state_time = {timeline: received}
+            command_time = {timeline: emitted}
+            if timeline != RECORDED_TIME:
+                state_time.update({EMITTED_WORLD: received - 10_000_000, RECEIVED_WORLD: received})
+                command_time[EMITTED_WORLD] = emitted
+            writer.append(keys.JOINTS, np.array([i]), Time(**state_time))
+            time = Time(**command_time)
             writer.append(keys.TARGET_JOINTS, np.array([i * 10]), time)
             writer.append(keys.TARGET_GRIP, i / 10, time)
     codec = ObservationCodec(state={'state': {keys.JOINTS: 1}}, images={}) & AbsoluteJointsAction(
@@ -61,10 +62,14 @@ def test_export_keeps_actions_and_observations_aligned_on_the_recording_clock(tm
         np.testing.assert_array_equal(loaded[index]['state'].numpy(), rows['state'][index])
 
 
-def test_export_prefers_harness_time_when_both_timelines_exist(tmp_path):
+@pytest.mark.parametrize(
+    ('preferred', 'other'),
+    [(HARNESS_WORLD, RECEIVED_WORLD), (HARNESS_WORLD, RECORDED_TIME), (RECEIVED_WORLD, RECORDED_TIME)],
+)
+def test_export_uses_the_preferred_clock(tmp_path, preferred, other):
     with LocalDatasetWriter(tmp_path) as dataset, dataset.new_episode() as writer:
         for i in range(3):
-            writer.append('value', i, Time(**{HARNESS_WORLD: i * 100_000_000, RECORDED_TIME: i * 1_000_000_000}))
+            writer.append('value', i, Time(**{preferred: i * 100_000_000, other: i * 1_000_000_000}))
     rows = EpisodeDictDataset(LocalDataset(tmp_path), fps=20)[0]
     np.testing.assert_array_equal(rows['value'], [0, 0, 1, 1])
 

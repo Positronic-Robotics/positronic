@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
+from pimm.time import RECEIVED_WORLD
 from positronic import geom, keys
 from positronic.dataset import transforms
 from positronic.dataset.episode import Episode
@@ -112,7 +113,9 @@ class AbsolutePositionAction(Codec):
         pose = episode[self.tgt_ee_pose_key]
         pose = transforms.recode_transform(RotRep.QUAT, self.rot_rep, pose)
         grip = episode[self.tgt_grip_key]
-        timeline = HARNESS_WORLD if HARNESS_WORLD in pose.timelines + grip.timelines else RECORDED_TIME
+        timelines = pose.timelines + grip.timelines
+        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
         return transforms.concat(pose, grip, dtype=np.float32, timelines=(timeline,))
 
     @property
@@ -155,7 +158,9 @@ class AbsoluteJointsAction(Codec):
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         joints, grip = episode[self.tgt_joints_key], episode[self.tgt_grip_key]
-        timeline = HARNESS_WORLD if HARNESS_WORLD in joints.timelines + grip.timelines else RECORDED_TIME
+        timelines = joints.timelines + grip.timelines
+        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
         return transforms.concat(joints, grip, dtype=np.float32, timelines=(timeline,))
 
     @property

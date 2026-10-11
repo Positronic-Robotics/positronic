@@ -21,25 +21,26 @@ from positronic.policy.spec import from_spec
 
 
 @pytest.mark.parametrize('positions', [False, True])
-def test_training_rows_align_observation_receipt_with_command_emission(positions):
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD])
+def test_training_rows_align_observations_and_commands_on_the_recording_clock(positions, timeline):
     pose = np.array([1, 2, 3, 0, 0, 0, 1], dtype=np.float32)
     target = obs_keys.TARGET_EE_POSE if positions else obs_keys.TARGET_JOINTS
     commands = [pose] * 3 if positions else [np.array([10]), np.array([20]), np.array([30])]
     episode = EpisodeContainer({
         obs_keys.JOINTS: DummySignal(
-            [[90, 100, 100, 1000], [190, 200, 200, 2000], [290, 300, 300, 3000]],
+            [[90, 100, 1000], [190, 200, 2000], [290, 300, 3000]],
             [[1], [2], [3]],
-            timelines=(EMITTED_WORLD, RECEIVED_WORLD, HARNESS_WORLD, RECORDED_TIME),
+            timelines=(EMITTED_WORLD, timeline, RECORDED_TIME),
         ),
         target: DummySignal(
             [[110, 110, 1000], [210, 210, 2000], [310, 310, 3000]],
             commands,
-            timelines=(EMITTED_WORLD, HARNESS_WORLD, RECORDED_TIME),
+            timelines=(EMITTED_WORLD, timeline, RECORDED_TIME),
         ),
         obs_keys.TARGET_GRIP: DummySignal(
             [[110, 110, 1000], [210, 210, 2000], [310, 310, 3000]],
             [0.1, 0.2, 0.3],
-            timelines=(EMITTED_WORLD, HARNESS_WORLD, RECORDED_TIME),
+            timelines=(EMITTED_WORLD, timeline, RECORDED_TIME),
         ),
     })
     observation = ObservationCodec(state={'state': {obs_keys.JOINTS: 1}}, images={})
@@ -49,7 +50,7 @@ def test_training_rows_align_observation_receipt_with_command_emission(positions
         else AbsoluteJointsAction(target, obs_keys.TARGET_GRIP, num_joints=1)
     )
     encoded = (observation & action).training_encoder(episode)
-    rows = encoded.time[[Time(**{HARNESS_WORLD: ts}) for ts in (110, 160, 210, 260)]]
+    rows = encoded.time[[Time(**{timeline: ts}) for ts in (110, 160, 210, 260)]]
     np.testing.assert_array_equal(rows['state'], [[1], [1], [2], [2]])
     np.testing.assert_allclose(np.asarray(rows[ACTION])[:, -1], [0.1, 0.1, 0.2, 0.2])
     if not positions:

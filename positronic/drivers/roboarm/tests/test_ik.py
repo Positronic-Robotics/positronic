@@ -5,9 +5,12 @@ import mujoco as mj
 import numpy as np
 import pytest
 
+from pimm.time import RECEIVED_WORLD
 from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import (
     DLSIKSolver,
@@ -102,7 +105,8 @@ def test_lm_solver(q_target):
     _assert_fk_matches(solver, q_start, target_pose)
 
 
-def test_ik_joints_from_episode():
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+def test_ik_joints_from_episode(timeline):
     n_steps = 5
     ts = np.arange(n_steps, dtype=np.int64) * 100_000_000  # 100ms apart
 
@@ -112,8 +116,8 @@ def test_ik_joints_from_episode():
 
     episode = EpisodeContainer(
         data={
-            keys.JOINTS: DummySignal(ts, q_traj),
-            keys.TARGET_EE_POSE: DummySignal(ts, ee_poses),
+            keys.JOINTS: DummySignal(ts, q_traj, timelines=(timeline,)),
+            keys.TARGET_EE_POSE: DummySignal(ts, ee_poses, timelines=(timeline,)),
             roboarm_keys.URDF: PANDA_URDF,
             roboarm_keys.JOINT_NAMES: PANDA_JOINTS,
             roboarm_keys.CONTROL_FRAME: PANDA_FRAME,
@@ -122,6 +126,7 @@ def test_ik_joints_from_episode():
     result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
 
     assert len(result) == n_steps
+    assert result.timelines == (timeline,)
     for i in range(n_steps):
         reconstructed_pose = _fk(PANDA_URDF, result[i][0])
         np.testing.assert_allclose(reconstructed_pose[:3], ee_poses[i, :3], atol=1e-3)

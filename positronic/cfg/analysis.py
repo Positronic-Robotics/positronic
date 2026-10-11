@@ -9,6 +9,7 @@ from positronic_model_server import keys as offboard_keys
 
 import positronic.cfg.ds as base_cfg
 from pimm.logging import init_logging
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.cfg.ds import internal
 from positronic.cfg.eval.real import tasks
@@ -128,7 +129,10 @@ def uph(ep: Episode) -> float | None:
     u = units(ep)
     if not u:
         return None
-    first, last = ep.bounds(HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME)
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    first, last = ep.bounds(timeline)
     return u / ((last - first) / 1e9 / 3600)
 
 
@@ -162,7 +166,10 @@ def unified_uph(ep: Episode) -> float | None:
         items = ep['eval.successful_items']
         if items == 0:
             return None
-        first, last = ep.bounds(HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME)
+        timelines = ep.timelines
+        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+        first, last = ep.bounds(timeline)
         return items / ((last - first) / 1e9 / 3600)
     if 'stacking_success' in ep:
         t = success_time(ep)
@@ -228,12 +235,13 @@ def episodes_table():
 def checkpoint_table():
     def group_fn(episodes: list[Episode]):
         count = len(episodes)
-        total_duration = sum(
-            (last - first) / 1e9
-            for first, last in (
-                ep.bounds(HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME) for ep in episodes
-            )
-        )
+        total_duration = 0.0
+        for ep in episodes:
+            timelines = ep.timelines
+            # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+            timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+            first, last = ep.bounds(timeline)
+            total_duration += (last - first) / 1e9
 
         if 'stacking_success' in episodes[0]:
             successful_count = sum(1 for ep in episodes if success(ep))
@@ -300,7 +308,10 @@ def success(episode: Episode, score_threshold: float = 0.95) -> bool:
 
     in_success = False
     success_start_ts = None
-    timeline = HARNESS_WORLD if HARNESS_WORLD in success_signal.timelines else RECORDED_TIME
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next(
+        (name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in success_signal.timelines), RECORDED_TIME
+    )
 
     for value, timestamps in success_signal:
         timestamp = timestamps[timeline]
@@ -328,7 +339,10 @@ def success_time(episode: Episode, score_threshold: float = 0.95) -> float | Non
     threshold_ns = int(0.25 * 1e9)  # 0.25 seconds in nanoseconds
     in_success = False
     success_start_ts = None
-    timeline = HARNESS_WORLD if HARNESS_WORLD in success_signal.timelines else RECORDED_TIME
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next(
+        (name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in success_signal.timelines), RECORDED_TIME
+    )
 
     for value, timestamps in success_signal:
         timestamp = timestamps[timeline]
@@ -435,7 +449,10 @@ def _effective_duration(key: str, ep: Episode) -> float:
     t = ep.get(key)
     if t is not None:
         return t
-    first, last = ep.bounds(HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME)
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    first, last = ep.bounds(timeline)
     return (last - first) / 1e9
 
 
@@ -527,7 +544,9 @@ def calculate_units(episode: Episode) -> int:  # noqa: C901
     pose_sig = episode.signals[keys.EE_POSE]
 
     # Sample signals at 10Hz to reduce noise and computation
-    timeline = HARNESS_WORLD if HARNESS_WORLD in episode.timelines else RECORDED_TIME
+    timelines = episode.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
     first, last = episode.bounds(timeline)
     times = [Time(**{timeline: t}) for t in range(first, last, int(1e8))]
     if len(times) == 0:
@@ -624,7 +643,9 @@ def phail_uph(ep: Episode) -> float | None:
     items = ep.get('eval.successful_items', 0)
     if not items:
         return None
-    timeline = HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
     duration = ep.get('eval.duration') or (ep.bounds(timeline).finish - ep.bounds(timeline).start) / 1e9
     if not duration:
         return None
@@ -689,7 +710,10 @@ phail_inference = base_cfg.transform.override(
 def _baseline_uph(ep: Episode, items: int) -> float | None:
     if not items:
         return None
-    first, last = ep.bounds(HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME)
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    first, last = ep.bounds(timeline)
     return items / ((last - first) / 1e9 / 3600)
 
 

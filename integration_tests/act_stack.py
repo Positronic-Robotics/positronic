@@ -127,6 +127,7 @@ def cube_trace(
 
 def read_trace(episode: Episode) -> dict[str, np.ndarray]:
     timelines = episode.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
     timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
     trace = cube_trace(episode, timeline)
     start = episode.bounds(timeline).start

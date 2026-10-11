@@ -101,6 +101,7 @@ def _duration(ep: Episode) -> float:
     if duration := ep.get('eval.duration'):
         return duration
     timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
     timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
     first, last = ep.bounds(timeline)
     return (last - first) / 1e9

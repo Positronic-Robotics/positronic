@@ -163,7 +163,7 @@ def test_observation_encode_missing_state_inputs_raise():
         enc.encode({})
 
 
-@pytest.mark.parametrize('axis', [HARNESS_WORLD, RECORDED_TIME])
+@pytest.mark.parametrize('axis', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
 def test_training_observations_align_on_the_recording_clock(axis):
     episode = EpisodeContainer({
         'a': DummySignal([[0, 100], [10, 200]], [[1], [2]], timelines=(axis, RECEIVED_WALL)),
@@ -176,32 +176,37 @@ def test_training_observations_align_on_the_recording_clock(axis):
     np.testing.assert_array_equal(state.values(), [[1, 3], [2, 4]])
 
 
-def test_training_observations_require_harness_time_for_each_input_when_present():
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD])
+def test_training_observations_require_the_selected_clock_for_each_input(timeline):
     episode = EpisodeContainer({
-        'a': DummySignal([[0, 100], [10, 200]], [[1], [2]], timelines=(HARNESS_WORLD, RECORDED_TIME)),
+        'a': DummySignal([[0, 100], [10, 200]], [[1], [2]], timelines=(timeline, RECORDED_TIME)),
         'b': DummySignal([100, 200], [[3], [4]], timelines=(RECORDED_TIME,)),
     })
     codec = ObservationCodec(state={'state': {'a': 1, 'b': 1}}, images={})
     with pytest.raises(ValueError, match='Failed to apply transform') as error:
         codec.training_encoder(episode)['state']
     assert isinstance(error.value.__cause__, KeyError)
-    assert error.value.__cause__.args == (HARNESS_WORLD,)
+    assert error.value.__cause__.args == (timeline,)
 
 
-def test_training_observations_prefer_harness_time_over_recorded_time():
+@pytest.mark.parametrize(
+    ('preferred', 'other'),
+    [(HARNESS_WORLD, RECEIVED_WORLD), (HARNESS_WORLD, RECORDED_TIME), (RECEIVED_WORLD, RECORDED_TIME)],
+)
+def test_training_observations_use_the_preferred_clock(preferred, other):
     episode = EpisodeContainer({
-        'a': DummySignal([[0, 100], [10, 200]], [[1], [2]], timelines=(HARNESS_WORLD, RECORDED_TIME)),
-        'b': DummySignal([[0, 150], [10, 250]], [[3], [4]], timelines=(HARNESS_WORLD, RECORDED_TIME)),
+        'a': DummySignal([[0, 100], [10, 200]], [[1], [2]], timelines=(preferred, other)),
+        'b': DummySignal([[0, 150], [10, 250]], [[3], [4]], timelines=(preferred, other)),
     })
     codec = ObservationCodec(state={'state': {'a': 1, 'b': 1}}, images={})
     state = codec.training_encoder(episode)['state']
-    assert state.timelines == (HARNESS_WORLD,)
-    assert list(state.timestamps(HARNESS_WORLD)) == [0, 10]
+    assert state.timelines == (preferred,)
+    assert list(state.timestamps(preferred)) == [0, 10]
     np.testing.assert_array_equal(state.values(), [[1, 3], [2, 4]])
 
 
-def test_training_observations_do_not_fall_back_to_receipt_time():
-    episode = EpisodeContainer({'a': DummySignal([0, 10], [[1], [2]], timelines=(RECEIVED_WORLD,))})
+def test_training_observations_do_not_select_arbitrary_clocks():
+    episode = EpisodeContainer({'a': DummySignal([0, 10], [[1], [2]], timelines=('device.clock',))})
     codec = ObservationCodec(state={'state': {'a': 1}}, images={})
     with pytest.raises(ValueError, match='Failed to apply transform') as error:
         codec.training_encoder(episode)['state']
