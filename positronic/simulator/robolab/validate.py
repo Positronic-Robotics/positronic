@@ -18,7 +18,8 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
 - ``cartesian_delta``: solves to the same joint targets as the equivalent absolute command, and the composed
   target tracks end-to-end;
 - with ``--num-envs`` above one, the batch: every clone answers its own frame and takes its own command, a
-  clone with no command holds, and a clone still makes subtask progress after another clone ends its episode.
+  clone with no command holds, a clone still makes subtask progress after another clone ends its episode, and a
+  one-scene recorded state restores into every clone.
 
 The transform checks all drive a single clone, whatever ``--num-envs`` asks for; the batch check builds its
 own env, because a clone count is fixed at ``create_env``.
@@ -31,6 +32,7 @@ Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLaunc
 
 import math
 import sys
+from typing import Any
 
 import keys
 import numpy as np
@@ -331,6 +333,23 @@ def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
     print(f'  batch: OK (clone 0 ended first; clone 1 reached subtask score {best_score:.2f} after it)')
 
 
+def _first_clone(state: Any) -> Any:
+    """Clone 0's rows of a scene state tree, shaped as a one-scene recording holds them."""
+    if isinstance(state, dict):
+        return {key: _first_clone(value) for key, value in state.items()}
+    return state[:1].cpu().numpy()
+
+
+def _check_a_recorded_state_reaches_every_clone(env: RobolabEnv) -> None:
+    """A reset with a one-scene recorded state restores that state into every clone."""
+    recorded = _first_clone(env._env.scene.get_state(is_relative=True))
+    env.reset({**_TOKEN, 'state': recorded})
+    joints = env._env.scene.get_state(is_relative=True)['articulation']['robot']['joint_position'].cpu().numpy()
+    err = float(np.max(np.abs(joints - recorded['articulation']['robot']['joint_position'])))
+    assert err < 1e-5, f'a recorded state reached the clones {err:.6f} rad off its joints'
+    print(f'  batch: OK (a recorded state restores into all {env.num_slots} clones)')
+
+
 def _check_batch(num_envs: int) -> None:
     """Every clone answers its own frame and takes the command addressed to it.
 
@@ -369,6 +388,7 @@ def _check_batch(num_envs: int) -> None:
         assert nearest == slot, f'slot {slot} answered the joints of clone {nearest}'
     print(f'  batch: OK ({num_envs} clones answer their own frames, take their own commands, and hold without one)')
     _check_a_clone_that_ends_first(env)
+    _check_a_recorded_state_reaches_every_clone(env)
     env.close()
 
 

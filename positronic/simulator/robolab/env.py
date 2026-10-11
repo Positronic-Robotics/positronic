@@ -423,9 +423,12 @@ class RobolabEnv(EnvProtocol):
         return vec[:3], quat_from_matrix(vec[3:].reshape(1, 3, 3)).squeeze(0)
 
     def _merged_state(self, base: Any, overlay: Any) -> Any:
-        """The scene's live state tree with the recording's entries written over it, as device tensors."""
+        """The scene's live state tree with the recording's entries written over it, as device tensors.
+
+        A recording holds one scene, so each recorded leaf is copied into the row of every clone.
+        """
         if not isinstance(base, dict):
-            return torch.as_tensor(overlay, dtype=base.dtype, device=self._env.device)
+            return torch.as_tensor(overlay, dtype=base.dtype, device=self._env.device).expand_as(base).clone()
         return {
             key: self._merged_state(value, overlay[key]) if key in overlay else value for key, value in base.items()
         }
