@@ -94,7 +94,7 @@ def wire_embodiment(
 
     for name, source in privileged.items():
         world.connect(source, harness.privileged[name])
-    # The harness records a privileged value unchanged, so the receiver applies a read-back's serializer.
+    # The receiver applies a read-back's serializer: the harness records a privileged value unchanged.
     for name, readback in embodiment.readbacks.items():
         serialize = pimm.map(readback.serializer) if readback.serializer is not None else identity
         world.connect(readback.source, harness.privileged[name], receiver_wrapper=serialize)

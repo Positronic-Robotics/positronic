@@ -120,12 +120,15 @@ def run_world(
     An attended run and an unattended one differ only by their driver: any control system with a ``perform_task``
     caller — a plan walked to its end, a person at a keyboard, a console of somebody's own. The driver reads what it
     decides from itself, so the runner wires nothing of it but that call. ``record`` off disables recording and
-    leaves privileged sources disconnected. Each rollout names its output path, or ``None`` to write nothing.
+    leaves the privileged sources and the embodiment's read-backs disconnected. Each rollout names its output path, or
+    ``None`` to write nothing.
     ``done`` ends an episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
     """
     privileged = (privileged or {}) if record else {}
     if record:
         embodiment.video_encoder.ensure_available()
+    else:
+        embodiment = replace(embodiment, readbacks={})
     harness = Harness(embodiment, record=record)
     with pimm.World(virtual_time=embodiment.simulated) as world:
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged, done=done)

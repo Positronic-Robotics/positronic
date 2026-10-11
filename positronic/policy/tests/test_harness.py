@@ -1752,12 +1752,44 @@ def test_a_readback_records_each_entry_its_serializer_expands_and_never_reaches_
             world.request_stop()
             list(loop)
     episode = LocalDataset(tmp_path)[0]
-    exposure = episode['camera_state.camera.exposure']
+    exposure_signal = f'{camera_state}.exposure'
+    exposure = episode[exposure_signal]
     positions = episode[POSITION]
     assert list(exposure.values()) == list(positions.values())
     assert list(exposure.timestamps(HARNESS_WORLD)) == list(positions.timestamps(HARNESS_WORLD))
     assert observations
-    assert all(camera_state not in obs and 'camera_state.camera.exposure' not in obs for obs in observations)
+    assert camera_state == 'camera_state.camera'
+    assert all(camera_state not in obs and exposure_signal not in obs for obs in observations)
+
+
+class ReadbackProbe(pimm.ControlSystem):
+    """A driver that asks for no task: it notes how many receivers its read-back reaches, then ends the run."""
+
+    def __init__(self):
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self.state = pimm.ControlSystemEmitter[int](self)
+        self.receivers: int | None = None
+
+    def run(self, should_stop, clock):
+        self.receivers = self.state.num_bound
+        yield pimm.Sleep(0.001)
+
+
+@pytest.mark.parametrize('record', [True, False])
+def test_a_run_connects_the_readbacks_only_when_it_records(record):
+    probe = ReadbackProbe()
+    embodiment = Embodiment(
+        descriptor='readback-test',
+        observations={},
+        commands={},
+        prepare_handlers={},
+        static_meta={},
+        meta_source=None,
+        simulated=True,
+        readbacks={keys.camera_state(f'{keys.IMAGE_PREFIX}{CAMERA}'): Observation(probe.state, None)},
+    )
+    run_world(embodiment, probe, record=record)
+    assert probe.receivers == (1 if record else 0)
 
 
 @pytest.mark.parametrize('name', [POSITION, MOTOR, GROUND_TRUTH])
