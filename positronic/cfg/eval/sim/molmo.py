@@ -11,7 +11,7 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
-from positronic.simulator.molmo_spaces.adapter import SHOULDER_CAMERAS, MolmoAdapter, camera_dict
+from positronic.simulator.molmo_spaces.adapter import MolmoAdapter, ShoulderSide, camera_dict
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
 # Margin for the harness to observe the simulator's terminal signal.
@@ -52,7 +52,7 @@ def benchmarks(
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
     if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
         raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
-    exterior_sides = random.Random(seed).sample(sorted(SHOULDER_CAMERAS), 2)
+    exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2)
     cameras = camera_dict(exterior_sides)
     proxy = RemoteEnvControlSystem(MolmoAdapter(cameras), serve_molmo_spaces())
     embodiment = remote_embodiment(
@@ -74,7 +74,7 @@ def benchmarks(
         for params in proxy.tasks(selection):
             deadline = timeout if timeout is not None else params[molmo_keys.TASK_HORIZON] + _TIMEOUT_MARGIN_SEC
             task = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=deadline)
-            scene = {**params, molmo_keys.EXTERIOR_SIDES: exterior_sides}
+            scene = {**params, molmo_keys.EXTERIOR_SIDES: [side.value for side in exterior_sides]}
             trials += [
                 (task, {**scene, **({eval_keys.SEED: seed + t} if seed is not None else {})})
                 for t in range(trial_count)

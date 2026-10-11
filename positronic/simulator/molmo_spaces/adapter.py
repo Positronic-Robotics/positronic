@@ -1,6 +1,7 @@
 """Client-side mapping between MolmoSpaces observations and the canonical embodiment contract."""
 
 from collections.abc import Mapping, Sequence
+from enum import StrEnum
 from typing import Any
 
 import pimm
@@ -12,12 +13,21 @@ from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
+
+class ShoulderSide(StrEnum):
+    LEFT = 'left'
+    RIGHT = 'right'
+
+
 # Camera aliases in MolmoSpaces Pi-policy preference order, and the shoulder cameras by robot side.
 WRIST_CAMERAS = ('wrist_camera_zed_mini', 'wrist_camera')
-SHOULDER_CAMERAS = {'left': mapping.LEFT_SHOULDER_CAMERAS, 'right': (mapping.RIGHT_SHOULDER_CAMERA,)}
+SHOULDER_CAMERAS = {
+    ShoulderSide.LEFT: mapping.LEFT_SHOULDER_CAMERAS,
+    ShoulderSide.RIGHT: (mapping.RIGHT_SHOULDER_CAMERA,),
+}
 
 
-def camera_dict(exterior_sides: Sequence[str]) -> dict[str, tuple[str, ...]]:
+def camera_dict(exterior_sides: Sequence[ShoulderSide]) -> dict[str, tuple[str, ...]]:
     """The aliases of each camera the embodiment declares; ``exterior_sides`` names the shoulder of each exterior."""
     first, second = exterior_sides
     return {

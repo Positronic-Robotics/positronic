@@ -10,10 +10,16 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
-from positronic.simulator.molmo_spaces.adapter import SHOULDER_CAMERAS, WRIST_CAMERAS, MolmoAdapter, camera_dict
+from positronic.simulator.molmo_spaces.adapter import (
+    SHOULDER_CAMERAS,
+    WRIST_CAMERAS,
+    MolmoAdapter,
+    ShoulderSide,
+    camera_dict,
+)
 
 FIXTURE = Path(__file__).parent / 'droid_obs.npz'
-_LEFT_FIRST = ('left', 'right')
+_LEFT_FIRST = (ShoulderSide.LEFT, ShoulderSide.RIGHT)
 
 
 def _payload() -> dict:
@@ -52,10 +58,10 @@ def test_observations_camera_passthrough_no_swap():
 
 
 # The fixture's dominant colour channel per shoulder: the left camera is green, the right one blue.
-_SHOULDER_CHANNEL = {'left': 1, 'right': 2}
+_SHOULDER_CHANNEL = {ShoulderSide.LEFT: 1, ShoulderSide.RIGHT: 2}
 
 
-@pytest.mark.parametrize('exterior_sides', [('left', 'right'), ('right', 'left')])
+@pytest.mark.parametrize('exterior_sides', [_LEFT_FIRST, _LEFT_FIRST[::-1]])
 def test_a_one_exterior_benchmark_fills_both_exterior_slots_in_the_drawn_order(exterior_sides):
     payload = _payload()
     obs = _adapter(exterior_sides).observations(payload)
