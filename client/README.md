@@ -280,7 +280,7 @@ definition.
 
 `platform_client.evals` carries the definitions of the public evals. A definition pins what the
 platform runs under the eval's name: the positronic eval config and its arguments, the trials, the
-time limit of one run, the scorer, and the positronic commit that the platform runs the config at.
+time limit of one run, its scoring, and the positronic commit that the platform runs the config at.
 `public_eval(name)` returns one definition, and `PUBLIC_EVALS` names them all. The platform also
 offers evals that it does not publish, and `public_eval` refuses their names.
 
@@ -289,18 +289,27 @@ your machine. The run uses the positronic you installed. It warns when that posi
 commit the definition names, because the two runs can then differ. A local run does not stop at the
 time limit.
 
-## Scoring a run
+## Labels and scores
 
-`platform_client.scoring` makes a run's `scores.json` from its recorded episodes. A scorer reads one
-episode and gives its outcome: the task, the success, and a graded score where the scorer grades one.
-`score(scorer, episodes)` adds the outcomes up into `Scores`, which holds three numbers. `primary` is
-the mean score of the episodes that recorded an outcome, and a board ranks on it. `episodes` counts
-every episode, and `unscored` counts the episodes that recorded no outcome. `primary` does not count
-those as failures. An episode that ran out of time counts as a failure, as it does on a real robot.
+`platform_client.labels` reads what happened in a recorded episode. A labeler reads one episode
+directory and gives its `Label`: the episode's id and task, its end, and a list of timed events. An
+event is a stage that the arm reached, a count of items delivered, a count of subtasks achieved, or
+one of the three end events: `Success`, `Fail` and `Safety`. The earliest end event gives the
+`outcome`. A label with no end event ran out of time. The label's other views, such as
+`stage_seconds` and `placements`, are properties computed from its events. `label.until(seconds)`
+gives the label as it stood at that time.
 
-`PUBLIC_SCORERS` holds the scorer of each public eval, under the name the definition gives as its
-`scorer`. A caller with scorers of its own passes `score` a table that holds them beside
-`PUBLIC_SCORERS`.
+`platform_client.scoring` states what a label is worth. An eval's `Scoring` names its labelers in
+order of precedence, and its primary metric. `label(episode, scoring.labelers)` gives the label of
+the first labeler that labels the episode. `score(scoring, labels)` gives `Scores`, which holds
+three numbers. `primary` is the mean episode score, and a board ranks on it. `episodes` counts every
+episode, and `unscored` counts the episodes that no labeler labelled. `primary` does not count those
+as failures. No file holds a score: a score is a function of the labels.
+
+`PUBLIC_LABELERS` holds the labeler of each public eval. A caller with labelers of its own passes
+`label` a table that holds them beside `PUBLIC_LABELERS`. The MolmoSpaces labeler reads the end of a
+trial from `eval.duration`. A recording without that key gives its end from its signal files, and
+to read them, install the `pyarrow` extra.
 
 ## From the command line
 

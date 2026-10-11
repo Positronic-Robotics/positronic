@@ -449,8 +449,8 @@ client calls it with `list_artifacts`, and `positronic eval` has no command for 
 - Read `result.json` first. Its `attempt_location` names the attempt that scored. A reprovisioned
   run writes one tree per attempt, and only that tree holds the episodes that count.
 - The route's `prefix` filter is read under the submission's own prefix, so one attempt's
-  episodes are `attempts/<n>/episodes/`. The same attempt holds `scores.json`, `logs/` and
-  `timing.jsonl`. `control/` is never listed.
+  episodes are `attempts/<n>/episodes/`. The same attempt holds `logs/` and `timing.jsonl`.
+  `control/` is never listed.
 - The route pages: pass `after` with the `next` of the page before it. These links expire after
   15 minutes, like the three above.
 - `attempts/<n>/episodes/` is a positronic dataset root. Download the whole tree, and positronic

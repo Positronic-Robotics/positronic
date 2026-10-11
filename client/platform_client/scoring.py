@@ -1,51 +1,68 @@
-"""A run's `scores.json`, from the outcome that each recorded episode reports.
+"""How an eval scores a run: its labelers in precedence order, and one metric over the labels they give.
 
-A scorer gives one episode its `Outcome`, and `tally` adds the outcomes of a run into `Scores`.
-`PUBLIC_SCORERS` holds the scorers of the public evals, under the names that `EvalDefinition.scorer`
-gives. `score` takes the table of scorers as an argument, so a caller adds its own scorers to these.
+`episode_score` gives what one label adds to a mean, from 0 to 1. `score` gives the `Scores` of a run from the
+labels of its episodes. A score is a function of the labels, so no file holds it.
 """
 
 from __future__ import annotations
 
-import json
-import logging
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
-from pathlib import Path
-from types import MappingProxyType
+from collections import defaultdict
+from collections.abc import Iterable
+from statistics import fmean
+from typing import Annotated, Literal
 
-from eval_vocabulary.episode import STATIC_FILE, SUCCESS, TASK, TERMINATED
-from platform_client.evals import MOLMO_SCORER, ScorerRef
-from pydantic import BaseModel
+from platform_client.labels import Label, LabelerRef, Outcome, Stage
+from platform_client.slug import Slugged
+from pydantic import BaseModel, ConfigDict, Field, PositiveFloat
 
-log = logging.getLogger(__name__)
+_SCORING_CONFIG = ConfigDict(extra='forbid', frozen=True)
 
-SCORES_FILENAME = 'scores.json'
-
-
-@dataclass(frozen=True)
-class Outcome:
-    """One episode's task, its success, and its graded score where its scorer grades one."""
-
-    task: str
-    succeeded: bool
-    graded: float | None = None
-
-    @property
-    def score(self) -> float:
-        """What the episode adds to the primary score of the run. An ungraded episode scores its success."""
-        return self.graded if self.graded is not None else float(self.succeeded)
+# A share of the whole task, from 0 to 1.
+Share = Annotated[float, Field(ge=0, le=1)]
 
 
-# Gives one recorded episode its outcome, or None when the episode recorded no outcome.
-Scorer = Callable[[Path], Outcome | None]
+class EpisodeScore(BaseModel):
+    """What one label adds to a mean. Parameters only."""
+
+    model_config = _SCORING_CONFIG
+
+    success: Share = 1.0
+    # The partial scores below apply when the episode did not succeed.
+    stage: dict[Slugged[Stage], Share] = {}  # the score of the furthest stage
+    subtask_score: bool = False  # the last subtask score
+    item_share: bool = False  # delivered / total_items
+    zero: frozenset[Slugged[Outcome]] = frozenset()  # outcomes that score 0, whatever progress the episode made
+
+
+class MeanEpisodeScore(BaseModel):
+    """The mean episode score of a run's labels."""
+
+    model_config = _SCORING_CONFIG
+
+    kind: Literal['mean_episode_score'] = 'mean_episode_score'
+    episode_score: EpisodeScore = EpisodeScore()
+    time_limit_s: PositiveFloat | None = None
+    per_task: bool = False  # True: the mean of the task means, so each task has the same weight
+
+
+# A closed set: a new metric kind joins this union.
+Metric = Annotated[MeanEpisodeScore, Field(discriminator='kind')]
+
+
+class Scoring(BaseModel):
+    """How an eval scores a run."""
+
+    model_config = _SCORING_CONFIG
+
+    labelers: tuple[LabelerRef, ...] = Field(min_length=1)  # in precedence order
+    primary: Metric
 
 
 class Scores(BaseModel):
-    """The `scores.json` of a run.
+    """The scores of a run.
 
-    A board ranks on `primary`: the mean score of the episodes that recorded an outcome. `episodes` counts every
-    episode, and `unscored` counts the ones that recorded no outcome. `primary` does not include those, and does not
+    A board ranks on `primary`, the run's value under the eval's primary metric. `episodes` counts every episode,
+    and `unscored` counts the episodes that no labeler labelled. `primary` does not include those, and does not
     count them as failures. `responses.Scores` publishes a subset of this record.
     """
 
@@ -54,70 +71,37 @@ class Scores(BaseModel):
     unscored: int
 
 
-def read_static(episode: Path) -> dict[str, object] | None:
-    """The statics that `episode` recorded, or None when it recorded none or they do not parse."""
-    static = episode / STATIC_FILE
-    if not static.is_file():
-        return None
-    try:
-        loaded = json.loads(static.read_text(encoding='utf-8'))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        loaded = None
-    if not isinstance(loaded, dict):
-        # One damaged upload leaves the other episodes scorable, so this is logged, not raised.
-        log.error('%s does not hold a JSON object; scoring this episode as unscored', static)
-        return None
-    return loaded
+def episode_score(label: Label, rule: EpisodeScore, time_limit_s: float | None) -> float:
+    """What `label` adds to a mean under `rule`, as the label stood at `time_limit_s`.
 
-
-def recorded_task_and_success(static: Mapping[str, object], task_key: str) -> tuple[str, bool] | None:
-    """The task under `task_key` and the recorded success, or None when either is missing or of the wrong type.
-
-    A trial that ran out of time failed, as a real-robot episode that runs out of time does. Its recorded
-    success does not count, and a success of the wrong type is still logged.
+    An outcome in `rule.zero` scores 0, and a success scores `rule.success`. Any other label scores the largest
+    partial score that it holds, or 0 when it holds none.
     """
-    terminated = static.get(TERMINATED)
-    if TERMINATED in static and not isinstance(terminated, bool):
-        log.error('%s=%r is not a bool; reading it as absent', TERMINATED, terminated)
-    success = False if terminated is False else static.get(SUCCESS)
-    task = static.get(task_key)
-    recorded = (task, success) if isinstance(task, str) and isinstance(success, bool) else None
-    misrecorded = [
-        f'{key}={static[key]!r} is not a {kind.__name__}'
-        for key, kind in ((SUCCESS, bool), (task_key, str))
-        if key in static and not isinstance(static[key], kind)
-    ]
-    if misrecorded:
-        # One damaged record leaves the other episodes scorable, so this is logged, not raised.
-        verdict = 'unscored' if recorded is None else 'failed, because it ran out of time'
-        log.error('%s; scoring this episode as %s', '; '.join(misrecorded), verdict)
-    return recorded
+    if time_limit_s is not None:
+        label = label.until(time_limit_s)
+    if label.outcome in rule.zero:
+        return 0.0
+    if label.outcome is Outcome.success:
+        return rule.success
+    partial = []
+    if label.furthest_stage is not None:
+        partial.append(rule.stage.get(label.furthest_stage, 0.0))
+    if rule.subtask_score and label.subtask_score is not None:
+        partial.append(label.subtask_score)
+    if rule.item_share and label.total_items is not None:
+        partial.append(label.delivered / label.total_items)
+    return max(partial, default=0.0)
 
 
-def molmo_outcome(episode: Path) -> Outcome | None:
-    """MolmoSpaces' scorer: an episode succeeds or fails, and a run ranks on its success rate."""
-    static = read_static(episode)
-    recorded = recorded_task_and_success(static, TASK) if static is not None else None
-    return Outcome(*recorded) if recorded is not None else None
-
-
-PUBLIC_SCORERS: Mapping[ScorerRef, Scorer] = MappingProxyType({MOLMO_SCORER: molmo_outcome})
-
-
-def score(scorer: ScorerRef, episodes: Iterable[Path], scorers: Mapping[ScorerRef, Scorer] = PUBLIC_SCORERS) -> Scores:
-    """The scores of `episodes` under `scorer`, or LookupError when `scorers` does not hold it."""
-    outcome_of = scorers.get(scorer)
-    if outcome_of is None:
-        raise LookupError(f'no scorer {scorer!r}; the scorers are {", ".join(sorted(scorers))}')
-    return tally(map(outcome_of, episodes))
-
-
-def tally(outcomes: Iterable[Outcome | None]) -> Scores:
-    """The scores of a run whose episodes gave `outcomes`. A None outcome counts as unscored."""
-    recorded = list(outcomes)
-    scored = [outcome.score for outcome in recorded if outcome is not None]
-    return Scores(
-        primary=sum(scored) / len(scored) if scored else 0.0,
-        episodes=len(recorded),
-        unscored=len(recorded) - len(scored),
-    )
+def score(scoring: Scoring, labels: Iterable[Label | None]) -> Scores:
+    """The scores of a run whose episodes have `labels`. A None is an episode that no labeler labelled."""
+    given = list(labels)
+    metric = scoring.primary
+    scored = [label for label in given if label is not None]
+    values = [episode_score(label, metric.episode_score, metric.time_limit_s) for label in scored]
+    if metric.per_task:
+        by_task: dict[str, list[float]] = defaultdict(list)
+        for label, value in zip(scored, values, strict=True):
+            by_task[label.task].append(value)
+        values = [fmean(task_values) for task_values in by_task.values()]
+    return Scores(primary=fmean(values) if values else 0.0, episodes=len(given), unscored=len(given) - len(scored))

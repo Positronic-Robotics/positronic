@@ -12,10 +12,14 @@ dependencies = [
     "pydantic>=2.11",
     "httpx>=0.27",
     "typing-extensions>=4.12.2",
-    # The names an episode records, which `scoring` reads. It has no dependencies, and the root pins it
+    # The names an episode records, which `labels` reads. It has no dependencies, and the root pins it
     # exactly at the same version.
     "positronic-eval-vocabulary==0.2.0",
 ]
+
+[project.optional-dependencies]
+# `labels` reads the signal files of a recording that has no `eval.duration`. Nothing else needs it.
+pyarrow = ["pyarrow"]
 
 [project.scripts]
 platform-register = "platform_client.github_device_flow:main"

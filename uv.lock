@@ -5436,13 +5436,20 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 
+[package.optional-dependencies]
+pyarrow = [
+    { name = "pyarrow" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "positronic-eval-vocabulary", editable = "vocabulary" },
+    { name = "pyarrow", marker = "extra == 'pyarrow'" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "typing-extensions", specifier = ">=4.12.2" },
 ]
+provides-extras = ["pyarrow"]
 
 [[package]]
 name = "positronic-wire"
