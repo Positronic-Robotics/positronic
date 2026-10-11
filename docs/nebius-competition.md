@@ -25,15 +25,19 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
    arrive.
 ```
 
-The agent needs git, [uv](https://docs.astral.sh/uv/), Docker and push access to a container registry,
-such as Docker Hub.
+The agent needs git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, Docker and push access to a
+container registry, such as Docker Hub.
 
 ## Get started by hand
 
 ### Install the commands
 
-The commands need [uv](https://docs.astral.sh/uv/). This command installs them from the positronic
-repository on GitHub. It uses about 2 GB of disk space.
+The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later, the first version with
+`--with-executables-from`. Run `uv --version` to check. To update uv, run `uv self update`, or use the
+tool that installed uv.
+
+This command installs the commands from the positronic repository on GitHub. It uses about 2 GB of disk
+space.
 
 ```bash
 uv tool install --with-executables-from positronic-platform-client \
@@ -242,7 +246,10 @@ docker buildx imagetools inspect --raw docker.io/<you>/<image>:v1 \
 You can make one submission per day. The count starts again at 00:00 UTC each day, so you can submit at
 23:00 UTC and again at 01:00 UTC on the next day.
 
-- A submission counts from the time that the platform accepts it. A cancel does not give it back.
+- A submission counts from the time that the platform accepts it. Your cancel never gives it back, also
+  when you cancel before the run starts.
+- When the platform cannot start a run for a submission and ends the submission itself, it gives the
+  submission back. That submission ends `errored` with `internal_error`.
 - A submission that fails also counts. If the fault is the platform's, the organizers give the submission
   back.
 - A retry with the same `--transaction-key` returns the first submission, and it does not count again.
