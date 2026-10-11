@@ -14,6 +14,22 @@ from positronic.policy.codecs.observation import ObservationCodec, PackObservati
 from positronic.policy.spec import from_spec
 
 
+def test_observation_v1_keeps_its_published_argument_schema():
+    description = {
+        'name': 'observation_codec',
+        'version': 1,
+        'args': {'state': {'state': {'q': 2}}, 'images': {}, 'task_field': 'prompt'},
+    }
+    codec = ObservationCodec(state={'state': {'q': 2}}, images={}, task_field='prompt')
+    assert codec.to_spec() == description
+    restored = from_spec(description)
+    assert isinstance(restored, ObservationCodec)
+    assert restored.to_spec() == description
+    encoded = restored.encode({'q': [1, 2], obs_keys.TASK: 'pick'})
+    assert encoded['prompt'] == 'pick'
+    np.testing.assert_array_equal(encoded['state'], [1, 2])
+
+
 @pytest.mark.parametrize(
     'unsqueeze_dims, shape, prompt', [(0, (2, 3), 'pick'), (1, (1, 2, 3), ['pick']), (2, (1, 1, 2, 3), [['pick']])]
 )

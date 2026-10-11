@@ -18,12 +18,12 @@ from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Step
 from positronic.policy.codecs import RestrictImageSize
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
+from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
 from positronic.utils import flatten_dict
@@ -103,7 +103,7 @@ def test_v1_timing_preserves_horizon_and_chunk_boundary(controlled_runtime, decl
 def test_v1_server_without_action_fps_runs_at_the_default_rate_and_warns(caplog):
     with caplog.at_level(logging.WARNING, logger='positronic.policy.compatibility'):
         stack = from_v1_spec({'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}, {})
-    assert flatten_dict(stack.meta())[policy_keys.ACTION_FPS] == V1_SERVER_DEFAULT_ACTION_FPS
+    assert flatten_dict(stack.meta())[ACTION_FPS] == V1_SERVER_DEFAULT_ACTION_FPS
     assert 'Rebuild the server on current positronic' in caplog.text
 
 

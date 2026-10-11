@@ -5,12 +5,16 @@
 # level and the vendor under ``SERVER``, so a reader composes a prefix with a field: f'{SERVER_META}.{TYPE}'.
 # The block under ``SERVER`` is the server's handshake metadata as sent. A ``prompt`` in it is not the task.
 TYPE = 'type'
+CHECKPOINT_ID = 'checkpoint_id'
 CHECKPOINT_PATH = 'checkpoint_path'
 EXPERIMENT_NAME = 'experiment_name'
 CONFIG_NAME = 'config_name'
-ACTION_FPS = 'action_fps'
 ACTION_HORIZON_SEC = 'action_horizon_sec'
+ACTION_FPS = 'action_fps'
 JPEG_QUALITY = 'jpeg_quality'
+# Metadata understood by the legacy offboard client and server.
+COMPRESS_IMAGES = 'compress_images'
+POSITRONIC_VERSION = 'positronic_version'
 # The name of the endpoint that served the episode.
 LABEL = 'label'
 SERVER = 'server'

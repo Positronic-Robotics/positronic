@@ -8,6 +8,7 @@ from eval_vocabulary.outcome import ABSENT, OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITE
 from eval_vocabulary.progress import LADDER, STATE_SIGNAL, Stage
 
 from pimm.logging import init_logging
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
@@ -76,7 +77,9 @@ def uph(ep: Episode) -> float | None:
     items = ep['units']
     if items == 0:
         return None
-    first, last = ep.bounds(HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME)
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in ep.timelines), RECORDED_TIME)
+    first, last = ep.bounds(timeline)
     return items / ((last - first) / 1e9 / 3600)
 
 
@@ -139,7 +142,9 @@ def finetune_group_by_task():
     def group_fn(episodes: list[Episode]):
         duration, units = 0, 0
         for ep in episodes:
-            first, last = ep.bounds(HARNESS_WORLD if HARNESS_WORLD in ep.timelines else RECORDED_TIME)
+            # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+            timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in ep.timelines), RECORDED_TIME)
+            first, last = ep.bounds(timeline)
             duration += (last - first) / 1e9 / 3600
             units += ep['units']
 

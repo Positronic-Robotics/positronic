@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
@@ -12,7 +13,7 @@ from positronic.policy.codecs import ACTION
 from positronic.vendors.dreamzero.codecs import DreamZeroActionCodec, DreamZeroObservationCodec
 
 
-@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECORDED_TIME])
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
 def test_training_actions_align_on_the_recording_clock(timeline):
     codec = DreamZeroActionCodec(keys.TARGET_JOINTS, keys.TARGET_GRIP, num_joints=2)
     episode = EpisodeContainer({

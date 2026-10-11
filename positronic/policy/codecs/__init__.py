@@ -5,6 +5,7 @@ from .action import (
     AbsolutePositionAction,
     IKJointsAction,
     JointDeltaAction,
+    JointPositionAction,
     SetControlMode,
     UnpackActionChunk,
 )

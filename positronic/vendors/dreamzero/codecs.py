@@ -7,6 +7,7 @@ import configuronic as cfn
 import numpy as np
 from PIL import Image as PilImage
 
+from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.cfg import codecs, layers
 from positronic.dataset import Signal, transforms
@@ -177,7 +178,9 @@ class DreamZeroActionCodec(Codec):
 
     def _encode_action(self, episode: Episode):
         joints, grip = episode[self._tgt_joints_key], episode[self._tgt_grip_key]
-        timeline = HARNESS_WORLD if HARNESS_WORLD in joints.timelines + grip.timelines else RECORDED_TIME
+        timelines = joints.timelines + grip.timelines
+        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
         return transforms.concat(joints, grip, timelines=(timeline,), dtype=np.float32)
 
     def _decode_single(self, data: dict) -> dict:

@@ -4,7 +4,6 @@ import configuronic as cfn
 import pos3
 from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
-from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
 from positronic import geom, keys
@@ -37,7 +36,7 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
     local = run_with_progress(lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {checkpoint_id}')
     backbone = ACTPolicy.from_pretrained(str(local), strict=True)
     meta = {
-        offboard_keys.CHECKPOINT_ID: checkpoint_id,
+        policy_keys.CHECKPOINT_ID: checkpoint_id,
         policy_keys.TYPE: 'act',
         policy_keys.CHECKPOINT_PATH: checkpoint_path,
         policy_keys.EXPERIMENT_NAME: experiment_dir.split('/')[-1],

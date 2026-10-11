@@ -8,7 +8,6 @@ from typing import Any
 import configuronic as cfn
 import pos3
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
-from positronic_model_server import keys as offboard_keys
 
 from pimm.logging import init_logging
 from positronic import geom
@@ -161,7 +160,7 @@ def openpi_model(checkpoints_dir: str, config_name: str, checkpoint: str | None,
         policy = OpenpiModel(
             subproc,
             {
-                offboard_keys.CHECKPOINT_ID: checkpoint_id,
+                policy_keys.CHECKPOINT_ID: checkpoint_id,
                 policy_keys.TYPE: 'openpi',
                 policy_keys.CONFIG_NAME: config_name,
                 policy_keys.CHECKPOINT_PATH: checkpoint_path,

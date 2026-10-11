@@ -956,16 +956,6 @@
                 }
             }
         ],
-        "./positronic/dataset/edits.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 34,
-                    "endColumn": 37,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/dataset/episode.py": [
             {
                 "code": "reportIncompatibleMethodOverride",
@@ -2216,16 +2206,6 @@
                 "range": {
                     "startColumn": 19,
                     "endColumn": 27,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/policy/codecs/observation.py": [
-            {
-                "code": "reportIncompatibleMethodOverride",
-                "range": {
-                    "startColumn": 8,
-                    "endColumn": 14,
                     "lineCount": 1
                 }
             }

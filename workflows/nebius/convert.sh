@@ -44,8 +44,9 @@ Examples:
     --output_dir=s3://<your-bucket>/sim_stack_cubes_openpi/
 
   bash workflows/nebius/convert.sh gr00t \
-    --dataset.dataset=@positronic.cfg.ds.sim.sim_stack_cubes \
-    --dataset.codec=@positronic.vendors.gr00t.codecs.droid \
+    --dataset=@positronic.cfg.ds.transform \
+    --dataset.base=@positronic.cfg.ds.sim.sim_stack_cubes \
+    --dataset.transforms='["@positronic.vendors.gr00t.recipes.droid"]' \
     --output_dir=s3://<your-bucket>/sim_stack_cubes_gr00t/
 EOF
   exit 1

@@ -104,7 +104,7 @@ class InferenceSession:
             if status is protocol.ServerStatus.ERROR:
                 raise RuntimeError('Server error: Unknown error')
 
-            message = response.get(protocol.MESSAGE, status)
+            message = response.get(legacy_protocol.MESSAGE, status)
             logger.info(f'Server status: [{status}] {message}')
             left = ready_by - time.monotonic()
             if left <= 0:

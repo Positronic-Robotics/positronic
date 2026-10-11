@@ -9,6 +9,8 @@ from .base import Codec
 
 GR00T_MODALITY_PATH = Path('meta/modality.json')
 GR00T_MODALITY = 'gr00t_modality'
+MODEL_SETTINGS = 'model_settings'
+MODEL_SETTINGS_PATH = Path('meta/positronic_model_settings.json')
 LEROBOT_FEATURES = 'lerobot_features'
 ACTION = 'action'
 

@@ -28,7 +28,7 @@ def build_dataset_with_signal(root: Path, values: list[int]) -> LocalDataset:
 def test_edited_dataset_applies_edits_by_uid(tmp_path):
     root = tmp_path / 'ds'
     ds = build_dataset_with_signal(root, [0, 1])
-    edited = EditedDataset(ds, root).set_static(ds[0].meta['uid'], {'id': 100, 'verdict': 'success'})
+    edited = EditedDataset(ds).set_static(ds[0].meta['uid'], {'id': 100, 'verdict': 'success'})
 
     assert len(edited) == 2
     assert edited[0]['id'] == 100
