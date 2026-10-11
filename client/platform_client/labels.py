@@ -239,8 +239,8 @@ class Label(BaseModel):
 
     def until(self, seconds: float) -> Label:
         """The label as it stood at `seconds`: the events at or before it, and the earlier of the two ends."""
-        if seconds < 0:
-            raise ValueError(f'a label cannot stand at {seconds} s, before the trial start')
+        if not seconds >= 0:
+            raise ValueError(f'a label cannot stand at {seconds} s, which is not a time from the trial start')
         kept = tuple(event for event in self.events if event.seconds <= seconds)
         return self.model_copy(update={'events': kept, 'seconds_to_end': min(self.seconds_to_end, seconds)})
 

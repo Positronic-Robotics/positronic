@@ -187,9 +187,10 @@ def test_a_label_refuses_a_time_that_is_not_finite():
         _label(Success(seconds=1.0), seconds_to_end=float('inf'))
 
 
-def test_a_label_cannot_stand_at_a_time_before_the_trial_start():
-    with pytest.raises(ValueError, match='before the trial start'):
-        CUBES.until(-1.0)
+@pytest.mark.parametrize('seconds', [-1.0, float('nan')])
+def test_a_label_cannot_stand_at_a_time_that_is_not_from_the_trial_start(seconds: float):
+    with pytest.raises(ValueError, match='not a time from the trial start'):
+        CUBES.until(seconds)
 
 
 def test_until_names_fields_that_the_label_has():
