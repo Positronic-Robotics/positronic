@@ -353,7 +353,7 @@ class RightViewCheck(BaseModel):
 
 def _check_right_view(env: MolmoSpacesEnv, bench: mapping.BenchmarkPath, index: int) -> RightViewCheck:
     rel = bench.relative.as_posix()
-    try:  # rules-allow: swallowed-error — the error line keeps the episode's benchmark out of the list
+    try:  # rules-allow: swallowed-error — one failed reset must not end the sweep; the check records the error
         frame = env.reset({**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: index, mapping.TOKEN_SEED: None})
         height, width = frame[protocol.FRAME_OBS][mapping.RIGHT_SHOULDER_CAMERA].shape[:2]
         blocker = env.right_view_blocker(width / height)

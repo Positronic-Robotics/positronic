@@ -239,12 +239,6 @@ def episode_rng(bench: BenchmarkPath, episode_index: int) -> np.random.Generator
 # `env.py --sweep` writes a benchmark's entry once it has checked every episode; a benchmark absent from it is unswept.
 RIGHT_VIEW_BLOCKED_PATH = Path(__file__).parent / 'right_view_blocked.json'
 
-# The geom groups a MuJoCo camera renders under MjvOption's defaults.
-RENDERED_GEOM_GROUPS = np.array([1, 1, 1, 0, 0, 0], dtype=np.uint8)
-# A hit this close to the grasp site is the surface the grasp site touches or reaches into.
-GRASP_SITE_SURFACE_MARGIN_M = 0.15
-_MAX_SEE_THROUGH_HITS = 64
-
 
 def load_right_view_blocked(path: Path = RIGHT_VIEW_BLOCKED_PATH) -> dict[BenchmarkPath, frozenset[int]]:
     """The blocked episodes of every swept benchmark."""
@@ -285,6 +279,13 @@ def in_camera_view(position: Any, forward: Any, up: Any, fovy_deg: float, aspect
     depth = v @ forward
     half = np.tan(np.deg2rad(fovy_deg) / 2)
     return bool(depth > 0 and abs(v @ up) <= half * depth and abs(v @ right) <= half * aspect * depth)
+
+
+# The geom groups a MuJoCo camera renders under MjvOption's defaults.
+RENDERED_GEOM_GROUPS = np.array([1, 1, 1, 0, 0, 0], dtype=np.uint8)
+# A hit this close to the grasp site is the surface the grasp site touches or reaches into.
+GRASP_SITE_SURFACE_MARGIN_M = 0.15
+_MAX_SEE_THROUGH_HITS = 64
 
 
 def first_occluding_geom(
