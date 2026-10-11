@@ -6,6 +6,7 @@ from typing import Any, TypeVar, cast
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from eval_vocabulary.episode import LEGACY_TIME_COLUMN
 
 from .signal import TIMELINE_METADATA_KEY, IndicesLike, Signal, SignalWriter
 from .time import Time, TimeArray, TimeBounds, search_timestamps, validate_timeline
@@ -19,7 +20,6 @@ TIMESTAMP_PREFIX = 'ts.'
 # Timeline name for legacy files without timeline metadata.
 RECORDED_TIME = 'recorded'
 VALUE_COLUMN = 'value'
-LEGACY_TIMESTAMP_COLUMN = 'timestamp'
 
 
 def timestamp_table(columns: Mapping[str, Sequence[int]]) -> pa.Table:
@@ -128,7 +128,7 @@ class SimpleSignal(Signal[T]):
 
     def __init__(self, filepath: Path):
         self.filepath = filepath
-        self._time_index = ParquetTimeIndex(filepath, LEGACY_TIMESTAMP_COLUMN)
+        self._time_index = ParquetTimeIndex(filepath, LEGACY_TIME_COLUMN)
         self._values: np.ndarray | None = None
 
     @property

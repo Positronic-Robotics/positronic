@@ -1,5 +1,14 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
+# What a trial reports when it ends, in its episode's statics. The harness writes ``TERMINATED``:
+# True when a terminal was delivered inside the budget, False when the budget ran out. Beside it, the harness
+# writes ``DURATION``. ``SUCCESS`` rides in the terminal payload an env's adapter returns, so an env that
+# reports it only on success leaves it absent on failure — a reader defaults it rather than assuming a False.
+# ``ENDED_BY`` names who ended the trial, when it was not the task's own ground truth. An env's terminal leaves
+# it absent.
+from eval_vocabulary.episode import DURATION as DURATION
+from eval_vocabulary.episode import ENDED_BY as ENDED_BY
+from eval_vocabulary.episode import ENDED_BY_OPERATOR as ENDED_BY_OPERATOR
 from eval_vocabulary.episode import SUCCESS as SUCCESS
 from eval_vocabulary.episode import TERMINATED as TERMINATED
 
@@ -17,17 +26,9 @@ JOINT_SIGNALS = 'joint_signals'
 POSE_SIGNALS = 'pose_signals'
 MOUNTS = 'mounts'
 
-# What a trial reports when it ends, in its episode's statics. The harness writes ``TERMINATED``:
-# True when a terminal was delivered inside the budget, False when the budget ran out. ``SUCCESS``
-# rides in the terminal payload an env's adapter returns, so an env that reports it only on success
-# leaves it absent on failure — a reader defaults it rather than assuming a False.
-DURATION = 'eval.duration'
 # Whether the trial charged each model call the wall time it really took. True on a real rig whatever the
 # task asked, since it cannot hold the world still while the model thinks.
 CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
-# Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
-ENDED_BY = 'eval.ended_by'
-ENDED_BY_OPERATOR = 'operator'
 # True when the operator replaced the trial's own instruction. The episode's ``keys.TASK`` holds the text that
 # the policy got.
 INSTRUCTION_OVERRIDDEN = 'eval.instruction_overridden'

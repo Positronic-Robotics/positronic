@@ -5,6 +5,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from eval_vocabulary.episode import LEGACY_TIME_COLUMN
 
 from pimm.time import RECEIVED_WALL
 from positronic.dataset import Episode
@@ -13,14 +14,7 @@ from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, Dis
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
-from positronic.dataset.vector import (
-    LEGACY_TIMESTAMP_COLUMN,
-    RECORDED_TIME,
-    SIGNAL_VERSION,
-    SIGNAL_VERSION_KEY,
-    TIMESTAMP_PREFIX,
-    VALUE_COLUMN,
-)
+from positronic.dataset.vector import RECORDED_TIME, SIGNAL_VERSION, SIGNAL_VERSION_KEY, TIMESTAMP_PREFIX, VALUE_COLUMN
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, vcs_wheel
@@ -569,7 +563,7 @@ class TestLazyMetaProperties:
         with DiskEpisodeWriter(ep_dir):
             # Write a parquet file directly (simulating migration's raw write)
             timestamps = [1000, 2000, 5000]
-            table = pa.table({LEGACY_TIMESTAMP_COLUMN: timestamps, VALUE_COLUMN: [1, 2, 3]})
+            table = pa.table({LEGACY_TIME_COLUMN: timestamps, VALUE_COLUMN: [1, 2, 3]})
             pq.write_table(table, ep_dir / 'signal.parquet')
 
         ep = DiskEpisode(ep_dir)

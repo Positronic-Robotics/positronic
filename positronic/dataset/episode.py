@@ -5,6 +5,8 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, Generic, TypeVar, overload
 
+from eval_vocabulary.episode import UID
+
 from .signal import Signal
 from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timelines
 
@@ -12,7 +14,7 @@ EPISODE_SCHEMA_VERSION = 1
 # Where the episode is written, in the meta of both the episode and the writer that made it.
 META_PATH = 'path'
 # The episode's identity, in the meta of both the episode and the writer that made it.
-META_UID = 'uid'
+META_UID = UID
 # When the episode was opened, in the meta of both the episode and the writer that made it.
 META_CREATED_TS_NS = 'created_ts_ns'
 # The video encoder spec, under the ``writer`` entry of the episode meta.

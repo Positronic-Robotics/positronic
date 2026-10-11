@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from eval_vocabulary.episode import STATIC_FILE
+from eval_vocabulary.episode import META_FILE, SIGNAL_FILE_SUFFIX, STATIC_FILE
 
 from positronic.utils.git import get_package_git_state
 from positronic.utils.lazy import LazyDict
@@ -41,7 +41,6 @@ from .vector import SimpleSignal, SimpleSignalWriter
 from .video import DEFAULT_VIDEO_ENCODER, VideoEncoder, VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
-META_FILE = 'meta.json'
 
 
 def _is_numeric_dir(p: Path) -> bool:
@@ -157,10 +156,10 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
             video_path = self._path / f'{signal_name}.mp4'
-            frames_index = self._path / f'{signal_name}.frames.parquet'
+            frames_index = self._path / f'{signal_name}.frames{SIGNAL_FILE_SUFFIX}'
             writer = VideoSignalWriter(video_path, frames_index, self._video_encoder)
         else:
-            writer = SimpleSignalWriter(self._path / f'{signal_name}.parquet')
+            writer = SimpleSignalWriter(self._path / f'{signal_name}{SIGNAL_FILE_SUFFIX}')
 
         try:
             writer.append(data, timestamps)
@@ -281,17 +280,17 @@ class DiskEpisode(Episode):
         used_names: set[str] = set()
         for video_file in self._dir.glob('*.mp4'):
             name = video_file.stem
-            frames_idx = self._dir / f'{name}.frames.parquet'
+            frames_idx = self._dir / f'{name}.frames{SIGNAL_FILE_SUFFIX}'
             if not frames_idx.exists():
                 raise ValueError(f'Video file {video_file} has no frames index {frames_idx}')
             self._signal_factories[name] = partial(VideoSignal, video_file, frames_idx)
             used_names.add(name)
 
-        for file in self._dir.glob('*.parquet'):
+        for file in self._dir.glob(f'*{SIGNAL_FILE_SUFFIX}'):
             fname = file.name
-            if fname.endswith('.frames.parquet'):
+            if fname.endswith(f'.frames{SIGNAL_FILE_SUFFIX}'):
                 continue
-            key = fname[: -len('.parquet')]
+            key = fname[: -len(SIGNAL_FILE_SUFFIX)]
             if key in used_names:
                 continue
             self._signal_factories[key] = partial(SimpleSignal, file)

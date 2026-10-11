@@ -4,7 +4,7 @@ Every sim adapter and embodiment produces them and every vendor codec consumes t
 here once, in a leaf module with no positronic imports, so a rename is a single-site change the type
 checker propagates instead of a string literal duplicated across codecs, configs, adapters and datasets.
 A key one package owns lives in that package's own ``keys`` module instead: a trial's in ``eval.keys``,
-the robot model's in ``drivers.roboarm.keys``, and so on. A key that a scorer also reads lives in the
+the robot model's in ``drivers.roboarm.keys``, and so on. A key that a labeler also reads lives in the
 dependency-free ``eval_vocabulary``, and a keys module imports from that package only.
 """
 

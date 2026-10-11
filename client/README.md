@@ -13,7 +13,7 @@ has no dependencies. So a service that only speaks to the platform installs it o
 version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.28.0"
+uv add "positronic-platform-client==0.29.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
