@@ -3,9 +3,7 @@ the ``sim`` and ``stats`` aliases over ``cli.eval.run``."""
 
 import logging
 from collections import Counter
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
-from functools import partial
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +22,8 @@ from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
-from positronic.gui.web import EndTrial, StationConsole
+from positronic.gui.web import StationConsole
 from positronic.policy import Policy
-from positronic.policy import keys as policy_keys
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 
@@ -98,68 +95,6 @@ real_cfg = cfn.Config(
 )
 
 
-# The lag between a Start and the harness taking the trial, and between the harness's answer and the console.
-FORWARD_POLL_S = 0.02
-
-TrialCall = pimm.calls.Call[Task | EndTrial, dict[str, Any]]
-
-
-@dataclass
-class _OpenTrial:
-    """An outstanding rollout and the callers waiting for its result."""
-
-    call: TrialCall
-    answer: pimm.calls.Answer[dict[str, Any]]
-    # The calls that ended this trial. Each gets the trial's answer.
-    ends: list[TrialCall] = field(default_factory=list)
-
-    def close(self) -> None:
-        for call in (self.call, *self.ends):
-            with pimm.calls.raise_to(call):
-                call.set_result(self.answer.result())
-
-
-class TrialForwarder(pimm.ControlSystem):
-    """Runs the trials and verdicts that ``trials`` receives: a ``Task`` as the rollout ``rollout_of`` makes, and an
-    ``EndTrial`` as one ``done`` to the harness.
-
-    It runs beside the harness for a caller in another process, which cannot hand the harness a policy. One trial
-    runs at a time. Verdicts go directly to ``done``; the harness drops a verdict that reaches it while idle.
-    Connect ``done`` to the harness's ``done``.
-    """
-
-    def __init__(self, rollout_of: Callable[[Task], Rollout]):
-        self._rollout_of = rollout_of
-        self.trials = pimm.calls.ControlSystemHandler[Task | EndTrial, dict[str, Any]](self)
-        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
-        self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        trial: _OpenTrial | None = None
-        while not should_stop.value:
-            for call in self.trials.incoming():
-                trial = self._receive(call, trial)
-            if trial is not None and trial.answer.done():
-                trial.close()
-                trial = None
-            yield pimm.Sleep(FORWARD_POLL_S)
-
-    def _receive(self, call: TrialCall, trial: _OpenTrial | None) -> _OpenTrial | None:
-        request = call.request
-        if isinstance(request, Task):
-            if trial is not None:
-                call.set_exception(RuntimeError('a trial is already running'))
-                return trial
-            return _OpenTrial(call, self.perform_task(self._rollout_of(request)))
-        if trial is None:
-            call.set_exception(RuntimeError('the trial ended before its verdict arrived'))
-            return None
-        if not trial.ends and not trial.answer.done():
-            self.done.emit(request.payload)
-        trial.ends.append(call)
-        return trial
-
-
 @scoped_env_var(ENV_TELEMETRY_DIR)
 def web(
     policy,
@@ -178,23 +113,19 @@ def web(
     if embodiment.simulated:
         raise ValueError('the web console drives hardware in real time; run a simulated embodiment as `sim`')
 
-    logger.info('Reading the policy metadata')
-    label = policy.meta().get(policy_keys.TYPE, type(policy).__name__)
     output_path = prepare_output_dir(output_dir)
-    console = StationConsole(next_task, policy=label, host=host, port=port)
-    forwarder = TrialForwarder(partial(Rollout, policy=policy, output_path=output_path))
+    console = StationConsole(next_task, policy, output_path, host=host, port=port)
     if output_path is not None:
         embodiment.video_encoder.ensure_available()
     harness = Harness(embodiment)
     with pimm.World() as world:
-        wire.wire_embodiment(world, harness, embodiment, done=forwarder.done)
-        world.connect(console.trials, forwarder.trials)
-        world.connect(forwarder.perform_task, harness.perform_task)
+        wire.wire_embodiment(world, harness, embodiment, done=console.done)
+        world.connect(console.perform_task, harness.perform_task)
         for name, observation in embodiment.observations.items():
             if name.startswith(keys.IMAGE_PREFIX):
                 world.connect(observation.source, console.cameras[name])
         producers = [cs for cs in embodiment.control_systems if cs is not None]
-        world.run([forwarder, harness], [*producers, console])
+        world.run([harness], [*producers, console])
 
 
 web_cfg = cfn.Config(
