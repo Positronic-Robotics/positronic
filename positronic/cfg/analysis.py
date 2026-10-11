@@ -18,6 +18,7 @@ from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
+from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
@@ -646,7 +647,7 @@ def phail_uph(ep: Episode) -> float | None:
     timelines = ep.timelines
     # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
     timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
-    duration = ep.get('eval.duration') or (ep.bounds(timeline).finish - ep.bounds(timeline).start) / 1e9
+    duration = ep.get(eval_keys.DURATION) or (ep.bounds(timeline).finish - ep.bounds(timeline).start) / 1e9
     if not duration:
         return None
     return items / (duration / 3600)
@@ -904,7 +905,7 @@ def phail_episodes_table():
 def phail_leaderboard():
     def group_fn(episodes: list[Episode]):
         count = len(episodes)
-        total_duration = sum(_effective_duration('eval.duration', ep) for ep in episodes)
+        total_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in episodes)
         failed_count = sum(1 for ep in episodes if ep['status'] != 'Pass')
 
         # Per-object aggregation: compute UPH and completion per object type, then average equally.
@@ -915,7 +916,7 @@ def phail_leaderboard():
         object_uphs = []
         object_completions = []
         for obj_eps in by_object.values():
-            obj_duration = sum(_effective_duration('eval.duration', ep) for ep in obj_eps)
+            obj_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in obj_eps)
             obj_items = sum(ep['eval.successful_items'] for ep in obj_eps)
             obj_possible = sum(ep['eval.total_items'] for ep in obj_eps)
             if obj_duration > 0:

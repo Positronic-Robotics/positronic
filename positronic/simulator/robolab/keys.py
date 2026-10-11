@@ -8,6 +8,7 @@ top-level ``keys`` from its own directory. The eval config reads it as ``positro
 EPISODE_LENGTH = 'robolab.episode_length'
 # The phrasing of the instruction, which the eval config owns and ``_reset_token`` reads back.
 INSTRUCTION_TYPE = 'robolab.instruction_type'
+SUBTASK = 'subtask'
 
 # The cameras RoboLab renders, named as the env's ``image_obs`` group names them.
 OVER_SHOULDER_LEFT_CAMERA = 'over_shoulder_left_camera'

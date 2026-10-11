@@ -5,6 +5,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
+from positronic.eval import keys as eval_keys
 from utilities.release_phail import _duration, verify_inference
 
 
@@ -25,7 +26,7 @@ def test_duration_uses_the_recordings_clock(timelines, seconds):
 
 
 def test_explicit_duration_does_not_require_signals():
-    assert _duration(EpisodeContainer({'eval.duration': 12.5})) == 12.5
+    assert _duration(EpisodeContainer({eval_keys.DURATION: 12.5})) == 12.5
 
 
 def test_missing_duration_and_clock_is_an_error():

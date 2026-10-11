@@ -10,6 +10,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
+from positronic.eval import keys as eval_keys
 from positronic.server.positronic_server import app_state_restored, configure_tables
 
 
@@ -107,7 +108,7 @@ def test_analysis_derives_duration_and_rates_on_the_recording_clock(timelines):
     assert analysis.unified_uph(episode) == 720
     assert analysis.phail_uph(episode) == 720
     assert analysis._baseline_uph(episode, items=2) == 720
-    assert analysis._effective_duration('eval.duration', episode) == 10
+    assert analysis._effective_duration(eval_keys.DURATION, episode) == 10
     table = analysis.checkpoint_table()
     assert table.group_fn([episode])['UPH'] == 720
 

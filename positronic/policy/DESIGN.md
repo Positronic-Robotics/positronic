@@ -325,7 +325,7 @@ emission for commands. These coordinates align training, replay, and viewing wit
 the original message timestamps. Producer timelines cannot use these two names.
 Writing is synchronous and may slow execution. An episode's answer waits for recording to close.
 The harness stores `runtime.metadata` with the policy definition metadata before policy cleanup.
-Inference input/output recording and custom signal recording are deferred.
+TODO: Add per-call records for the policy stack, remote inference payloads, and custom values.
 
 Timing is part of logging: framework spans cover processor resumptions, codecs,
 and submitted jobs, with parent-child links. The outermost processor span times

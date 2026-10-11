@@ -54,7 +54,7 @@ def _libero_eval(
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.libero.franka', static_meta=bundled_panda_model()
     )
-    privileged = {'sim_state': proxy.privileged['sim_state']}
+    privileged = {libero_keys.SIM_STATE: proxy.privileged[libero_keys.SIM_STATE]}
     # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
     task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout)
 

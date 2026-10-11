@@ -23,7 +23,6 @@ import torch  # noqa: E402
 from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 
 from positronic.vendors.lerobot.to_lerobot import EpisodeDictDataset, append_data_to_dataset  # noqa: E402
-from positronic.vendors.lerobot_0_3_3.to_lerobot import EpisodeDictDataset as LegacyEpisodeDictDataset  # noqa: E402
 
 
 @pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
@@ -67,12 +66,11 @@ def test_export_keeps_actions_and_observations_aligned_on_the_recording_clock(tm
     ('preferred', 'other'),
     [(HARNESS_WORLD, RECEIVED_WORLD), (HARNESS_WORLD, RECORDED_TIME), (RECEIVED_WORLD, RECORDED_TIME)],
 )
-@pytest.mark.parametrize('adapter', [EpisodeDictDataset, LegacyEpisodeDictDataset], ids=['current', '0.3.3'])
-def test_export_uses_the_preferred_clock(tmp_path, preferred, other, adapter):
+def test_export_uses_the_preferred_clock(tmp_path, preferred, other):
     with LocalDatasetWriter(tmp_path) as dataset, dataset.new_episode() as writer:
         for i in range(3):
             writer.append('value', i, Time(**{preferred: i * 100_000_000, other: i * 1_000_000_000}))
-    rows = adapter(LocalDataset(tmp_path), fps=20)[0]
+    rows = EpisodeDictDataset(LocalDataset(tmp_path), fps=20)[0]
     np.testing.assert_array_equal(rows['value'], [0, 0, 1, 1])
 
 

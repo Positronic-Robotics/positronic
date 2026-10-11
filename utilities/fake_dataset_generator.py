@@ -137,7 +137,7 @@ class FakeGenerator(pimm.ControlSystem):
                 'eval.successful_items': successful_items,
                 'eval.outcome': outcome,
                 'eval.notes': notes,
-                'eval.duration': episode_duration,
+                eval_keys.DURATION: episode_duration,
                 'eval.cap_per_item': self.cap_per_item,
                 'eval.tote_placement': random.choice(['left', 'right']),
                 'eval.external_camera': random.choices(['left', 'right', 'NA'], [5, 5, 1])[0],

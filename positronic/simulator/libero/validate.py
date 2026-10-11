@@ -50,6 +50,7 @@ run picks up a ``~/.libero`` written by some earlier, differently-located clone.
 
 import argparse
 
+import keys
 import numpy as np
 import protocol  # pyright: ignore[reportMissingImports]
 from env import LiberoEnv
@@ -97,11 +98,10 @@ def _goal_qpos(c) -> np.ndarray:
 
 
 def _check_serve(env: LiberoEnv, token: dict) -> None:
-    env.reset(token)
-    out = None
+    out = env.reset(token)
     for _ in range(5):
         out = env.step(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
-    assert {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'grip', 'sim_state'} <= out['obs'].keys()
+    assert {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'grip', keys.SIM_STATE} <= out['obs'].keys()
     print('  serve smoke: OK (5 hold steps, obs keys present)')
 
 

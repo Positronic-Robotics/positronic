@@ -20,6 +20,7 @@ MOUNTS = 'mounts'
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
 SUCCESS = 'eval.success'
 TERMINATED = 'eval.terminated'
+DURATION = 'eval.duration'
 # Whether the trial charged each model call the wall time it really took. True on a real rig whatever the
 # task asked, since it cannot hold the world still while the model thinks.
 CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'

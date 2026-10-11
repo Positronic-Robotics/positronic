@@ -63,7 +63,9 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras):
             trials += [(trial, {**params, robolab_keys.INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
         return number_trials(trials)
 
-    return Eval(embodiment, tasks, privileged={'subtask': proxy.privileged['subtask']}, done=proxy.done)
+    return Eval(
+        embodiment, tasks, privileged={robolab_keys.SUBTASK: proxy.privileged[robolab_keys.SUBTASK]}, done=proxy.done
+    )
 
 
 # Every task the benchmark holds, in one run.

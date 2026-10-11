@@ -26,7 +26,7 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observ
 from positronic.eval import keys as eval_keys
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
 from positronic.simulator.env_server import telemetry as env_telemetry
-from positronic.simulator.mujoco.sim import MujocoSim
+from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION, MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
 from positronic.utils import package_assets_path
 
@@ -99,13 +99,13 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     assert episode.static[eval_keys.TIMEOUT] == 0.4
     # The post-loader scene description rides robot_meta into static: with eval.seed it makes
     # the episode self-contained for downstream scoring and faithful replay.
-    assert episode.static['scene_xml'].startswith('<mujoco')
+    assert episode.static[SCENE_XML].startswith('<mujoco')
     signals = episode.signals
     assert keys.TARGET_EE_POSE in signals
     assert 'target_grip' in signals
     assert keys.WRIST_IMAGE in signals
     # Privileged ground truth: the full sim state is recorded as a time-series signal.
-    assert 'sim_state.mjSTATE_INTEGRATION' in signals
+    assert SIM_STATE_INTEGRATION in signals
 
     camera_samples = list(signals[keys.WRIST_IMAGE])
     assert camera_samples, 'Camera signal for handcam_left is empty'
@@ -123,7 +123,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
             'positronic/assets/mujoco/franka_table.xml', positronic.cfg.simulator.stack_cubes_loaders()
         )
         reference.reset(seed=seed)
-        first_state, _ = list(ds[i].signals['sim_state.mjSTATE_INTEGRATION'])[0]
+        first_state, _ = list(ds[i].signals[SIM_STATE_INTEGRATION])[0]
         np.testing.assert_allclose(first_state, reference.save_state()['mjSTATE_INTEGRATION'], rtol=1e-6)
 
     pose_signal = signals[keys.TARGET_EE_POSE]
@@ -373,7 +373,7 @@ def test_sim_reset_seed_reproduces_scene():
     # Model fields pass through XML text, so they round-trip to float-printing precision;
     # the state arrays are set verbatim and stay exact.
     replayed = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders)
-    replayed.load_state({**third, 'scene_xml': first_xml}, reset_time=False)
+    replayed.load_state({**third, SCENE_XML: first_xml}, reset_time=False)
     np.testing.assert_allclose(replayed.model.body('marker_body').pos, first_marker, rtol=1e-6)
     for name, array in replayed.save_state().items():
         np.testing.assert_array_equal(array, third[name])

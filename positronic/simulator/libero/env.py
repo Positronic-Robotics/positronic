@@ -46,6 +46,7 @@ import pathlib
 import random
 from typing import Any
 
+import keys
 import mujoco
 import numpy as np
 import protocol  # pyright: ignore[reportMissingImports]
@@ -330,7 +331,7 @@ class LiberoEnv(EnvProtocol):
             'eef_pos': eef_pos,
             'eef_quat': mat2quat(eef_rot),
             'grip': float(np.clip(grip, 0.0, 1.0)),
-            'sim_state': self._env.env.sim.get_state().flatten(),
+            keys.SIM_STATE: self._sim.get_state().flatten(),
         }
 
     def close(self) -> None:

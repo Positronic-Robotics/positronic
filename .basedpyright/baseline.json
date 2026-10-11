@@ -2526,14 +2526,6 @@
                 }
             },
             {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 58,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportAttributeAccessIssue",
                 "range": {
                     "startColumn": 22,
@@ -2720,14 +2712,6 @@
                     "endColumn": 54,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 35,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/simulator/libero/make_fixture.py": [
@@ -2741,14 +2725,6 @@
             }
         ],
         "./positronic/simulator/libero/validate.py": [
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 91,
-                    "endColumn": 94,
-                    "lineCount": 1
-                }
-            },
             {
                 "code": "reportOptionalSubscript",
                 "range": {

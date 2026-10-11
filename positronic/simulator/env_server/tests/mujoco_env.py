@@ -27,7 +27,7 @@ from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.env_server.protocol import COMMAND_DELTA, COMMAND_JOINT_DELTA, COMMAND_JOINT_POS, COMMAND_POSE
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
-from positronic.simulator.mujoco.sim import MujocoFrankaState, MujocoSim
+from positronic.simulator.mujoco.sim import SIM_STATE, MujocoFrankaState, MujocoSim
 from positronic.utils import package_assets_path
 
 _ROTMAT = geom.Rotation.Representation.ROTATION_MATRIX
@@ -90,6 +90,8 @@ class MujocoEnv(EnvProtocol):
     def _read_obs(self) -> dict[str, Any]:
         state = self._state_recv.read().data
         ee_pose = state.ee_pose
+        sim_state = self._sim_state_recv.read()
+        assert sim_state is not None
         # ``q``/``dq`` already copy out of the sim's reused state buffer; ``ee_pose`` translation is a
         # live view into it, so copy here too — otherwise the next ``step`` overwrites this obs.
         return {
@@ -100,7 +102,7 @@ class MujocoEnv(EnvProtocol):
             'status': int(state.status.value),
             'grip': float(self._grip_recv.read().data),
             'cameras': {name: recv.read().data.array.copy() for name, recv in self._camera_recvs.items()},
-            'sim_state': dict(self._sim_state_recv.read().data),
+            SIM_STATE: dict(sim_state.data),
         }
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -202,7 +204,7 @@ class StackCubesAdapter(WireCommandAdapter):
         return obs
 
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        return {'sim_state': raw_obs['sim_state']}
+        return {SIM_STATE: raw_obs[SIM_STATE]}
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         return None  # native stack_cubes scores downstream — it reports no live terminal
@@ -214,6 +216,4 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
     plan = [Task(instruction_source='Pick up the green cube and place it on the red cube.', timeout_sec=15.0)]
-    return Eval(
-        embodiment, partial(iter, plan), privileged={'sim_state': proxy.privileged['sim_state']}, done=proxy.done
-    )
+    return Eval(embodiment, partial(iter, plan), privileged={SIM_STATE: proxy.privileged[SIM_STATE]}, done=proxy.done)

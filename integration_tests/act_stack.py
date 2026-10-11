@@ -23,6 +23,7 @@ from positronic.dataset.video import VideoSignal
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
+from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION
 from positronic.simulator.mujoco.transforms import load_spec
 from positronic.utils import package_assets_path
 
@@ -101,7 +102,7 @@ def is_supported_stack(model: mj.MjModel, data: mj.MjData, red: int, green: int,
 
 
 def cube_trace(
-    episode: Episode, timeline: str, scene_key: str = 'scene_xml', state_key: str = f'sim_state.{STATE_SPEC.name}'
+    episode: Episode, timeline: str, scene_key: str = SCENE_XML, state_key: str = SIM_STATE_INTEGRATION
 ) -> dict[str, np.ndarray]:
     spec, _ = load_spec(episode.static[scene_key], Path(package_assets_path('assets/mujoco')))
     model = spec.compile()
