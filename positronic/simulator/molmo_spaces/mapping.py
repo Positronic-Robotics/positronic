@@ -246,8 +246,9 @@ def load_right_view_blocked(path: Path = RIGHT_VIEW_BLOCKED_PATH) -> dict[Benchm
 
 
 def write_right_view_blocked(swept: dict[BenchmarkPath, Collection[int]], path: Path = RIGHT_VIEW_BLOCKED_PATH) -> None:
-    """Set the entries of ``swept`` in the file at ``path`` and keep its other entries."""
-    entries = {b.relative.as_posix(): sorted(v) for b, v in load_right_view_blocked(path).items()}
+    """Set the entries of ``swept`` in the file at ``path`` and keep its other entries; an absent file has none."""
+    kept = load_right_view_blocked(path) if path.exists() else {}
+    entries = {b.relative.as_posix(): sorted(v) for b, v in kept.items()}
     entries |= {b.relative.as_posix(): sorted(v) for b, v in swept.items()}
     path.write_text(json.dumps(dict(sorted(entries.items())), indent=1) + '\n')
 

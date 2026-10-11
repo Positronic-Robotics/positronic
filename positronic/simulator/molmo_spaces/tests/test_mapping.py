@@ -393,6 +393,12 @@ def test_a_blocked_list_write_sets_its_benchmarks_and_keeps_the_others(tmp_path:
     assert mapping.load_right_view_blocked(path) == {_HARD: frozenset({2}), other: frozenset()}
 
 
+def test_a_blocked_list_write_creates_an_absent_file(tmp_path: Path):
+    path = tmp_path / 'blocked.json'
+    mapping.write_right_view_blocked({_HARD: [3, 1]}, path)
+    assert mapping.load_right_view_blocked(path) == {_HARD: frozenset({1, 3})}
+
+
 def test_no_public_eval_pins_an_episode_the_committed_list_blocks():
     blocked = mapping.load_right_view_blocked()
     for name in PUBLIC_EVALS:
