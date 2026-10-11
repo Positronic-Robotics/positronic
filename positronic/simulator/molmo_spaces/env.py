@@ -99,40 +99,6 @@ class _JointGraspSampler(JsonEvalTaskSampler):
         super().set_joint_values(env)
 
 
-# The camera systems that record the Franka benchmarks, by the name an episode's source gives.
-_CAMERA_SYSTEMS = {system.__name__: system for system in (FrankaDroidCameraSystem, FrankaOmniPurposeCameraSystem)}
-
-
-def _left_shoulder_config(episode: Any) -> Any:
-    """The config of the episode's left shoulder camera, in the camera system that recorded the episode."""
-    system = episode.source.camera_system_class if episode.source is not None else None
-    if system not in _CAMERA_SYSTEMS:
-        raise ValueError(f'camera system {system!r} is not one of {sorted(_CAMERA_SYSTEMS)}')
-    recorded = {camera.name for camera in episode.cameras}
-    for config in _CAMERA_SYSTEMS[system]().cameras:
-        if config.name in mapping.LEFT_SHOULDER_CAMERAS and config.name in recorded:
-            return config
-    raise ValueError(f'the episode records none of {mapping.LEFT_SHOULDER_CAMERAS}; it records {sorted(recorded)}')
-
-
-def _with_right_shoulder_camera(episode: Any, rng: np.random.Generator) -> Any:
-    """A copy of ``episode`` with a right shoulder camera: the left camera's nominal pose mirrored and randomized."""
-    left = _left_shoulder_config(episode)
-    offset, quat = mapping.mirror_camera_pose(left.camera_offset, left.camera_quaternion)
-    offset, quat = mapping.jitter_camera_pose(offset, quat, left.pos_noise_range, left.orientation_noise_degrees, rng)
-    right = RobotMountedCameraSpec(
-        name=mapping.RIGHT_SHOULDER_CAMERA,
-        reference_body_names=left.reference_body_names,
-        camera_offset=offset.tolist(),
-        lookat_offset=left.lookat_offset,
-        camera_quaternion=quat.tolist(),
-        fov=left.fov,
-    )
-    with_right = episode.model_copy()
-    with_right.cameras = [*episode.cameras, right]
-    return with_right
-
-
 class MolmoSpacesEnv(EnvProtocol):
     """A MolmoSpaces benchmark environment with one active episode."""
 
@@ -170,11 +136,45 @@ class MolmoSpacesEnv(EnvProtocol):
         if name != mapping.MOLMO_GRASP_SITE and not name.endswith(f'/{mapping.MOLMO_GRASP_SITE}'):
             raise ValueError(f'arm move group measures at site {name!r}, expected {mapping.MOLMO_GRASP_SITE!r}')
 
+    @staticmethod
+    def _left_shoulder_config(episode: Any) -> Any:
+        """The config of the episode's left shoulder camera, in the camera system that recorded the episode."""
+        # The camera systems that record the Franka benchmarks, by the name an episode's source gives.
+        systems = {system.__name__: system for system in (FrankaDroidCameraSystem, FrankaOmniPurposeCameraSystem)}
+        system = episode.source.camera_system_class if episode.source is not None else None
+        if system not in systems:
+            raise ValueError(f'camera system {system!r} is not one of {sorted(systems)}')
+        recorded = {camera.name for camera in episode.cameras}
+        for config in systems[system]().cameras:
+            if config.name in mapping.LEFT_SHOULDER_CAMERAS and config.name in recorded:
+                return config
+        raise ValueError(f'the episode records none of {mapping.LEFT_SHOULDER_CAMERAS}; it records {sorted(recorded)}')
+
+    @staticmethod
+    def _with_right_shoulder_camera(episode: Any, rng: np.random.Generator) -> Any:
+        """A copy of ``episode`` with a right shoulder camera: the left camera's nominal pose mirrored and jittered."""
+        left = MolmoSpacesEnv._left_shoulder_config(episode)
+        offset, quat = mapping.mirror_camera_pose(left.camera_offset, left.camera_quaternion)
+        offset, quat = mapping.jitter_camera_pose(
+            offset, quat, left.pos_noise_range, left.orientation_noise_degrees, rng
+        )
+        right = RobotMountedCameraSpec(
+            name=mapping.RIGHT_SHOULDER_CAMERA,
+            reference_body_names=left.reference_body_names,
+            camera_offset=offset.tolist(),
+            lookat_offset=left.lookat_offset,
+            camera_quaternion=quat.tolist(),
+            fov=left.fov,
+        )
+        with_right = episode.model_copy()
+        with_right.cameras = [*episode.cameras, right]
+        return with_right
+
     def _build(self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None) -> None:
         if self._sampler is not None:
             self._sampler.close()
         episodes = self._episodes_of(bench)
-        episode = _with_right_shoulder_camera(episodes[episode_index], mapping.episode_rng(bench, episode_index))
+        episode = self._with_right_shoulder_camera(episodes[episode_index], mapping.episode_rng(bench, episode_index))
         cfg = _DroidEvalConfig()
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark.
@@ -344,7 +344,7 @@ class RightViewCheck(BaseModel):
     episode: int
     right_blocked: bool | None = None
     blocker: str | None = None
-    error: str | None = None  # The episode failed to build or reset; a rerun checks it again.
+    error: str | None = None  # Why the episode failed to build or reset.
 
     @property
     def clean(self) -> bool:
@@ -353,11 +353,11 @@ class RightViewCheck(BaseModel):
 
 def _check_right_view(env: MolmoSpacesEnv, bench: mapping.BenchmarkPath, index: int) -> RightViewCheck:
     rel = bench.relative.as_posix()
-    try:
+    try:  # rules-allow: swallowed-error — the error line keeps the episode's benchmark out of the list
         frame = env.reset({**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: index, mapping.TOKEN_SEED: None})
         height, width = frame[protocol.FRAME_OBS][mapping.RIGHT_SHOULDER_CAMERA].shape[:2]
         blocker = env.right_view_blocker(width / height)
-    except Exception as error:  # Record it; a rerun checks the episode again.
+    except Exception as error:
         return RightViewCheck(bench=rel, episode=index, error=repr(error))
     return RightViewCheck(bench=rel, episode=index, right_blocked=blocker is not None, blocker=blocker)
 
