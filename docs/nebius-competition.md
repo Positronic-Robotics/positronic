@@ -71,25 +71,33 @@ Start the image with the network denied, and wait for its server. This test need
 no submission.
 
 ```bash
-docker run -d --name policy --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
-deadline=$((SECONDS + 900))
-until docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', \
-  headers={'Authorization': 'Bearer test'}), timeout=5).read().decode())" 2>/dev/null; do
-  [ "$(docker inspect -f '{{.State.Running}}' policy)" = true ] || { echo "the server exited"; break; }
-  [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
-  sleep 5
-done
-docker logs --tail 30 policy
-docker rm -f policy
+probe='import urllib.error, urllib.request as u
+try:
+    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
+          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
+except urllib.error.HTTPError as e:
+    print("the server answered HTTP", e.code)'
+if cid=$(docker run -d --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+  deadline=$((SECONDS + 900))
+  until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
+    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
+    sleep 5
+  done
+  docker logs --tail 30 "$cid"
+  docker rm -f "$cid"
+fi
 ```
 
 The loop calls the keepalive route every 5 s, for up to 900 s. A model loads more slowly on a CPU than on
-a GPU. The loop ends in one of three ways:
+a GPU. The loop ends in one of four ways:
 
 - `{"alive_seconds": ...}`: the server loaded its weights, and it serves on the CPU.
 - `the server exited`: read the log. A correct image loads its weights, and then it stops on the missing
   GPU.
+- `the server answered HTTP <code>`: the server runs, but it refused the request. A `401` means that the
+  server does not accept the token in `AUTH_TOKEN`. On the platform, this fails the run with
+  `policy_setup_crash`.
 - `no answer in 900 s`: the server hung. Read the log for the step where it stopped.
 
 The log must not show a DNS error. The `docker exec` line uses the Python of the example images. In your
@@ -246,23 +254,30 @@ answers, from inside the container, with the token:
 
 ```bash
 docker network create --internal noegress
-docker run -d --name policy --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
-deadline=$((SECONDS + 600))
-until docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', \
-  headers={'Authorization': 'Bearer test'}), timeout=5).read().decode())" 2>/dev/null; do
-  [ "$(docker inspect -f '{{.State.Running}}' policy)" = true ] || { echo "the server exited"; break; }
-  [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
-  sleep 5
-done
-docker logs --tail 30 policy
-docker rm -f policy
+probe='import urllib.error, urllib.request as u
+try:
+    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
+          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
+except urllib.error.HTTPError as e:
+    print("the server answered HTTP", e.code)'
+if cid=$(docker run -d --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+  deadline=$((SECONDS + 600))
+  until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
+    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
+    sleep 5
+  done
+  docker logs --tail 30 "$cid"
+  docker rm -f "$cid"
+fi
 ```
 
 - The loop calls the route every 5 s, for up to 600 s. A slow model binds port 8000 late: FLUX 3 Action
   binds it after about 140 s.
 - The route answers `{"alive_seconds": ...}` when the model has loaded and warmed.
 - `the server exited` means that the server crashed. The log shows why.
+- `the server answered HTTP <code>` means that the server refused the request. A `401` means that it does
+  not accept the token in `AUTH_TOKEN`.
 - `no answer in 600 s` means that the server hung, or that it starts too slowly. On the platform, machine
   boot, the image pull and the server's start share one deadline of 1800 s.
 - A server that checks the token answers `401` when the request has no token.
@@ -270,7 +285,7 @@ docker rm -f policy
   that the image has.
 
 After you push the image, read its compressed size. The size limit counts the layers and the config, as
-this command adds them:
+this command adds them. The command needs [jq](https://jqlang.org/download/).
 
 ```bash
 docker buildx imagetools inspect --raw docker.io/<you>/<image>:v1 \
