@@ -139,7 +139,7 @@ Write the password into a file of its own and name the file:
 ```bash
 mkdir -p ~/.config/positronic
 install -m 600 /dev/null ~/.config/positronic/registry-password
-printf 'Registry token: '; read -rs token; echo        # paste the token at the prompt
+printf 'Registry token: '; IFS= read -rs token; echo        # paste the token at the prompt
 printf %s "$token" > ~/.config/positronic/registry-password; unset token
 uv run positronic eval run --eval=<eval> \
     --policy-image=<registry>/<you>/<image>@sha256:<digest> \

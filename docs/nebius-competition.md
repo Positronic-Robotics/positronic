@@ -90,7 +90,7 @@ fi
 ```
 
 The loop calls the keepalive route every 5 s, for up to 900 s. A model loads more slowly on a CPU than on
-a GPU. The loop ends in one of four ways:
+a GPU. The loop ends with one of these lines:
 
 - `{"alive_seconds": ...}`: the server loaded its weights, and it serves on the CPU.
 - `the server exited`: read the log. A correct image loads its weights, and then it stops on the missing
@@ -101,7 +101,9 @@ a GPU. The loop ends in one of four ways:
 - `no answer in 900 s`: the server hung. Read the log for the step where it stopped.
 
 The log must not show a DNS error. The `docker exec` line uses the Python of the example images. In your
-own image, use any HTTP client that the image has. The full test on a GPU machine is in
+own image, use any HTTP client that the image has. The probe runs inside the container, so it also gets
+an answer from a server that listens only on `127.0.0.1`. The platform connects from outside the
+container, so such a server fails with `policy_setup_crash`. The full test on a GPU machine is in
 [Test the image on a GPU](#test-the-image-on-a-gpu).
 
 ### Submit
@@ -158,7 +160,7 @@ eval against the server in the image.
 
 ### What the platform runs
 
-- The server listens on port 8000 and speaks the positronic
+- The server listens on port 8000 on all interfaces (`0.0.0.0`), and speaks the positronic
   [session protocol](https://github.com/Positronic-Robotics/positronic/blob/main/positronic/offboard/README.md).
 - The platform starts the image with no arguments. Your `ENTRYPOINT` or `CMD` starts the server.
 - The platform sets one environment variable, `AUTH_TOKEN`, the bearer token of the run. It passes no
@@ -216,7 +218,7 @@ and press Enter:
 ```bash
 mkdir -p ~/.config/positronic
 install -m 600 /dev/null ~/.config/positronic/registry-password
-printf 'Registry token: '; read -rs token; echo
+printf 'Registry token: '; IFS= read -rs token; echo
 printf %s "$token" > ~/.config/positronic/registry-password; unset token
 ```
 
