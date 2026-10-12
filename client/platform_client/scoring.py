@@ -35,7 +35,7 @@ class EpisodeScore(BaseModel):
 
 
 class MeanEpisodeScore(BaseModel):
-    """The mean episode score of a run's labels."""
+    """The mean of a run's episode scores, or of its task means."""
 
     model_config = _SCORING_CONFIG
 

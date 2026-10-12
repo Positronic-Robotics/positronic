@@ -298,13 +298,27 @@ directory and gives its `Label`: the episode's id and task, its end, and a list 
 event is a stage that the arm reached, a count of items delivered, a count of subtasks achieved, or
 one of the three end events: `Success`, `Fail` and `Safety`. The earliest end event gives the
 `outcome`. A label with no end event ran out of time. The label's other views, such as
-`stage_seconds` and `placements`, are properties computed from its events. `label.until(seconds)`
+`stage_seconds` and `placements`, are properties computed from its events. `Label.until(seconds)`
 gives the label as it stood at that time.
 
 `platform_client.scoring` states what a label is worth. An eval's `Scoring` names its labelers in
-order of precedence, and its primary metric. `label(episode, scoring.labelers)` gives the label of
-the first labeler that labels the episode. `score(scoring, labels)` gives `Scores`, which holds
-three numbers. `primary` is the mean episode score, and a board ranks on it. `episodes` counts every
+order of precedence, and its primary metric. `label(episode, scoring.labelers)` gives a pair: the
+first labeler that labels the episode, and its label. It gives None when no labeler labels the
+episode. `score(scoring, labels)` takes the label of each episode, or None. For the episode
+directories `episodes` of one run:
+
+```python
+from platform_client.evals import EvalRef, public_eval
+from platform_client.labels import label
+from platform_client.scoring import score
+
+scoring = public_eval(EvalRef('molmo.franka_pick_mini')).scoring
+picked = [label(episode, scoring.labelers) for episode in episodes]
+scores = score(scoring, [None if given is None else given[1] for given in picked])
+```
+
+`score` gives `Scores`, which holds three numbers. `primary` is the mean episode score, or the mean
+of the task means where the metric sets `per_task`, and a board ranks on it. `episodes` counts every
 episode, and `unscored` counts the episodes that no labeler labelled. `primary` does not count those
 as failures. No file holds a score: a score is a function of the labels.
 

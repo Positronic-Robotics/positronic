@@ -1,7 +1,7 @@
 """One labeler's account of one recorded episode, and the labelers of the public evals.
 
 A `Label` holds one episode's timed events, its end and its totals, and its views are properties of the events.
-`label` gives an episode directory the label of the first labeler, in precedence order, that labels it.
+`label` gives the first labeler, in precedence order, that labels an episode directory, with its label.
 """
 
 from __future__ import annotations
