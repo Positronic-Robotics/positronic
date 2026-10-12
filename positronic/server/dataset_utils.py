@@ -568,14 +568,14 @@ def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, 
     return max(_MIN_ENCODED_SIDE, int(width * scale) // 2 * 2), max(_MIN_ENCODED_SIDE, int(height * scale) // 2 * 2)
 
 
-def _timestamp_columns(sig: Signal, on_received_world: bool) -> dict[str, np.ndarray]:
-    """Each timeline of `sig`. In an episode on `received.world`, a signal on `recorded` alone is on it too.
+def _timestamp_columns(sig: Signal, replay_timeline: str | None) -> dict[str, np.ndarray]:
+    """Each timeline of `sig`. A signal on `recorded` and not on `replay_timeline` is put on it too.
 
-    `recorded` is the world clock a writer named before timelines had names, so the coordinates are the same.
+    `recorded` is the world clock of a file with no format version, so its coordinates hold on the world timelines.
     """
     columns = {name: np.asarray(sig.timestamps(name), dtype=np.int64) for name in sig.timelines}
-    if on_received_world and RECORDED_TIME in columns and RECEIVED_WORLD not in columns:
-        columns[RECEIVED_WORLD] = columns[RECORDED_TIME]
+    if replay_timeline is not None and RECORDED_TIME in columns and replay_timeline not in columns:
+        columns[replay_timeline] = columns[RECORDED_TIME]
     return columns
 
 
@@ -678,12 +678,12 @@ def _log_video_signals(
     ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_resolution: int, max_hz: float
 ) -> Iterator[bytes]:
     """Log stored videos as frame references and raw images as a video stream."""
-    on_received_world = RECEIVED_WORLD in ep.timelines
+    replay_timeline = duration_timeline(ep.timelines)
     for name in signals.videos:
         sig = ep.signals[name]
         if not len(sig):
             continue
-        timestamps = _timestamp_columns(sig, on_received_world)
+        timestamps = _timestamp_columns(sig, replay_timeline)
         if isinstance(sig, VideoSignal):
             kept = _sample_indices(timestamps, max_hz)
             video_bytes = _mp4_reduced_to(sig.video_path, max_resolution, kept if len(kept) < len(sig) else None)
@@ -744,14 +744,14 @@ def _log_numeric_signals(
     pose_data = {}
     unplotted = signals.unplotted
 
-    on_received_world = RECEIVED_WORLD in ep.timelines
+    replay_timeline = duration_timeline(ep.timelines)
     for key in signals.numerics:
         if key in unplotted and key not in stash_keys:  # nothing would read the values
             continue
         sig = ep.signals[key]
         if len(sig) == 0:
             continue
-        timestamps = _timestamp_columns(sig, on_received_world)
+        timestamps = _timestamp_columns(sig, replay_timeline)
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
@@ -940,12 +940,12 @@ def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStre
     """
     plotted = signals.plotted_texts
     ep_signals = ep.signals  # `Episode.signals` builds a new dict on every read
-    on_received_world = RECEIVED_WORLD in ep.timelines
+    replay_timeline = duration_timeline(ep.timelines)
     for key in signals.texts:
         sig = ep_signals[key]
         if not len(sig):
             continue
-        timestamps = _timestamp_columns(sig, on_received_world)
+        timestamps = _timestamp_columns(sig, replay_timeline)
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
         time_idx = _rerun_indexes({name: values[changes] for name, values in timestamps.items()})

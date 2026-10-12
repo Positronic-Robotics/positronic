@@ -1118,7 +1118,8 @@ def main(
     """Visualize a Dataset with Rerun.
 
     Each signal retains its timeline names. Known nanosecond clocks use durations; other names use integer sequences.
-    The initial timeline is `received.world`, `recorded`, another known clock, or the first available name.
+    The initial timeline is `harness.world`, `received.world`, `recorded`, another known clock, or the first available
+    name. A signal on `recorded` alone is also put on the initial timeline.
 
     Episode viewer URL params (require a known nanosecond clock):
         /episode/<id>?t=<seconds>      — open paused at seconds from episode start
