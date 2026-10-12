@@ -1705,8 +1705,8 @@ def test_a_driver_with_no_desk_session_answers_without_desk_prepare(world, monke
     assert answer.result() is RecoveryOutcome.NOT_CLEARED
 
 
-def test_a_failed_desk_prepare_answers_the_console_and_ends_the_run(desk, world, monkeypatch):
-    """As at a failed run start: the arm has no FCI, so the run ends on its next read of the arm."""
+def test_a_failed_desk_prepare_answers_the_console_and_the_run_goes_on_with_no_connection(desk, world, monkeypatch):
+    """FCI stays off, so the driver connects to the arm no more until a Desk step succeeds."""
     arm = FakeArm(PARK)
     arm.error = 1
     monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
@@ -1718,19 +1718,148 @@ def test_a_failed_desk_prepare_answers_the_console_and_ends_the_run(desk, world,
 
     for _ in range(3):  # init + the opening move
         next(loop)
-    desk.raises[Call.PREPARE] = RuntimeError('TD2 self-test did not complete')
+    desk.raises[Call.PREPARE] = RuntimeError('500 Server Error: OneClientError')
     answer = recover(None)
     next(loop)
 
-    with pytest.raises(RuntimeError, match='TD2 self-test'):
+    with pytest.raises(RuntimeError, match='OneClientError'):
         answer.result()
-    arm.raises = ConnectionError('FCI is off')  # the connection FCI off ended
-    with pytest.raises(ConnectionError):
+    arm.raises = ConnectionError('libfranka: TCP send bytes: Connection reset by peer')  # the connection FCI off ended
+    mark = len(arm.calls)
+    for _ in range(3):
         next(loop)
+    assert arm.calls[mark:] == [], 'the run drives the connection FCI ended'
+
+
+def test_a_desk_step_that_succeeds_connects_once_and_the_run_moves_the_arm_again(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    arm.error = 1
+    reconnected = FakeArm(PARK)
+    connections = []
+
+    def connect(*_args, **_kwargs) -> FakeArm:
+        connections.append(reconnected)
+        return reconnected
+
+    monkeypatch.setattr(franka.pf, 'Robot', connect)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    recover = _recoverer(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    answer = recover(None)
+    next(loop)
+    move = _mover(world, driver)(command.JointPosition(JOGGED))
+    for _ in range(20):
+        if move.done():
+            break
+        next(loop)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    move.result()
+    assert len(connections) == 1
+    assert desk.calls.count(Call.DEACTIVATE_FCI) == 1
+    np.testing.assert_allclose(reconnected.targets[-1], JOGGED)
+
+
+def _run_with_no_connection(
+    desk: FakeDesk, world: pimm.World, monkeypatch, driver: franka.Robot, arm: FakeArm
+) -> tuple[Iterator[pimm.Command], StopFlag, pimm.calls.Caller[None, RecoveryOutcome]]:
+    """Run ``driver`` on ``arm`` through init and the opening move, then fail ``Desk.prepare()`` in the step a console
+    asks for, so the driver holds no connection. Every later call on ``arm`` raises, as on the connection FCI off ended.
+
+    Returns the run, its stop and the recovery caller.
+    """
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    recover = _recoverer(world, driver)
+    stop = StopFlag()
+    loop = driver.run(stop, clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected with FCI off'))
+    desk.raises[Call.PREPARE] = RuntimeError('500 Server Error: OneClientError')
+    recover(None)
+    next(loop)
+    del desk.raises[Call.PREPARE]
+    arm.raises = ConnectionError('libfranka: TCP send bytes: Connection reset by peer')
+    return loop, stop, recover
+
+
+def test_a_console_recovery_with_no_connection_runs_the_desk_step_again_and_connects(desk, world, monkeypatch):
+    """FCI is off already, so the step sends no second FCI off: a box in Recovery would refuse it."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, _stop, recover = _run_with_no_connection(desk, world, monkeypatch, driver, arm)
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+
+    answer = recover(None)
+    next(loop)
+    mark = len(reconnected.calls)
+    next(loop)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert desk.calls == [Call.PREPARE, Call.CLOSE_BRAKES, Call.DEACTIVATE_FCI, Call.PREPARE, Call.PREPARE]
+    assert Call.STATE in reconnected.calls[mark:], 'the run does not read the new connection'
+
+
+def test_a_move_with_no_connection_is_refused_and_reaches_no_arm(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    loop, _stop, _recover = _run_with_no_connection(desk, world, monkeypatch, driver, arm)
+    mark = len(arm.calls)
+
+    move = _mover(world, driver)(command.JointPosition(JOGGED))
+    feed.push(command.JointPosition(positions=JOGGED))
+    next(loop)
+
+    with pytest.raises(RuntimeError, match='no connection to the arm: 500 Server Error: OneClientError'):
+        move.result()
+    assert arm.calls[mark:] == []
+
+
+def test_a_ready_call_with_no_connection_runs_the_desk_step_and_answers_once_connected(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    ready = _readier(world, driver)
+    loop, _stop, _recover = _run_with_no_connection(desk, world, monkeypatch, driver, arm)
+    reconnected = FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED)
+    _reconnect_to(monkeypatch, reconnected)
+
+    answer = ready(None)
+    next(loop)
+
+    assert answer.result() is None
+    assert reconnected.calls[:4] == [
+        Call.SET_COLLISION_BEHAVIOR,
+        Call.SET_CONTROL_MODE,
+        Call.SET_LOAD,
+        Call.RECOVER_FROM_ERRORS,
+    ]
+
+
+def test_a_run_with_no_connection_ends_without_a_park_or_a_brake_release(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, stop, _recover = _run_with_no_connection(desk, world, monkeypatch, driver, arm)
+    mark, desk_mark = len(arm.calls), len(desk.calls)
+
+    stop.stopped = True
+    _drive(loop)
+
+    assert arm.calls[mark:] == [Call.STOP]
+    assert desk.calls[desk_mark:] == []
+    assert desk.released
 
 
 def test_a_new_connection_that_fails_its_configuration_never_drives_the_arm(desk, world, monkeypatch):
-    """As at a failed run start, the run ends on its next read of the arm."""
     arm = FakeArm(PARK)
     arm.error = 1
     reconnected = FakeArm(PARK)
@@ -1750,8 +1879,10 @@ def test_a_new_connection_that_fails_its_configuration_never_drives_the_arm(desk
     with pytest.raises(RuntimeError, match='set_collision_behavior rejected'):
         answer.result()
     arm.raises = ConnectionError('FCI is off')  # the connection FCI off ended
-    with pytest.raises(ConnectionError):
+    mark = len(arm.calls)
+    for _ in range(3):
         next(loop)
+    assert arm.calls[mark:] == []
     assert reconnected.calls == [Call.SET_COLLISION_BEHAVIOR]
 
 
@@ -1870,7 +2001,7 @@ def test_a_ready_call_answers_the_error_that_desk_prepare_leaves(desk, world, mo
     assert desk.calls.count(Call.PREPARE) == 2
 
 
-def test_a_ready_call_answers_a_failed_desk_prepare(desk, world, monkeypatch):
+def test_a_ready_call_answers_a_failed_desk_prepare_and_the_run_goes_on_with_no_connection(desk, world, monkeypatch):
     arm = FakeArm(PARK)
     monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
     loop, ready = _started_with_error(arm, world)
@@ -1881,6 +2012,11 @@ def test_a_ready_call_answers_a_failed_desk_prepare(desk, world, monkeypatch):
 
     with pytest.raises(RuntimeError, match='TD2 self-test'):
         answer.result()
+    arm.raises = ConnectionError('libfranka: TCP send bytes: Connection reset by peer')  # the connection FCI off ended
+    mark = len(arm.calls)
+    for _ in range(3):
+        next(loop)
+    assert arm.calls[mark:] == [], 'the run drives the connection FCI ended'
 
 
 def test_a_ready_call_on_a_driver_with_no_desk_session_answers_the_error_without_desk(world, monkeypatch, caplog):
