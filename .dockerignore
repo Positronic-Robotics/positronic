@@ -38,7 +38,7 @@ htmlcov
 
 # Docker
 docker/*
-!docker/install-gr00t-server.sh
+!docker/install-gr00t-server-deps.sh
 
 # Outputs and datasets (shouldn't be in source anyway)
 outputs/
