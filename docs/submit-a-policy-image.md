@@ -7,8 +7,8 @@ GPU beside a simulator, plays an eval against it, and scores the result. An eval
 tasks from the platform's catalog.
 
 The container gets no network access. Bake every package, weight and tokenizer into the image, and
-test that the image starts with the network denied before you submit:
-`docker run --rm --network none <image>`.
+test that the image starts with the network denied before you submit
+([Test the image before you submit](#test-the-image-before-you-submit)).
 
 ## Example images
 
@@ -131,16 +131,16 @@ published image as a submission.
 
 ### A private image
 
-Push to a private repository and hand the platform a read-only credential for it. The platform
-copies the image into its own registry, runs it from there, and discards the credential. Nothing
-of yours stays readable to anyone else.
+Push to a private repository and hand the platform a read-only credential for it. The run pulls
+the image from your registry with that credential.
 
 Write the password into a file of its own and name the file:
 
 ```bash
 mkdir -p ~/.config/positronic
 install -m 600 /dev/null ~/.config/positronic/registry-password
-printf %s "<the registry access token>" > ~/.config/positronic/registry-password
+printf 'Registry token: '; IFS= read -rs token; echo        # paste the token at the prompt
+printf %s "$token" > ~/.config/positronic/registry-password; unset token
 uv run positronic eval run --eval=<eval> \
     --policy-image=<registry>/<you>/<image>@sha256:<digest> \
     --registry-username=<user> \
@@ -148,18 +148,38 @@ uv run positronic eval run --eval=<eval> \
 ```
 
 - The password is in the file and never on the command line, where every `ps` on the machine
-  reads it and every shell history keeps it.
+  reads it and every shell history keeps it. `read -s` keeps it off the screen and out of a
+  terminal or agent transcript, so run it in your own terminal.
 - One trailing line ending goes, so a file written with `echo` needs no trimming. Everything
   else in the file is the password, a leading or trailing space included.
 - Give the credential read on that one repository. A registry issues a token for exactly this:
   Docker Hub calls it an access token, and a cloud registry a service account key.
-- The credential opens the registry for the copy and for nothing else. It is not written to the
-  run's VM, and the policy container never sees it.
+
+What the platform does with the credential:
+
+1. At submission, the platform reads the image with it. A credential your registry refuses fails
+   the submission with `image_unpullable`, charged.
+2. After that read, the platform stores the credential as one secret for this submission. The
+   submission record holds a reference to the secret. No response and no log holds the password.
+3. When the run starts, the platform copies the credential into the run's own secret. The policy
+   VM of that run reads it before it denies the container the network.
+4. The VM writes the credential to a file that only root reads, and logs in to your registry. It
+   deletes the file, pulls the digest, and logs out. The policy container never gets the credential.
+5. When the submission ends, the platform deletes both secrets. The secret store keeps a deleted
+   secret until it purges it.
+
+- Only the platform's run services, the policy VM of that run and a platform administrator can
+  read the credential. They can read it until the purge.
+- Keep the image and the credential valid until the submission ends. A run that cannot pull
+  the image fails with `image_unpullable`. Revoke the token after the submission ends.
+- A retry with the same transaction key returns the first submission, also with a changed
+  credential. To submit with a new credential, use a new transaction key.
 
 ## Life of a submission
 
 1. The platform resolves your image reference to a digest at submission and records it as
-   `policy_image_digest`. The run uses those bytes.
+   `policy_image_digest`. The run pulls that digest from your registry when its VM starts. The
+   platform keeps no copy of the image.
 2. It refuses an image it cannot pull — anonymously, or with the credential you named
    (`image_unpullable`) — and one whose compressed size, config and layers summed, is over 50 GB
    (`image_too_large`). Both are charged to your quota. The image has two more budgets, in
@@ -226,11 +246,44 @@ holds each value below. The platform runs every image under them.
 
 ## Test the image before you submit
 
-Run it with the network denied. This reproduces the platform's own conditions and needs no GPU:
+Run it with the network denied, and wait for its server. This reproduces the platform's own
+conditions and needs no GPU:
 
 ```bash
-docker run --rm --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
+probe='import sys, urllib.error, urllib.request as u
+try:
+    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
+          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
+except urllib.error.HTTPError as e:
+    print("the server answered HTTP", e.code)
+except OSError as e:
+    reason = e.reason if isinstance(e, urllib.error.URLError) else e
+    if not isinstance(reason, (ConnectionError, TimeoutError)):
+        raise
+    sys.exit(3)'
+if cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+  deadline=$((SECONDS + 900))
+  while :; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
+    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
+    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
+    [ $? = 3 ] || break
+    sleep 5
+  done
+  docker logs --tail 30 "$cid"
+  docker rm -f "$cid"
+fi
 ```
+
+The loop calls the keepalive route every 5 s, for up to 900 s, because a model loads more slowly
+on a CPU. A ready server prints `{"alive_seconds": ...}`. A server that stops prints
+`the server exited`, and a hung one prints `no answer in 900 s`. A server that refuses the request
+prints `the server answered HTTP <code>`, and a `401` means that it does not accept the token in
+`AUTH_TOKEN`. The log follows each of them.
+
+The probe exits with code 3 when the port is closed or the server does not answer in 5 s, and the
+loop then waits quietly. Any other failure stops the loop at once and shows its error: an error from
+`docker exec`, for example no Python at `/positronic/.venv/bin/python`, or a Python traceback.
 
 In a correct image, the server pins its checkpoint, starts the model process, and reads the
 weights from the image. The GR00T recipe then fails on the missing GPU with
@@ -238,23 +291,46 @@ weights from the image. The GR00T recipe then fails on the missing GPU with
 CPU and serve. For the FLUX 3 Action recipe, BFL's server exits on the missing GPU, and the server
 reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano recipe, NVIDIA's server exits
 the same way, and the server reports `Cosmos3 backend exited with code 1`. Everything you control is then
-correct. The run must not print `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`, and it
-must not hang. albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2
-prints `A new version of the following files was downloaded` when `transformers` copies the model's code
+correct. The log must not show `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
+albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints
+`A new version of the following files was downloaded` when `transformers` copies the model's code
 into its module cache; no download occurs.
 
-On a machine with a GPU, serve it with the network denied and call the keepalive route from inside
-the container with the token:
+On a machine with a GPU, serve it with the network denied, and wait until the keepalive route
+answers from inside the container with the token:
 
 ```bash
 docker network create --internal noegress
-docker run -d --name policy --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
-docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', headers={'Authorization': 'Bearer test'})).read())"
+probe='import sys, urllib.error, urllib.request as u
+try:
+    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
+          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
+except urllib.error.HTTPError as e:
+    print("the server answered HTTP", e.code)
+except OSError as e:
+    reason = e.reason if isinstance(e, urllib.error.URLError) else e
+    if not isinstance(reason, (ConnectionError, TimeoutError)):
+        raise
+    sys.exit(3)'
+if cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+  deadline=$((SECONDS + 600))
+  while :; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
+    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
+    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
+    [ $? = 3 ] || break
+    sleep 5
+  done
+  docker logs --tail 30 "$cid"
+  docker rm -f "$cid"
+fi
 ```
 
 The route answers `{"alive_seconds": ...}` with the token once the model has loaded and warmed.
-A server that checks the token answers `401` without it.
+A server that checks the token answers `401` without it. The loop waits up to 600 s: FLUX 3
+Action binds port 8000 after about 140 s, and GR00T loads in about 151 s. `no answer in 600 s`
+means a hung server, or one too slow for the provisioning deadline, which it shares with VM boot
+and the pull.
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
@@ -306,7 +382,8 @@ uv run positronic eval list
 - `positronic eval catalog` prints the evals your key may name, and the tasks each one runs. The
   catalog changes, so read the names from it. Start with the smallest eval it offers: it answers
   whether the image serves at all.
-- `users.me` reports your quota. The default is 2 image submissions per day. An
+- `users.me` reports your quota. A competition submission counts against a daily limit:
+  [Submissions per day](nebius-competition.md#submissions-per-day). An
   [eval plan](../client/README.md#eval-plans) runs on the lab rig, a real robot, and does not count
   against it.
 
@@ -331,8 +408,8 @@ A `finished` submission carries `scores.primary`, the value a leaderboard ranks 
 
 | link | content | present |
 |---|---|---|
-| `result` | the run id, the attempt that scored, and `scores` with a `per_task` breakdown | on a finished or an errored run |
-| `policy_log` | your container's stdout and stderr, from the attempt that decided the run | on a finished or an errored run, when the container printed anything |
+| `result` | the run id, the attempt that scored, and `scores` with a `per_task` breakdown | on a finished run, and on an errored run that wrote its records |
+| `policy_log` | your container's stdout and stderr, from the attempt that decided the run | on the same runs as `result`, when the container printed anything |
 | `diagnostics` | why the run failed, and the state of the box | on an errored run whose record was written |
 
 The links expire after 15 minutes. Read `submissions.get` again for fresh ones. `submissions.get`
