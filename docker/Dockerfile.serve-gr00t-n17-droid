@@ -48,8 +48,10 @@ ENV HF_HOME=/opt/hf \
     UV_HTTP_TIMEOUT=600
 
 COPY pyproject.toml uv.lock /opt/positronic-packages/
+COPY client/pyproject.toml /opt/positronic-packages/client/
 COPY wire/pyproject.toml /opt/positronic-packages/wire/
 COPY model_server/pyproject.toml /opt/positronic-packages/model_server/
+COPY vocabulary/pyproject.toml /opt/positronic-packages/vocabulary/
 COPY docker/install-gr00t-server-deps.sh /opt/positronic-packages/install-gr00t-server-deps.sh
 RUN --mount=type=cache,target=/root/.cache/uv bash /opt/positronic-packages/install-gr00t-server-deps.sh
 

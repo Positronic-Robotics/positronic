@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-uv export --project /opt/positronic-packages --frozen --no-dev --no-emit-workspace \
+UV_OFFLINE=0 uv export --project /opt/positronic-packages --locked --no-dev --no-emit-workspace \
   --no-hashes --no-annotate --no-header --output-file /tmp/gr00t-locked-requirements.txt > /dev/null
 
 # Preserve native versions; use the repository lock for packages absent from the native environment.
