@@ -39,7 +39,7 @@ from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, Te
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
-from positronic.tests.test_inference import _post, _run_attended, _status, _wait
+from positronic.tests.testing_inference import post, read_status, run_attended, wait
 
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}}
 
@@ -513,21 +513,21 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
     statuses = []
 
     def script(base, clock):
-        assert (yield from _wait(lambda: _status(base), clock, seconds=60))
+        assert (yield from wait(lambda: read_status(base), clock, seconds=60))
         for verdict in (Outcome.PASS, Outcome.FAIL):
             calls = model.call_count
-            assert _post(base, '/episode/start') == 200
-            assert (yield from _wait(lambda calls=calls: model.call_count > calls, clock))
-            assert _post(base, '/episode/end', EndBody(verdict=verdict)) == 200
+            assert post(base, '/episode/start') == 200
+            assert (yield from wait(lambda calls=calls: model.call_count > calls, clock))
+            assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
 
             def finished():
-                status = _status(base)
+                status = read_status(base)
                 return status is not None and status.run.phase is Phase.READY
 
-            assert (yield from _wait(finished, clock))
-        statuses.append(_status(base))
+            assert (yield from wait(finished, clock))
+        statuses.append(read_status(base))
 
-    _run_attended(policy, script)
+    run_attended(policy, script)
 
     [status] = statuses
     assert status is not None

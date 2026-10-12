@@ -3,11 +3,10 @@ import logging
 import multiprocessing
 import os
 import signal
-import socket
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
 from itertools import pairwise
@@ -39,6 +38,18 @@ from positronic.policy import Policy
 from positronic.policy.base import Step
 from positronic.policy.harness import Harness, Rollout
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
+from positronic.tests.testing_inference import (
+    ARM_STOPPED_SHORT,
+    PageOperator,
+    ReadyDevices,
+    free_port,
+    make_embodiment,
+    make_trial,
+    post,
+    read_status,
+    run_attended,
+    wait,
+)
 
 
 class _IdlePolicy(Policy):
@@ -60,58 +71,6 @@ class _IdlePolicy(Policy):
             self.closed = True
 
 
-ARM_STOPPED_SHORT = 'the arm stopped short of its target'
-
-
-class _ReadyDevices(pimm.ControlSystem):
-    """The arm and fingers of a rig that reaches wherever it is asked to go ``move_s`` after it is asked. The arm's
-    first ``arm_failures`` moves stop short. Its teardown creates ``parked``, when one is given."""
-
-    def __init__(self, move_s: float = 0.0, arm_failures: int = 0, parked: Path | None = None):
-        self._move_s = move_s
-        self._arm_failures = arm_failures
-        self._parked = parked
-        self.arm = pimm.calls.ControlSystemHandler[Any, None](self)
-        self.gripper = pimm.calls.ControlSystemHandler[Any, None](self)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        moving: list[tuple[pimm.calls.Call[Any, None], float]] = []
-        while not should_stop.value:
-            now = clock.now()
-            for call in self.arm.incoming():
-                if self._arm_failures > 0:
-                    self._arm_failures -= 1
-                    call.set_exception(RuntimeError(ARM_STOPPED_SHORT))
-                else:
-                    moving.append((call, now + self._move_s))
-            moving.extend((call, now + self._move_s) for call in self.gripper.incoming())
-            for call, _ in [(call, at) for call, at in moving if at <= now]:
-                call.set_result(None)
-            moving = [(call, at) for call, at in moving if at > now]
-            yield pimm.Sleep(0.01)
-        if self._parked is not None:
-            self._parked.touch()
-
-
-def _embodiment(simulated: bool = False, move_s: float = 0.0, arm_failures: int = 0) -> Embodiment:
-    devices = _ReadyDevices(move_s, arm_failures)
-    return Embodiment(
-        descriptor='stub',
-        observations={},
-        commands={},
-        prepare_handlers={eval_keys.ARM: devices.arm, eval_keys.GRIPPER: devices.gripper},
-        static_meta={},
-        meta_source=None,
-        control_systems=(devices,),
-        simulated=simulated,
-    )
-
-
-def _trial(instruction: str = 'stub') -> Callable[[], Task]:
-    prepare_args = {eval_keys.ARM: 'start-pose', eval_keys.GRIPPER: 0.0}
-    return partial(Task, instruction_source=instruction, timeout_sec=None, prepare_args=prepare_args)
-
-
 @pytest.mark.timeout(30.0)
 def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
     """How an attended run finishes: the operator returns, the world stops, no policy run is started.
@@ -121,7 +80,7 @@ def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
     monkeypatch.setattr(sys, 'stdin', io.StringIO())
     policy = _IdlePolicy()
 
-    real(policy=policy, embodiment=_embodiment(), next_task=_trial())
+    real(policy=policy, embodiment=make_embodiment(), next_task=make_trial())
 
     assert not policy.closed
     assert not policy.started
@@ -131,7 +90,7 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
     """It composes a real-time world and records against the wall clock, which a simulated embodiment needs
     neither of."""
     with pytest.raises(ValueError, match='sim'):
-        real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), next_task=_trial())
+        real(policy=_IdlePolicy(), embodiment=make_embodiment(simulated=True), next_task=make_trial())
 
 
 @pytest.mark.timeout(30.0)
@@ -153,7 +112,7 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(script, None)))
 
     with caplog.at_level(logging.INFO):
-        real(policy=policy, embodiment=_embodiment(), next_task=_trial('pick up the cube'))
+        real(policy=policy, embodiment=make_embodiment(), next_task=make_trial('pick up the cube'))
 
     assert policy.observations, 'the episode never opened'
     assert policy.observations[0][keys.TASK] == 'pick up the cube'
@@ -200,7 +159,7 @@ def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog
 
 def test_the_web_console_refuses_a_simulated_embodiment():
     with pytest.raises(ValueError, match='sim'):
-        web(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), next_task=_trial())
+        web(policy=_IdlePolicy(), embodiment=make_embodiment(simulated=True), next_task=make_trial())
 
 
 class _LockedPolicy(_IdlePolicy):
@@ -210,7 +169,7 @@ class _LockedPolicy(_IdlePolicy):
 
 
 def test_a_policy_with_live_resources_fails_when_the_console_process_starts():
-    console = StationConsole(_trial(), _LockedPolicy(), None, host='127.0.0.1', port=0)
+    console = StationConsole(make_trial(), _LockedPolicy(), None, host='127.0.0.1', port=0)
     with pimm.World() as world:
         with pytest.raises(RuntimeError, match='Background control systems must be picklable') as failed:
             world.run([], [console])
@@ -258,7 +217,7 @@ class _MarkingPolicy(Policy):
 
 
 def _serve_station(port: int, output_dir: Path, marks: Path) -> None:
-    camera, devices = _Camera(), _ReadyDevices(parked=marks / 'parked')
+    camera, devices = _Camera(), ReadyDevices(parked=marks / 'parked')
     embodiment = Embodiment(
         descriptor='stub',
         observations={keys.WRIST_IMAGE: Observation(camera.frame, Serializers.camera_images)},
@@ -269,13 +228,7 @@ def _serve_station(port: int, output_dir: Path, marks: Path) -> None:
         control_systems=(devices, camera),
     )
     with pos3.mirror():
-        web(_MarkingPolicy(marks), embodiment, _trial('pick up the cube'), output_dir=str(output_dir), port=port)
-
-
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(('127.0.0.1', 0))
-        return probe.getsockname()[1]
+        web(_MarkingPolicy(marks), embodiment, make_trial('pick up the cube'), output_dir=str(output_dir), port=port)
 
 
 def _wait_for(condition: Callable[[], Any], what: str, timeout: float = 90.0) -> Any:
@@ -287,20 +240,13 @@ def _wait_for(condition: Callable[[], Any], what: str, timeout: float = 90.0) ->
     raise AssertionError(f'timed out waiting for {what}')
 
 
-def _status(base: str) -> Status | None:
-    try:
-        return Status.model_validate(httpx.get(f'{base}/status', timeout=2.0).json())
-    except httpx.TransportError:
-        return None
-
-
 def _run_episode(base: str, marks: Path, number: int, verdict: Verdict) -> Episode:
     httpx.post(f'{base}/episode/start').raise_for_status()
     _wait_for((marks / f'episode-{number}').exists, f'episode {number} to open')
     httpx.post(f'{base}/episode/end', json=EndBody(verdict=verdict).model_dump(mode='json')).raise_for_status()
 
     def closed() -> Status | None:
-        status = _status(base)
+        status = read_status(base)
         return status if status and status.run.phase is Phase.READY else None
 
     return _wait_for(closed, f'episode {number} to close').run.episodes[number - 1]
@@ -310,7 +256,7 @@ def _run_episode(base: str, marks: Path, number: int, verdict: Verdict) -> Episo
 def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(tmp_path):
     """The whole command, in a process of its own: the page streams the camera, and each episode it starts
     records the instruction it sent, the override flag, its number, and the operator's verdict."""
-    port = _free_port()
+    port = free_port()
     base = f'http://127.0.0.1:{port}'
     marks = tmp_path / 'marks'
     marks.mkdir()
@@ -318,7 +264,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     run = multiprocessing.get_context('spawn').Process(target=_serve_station, args=(port, output_dir, marks))
     run.start()
     try:
-        status = _wait_for(lambda: (s := _status(base)) and s.cameras[0].live and s, 'the camera to be live')
+        status = _wait_for(lambda: (s := read_status(base)) and s.cameras[0].live and s, 'the camera to be live')
         assert status.run.configured == 'pick up the cube'
         with connect(f'ws://127.0.0.1:{port}/video/{keys.WRIST_IMAGE}', open_timeout=10) as tile:
             codec, _init, fragment = (tile.recv(timeout=10) for _ in range(3))
@@ -376,61 +322,15 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     assert second[eval_keys.SUCCESS] is False
 
 
-class _PageOperator(pimm.ControlSystem):
-    """Presses the station page's buttons over HTTP from inside the world, as ``script`` says. Its return ends
-    the world."""
-
-    def __init__(self, script: Callable[[pimm.Clock], Iterator[pimm.Command]]):
-        self._script = script
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        yield from self._script(clock)
-
-
-def _wait(condition: Callable[[], Any], clock: pimm.Clock, seconds: float = 5.0) -> Iterator[pimm.Command]:
-    """Yield until ``condition`` holds or ``seconds`` pass on ``clock``, and return whether it held."""
-    deadline = clock.now() + seconds
-    while not condition():
-        if clock.now() > deadline:
-            return False
-        yield pimm.Sleep(0.02)
-    return True
-
-
-def _run_attended(
-    policy: Policy,
-    script: Callable[[str, pimm.Clock], Iterator[pimm.Command]],
-    move_s: float = 0.0,
-    arm_failures: int = 0,
-) -> None:
-    """The world ``web`` composes, with the station console in a process of its own and ``script`` pressing the
-    page's buttons from beside the harness. The rig takes ``move_s`` for each move, and its arm's first
-    ``arm_failures`` moves stop short."""
-    port = _free_port()
-    console = StationConsole(_trial('pick up the cube'), policy, None, host='127.0.0.1', port=port)
-    embodiment = _embodiment(move_s=move_s, arm_failures=arm_failures)
-    harness = Harness(embodiment)
-    operator = _PageOperator(partial(script, f'http://127.0.0.1:{port}'))
-    with pimm.World() as world:
-        wire.wire_embodiment(world, harness, embodiment, done=console.done)
-        world.connect(console.perform_task, harness.perform_task)
-        world.run([operator, harness, *embodiment.control_systems], [console])
-
-
-def _post(base: str, path: str, body: EndBody | None = None) -> int:
-    """The HTTP status of the press. A press the console refuses must not raise inside the world."""
-    return httpx.post(f'{base}{path}', json=None if body is None else body.model_dump(mode='json')).status_code
-
-
 def _phase(base: str) -> Phase | None:
-    status = _status(base)
+    status = read_status(base)
     return status.run.phase if status else None
 
 
 @pytest.mark.parametrize('retry', [False, True])
 def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(retry):
     policy = _IdlePolicy()
-    embodiment = _embodiment(simulated=True)
+    embodiment = make_embodiment(simulated=True)
     harness = Harness(embodiment)
     answers = []
     with pimm.World(virtual_time=True) as world:
@@ -441,12 +341,12 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
         def script(clock):
             answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
             done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
-            assert (yield from _wait(lambda: policy.observations, clock))
+            assert (yield from wait(lambda: policy.observations, clock))
             if retry:
                 done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
-            assert (yield from _wait(answers[0].done, clock))
+            assert (yield from wait(answers[0].done, clock))
 
-        drive_scheduler(world.start([harness, *embodiment.control_systems, _PageOperator(script)]))
+        drive_scheduler(world.start([harness, *embodiment.control_systems, PageOperator(script)]))
     assert policy.observations
     expected = (
         {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
@@ -464,17 +364,17 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
-        yield from _wait(lambda: _status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
         for number, verdict in verdicts:
-            _post(base, '/episode/start')
-            yield from _wait((tmp_path / f'episode-{number}').exists, clock)
+            post(base, '/episode/start')
+            yield from wait((tmp_path / f'episode-{number}').exists, clock)
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
-            _post(base, '/episode/end', EndBody(verdict=verdict))
-            yield from _wait(lambda: _phase(base) is Phase.READY, clock)
-        statuses.append(_status(base))
+            post(base, '/episode/end', EndBody(verdict=verdict))
+            yield from wait(lambda: _phase(base) is Phase.READY, clock)
+        statuses.append(read_status(base))
 
-    _run_attended(_MarkingPolicy(tmp_path), script)
+    run_attended(_MarkingPolicy(tmp_path), script)
 
     assert phases == [Phase.RUNNING, Phase.RUNNING]
     [status] = statuses
@@ -491,19 +391,19 @@ def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp
     verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
-        yield from _wait(lambda: _status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
         for number, verdict in verdicts:
-            _post(base, '/episode/start')
-            yield from _wait((tmp_path / f'episode-{number}').exists, clock, seconds=10.0)
+            post(base, '/episode/start')
+            yield from wait((tmp_path / f'episode-{number}').exists, clock, seconds=10.0)
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
-            _post(base, '/episode/end', EndBody(verdict=verdict))
+            post(base, '/episode/end', EndBody(verdict=verdict))
             yield pimm.Sleep(0.2)
-            assert _post(base, '/episode/end', EndBody(verdict=verdict)) == 200
-            yield from _wait(lambda: _phase(base) is Phase.READY, clock, seconds=10.0)
-        statuses.append(_status(base))
+            assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
+            yield from wait(lambda: _phase(base) is Phase.READY, clock, seconds=10.0)
+        statuses.append(read_status(base))
 
-    _run_attended(_MarkingPolicy(tmp_path), script, move_s=1.0)
+    run_attended(_MarkingPolicy(tmp_path), script, move_s=1.0)
 
     assert phases == [Phase.RUNNING, Phase.RUNNING]
     [status] = statuses
@@ -517,21 +417,21 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
     statuses: list[Status | None] = []
 
     def ended(base: str) -> bool:
-        status = _status(base)
+        status = read_status(base)
         return status is not None and bool(status.run.episodes) and status.run.episodes[-1].outcome is not None
 
     def script(base: str, clock: pimm.Clock):
-        yield from _wait(lambda: _status(base) is not None, clock, seconds=60.0)
-        presses.append(_post(base, '/episode/start'))
-        yield from _wait(lambda: ended(base), clock)
-        statuses.append(_status(base))
-        presses.append(_post(base, '/episode/start'))
-        yield from _wait((tmp_path / 'episode-1').exists, clock)
-        presses.append(_post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
-        yield from _wait(lambda: _phase(base) is Phase.READY, clock)
-        statuses.append(_status(base))
+        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        presses.append(post(base, '/episode/start'))
+        yield from wait(lambda: ended(base), clock)
+        statuses.append(read_status(base))
+        presses.append(post(base, '/episode/start'))
+        yield from wait((tmp_path / 'episode-1').exists, clock)
+        presses.append(post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
+        yield from wait(lambda: _phase(base) is Phase.READY, clock)
+        statuses.append(read_status(base))
 
-    _run_attended(_MarkingPolicy(tmp_path), script, arm_failures=1)
+    run_attended(_MarkingPolicy(tmp_path), script, arm_failures=1)
 
     assert presses == [200, 200, 200]
     failed, retried = statuses
@@ -546,14 +446,14 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
 def test_end_run_waits_for_the_open_episode_and_then_stops_the_whole_command(tmp_path):
     """End run stops the World, so each device runs its teardown and the command returns without a signal. A camera
     tile stays open on the page through it."""
-    port = _free_port()
+    port = free_port()
     base = f'http://127.0.0.1:{port}'
     marks = tmp_path / 'marks'
     marks.mkdir()
     run = multiprocessing.get_context('spawn').Process(target=_serve_station, args=(port, tmp_path / 'episodes', marks))
     run.start()
     try:
-        _wait_for(lambda: _status(base), 'the console to answer')
+        _wait_for(lambda: read_status(base), 'the console to answer')
         httpx.post(f'{base}/episode/start').raise_for_status()
         _wait_for((marks / 'episode-1').exists, 'episode 1 to open')
         refused = httpx.post(f'{base}/run/end')
@@ -562,7 +462,7 @@ def test_end_run_waits_for_the_open_episode_and_then_stops_the_whole_command(tmp
 
         verdict = EndBody(verdict=Outcome.PASS).model_dump(mode='json')
         httpx.post(f'{base}/episode/end', json=verdict).raise_for_status()
-        _wait_for(lambda: (s := _status(base)) and s.run.phase is Phase.READY, 'episode 1 to close')
+        _wait_for(lambda: (s := read_status(base)) and s.run.phase is Phase.READY, 'episode 1 to close')
         with connect(f'ws://127.0.0.1:{port}/video/{keys.WRIST_IMAGE}', open_timeout=10) as tile:
             assert isinstance(tile.recv(timeout=10), str)
             ended = httpx.post(f'{base}/run/end')
