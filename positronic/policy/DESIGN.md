@@ -271,8 +271,8 @@ processor can keep state in its run and use the episode clock.
 Sequential and codecs are offered, not imposed: a policy may always implement
 its run directly.
 
-A processor reports metadata about its definition, and writes episode values into
-`runtime.metadata` as the values change.
+A processor reports metadata about its definition, and writes episode values with
+`runtime.set_metadata(name, value)`. Each write copies its input and replaces the named value.
 
 ### Remote policies
 
@@ -324,7 +324,7 @@ Harness adds `harness.world` and `harness.wall` to every record: first receipt f
 emission for commands. These coordinates align training, replay, and viewing without changing
 the original message timestamps. Producer timelines cannot use these two names.
 Writing is synchronous and may slow execution. An episode's answer waits for recording to close.
-The harness stores `runtime.metadata` with the policy definition metadata before policy cleanup.
+The harness stores episode metadata with the policy definition metadata before policy cleanup.
 TODO: Add per-call records for the policy stack, remote inference payloads, and custom values.
 
 Timing is part of logging: framework spans cover processor resumptions, codecs,
@@ -383,8 +383,7 @@ class Answer(ABC, Generic[T]):
 ```python
 # One runtime shared by the runs in an episode.
 class Runtime(ABC):
-    @cached_property
-    def metadata(self) -> dict[str, Any]: ...
+    def set_metadata(self, name: str, value: Any) -> None: ...
 
     @property
     def time_ns(self) -> int: ...

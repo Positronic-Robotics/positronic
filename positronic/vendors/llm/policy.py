@@ -139,9 +139,11 @@ class LLMPolicy(Policy):
     """An API-backed, single-arm Cartesian policy with independent episode conversations."""
 
     class _Conversation:
-        def __init__(self, policy: 'LLMPolicy'):
+        def __init__(self, policy: 'LLMPolicy', runtime: Runtime):
             self._policy = policy
+            self._runtime = runtime
             self._transcript: list[dict[str, Any]] = []
+            self._runtime.set_metadata(policy_keys.TRANSCRIPT, self._transcript)
             self._messages: list[ModelMessage] = []
             self._obs: _Observation | None = None
             self._pictures: list[str] = []
@@ -149,6 +151,10 @@ class LLMPolicy(Policy):
             self._failures = 0
             self._calls = 0
             self._target: MoveTo | None = None
+
+        def _record(self, event: dict[str, Any]) -> None:
+            self._transcript.append(event)
+            self._runtime.set_metadata(policy_keys.TRANSCRIPT, self._transcript)
 
         def _initial(self) -> ModelRequest:
             prompt = (
@@ -170,7 +176,7 @@ class LLMPolicy(Policy):
                 f'Motion limits: {json.dumps(asdict(self._policy.motion))}. '
                 f'API call budget, including corrections and pictures: {self._policy.max_calls}.'
             )
-            self._transcript.append({
+            self._record({
                 'event': 'instructions',
                 'prompt': prompt,
                 'tools': {tool.name: tool.parameters_json_schema for tool in self._policy._tools},
@@ -182,7 +188,7 @@ class LLMPolicy(Policy):
             if not self._messages:
                 self._messages.append(self._initial())
             state = self._obs.state(self._target)
-            self._transcript.append({'event': 'observation', **state})
+            self._record({'event': 'observation', **state})
             self._messages.append(ModelRequest.user_text_prompt(json.dumps(state, allow_nan=False)))
             self._pictures = list(self._obs.images) if self._policy.images is Images.ALWAYS else []
             self._revealed = set(self._pictures)
@@ -223,7 +229,7 @@ class LLMPolicy(Policy):
             )
 
         def _respond(self, response: ModelResponse) -> tuple[ToolCallPart, MoveTo | Finish] | None:
-            self._transcript.append({
+            self._record({
                 'event': 'response',
                 'call': self._calls,
                 'model': response.model_name,
@@ -244,7 +250,7 @@ class LLMPolicy(Policy):
                 data = self._tool(calls[0])
             except ValueError as exc:
                 self._reject(calls, str(exc))
-                self._transcript.append({'event': 'rejected', 'call': self._calls, 'reason': str(exc)})
+                self._record({'event': 'rejected', 'call': self._calls, 'reason': str(exc)})
                 self._failures += 1
                 if self._failures >= self._policy.max_invalid:
                     raise RuntimeError(f'Model produced {self._failures} consecutive invalid replies') from exc
@@ -282,7 +288,7 @@ class LLMPolicy(Policy):
                 self._pictures = []
                 self._prune_images()
             self._calls += 1
-            self._transcript.append({
+            self._record({
                 'event': 'request',
                 'call': self._calls,
                 'cameras': sorted(self._revealed),
@@ -300,11 +306,11 @@ class LLMPolicy(Policy):
                         ToolReturnPart(call.tool_name, 'No further actions.', tool_call_id=call.tool_call_id)
                     ])
                 )
-                self._transcript.append({
+                self._record({
                     'event': 'accepted',
                     'call': self._calls,
                     'time_ns': time_ns,
-                    'stop_reason': call.tool_name,
+                    policy_keys.STOP_REASON: call.tool_name,
                 })
                 return []
             start = _Observation.measured_pose(obs)
@@ -318,7 +324,7 @@ class LLMPolicy(Policy):
             self._messages.append(
                 ModelRequest([ToolReturnPart(call.tool_name, result, tool_call_id=call.tool_call_id)])
             )
-            self._transcript.append({'event': 'accepted', 'call': self._calls, 'time_ns': time_ns, **result})
+            self._record({'event': 'accepted', 'call': self._calls, 'time_ns': time_ns, **result})
             return trajectory
 
     def __init__(
@@ -365,21 +371,18 @@ class LLMPolicy(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         with self.endpoint.open() as request:
-            conversation = self._Conversation(self)
-            runtime.metadata['transcript'] = conversation._transcript
+            conversation = self._Conversation(self, runtime)
             obs = yield
             while True:
                 if conversation._calls >= self.max_calls:
-                    runtime.metadata['stop_reason'] = 'call_budget'
-                    conversation._transcript.extend([
-                        {'event': 'budget_exhausted', 'calls': conversation._calls},
-                        {
-                            'event': 'accepted',
-                            'call': conversation._calls,
-                            'time_ns': runtime.time_ns,
-                            'stop_reason': 'call_budget',
-                        },
-                    ])
+                    runtime.set_metadata(policy_keys.STOP_REASON, 'call_budget')
+                    conversation._record({'event': 'budget_exhausted', 'calls': conversation._calls})
+                    conversation._record({
+                        'event': 'accepted',
+                        'call': conversation._calls,
+                        'time_ns': runtime.time_ns,
+                        policy_keys.STOP_REASON: 'call_budget',
+                    })
                     break
                 if conversation._obs is None:
                     conversation._observe(obs, runtime.time_ns)
@@ -394,7 +397,8 @@ class LLMPolicy(Policy):
                 call, data = decision
                 chunk = conversation._accept(call, data, obs, runtime.time_ns)
                 if isinstance(data, Finish):
-                    runtime.metadata.update(stop_reason=call.tool_name, hindsight=data.hindsight)
+                    runtime.set_metadata(policy_keys.STOP_REASON, call.tool_name)
+                    runtime.set_metadata(policy_keys.HINDSIGHT, data.hindsight)
                     break
                 started_ns, index = runtime.time_ns, 0
                 end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)

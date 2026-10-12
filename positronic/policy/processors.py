@@ -102,8 +102,8 @@ class ChunkedSchedule(Policy):
         waypoints that a new chunk replaces count as dropped too.
         """
 
-        def __init__(self, metadata: dict[str, Any]) -> None:
-            self._metadata = metadata
+        def __init__(self, runtime: Runtime) -> None:
+            self._runtime = runtime
             self._scheduled = 0
             self._sorted_late_ns: list[int] = []
             self._gap_max_ns = 0
@@ -136,7 +136,7 @@ class ChunkedSchedule(Policy):
                 values[eval_keys.LATE_MAX_MS] = late_ns[-1] / 1e6
                 values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
             for name, value in values.items():
-                self._metadata[f'{eval_keys.SCHEDULE}.{name}'] = value
+                self._runtime.set_metadata(f'{eval_keys.SCHEDULE}.{name}', value)
 
         @staticmethod
         def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
@@ -160,7 +160,7 @@ class ChunkedSchedule(Policy):
         answer: Answer[Sequence[Commands]] | None = None
         trajectory: deque[tuple[Commands, int]] = deque()
         end_ns = 0
-        stats = self._Stats(runtime.metadata) if self._record_stats else None
+        stats = self._Stats(runtime) if self._record_stats else None
         obs = yield
         try:
             while True:

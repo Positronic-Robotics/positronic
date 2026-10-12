@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import partial
@@ -108,6 +109,14 @@ class Executor(Runtime):
         self._tick_time_ns: int | None = None
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._answers: set[_UnchargedAnswer[Any]] = set()
+        self._metadata: dict[str, Any] = {}
+
+    def set_metadata(self, name: str, value: Any) -> None:
+        self._metadata[name] = deepcopy(value)
+
+    def metadata_snapshot(self) -> dict[str, Any]:
+        """Return an independent copy of the episode metadata."""
+        return deepcopy(self._metadata)
 
     @property
     def time_ns(self) -> int:

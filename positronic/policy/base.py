@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping
-from functools import cached_property, partial
+from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
 
 from attr import dataclass
@@ -67,10 +67,9 @@ class Runtime(ABC):
     At episode shutdown, drain submitted work before closing live generators whose resources it may use.
     """
 
-    @cached_property
-    def metadata(self) -> dict[str, Any]:
-        """Episode metadata written on the control thread, overriding definition values at recording time."""
-        return {}
+    @abstractmethod
+    def set_metadata(self, name: str, value: Any) -> None:
+        """Write a deep copy of an episode value on the control thread, replacing any value at this name."""
 
     @property
     @abstractmethod
