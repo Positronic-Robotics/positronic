@@ -118,52 +118,24 @@ class JointPositionAction(Codec):
 class CartesianDeltaAction(Codec):
     """Decode ``[translation(3), rotation-vector(3), grip(1)]`` into a Cartesian delta and absolute grip.
 
-    Clip to ``clip`` when supplied, then apply ``action * scale + offset`` per channel.
     Translation is in metres, rotation in radians, and grip in ``[0, 1]`` closure units.
     The driver applies each delta to its live pose; decoding does not integrate a chunk.
     """
 
     WIRE_NAME = 'cartesian_delta_action'
 
-    def __init__(
-        self,
-        *,
-        scale: Sequence[float] = (1.0,) * 7,
-        offset: Sequence[float] = (0.0,) * 7,
-        clip: tuple[float, float] | None = None,
-        action_key: str = ACTION,
-    ):
-        self._scale = np.array(scale, dtype=float)
-        self._offset = np.array(offset, dtype=float)
-        for name, values in (('scale', self._scale), ('offset', self._offset)):
-            if values.shape != (7,) or not np.isfinite(values).all():
-                raise ValueError(f'{name} must contain seven finite values')
-        if clip is not None and (len(clip) != 2 or not np.isfinite(clip).all() or clip[0] > clip[1]):
-            raise ValueError('clip must contain finite lower and upper bounds in ascending order')
-        self._clip = None if clip is None else tuple(clip)
+    def __init__(self, *, action_key: str = ACTION):
         self._action_key = action_key
 
     def _decode_single(self, data: dict) -> dict:
         action = np.asarray(data[self._action_key])
         if action.shape != (7,):
             raise ValueError('Cartesian delta action must have shape (7,)')
-        if self._clip is not None:
-            action = action.clip(self._clip[0], self._clip[1])
-        physical = action * self._scale + self._offset
-        delta = geom.Transform3D.from_vector(physical[:6], RotRep.ROTVEC)
-        return {keys.ROBOT_COMMAND: command.CartesianDelta(delta=delta), keys.TARGET_GRIP: float(physical[6])}
+        delta = geom.Transform3D.from_vector(action[:6], RotRep.ROTVEC)
+        return {keys.ROBOT_COMMAND: command.CartesianDelta(delta=delta), keys.TARGET_GRIP: float(action[6])}
 
     def to_spec(self):
-        return {
-            NAME: self.WIRE_NAME,
-            VERSION: self.WIRE_VERSION,
-            ARGS: {
-                'scale': self._scale.tolist(),
-                'offset': self._offset.tolist(),
-                'clip': None if self._clip is None else list(self._clip),
-                'action_key': self._action_key,
-            },
-        }
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'action_key': self._action_key}}
 
 
 class AbsolutePositionAction(Codec):

@@ -160,13 +160,7 @@ class LiberoObservationCodec(Codec):
 
 
 libero_obs = cfn.Config(LiberoObservationCodec)
-# robosuite OSC_POSE clips normalized actions, scales metres/radians, and maps grip to closure.
-libero_action = cfn.Config(
-    CartesianDeltaAction,
-    scale=(0.05, 0.05, 0.05, 0.5, 0.5, 0.5, 0.5),
-    offset=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5),
-    clip=(-1.0, 1.0),
-)
+libero_action = cfn.Config(CartesianDeltaAction)
 
 # LIBERO training observations are sampled at 20 Hz.
 libero = codecs.compose.override(obs=libero_obs, action=libero_action, training_fps=20.0)
