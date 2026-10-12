@@ -62,7 +62,7 @@ class Camera(pimm.ControlSystem):
 def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_path, ending, charge, distance):
     states = []
 
-    def request(endpoint, messages, tools):
+    def request(endpoint, runner, model, messages, tools):
         observations = [
             json.loads(part.content)
             for message in messages

@@ -1,5 +1,10 @@
 import asyncio
 import json
+import multiprocessing
+import pickle
+from contextvars import ContextVar, copy_context
+from copy import copy
+from multiprocessing.reduction import ForkingPickler
 
 import httpx
 import pytest
@@ -12,6 +17,18 @@ from positronic.policy import keys as policy_keys
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.policy import llm
 from positronic.vendors.llm.tests.test_policy import complete, execution, finish, observation
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize('model', ['openai-chat:test-model', 'anthropic:test-model', 'google:test-model'])
+def test_model_name_policy_and_metadata_cross_a_spawned_process(model):
+    policy = llm(model=model, settings={'temperature': 0.5})
+    metadata = policy.meta()
+    with multiprocessing.get_context('spawn').Pool(1) as pool:
+        restored = pool.apply(copy, (policy,))
+    assert restored.meta() == metadata
+    assert metadata['model'] == model
+    assert metadata['settings.temperature'] == 0.5
 
 
 def test_openai_compatible_endpoint_round_trip(monkeypatch):
@@ -74,10 +91,16 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', 'test-secret-do-not-record')
     monkeypatch.setenv('OPENAI_BASE_URL', 'https://endpoint-secret.invalid/path-secret/v1')
     policy = llm(model='openai-chat:test-model')
+    metadata = policy.meta()
+    assert not clients
+    policy = pickle.loads(ForkingPickler.dumps(policy))
+    assert policy.meta() == metadata
     with execution(policy) as (active, rt, clock):
         assert not complete(active, rt, clock, observation()).commands
         complete(active, rt, clock, observation())
         meta = policy.meta() | rt.metadata
+        assert len(clients) == 1 and not clients[0].is_closed
+        assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
     assert len(requests) == 2
     assert requests[0].url.host == 'endpoint-secret.invalid'
     assert requests[0].url.path == '/path-secret/v1/chat/completions'
@@ -92,6 +115,12 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert 'endpoint-secret' not in recorded
     assert 'path-secret' not in recorded
     assert clients and all(client.is_closed for client in clients)
+    with execution(policy) as (active, rt, clock):
+        complete(active, rt, clock, observation())
+        assert rt.metadata['stop_reason'] == 'done'
+        assert len(clients) == 2 and not clients[1].is_closed
+    assert all(client.is_closed for client in clients)
+    assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
 
 
 def test_run_records_compact_reply_and_usage(monkeypatch):
@@ -129,7 +158,8 @@ def test_run_records_compact_reply_and_usage(monkeypatch):
 def test_endpoint_rejects_userinfo_query_and_non_http_urls(monkeypatch, base_url):
     monkeypatch.setattr(FunctionModel, 'base_url', property(lambda _: base_url))
     with pytest.raises(ValueError, match='base_url'):
-        Endpoint(FunctionModel(lambda messages, info: finish()))
+        with Endpoint(FunctionModel(lambda messages, info: finish())).open():
+            pytest.fail('The endpoint must reject this URL before yielding a client')
 
 
 def test_endpoint_deadline_cancels_the_model_request():
@@ -144,8 +174,8 @@ def test_endpoint_deadline_cancels_the_model_request():
         raise AssertionError('The timeout should cancel this request')
 
     endpoint = Endpoint(FunctionModel(delayed), timeout=1.0)
-    with pytest.raises(TimeoutError):
-        endpoint.request([ModelRequest.user_text_prompt('stop')], [])
+    with endpoint.open() as request, pytest.raises(TimeoutError):
+        request([ModelRequest.user_text_prompt('stop')], [])
     assert cancelled
 
 
@@ -153,8 +183,24 @@ def test_endpoint_propagates_model_errors():
     async def fail(messages, info):
         raise RuntimeError('Request failed')
 
-    with pytest.raises(RuntimeError, match='Request failed'):
-        Endpoint(FunctionModel(fail)).request([ModelRequest.user_text_prompt('stop')], [])
+    with Endpoint(FunctionModel(fail)).open() as request, pytest.raises(RuntimeError, match='Request failed'):
+        request([ModelRequest.user_text_prompt('stop')], [])
+
+
+def test_each_request_inherits_its_callers_context():
+    marker = ContextVar('request_marker')
+    seen = []
+
+    async def respond(messages, info):
+        seen.append(marker.get())
+        return finish()
+
+    with Endpoint(FunctionModel(respond)).open() as request:
+        for value in ('first', 'second'):
+            context = copy_context()
+            context.run(marker.set, value)
+            context.run(request, [ModelRequest.user_text_prompt('stop')], [])
+    assert seen == ['first', 'second']
 
 
 def test_config_accepts_a_configured_model_and_records_generation_settings():
