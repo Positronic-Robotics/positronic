@@ -79,49 +79,6 @@ CUBES = Label(
 )
 
 
-def _label(*events: object, seconds_to_end: float = 240.0, **fields: object) -> Label:
-    return Label.model_validate({
-        'uid': UID_OF_EPISODE,
-        'task': CUP,
-        'seconds_to_end': seconds_to_end,
-        'events': events,
-        **fields,
-    })
-
-
-def _episodes(
-    tmp_path: Path, *statics: dict[str, object] | str | bytes | None, uid: str = UID_OF_EPISODE
-) -> list[Path]:
-    """One episode directory per given `static.json`, each with a meta that records `uid`.
-
-    A mapping is written as JSON, a string or bytes as they are, and None leaves the episode without statics.
-    """
-    made = []
-    for index, static in enumerate(statics):
-        episode = tmp_path / f'{index:012d}'
-        episode.mkdir()
-        (episode / META_FILE).write_text(json.dumps({UID: uid}))
-        if isinstance(static, bytes):
-            (episode / STATIC_FILE).write_bytes(static)
-        elif static is not None:
-            (episode / STATIC_FILE).write_text(static if isinstance(static, str) else json.dumps(static))
-        made.append(episode)
-    return made
-
-
-def _write_signal(episode: Path, name: str, times: list[int], column: str = LEGACY_TIME_COLUMN) -> None:
-    pq.write_table(pa.table({column: times}), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
-
-
-def _write_timed_signal(episode: Path, name: str, world: list[int]) -> None:
-    """A signal in the format with named timelines, slower than real time: ten wall seconds to each world second."""
-    columns = {
-        f'{TIMESTAMP_COLUMN_PREFIX}emitted.wall': [10 * t for t in world],
-        f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WORLD}': world,
-    }
-    pq.write_table(pa.table(columns), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
-
-
 # --- the API words
 
 
@@ -174,6 +131,16 @@ def test_stage_items_refuse_names_whose_counts_do_not_add_up_to_the_count(names:
 
 
 # --- the label's shape
+
+
+def _label(*events: object, seconds_to_end: float = 240.0, **fields: object) -> Label:
+    return Label.model_validate({
+        'uid': UID_OF_EPISODE,
+        'task': CUP,
+        'seconds_to_end': seconds_to_end,
+        'events': events,
+        **fields,
+    })
 
 
 def test_a_label_refuses_events_out_of_time_order():
@@ -395,6 +362,39 @@ def test_each_episode_of_the_sweep_has_a_label_at_the_end_that_its_signal_record
         Outcome.success,
         pytest.approx(4.686),
     )
+
+
+def _episodes(
+    tmp_path: Path, *statics: dict[str, object] | str | bytes | None, uid: str = UID_OF_EPISODE
+) -> list[Path]:
+    """One episode directory per given `static.json`, each with a meta that records `uid`.
+
+    A mapping is written as JSON, a string or bytes as they are, and None leaves the episode without statics.
+    """
+    made = []
+    for index, static in enumerate(statics):
+        episode = tmp_path / f'{index:012d}'
+        episode.mkdir()
+        (episode / META_FILE).write_text(json.dumps({UID: uid}))
+        if isinstance(static, bytes):
+            (episode / STATIC_FILE).write_bytes(static)
+        elif static is not None:
+            (episode / STATIC_FILE).write_text(static if isinstance(static, str) else json.dumps(static))
+        made.append(episode)
+    return made
+
+
+def _write_signal(episode: Path, name: str, times: list[int], column: str = LEGACY_TIME_COLUMN) -> None:
+    pq.write_table(pa.table({column: times}), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
+
+
+def _write_timed_signal(episode: Path, name: str, world: list[int]) -> None:
+    """A signal in the format with named timelines, slower than real time: ten wall seconds to each world second."""
+    columns = {
+        f'{TIMESTAMP_COLUMN_PREFIX}emitted.wall': [10 * t for t in world],
+        f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WORLD}': world,
+    }
+    pq.write_table(pa.table(columns), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
 
 
 def test_an_untimed_verdict_sits_at_the_end_that_the_signals_record(tmp_path: Path):

@@ -190,10 +190,6 @@ class Attempt(NamedTuple):
     stage_seconds: dict[Stage, float]  # the first mark of each stage in this part, from the trial start
 
 
-# The order of two end events at the same time: the first in this tuple decides the outcome.
-_SAME_TIME_ORDER = (Outcome.safety, Outcome.fail, Outcome.success)
-
-
 class Label(BaseModel):
     """One labeler's account of one episode.
 
@@ -258,9 +254,12 @@ class Label(BaseModel):
             update={'events': kept, 'seconds_to_end': min(self.seconds_to_end, seconds), 'lost_items': lost}
         )
 
+    # The order of two end events at the same time: the first in this tuple decides the outcome.
+    _SAME_TIME_ORDER: ClassVar[tuple[Outcome, ...]] = (Outcome.safety, Outcome.fail, Outcome.success)
+
     def _deciding_end(self) -> EndEvent | None:
         ends = [event for event in self.events if isinstance(event, EndEvent)]
-        return min(ends, key=lambda end: (end.seconds, _SAME_TIME_ORDER.index(end.outcome)), default=None)
+        return min(ends, key=lambda end: (end.seconds, self._SAME_TIME_ORDER.index(end.outcome)), default=None)
 
     @property
     def outcome(self) -> Outcome:

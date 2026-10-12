@@ -30,6 +30,20 @@ from pydantic import ValidationError
 
 SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'molmo_sweep').glob('*/*') if p.is_dir())
 
+
+def _sweep_labels() -> list[Label | None]:
+    picked = [label(episode, MOLMO_SCORING.labelers) for episode in SWEEP]
+    return [given[1] if given is not None else None for given in picked]
+
+
+def test_the_sweep_scores_five_of_twenty_in_this_record():
+    assert score(MOLMO_SCORING, _sweep_labels()).model_dump(mode='json') == {
+        'primary': 0.25,
+        'episodes': 20,
+        'unscored': 0,
+    }
+
+
 # Read from the recording: ten tasks over twenty trials, split irregularly. Four tasks ran three times,
 # two ran twice, and four ran once.
 PER_TASK = {
@@ -44,37 +58,6 @@ PER_TASK = {
     'pick up the spoon.': (3, 1),
     'pick up the tissue.': (3, 1),
 }
-
-CUP = 'pick up the cup.'
-KETTLE = 'pick up the kettle.'
-
-# A board's rule that scores the furthest stage, and scores a fail or a safety stop 0.
-DROID = EpisodeScore(
-    stage={Stage.contact: 0.1, Stage.control: 0.3, Stage.at_target: 0.4}, zero=frozenset({Outcome.fail, Outcome.safety})
-)
-
-
-def _label(*events: object, task: str = CUP, seconds_to_end: float = 240.0, **fields: object) -> Label:
-    return Label.model_validate({
-        'uid': 'e1',
-        'task': task,
-        'seconds_to_end': seconds_to_end,
-        'events': events,
-        **fields,
-    })
-
-
-def _sweep_labels() -> list[Label | None]:
-    picked = [label(episode, MOLMO_SCORING.labelers) for episode in SWEEP]
-    return [given[1] if given is not None else None for given in picked]
-
-
-def test_the_sweep_scores_five_of_twenty_in_this_record():
-    assert score(MOLMO_SCORING, _sweep_labels()).model_dump(mode='json') == {
-        'primary': 0.25,
-        'episodes': 20,
-        'unscored': 0,
-    }
 
 
 def test_each_task_of_the_sweep_has_the_trials_and_successes_it_recorded():
@@ -99,6 +82,19 @@ def test_the_published_scores_are_a_subset_of_the_record():
 # --- one episode
 
 
+CUP = 'pick up the cup.'
+
+
+def _label(*events: object, task: str = CUP, seconds_to_end: float = 240.0, **fields: object) -> Label:
+    return Label.model_validate({
+        'uid': 'e1',
+        'task': task,
+        'seconds_to_end': seconds_to_end,
+        'events': events,
+        **fields,
+    })
+
+
 def test_a_success_scores_the_success_value_and_the_default_rule_scores_nothing_else():
     assert episode_score(_label(Success(seconds=5.0)), EpisodeScore(), None) == 1.0
     assert episode_score(_label(Success(seconds=5.0)), EpisodeScore(success=0.75), None) == 0.75
@@ -106,6 +102,12 @@ def test_a_success_scores_the_success_value_and_the_default_rule_scores_nothing_
         StageReached(seconds=1.0, stage=Stage.at_target), ItemsDelivered(seconds=2.0, delivered=1), total_items=2
     )
     assert episode_score(reached, EpisodeScore(), None) == 0.0
+
+
+# A board's rule that scores the furthest stage, and scores a fail or a safety stop 0.
+DROID = EpisodeScore(
+    stage={Stage.contact: 0.1, Stage.control: 0.3, Stage.at_target: 0.4}, zero=frozenset({Outcome.fail, Outcome.safety})
+)
 
 
 @pytest.mark.parametrize(
@@ -169,6 +171,9 @@ def test_a_run_that_has_no_label_scores_zero_rather_than_dividing_by_it():
 def test_a_trial_that_ran_out_of_time_counts_as_a_trial_that_did_not_succeed():
     scores = score(MOLMO_SCORING, [_label(Success(seconds=1.0)), _label(seconds_to_end=60.0)])
     assert (scores.primary, scores.unscored) == (0.5, 0)
+
+
+KETTLE = 'pick up the kettle.'
 
 
 def test_per_task_weighs_each_task_the_same():
