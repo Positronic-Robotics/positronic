@@ -204,7 +204,7 @@ class Harness(pimm.ControlSystem):
         meta[eval_keys.CHARGE_INFERENCE_TIME] = task.charge_inference_time or not self._embodiment.simulated
         if task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[eval_keys.TIMEOUT] = task.timeout_sec
-        for k, v in deepcopy(flatten_dict(rollout.policy.meta()) | flatten_dict(runtime.metadata)).items():
+        for k, v in deepcopy(flatten_dict(rollout.policy.meta()) | flatten_dict(runtime._metadata)).items():
             meta[f'{policy_keys.POLICY_META}.{k}'] = v
         meta.update(task.meta)
         meta[keys.TASK] = task.instruction

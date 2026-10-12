@@ -906,15 +906,17 @@ def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(epi
             return {'config.name': 'record', 'config.status': 'initial'}
 
         def run(self, runtime):
-            events = runtime.metadata.setdefault('events', [])
-            runtime.metadata['config'] = {'status': 'active'}
+            events = []
+            runtime.set_metadata('config', {'status': 'active'})
             try:
                 yield
                 events.append('started')
+                runtime.set_metadata('events', events)
                 while True:
                     yield Step({}, runtime.time_ns + 100_000_000)
             finally:
                 events.append('closed')
+                runtime.set_metadata('events', events)
 
     h = episode_harness
     policy = Record()

@@ -98,7 +98,7 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     with execution(policy) as (active, rt, clock):
         assert not complete(active, rt, clock, observation()).commands
         complete(active, rt, clock, observation())
-        meta = policy.meta() | rt.metadata
+        meta = policy.meta() | rt._metadata
         assert len(clients) == 1 and not clients[0].is_closed
         assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
     assert len(requests) == 2
@@ -117,7 +117,7 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert clients and all(client.is_closed for client in clients)
     with execution(policy) as (active, rt, clock):
         complete(active, rt, clock, observation())
-        assert rt.metadata['stop_reason'] == 'done'
+        assert rt._metadata['stop_reason'] == 'done'
         assert len(clients) == 2 and not clients[1].is_closed
     assert all(client.is_closed for client in clients)
     assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
@@ -135,7 +135,7 @@ def test_run_records_compact_reply_and_usage(monkeypatch):
     with execution(policy) as (active, rt, clock):
         clock.advance_to_ns(1000)
         complete(active, rt, clock, observation())
-        meta = policy.meta() | rt.metadata
+        meta = policy.meta() | rt._metadata
     recorded = json.dumps(meta)
     assert 'base_url' not in meta
     assert 'endpoint-secret' not in recorded

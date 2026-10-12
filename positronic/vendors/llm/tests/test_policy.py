@@ -86,13 +86,11 @@ def execution(policy):
 
 
 def complete(run, runtime, clock, obs) -> Step:
-    accepted = sum(e['event'] == 'accepted' for e in runtime.metadata['transcript'])
+    accepted = sum(e['event'] == 'accepted' for e in runtime._metadata['transcript'])
     for _ in range(1000):
         step = run.send(obs)
-        if (
-            'stop_reason' in runtime.metadata
-            or sum(e['event'] == 'accepted' for e in runtime.metadata['transcript']) > accepted
-        ):
+        metadata = runtime._metadata
+        if 'stop_reason' in metadata or sum(e['event'] == 'accepted' for e in metadata['transcript']) > accepted:
             return step
         result = runtime.wait(5)
         assert result.status is not WaitStatus.TIMED_OUT
@@ -121,9 +119,9 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
         for second in range(3):
             clock.advance_to_ns(second * 1_000_000_000)
             complete(run, runtime, clock, observation())
-        assert runtime.metadata['stop_reason'] == 'done'
-        assert runtime.metadata['hindsight'] == 'Inspect the final image.'
-        events = runtime.metadata['transcript']
+        assert runtime._metadata['stop_reason'] == 'done'
+        assert runtime._metadata['hindsight'] == 'Inspect the final image.'
+        events = runtime._metadata['transcript']
     assert [len(frames(messages)) for messages, _ in requests] == [2, 4, 4]
     states = [e for e in events if e['event'] == 'observation']
     assert states[1]['remaining_translation_m'] == [0.01, 0.0, 0.0]
@@ -134,12 +132,12 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
     assert len([e for e in events if e['event'] == 'instructions']) == 1
     assert 'privileged-value-never-send' not in json.dumps(events)
     with execution(policy) as (fresh, runtime, clock):
-        assert runtime.metadata['transcript'] == []
+        assert runtime._metadata['transcript'] == []
         replies.append(finish('give_up'))
         complete(fresh, runtime, clock, observation())
         assert len(frames(requests[-1][0])) == 2
         assert 'Inspect the final image.' not in str(requests[-1][0])
-        assert [e['call'] for e in runtime.metadata['transcript'] if e['event'] == 'request'] == [1]
+        assert [e['call'] for e in runtime._metadata['transcript'] if e['event'] == 'request'] == [1]
 
 
 def test_on_demand_pictures_reveal_only_requested_cameras(model):
@@ -150,7 +148,7 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
     replies.extend([picture, picture, finish()])
     with execution(LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND)) as (run, runtime, clock):
         complete(run, runtime, clock, observation())
-        events = runtime.metadata['transcript']
+        events = runtime._metadata['transcript']
     assert [len(frames(messages)) for messages, _ in requests] == [0, 1, 1]
     assert 'already revealed' in str(requests[-1][0])
     assert Tool.REVEAL_FRAMES.value in [tool.name for tool in requests[0][1]]
@@ -221,7 +219,7 @@ def test_follow_up_needs_another_tick_and_uses_the_frozen_observation(model, rep
         assert runtime.wait(5).status is WaitStatus.ANSWERS_READY
         assert len(requests) == 2
         assert not run.send(later).commands
-        events = runtime.metadata['transcript']
+        events = runtime._metadata['transcript']
     assert [e[policy_keys.OBS_TIME_NS] for e in events if e['event'] == 'request'] == [1, 1]
     assert len([e for e in events if e['event'] == 'observation']) == 1
     if reply.tool_calls:
@@ -262,19 +260,19 @@ def test_finished_run_stays_idle_and_new_run_starts_fresh(model, ending):
     policy = llm(model='test', images='on_demand', max_calls=1)
     with execution(policy) as (run, runtime, clock):
         assert not complete(run, runtime, clock, observation()).commands
-        meta = deepcopy(runtime.metadata)
+        meta = deepcopy(runtime._metadata)
         assert meta['stop_reason'] == ending
         for status in (RobotStatus.AVAILABLE, RobotStatus.ERROR, RobotStatus.AVAILABLE):
             clock.advance_to_ns(clock.now_ns() + 1_000_000_000)
             assert not run.send(observation() | {keys.ROBOT_STATUS: status}).commands
-        assert runtime.metadata == meta
+        assert runtime._metadata == meta
     assert len(requests) == 1
     replies.append(finish())
     with execution(policy) as (fresh, runtime, clock):
-        assert 'stop_reason' not in runtime.metadata
-        assert runtime.metadata['transcript'] == []
+        assert 'stop_reason' not in runtime._metadata
+        assert runtime._metadata['transcript'] == []
         complete(fresh, runtime, clock, observation())
-        assert [e['call'] for e in runtime.metadata['transcript'] if e['event'] == 'request'] == [1]
+        assert [e['call'] for e in runtime._metadata['transcript'] if e['event'] == 'request'] == [1]
     assert len(requests) == 2
 
 
@@ -304,7 +302,7 @@ def test_fault_pauses_commands_without_discarding_pending_reply(model, status):
         clock.advance_to_ns(first.resume_at_ns)
         command = run.send(observation(x=0.02)).commands[keys.ROBOT_COMMAND]
         assert 0.02 < command.pose.translation[0] <= 0.04
-        accepted = [e for e in runtime.metadata['transcript'] if e['event'] == 'accepted']
+        accepted = [e for e in runtime._metadata['transcript'] if e['event'] == 'accepted']
         assert accepted[0]['target']['x'] == 0.04
     assert len(requests) == 1
 
@@ -341,10 +339,10 @@ def test_close_drains_request_without_processing_reply(model, late_response):
         try:
             assert not run.send(observation()).commands
             assert entered.wait(5)
-            snapshot = deepcopy(runtime.metadata)
+            snapshot = deepcopy(runtime._metadata)
         finally:
             release.set()
-    assert runtime.metadata == snapshot
+    assert runtime._metadata == snapshot
     assert len(requests) == 1
     assert [e['event'] for e in snapshot['transcript']] == ['instructions', 'observation', 'request']
 
@@ -356,7 +354,7 @@ def test_corrected_replies_are_preserved_in_transcript(model, bad):
     with execution(LLMPolicy(Endpoint('test'), Motion())) as (run, runtime, clock):
         clock.advance_to_ns(123)
         complete(run, runtime, clock, observation())
-        events = runtime.metadata['transcript']
+        events = runtime._metadata['transcript']
     assert [e['call'] for e in events if e['event'] == 'response'] == [1, 2]
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [1]
     assert [e['call'] for e in events if e['event'] == 'accepted'] == [2]
@@ -375,7 +373,7 @@ def test_motion_uses_delivery_pose_and_waits_for_final_period_before_observing(
         clock.advance_to_ns(5_000_000_000)
         step = run.send(observation(x=current_x))
         assert step == Step({}, 5_040_000_000)
-        accepted = [e for e in runtime.metadata['transcript'] if e['event'] == 'accepted'][0]
+        accepted = [e for e in runtime._metadata['transcript'] if e['event'] == 'accepted'][0]
         assert accepted['target']['x'] == pytest.approx(expected_x)
         assert accepted['clamped'] is (requested_x != expected_x)
         end_ns = 5_000_000_000 + round(accepted['duration_s'] * 1e9)
@@ -389,7 +387,7 @@ def test_motion_uses_delivery_pose_and_waits_for_final_period_before_observing(
         assert len(requests) == 1
         clock.advance_to_ns(end_ns)
         complete(run, runtime, clock, observation(x=expected_x))
-        events = runtime.metadata['transcript']
+        events = runtime._metadata['transcript']
     assert len(requests) == 2
     assert not any(e['event'] == 'rejected' for e in events)
     result = next(

@@ -102,8 +102,8 @@ class ChunkedSchedule(Policy):
         waypoints that a new chunk replaces count as dropped too.
         """
 
-        def __init__(self, metadata: dict[str, Any]) -> None:
-            self._metadata = metadata
+        def __init__(self, runtime: Runtime) -> None:
+            self._runtime = runtime
             self._scheduled = 0
             self._sorted_late_ns: list[int] = []
             self._gap_max_ns = 0
@@ -136,7 +136,7 @@ class ChunkedSchedule(Policy):
                 values[eval_keys.LATE_MAX_MS] = late_ns[-1] / 1e6
                 values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
             for name, value in values.items():
-                self._metadata[f'{eval_keys.SCHEDULE}.{name}'] = value
+                self._runtime.set_metadata(f'{eval_keys.SCHEDULE}.{name}', value)
 
         @staticmethod
         def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
@@ -160,7 +160,7 @@ class ChunkedSchedule(Policy):
         answer: Answer[Sequence[Commands]] | None = None
         trajectory: deque[tuple[Commands, int]] = deque()
         end_ns = 0
-        stats = self._Stats(runtime.metadata) if self._record_stats else None
+        stats = self._Stats(runtime) if self._record_stats else None
         obs = yield
         try:
             while True:
@@ -253,7 +253,7 @@ class PrefixSampling(Enum):
 
 
 class _TimedChunk:
-    """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
+    """An action chunk timed from ``start_ns`` at ``fps`` actions per second."""
 
     def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
         self._actions = actions
@@ -269,7 +269,7 @@ class _TimedChunk:
         return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
 
     def prefix(self, now_ns: int, duration_sec: float, sampling: PrefixSampling) -> list[Commands]:
-        """This chunk sampled at ``now_ns + k / fps`` for each k that falls before ``now_ns + duration_sec``.
+        """Sample at the chunk's action rate from ``now_ns`` for ``duration_sec`` seconds.
 
         Stops at the first time that ``sampling`` gives no action for.
         """
