@@ -8,13 +8,12 @@ from types import MappingProxyType
 from typing import SupportsIndex, overload
 
 import numpy as np
-
-EMITTED_PREFIX = 'emitted.'
-RECEIVED_PREFIX = 'received.'
-EMITTED_WALL = f'{EMITTED_PREFIX}wall'
-EMITTED_WORLD = f'{EMITTED_PREFIX}world'
-RECEIVED_WALL = f'{RECEIVED_PREFIX}wall'
-RECEIVED_WORLD = f'{RECEIVED_PREFIX}world'
+from eval_vocabulary.timeline import EMITTED_PREFIX as EMITTED_PREFIX
+from eval_vocabulary.timeline import EMITTED_WALL as EMITTED_WALL
+from eval_vocabulary.timeline import EMITTED_WORLD as EMITTED_WORLD
+from eval_vocabulary.timeline import RECEIVED_PREFIX as RECEIVED_PREFIX
+from eval_vocabulary.timeline import RECEIVED_WALL as RECEIVED_WALL
+from eval_vocabulary.timeline import RECEIVED_WORLD as RECEIVED_WORLD
 
 
 def validate_timeline(timeline: str) -> None:

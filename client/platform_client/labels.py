@@ -18,7 +18,6 @@ from typing import Annotated, ClassVar, Literal, NamedTuple, NewType, Self
 import pyarrow as pa
 import pyarrow.parquet as pq
 from eval_vocabulary.episode import (
-    EMITTED_WORLD,
     ENDED_BY,
     ENDED_BY_OPERATOR,
     LEGACY_TIME_COLUMN,
@@ -31,6 +30,7 @@ from eval_vocabulary.episode import (
     TIMESTAMP_COLUMN_PREFIX,
     UID,
 )
+from eval_vocabulary.timeline import EMITTED_WORLD
 from platform_client.slug import Slugged
 from pydantic import (
     BaseModel,

@@ -17,7 +17,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from eval_vocabulary.episode import (
-    EMITTED_WORLD,
     ENDED_BY,
     ENDED_BY_OPERATOR,
     LEGACY_TIME_COLUMN,
@@ -30,6 +29,7 @@ from eval_vocabulary.episode import (
     TIMESTAMP_COLUMN_PREFIX,
     UID,
 )
+from eval_vocabulary.timeline import EMITTED_WORLD
 from platform_client import labels
 from platform_client.labels import (
     MOLMO_LABELER,

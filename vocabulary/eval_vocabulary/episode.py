@@ -1,7 +1,6 @@
 """Where an episode records its statics, its meta and its signals, and the names that a labeler reads there.
 
-The dataset writer imports these names, so it and a labeler cannot disagree. `EMITTED_WORLD` must equal pimm's name
-for the emitted world timeline.
+The dataset writer imports these names, so it and a labeler cannot disagree.
 """
 
 # The file in an episode's directory that holds its statics as one JSON object.
@@ -24,7 +23,5 @@ TASK = 'task'
 SIGNAL_FILE_SUFFIX = '.parquet'
 # Each sample's time on the timeline `<name>`, in nanoseconds, is in the column `<TIMESTAMP_COLUMN_PREFIX><name>`.
 TIMESTAMP_COLUMN_PREFIX = 'ts.'
-# The timeline of when each sample was made, on the world clock that a trial runs on.
-EMITTED_WORLD = 'emitted.world'
 # The one time column of a signal file in the format before named timelines, on the world clock.
 LEGACY_TIME_COLUMN = 'timestamp'
