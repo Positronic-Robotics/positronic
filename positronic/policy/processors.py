@@ -253,7 +253,7 @@ class PrefixSampling(Enum):
 
 
 class _TimedChunk:
-    """An action chunk timed from ``start_ns`` at ``fps`` actions per second."""
+    """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
 
     def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
         self._actions = actions
@@ -269,7 +269,7 @@ class _TimedChunk:
         return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
 
     def prefix(self, now_ns: int, duration_sec: float, sampling: PrefixSampling) -> list[Commands]:
-        """Sample at the chunk's action rate from ``now_ns`` for ``duration_sec`` seconds.
+        """This chunk sampled at ``now_ns + k / fps`` for each k that falls before ``now_ns + duration_sec``.
 
         Stops at the first time that ``sampling`` gives no action for.
         """
