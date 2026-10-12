@@ -1,8 +1,7 @@
 # Enter the Physical AI Competition
 
-This guide takes a team in the Nebius × Positronic
-[Physical AI Competition](https://physical-ai-competition.positronic.ro/index.html) from an account to a
-scored submission. The competition site has the rules, the dates and the leaderboard.
+The [competition site](https://physical-ai-competition.positronic.ro/index.html) has the rules, the dates
+and the leaderboard.
 
 A coding agent can do most of the work. You approve the sign-in, and you choose where to push your image.
 
@@ -71,17 +70,24 @@ Start the image with the network denied, and wait for its server. This test need
 no submission. `--pull=always` makes Docker test the image in your registry, not an older local copy.
 
 ```bash
-probe='import urllib.error, urllib.request as u
+probe='import sys, urllib.error, urllib.request as u
 try:
     print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
           headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
 except urllib.error.HTTPError as e:
-    print("the server answered HTTP", e.code)'
+    print("the server answered HTTP", e.code)
+except OSError as e:
+    reason = e.reason if isinstance(e, urllib.error.URLError) else e
+    if not isinstance(reason, (ConnectionError, TimeoutError)):
+        raise
+    sys.exit(3)'
 if cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 900))
-  until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
+  while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
     [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
+    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
+    [ $? = 3 ] || break
     sleep 5
   done
   docker logs --tail 30 "$cid"
@@ -99,6 +105,11 @@ a GPU. The loop ends with one of these lines:
   server does not accept the token in `AUTH_TOKEN`. On the platform, this fails the run with
   `policy_setup_crash`.
 - `no answer in 900 s`: the server hung. Read the log for the step where it stopped.
+- An error from `docker exec` or a Python traceback: the probe failed, and the loop stopped at once. For
+  example, the image has no Python at `/positronic/.venv/bin/python`.
+
+The probe exits with code 3 when the port is closed or the server does not answer in 5 s. The loop then
+waits quietly, because a server that loads its weights does not open the port yet.
 
 The log must not show a DNS error. The `docker exec` line uses the Python of the example images. In your
 own image, use any HTTP client that the image has. The probe runs inside the container, so it also gets
@@ -257,17 +268,24 @@ answers, from inside the container, with the token:
 
 ```bash
 docker network create --internal noegress
-probe='import urllib.error, urllib.request as u
+probe='import sys, urllib.error, urllib.request as u
 try:
     print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
           headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
 except urllib.error.HTTPError as e:
-    print("the server answered HTTP", e.code)'
+    print("the server answered HTTP", e.code)
+except OSError as e:
+    reason = e.reason if isinstance(e, urllib.error.URLError) else e
+    if not isinstance(reason, (ConnectionError, TimeoutError)):
+        raise
+    sys.exit(3)'
 if cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 600))
-  until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
+  while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
     [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
+    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
+    [ $? = 3 ] || break
     sleep 5
   done
   docker logs --tail 30 "$cid"
@@ -283,6 +301,7 @@ fi
   not accept the token in `AUTH_TOKEN`.
 - `no answer in 600 s` means that the server hung, or that it starts too slowly. On the platform, machine
   boot, the image pull and the server's start share one deadline of 1800 s.
+- An error from `docker exec` or a Python traceback means that the probe failed. The loop stops at once.
 - A server that checks the token answers `401` when the request has no token.
 - The `docker exec` line uses the Python of the example images. In your own image, use any HTTP client
   that the image has.
