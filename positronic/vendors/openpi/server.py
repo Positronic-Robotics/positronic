@@ -271,7 +271,7 @@ COMMANDS = {
         model=openpi_model.override(
             checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero',
             config_name='pi05_libero',
-            transform_actions=openpi.libero_actions,
+            transform_actions=openpi.libero_actions_to_physical,
         ),
         pipeline=libero_pipe.override(ee_frame=None),
     ),
