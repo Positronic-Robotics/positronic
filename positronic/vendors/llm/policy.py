@@ -351,7 +351,7 @@ class LLMPolicy(Policy):
     def meta(self) -> dict[str, Any]:
         return {
             policy_keys.TYPE: 'llm',
-            'model': self.endpoint.model.model_id,
+            'model': self.endpoint.model_id,
             'settings': dict(self.endpoint.settings),
             'motion': asdict(self.motion),
             'max_calls': self.max_calls,
@@ -364,49 +364,50 @@ class LLMPolicy(Policy):
         }
 
     def run(self, runtime: Runtime) -> PolicyRun:
-        conversation = self._Conversation(self)
-        runtime.metadata['transcript'] = conversation._transcript
-        obs = yield
-        while True:
-            if conversation._calls >= self.max_calls:
-                runtime.metadata['stop_reason'] = 'call_budget'
-                conversation._transcript.extend([
-                    {'event': 'budget_exhausted', 'calls': conversation._calls},
-                    {
-                        'event': 'accepted',
-                        'call': conversation._calls,
-                        'time_ns': runtime.time_ns,
-                        'stop_reason': 'call_budget',
-                    },
-                ])
-                break
-            if conversation._obs is None:
-                conversation._observe(obs, runtime.time_ns)
-            messages = conversation._request_messages()
-            answer = runtime.submit(self.endpoint.request, messages, self._tools)
-            obs = yield Step({}, runtime.time_ns)
-            while not answer.done():
+        with self.endpoint.open() as request:
+            conversation = self._Conversation(self)
+            runtime.metadata['transcript'] = conversation._transcript
+            obs = yield
+            while True:
+                if conversation._calls >= self.max_calls:
+                    runtime.metadata['stop_reason'] = 'call_budget'
+                    conversation._transcript.extend([
+                        {'event': 'budget_exhausted', 'calls': conversation._calls},
+                        {
+                            'event': 'accepted',
+                            'call': conversation._calls,
+                            'time_ns': runtime.time_ns,
+                            'stop_reason': 'call_budget',
+                        },
+                    ])
+                    break
+                if conversation._obs is None:
+                    conversation._observe(obs, runtime.time_ns)
+                messages = conversation._request_messages()
+                answer = runtime.submit(request, messages, self._tools)
                 obs = yield Step({}, runtime.time_ns)
-            decision = conversation._respond(answer.result())
-            if decision is None:
-                continue
-            call, data = decision
-            chunk = conversation._accept(call, data, obs, runtime.time_ns)
-            if isinstance(data, Finish):
-                runtime.metadata.update(stop_reason=call.tool_name, hindsight=data.hindsight)
-                break
-            started_ns, index = runtime.time_ns, 0
-            end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)
-            while index < len(chunk) or runtime.time_ns < end_ns:
-                due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
-                commands = {}
-                while index < len(chunk) and runtime.time_ns >= due_ns:
-                    commands.update(chunk[index])
-                    index += 1
+                while not answer.done():
+                    obs = yield Step({}, runtime.time_ns)
+                decision = conversation._respond(answer.result())
+                if decision is None:
+                    continue
+                call, data = decision
+                chunk = conversation._accept(call, data, obs, runtime.time_ns)
+                if isinstance(data, Finish):
+                    runtime.metadata.update(stop_reason=call.tool_name, hindsight=data.hindsight)
+                    break
+                started_ns, index = runtime.time_ns, 0
+                end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)
+                while index < len(chunk) or runtime.time_ns < end_ns:
                     due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
-                obs = yield Step(commands, due_ns)
-        while True:
-            yield Step({}, runtime.time_ns + 1_000_000_000)
+                    commands = {}
+                    while index < len(chunk) and runtime.time_ns >= due_ns:
+                        commands.update(chunk[index])
+                        index += 1
+                        due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
+                    obs = yield Step(commands, due_ns)
+            while True:
+                yield Step({}, runtime.time_ns + 1_000_000_000)
 
 
 @cfn.config(

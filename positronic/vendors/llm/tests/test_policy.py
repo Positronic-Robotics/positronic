@@ -64,7 +64,7 @@ def finish(tool='done'):
 def model(monkeypatch):
     requests, replies = [], []
 
-    def request(endpoint, messages, tools):
+    def request(endpoint, runner, model, messages, tools):
         requests.append((messages, tools))
         response = replies.pop(0)
         return response() if callable(response) else response
