@@ -33,10 +33,10 @@ def test_set_metadata_copies_nested_values_and_replaces_previous_value(executors
     config = {'labels': ['original']}
     runtime.set_metadata('config', config)
     config['labels'].append('changed')
-    assert runtime._metadata == {'config': {'labels': ['original']}}
+    assert runtime.metadata_snapshot() == {'config': {'labels': ['original']}}
 
     runtime.set_metadata('config', {'enabled': False})
-    assert runtime._metadata == {'config': {'enabled': False}}
+    assert runtime.metadata_snapshot() == {'config': {'enabled': False}}
 
 
 def test_metadata_changes_only_on_explicit_writes(executors):
@@ -44,18 +44,31 @@ def test_metadata_changes_only_on_explicit_writes(executors):
     events = []
     runtime.set_metadata('events', events)
     events.append({'labels': ['first']})
-    assert runtime._metadata == {'events': []}
+    assert runtime.metadata_snapshot() == {'events': []}
 
     runtime.set_metadata('events', events)
     events[0]['labels'].append('changed')
-    assert runtime._metadata == {'events': [{'labels': ['first']}]}
+    assert runtime.metadata_snapshot() == {'events': [{'labels': ['first']}]}
 
 
 def test_metadata_is_owned_by_each_runtime(executors):
     first, _ = executors()
     second, _ = executors()
     first.set_metadata('status', 'running')
-    assert second._metadata == {}
+    assert second.metadata_snapshot() == {}
+
+
+def test_metadata_snapshot_is_independent_of_runtime_writes_and_caller_mutations(executors):
+    runtime, _ = executors()
+    runtime.set_metadata('config', {'labels': ['original']})
+    snapshot = runtime.metadata_snapshot()
+    snapshot['config']['labels'].append('changed')
+    snapshot['local'] = True
+    assert runtime.metadata_snapshot() == {'config': {'labels': ['original']}}
+
+    runtime.set_metadata('config', {'enabled': False})
+    runtime.set_metadata('status', 'running')
+    assert snapshot == {'config': {'labels': ['original', 'changed']}, 'local': True}
 
 
 def test_worker_span_keeps_parent_after_processor_yields(executors, tmp_path):

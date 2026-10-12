@@ -114,6 +114,10 @@ class Executor(Runtime):
     def set_metadata(self, name: str, value: Any) -> None:
         self._metadata[name] = deepcopy(value)
 
+    def metadata_snapshot(self) -> dict[str, Any]:
+        """Return an independent copy of the episode metadata."""
+        return deepcopy(self._metadata)
+
     @property
     def time_ns(self) -> int:
         return self._clock()
