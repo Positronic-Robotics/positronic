@@ -256,7 +256,7 @@ try:
           headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
 except urllib.error.HTTPError as e:
     print("the server answered HTTP", e.code)'
-if cid=$(docker run -d --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+if cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 900))
   until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
@@ -296,7 +296,7 @@ try:
           headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
 except urllib.error.HTTPError as e:
     print("the server answered HTTP", e.code)'
-if cid=$(docker run -d --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+if cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 600))
   until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
