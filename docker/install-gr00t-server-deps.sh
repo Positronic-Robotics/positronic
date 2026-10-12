@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Preserve every package version chosen by the native model environment.
+uv export --project /opt/positronic-packages --frozen --no-dev --no-emit-workspace \
+  --no-hashes --no-annotate --no-header --output-file /tmp/gr00t-locked-requirements.txt > /dev/null
+
+# Preserve native versions; use the repository lock for packages absent from the native environment.
 /opt/gr00t-venv/bin/python - <<'PY'
 import tomllib
 from importlib.metadata import distributions
@@ -10,9 +13,13 @@ from pathlib import Path
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
-Path('/tmp/gr00t-constraints.txt').write_text('\n'.join(
-    f'{dist.metadata["Name"]}=={dist.version}' for dist in distributions()
-))
+native = {canonicalize_name(dist.metadata['Name']): dist.version for dist in distributions()}
+constraints = [f'{name}=={version}' for name, version in native.items()]
+constraints.extend(
+    line for line in Path('/tmp/gr00t-locked-requirements.txt').read_text().splitlines()
+    if canonicalize_name(Requirement(line).name) not in native
+)
+Path('/tmp/gr00t-constraints.txt').write_text('\n'.join(constraints))
 projects = [
     tomllib.loads((Path('/opt/positronic-packages') / name / 'pyproject.toml').read_text())['project']
     for name in ('wire', 'model_server')
@@ -29,5 +36,5 @@ Path('/tmp/gr00t-requirements.txt').write_text('\n'.join(
 PY
 UV_OFFLINE=0 uv pip install --python /opt/gr00t-venv/bin/python --constraint /tmp/gr00t-constraints.txt \
   --requirements /tmp/gr00t-requirements.txt \
-  configuronic==0.7.0 pos3==0.3.1
-rm /tmp/gr00t-constraints.txt /tmp/gr00t-requirements.txt
+  configuronic pos3
+rm /tmp/gr00t-constraints.txt /tmp/gr00t-requirements.txt /tmp/gr00t-locked-requirements.txt

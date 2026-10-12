@@ -4,6 +4,7 @@ FROM ${BASE_IMAGE}
 
 RUN apt-get update && apt-get install -y --no-install-recommends libturbojpeg && rm -rf /var/lib/apt/lists/*
 
+COPY pyproject.toml uv.lock /opt/positronic-packages/
 COPY wire/pyproject.toml /opt/positronic-packages/wire/
 COPY model_server/pyproject.toml /opt/positronic-packages/model_server/
 COPY docker/install-gr00t-server-deps.sh /opt/positronic-packages/install-gr00t-server-deps.sh

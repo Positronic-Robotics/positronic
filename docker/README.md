@@ -48,6 +48,7 @@ Training installs Positronic at `/positronic/.venv` on startup, reusing the moun
 Serving runs the standalone adapter in `/opt/gr00t-venv`, without importing Positronic.
 
 Both GR00T Dockerfiles install dependencies from the package manifests before copying the complete packages with `COPY --link`.
+They preserve native package versions and pin added dependencies to the repository's `uv.lock`.
 They then install the wrapper and wire packages without changing dependencies and check the resulting environment.
 Changes to wrapper or wire files repeat only their package installation. Adapter changes reuse both installation layers.
 The dedicated serving image also caches model weights in a separate stage.
