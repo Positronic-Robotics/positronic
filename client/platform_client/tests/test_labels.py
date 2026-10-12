@@ -29,7 +29,7 @@ from eval_vocabulary.episode import (
     TIMESTAMP_COLUMN_PREFIX,
     UID,
 )
-from eval_vocabulary.timeline import EMITTED_WORLD
+from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD
 from platform_client import labels
 from platform_client.labels import (
     MOLMO_LABELER,
@@ -391,7 +391,7 @@ def _write_signal(episode: Path, name: str, times: list[int], column: str = LEGA
 def _write_timed_signal(episode: Path, name: str, world: list[int]) -> None:
     """A signal in the format with named timelines, slower than real time: ten wall seconds to each world second."""
     columns = {
-        f'{TIMESTAMP_COLUMN_PREFIX}emitted.wall': [10 * t for t in world],
+        f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WALL}': [10 * t for t in world],
         f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WORLD}': world,
     }
     pq.write_table(pa.table(columns), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
@@ -436,7 +436,7 @@ def test_an_older_recording_takes_its_end_from_the_first_and_last_samples_of_its
 
 def test_a_recording_with_no_world_time_has_no_label_and_is_logged(tmp_path: Path, caplog: pytest.LogCaptureFixture):
     (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True})
-    _write_signal(episode, 'grip', [0, 1_000_000_000], column=f'{TIMESTAMP_COLUMN_PREFIX}emitted.wall')
+    _write_signal(episode, 'grip', [0, 1_000_000_000], column=f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WALL}')
     with caplog.at_level(logging.ERROR, logger=labels.__name__):
         assert molmo_label(episode) is None
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
