@@ -171,7 +171,7 @@ def test_joint_position_action_requires_the_configured_joint_count_and_one_grip(
         JointPositionAction('q', 'g').decode({'q': joints, 'g': grip})
 
 
-def test_cartesian_delta_action_defaults_use_physical_units_and_live_pose():
+def test_cartesian_delta_action_uses_physical_units_and_live_pose():
     decoded = CartesianDeltaAction().decode({ACTION: [0.1, -0.2, 0.3, 0.0, 0.0, np.pi / 2, 0.25]})
     command = decoded[obs_keys.ROBOT_COMMAND]
     assert isinstance(command, cmd_module.CartesianDelta)
@@ -187,22 +187,17 @@ def test_cartesian_delta_action_defaults_use_physical_units_and_live_pose():
         )
 
 
-def test_cartesian_delta_action_spec_decodes_a_native_chunk_with_custom_conversion():
-    decoder = CartesianDeltaAction(
-        action_key='prediction',
-        scale=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, -0.25),
-        offset=(0.01, 0.02, 0.03, 0.0, 0.0, 0.0, 0.5),
-        clip=(-2.0, 2.0),
-    ) | UnpackActionChunk({'prediction': ['actions']})
+def test_cartesian_delta_action_spec_decodes_a_chunk_with_a_custom_key():
+    decoder = CartesianDeltaAction(action_key='prediction') | UnpackActionChunk({'prediction': ['actions']})
     restored = from_spec(json.loads(json.dumps(decoder.to_spec())))
     assert isinstance(restored, Codec)
-    predictions = np.array([[3, -3, 1, 0, 0, 1, 2], [-3, 3, -1, 0, 1, 0, -2]], dtype=np.float32)
+    predictions = np.array([[3, -3, 1, 0, 0, 1, 0.25], [-3, 3, -1, 0, 1, 0, 0.75]], dtype=np.float32)
     original = predictions.copy()
     decoded = restored.decode({'actions': predictions})
 
     assert len(decoded) == 2
     for action, position, rotvec, grip in zip(
-        decoded, [[0.21, -0.38, 0.33], [-0.19, 0.42, -0.27]], [[0, 0, 0.6], [0, 0.5, 0]], [0, 1], strict=True
+        decoded, [[3, -3, 1], [-3, 3, -1]], [[0, 0, 1], [0, 1, 0]], [0.25, 0.75], strict=True
     ):
         command = action[obs_keys.ROBOT_COMMAND]
         assert isinstance(command, cmd_module.CartesianDelta)
@@ -218,23 +213,6 @@ def test_cartesian_delta_action_spec_decodes_a_native_chunk_with_custom_conversi
 def test_cartesian_delta_action_requires_a_single_seven_channel_action(action):
     with pytest.raises(ValueError, match='shape'):
         CartesianDeltaAction().decode({ACTION: action})
-
-
-@pytest.mark.parametrize(
-    'arguments',
-    [
-        {'scale': [1]},
-        {'offset': [[0] * 7]},
-        {'scale': [np.inf] * 7},
-        {'offset': [np.nan] * 7},
-        {'clip': [1]},
-        {'clip': [1, -1]},
-        {'clip': [-np.inf, 1]},
-    ],
-)
-def test_cartesian_delta_action_rejects_invalid_conversion_settings(arguments):
-    with pytest.raises(ValueError):
-        from_spec(component('cartesian_delta_action', **arguments))
 
 
 def test_absolute_position_action_encode_decode_quat():
