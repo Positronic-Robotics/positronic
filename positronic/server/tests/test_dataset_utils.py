@@ -282,7 +282,7 @@ def test_a_text_signal_is_logged_where_its_value_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda path, value, static=False: styles.__setitem__(path, value))
     ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
 
-    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer(), None))
 
     second = 1_000_000_000
     changes = [second, 3 * second, 4 * second, 5 * second, 7 * second]
@@ -312,7 +312,7 @@ def test_a_text_log_entry_keeps_all_its_coordinates(tmp_path, monkeypatch):
         )
     ep = DiskEpisode(tmp_path / 'ep')
 
-    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer(), None))
 
     assert sent['/text/progress.state'] == {
         RECEIVED_WALL: [machine_clock, machine_clock + 1000],
@@ -334,7 +334,7 @@ def test_disjoint_text_timelines_are_exported(tmp_path, monkeypatch):
         writer.append('device.state', 'ready', Time(device=7))
     ep = DiskEpisode(tmp_path / 'ep')
 
-    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer(), None))
 
     assert sent['/text/progress.state'] == {RECORDED_TIME: [4_000_000_000]}
     assert sent['/text/device.state'] == {'device': [7]}
@@ -377,6 +377,27 @@ def test_a_legacy_signal_is_on_the_timeline_the_replay_opens_on(tmp_path, monkey
     assert sent['/signals/progress.delivered'] == both
     assert sent['camera'] == both
     assert sent['/signals/robot.q/0'] == dict.fromkeys(world, times)
+
+
+@pytest.mark.parametrize(
+    ('selected', 'copied_to'), [(RECEIVED_WORLD, RECEIVED_WORLD), (HARNESS_WALL, None), ('tick', None)]
+)
+def test_a_legacy_signal_is_copied_to_a_selected_timeline_only_on_the_world_clock(
+    tmp_path, monkeypatch, selected, copied_to
+):
+    sent = _capture_indexes(monkeypatch)
+    times = [1_000_000_000, 2_000_000_000]
+    root = tmp_path / 'ds'
+    with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
+        for i, ts in enumerate(times):
+            on = {HARNESS_WORLD: ts, RECEIVED_WORLD: ts, HARNESS_WALL: ts + 5, 'tick': i}
+            writer.append('robot.q', np.zeros(2), Time(**on))
+            writer.append('progress.state', ['floating', 'reaching'][i], Time(**{RECORDED_TIME: ts}))
+
+    b''.join(stream_episode_rrd(LocalDataset(root), 0, timeline=selected))
+
+    expected = {RECORDED_TIME: times} if copied_to is None else {RECORDED_TIME: times, copied_to: times}
+    assert sent['/text/progress.state'] == expected
 
 
 @pytest.mark.parametrize('world', [RECEIVED_WORLD, HARNESS_WORLD])
@@ -618,7 +639,7 @@ def test_a_text_signal_holds_its_last_value_to_the_last_sample(tmp_path, monkeyp
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
     ep = _text_episode(tmp_path / 'ep', {'progress.state': ['floating', 'reaching', 'reaching']})
 
-    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer()))
+    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer(), None))
 
     assert sent['/text/progress.state'] == [1_000_000_000, 2_000_000_000]
     assert sent['/signals/progress.state'] == [1_000_000_000, 2_000_000_000, 3_000_000_000]

@@ -502,13 +502,23 @@ def duration_timeline(timelines: Iterable[str]) -> str | None:
     return next((name for name in _DURATION_TIMELINES if name in names), None)
 
 
-def _build_blueprint(
-    signals: EpisodeSignals, ep: Episode, layout: ReplayLayout | None, timeline: str | None = None
-) -> rrb.Blueprint:
+# The timelines on the world clock that `recorded` names, so a `recorded` coordinate holds on them.
+_RECORDED_CLOCK_TIMELINES = frozenset({HARNESS_WORLD, RECEIVED_WORLD})
+
+
+def _opening_timeline(ep: Episode, timeline: str | None) -> str | None:
+    """`timeline` where `ep` carries it, else the preferred clock, else the first name."""
     if timeline is not None and timeline not in ep.timelines:
         raise KeyError(timeline)
     if timeline is None:
         timeline = duration_timeline(ep.timelines) or next(iter(ep.timelines), None)
+    return timeline
+
+
+def _build_blueprint(
+    signals: EpisodeSignals, ep: Episode, layout: ReplayLayout | None, timeline: str | None = None
+) -> rrb.Blueprint:
+    timeline = _opening_timeline(ep, timeline)
     return rrb.Blueprint(
         rrb.BlueprintPanel(state=rrb.PanelState.Hidden),
         rrb.SelectionPanel(state=rrb.PanelState.Hidden),
@@ -568,14 +578,11 @@ def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, 
     return max(_MIN_ENCODED_SIDE, int(width * scale) // 2 * 2), max(_MIN_ENCODED_SIDE, int(height * scale) // 2 * 2)
 
 
-def _timestamp_columns(sig: Signal, replay_timeline: str | None) -> dict[str, np.ndarray]:
-    """Each timeline of `sig`. A signal on `recorded` and not on `replay_timeline` is put on it too.
-
-    `recorded` is the world clock of a file with no format version, so its coordinates hold on the world timelines.
-    """
+def _timestamp_columns(sig: Signal, recorded_also_on: str | None) -> dict[str, np.ndarray]:
+    """Each timeline of `sig`. A signal on `recorded` and not on `recorded_also_on` is put on it too."""
     columns = {name: np.asarray(sig.timestamps(name), dtype=np.int64) for name in sig.timelines}
-    if replay_timeline is not None and RECORDED_TIME in columns and replay_timeline not in columns:
-        columns[replay_timeline] = columns[RECORDED_TIME]
+    if recorded_also_on is not None and RECORDED_TIME in columns and recorded_also_on not in columns:
+        columns[recorded_also_on] = columns[RECORDED_TIME]
     return columns
 
 
@@ -675,15 +682,19 @@ def _mp4_reduced_to(src: Path, max_resolution: int, kept: np.ndarray | None = No
 
 
 def _log_video_signals(
-    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_resolution: int, max_hz: float
+    ep: Episode,
+    signals: EpisodeSignals,
+    drainer: _BinaryStreamDrainer,
+    max_resolution: int,
+    max_hz: float,
+    recorded_also_on: str | None,
 ) -> Iterator[bytes]:
     """Log stored videos as frame references and raw images as a video stream."""
-    replay_timeline = duration_timeline(ep.timelines)
     for name in signals.videos:
         sig = ep.signals[name]
         if not len(sig):
             continue
-        timestamps = _timestamp_columns(sig, replay_timeline)
+        timestamps = _timestamp_columns(sig, recorded_also_on)
         if isinstance(sig, VideoSignal):
             kept = _sample_indices(timestamps, max_hz)
             video_bytes = _mp4_reduced_to(sig.video_path, max_resolution, kept if len(kept) < len(sig) else None)
@@ -730,7 +741,7 @@ def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
 
 
 def _log_numeric_signals(
-    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_hz: float
+    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_hz: float, recorded_also_on: str | None
 ) -> Generator[bytes, None, dict[str, tuple[dict[str, np.ndarray], np.ndarray]]]:
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging.
 
@@ -744,14 +755,13 @@ def _log_numeric_signals(
     pose_data = {}
     unplotted = signals.unplotted
 
-    replay_timeline = duration_timeline(ep.timelines)
     for key in signals.numerics:
         if key in unplotted and key not in stash_keys:  # nothing would read the values
             continue
         sig = ep.signals[key]
         if len(sig) == 0:
             continue
-        timestamps = _timestamp_columns(sig, replay_timeline)
+        timestamps = _timestamp_columns(sig, recorded_also_on)
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
@@ -933,19 +943,20 @@ def _changes(values: np.ndarray) -> np.ndarray:
     return np.flatnonzero(np.concatenate([[True], values[1:] != values[:-1]]))
 
 
-def _log_text_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
+def _log_text_signals(
+    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, recorded_also_on: str | None
+) -> Iterator[bytes]:
     """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
 
     A text signal is logged where its value changes rather than thinned to a rate, so no short-lived value drops out.
     """
     plotted = signals.plotted_texts
     ep_signals = ep.signals  # `Episode.signals` builds a new dict on every read
-    replay_timeline = duration_timeline(ep.timelines)
     for key in signals.texts:
         sig = ep_signals[key]
         if not len(sig):
             continue
-        timestamps = _timestamp_columns(sig, replay_timeline)
+        timestamps = _timestamp_columns(sig, recorded_also_on)
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
         time_idx = _rerun_indexes({name: values[changes] for name, values in timestamps.items()})
@@ -1031,7 +1042,9 @@ def stream_episode_rrd(
 
     with rec:
         signals = _collect_signal_groups(ep)
-        _send_blueprint(rec, _build_blueprint(signals, ep, layout, timeline))
+        opening = _opening_timeline(ep, timeline)
+        recorded_also_on = opening if opening in _RECORDED_CLOCK_TIMELINES else None
+        _send_blueprint(rec, _build_blueprint(signals, ep, layout, opening))
         if signals.unplotted:
             logging.warning(f'Episode {episode_id}: not plotting {signals.unplotted}')
             notice = _unplotted_notice(signals.unplotted)
@@ -1041,9 +1054,9 @@ def stream_episode_rrd(
         _setup_series_names(signals, ep)
         yield from drainer.drain()
 
-        yield from _log_video_signals(ep, signals, drainer, max_resolution, max_hz)
-        pose_data = yield from _log_numeric_signals(ep, signals, drainer, max_hz)
-        yield from _log_text_signals(ep, signals, drainer)
+        yield from _log_video_signals(ep, signals, drainer, max_resolution, max_hz, recorded_also_on)
+        pose_data = yield from _log_numeric_signals(ep, signals, drainer, max_hz, recorded_also_on)
+        yield from _log_text_signals(ep, signals, drainer, recorded_also_on)
         yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
         yield from _log_pose_signals(ep, signals, pose_data, drainer)
 
