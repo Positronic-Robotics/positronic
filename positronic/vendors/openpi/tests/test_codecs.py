@@ -3,11 +3,12 @@ import json
 import numpy as np
 import pytest
 
-from positronic import keys
+from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.policy.codecs import LEROBOT_FEATURES, Codec
+from positronic.drivers.roboarm.command import CartesianDelta
+from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, Codec
 from positronic.policy.spec import from_spec
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs
@@ -49,6 +50,29 @@ def test_training_state_aligns_recorded_samples():
     state = codec.training_encoder(episode)[openpi.TRAINING_STATE]
     assert list(state.timestamps(RECORDED_TIME)) == [100, 200, 300]
     np.testing.assert_array_equal(state.values(), [[1, 2, 0], [1, 2, 1], [3, 4, 1]])
+
+
+@pytest.mark.parametrize('dtype', [np.float32, np.float64])
+def test_libero_action_preserves_osc_scaling_clipping_and_grip_through_json(dtype):
+    preset = codecs.libero_action.instantiate()
+    decoder = from_spec(json.loads(json.dumps(preset.to_spec())))
+    predictions = np.random.default_rng(42).uniform(-2, 2, (32, 7)).astype(dtype)
+    predictions[:3] = np.array([-1, 0, 1])[:, None]
+    chunk = [{ACTION: row} for row in predictions]
+    decoded = decoder.decode(chunk)
+    composed = codecs.libero.instantiate().decode(chunk)
+
+    for row, action, full_action in zip(predictions, decoded, composed, strict=True):
+        clipped = row.clip(-1, 1)
+        physical = clipped[:6] * np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])
+        expected = geom.Transform3D(translation=physical[:3], rotation=geom.Rotation.from_rotvec(physical[3:]))
+        for result in (action, full_action):
+            command = result[keys.ROBOT_COMMAND]
+            assert isinstance(command, CartesianDelta)
+            assert command.mode is None
+            np.testing.assert_array_equal(command.delta.as_matrix, expected.as_matrix)
+            np.testing.assert_array_equal(command.frame.as_matrix, np.eye(4))
+            assert result[keys.TARGET_GRIP] == (float(clipped[6]) + 1.0) / 2.0
 
 
 @pytest.mark.parametrize(
