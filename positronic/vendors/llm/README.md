@@ -22,9 +22,6 @@ Use `--charge_inference_time=True` to count API latency against simulated trial 
 
 `--policy.model` takes Pydantic AI's `provider:model` identifier. Pydantic AI loads the selected provider and reads its standard credential environment variables. MysteryBox can populate those variables before starting the rig.
 
-Model-name policies are serializable for browser mode. Each episode creates its SDK client when the policy run
-starts, reuses it for model calls, and closes it after pending requests finish. Reading policy metadata creates no client.
-
 | Model prefix | Install extra | Credential environment variable |
 | --- | --- | --- |
 | `openai-responses:` or `openai-chat:` | `llm-openai` | `OPENAI_API_KEY` |
@@ -53,8 +50,6 @@ policy = llm(
     ),
 )
 ```
-
-Preconstructed models must themselves support multiprocessing serialization to work in browser mode.
 
 `--policy.settings` accepts [Pydantic AI model settings](https://ai.pydantic.dev/api/settings/), including provider-specific options. These override defaults on a configured model and are recorded with the episode. Put authentication and transport configuration on the provider, not in these recorded settings. Endpoint URLs must use HTTP(S) and have no userinfo, query parameters, or fragments.
 
