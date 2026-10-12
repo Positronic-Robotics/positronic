@@ -56,13 +56,17 @@ def warm_observation() -> dict[str, Any]:
     }
 
 
-def libero_actions(actions: np.ndarray) -> np.ndarray:
+LIBERO_OSC_SCALE = (0.05, 0.05, 0.05, 0.5, 0.5, 0.5)
+
+
+def libero_actions_to_physical(actions: np.ndarray) -> np.ndarray:
     """Convert LIBERO OSC actions to translation in metres, rotation vectors in radians and grip closure."""
     if actions.ndim != 2 or actions.shape[1] != 7:
         raise ValueError('LIBERO actions must have shape (T, 7)')
     # robosuite OSC_POSE clips each channel before applying its controller scale.
-    physical = actions.astype(float).clip(-1, 1) * [0.05, 0.05, 0.05, 0.5, 0.5, 0.5, 0.5]
-    physical[:, 6] += 0.5
+    physical = actions.astype(float).clip(-1, 1)
+    physical[:, :6] *= LIBERO_OSC_SCALE
+    physical[:, 6] = (physical[:, 6] + 1) / 2
     return physical
 
 
