@@ -103,14 +103,17 @@ def test_start_hands_the_trial_to_the_control_loop_once(console):
     assert len(console.tasks) == 1
 
 
-def test_a_verdict_emits_done_without_waiting_for_the_control_loop(console):
+def test_each_verdict_emits_done_without_waiting_for_the_control_loop(console):
     console.post('/episode/start')
     assert console.post('/episode/end', EndBody(verdict=Outcome.FAIL)).run.phase is Phase.ENDING
     assert len(console.tasks) == 1
     [(_, payload)] = console.done.emitted
     assert payload == terminal_payload(Outcome.FAIL)
-    assert console.client.post('/episode/end', json=EndBody(verdict=Outcome.FAIL).model_dump()).status_code == 409
-    assert len(console.done.emitted) == 1
+    assert console.post('/episode/end', EndBody(verdict=Outcome.PASS)).run.phase is Phase.ENDING
+    assert [payload for _, payload in console.done.emitted] == [
+        terminal_payload(Outcome.FAIL),
+        terminal_payload(Outcome.PASS),
+    ]
 
 
 def test_the_page_offers_only_the_operator_verdicts(console):

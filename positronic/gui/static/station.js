@@ -262,7 +262,7 @@ function renderButtons() {
   const phase = current ? current.phase : null;
   const idle = !offline && !busy;
   $('start').disabled = !(idle && phase === PHASE.ready);
-  for (const [button] of verdictButtons) button.disabled = !(idle && phase === PHASE.running);
+  for (const [button] of verdictButtons) button.disabled = !(idle && isOpen(phase));
   $('end-run').disabled = !idle || phase === null || phase === PHASE.runEnded;
 }
 

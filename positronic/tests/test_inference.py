@@ -427,7 +427,8 @@ def _phase(base: str) -> Phase | None:
     return status.run.phase if status else None
 
 
-def test_a_verdict_sent_with_start_is_discarded_before_the_rollout_begins():
+@pytest.mark.parametrize('retry', [False, True])
+def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(retry):
     policy = _IdlePolicy()
     embodiment = _embodiment(simulated=True)
     harness = Harness(embodiment)
@@ -437,14 +438,22 @@ def test_a_verdict_sent_with_start_is_discarded_before_the_rollout_begins():
         done = world.pair(harness.done)
         wire.wire_embodiment(world, harness, embodiment)
 
-        def start_and_finish():
+        def script(clock):
             answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
             done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
+            assert (yield from _wait(lambda: policy.observations, clock))
+            if retry:
+                done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
+            assert (yield from _wait(answers[0].done, clock))
 
-        script = scripted_driver((start_and_finish, 0.2))
-        drive_scheduler(world.start([harness, *embodiment.control_systems, script]))
+        drive_scheduler(world.start([harness, *embodiment.control_systems, _PageOperator(script)]))
     assert policy.observations
-    assert [answer.result() for answer in answers] == [{eval_keys.TERMINATED: False}]
+    expected = (
+        {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+        if retry
+        else {eval_keys.TERMINATED: False}
+    )
+    assert [answer.result() for answer in answers] == [expected]
 
 
 @pytest.mark.timeout(120.0)
@@ -474,7 +483,7 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
 
 
 @pytest.mark.timeout(120.0)
-def test_a_verdict_does_not_end_the_next_trial_after_a_slow_move_back(tmp_path):
+def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp_path):
     """The rig takes a second for each move, so the harness answers each trial a second after its verdict. The next
     trial still runs until its own verdict."""
     phases: list[Phase | None] = []
@@ -489,6 +498,8 @@ def test_a_verdict_does_not_end_the_next_trial_after_a_slow_move_back(tmp_path):
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
             _post(base, '/episode/end', EndBody(verdict=verdict))
+            yield pimm.Sleep(0.2)
+            assert _post(base, '/episode/end', EndBody(verdict=verdict)) == 200
             yield from _wait(lambda: _phase(base) is Phase.READY, clock, seconds=10.0)
         statuses.append(_status(base))
 
