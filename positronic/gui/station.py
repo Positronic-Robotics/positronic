@@ -142,7 +142,7 @@ class Station:
     def end(self, verdict: Verdict) -> dict[str, Any]:
         """Mark the open episode as ending, and return the ``done`` payload that ends it with ``verdict``."""
         with self._lock:
-            if not self._is_open() or self._ending:
+            if not self._is_open():
                 raise Refused('no episode is running')
             self._ending = True
             self._generation += 1

@@ -12,18 +12,10 @@ import pimm
 from pimm.world import SystemClock
 from positronic.eval import Task
 from positronic.gui.station import Episode, Outcome, Phase, RunView, Station, terminal_payload
-from positronic.gui.web import (
-    STATIC_DIR,
-    Action,
-    CameraFeed,
-    CameraView,
-    EndBody,
-    EndTrial,
-    InstructionBody,
-    StationConsole,
-    Status,
-)
-from positronic.tests.testing_coutils import ManualCommandReceiver
+from positronic.gui.web import STATIC_DIR, CameraFeed, CameraView, EndBody, InstructionBody, StationConsole, Status
+from positronic.policy import Policy
+from positronic.policy import keys as policy_keys
+from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 CONFIGURED = 'put the cup in the tote'
 OVERRIDE = 'put the red cup in the grey tote'
@@ -40,17 +32,27 @@ def _frame(i: int) -> np.ndarray:
     return frame
 
 
+class _Policy(Policy):
+    def meta(self):
+        return {policy_keys.TYPE: 'remote'}
+
+    def run(self, runtime):
+        yield
+
+
 class _Console:
-    """A station page served in-process, with the actions it hands to the control loop collected in a list."""
+    """A station page served in-process, with queued tasks and emitted verdicts collected for inspection."""
 
     def __init__(self):
-        self.actions: list[Action] = []
+        self.tasks: list[Task] = []
+        self.done = RecordingEmitter[dict[str, Any]]()
         self.feed = CameraFeed()
         self.should_stop = ManualCommandReceiver[bool]()
         self.should_stop.push(False)
         self.station = Station(_trial)
-        console = StationConsole(_trial, policy='remote', host='127.0.0.1', port=0)
-        app = console.build_app(self.station, {CAMERA: self.feed}, self.actions.append, SystemClock(), self.should_stop)
+        console = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
+        console.done._bind(self.done, clock=SystemClock())
+        app = console.build_app(self.station, {CAMERA: self.feed}, self.tasks.append, SystemClock(), self.should_stop)
         self.client = TestClient(app)
 
     def post(self, path: str, body: EndBody | InstructionBody | None = None) -> Status:
@@ -92,25 +94,32 @@ def test_the_status_is_the_json_the_page_reads(console):
 def test_start_hands_the_trial_to_the_control_loop_once(console):
     console.post('/instruction', InstructionBody(override=OVERRIDE))
     assert console.post('/episode/start').run.phase is Phase.RUNNING
-    [task] = console.actions
+    [task] = console.tasks
     assert isinstance(task, Task) and task.instruction == OVERRIDE
 
     again = console.client.post('/episode/start')
     assert again.status_code == 409
     assert 'already running' in again.json()['detail']
-    assert len(console.actions) == 1
+    assert len(console.tasks) == 1
 
 
-def test_a_verdict_hands_the_end_of_the_trial_to_the_control_loop(console):
+def test_each_verdict_emits_done_without_waiting_for_the_control_loop(console):
     console.post('/episode/start')
     assert console.post('/episode/end', EndBody(verdict=Outcome.FAIL)).run.phase is Phase.ENDING
-    assert console.actions[-1] == EndTrial(terminal_payload(Outcome.FAIL))
+    assert len(console.tasks) == 1
+    [(_, payload)] = console.done.emitted
+    assert payload == terminal_payload(Outcome.FAIL)
+    assert console.post('/episode/end', EndBody(verdict=Outcome.PASS)).run.phase is Phase.ENDING
+    assert [payload for _, payload in console.done.emitted] == [
+        terminal_payload(Outcome.FAIL),
+        terminal_payload(Outcome.PASS),
+    ]
 
 
 def test_the_page_offers_only_the_operator_verdicts(console):
     console.post('/episode/start')
     assert console.client.post('/episode/end', json={'verdict': Outcome.TIMEOUT.value}).status_code == 422
-    assert len(console.actions) == 1
+    assert len(console.tasks) == 1
 
 
 def test_the_instruction_is_refused_while_an_episode_runs(console):
@@ -132,7 +141,7 @@ def test_end_run_is_refused_while_an_episode_runs_and_ends_the_run_after_it(cons
 def test_a_post_from_another_site_is_refused(console):
     refused = console.client.post('/episode/start', headers={'Origin': 'http://example.com'})
     assert refused.status_code == 403
-    assert console.actions == []
+    assert console.tasks == []
     accepted = console.client.post('/episode/start', headers={'Origin': 'http://testserver'})
     assert accepted.status_code == 200
 
@@ -184,7 +193,7 @@ class _Frame:
 
 
 def _console_with_camera() -> tuple[StationConsole, ManualCommandReceiver, CameraFeed]:
-    console = StationConsole(_trial, policy='remote', host='127.0.0.1', port=0)
+    console = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
     camera = ManualCommandReceiver()
     console.cameras[CAMERA]._bind(camera)
     return console, camera, CameraFeed()
@@ -226,7 +235,7 @@ class _Failed(pimm.calls.Answer[dict[str, Any]]):
 
 
 def test_an_arm_error_that_fails_an_episode_reaches_the_page_and_is_not_skipped_as_a_frame_is():
-    console = StationConsole(_trial, policy='remote', host='127.0.0.1', port=0)
+    console = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
     station = Station(_trial)
     station.start(now=0.0)
     console._episode = _Failed(pimm.SignalError('Release the emergency stop button'))

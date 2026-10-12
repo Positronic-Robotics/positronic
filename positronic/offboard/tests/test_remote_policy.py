@@ -19,6 +19,8 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Transform3D
+from positronic.gui.station import Outcome, Phase
+from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
@@ -37,6 +39,7 @@ from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, Te
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
+from positronic.tests.testing_inference import post, read_status, run_attended, wait
 
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}}
 
@@ -499,6 +502,37 @@ def served(start_server):
         return address, model, pipeline
 
     return start
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+def test_background_console_sends_remote_policy_rollouts_and_receives_their_results(served, make_mock_model, transport):
+    model = make_mock_model([{}], {'model_name': 'console-policy'})
+    address, _, _ = served(model=model, transport=transport)
+    policy = RemotePolicy(transport, address)
+    statuses = []
+
+    def script(base, clock):
+        assert (yield from wait(lambda: read_status(base), clock, seconds=60))
+        for verdict in (Outcome.PASS, Outcome.FAIL):
+            calls = model.call_count
+            assert post(base, '/episode/start') == 200
+            assert (yield from wait(lambda calls=calls: model.call_count > calls, clock))
+            assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
+
+            def finished():
+                status = read_status(base)
+                return status is not None and status.run.phase is Phase.READY
+
+            assert (yield from wait(finished, clock))
+        statuses.append(read_status(base))
+
+    run_attended(policy, script)
+
+    [status] = statuses
+    assert status is not None
+    assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
+    assert model.end_session.call_count == 3  # Metadata and two completed episodes.
 
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])

@@ -11,7 +11,6 @@ import threading
 import traceback
 from collections import deque
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -29,6 +28,9 @@ from positronic import keys
 from positronic.eval import Task
 from positronic.gui.station import Outcome, Refused, RunView, Station, Verdict, outcome_of
 from positronic.gui.video_stream import VideoStream, codec_string
+from positronic.policy import Policy
+from positronic.policy import keys as policy_keys
+from positronic.policy.harness import Rollout
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +43,6 @@ TILE_WIDTH = 640
 TILE_KEYFRAME_INTERVAL = 8
 TILE_BITRATE = 1_000_000
 CAMERA_STALE_AFTER_S = 1.0
-
-
-@dataclass(frozen=True)
-class EndTrial:
-    """Ends the open trial with ``payload`` as its ``done``."""
-
-    payload: dict[str, Any]
-
-
-Action = Task | EndTrial
 
 
 class CameraView(BaseModel):
@@ -113,18 +105,24 @@ class StationConsole(pimm.ControlSystem):
     """Serves the station page and turns its presses into episodes. End run on the page returns from its loop, and
     that stops the World.
 
-    Connect each camera to ``cameras`` and ``trials`` to a ``TrialForwarder``, which runs each trial and its verdict.
-    Schedule it as a background control system, so the harness never waits for the encoders or the web server.
-    ``next_task`` makes the trials, and the page names the policy with ``policy``.
+    Connect ``perform_task`` and ``done`` to Harness, and each camera to ``cameras``. Run this system in a
+    background process so preview encoding can progress independently of policy execution. The policy and
+    tasks must be picklable; each rollout sends its own copy of the policy definition.
     """
 
-    def __init__(self, next_task: Callable[[], Task], *, policy: str, host: str, port: int):
+    def __init__(
+        self, next_task: Callable[[], Task], policy: Policy, output_path: Path | None, *, host: str, port: int
+    ):
         self._next_task = next_task
         self._policy = policy
+        self._output_path = output_path
+        logger.info('Reading the policy metadata')
+        self._policy_label = policy.meta().get(policy_keys.TYPE, type(policy).__name__)
         self._host = host
         self._port = port
         self.cameras = pimm.ReceiverDict(self)
-        self.trials = pimm.calls.ControlSystemCaller[Action, dict[str, Any]](self)
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
         # The open episode's answer.
         self._episode: pimm.calls.Answer[dict[str, Any]] | None = None
 
@@ -136,8 +134,8 @@ class StationConsole(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         station = Station(self._next_task)
         feeds = {name: CameraFeed() for name in self.cameras}
-        actions: queue.SimpleQueue[Action] = queue.SimpleQueue()
-        app = self.build_app(station, feeds, actions.put, clock, should_stop)
+        tasks: queue.SimpleQueue[Task] = queue.SimpleQueue()
+        app = self.build_app(station, feeds, tasks.put, clock, should_stop)
         # The legacy asyncio `websockets` backend drains the transport from its reader and keepalive coroutines
         # while the video loop sends, and an assertion then kills the feed. The sans-io backend serializes writes.
         config = uvicorn.Config(
@@ -155,7 +153,7 @@ class StationConsole(pimm.ControlSystem):
             while not should_stop.value:
                 self._raise_if_stopped(server_thread)
                 self._push_frames(feeds, clock)
-                self._drive_episode(station, actions, clock)
+                self._drive_episode(station, tasks, clock)
                 if station.run_ended:
                     logger.info('The operator ended the run')
                     return
@@ -176,16 +174,14 @@ class StationConsole(pimm.ControlSystem):
             if message is not None and not isinstance(message.data, pimm.SignalError):
                 feed.push(message.data.array, clock.now())
 
-    def _drive_episode(self, station: Station, actions: queue.SimpleQueue[Action], clock: pimm.Clock) -> None:
-        """Send what the page asked for, in order, and record the episode once the harness answers it."""
+    def _drive_episode(self, station: Station, tasks: queue.SimpleQueue[Task], clock: pimm.Clock) -> None:
+        """Submit queued tasks and update the page when an episode finishes."""
         while True:
             try:
-                action = actions.get_nowait()
+                task = tasks.get_nowait()
             except queue.Empty:
                 break
-            answer = self.trials(action)
-            if isinstance(action, Task):
-                self._episode = answer
+            self._episode = self.perform_task(Rollout(task, self._policy, self._output_path))
         if self._episode is None or not self._episode.done():
             return
         episode, self._episode = self._episode, None
@@ -201,11 +197,11 @@ class StationConsole(pimm.ControlSystem):
         self,
         station: Station,
         feeds: dict[str, CameraFeed],
-        submit: Callable[[Action], None],
+        submit: Callable[[Task], None],
         clock: pimm.Clock,
         should_stop: pimm.SignalReceiver,
     ) -> FastAPI:
-        """The console's HTTP surface. ``submit`` hands a trial or its end to the control loop."""
+        """The console's HTTP surface. ``submit`` queues a task for the control loop."""
         app = FastAPI()
 
         def sent_from_another_site(connection: HTTPConnection) -> bool:
@@ -228,7 +224,7 @@ class StationConsole(pimm.ControlSystem):
         def status() -> Status:
             now = clock.now()
             cameras = [feed.view(name, now) for name, feed in feeds.items()]
-            return Status(run=station.view(now), cameras=cameras, policy=self._policy, host=self._host)
+            return Status(run=station.view(now), cameras=cameras, policy=self._policy_label, host=self._host)
 
         @app.get('/status')
         async def get_status() -> Status:
@@ -246,7 +242,7 @@ class StationConsole(pimm.ControlSystem):
 
         @app.post('/episode/end')
         async def end(body: EndBody) -> Status:
-            submit(EndTrial(station.end(body.verdict)))
+            self.done.emit(station.end(body.verdict))
             return status()
 
         @app.post('/run/end')

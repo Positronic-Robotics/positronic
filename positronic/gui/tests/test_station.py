@@ -114,14 +114,16 @@ def test_the_run_ends_only_after_the_open_episode_and_then_takes_no_start():
         station.start(now=4.0)
 
 
-def test_one_episode_runs_at_a_time_and_takes_one_verdict():
+def test_one_episode_runs_at_a_time_and_accepts_verdicts_until_it_closes():
     station = Station(_trials())
     with pytest.raises(Refused):
         station.end(Outcome.PASS)
     station.start(now=1.0)
     with pytest.raises(Refused):
         station.start(now=1.5)
-    station.end(Outcome.FAIL)
+    assert station.end(Outcome.FAIL) == terminal_payload(Outcome.FAIL)
+    assert station.end(Outcome.PASS) == terminal_payload(Outcome.PASS)
+    station.close(Outcome.PASS, now=2.0)
     with pytest.raises(Refused):
         station.end(Outcome.PASS)
 

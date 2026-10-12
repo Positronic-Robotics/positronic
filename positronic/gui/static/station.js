@@ -72,7 +72,7 @@ const PHASE_VIEW = {
   [PHASE.runEnded]: { text: 'Run ended', css: 'run-ended' },
 };
 const OUTCOME_VIEW = {
-  [OUTCOME.pass]: { label: `${ICON.check}Pass`, text: 'pass', css: 'pass' },
+  [OUTCOME.pass]: { label: `${ICON.check}Success`, text: 'success', css: 'pass' },
   [OUTCOME.fail]: { label: `${ICON.cross}Fail`, text: 'fail', css: 'fail' },
   [OUTCOME.timeout]: { label: 'Timed out', text: 'timed out', css: 'timeout' },
   [OUTCOME.error]: { label: 'Error', text: 'error', css: 'error' },
@@ -262,7 +262,7 @@ function renderButtons() {
   const phase = current ? current.phase : null;
   const idle = !offline && !busy;
   $('start').disabled = !(idle && phase === PHASE.ready);
-  for (const [button] of verdictButtons) button.disabled = !(idle && phase === PHASE.running);
+  for (const [button] of verdictButtons) button.disabled = !(idle && isOpen(phase));
   $('end-run').disabled = !idle || phase === null || phase === PHASE.runEnded;
 }
 
@@ -284,7 +284,7 @@ function renderEpisodes(status) {
   $('ep-legend').hidden = episodes.length === 0;
   let sum = '<span>0 episodes</span>';
   if (episodes.length > 0) {
-    sum = `<span class="n-pass">${count(OUTCOME.pass)} pass</span>`;
+    sum = `<span class="n-pass">Success: ${count(OUTCOME.pass)}</span>`;
     sum += `<span class="n-fail">${count(OUTCOME.fail)} fail</span>`;
     if (count(OUTCOME.timeout)) sum += `<span>${count(OUTCOME.timeout)} timed out</span>`;
     if (count(OUTCOME.error)) sum += `<span>${count(OUTCOME.error)} error</span>`;
