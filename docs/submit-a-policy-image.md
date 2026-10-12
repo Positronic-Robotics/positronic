@@ -250,17 +250,24 @@ Run it with the network denied, and wait for its server. This reproduces the pla
 conditions and needs no GPU:
 
 ```bash
-probe='import urllib.error, urllib.request as u
+probe='import sys, urllib.error, urllib.request as u
 try:
     print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
           headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
 except urllib.error.HTTPError as e:
-    print("the server answered HTTP", e.code)'
+    print("the server answered HTTP", e.code)
+except OSError as e:
+    reason = e.reason if isinstance(e, urllib.error.URLError) else e
+    if not isinstance(reason, (ConnectionError, TimeoutError)):
+        raise
+    sys.exit(3)'
 if cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 900))
-  until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
+  while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
     [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
+    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
+    [ $? = 3 ] || break
     sleep 5
   done
   docker logs --tail 30 "$cid"
@@ -273,6 +280,10 @@ on a CPU. A ready server prints `{"alive_seconds": ...}`. A server that stops pr
 `the server exited`, and a hung one prints `no answer in 900 s`. A server that refuses the request
 prints `the server answered HTTP <code>`, and a `401` means that it does not accept the token in
 `AUTH_TOKEN`. The log follows each of them.
+
+The probe exits with code 3 when the port is closed or the server does not answer in 5 s, and the
+loop then waits quietly. Any other failure stops the loop at once and shows its error: an error from
+`docker exec`, for example no Python at `/positronic/.venv/bin/python`, or a Python traceback.
 
 In a correct image, the server pins its checkpoint, starts the model process, and reads the
 weights from the image. The GR00T recipe then fails on the missing GPU with
@@ -290,17 +301,24 @@ answers from inside the container with the token:
 
 ```bash
 docker network create --internal noegress
-probe='import urllib.error, urllib.request as u
+probe='import sys, urllib.error, urllib.request as u
 try:
     print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
           headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
 except urllib.error.HTTPError as e:
-    print("the server answered HTTP", e.code)'
+    print("the server answered HTTP", e.code)
+except OSError as e:
+    reason = e.reason if isinstance(e, urllib.error.URLError) else e
+    if not isinstance(reason, (ConnectionError, TimeoutError)):
+        raise
+    sys.exit(3)'
 if cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 600))
-  until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
+  while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
     [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
+    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
+    [ $? = 3 ] || break
     sleep 5
   done
   docker logs --tail 30 "$cid"
