@@ -9,9 +9,11 @@ from positronic.dataset.signal import TIMELINE_METADATA_KEY, Kind
 from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.transforms.signals import Join, diff, norm
 from positronic.dataset.vector import (
+    LEGACY_TIMESTAMP_COLUMN,
     RECORDED_TIME,
     SIGNAL_VERSION,
     SIGNAL_VERSION_KEY,
+    VALUE_COLUMN,
     SimpleSignal,
     SimpleSignalWriter,
 )
@@ -592,7 +594,7 @@ def test_named_columns_and_empty_signal(tmp_path, count):
 
 def test_unnamed_legacy_file_queries(tmp_path):
     path = tmp_path / 'legacy.parquet'
-    pq.write_table(pa.table({'timestamp': [100, 200], 'value': [1, 2]}), path)
+    pq.write_table(pa.table({LEGACY_TIMESTAMP_COLUMN: [100, 200], VALUE_COLUMN: [1, 2]}), path)
     signal = SimpleSignal(path)
     assert signal.timelines == (RECORDED_TIME,)
     assert signal.time[Time(**{RECORDED_TIME: 150})] == (1, Time(**{RECORDED_TIME: 100}))
@@ -864,7 +866,7 @@ class TestNamedTimelines:
     def test_legacy_columns_and_unknown_version(self, tmp_path):
 
         path = tmp_path / 'old.parquet'
-        table = pa.table({'timestamp': [100, 200], 'value': [1, 2], 'ts_ns.server': [50, 10]})
+        table = pa.table({LEGACY_TIMESTAMP_COLUMN: [100, 200], VALUE_COLUMN: [1, 2], 'ts_ns.server': [50, 10]})
         pq.write_table(table.replace_schema_metadata({TIMELINE_METADATA_KEY: b'world'}), path)
         signal = SimpleSignal(path)
         assert signal.timelines == ('world',)

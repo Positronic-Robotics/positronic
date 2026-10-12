@@ -18,6 +18,8 @@ SIGNAL_VERSION = b'2'
 TIMESTAMP_PREFIX = 'ts.'
 # Timeline name for legacy files without timeline metadata.
 RECORDED_TIME = 'recorded'
+VALUE_COLUMN = 'value'
+LEGACY_TIMESTAMP_COLUMN = 'timestamp'
 
 
 def timestamp_table(columns: Mapping[str, Sequence[int]]) -> pa.Table:
@@ -126,7 +128,7 @@ class SimpleSignal(Signal[T]):
 
     def __init__(self, filepath: Path):
         self.filepath = filepath
-        self._time_index = ParquetTimeIndex(filepath, 'timestamp')
+        self._time_index = ParquetTimeIndex(filepath, LEGACY_TIMESTAMP_COLUMN)
         self._values: np.ndarray | None = None
 
     @property
@@ -144,7 +146,7 @@ class SimpleSignal(Signal[T]):
 
     def _values_at(self, indices: IndicesLike) -> Sequence[T]:
         if self._values is None:
-            values = pq.read_table(self.filepath, columns=['value'])['value'].to_numpy()
+            values = pq.read_table(self.filepath, columns=[VALUE_COLUMN])[VALUE_COLUMN].to_numpy()
             if values.dtype == object and len(values) and isinstance(values[0], np.ndarray):
                 values = np.stack(values)
             self._values = values
@@ -183,7 +185,7 @@ class SimpleSignalWriter(SignalWriter[T]):
     def _flush_chunk(self):
         if not self._values:
             return
-        table = timestamp_table(self._timestamps).append_column('value', pa.array(self._values))
+        table = timestamp_table(self._timestamps).append_column(VALUE_COLUMN, pa.array(self._values))
         if self._writer is None:
             self._writer = pq.ParquetWriter(self.filepath, table.schema)
         self._writer.write_table(table)
@@ -246,7 +248,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             if self._writer:
                 self._writer.close()
             else:
-                table = timestamp_table(self._timestamps).append_column('value', pa.array([], type=pa.int64()))
+                table = timestamp_table(self._timestamps).append_column(VALUE_COLUMN, pa.array([], type=pa.int64()))
                 pq.write_table(table, self.filepath)
 
     def abort(self) -> None:

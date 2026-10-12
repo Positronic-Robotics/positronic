@@ -21,7 +21,7 @@ from positronic.dataset import Time
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.dataset.tests.utils import DummySignal
-from positronic.dataset.vector import RECORDED_TIME
+from positronic.dataset.vector import LEGACY_TIMESTAMP_COLUMN, RECORDED_TIME, VALUE_COLUMN
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -364,7 +364,8 @@ def test_a_legacy_signal_in_an_episode_on_received_world_is_on_received_world_to
     # The layout of a file with no format version: one `timestamp` column, read on `recorded`.
     for name, values in (('progress.state', ['floating', 'reaching']), ('progress.delivered', [0, 1])):
         pq.write_table(
-            pa.table({'timestamp': pa.array(times, type=pa.int64()), 'value': values}), episode_dir / f'{name}.parquet'
+            pa.table({LEGACY_TIMESTAMP_COLUMN: pa.array(times, type=pa.int64()), VALUE_COLUMN: values}),
+            episode_dir / f'{name}.parquet',
         )
 
     b''.join(stream_episode_rrd(LocalDataset(root), 0))
