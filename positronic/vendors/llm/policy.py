@@ -143,7 +143,7 @@ class LLMPolicy(Policy):
             self._policy = policy
             self._runtime = runtime
             self._transcript: list[dict[str, Any]] = []
-            self._runtime.set_metadata('transcript', self._transcript)
+            self._runtime.set_metadata(policy_keys.TRANSCRIPT, self._transcript)
             self._messages: list[ModelMessage] = []
             self._obs: _Observation | None = None
             self._pictures: list[str] = []
@@ -154,7 +154,7 @@ class LLMPolicy(Policy):
 
         def _record(self, event: dict[str, Any]) -> None:
             self._transcript.append(event)
-            self._runtime.set_metadata('transcript', self._transcript)
+            self._runtime.set_metadata(policy_keys.TRANSCRIPT, self._transcript)
 
         def _initial(self) -> ModelRequest:
             prompt = (
@@ -310,7 +310,7 @@ class LLMPolicy(Policy):
                     'event': 'accepted',
                     'call': self._calls,
                     'time_ns': time_ns,
-                    'stop_reason': call.tool_name,
+                    policy_keys.STOP_REASON: call.tool_name,
                 })
                 return []
             start = _Observation.measured_pose(obs)
@@ -375,13 +375,13 @@ class LLMPolicy(Policy):
             obs = yield
             while True:
                 if conversation._calls >= self.max_calls:
-                    runtime.set_metadata('stop_reason', 'call_budget')
+                    runtime.set_metadata(policy_keys.STOP_REASON, 'call_budget')
                     conversation._record({'event': 'budget_exhausted', 'calls': conversation._calls})
                     conversation._record({
                         'event': 'accepted',
                         'call': conversation._calls,
                         'time_ns': runtime.time_ns,
-                        'stop_reason': 'call_budget',
+                        policy_keys.STOP_REASON: 'call_budget',
                     })
                     break
                 if conversation._obs is None:
@@ -397,8 +397,8 @@ class LLMPolicy(Policy):
                 call, data = decision
                 chunk = conversation._accept(call, data, obs, runtime.time_ns)
                 if isinstance(data, Finish):
-                    runtime.set_metadata('stop_reason', call.tool_name)
-                    runtime.set_metadata('hindsight', data.hindsight)
+                    runtime.set_metadata(policy_keys.STOP_REASON, call.tool_name)
+                    runtime.set_metadata(policy_keys.HINDSIGHT, data.hindsight)
                     break
                 started_ns, index = runtime.time_ns, 0
                 end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)

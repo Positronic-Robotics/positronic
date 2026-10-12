@@ -18,6 +18,9 @@ POSITRONIC_VERSION = 'positronic_version'
 # The name of the endpoint that served the episode.
 LABEL = 'label'
 SERVER = 'server'
+TRANSCRIPT = 'transcript'
+STOP_REASON = 'stop_reason'
+HINDSIGHT = 'hindsight'
 
 POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'

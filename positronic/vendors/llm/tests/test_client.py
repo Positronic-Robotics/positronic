@@ -108,7 +108,7 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     body = json.loads(requests[0].content)
     assert 'data:image/png;base64,' in str(body['messages'])
     assert {tool['function']['name'] for tool in body['tools']} == {'move_to', 'done', 'give_up'}
-    assert meta['stop_reason'] == 'done'
+    assert meta[policy_keys.STOP_REASON] == 'done'
     recorded = json.dumps(meta)
     assert 'test-secret-do-not-record' not in recorded
     assert 'base_url' not in meta
@@ -117,7 +117,7 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert clients and all(client.is_closed for client in clients)
     with execution(policy) as (active, rt, clock):
         complete(active, rt, clock, observation())
-        assert rt.metadata_snapshot()['stop_reason'] == 'done'
+        assert rt.metadata_snapshot()[policy_keys.STOP_REASON] == 'done'
         assert len(clients) == 2 and not clients[1].is_closed
     assert all(client.is_closed for client in clients)
     assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
@@ -143,7 +143,7 @@ def test_run_records_compact_reply_and_usage(monkeypatch):
     assert 'private reasoning' not in recorded
     assert 'native-signature' not in recorded
     assert 'iVBOR' not in recorded
-    events = meta['transcript']
+    events = meta[policy_keys.TRANSCRIPT]
     request = next(e for e in events if e['event'] == 'request')
     assert request[policy_keys.OBS_TIME_NS] == 1000
     assert request['cameras'] == [keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE]
