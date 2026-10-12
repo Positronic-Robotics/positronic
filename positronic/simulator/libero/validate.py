@@ -29,11 +29,9 @@ against robosuite's *own* control path:
 
 - ``ee``/OSC_POSE, ``joint``/JOINT_POSITION, ``joint_delta``/JOINT_VELOCITY: drive the active controller's
   ``set_goal`` forward from a random normalized action to its goal setpoint, feed that setpoint back through
-  ``_arm_action``, and assert the recovered action equals the original. This proves ``_arm_action`` is the exact
-  inverse of robosuite's ``scale_action`` + ``set_goal`` — byte-identical to what a LIBERO policy drives.
-- forward kinematics: ``_fk`` of the live joints reproduces the controller's eef-site read to the bit.
-- the eef site against the panda model's ``DEFAULT_FRAME``: LIBERO's own scene puts the site where
-  ``LiberoAdapter``, passing no ``env_control_frame``, claims it is.
+  ``_arm_action``, and compare the recovered action with the original within numerical tolerances.
+- forward kinematics: compare ``_fk`` of the live joints with the controller's eef-site pose.
+- frame comparison: report the offset between the eef site and the panda model's ``DEFAULT_FRAME``.
 - inverse kinematics: ``_fk(_ik(pose))`` recovers the target pose (round-trip; LIBERO has no IK to match).
 
 Run on a LIBERO-capable box with the positronic-free ``server`` module and a LIBERO source checkout on the
@@ -79,7 +77,7 @@ _FRAME_ISSUE = 'https://github.com/Positronic-Robotics/positronic/issues/557'
 
 
 def _token(args, control_mode: str) -> dict:
-    """The reset token for ``control_mode`` on the CLI's task (seed 0); the env builds + caches from its spec."""
+    """The reset token for ``control_mode`` on the CLI's task (seed 0)."""
     return {
         'suite': args.suite,
         'task_id': args.task_id,
@@ -220,32 +218,27 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
             'grip->hand offset varies across poses'
         )
 
-    # The policy consumes the axis-angle 3-vector the codec emits, so verify it encodes robosuite's orientation.
-    # The tool-down home pose sits at angle ~pi, where the axis-angle map is singular (w ~ 0, so a tiny quat
-    # perturbation flips the 3-vector's sign for the same rotation); convert the codec's axis-angle back to a quat
-    # and compare to robosuite's, double-cover and all. A genuine branch/sign bug away from pi yields a different
-    # rotation and still fails, so this stays a real check.
+    # Quaternion comparison checks rotation equivalence, not the choice of axis-angle branch.
     for w, robo in samples:
         aa_codec = quat2axisangle(-mat2quat(quat2mat(w['eef_quat']) @ r_off))  # negate w>=0 form to the codec's w<=0
         q_codec, q_ref = axisangle2quat(aa_codec), robo['robot0_eef_quat']
         assert np.allclose(q_codec, q_ref, atol=_OSC_ATOL) or np.allclose(q_codec, -q_ref, atol=_OSC_ATOL), (
             f'axis-angle encodes the wrong rotation: {aa_codec} -> {q_codec} vs {q_ref}'
         )
-    print(f'    grip->hand offset + axis-angle branch match robosuite across {len(samples)} poses')
+    print(f'    grip->hand offset + represented rotations match robosuite across {len(samples)} poses')
 
 
 def _check_osc_delta_scale(env: LiberoEnv, token: dict) -> None:
-    """Pin the OSC scaling and control rate the libero codec bakes: ``PoseDeltaAction.OUTPUT_MAX``
-    must equal the controller's per-step output range, and the codec stamps the chunk at the env's control rate."""
+    """Check the controller's output range and rate against the LIBERO action preset."""
     _reset(env, token)
     c = env._controller
-    output_max = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])  # mirrors PoseDeltaAction.OUTPUT_MAX
+    output_max = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])
     assert np.allclose(c.output_max, output_max) and np.allclose(c.output_min, -output_max), (
         f'OSC output range [{c.output_min}, {c.output_max}] != +/-{output_max.tolist()}'
     )
     freq = env._env.env.control_freq
-    assert freq == 20, f'control_freq {freq} Hz != 20 (the libero codec stamps the chunk at fps=20)'
-    print(f'  osc delta scale: output_max == {output_max.tolist()} OK; control_freq {freq} Hz == libero codec fps')
+    assert freq == 20, f'control_freq {freq} Hz != 20 (LIBERO training cadence)'
+    print(f'  osc delta scale: output_max == {output_max.tolist()} OK; control_freq {freq} Hz == training cadence')
 
 
 def _check_fk_identity(env: LiberoEnv, token: dict) -> None:

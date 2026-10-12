@@ -14,8 +14,16 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm.command import Impedance, JointDelta
-from positronic.geom import Rotation
-from positronic.policy.codecs import ACTION, JointPositionAction, ObservationCodec, SetControlMode, UnpackActionChunk
+from positronic.geom import Rotation, Transform3D
+from positronic.policy.codecs import (
+    ACTION,
+    CartesianDeltaAction,
+    Codec,
+    JointPositionAction,
+    ObservationCodec,
+    SetControlMode,
+    UnpackActionChunk,
+)
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
 from positronic.policy.spec import from_spec
 
@@ -161,6 +169,72 @@ def test_joint_position_action_preserves_values_and_does_not_threshold_grip(num_
 def test_joint_position_action_requires_the_configured_joint_count_and_one_grip(joints, grip):
     with pytest.raises(ValueError):
         JointPositionAction('q', 'g').decode({'q': joints, 'g': grip})
+
+
+def test_cartesian_delta_action_defaults_use_physical_units_and_live_pose():
+    decoded = CartesianDeltaAction().decode({ACTION: [0.1, -0.2, 0.3, 0.0, 0.0, np.pi / 2, 0.25]})
+    command = decoded[obs_keys.ROBOT_COMMAND]
+    assert isinstance(command, cmd_module.CartesianDelta)
+    assert command.mode is None
+    assert decoded[obs_keys.TARGET_GRIP] == 0.25
+    turn = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+    for position in ([1, 2, 3], [4, 5, 6]):
+        current = Transform3D(translation=position, rotation=Rotation.from_rotvec(np.array([np.pi / 2, 0, 0])))
+        target = command.apply(current)
+        np.testing.assert_allclose(target.translation, np.asarray(position) + [0.1, -0.2, 0.3])
+        np.testing.assert_allclose(
+            target.rotation.as_rotation_matrix, turn @ current.rotation.as_rotation_matrix, atol=1e-12
+        )
+
+
+def test_cartesian_delta_action_spec_decodes_a_native_chunk_with_custom_conversion():
+    decoder = CartesianDeltaAction(
+        action_key='prediction',
+        scale=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, -0.25),
+        offset=(0.01, 0.02, 0.03, 0.0, 0.0, 0.0, 0.5),
+        clip=(-2.0, 2.0),
+    ) | UnpackActionChunk({'prediction': ['actions']})
+    restored = from_spec(json.loads(json.dumps(decoder.to_spec())))
+    assert isinstance(restored, Codec)
+    predictions = np.array([[3, -3, 1, 0, 0, 1, 2], [-3, 3, -1, 0, 1, 0, -2]], dtype=np.float32)
+    original = predictions.copy()
+    decoded = restored.decode({'actions': predictions})
+
+    assert len(decoded) == 2
+    for action, position, rotvec, grip in zip(
+        decoded, [[0.21, -0.38, 0.33], [-0.19, 0.42, -0.27]], [[0, 0, 0.6], [0, 0.5, 0]], [0, 1], strict=True
+    ):
+        command = action[obs_keys.ROBOT_COMMAND]
+        assert isinstance(command, cmd_module.CartesianDelta)
+        np.testing.assert_allclose(command.delta.translation, position)
+        np.testing.assert_allclose(
+            command.delta.rotation.as_rotation_matrix, Rotation.from_rotvec(np.asarray(rotvec)).as_rotation_matrix
+        )
+        assert action[obs_keys.TARGET_GRIP] == grip
+    np.testing.assert_array_equal(predictions, original)
+
+
+@pytest.mark.parametrize('action', [np.zeros(6), np.zeros(8), np.zeros((1, 7)), np.zeros((7, 1))])
+def test_cartesian_delta_action_requires_a_single_seven_channel_action(action):
+    with pytest.raises(ValueError, match='shape'):
+        CartesianDeltaAction().decode({ACTION: action})
+
+
+@pytest.mark.parametrize(
+    'arguments',
+    [
+        {'scale': [1]},
+        {'offset': [[0] * 7]},
+        {'scale': [np.inf] * 7},
+        {'offset': [np.nan] * 7},
+        {'clip': [1]},
+        {'clip': [1, -1]},
+        {'clip': [-np.inf, 1]},
+    ],
+)
+def test_cartesian_delta_action_rejects_invalid_conversion_settings(arguments):
+    with pytest.raises(ValueError):
+        from_spec(component('cartesian_delta_action', **arguments))
 
 
 def test_absolute_position_action_encode_decode_quat():
