@@ -250,22 +250,29 @@ Run it with the network denied, and wait for its server. This reproduces the pla
 conditions and needs no GPU:
 
 ```bash
-docker run -d --name policy --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
-deadline=$((SECONDS + 900))
-until docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', \
-  headers={'Authorization': 'Bearer test'}), timeout=5).read().decode())" 2>/dev/null; do
-  [ "$(docker inspect -f '{{.State.Running}}' policy)" = true ] || { echo "the server exited"; break; }
-  [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
-  sleep 5
-done
-docker logs --tail 30 policy
-docker rm -f policy
+probe='import urllib.error, urllib.request as u
+try:
+    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
+          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
+except urllib.error.HTTPError as e:
+    print("the server answered HTTP", e.code)'
+if cid=$(docker run -d --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+  deadline=$((SECONDS + 900))
+  until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
+    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
+    sleep 5
+  done
+  docker logs --tail 30 "$cid"
+  docker rm -f "$cid"
+fi
 ```
 
 The loop calls the keepalive route every 5 s, for up to 900 s, because a model loads more slowly
 on a CPU. A ready server prints `{"alive_seconds": ...}`. A server that stops prints
-`the server exited`, and a hung one prints `no answer in 900 s`. The log follows each of them.
+`the server exited`, and a hung one prints `no answer in 900 s`. A server that refuses the request
+prints `the server answered HTTP <code>`, and a `401` means that it does not accept the token in
+`AUTH_TOKEN`. The log follows each of them.
 
 In a correct image, the server pins its checkpoint, starts the model process, and reads the
 weights from the image. The GR00T recipe then fails on the missing GPU with
@@ -283,17 +290,22 @@ answers from inside the container with the token:
 
 ```bash
 docker network create --internal noegress
-docker run -d --name policy --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1
-deadline=$((SECONDS + 600))
-until docker exec policy /positronic/.venv/bin/python -c "import urllib.request as u; \
-  print(u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/keepalive', method='POST', \
-  headers={'Authorization': 'Bearer test'}), timeout=5).read().decode())" 2>/dev/null; do
-  [ "$(docker inspect -f '{{.State.Running}}' policy)" = true ] || { echo "the server exited"; break; }
-  [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
-  sleep 5
-done
-docker logs --tail 30 policy
-docker rm -f policy
+probe='import urllib.error, urllib.request as u
+try:
+    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
+          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
+except urllib.error.HTTPError as e:
+    print("the server answered HTTP", e.code)'
+if cid=$(docker run -d --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+  deadline=$((SECONDS + 600))
+  until docker exec "$cid" /positronic/.venv/bin/python -c "$probe" 2>/dev/null; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
+    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
+    sleep 5
+  done
+  docker logs --tail 30 "$cid"
+  docker rm -f "$cid"
+fi
 ```
 
 The route answers `{"alive_seconds": ...}` with the token once the model has loaded and warmed.
