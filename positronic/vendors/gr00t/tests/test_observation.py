@@ -1,10 +1,13 @@
 import importlib.util
 import json
 import os
+from functools import reduce
+from operator import or_
 from pathlib import Path
 
 import numpy as np
 import pytest
+from positronic_model_server import serialization
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
@@ -14,10 +17,10 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import models
 from positronic.policy import spec
-from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec, RestrictImageSize
+from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec
 from positronic.policy.codecs.metadata import MODEL_SETTINGS
 from positronic.policy.keys import ACTION_FPS
-from positronic.vendors.gr00t import recipes, server
+from positronic.vendors.gr00t import recipes
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import keys as serving_keys
 from positronic.vendors.gr00t.serving import recipe
@@ -38,6 +41,12 @@ def observation():
     }
 
 
+def _episode(observation, task_key=keys.TASK):
+    return EpisodeContainer({
+        name: value if name == task_key else DummySignal([0, 1], [value, value]) for name, value in observation.items()
+    })
+
+
 @pytest.mark.parametrize('config', [model_settings.droid, model_settings.droid_three_cameras])
 def test_training_and_inference_encode_the_same_absolute_state_and_images(config, observation):
     settings = config()
@@ -46,10 +55,7 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
         observation['alternate_view'] = observation.pop(keys.EXTERIOR_IMAGE_2)
     codec = spec.from_spec(recipe.inference(settings))
     assert isinstance(codec, Codec)
-    episode = EpisodeContainer({
-        name: value if name == keys.TASK else DummySignal([0, 1], [value, value]) for name, value in observation.items()
-    })
-    training = recipes.droid(settings=settings)(episode)
+    training = recipes.droid(settings=settings)(_episode(observation))
     encoded = codec.encode(observation)
     assert set(encoded) == {gr00t.STATE, gr00t.VIDEO, gr00t.LANGUAGE}
     assert encoded[gr00t.LANGUAGE] == {gr00t.TASK: [[observation[keys.TASK]]]}
@@ -88,10 +94,9 @@ def test_observation_layout_requires_a_live_prompt(observation):
 @pytest.mark.parametrize('task', [None, 'Pick up the cup'])
 def test_training_episode_materializes_without_requiring_a_recorded_task(observation, task):
     observation.pop(keys.TASK)
-    fields = {name: DummySignal([0, 1], [value, value]) for name, value in observation.items()}
     if task is not None:
-        fields[keys.TASK] = task
-    training = recipes.droid()(EpisodeContainer(fields))
+        observation[keys.TASK] = task
+    training = recipes.droid()(_episode(observation))
     frame = training.time[[Time(**{RECORDED_TIME: 0})]]
     assert frame[keys.TASK] == (task or '')
 
@@ -109,20 +114,16 @@ def test_three_camera_configuration_uses_a_distinct_second_external_image(observ
 
 def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monkeypatch, observation):
     monkeypatch.setattr(gr00t, 'STATE_DIMS', dict(reversed(list(gr00t.STATE_DIMS.items()))))
-    episode = EpisodeContainer({
-        name: value if name == keys.TASK else DummySignal([0, 1], [value, value]) for name, value in observation.items()
-    })
     encoder = recipes.droid()
-    encoded = encoder(episode)
+    encoded = encoder(_episode(observation))
     action = encoded[ACTION][0][0]
     for name, bounds in encoder.meta[GR00T_MODALITY][ACTION].items():
-        np.testing.assert_allclose(action[bounds['start'] : bounds['end']], encoded[name][0][0])
+        np.testing.assert_allclose(action[bounds[gr00t.START] : bounds[gr00t.END]], encoded[name][0][0])
 
 
 def test_standalone_observation_names_match_the_client():
-    for name, value in vars(serving_keys).items():
-        if name.isupper():
-            assert value == getattr(keys, name)
+    for name in ('EE_POSE', 'JOINTS', 'GRIP', 'TASK', 'EXTERIOR_IMAGE', 'EXTERIOR_IMAGE_2', 'WRIST_IMAGE'):
+        assert getattr(serving_keys, name) == getattr(keys, name)
 
 
 def test_python_settings_drive_independent_training_and_inference_recipes(observation):
@@ -142,11 +143,7 @@ def test_python_settings_drive_independent_training_and_inference_recipes(observ
     description = json.loads(json.dumps(recipe.inference(settings)))
     codec = spec.from_spec(description)
     assert isinstance(codec, Codec)
-    episode = EpisodeContainer({
-        name: value if name == settings[model_settings.OBSERVATION_KEYS][gr00t.TASK] else DummySignal([0], [value])
-        for name, value in observation.items()
-    })
-    prepared = training(episode)
+    prepared = training(_episode(observation, settings[model_settings.OBSERVATION_KEYS][gr00t.TASK]))
     encoded = codec.encode(observation)
     assert prepared[keys.TASK] == encoded[gr00t.LANGUAGE][gr00t.TASK][0][0]
     assert encoded[gr00t.VIDEO]['custom_camera'].shape == (1, 1, 90, 160, 3)
@@ -155,24 +152,33 @@ def test_python_settings_drive_independent_training_and_inference_recipes(observ
     assert training.meta[MODEL_SETTINGS] == codec.meta[MODEL_SETTINGS] == settings
 
 
-@pytest.mark.parametrize('config', [server.droid, server.droid_three_cameras])
+@pytest.mark.parametrize('config', [model_settings.droid, model_settings.droid_three_cameras])
 @pytest.mark.parametrize('image_size', [[320, 180], [160, 90]])
-def test_images_are_bounded_before_remote_without_changing_model_pixels(config, observation, image_size):
-    pipeline = config(**{f'settings.{model_settings.IMAGE_SIZE}': image_size})
-    local, codec = pipeline.local, pipeline.codec
-    assert codec is not None
-    resize = next(layer for layer in local._components if isinstance(layer, RestrictImageSize))
-    wire_observation = resize.encode(observation)
-    settings = codec.meta[MODEL_SETTINGS]
-    assert settings[model_settings.IMAGE_SIZE] == image_size
-    assert config().codec.meta[MODEL_SETTINGS][model_settings.IMAGE_SIZE] == [320, 180]
-    for source in settings[model_settings.IMAGE_MAPPINGS].values():
-        assert wire_observation[source].shape[0] <= settings[model_settings.IMAGE_SIZE][1]
-        assert wire_observation[source].shape[1] <= settings[model_settings.IMAGE_SIZE][0]
-    direct = codec.encode(observation)
-    remote_encoded = codec.encode(wire_observation)
+@pytest.mark.parametrize('compress', [False, True])
+def test_complete_client_description_prepares_images_before_serialization(config, observation, image_size, compress):
+    settings = config()
+    settings[model_settings.IMAGE_SIZE] = image_size
+    description = recipe.client_stack(
+        settings,
+        fps=10,
+        horizon_sec=1,
+        image_mappings=settings[model_settings.IMAGE_MAPPINGS],
+        compress_images=compress,
+    )
+    assert any(part.get(spec.NAME) == 'encode_images' for part in description[spec.SEQ]) is compress
+    pipeline = spec.from_spec(description)
+    codec = reduce(or_, (part for part in pipeline._components if isinstance(part, Codec)))
+    encoded = codec.encode(observation)
+    received = serialization.deserialise(serialization.serialise(encoded))
+    direct = spec.from_spec(recipe.inference(settings)).encode(observation)
+    assert pipeline.meta()[ACTION_FPS] == 10
+    assert settings[model_settings.ACTION_FPS] == 15
     for name in direct[gr00t.VIDEO]:
-        np.testing.assert_array_equal(remote_encoded[gr00t.VIDEO][name], direct[gr00t.VIDEO][name])
+        assert received[gr00t.VIDEO][name].shape == (1, 1, image_size[1], image_size[0], 3)
+        if not compress:
+            np.testing.assert_array_equal(received[gr00t.VIDEO][name], direct[gr00t.VIDEO][name])
+        else:
+            assert isinstance(encoded[gr00t.VIDEO][name], dict)
 
 
 def test_droid_frame_and_pixels_match_upstream_robot_client(observation):

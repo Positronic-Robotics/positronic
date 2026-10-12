@@ -8,6 +8,7 @@ on:
       - main
     paths:
       - docker/Dockerfile.serve-gr00t-n17-droid
+      - docker/install-gr00t-server-deps.sh
       - docker/Makefile
       - .dockerignore
       - pyproject.toml

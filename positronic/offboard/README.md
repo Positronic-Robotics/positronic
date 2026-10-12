@@ -2,6 +2,9 @@
 
 This package implements the protocol and utilities for offboard policy inference, allowing robots or simulators to stream observations to a remote server and receive actions.
 
+The server configuration examples describe `PolicyServer`. GR00T uses the lightweight `ModelServer` with codecs on the client.
+See [GR00T serving](../vendors/gr00t/README.md#serve) for its CLI and session controls.
+
 ## Protocol
 
 The protocol connects clients to callable models. Each deployment declares a client stack of
@@ -109,7 +112,9 @@ session.
 
 #### Session parameters
 
-Query params on the session URL tune the served policy pipeline for that one session. Each key is a dotted path into the server's pipeline config — any argument at any depth — applied as a config override before the session is built:
+Query params on the session URL tune the served policy pipeline for that one session.
+With `PolicyServer`, each key is a dotted path into the pipeline config, applied before the session is built.
+`ModelServer` accepts only the parameters declared by its model:
 
 ```
 ws://localhost:8000/api/v1/session?fps=10&horizon_sec=1.0
@@ -118,10 +123,10 @@ ws://localhost:8000/api/v1/session?fps=10&horizon_sec=1.0
 Rules:
 
 - **Values are JSON literals.** The server parses each value as JSON (`10` → int, `false` → bool, `"hello"` → str); a value that does not parse passes through as a plain string, so a hand-typed `?tag=hello` works. The query travels verbatim — `InferenceClient` forwards whatever the URL already says — so a caller who means the string `true` rather than the boolean writes the quoted literal itself, percent-encoded: `?tag=%22true%22`.
-- **Imports are rejected.** Overrides are applied with `Config.override_data`, so a value that configuronic would read as an import — `@module.path.Object`, or a leading-dot path relative to the argument's current value — is refused at any nesting depth, and the error names the offending key. Params can tune the pipeline's arguments, never swap its components. A leading-dot string on an argument that gives imports no base to resolve against (a number, a flag, a plain string) is ordinary data and passes through, so `?tag=./data` works.
+- **Values never cause imports.** `PolicyServer` uses `Config.override_data`, which rejects Configuronic import syntax. `ModelServer` passes plain data to the model's session factory.
 - **Duplicate keys are rejected.**
-- **Params never reach the model.** The server builds the model once, at launch, from a config apart from the pipeline, so a key that names it (e.g. `?model.checkpoint=...`) is an unknown key.
-- **Only config-launched servers accept params.** All vendor servers qualify; a `PolicyServer` built from an already-instantiated pipeline rejects every param.
+- **Params cannot change the loaded checkpoint.** The server builds the model once at launch. Session parameters configure the pipeline or the model's session state.
+- **A configured pipeline accepts params.** A `PolicyServer` built from an already-instantiated pipeline rejects every param.
 
 Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and ends the session before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
 
@@ -262,10 +267,10 @@ Keys are flat strings — the dots are literal, not nesting. Arrays travel as nu
 
 **Server → Client (Actions):**
 
-For the vendor deployments, `result` is a **list** of command dicts, one per action in the predicted chunk. The client
+For `PolicyServer` deployments, `result` is a **list** of command dicts, one per action in the predicted chunk. The client
 scheduler supplies timing; commands carry no timestamps or end-of-chunk sentinel.
 `robot_command` carries the control command, and a rig with more than one arm names the channel per arm
-(`robot_command.left`):
+(`robot_command.left`). GR00T returns the native model result; its declared client stack converts that result into commands:
 
 ```json
 {
@@ -380,7 +385,10 @@ an instantiated pipeline serves exactly as launched. `idle_timeout_min` ends the
 many minutes with no session and no keepalive call.
 
 ### `server.serve`
-The CLI entry point every vendor server exposes. A vendor binds `model` and `pipeline` for each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. `--model.*` names the checkpoint: `--model.model_source=...` for GR00T, `--model.checkpoints_dir=...` for LeRobot and OpenPI. `--pipeline.*` tunes the rig-side stack and the server codec. `--websocket`, `--grpc` and `--idle_timeout_min` are the other flags of `serve` — each wire carries the address it binds, so `--websocket.served_address.port=9000` moves one and `--grpc=@positronic.offboard.server.grpc` adds the other. A deployment preset binds a model and a pipeline together.
+The CLI entry point for `PolicyServer` deployments. A vendor binds `model` and `pipeline` and exposes named configurations as subcommands.
+`--model.checkpoints_dir=...` names the checkpoint for LeRobot and OpenPI. `--pipeline.*` configures the client stack and server codec.
+`--websocket.served_address.port=9000` moves the WebSocket listener. `--grpc=@positronic.offboard.server.grpc` adds a gRPC listener.
+GR00T has its own [standalone CLI](../vendors/gr00t/README.md#serve), with `--model.model_source=...` and `--grpc=@gr00t_serving.server.grpc`.
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. It takes the wire and the address that wire
@@ -423,11 +431,11 @@ A session recovers a connection that drops before the server's first answer. A l
 
 ## Vendor Implementations
 
-Every vendor ships a model config plus named pipelines and serves them through the one `PolicyServer`:
+Vendors provide their own launch configurations and share the inference protocol:
 
 - **LeRobot (0.4.x)**: `positronic.vendors.lerobot.server` - Serves SmolVLA/ACT/Diffusion checkpoints (auto-detects policy type)
 - **LeRobot (0.3.3)**: `positronic.vendors.lerobot_0_3_3.server` - Serves ACT checkpoints
-- **GR00T**: `positronic.vendors.gr00t.server` - Serves GR00T checkpoints with modality config
+- **GR00T**: [`vendors/gr00t/serving/server.py`](../vendors/gr00t/serving/server.py) serves a native checkpoint through the lightweight wrapper.
 - **OpenPI**: `positronic.vendors.openpi.server` - Serves OpenPI checkpoints with config name
 - **DreamZero**: `positronic.vendors.dreamzero.server` - Serves DreamZero checkpoints through a torchrun subprocess
 - **MolmoAct2**: `positronic.vendors.molmoact2.server` - Serves the pretrained MolmoAct2 DROID model

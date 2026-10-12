@@ -1,11 +1,28 @@
+# syntax=docker/dockerfile:1.7
 ARG BASE_IMAGE=positro/gr00t-base:latest
 FROM ${BASE_IMAGE}
 
-WORKDIR /positronic
-
 RUN apt-get update && apt-get install -y --no-install-recommends libturbojpeg && rm -rf /var/lib/apt/lists/*
 
-COPY . /positronic
+COPY pyproject.toml uv.lock /opt/positronic-packages/
+COPY client/pyproject.toml /opt/positronic-packages/client/
+COPY wire/pyproject.toml /opt/positronic-packages/wire/
+COPY model_server/pyproject.toml /opt/positronic-packages/model_server/
+COPY vocabulary/pyproject.toml /opt/positronic-packages/vocabulary/
+COPY docker/install-gr00t-server-deps.sh /opt/positronic-packages/install-gr00t-server-deps.sh
+RUN --mount=type=cache,target=/root/.cache/uv bash /opt/positronic-packages/install-gr00t-server-deps.sh
+
+COPY --link wire /opt/positronic-packages/wire
+COPY --link model_server /opt/positronic-packages/model_server
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_OFFLINE=0 uv pip install --python /opt/gr00t-venv/bin/python --no-deps \
+      /opt/positronic-packages/wire /opt/positronic-packages/model_server \
+ && uv pip check --python /opt/gr00t-venv/bin/python
+
+WORKDIR /positronic
+
+COPY --link . /positronic
+COPY --link positronic/vendors/gr00t/serving /opt/positronic-vendors/gr00t_serving
 
 ENV PYTHONPATH=/positronic:/gr00t
 

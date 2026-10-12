@@ -37,7 +37,8 @@ htmlcov
 .tox
 
 # Docker
-docker/
+docker/*
+!docker/install-gr00t-server-deps.sh
 
 # Outputs and datasets (shouldn't be in source anyway)
 outputs/
@@ -45,4 +46,5 @@ datasets/
 
 # Misc
 *.log
+*.local.md
 .DS_Store
