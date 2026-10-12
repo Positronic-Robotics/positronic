@@ -239,6 +239,19 @@ def test_a_fall_in_the_delivered_count_does_not_hide_an_earlier_count_above_the_
         _label(ItemsDelivered(seconds=1.0, delivered=3), ItemsDelivered(seconds=2.0, delivered=2), total_items=2)
 
 
+def test_a_label_refuses_more_items_delivered_and_lost_than_its_total():
+    with pytest.raises(ValidationError, match='3 items delivered and 1 items lost are more than the total of 3'):
+        _label(ItemsDelivered(seconds=1.0, delivered=3), total_items=3, lost_items=1)
+
+
+def test_a_label_bounds_only_its_last_delivered_count_with_its_lost_items():
+    _label(ItemsDelivered(seconds=1.0, delivered=2), total_items=3, lost_items=1)
+    _label(
+        ItemsDelivered(seconds=1.0, delivered=3), ItemsDelivered(seconds=2.0, delivered=2), total_items=3, lost_items=1
+    )
+    _label(ItemsDelivered(seconds=1.0, delivered=3), lost_items=1)
+
+
 def test_a_label_refuses_a_time_that_is_not_finite():
     with pytest.raises(ValidationError):
         _label(Success(seconds=1.0), seconds_to_end=float('inf'))
@@ -251,7 +264,7 @@ def test_a_label_cannot_stand_at_a_time_that_is_not_from_the_trial_start(seconds
 
 
 def test_until_names_fields_that_the_label_has():
-    assert {'events', 'seconds_to_end'} <= set(Label.model_fields)
+    assert {'events', 'seconds_to_end', 'lost_items'} <= set(Label.model_fields)
 
 
 # --- the views
@@ -276,6 +289,16 @@ def test_the_example_until_a_time_holds_the_events_up_to_it_and_ends_there():
     assert (before.outcome, before.delivered, before.seconds_to_end) == (Outcome.out_of_time, 1, 15.0)
     assert before.events == CUBES.events[:4]
     assert CUBES.until(60.0) == CUBES
+
+
+def test_a_label_until_a_time_before_its_end_has_lost_no_item():
+    assert _label(seconds_to_end=100.0, total_items=3, lost_items=1).until(50.0).lost_items == 0
+
+
+def test_a_label_until_its_end_or_later_keeps_its_lost_items():
+    lossy = _label(seconds_to_end=100.0, total_items=3, lost_items=1)
+    assert lossy.until(100.0).lost_items == 1
+    assert lossy.until(150.0) == lossy
 
 
 def test_a_label_with_no_end_event_ran_out_of_time():

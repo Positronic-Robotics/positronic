@@ -241,14 +241,22 @@ class Label(BaseModel):
             for count, what in counts:
                 if total is not None and count > total:
                     raise ValueError(f'{count} {what} is more than the total of {total}')
+        if self.total_items is not None and self.delivered + self.lost_items > self.total_items:
+            raise ValueError(
+                f'{self.delivered} items delivered and {self.lost_items} items lost are more than the total of '
+                f'{self.total_items}'
+            )
         return self
 
     def until(self, seconds: float) -> Label:
-        """The label as it stood at `seconds`: the events at or before it, and the earlier of the two ends."""
+        """The label as it stood at `seconds`: the events and the losses at or before it, and the earlier end."""
         if not seconds >= 0:
             raise ValueError(f'a label cannot stand at {seconds} s, which is not a time from the trial start')
         kept = tuple(event for event in self.events if event.seconds <= seconds)
-        return self.model_copy(update={'events': kept, 'seconds_to_end': min(self.seconds_to_end, seconds)})
+        lost = self.lost_items if seconds >= self.seconds_to_end else 0
+        return self.model_copy(
+            update={'events': kept, 'seconds_to_end': min(self.seconds_to_end, seconds), 'lost_items': lost}
+        )
 
     def _deciding_end(self) -> EndEvent | None:
         ends = [event for event in self.events if isinstance(event, EndEvent)]
