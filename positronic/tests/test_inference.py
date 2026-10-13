@@ -197,22 +197,27 @@ class _Camera(pimm.ControlSystem):
 
 
 class _MarkingPolicy(Policy):
-    """Checks array snapshots and marks each episode after five policy steps."""
+    """Checks array snapshots and marks each episode after five policy steps. With a ``camera_key``, the mark also
+    waits for five different frames under that observation key."""
 
-    def __init__(self, marks: Path):
+    def __init__(self, marks: Path, camera_key: str | None = None):
         self._marks = marks
+        self._camera_key = camera_key
 
     def run(self, runtime):
         number = len(list(self._marks.glob('episode-*'))) + 1
         obs = yield
         steps = 0
+        frames_seen: set[bytes] = set()
         while True:
             snapshots = [(value, value.copy()) for value in obs.values() if isinstance(value, np.ndarray)]
             obs = yield Step({}, runtime.time_ns + 100_000_000)
             for value, snapshot in snapshots:
                 np.testing.assert_array_equal(value, snapshot)
             steps += 1
-            if steps == 5:
+            if self._camera_key is not None:
+                frames_seen.add(obs[self._camera_key].tobytes())
+            if steps >= 5 and (self._camera_key is None or len(frames_seen) >= 5):
                 (self._marks / f'episode-{number}').touch()
 
 
@@ -228,7 +233,13 @@ def _serve_station(port: int, output_dir: Path, marks: Path) -> None:
         control_systems=(devices, camera),
     )
     with pos3.mirror():
-        web(_MarkingPolicy(marks), embodiment, make_trial('pick up the cube'), output_dir=str(output_dir), port=port)
+        web(
+            _MarkingPolicy(marks, camera_key=keys.WRIST_IMAGE),
+            embodiment,
+            make_trial('pick up the cube'),
+            output_dir=str(output_dir),
+            port=port,
+        )
 
 
 def _wait_for(condition: Callable[[], Any], what: str, timeout: float = 90.0) -> Any:
