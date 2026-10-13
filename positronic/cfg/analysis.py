@@ -6,7 +6,7 @@ from functools import partial
 import configuronic as cfn
 import numpy as np
 import pos3
-from eval_vocabulary.outcome import ABSENT, OUTCOME, Outcome, is_scored
+from eval_vocabulary.outcome import ABSENT, OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, is_scored
 from positronic_model_server import keys as offboard_keys
 
 import positronic.cfg.ds as base_cfg
@@ -121,8 +121,8 @@ def started(ep: Episode) -> datetime:
 
 
 def units(ep: Episode) -> int | None:
-    if 'eval.successful_items' in ep:
-        return ep['eval.successful_items']
+    if SUCCESSFUL_ITEMS in ep:
+        return ep[SUCCESSFUL_ITEMS]
     if 'units' in ep:
         return ep['units']
     return None
@@ -161,16 +161,16 @@ def unified_success_bool(ep: Episode) -> bool | None:
 
 
 def unified_units_display(ep: Episode) -> str:
-    if 'eval.successful_items' in ep:
-        return f'{ep["eval.successful_items"]}/{ep["eval.total_items"]}'
+    if SUCCESSFUL_ITEMS in ep:
+        return f'{ep[SUCCESSFUL_ITEMS]}/{ep[TOTAL_ITEMS]}'
     if 'stacking_success' in ep:
         return str(1 if success(ep) else 0)
     return '-'
 
 
 def unified_uph(ep: Episode) -> float | None:
-    if 'eval.successful_items' in ep:
-        items = ep['eval.successful_items']
+    if SUCCESSFUL_ITEMS in ep:
+        items = ep[SUCCESSFUL_ITEMS]
         if items == 0:
             return None
         timelines = ep.timelines
@@ -187,8 +187,8 @@ def unified_uph(ep: Episode) -> float | None:
 
 
 def unified_success_rate(ep: Episode) -> float:
-    if 'eval.successful_items' in ep:
-        return 100 * ep['eval.successful_items'] / ep['eval.total_items']
+    if SUCCESSFUL_ITEMS in ep:
+        return 100 * ep[SUCCESSFUL_ITEMS] / ep[TOTAL_ITEMS]
     if 'stacking_success' in ep:
         return 100.0 if success(ep) else 0.0
     return 0.0
@@ -244,9 +244,8 @@ def episodes_table():
 
 
 def scored_episodes(episodes: Sequence[Episode]) -> list[Episode]:
-    """The episodes that every aggregate counts: a sim episode that analysis scores, or an episode with a verdict in
-    ``eval.outcome``. A discarded episode, or one that nobody scored, counts in no aggregate."""
-    return [ep for ep in episodes if 'stacking_success' in ep or is_scored(ep.get(OUTCOME, ABSENT))]
+    """The episodes that every aggregate counts: the ones that ``unified_success_bool`` scores."""
+    return [ep for ep in episodes if unified_success_bool(ep) is not None]
 
 
 @cfn.config()
@@ -268,8 +267,8 @@ def checkpoint_table():
             failed_count = count - successful_count
             success_rate = 100 * successful_count / count if count > 0 else 0
         else:
-            total_units = sum(ep.get('eval.successful_items', 0) for ep in scored)
-            total_possible = sum(ep.get('eval.total_items', 0) for ep in scored)
+            total_units = sum(ep.get(SUCCESSFUL_ITEMS, 0) for ep in scored)
+            total_possible = sum(ep.get(TOTAL_ITEMS, 0) for ep in scored)
             success_rate = 100 * total_units / total_possible if total_possible > 0 else 0
             failed_count = sum(1 for ep in scored if ep[OUTCOME] != Outcome.SUCCESS)
 
@@ -653,17 +652,17 @@ def phail_status(ep: Episode) -> str:
 
 
 def phail_completion(ep: Episode) -> float:
-    s = ep.get('eval.successful_items', 0)
-    t = ep.get('eval.total_items', 0)
+    s = ep.get(SUCCESSFUL_ITEMS, 0)
+    t = ep.get(TOTAL_ITEMS, 0)
     return 100 * s / t if t else 0.0
 
 
 def phail_units(ep: Episode) -> str:
-    return f'{ep.get("eval.successful_items", 0)}/{ep.get("eval.total_items", 0)}'
+    return f'{ep.get(SUCCESSFUL_ITEMS, 0)}/{ep.get(TOTAL_ITEMS, 0)}'
 
 
 def phail_uph(ep: Episode) -> float | None:
-    items = ep.get('eval.successful_items', 0)
+    items = ep.get(SUCCESSFUL_ITEMS, 0)
     if not items:
         return None
     timelines = ep.timelines
@@ -759,8 +758,8 @@ phail_human = base_cfg.transform.override(
             Derive(**{
                 **_PHAIL_BASELINE,
                 'model': FromValue(HUMAN_MODEL),
-                'eval.successful_items': FromValue(8),
-                'eval.total_items': FromValue(8),
+                SUCCESSFUL_ITEMS: FromValue(8),
+                TOTAL_ITEMS: FromValue(8),
                 'units': FromValue('8/8'),
                 'uph': partial(_baseline_uph, items=8),
             }),
@@ -783,8 +782,8 @@ phail_teleop = base_cfg.transform.override(
             Derive(**{
                 **_PHAIL_BASELINE,
                 'model': FromValue(TELEOP_MODEL),
-                'eval.successful_items': lambda ep: ep['item_count'],
-                'eval.total_items': lambda ep: ep['item_count'],
+                SUCCESSFUL_ITEMS: lambda ep: ep['item_count'],
+                TOTAL_ITEMS: lambda ep: ep['item_count'],
                 'units': lambda ep: f'{ep["item_count"]}/{ep["item_count"]}',
                 'uph': lambda ep: _baseline_uph(ep, ep['item_count']),
             }),
@@ -880,8 +879,8 @@ phail_teleop_release = base_cfg.transform.override(
                 'variant': FromValue(''),
                 'eval.object': task_code,
                 'eval.outcome': FromValue('Success'),
-                'eval.successful_items': lambda ep: ep['item_count'],
-                'eval.total_items': lambda ep: ep['item_count'],
+                SUCCESSFUL_ITEMS: lambda ep: ep['item_count'],
+                TOTAL_ITEMS: lambda ep: ep['item_count'],
             }),
         ),
         internal.REAL_ROBOT_TRANSFORM,
@@ -898,8 +897,8 @@ phail_human_release = base_cfg.transform.override(
                 'variant': FromValue(''),
                 'eval.object': task_code,
                 'eval.outcome': FromValue('Success'),
-                'eval.successful_items': FromValue(8),
-                'eval.total_items': FromValue(8),
+                SUCCESSFUL_ITEMS: FromValue(8),
+                TOTAL_ITEMS: FromValue(8),
             }),
         ),
         internal.REAL_ROBOT_TRANSFORM,
@@ -940,8 +939,8 @@ def phail_leaderboard():
         object_completions = []
         for obj_eps in by_object.values():
             obj_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in obj_eps)
-            obj_items = sum(ep['eval.successful_items'] for ep in obj_eps)
-            obj_possible = sum(ep['eval.total_items'] for ep in obj_eps)
+            obj_items = sum(ep[SUCCESSFUL_ITEMS] for ep in obj_eps)
+            obj_possible = sum(ep[TOTAL_ITEMS] for ep in obj_eps)
             if obj_duration > 0:
                 object_uphs.append(obj_items / (obj_duration / 3600))
             if obj_possible > 0:

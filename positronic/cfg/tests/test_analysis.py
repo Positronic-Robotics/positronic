@@ -172,3 +172,15 @@ def test_every_aggregate_leaves_out_an_episode_nobody_scored():
     leaderboard = analysis.phail_leaderboard().group_fn(scored + unscored)
     assert leaderboard == analysis.phail_leaderboard().group_fn(scored)
     assert (leaderboard['count'], leaderboard['completion'], leaderboard['MTBF']) == (2, 50, 20 / 60)
+
+
+@pytest.mark.parametrize('outcome', [Outcome.DISCARDED, Outcome.UNSCORED])
+def test_an_unscored_outcome_leaves_out_a_sim_episode(outcome):
+    signal = DummySignal([0, 10_000_000_000], [1.0, 1.0], timelines=(HARNESS_WORLD,))
+    sim = {'stacking_success': signal, 'checkpoint': 'test', 'model': 'test'}
+    scored = EpisodeContainer(sim)
+    discarded = EpisodeContainer({**sim, OUTCOME: outcome})
+
+    assert analysis.unified_success_bool(discarded) is None
+    assert analysis.scored_episodes([scored, discarded]) == [scored]
+    assert analysis.checkpoint_table().group_fn([scored, discarded])['count'] == 1
