@@ -72,12 +72,6 @@ class TransportMode(IntEnum):
 MAX_PICKLED_TIME_BYTES = 4096
 
 
-def _pickled(obj: object) -> bytes:
-    # FOOTGUN: a manager unpickles each request on the thread of its client. Two threads that import a package and its
-    # submodule for the first time can deadlock, so a manager queue holds bytes only.
-    return bytes(ForkingPickler.dumps(obj))
-
-
 class _SharedTime:
     """A ``Time | None`` in shared memory, pickled. Read and write it under the pipe's lock."""
 
@@ -188,8 +182,14 @@ class MultiprocessEmitter(SignalEmitter[T]):
             self._set_mode(TransportMode.QUEUE)
         return self._mode
 
+    @staticmethod
+    def _pickled(obj: object) -> bytes:
+        # FOOTGUN: a manager unpickles each request on the thread of its client. Two threads that import a package and
+        # its submodule for the first time can deadlock, so a manager queue holds bytes only.
+        return bytes(ForkingPickler.dumps(obj))
+
     def _emit_queue(self, data: T, time: Time) -> bool:
-        msg = _pickled(Message(data, time))
+        msg = self._pickled(Message(data, time))
         success = False
 
         for q in self._queues:
@@ -220,7 +220,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
             # support multiple receivers
             for sm_q in self._sm_queues:
-                sm_q.put(_pickled((self._sm.name, buf_size, self._data_type, data.instantiation_params())))
+                sm_q.put(self._pickled((self._sm.name, buf_size, self._data_type, data.instantiation_params())))
         else:
             assert self._expected_buf_size == buf_size, (
                 f'Buffer size mismatch: expected {self._expected_buf_size}, got {buf_size}. '

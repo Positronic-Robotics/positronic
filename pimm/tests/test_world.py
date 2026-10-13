@@ -263,16 +263,6 @@ class DummySMValue(SMCompliant):
         self.value = struct.unpack('d', buffer[:8])[0]
 
 
-@pytest.fixture
-def unimportable_in_the_manager(monkeypatch) -> type[DummySMValue]:
-    """A payload type whose module exists in this process only, so a spawned manager process cannot import it."""
-    module = types.ModuleType('pimm_tests_module_the_manager_lacks')
-    value_type = type('Value', (DummySMValue,), {'__module__': module.__name__})
-    vars(module)['Value'] = value_type
-    monkeypatch.setitem(sys.modules, module.__name__, module)
-    return value_type
-
-
 class TestQueueEmitter:
     """Test the QueueEmitter class."""
 
@@ -684,6 +674,15 @@ class TestWorld:
 
             emitter.emit('again', time=Time(capture=3))
             assert self._read(reader).data == 'again'
+
+    @pytest.fixture
+    def unimportable_in_the_manager(self, monkeypatch) -> type[DummySMValue]:
+        """A payload type whose module exists in this process only, so a spawned manager process cannot import it."""
+        module = types.ModuleType('pimm_tests_module_the_manager_lacks')
+        value_type = type('Value', (DummySMValue,), {'__module__': module.__name__})
+        vars(module)['Value'] = value_type
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+        return value_type
 
     @pytest.mark.parametrize('transport', [TransportMode.QUEUE, TransportMode.SHARED_MEMORY])
     def test_mp_pipes_carry_a_payload_whose_module_the_manager_cannot_import(
