@@ -114,7 +114,7 @@ OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
 
 # The left shoulder camera under its benchmark names, in Pi-policy preference order.
 LEFT_SHOULDER_CAMERAS = ('droid_shoulder_light_randomization', 'exo_camera_1')
-# The server adds this camera to every episode, on the robot's right shoulder.
+# The robot's right shoulder camera. No benchmark records it, so the name is positronic's own.
 RIGHT_SHOULDER_CAMERA = 'right_shoulder_camera'
 
 # Closed finger joint position used by MolmoSpaces' pi_policy.py to normalize gripper observations.
