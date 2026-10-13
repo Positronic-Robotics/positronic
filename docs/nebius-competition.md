@@ -17,8 +17,8 @@ Linux machine with an x86-64 (amd64) processor, such as a [Nebius](https://nebiu
   [What the example images use](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#what-the-example-images-use)
   gives the values for each example image.
 - The first test needs no GPU. Some images stop on the missing GPU before they load their weights.
-  [Test the image on a GPU](#test-the-image-on-a-gpu) shows that the model loads and serves, as on the
-  platform. You also need a GPU to train your policy.
+  [Test the image on a GPU](#test-the-image-on-a-gpu) shows that the model loads and serves on a GPU with
+  the network denied. You also need a GPU to train your policy.
 
 ## Use a coding agent
 
