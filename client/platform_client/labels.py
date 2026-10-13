@@ -508,14 +508,33 @@ ROBOLAB_LABELER = LabelerRef('robolab')
 _SUBTASK_FILE = f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}'
 
 
-def _subtask_samples(episode: Path) -> list[tuple[int, list[float]]]:
-    """The world time and the value of each sample of the `subtask` signal, which `recorded_span` has parsed."""
+class _SubtaskSample(NamedTuple):
+    """One sample of the `subtask` signal."""
+
+    time_ns: int  # on the world clock
+    completed: int
+    total: int
+    score: float
+
+
+def _subtask_samples(episode: Path) -> list[_SubtaskSample]:
+    """Each sample of the `subtask` signal, which `recorded_span` has parsed."""
     signal = episode / _SUBTASK_FILE
     column = _world_time_column(signal) if signal.is_file() else None
     if column is None:
         return []
     table = pq.read_table(signal, columns=[column, VALUE_COLUMN])
-    return list(zip(table.column(column).to_pylist(), table.column(VALUE_COLUMN).to_pylist(), strict=True))
+    return [
+        _SubtaskSample(
+            time_ns,
+            int(vector[SUBTASK_COMPLETED_INDEX]),
+            int(vector[SUBTASK_TOTAL_INDEX]),
+            float(vector[SUBTASK_SCORE_INDEX]),
+        )
+        for time_ns, vector in zip(
+            table.column(column).to_pylist(), table.column(VALUE_COLUMN).to_pylist(), strict=True
+        )
+    ]
 
 
 def robolab_label(episode: Path) -> Label | None:
@@ -530,18 +549,17 @@ def robolab_label(episode: Path) -> Label | None:
     if trial is None or not samples:
         return None
     events: list[SubtaskAchieved] = []
-    for time_ns, progress in samples:
-        completed, score = int(progress[SUBTASK_COMPLETED_INDEX]), float(progress[SUBTASK_SCORE_INDEX])
-        if not events or (completed, score) != (events[-1].achieved, events[-1].score):
-            events.append(SubtaskAchieved(seconds=(time_ns - trial.start_ns) / 1e9, achieved=completed, score=score))
-    total = int(samples[-1][1][SUBTASK_TOTAL_INDEX])
+    for sample in samples:
+        if not events or (sample.completed, sample.score) != (events[-1].achieved, events[-1].score):
+            seconds = (sample.time_ns - trial.start_ns) / 1e9
+            events.append(SubtaskAchieved(seconds=seconds, achieved=sample.completed, score=sample.score))
     return Label(
         uid=trial.uid,
         task=trial.task,
         annotator=ROBOLAB_LABELER,
         seconds_to_end=trial.seconds_to_end,
         # The env records zeros on the frame of a reset, and a total of 0 states no total.
-        total_subtasks=total or None,
+        total_subtasks=samples[-1].total or None,
         events=(*events, *trial.end_events),
     )
 
