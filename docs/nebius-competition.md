@@ -288,7 +288,7 @@ What the platform does with your credential:
 ## Test the image on a GPU
 
 On a machine with a GPU, serve the image with the network denied. Then wait until the keepalive route
-answers, from inside the container, with the token:
+answers, from inside the container, with the token. The container gets one GPU, GPU 0, as on the platform:
 
 ```bash
 docker network create --internal noegress
@@ -306,7 +306,7 @@ except OSError as e:
 arch=$(docker version -f '{{.Server.Arch}}')
 if [ "$arch" != amd64 ]; then
   echo "Docker runs on '$arch'. Run this test on an amd64 machine."
-elif cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+elif cid=$(docker run -d --pull=always --network noegress --gpus device=0 -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 600))
   while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
@@ -325,11 +325,11 @@ fi
   binds it after about 140 s.
 - The route answers `{"alive_seconds": ...}` when the model has loaded and warmed.
 - The platform gives the image 40448 MiB of GPU memory. A larger GPU can hide a model that does not fit.
-  The load and the warmup can use more memory for a short time. Before you start the test, run this command
-  in a second terminal. It prints each new peak:
+  The load and the warmup can use more memory for a short time. Use an idle GPU. Before you start the
+  test, run this command in a second terminal. It prints each new peak:
 
   ```bash
-  nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits --loop-ms=500 \
+  nvidia-smi --id=0 --query-gpu=memory.used --format=csv,noheader,nounits --loop-ms=500 \
     | awk '$1 > m { m = $1; print "peak", m, "MiB"; fflush() }'
   ```
 - `the server exited` means that the server crashed. The log shows why.

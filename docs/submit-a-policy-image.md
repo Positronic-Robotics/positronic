@@ -324,7 +324,7 @@ albumentations prints a `UserWarning` about fetching its version; ignore it. Mol
 into its module cache; no download occurs.
 
 On a machine with a GPU, serve it with the network denied, and wait until the keepalive route
-answers from inside the container with the token:
+answers from inside the container with the token. The container gets one GPU, GPU 0, as on the platform:
 
 ```bash
 docker network create --internal noegress
@@ -342,7 +342,7 @@ except OSError as e:
 arch=$(docker version -f '{{.Server.Arch}}')
 if [ "$arch" != amd64 ]; then
   echo "Docker runs on '$arch'. Run this test on an amd64 machine."
-elif cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+elif cid=$(docker run -d --pull=always --network noegress --gpus device=0 -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 600))
   while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
