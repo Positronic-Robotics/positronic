@@ -379,7 +379,7 @@ and `reason` tell you why it failed.
 
 | link | content | when it is there |
 |---|---|---|
-| `result` | the run, the attempt that scored, and the scores for each task | in all `artifacts` |
+| `result` | the run, the attempt that scored, and `scores` with `primary`, `episodes` and `unscored` | in all `artifacts` |
 | `policy_log` | the stdout and stderr of your container | when your container printed something |
 | `diagnostics` | why the run failed, and the state of the machine | on a failed run, when the run wrote it |
 

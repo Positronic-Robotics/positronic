@@ -1,0 +1,68 @@
+{
+  "control_frame": "end_effector",
+  "eval.embodiment": "remote.molmo_spaces.droid",
+  "eval.episode_index": 19,
+  "eval.success": false,
+  "eval.terminated": true,
+  "eval.timeout": 60.0,
+  "eval.trial_count": 20,
+  "eval.trial_index": 19,
+  "eval.universe": "sim",
+  "gripper": {
+    "joints": [
+      "right_driver_joint",
+      "right_coupler_joint",
+      "right_spring_link_joint",
+      "right_follower_joint",
+      "left_driver_joint",
+      "left_coupler_joint",
+      "left_spring_link_joint",
+      "left_follower_joint"
+    ],
+    "signal": "grip",
+    "travel": 0.8
+  },
+  "inference.policy.server.action_fps": 15.0,
+  "inference.policy.server.checkpoint_id": "pi05_droid_jointpos",
+  "inference.policy.server.checkpoint_path": "gs://openpi-assets-simeval/pi05_droid_jointpos",
+  "inference.policy.server.compress_images": false,
+  "inference.policy.server.config_name": "pi05_droid_jointpos",
+  "inference.policy.server.experiment_name": "pi05_droid_jointpos",
+  "inference.policy.server.host": "0.0.0.0",
+  "inference.policy.server.image_sizes": [
+    224,
+    224
+  ],
+  "inference.policy.server.local_stack.seq": [
+    {
+      "name": "chunked_schedule"
+    },
+    {
+      "args": {
+        "height": 224,
+        "width": 224
+      },
+      "name": "restrict_image_size"
+    }
+  ],
+  "inference.policy.server.port": 8000,
+  "inference.policy.server.positronic_version": "0.2.1",
+  "inference.policy.server.type": "openpi",
+  "inference.policy.type": "remote",
+  "inference_latency": false,
+  "joint_names": [
+    "joint1",
+    "joint2",
+    "joint3",
+    "joint4",
+    "joint5",
+    "joint6",
+    "joint7"
+  ],
+  "joint_signal": "robot_state.q",
+  "pose_signals": [
+    "robot_state.ee_pose",
+    "robot_command.pose"
+  ],
+  "task": "pick up the spoon."
+}

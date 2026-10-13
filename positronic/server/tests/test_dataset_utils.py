@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 import rerun.blueprint as rrb
 import rerun.recording as rr_recording
+from eval_vocabulary.episode import LEGACY_TIME_COLUMN
 
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys
@@ -21,7 +22,7 @@ from positronic.dataset import Time
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.dataset.tests.utils import DummySignal
-from positronic.dataset.vector import LEGACY_TIMESTAMP_COLUMN, RECORDED_TIME, VALUE_COLUMN
+from positronic.dataset.vector import RECORDED_TIME, VALUE_COLUMN
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -365,7 +366,7 @@ def test_a_legacy_signal_is_on_the_timeline_the_replay_opens_on(tmp_path, monkey
     # The layout of a file with no format version: one `timestamp` column, read on `recorded`.
     for name, values in (('progress.state', ['floating', 'reaching']), ('progress.delivered', [0, 1])):
         pq.write_table(
-            pa.table({LEGACY_TIMESTAMP_COLUMN: pa.array(times, type=pa.int64()), VALUE_COLUMN: values}),
+            pa.table({LEGACY_TIME_COLUMN: pa.array(times, type=pa.int64()), VALUE_COLUMN: values}),
             episode_dir / f'{name}.parquet',
         )
 

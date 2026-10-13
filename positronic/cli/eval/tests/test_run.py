@@ -11,13 +11,18 @@ from typing import cast
 
 import pos3
 import pytest
-from platform_client.evals import MOLMO_EPISODE_INDEX_KEY, PUBLIC_EVALS, EvalRef, public_eval
+from platform_client.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
+from platform_client.labels import MOLMO_LABELER, Label, Success, label
+from platform_client.scoring import score
 
 import pimm
-from positronic import telemetry, telemetry_keys
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time
+from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.cfg.eval.real import droid as real_droid
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
+from positronic.dataset.episode import META_UID
+from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyRun, Runtime, Step
@@ -238,6 +243,30 @@ def test_a_public_eval_binds_its_arguments_on_the_installed_positronic(name: str
 
 def test_the_molmo_trial_key_of_a_public_eval_is_the_one_molmo_spaces_reads():
     assert MOLMO_EPISODE_INDEX_KEY == molmo_keys.EPISODE_INDEX
+
+
+def test_the_molmo_labeler_reads_the_outcome_that_positronic_records(tmp_path):
+    with LocalDatasetWriter(tmp_path) as writer, writer.new_episode() as episode:
+        episode.set_static(keys.TASK, 'pick up the cup.')
+        episode.set_static(eval_keys.SUCCESS, True)
+        episode.set_static(eval_keys.TERMINATED, True)
+        # Ten seconds pass on the wall clock for each second on the world clock, as in a sim slower than real time.
+        for world_ns in (2_000_000_000, 4_000_000_000, 6_500_000_000):
+            episode.append(keys.GRIP, 0.0, Time(**{EMITTED_WORLD: world_ns, EMITTED_WALL: 10 * world_ns}))
+
+    given = label(episode.path, MOLMO_SCORING.labelers)
+
+    assert given is not None
+    labeler, given_label = given
+    assert labeler == MOLMO_LABELER
+    assert given_label == Label(
+        uid=episode.meta[META_UID],
+        task='pick up the cup.',
+        annotator=MOLMO_LABELER,
+        seconds_to_end=4.5,
+        events=(Success(seconds=4.5),),
+    )
+    assert score(MOLMO_SCORING, [given_label]).model_dump() == {'primary': 1.0, 'episodes': 1, 'unscored': 0}
 
 
 @pytest.mark.parametrize('name', ['molmo.held_out', ''])

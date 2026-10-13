@@ -416,7 +416,7 @@ A `finished` submission carries `scores.primary`, the value a leaderboard ranks 
 
 | link | content | present |
 |---|---|---|
-| `result` | the run id, the attempt that scored, and `scores` with a `per_task` breakdown | on a finished run, and on an errored run that wrote its records |
+| `result` | the run id, the attempt that scored, and `scores` with `primary`, `episodes` and `unscored` | on a finished run, and on an errored run that wrote its records |
 | `policy_log` | your container's stdout and stderr, from the attempt that decided the run | on the same runs as `result`, when the container printed anything |
 | `diagnostics` | why the run failed, and the state of the box | on an errored run whose record was written |
 
@@ -457,8 +457,8 @@ client calls it with `list_artifacts`, and `positronic eval` has no command for 
 - Read `result.json` first. Its `attempt_location` names the attempt that scored. A reprovisioned
   run writes one tree per attempt, and only that tree holds the episodes that count.
 - The route's `prefix` filter is read under the submission's own prefix, so one attempt's
-  episodes are `attempts/<n>/episodes/`. The same attempt holds `scores.json`, `logs/` and
-  `timing.jsonl`. `control/` is never listed.
+  episodes are `attempts/<n>/episodes/`. The same attempt holds `logs/` and `timing.jsonl`.
+  `control/` is never listed.
 - The route pages: pass `after` with the `next` of the page before it. These links expire after
   15 minutes, like the three above.
 - `attempts/<n>/episodes/` is a positronic dataset root. Download the whole tree, and positronic

@@ -7,6 +7,11 @@ An operator scores an episode and marks how far the arm got. Both reach the reco
 console that wrote them, the viewer that colours them, a report that counts them, a coordinator that
 has no robot installed at all.
 
+An episode keeps its statics in one file and its id in another. A labeler reads from them how the
+trial ended, who ended it, the task and the id. It reads how long the trial ran from the times in the
+signal files. `eval_vocabulary.episode` names the files and the keys. `eval_vocabulary.timeline`
+names the timelines whose columns hold those times.
+
 This distribution defines those words once. It depends on nothing, so any of those
 programs installs it alone.
 

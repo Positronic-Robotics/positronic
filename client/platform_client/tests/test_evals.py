@@ -10,7 +10,6 @@ from platform_client.evals import (
     PUBLIC_EVALS,
     EvalDefinition,
     EvalRef,
-    ScorerRef,
     public_eval,
 )
 from platform_client.policy_images import PolicyImage
@@ -39,12 +38,6 @@ def test_a_name_this_client_has_never_heard_of_still_reaches_the_platform():
 def test_the_boundary_refuses_an_empty_eval():
     with pytest.raises(ValidationError):
         EvalPlan.model_validate({'eval': '', 'endpoints': [{'name': 'policy', 'kind': 'image', 'image': 'org/p:v1'}]})
-
-
-@pytest.mark.parametrize('value', ['', ' ', 'two words'])
-def test_a_value_that_could_never_name_a_scorer_is_refused_here(value: str):
-    with pytest.raises(ValueError):
-        ScorerRef(value)
 
 
 BOARD = EvalRef('molmo.franka_pick_mini')
@@ -105,7 +98,7 @@ def test_a_public_definition_is_handed_out_as_a_copy():
         {'positronic_revision': 'a9e13e8a'},
         {'time_limit_s': 0},
         {'tasks': []},
-        {'scorer': ''},
+        {'scoring': {'labelers': [], 'primary': {'kind': 'mean_episode_score'}}},
     ],
 )
 def test_a_definition_refuses_a_field_no_run_can_use(change: dict):

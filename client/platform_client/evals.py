@@ -8,6 +8,8 @@ The platform holds the definitions of the evals it does not publish.
 
 from __future__ import annotations
 
+from platform_client.labels import MOLMO_LABELER
+from platform_client.scoring import MeanEpisodeScore, Scoring
 from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, JsonValue, PositiveInt
 from pydantic_core import core_schema
 
@@ -20,21 +22,6 @@ class EvalRef(str):
     def __new__(cls, value: str) -> EvalRef:
         if not value or any(c.isspace() for c in value):
             raise ValueError(f'not an eval name: {value!r}')
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source: type, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
-
-
-class ScorerRef(str):
-    """The name of the rule that scores a run's recorded episodes, as a validated `str`."""
-
-    __slots__ = ()
-
-    def __new__(cls, value: str) -> ScorerRef:
-        if not value or any(c.isspace() for c in value):
-            raise ValueError(f'not a scorer name: {value!r}')
         return super().__new__(cls, value)
 
     @classmethod
@@ -67,17 +54,18 @@ class EvalDefinition(BaseModel):
     tasks: list[EvalTask] = Field(min_length=1)
     # The wall-clock limit of one platform run. A local run does not stop at it.
     time_limit_s: PositiveInt
-    scorer: ScorerRef
+    scoring: Scoring
     # The positronic commit the platform runs the config at.
     positronic_revision: str = Field(pattern=r'^[0-9a-f]{40}$')
 
 
 # The MolmoSpaces evals: the config they name, its task and trial key as positronic spells them
-# (`positronic/simulator/molmo_spaces/keys.py`), and the positronic commit the platform's sim image holds.
+# (`positronic/simulator/molmo_spaces/keys.py`), their scoring, and the positronic commit the platform's sim
+# image holds. A run ranks on its success rate.
 MOLMO_CONFIG = '.sim.molmo.benchmarks'
 MOLMO_TASK = 'franka_pick_droid_mini'
 MOLMO_EPISODE_INDEX_KEY = 'molmo.episode_index'
-MOLMO_SCORER = ScorerRef('molmo')
+MOLMO_SCORING = Scoring(labelers=(MOLMO_LABELER,), primary=MeanEpisodeScore())
 MOLMO_POSITRONIC_REVISION = 'a9e13e8a1fbe624ff62b49e25628b39859619986'
 
 
@@ -96,7 +84,7 @@ def _franka_pick_mini(episodes: list[int]) -> EvalDefinition:
         },
         tasks=[EvalTask(name=MOLMO_TASK, trials=[{MOLMO_EPISODE_INDEX_KEY: i} for i in episodes])],
         time_limit_s=7200,
-        scorer=MOLMO_SCORER,
+        scoring=MOLMO_SCORING,
         positronic_revision=MOLMO_POSITRONIC_REVISION,
     )
 
