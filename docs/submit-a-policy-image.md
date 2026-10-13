@@ -77,10 +77,13 @@ limits of the platform. The run without a GPU is the first test in
 | `positro/cosmos3-nano` | 37.1 GB | 54.1 GB | 32373 MiB | 208 s | stops on the missing GPU |
 
 - The time starts when the container starts. It does not include the pull.
+- Each GPU run started after the pull, as on the platform. The weights were probably in the page cache. A
+  start that reads the weights from the disk takes longer. Plan for the longer times in
+  [Test the image before you submit](#test-the-image-before-you-submit): about 140 s for FLUX 3 Action and
+  about 151 s for GR00T.
 - The measured `positro/flux3-action` image does not start with the network denied, because its hub
   cache has no `trees/<commit>.json` listings. The GPU values in its row are from that image with the two
-  listings added by hand. No published image is the same as that image. The weights were in the page
-  cache, so a first start takes longer than 80 s.
+  listings added by hand. No published image is the same as that image.
 - The slice has 40448 MiB. FLUX 3 Action leaves 7193 MiB of it free, and Cosmos3-Nano leaves 8075 MiB.
 
 The digests of the measured images:
@@ -372,6 +375,15 @@ A server that checks the token answers `401` without it. The loop waits up to 60
 Action binds port 8000 after about 140 s, and GR00T loads in about 151 s. `no answer in 600 s`
 means a hung server, or one too slow for the provisioning deadline, which it shares with VM boot
 and the pull.
+
+The platform gives the image 40448 MiB of GPU memory, and a larger GPU can hide a model that does not
+fit. The load and the warmup can use more memory for a short time. Use an idle GPU. Before you start the
+test, run this command in a second terminal. It prints each new peak:
+
+```bash
+nvidia-smi --id=0 --query-gpu=memory.used --format=csv,noheader,nounits --loop-ms=500 \
+  | awk '$1 > m { m = $1; print "peak", m, "MiB"; fflush() }'
+```
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
