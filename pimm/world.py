@@ -184,8 +184,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
     @staticmethod
     def _pickled(obj: object) -> bytes:
-        # FOOTGUN: a manager unpickles each request on the thread of its client. Two threads that import a package and
-        # its submodule for the first time can deadlock, so a manager queue holds bytes only.
+        # FOOTGUN: a manager queue holds bytes only. The manager unpickles each request on the thread of its client,
+        # and two threads that import a package and its submodule for the first time can deadlock.
         return bytes(ForkingPickler.dumps(obj))
 
     def _emit_queue(self, data: T, time: Time) -> bool:
