@@ -11,11 +11,9 @@ You can install the commands, register and submit on any computer. To build and 
 Linux machine with an x86-64 (amd64) processor, such as a [Nebius](https://nebius.com) virtual machine.
 
 - The platform runs only amd64 images. On a Mac with Apple silicon, or on another ARM machine, Docker
-  emulates amd64. With emulation, the test is very slow, and it can fail after one hour.
-- The test loads your model into the memory of the machine. The π0.5 DROID example uses more than
-  19 GB, and it fails on a machine with 16 GB. Give the machine at least 32 GB of memory.
-- Give the machine at least 100 GB of free disk space. The π0.5 DROID example image uses 55 GB when
-  Docker extracts it.
+  emulates amd64. With emulation, the test is very slow, and it can fail.
+- The test loads your model into memory. Give the machine enough memory and free disk space for your
+  model. For the π0.5 DROID example image, use 32 GB of memory and 100 GB of free disk space.
 - The first test needs no GPU. A GPU is necessary for [Test the image on a GPU](#test-the-image-on-a-gpu),
   and to train your policy.
 
