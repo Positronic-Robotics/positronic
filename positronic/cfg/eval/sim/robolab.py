@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 
 import configuronic as cfn
+from eval_vocabulary.episode import SUBTASK_SIGNAL
 
 from positronic import keys
 from positronic.cfg.eval import number_trials, spec
@@ -76,9 +77,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_ser
             trials += [(trial, {**params, robolab_keys.INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
         return number_trials(trials)
 
-    return Eval(
-        embodiment, tasks, privileged={robolab_keys.SUBTASK: proxy.privileged[robolab_keys.SUBTASK]}, done=proxy.done
-    )
+    return Eval(embodiment, tasks, privileged={SUBTASK_SIGNAL: proxy.privileged[robolab_keys.SUBTASK]}, done=proxy.done)
 
 
 # Every task the benchmark holds, in one run.

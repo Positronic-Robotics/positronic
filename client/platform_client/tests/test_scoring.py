@@ -1,6 +1,7 @@
-"""The episode score of a label, and the scores of a run, against a recorded MolmoSpaces sweep.
+"""The episode score of a label, and the scores of a run, against a recorded MolmoSpaces sweep and a RoboLab sweep.
 
-The fixture is the sweep that `test_labels.py` describes. Five of its twenty episodes succeeded.
+The fixtures are the sweeps that `test_labels.py` describes. Five of the twenty MolmoSpaces episodes succeeded, and
+none of the six RoboLab episodes did.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import pytest
 from platform_client.evals import MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
 from platform_client.labels import (
     PUBLIC_LABELERS,
+    ROBOLAB_LABELER,
     Fail,
     ItemsDelivered,
     Label,
@@ -28,11 +30,13 @@ from platform_client.responses import Scores as PublishedScores
 from platform_client.scoring import EpisodeScore, MeanEpisodeScore, Scores, Scoring, episode_score, score
 from pydantic import ValidationError
 
-SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'molmo_sweep').glob('*/*') if p.is_dir())
+FIXTURES = Path(__file__).parent / 'fixtures'
+SWEEP = sorted(p for p in (FIXTURES / 'molmo_sweep').glob('*/*') if p.is_dir())
+ROBOLAB_SWEEP = sorted(p for p in (FIXTURES / 'robolab_sweep').glob('*/*') if p.is_dir())
 
 
-def _sweep_labels() -> list[Label | None]:
-    picked = [label(episode, MOLMO_SCORING.labelers) for episode in SWEEP]
+def _sweep_labels(scoring: Scoring = MOLMO_SCORING, sweep: list[Path] = SWEEP) -> list[Label | None]:
+    picked = [label(episode, scoring.labelers) for episode in sweep]
     return [given[1] if given is not None else None for given in picked]
 
 
@@ -65,6 +69,30 @@ def test_each_task_of_the_sweep_has_the_trials_and_successes_it_recorded():
     trials = Counter(given_label.task for given_label in given)
     successes = Counter(given_label.task for given_label in given if given_label.outcome is Outcome.success)
     assert {task: (trials[task], successes[task]) for task in trials} == PER_TASK
+
+
+# A RoboLab eval scores a success 1.0, and any other episode the score of its last step, as RoboLab scores it.
+ROBOLAB_SCORING = Scoring(
+    labelers=(ROBOLAB_LABELER,), primary=MeanEpisodeScore(episode_score=EpisodeScore(use_subtask_score=True))
+)
+
+
+def test_each_robolab_episode_scores_the_float32_score_of_its_last_step():
+    rule = ROBOLAB_SCORING.primary.episode_score
+    given = _sweep_labels(ROBOLAB_SCORING, ROBOLAB_SWEEP)
+    assert [episode_score(given_label, rule, None) if given_label else None for given_label in given] == [
+        0.1428571492433548,
+        0.0,
+        0.5,
+        0.0,
+        0.0,
+        0.0,
+    ]
+    assert score(ROBOLAB_SCORING, given).model_dump(mode='json') == {
+        'primary': 0.1071428582072258,
+        'episodes': 6,
+        'unscored': 0,
+    }
 
 
 @pytest.mark.parametrize('name', PUBLIC_EVALS)

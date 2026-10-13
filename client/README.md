@@ -13,7 +13,7 @@ The library depends on `pydantic`, `httpx`, `typing-extensions`, `pyarrow` and
 installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.30.1"
+uv add "positronic-platform-client==0.32.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -322,10 +322,24 @@ of the task means where the metric sets `per_task`, and a board ranks on it. `ep
 episode, and `unscored` counts the episodes that no labeler labelled. `primary` does not count those
 as failures. No file holds a score: a score is a function of the labels.
 
-`PUBLIC_LABELERS` holds the labeler of each public eval. A caller with labelers of its own passes
-`label` a table that holds them beside `PUBLIC_LABELERS`. The MolmoSpaces labeler takes the end of a
-trial from the episode's signal files: the time from the first sample to the last, on the world clock.
-That time can exceed the trial by up to one control step.
+`PUBLIC_LABELERS` holds the labelers that this package publishes, `molmo` and `robolab`. A caller with
+labelers of its own passes `label` a table that holds them beside `PUBLIC_LABELERS`. The MolmoSpaces
+labeler takes the end of a trial from the episode's signal files: the time from the first sample to
+the last, on the world clock. That time can exceed the trial by up to one control step.
+
+The RoboLab labeler reads the end of a trial in the same way. Its task is the task id that RoboLab
+names, and not the instruction. It also reads the `subtask` signal, which RoboLab records at each
+step, and gives a `SubtaskAchieved` event for each change of the subtasks completed or of RoboLab's
+score. A RoboLab eval scores a success 1.0, and any other episode the score of its last step:
+
+```python
+from platform_client.labels import ROBOLAB_LABELER
+from platform_client.scoring import EpisodeScore, MeanEpisodeScore, Scoring
+
+robolab = Scoring(
+    labelers=(ROBOLAB_LABELER,), primary=MeanEpisodeScore(episode_score=EpisodeScore(use_subtask_score=True))
+)
+```
 
 ## From the command line
 

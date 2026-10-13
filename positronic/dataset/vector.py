@@ -6,7 +6,7 @@ from typing import Any, TypeVar, cast
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from eval_vocabulary.episode import LEGACY_TIME_COLUMN, TIMESTAMP_COLUMN_PREFIX
+from eval_vocabulary.episode import LEGACY_TIME_COLUMN, TIMESTAMP_COLUMN_PREFIX, VALUE_COLUMN
 
 from .signal import TIMELINE_METADATA_KEY, IndicesLike, Signal, SignalWriter
 from .time import Time, TimeArray, TimeBounds, search_timestamps, validate_timeline
@@ -18,7 +18,6 @@ SIGNAL_VERSION_KEY = b'positronic.signal_version'
 SIGNAL_VERSION = b'2'
 # Timeline name for legacy files without timeline metadata.
 RECORDED_TIME = 'recorded'
-VALUE_COLUMN = 'value'
 
 
 def timestamp_table(columns: Mapping[str, Sequence[int]]) -> pa.Table:
