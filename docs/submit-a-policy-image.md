@@ -77,9 +77,10 @@ platform. The run without a GPU is the first test in
 | `positro/cosmos3-nano:b019ff1` | 37.1 GB | 54.1 GB | 32373 MiB | 208 s | stops on the missing GPU |
 
 - The time starts when the container starts. It does not include the pull.
-- `positro/flux3-action:b019ff1` does not start with the network denied. Its GPU values are from the same
-  image with the `trees/` listings added to its hub cache. The [recipe](../docker/Dockerfile.serve-flux3-action)
-  writes these listings. The weights were in the page cache, so a first start takes longer than 80 s.
+- `positro/flux3-action:b019ff1` does not start with the network denied, because its hub cache has no
+  `trees/<commit>.json` listings. The GPU values in its row are from that image with the two listings added
+  by hand. No published image is the same as that image. The weights were in the page cache, so a first
+  start takes longer than 80 s.
 - The slice has 40448 MiB. FLUX 3 Action leaves 7193 MiB of it free, and Cosmos3-Nano leaves 8075 MiB.
 
 ### Three traps in the `positro/*` bases
