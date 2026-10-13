@@ -3,11 +3,10 @@
 import hashlib
 import json
 import os
-from collections.abc import Callable, Collection
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
-import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -236,21 +235,14 @@ def episode_rng(bench: BenchmarkPath, episode_index: int) -> np.random.Generator
 
 
 # The episodes where scene geometry hides the start grasp site from the right shoulder camera, by benchmark path.
-# `env.py --sweep` writes a benchmark's entry once it has checked every episode; a benchmark absent from it is unswept.
+# A benchmark absent from the file is unswept. An offline sweep builds the file (internal#1869). Rebuild it when
+# the pinned MolmoSpaces revision or the asset packs change.
 RIGHT_VIEW_BLOCKED_PATH = Path(__file__).parent / 'right_view_blocked.json'
 
 
 def load_right_view_blocked(path: Path = RIGHT_VIEW_BLOCKED_PATH) -> dict[BenchmarkPath, frozenset[int]]:
     """The blocked episodes of every swept benchmark."""
     return {BenchmarkPath.parse(rel): frozenset(indices) for rel, indices in json.loads(path.read_text()).items()}
-
-
-def write_right_view_blocked(swept: dict[BenchmarkPath, Collection[int]], path: Path = RIGHT_VIEW_BLOCKED_PATH) -> None:
-    """Set the entries of ``swept`` in the file at ``path`` and keep its other entries; an absent file has none."""
-    kept = load_right_view_blocked(path) if path.exists() else {}
-    entries = {b.relative.as_posix(): sorted(v) for b, v in kept.items()}
-    entries |= {b.relative.as_posix(): sorted(v) for b, v in swept.items()}
-    path.write_text(json.dumps(dict(sorted(entries.items())), indent=1) + '\n')
 
 
 def select_episodes(bench: BenchmarkPath, count: int, pinned: list[int] | None, blocked: frozenset[int]) -> list[int]:
@@ -267,46 +259,3 @@ def select_episodes(bench: BenchmarkPath, count: int, pinned: list[int] | None, 
             f'select others ({RIGHT_VIEW_BLOCKED_PATH.name} lists them)'
         )
     return list(pinned)
-
-
-def in_camera_view(position: Any, forward: Any, up: Any, fovy_deg: float, aspect: float, point: Any) -> bool:
-    """Whether ``point`` is in front of the camera and inside its image; ``aspect`` is width over height."""
-    forward = np.asarray(forward, dtype=np.float64) / np.linalg.norm(forward)
-    up = np.asarray(up, dtype=np.float64)
-    up = up - forward * (up @ forward)
-    up /= np.linalg.norm(up)
-    right = np.cross(forward, up)
-    v = np.asarray(point, dtype=np.float64) - np.asarray(position, dtype=np.float64)
-    depth = v @ forward
-    half = np.tan(np.deg2rad(fovy_deg) / 2)
-    return bool(depth > 0 and abs(v @ up) <= half * depth and abs(v @ right) <= half * aspect * depth)
-
-
-# The geom groups a MuJoCo camera renders under MjvOption's defaults.
-RENDERED_GEOM_GROUPS = np.array([1, 1, 1, 0, 0, 0], dtype=np.uint8)
-# A hit this close to the grasp site is the surface the grasp site touches or reaches into.
-GRASP_SITE_SURFACE_MARGIN_M = 0.15
-_MAX_SEE_THROUGH_HITS = 64
-
-
-def first_occluding_geom(
-    model: mujoco.MjModel, data: mujoco.MjData, origin: Any, target: Any, see_through: Collection[int]
-) -> int | None:
-    """The first rendered geom outside ``see_through`` on the segment from ``origin`` to ``target``, or None.
-
-    A hit within GRASP_SITE_SURFACE_MARGIN_M of ``target`` does not count.
-    """
-    origin = np.asarray(origin, dtype=np.float64)
-    span = np.asarray(target, dtype=np.float64) - origin
-    length = float(np.linalg.norm(span))
-    unit = span / length
-    travelled = 0.0
-    geom = np.zeros(1, dtype=np.int32)
-    for _ in range(_MAX_SEE_THROUGH_HITS):
-        hit = mujoco.mj_ray(model, data, origin + unit * travelled, unit, RENDERED_GEOM_GROUPS, 1, -1, geom)
-        if hit < 0 or travelled + hit >= length - GRASP_SITE_SURFACE_MARGIN_M:
-            return None
-        if int(geom[0]) not in see_through:
-            return int(geom[0])
-        travelled += hit + 1e-4
-    raise RuntimeError(f'the ray from {origin} passed {_MAX_SEE_THROUGH_HITS} see-through geoms')

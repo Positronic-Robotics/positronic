@@ -3,7 +3,6 @@
 import types
 from pathlib import Path
 
-import mujoco
 import numpy as np
 import pytest
 from platform_client.evals import MOLMO_CONFIG, PUBLIC_EVALS, public_eval
@@ -304,61 +303,6 @@ def test_the_right_camera_jitter_takes_the_left_camera_ranges_in_the_robot_base_
     assert 7.5 < turns.max() <= _ORIENTATION_NOISE_DEG + 1e-9
 
 
-# A camera at x = 0 and a grasp site at x = 2, both 1 m up; each scene adds geoms on the line between them.
-_CAMERA, _SITE = np.array([0.0, 0.0, 1.0]), np.array([2.0, 0.0, 1.0])
-
-
-def _scene(**plates: str) -> tuple[mujoco.MjModel, mujoco.MjData]:
-    """A scene of thin plates across the camera-to-site line, by body name, as ``x`` or ``x group``."""
-    bodies = []
-    for name, spec in plates.items():
-        x, _, group = spec.partition(' ')
-        geom = f'<geom type="box" size="0.01 0.3 0.3" pos="{x} 0 1" group="{group or 0}"/>'
-        bodies.append(f'<body name="{name}">{geom}</body>')
-    model = mujoco.MjModel.from_xml_string(f'<mujoco><worldbody>{"".join(bodies)}</worldbody></mujoco>')
-    data = mujoco.MjData(model)
-    mujoco.mj_forward(model, data)
-    return model, data
-
-
-def _geom_of(model: mujoco.MjModel, body: str) -> int:
-    return int(model.body(body).geomadr[0])
-
-
-def test_a_wall_between_the_camera_and_the_grasp_site_occludes_it():
-    model, data = _scene(wall='1.0')
-    assert mapping.first_occluding_geom(model, data, _CAMERA, _SITE, set()) == _geom_of(model, 'wall')
-
-
-def test_the_camera_sees_through_the_geoms_it_is_told_to():
-    model, data = _scene(link='0.5', wall='1.0')
-    link = _geom_of(model, 'link')
-    assert mapping.first_occluding_geom(model, data, _CAMERA, _SITE, set()) == link
-    assert mapping.first_occluding_geom(model, data, _CAMERA, _SITE, {link}) == _geom_of(model, 'wall')
-    assert mapping.first_occluding_geom(model, *_scene(link='0.5')[1:], _CAMERA, _SITE, {link}) is None
-
-
-def test_a_surface_at_the_grasp_site_does_not_occlude_it_and_one_short_of_the_margin_does():
-    margin = mapping.GRASP_SITE_SURFACE_MARGIN_M
-    at_site = _scene(front=str(_SITE[0] - margin + 0.02))
-    short = _scene(front=str(_SITE[0] - margin - 0.04))
-    assert mapping.first_occluding_geom(*at_site, _CAMERA, _SITE, set()) is None
-    assert mapping.first_occluding_geom(*short, _CAMERA, _SITE, set()) == _geom_of(short[0], 'front')
-
-
-def test_a_geom_the_camera_does_not_render_does_not_occlude():
-    assert mapping.first_occluding_geom(*_scene(collision='1.0 3'), _CAMERA, _SITE, set()) is None
-
-
-@pytest.mark.parametrize(
-    ('point', 'aspect', 'seen'),
-    [((2, 0, 0), 1.0, True), ((2, 1.8, 0), 1.0, True), ((2, 2.2, 0), 1.0, False), ((2, 2.2, 0), 1.5, True),
-     ((2, 0, 2.2), 1.5, False), ((-2, 0, 0), 1.0, False)],
-)  # fmt: skip
-def test_a_point_is_in_view_when_it_is_in_front_of_the_camera_and_inside_its_image(point, aspect, seen):
-    assert mapping.in_camera_view((0, 0, 0), (1, 0, 0), (0, 0, 1), 90.0, aspect, point) is seen
-
-
 _BLOCKED = frozenset({3})
 
 
@@ -382,21 +326,6 @@ def test_a_pinned_blocked_episode_is_refused():
 def test_a_pinned_episode_out_of_range_is_refused():
     with pytest.raises(ValueError, match=r'episodes \[6\] out of range for the 6 episodes'):
         mapping.select_episodes(_HARD, 6, [0, 6], frozenset())
-
-
-def test_a_blocked_list_write_sets_its_benchmarks_and_keeps_the_others(tmp_path: Path):
-    path = tmp_path / 'blocked.json'
-    path.write_text('{}')
-    other = _HARD._replace(task_config='FrankaOpenHardBench')
-    mapping.write_right_view_blocked({_HARD: [4, 1], other: []}, path)
-    mapping.write_right_view_blocked({_HARD: [2]}, path)
-    assert mapping.load_right_view_blocked(path) == {_HARD: frozenset({2}), other: frozenset()}
-
-
-def test_a_blocked_list_write_creates_an_absent_file(tmp_path: Path):
-    path = tmp_path / 'blocked.json'
-    mapping.write_right_view_blocked({_HARD: [3, 1]}, path)
-    assert mapping.load_right_view_blocked(path) == {_HARD: frozenset({1, 3})}
 
 
 def test_no_public_eval_pins_an_episode_the_committed_list_blocks():
