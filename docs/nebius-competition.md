@@ -5,6 +5,18 @@ and the leaderboard.
 
 A coding agent can do most of the work. You approve the sign-in, and you choose where to push your image.
 
+## What you need
+
+You can install the commands, register and submit on any computer. To build and test your image, use a
+Linux machine with an x86-64 (amd64) processor, such as a [Nebius](https://nebius.com) virtual machine.
+
+- The platform runs only amd64 images. On a Mac with Apple silicon, or on another ARM machine, Docker
+  emulates amd64. With emulation, the test is very slow, and it can fail.
+- The test loads your model into memory. Give the machine enough memory and free disk space for your
+  model. For the π0.5 DROID example image, use 32 GB of memory and 100 GB of free disk space.
+- The first test needs no GPU. A GPU is necessary for [Test the image on a GPU](#test-the-image-on-a-gpu),
+  and to train your policy.
+
 ## Use a coding agent
 
 Paste this prompt into Claude Code, Codex or a similar agent:
@@ -25,7 +37,8 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 ```
 
 The agent needs git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, Docker and push access to a
-container registry, such as Docker Hub.
+container registry, such as Docker Hub. Run the agent on the machine that builds and tests the image, as
+[What you need](#what-you-need) says.
 
 ## Get started by hand
 
@@ -67,7 +80,8 @@ platform needs from the image, and how to build one from an example.
 ### Test the image
 
 Start the image with the network denied, and wait for its server. This test needs no GPU, and it uses
-no submission. `--pull=always` makes Docker test the image in your registry, not an older local copy.
+no submission. It needs an amd64 machine with enough memory, as [What you need](#what-you-need) says.
+`--pull=always` makes Docker test the image in your registry, not an older local copy.
 
 ```bash
 probe='import sys, urllib.error, urllib.request as u
@@ -81,7 +95,10 @@ except OSError as e:
     if not isinstance(reason, (ConnectionError, TimeoutError)):
         raise
     sys.exit(3)'
-if cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+arch=$(docker version -f '{{.Server.Arch}}')
+if [ "$arch" != amd64 ]; then
+  echo "Docker runs on '$arch'. Run this test on an amd64 machine."
+elif cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 900))
   while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
@@ -98,6 +115,9 @@ fi
 The loop calls the keepalive route every 5 s, for up to 900 s. A model loads more slowly on a CPU than on
 a GPU. The loop ends with one of these lines:
 
+- `Docker runs on '<arch>'`: Docker does not run amd64 images natively, and the test does not start. Use
+  an amd64 machine, as [What you need](#what-you-need) says. An empty `<arch>` means that Docker does not
+  answer.
 - `{"alive_seconds": ...}`: the server loaded its weights, and it serves on the CPU.
 - `the server exited`: read the log. A correct image loads its weights, and then it stops on the missing
   GPU.
@@ -279,7 +299,10 @@ except OSError as e:
     if not isinstance(reason, (ConnectionError, TimeoutError)):
         raise
     sys.exit(3)'
-if cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+arch=$(docker version -f '{{.Server.Arch}}')
+if [ "$arch" != amd64 ]; then
+  echo "Docker runs on '$arch'. Run this test on an amd64 machine."
+elif cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 600))
   while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
@@ -293,6 +316,7 @@ if cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN
 fi
 ```
 
+- `Docker runs on '<arch>'` means that the machine is not amd64. The test does not start.
 - The loop calls the route every 5 s, for up to 600 s. A slow model binds port 8000 late: FLUX 3 Action
   binds it after about 140 s.
 - The route answers `{"alive_seconds": ...}` when the model has loaded and warmed.
