@@ -39,7 +39,7 @@ from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, Te
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
-from positronic.tests.testing_inference import post, read_status, run_attended, wait
+from positronic.tests.testing_inference import CONSOLE_START_TIMEOUT_S, post, read_status, run_attended, wait
 
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}}
 
@@ -504,7 +504,7 @@ def served(start_server):
     return start
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(240.0)
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 def test_background_console_sends_remote_policy_rollouts_and_receives_their_results(served, make_mock_model, transport):
     model = make_mock_model([{}], {'model_name': 'console-policy'})
@@ -513,18 +513,20 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
     statuses = []
 
     def script(base, clock):
-        assert (yield from wait(lambda: read_status(base), clock, seconds=60))
+        yield from wait(lambda: read_status(base), clock, 'the console to answer', CONSOLE_START_TIMEOUT_S)
         for verdict in (Outcome.PASS, Outcome.FAIL):
             calls = model.call_count
             assert post(base, '/episode/start') == 200
-            assert (yield from wait(lambda calls=calls: model.call_count > calls, clock))
+            yield from wait(
+                lambda calls=calls: model.call_count > calls, clock, f'the {verdict} episode to call the model'
+            )
             assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
 
             def finished():
                 status = read_status(base)
                 return status is not None and status.run.phase is Phase.READY
 
-            assert (yield from wait(finished, clock))
+            yield from wait(finished, clock, f'the {verdict} episode to close')
         statuses.append(read_status(base))
 
     run_attended(policy, script)

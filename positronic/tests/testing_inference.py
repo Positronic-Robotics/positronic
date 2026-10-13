@@ -92,14 +92,21 @@ class PageOperator(pimm.ControlSystem):
         yield from self._script(clock)
 
 
-def wait(condition: Callable[[], Any], clock: pimm.Clock, seconds: float = 5.0) -> Iterator[pimm.Command]:
-    """Yield until ``condition`` holds or ``seconds`` pass on ``clock``, and return whether it held."""
+# On a loaded CI runner, one step can take over 10 s. A test's pytest timeout must exceed the sum of its waits'
+# budgets, or that timeout fires first and names no step.
+STEP_TIMEOUT_S = 30.0
+CONSOLE_START_TIMEOUT_S = 60.0
+
+
+def wait(
+    condition: Callable[[], Any], clock: pimm.Clock, what: str, seconds: float = STEP_TIMEOUT_S
+) -> Iterator[pimm.Command]:
+    """Yield until ``condition`` holds, and raise naming ``what`` when ``seconds`` pass on ``clock`` first."""
     deadline = clock.now() + seconds
     while not condition():
         if clock.now() > deadline:
-            return False
+            raise AssertionError(f'timed out after {seconds:g} s waiting for {what}')
         yield pimm.Sleep(0.02)
-    return True
 
 
 def run_attended(

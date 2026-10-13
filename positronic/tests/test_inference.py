@@ -10,6 +10,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
 from itertools import pairwise
+from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,8 @@ from positronic.policy.harness import Harness, Rollout
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 from positronic.tests.testing_inference import (
     ARM_STOPPED_SHORT,
+    CONSOLE_START_TIMEOUT_S,
+    STEP_TIMEOUT_S,
     PageOperator,
     ReadyDevices,
     free_port,
@@ -242,25 +245,28 @@ def _serve_station(port: int, output_dir: Path, marks: Path) -> None:
         )
 
 
-def _wait_for(condition: Callable[[], Any], what: str, timeout: float = 90.0) -> Any:
+def _wait_for(condition: Callable[[], Any], what: str, station: BaseProcess, timeout: float = STEP_TIMEOUT_S) -> Any:
+    """The first true value of ``condition``. Raise naming ``what`` when ``timeout`` passes or ``station`` exits."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if value := condition():
             return value
+        if not station.is_alive():
+            raise AssertionError(f'the station exited with code {station.exitcode} while waiting for {what}')
         time.sleep(0.1)
-    raise AssertionError(f'timed out waiting for {what}')
+    raise AssertionError(f'timed out after {timeout:g} s waiting for {what}')
 
 
-def _run_episode(base: str, marks: Path, number: int, verdict: Verdict) -> Episode:
+def _run_episode(base: str, marks: Path, number: int, verdict: Verdict, station: BaseProcess) -> Episode:
     httpx.post(f'{base}/episode/start').raise_for_status()
-    _wait_for((marks / f'episode-{number}').exists, f'episode {number} to open')
+    _wait_for((marks / f'episode-{number}').exists, f'episode {number} to open', station)
     httpx.post(f'{base}/episode/end', json=EndBody(verdict=verdict).model_dump(mode='json')).raise_for_status()
 
     def closed() -> Status | None:
         status = read_status(base)
         return status if status and status.run.phase is Phase.READY else None
 
-    return _wait_for(closed, f'episode {number} to close').run.episodes[number - 1]
+    return _wait_for(closed, f'episode {number} to close', station).run.episodes[number - 1]
 
 
 @pytest.mark.timeout(240.0)
@@ -275,7 +281,12 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     run = multiprocessing.get_context('spawn').Process(target=_serve_station, args=(port, output_dir, marks))
     run.start()
     try:
-        status = _wait_for(lambda: (s := read_status(base)) and s.cameras[0].live and s, 'the camera to be live')
+        status = _wait_for(
+            lambda: (s := read_status(base)) and s.cameras[0].live and s,
+            'the camera to be live',
+            run,
+            CONSOLE_START_TIMEOUT_S,
+        )
         assert status.run.configured == 'pick up the cube'
         with connect(f'ws://127.0.0.1:{port}/video/{keys.WRIST_IMAGE}', open_timeout=10) as tile:
             codec, _init, fragment = (tile.recv(timeout=10) for _ in range(3))
@@ -286,7 +297,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
         httpx.post(f'{base}/instruction', json=override).raise_for_status()
         last_frame = -1
         for number, verdict in enumerate((Outcome.PASS, Outcome.FAIL), start=1):
-            assert _run_episode(base, marks, number, verdict).outcome is verdict
+            assert _run_episode(base, marks, number, verdict, run).outcome is verdict
             dataset = LocalDataset(output_dir)
             assert len(dataset) == number
             camera = dataset[number - 1][keys.WRIST_IMAGE]
@@ -352,10 +363,10 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
         def script(clock):
             answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
             done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
-            assert (yield from wait(lambda: policy.observations, clock))
+            yield from wait(lambda: policy.observations, clock, 'the first observation')
             if retry:
                 done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
-            assert (yield from wait(answers[0].done, clock))
+            yield from wait(answers[0].done, clock, 'the harness to answer the rollout')
 
         drive_scheduler(world.start([harness, *embodiment.control_systems, PageOperator(script)]))
     assert policy.observations
@@ -367,7 +378,7 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
     assert [answer.result() for answer in answers] == [expected]
 
 
-@pytest.mark.timeout(120.0)
+@pytest.mark.timeout(240.0)
 def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     phases: list[Phase | None] = []
     statuses: list[Status | None] = []
@@ -375,14 +386,14 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
-        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, clock, 'the console to answer', CONSOLE_START_TIMEOUT_S)
         for number, verdict in verdicts:
             post(base, '/episode/start')
-            yield from wait((tmp_path / f'episode-{number}').exists, clock)
+            yield from wait((tmp_path / f'episode-{number}').exists, clock, f'episode {number} to open')
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
             post(base, '/episode/end', EndBody(verdict=verdict))
-            yield from wait(lambda: _phase(base) is Phase.READY, clock)
+            yield from wait(lambda: _phase(base) is Phase.READY, clock, f'episode {number} to close')
         statuses.append(read_status(base))
 
     run_attended(_MarkingPolicy(tmp_path), script)
@@ -393,7 +404,7 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
 
 
-@pytest.mark.timeout(120.0)
+@pytest.mark.timeout(240.0)
 def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp_path):
     """The rig takes a second for each move, so the harness answers each trial a second after its verdict. The next
     trial still runs until its own verdict."""
@@ -402,16 +413,16 @@ def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp
     verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
-        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, clock, 'the console to answer', CONSOLE_START_TIMEOUT_S)
         for number, verdict in verdicts:
             post(base, '/episode/start')
-            yield from wait((tmp_path / f'episode-{number}').exists, clock, seconds=10.0)
+            yield from wait((tmp_path / f'episode-{number}').exists, clock, f'episode {number} to open')
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
             post(base, '/episode/end', EndBody(verdict=verdict))
             yield pimm.Sleep(0.2)
             assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
-            yield from wait(lambda: _phase(base) is Phase.READY, clock, seconds=10.0)
+            yield from wait(lambda: _phase(base) is Phase.READY, clock, f'episode {number} to close')
         statuses.append(read_status(base))
 
     run_attended(_MarkingPolicy(tmp_path), script, move_s=1.0)
@@ -422,7 +433,7 @@ def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp
     assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
 
 
-@pytest.mark.timeout(120.0)
+@pytest.mark.timeout(240.0)
 def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_path):
     presses: list[int] = []
     statuses: list[Status | None] = []
@@ -432,14 +443,14 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
         return status is not None and bool(status.run.episodes) and status.run.episodes[-1].outcome is not None
 
     def script(base: str, clock: pimm.Clock):
-        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, clock, 'the console to answer', CONSOLE_START_TIMEOUT_S)
         presses.append(post(base, '/episode/start'))
-        yield from wait(lambda: ended(base), clock)
+        yield from wait(lambda: ended(base), clock, 'episode 1 to end on the failed home')
         statuses.append(read_status(base))
         presses.append(post(base, '/episode/start'))
-        yield from wait((tmp_path / 'episode-1').exists, clock)
+        yield from wait((tmp_path / 'episode-1').exists, clock, 'the retry to open')
         presses.append(post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
-        yield from wait(lambda: _phase(base) is Phase.READY, clock)
+        yield from wait(lambda: _phase(base) is Phase.READY, clock, 'the retry to close')
         statuses.append(read_status(base))
 
     run_attended(_MarkingPolicy(tmp_path), script, arm_failures=1)
@@ -464,16 +475,16 @@ def test_end_run_waits_for_the_open_episode_and_then_stops_the_whole_command(tmp
     run = multiprocessing.get_context('spawn').Process(target=_serve_station, args=(port, tmp_path / 'episodes', marks))
     run.start()
     try:
-        _wait_for(lambda: read_status(base), 'the console to answer')
+        _wait_for(lambda: read_status(base), 'the console to answer', run, CONSOLE_START_TIMEOUT_S)
         httpx.post(f'{base}/episode/start').raise_for_status()
-        _wait_for((marks / 'episode-1').exists, 'episode 1 to open')
+        _wait_for((marks / 'episode-1').exists, 'episode 1 to open', run)
         refused = httpx.post(f'{base}/run/end')
         assert refused.status_code == 409
         assert 'finish the episode first' in refused.json()['detail']
 
         verdict = EndBody(verdict=Outcome.PASS).model_dump(mode='json')
         httpx.post(f'{base}/episode/end', json=verdict).raise_for_status()
-        _wait_for(lambda: (s := read_status(base)) and s.run.phase is Phase.READY, 'episode 1 to close')
+        _wait_for(lambda: (s := read_status(base)) and s.run.phase is Phase.READY, 'episode 1 to close', run)
         with connect(f'ws://127.0.0.1:{port}/video/{keys.WRIST_IMAGE}', open_timeout=10) as tile:
             assert isinstance(tile.recv(timeout=10), str)
             ended = httpx.post(f'{base}/run/end')
