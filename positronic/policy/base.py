@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping
+from enum import StrEnum
 from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
 
@@ -42,16 +43,25 @@ Obs = Mapping[str, Any]
 Commands = Mapping[str, Any]
 
 
+class Exit(StrEnum):
+    """How a policy ends its episode."""
+
+    # The policy is done. This claims nothing about success.
+    END = 'end'
+
+
 @dataclass
 class Step:
-    """Commands to emit now and the next requested call time.
+    """Commands to emit now, the next requested call time, and an optional exit.
 
-    Any submitted call becoming ready may resume the policy sooner, including at the same clock time.
+    Any submitted call becoming ready may resume the policy sooner, including at the same clock time. The harness
+    emits the commands of a step with an exit, and then ends the episode.
     """
 
     # TODO: Allow selecting which answers can wake the policy early, alongside its time deadline.
     commands: Commands
     resume_at_ns: int
+    exit: Exit | None = None
 
 
 P = ParamSpec('P')

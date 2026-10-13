@@ -26,7 +26,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyRun, Runtime, Step
-from positronic.policy.harness import Rollout
+from positronic.policy.harness import EpisodeEnd, Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 
@@ -105,7 +105,7 @@ class _EpisodeStub(pimm.ControlSystem):
 
     def __init__(self):
         self.asked: list[Task] = []
-        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict](self)
+        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, EpisodeEnd](self)
 
     def run(self, should_stop, clock):
         while not should_stop.value:
@@ -113,7 +113,7 @@ class _EpisodeStub(pimm.ControlSystem):
                 self.asked.append(call.request.task)
                 yield pimm.Sleep(0.01)  # an episode takes a round to run
                 assert not list(self.perform_task.incoming()), 'a task was asked for while one was running'
-                call.set_result({})
+                call.set_result(EpisodeEnd({}, None))
             yield pimm.Sleep(0.01)
 
 
@@ -135,10 +135,10 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
 class _ScriptedEpisodes(pimm.ControlSystem):
     """Stands in for the harness: records each task it is asked for, and answers with the next outcome."""
 
-    def __init__(self, outcomes: list[dict | Exception]):
+    def __init__(self, outcomes: list[EpisodeEnd | Exception]):
         self.asked: list[Task] = []
         self._outcomes = list(outcomes)
-        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict](self)
+        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, EpisodeEnd](self)
 
     def run(self, should_stop, clock):
         while not should_stop.value:
@@ -164,11 +164,14 @@ def _tasks(count: int) -> list[Task]:
     return [Task(instruction_source='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(count)]
 
 
+_ENDED = EpisodeEnd({eval_keys.TERMINATED: False}, None)
+
+
 @pytest.mark.timeout(3.0)
 def test_a_signal_error_runs_its_task_again():
     """Each task gets its own count: a signal error on the second task after one on the first ends nothing."""
     tasks = _tasks(2)
-    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), {}, pimm.SignalError('camera lost'), {}])
+    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), _ENDED, pimm.SignalError('camera lost'), _ENDED])
     _drive(tasks, episodes)
 
     assert episodes.asked == [tasks[0], tasks[0], tasks[1], tasks[1]]

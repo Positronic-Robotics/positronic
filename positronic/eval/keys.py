@@ -1,9 +1,10 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
-# The verdict a trial writes in its episode's statics: the harness's ``TERMINATED``, False when the budget ran out,
-# and the env's ``SUCCESS``, which a failure can leave absent.
+# How a trial ended, in its episode's statics: the harness's ``TERMINATED``, False when the budget ran out, the env's
+# ``SUCCESS``, which a failure can leave absent, and ``ENDED_BY``, who ended it when the env did not.
 from eval_vocabulary.episode import ENDED_BY as ENDED_BY
 from eval_vocabulary.episode import ENDED_BY_OPERATOR as ENDED_BY_OPERATOR
+from eval_vocabulary.episode import ENDED_BY_POLICY as ENDED_BY_POLICY
 from eval_vocabulary.episode import SUCCESS as SUCCESS
 from eval_vocabulary.episode import TERMINATED as TERMINATED
 

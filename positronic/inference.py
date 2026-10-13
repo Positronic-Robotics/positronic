@@ -24,7 +24,7 @@ from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.web import StationConsole
 from positronic.policy import Policy
-from positronic.policy.harness import Harness, Rollout
+from positronic.policy.harness import EpisodeEnd, Harness, Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
@@ -45,8 +45,8 @@ class KeyboardOperator(KeyboardControl):
         self._next_task = next_task
         self._policy = policy
         self._output_path = output_path
-        self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
-        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self._pending: pimm.calls.Answer[EpisodeEnd] | None = None
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, EpisodeEnd](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def _each_round(self, key: str | None) -> None:
@@ -106,9 +106,10 @@ def web(
 ):
     """Run one hardware embodiment attended from a browser, at ``http://{host}:{port}/``.
 
-    The page shows each camera, starts an episode on the trial ``next_task`` makes, and ends it with a pass or fail
-    verdict. The run ends on the page's End run or on Ctrl-C. The policy's metadata is read once before the page opens,
-    so a policy that cannot answer stops the run there.
+    The page shows each camera, starts an episode on the trial ``next_task`` makes, and ends it with a verdict or a
+    discard. After the policy ends an episode, the page asks for the verdict. The run ends on the page's End run or on
+    Ctrl-C. The policy's metadata is read once before the page opens, so a policy that cannot answer stops the run
+    there.
     """
     if embodiment.simulated:
         raise ValueError('the web console drives hardware in real time; run a simulated embodiment as `sim`')

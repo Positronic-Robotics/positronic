@@ -33,7 +33,9 @@ from .ds import internal
 def eval_table():
     """The episode table for an eval run: only what every eval writes, nothing task-specific.
 
-    ``eval.success`` is absent on an episode that never reached its terminal, so it defaults to False;
+    ``eval.success`` is the env's report. It is absent, and the cell blank, when no env reported: on an episode that
+    never reached its terminal, on an episode that a console or a policy END ended, and on a rig with no env.
+    ``eval.outcome`` is the verdict that a console wrote, and an episode without one reads as unscored.
     ``eval.terminated`` separates a task the policy failed from one whose budget ran out.
     """
     return {
@@ -41,13 +43,13 @@ def eval_table():
         '__duration__': C(label='Duration', format='%.2f sec'),
         keys.TASK: C(label='Task', filter=True),
         eval_keys.SUCCESS: C(
-            label='Pass',
-            default=False,
+            label='Env report',
             renderer=RendererConfig(
                 type='badge',
                 options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
             ),
         ),
+        OUTCOME: C(label='Outcome', default=ABSENT, renderer=OUTCOME_BADGE, filter=True, align='center'),
         eval_keys.TERMINATED: C(label='Ended', default=False),
     }
 

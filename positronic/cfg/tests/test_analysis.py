@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from eval_vocabulary.outcome import OUTCOME, Outcome
 
 from pimm.time import RECEIVED_WORLD
 from positronic import keys
@@ -124,3 +125,50 @@ def test_item_counting_samples_the_recording_clock(timeline):
         ),
     })
     assert analysis.calculate_units(episode) == 1
+
+
+@pytest.mark.parametrize('outcome', [Outcome.DISCARDED, Outcome.UNSCORED, None])
+def test_an_episode_nobody_scored_is_neither_a_success_nor_a_failure(outcome):
+    signal = DummySignal([0, 10_000_000_000], [0, 1], timelines=(HARNESS_WORLD,))
+    statics = {} if outcome is None else {OUTCOME: outcome}
+    unscored = EpisodeContainer({'state': signal, 'checkpoint': 'test', 'model': 'test', **statics})
+    failed = EpisodeContainer({'state': signal, 'checkpoint': 'test', 'model': 'test', OUTCOME: Outcome.FAIL})
+
+    assert analysis.unified_success_bool(unscored) is None
+    assert analysis.unified_success_bool(failed) is False
+    assert analysis.checkpoint_table().group_fn([unscored, failed])['failures'] == 1
+    assert analysis.phail_status(unscored) == analysis.UNSCORED
+    assert analysis.phail_status(failed) == 'Fail'
+
+
+def _attended(outcome: Outcome | None, items: int) -> EpisodeContainer:
+    """A 10 s attended episode that delivered ``items`` of 2, with ``outcome`` in ``eval.outcome``."""
+    episode = {
+        'state': DummySignal([0, 10_000_000_000], [0, 1], timelines=(HARNESS_WORLD,)),
+        'checkpoint': 'test',
+        'model': 'test',
+        'variant': '',
+        'eval.object': 'cup',
+        eval_keys.DURATION: 10.0,
+        'eval.successful_items': items,
+        'eval.total_items': 2,
+    }
+    if outcome is not None:
+        episode[OUTCOME] = outcome
+    container = EpisodeContainer(episode)
+    return EpisodeContainer({**episode, 'status': analysis.phail_status(container)})
+
+
+def test_every_aggregate_leaves_out_an_episode_nobody_scored():
+    scored = [_attended(Outcome.SUCCESS, 2), _attended(Outcome.FAIL, 0)]
+    unscored = [_attended(Outcome.DISCARDED, 2), _attended(Outcome.UNSCORED, 2), _attended(None, 2)]
+
+    assert analysis.scored_episodes(scored + unscored) == scored
+    checkpoint = analysis.checkpoint_table().group_fn(scored + unscored)
+    assert checkpoint == analysis.checkpoint_table().group_fn(scored)
+    assert (checkpoint['count'], checkpoint['failures'], checkpoint['success_rate']) == (2, 1, 50)
+    assert checkpoint['UPH'] == pytest.approx(2 / (20 / 3600))
+    assert checkpoint['MTBF'] == 20
+    leaderboard = analysis.phail_leaderboard().group_fn(scored + unscored)
+    assert leaderboard == analysis.phail_leaderboard().group_fn(scored)
+    assert (leaderboard['count'], leaderboard['completion'], leaderboard['MTBF']) == (2, 50, 20 / 60)

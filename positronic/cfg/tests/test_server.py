@@ -11,6 +11,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
+from positronic.eval import keys as eval_keys
 from positronic.server.positronic_server import filter_spelling
 from positronic.server.rollouts import NO_RATE, NO_STAGE, StageCell
 
@@ -153,6 +154,15 @@ def test_a_rung_below_the_target_does_not_count_as_reaching_it():
     row = group.group_fn([_row(Outcome.FAIL, StageCell(LADDER.index(below), STAGE_LABELS[below]))])
 
     assert row['at_target'] == 0
+
+
+def test_the_eval_table_shows_the_verdict_beside_the_env_report_and_no_report_as_blank():
+    """A sim run records the env's report in `eval.success`, and a console records the verdict in `eval.outcome`."""
+    table = cfg_server.eval_table.instantiate()
+
+    assert {eval_keys.SUCCESS, OUTCOME} <= set(table)
+    assert table[OUTCOME].default == Outcome.UNSCORED
+    assert table[eval_keys.SUCCESS].default is None
 
 
 def test_an_episode_nobody_scored_reads_as_unscored():

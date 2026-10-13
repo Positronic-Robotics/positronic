@@ -1,6 +1,7 @@
 """What a station console holds about its run: the trial the next Start sends, the operator's instruction
 override, and each episode so far."""
 
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -8,41 +9,47 @@ from dataclasses import replace
 from enum import StrEnum
 from typing import Any, Literal
 
+from eval_vocabulary.outcome import OUTCOME, Outcome
 from pydantic import BaseModel
 
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
+from positronic.policy.harness import EpisodeEnd
+
+logger = logging.getLogger(__name__)
 
 
-class Outcome(StrEnum):
-    """How an episode ended. The operator gives the first two, and the harness gives the others."""
+class Unrecorded(StrEnum):
+    """How an episode ended when it recorded nothing. Each other ending is an ``Outcome`` of ``eval_vocabulary``."""
 
-    PASS = 'pass'
-    FAIL = 'fail'
-    TIMEOUT = 'timeout'
     ERROR = 'error'
 
 
-Verdict = Literal[Outcome.PASS, Outcome.FAIL]
+# What the judge gives an episode: success, fail, or a discard.
+Verdict = Literal[Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED]
+# How an episode ended. The console gives ``OUT_OF_TIME`` when the time limit ends an episode.
+Ending = Verdict | Literal[Outcome.OUT_OF_TIME] | Unrecorded
 
 
 def terminal_payload(verdict: Verdict) -> dict[str, Any]:
     """The ``done`` payload that ends an episode with ``verdict``. The harness records it in the episode's statics."""
-    return {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: verdict is Outcome.PASS}
+    return {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, OUTCOME: verdict}
 
 
-def outcome_of(result: dict[str, Any]) -> Outcome:
-    """The outcome that the harness's answer to an episode carries."""
-    if not result[eval_keys.TERMINATED]:
-        return Outcome.TIMEOUT
-    return Outcome.PASS if result[eval_keys.SUCCESS] else Outcome.FAIL
+def outcome_of(terminal: dict[str, Any]) -> Verdict | Literal[Outcome.OUT_OF_TIME] | None:
+    """The outcome that the harness's terminal payload carries. ``None`` when the judge must still give it."""
+    if not terminal[eval_keys.TERMINATED]:
+        return Outcome.OUT_OF_TIME
+    return terminal.get(OUTCOME)
 
 
 class Phase(StrEnum):
     READY = 'ready'
     RUNNING = 'running'
-    # The operator gave a verdict, and the harness has not answered yet.
+    # The judge ended the episode, and the harness has not answered yet.
     ENDING = 'ending'
+    # The episode ended with no outcome, as on a policy END. The judge gives it before the next Start.
+    VERDICT_PENDING = 'verdict_pending'
     # The operator ended the run. The console stops, and that stops the World.
     RUN_ENDED = 'run_ended'
 
@@ -54,10 +61,11 @@ class Episode(BaseModel):
     instruction: str
     overridden: bool
     started_at: float
-    # Both stay ``None`` while the episode is open.
+    # ``ended_at`` stays ``None`` until the harness answers, and ``outcome`` until the episode has one.
     ended_at: float | None = None
-    outcome: Outcome | None = None
-    # The error that failed an ``ERROR`` episode, as the last line of its traceback.
+    outcome: Ending | None = None
+    # The error that failed an ``ERROR`` episode, or that stopped the console from writing the outcome into the
+    # episode's recording, as the last line of its traceback.
     error: str | None = None
 
 
@@ -84,15 +92,21 @@ class Station:
 
     ``next_task`` makes a trial before it is needed, so the page shows the instruction that the next Start sends.
     A trial must carry that instruction as a string: one known only after the trial's reset has nothing to show.
+    ``record(uid, outcome)`` writes ``outcome`` into the recording ``uid``. The station calls it for an outcome that it
+    gives after the harness answered.
     """
 
-    def __init__(self, next_task: Callable[[], Task]):
+    def __init__(self, next_task: Callable[[], Task], record: Callable[[str, Outcome], None]):
         self._next_task = next_task
+        self._record = record
         self._trial = self._draw()
         self._override: str | None = None
         self._override_since: int | None = None
         self._episodes: list[Episode] = []
-        self._ending = False
+        # The verdict that ends the open episode, from its press until the harness answers.
+        self._ending_with: Verdict | None = None
+        # The recording of the episode that waits for a verdict. ``None`` when that episode recorded nothing.
+        self._pending_uid: str | None = None
         self._run_ended = False
         # Starts at the wall clock in microseconds, so a restarted console starts above the one before it.
         self._generation = time.time_ns() // 1000
@@ -106,6 +120,10 @@ class Station:
 
     def _is_open(self) -> bool:
         return bool(self._episodes) and self._episodes[-1].outcome is None
+
+    def _awaits_verdict(self) -> bool:
+        """The harness answered the open episode with no outcome."""
+        return self._is_open() and self._episodes[-1].ended_at is not None
 
     def set_override(self, text: str | None) -> None:
         """Send ``text`` in place of the trial's instruction from the next Start on. ``None`` or the trial's own
@@ -123,6 +141,8 @@ class Station:
         with self._lock:
             if self._run_ended:
                 raise Refused('the run has ended')
+            if self._awaits_verdict():
+                raise Refused('give the verdict on the last episode first')
             if self._is_open():
                 raise Refused('an episode is already running')
             trial, self._trial = self._trial, self._draw()
@@ -140,20 +160,54 @@ class Station:
             return replace(trial, meta=meta)
 
     def end(self, verdict: Verdict) -> dict[str, Any]:
-        """Mark the open episode as ending, and return the ``done`` payload that ends it with ``verdict``."""
+        """Mark the running episode as ending, and return the ``done`` payload that ends it with ``verdict``."""
         with self._lock:
+            if self._awaits_verdict():
+                raise Refused('the episode has ended: give its verdict')
             if not self._is_open():
                 raise Refused('no episode is running')
-            self._ending = True
+            self._ending_with = verdict
             self._generation += 1
             return terminal_payload(verdict)
 
-    def close(self, outcome: Outcome, now: float, error: str | None = None) -> None:
-        """Record how the open episode ended."""
+    def close(self, end: EpisodeEnd, now: float) -> None:
+        """Close the open episode on the harness's answer.
+
+        An answer with no outcome takes the verdict pressed for this episode, or waits for the judge's verdict. The
+        station writes an outcome that the recording does not hold, and the episode's row shows a write that failed.
+        """
+        with self._lock:
+            outcome = outcome_of(end.terminal) or self._ending_with
+            episode = self._episodes[-1]
+            episode.ended_at, episode.outcome = now, outcome
+            self._ending_with = None
+            if outcome is None:
+                self._pending_uid = end.uid
+            elif OUTCOME not in end.terminal and end.uid is not None:
+                # rules-allow: swallowed-error — the recording is complete, and the row shows the error
+                try:
+                    self._record(end.uid, outcome)
+                except (OSError, ValueError) as exc:
+                    logger.error(f'The outcome {outcome} of episode {episode.number} is not in its recording: {exc}')
+                    episode.error = f'{type(exc).__name__}: {exc}'
+            self._generation += 1
+
+    def fail(self, error: str, now: float) -> None:
+        """Close the open episode, which the harness failed with ``error``."""
         with self._lock:
             episode = self._episodes[-1]
-            episode.ended_at, episode.outcome, episode.error = now, outcome, error
-            self._ending = False
+            episode.ended_at, episode.outcome, episode.error = now, Unrecorded.ERROR, error
+            self._ending_with = None
+            self._generation += 1
+
+    def judge(self, verdict: Verdict) -> None:
+        """Give ``verdict`` to the episode that waits for a verdict, and write it into that episode's recording."""
+        with self._lock:
+            if not self._awaits_verdict():
+                raise Refused('no episode waits for a verdict')
+            if self._pending_uid is not None:
+                self._record(self._pending_uid, verdict)
+            self._episodes[-1].outcome, self._pending_uid = verdict, None
             self._generation += 1
 
     def end_run(self) -> None:
@@ -172,7 +226,9 @@ class Station:
     def _phase(self) -> Phase:
         if self._run_ended:
             return Phase.RUN_ENDED
-        if self._ending:
+        if self._awaits_verdict():
+            return Phase.VERDICT_PENDING
+        if self._ending_with is not None:
             return Phase.ENDING
         return Phase.RUNNING if self._is_open() else Phase.READY
 

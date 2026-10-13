@@ -8,6 +8,7 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
+from positronic.policy.base import Exit, Step
 from positronic.policy.codecs import (
     ACTION,
     LEROBOT_FEATURES,
@@ -193,6 +194,21 @@ def test_operator_precedence():
     assert result['encoded_by_a'] is True
     assert result['encoded_by_b'] is True
     assert result['encoded_by_c'] is True
+
+
+class _DoublingCodec(Codec):
+    def _decode_single(self, data):
+        return {name: 2 * value for name, value in data.items()}
+
+
+def test_a_wrapped_step_with_commands_keeps_its_wake_up_time_and_exit():
+    def run():
+        yield
+        yield Step({'value': 1}, 123, exit=Exit.END)
+
+    inner = run()
+    next(inner)
+    assert _DoublingCodec().wrap(inner).send({}) == Step({'value': 2}, 123, exit=Exit.END)
 
 
 class TestCodecComposition:

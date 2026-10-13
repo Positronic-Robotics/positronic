@@ -1,10 +1,12 @@
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime
 from functools import partial
 
 import configuronic as cfn
 import numpy as np
 import pos3
+from eval_vocabulary.outcome import ABSENT, OUTCOME, Outcome, is_scored
 from positronic_model_server import keys as offboard_keys
 
 import positronic.cfg.ds as base_cfg
@@ -141,17 +143,21 @@ def uph(ep: Episode) -> float | None:
 # Unified configs (real + sim)
 ########################
 
+# What a table shows for an episode that nobody scored. It is not a failure.
+UNSCORED = 'Unscored'
+
 
 def is_sim_episode(ep: Episode) -> bool:
     return 'stacking_success' in ep
 
 
-def unified_success_bool(ep: Episode) -> bool:
-    if 'eval.outcome' in ep:
-        return ep['eval.outcome'] == 'Success'
+def unified_success_bool(ep: Episode) -> bool | None:
+    """Whether the episode succeeded. ``None`` for an episode that nobody scored."""
+    if OUTCOME in ep:
+        return ep[OUTCOME] == Outcome.SUCCESS if is_scored(ep[OUTCOME]) else None
     if 'stacking_success' in ep:
         return success(ep)
-    return False
+    return None
 
 
 def unified_units_display(ep: Episode) -> str:
@@ -220,9 +226,14 @@ def episodes_table():
         'checkpoint': C(label='Checkpoint', filter=True),
         'success_bool': C(
             label='Pass',
+            default=UNSCORED,
             renderer=RendererConfig(
                 type='badge',
-                options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
+                options={
+                    True: {'label': 'Pass', 'variant': 'success'},
+                    False: {'label': 'Fail', 'variant': 'danger'},
+                    UNSCORED: {'label': UNSCORED, 'variant': 'default'},
+                },
             ),
         ),
         'units_display': C(label='Units'),
@@ -232,12 +243,19 @@ def episodes_table():
     }
 
 
+def scored_episodes(episodes: Sequence[Episode]) -> list[Episode]:
+    """The episodes that every aggregate counts: a sim episode that analysis scores, or an episode with a verdict in
+    ``eval.outcome``. A discarded episode, or one that nobody scored, counts in no aggregate."""
+    return [ep for ep in episodes if 'stacking_success' in ep or is_scored(ep.get(OUTCOME, ABSENT))]
+
+
 @cfn.config()
 def checkpoint_table():
     def group_fn(episodes: list[Episode]):
-        count = len(episodes)
+        scored = scored_episodes(episodes)
+        count = len(scored)
         total_duration = 0.0
-        for ep in episodes:
+        for ep in scored:
             timelines = ep.timelines
             # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
             timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
@@ -245,15 +263,15 @@ def checkpoint_table():
             total_duration += (last - first) / 1e9
 
         if 'stacking_success' in episodes[0]:
-            successful_count = sum(1 for ep in episodes if success(ep))
+            successful_count = sum(1 for ep in scored if success(ep))
             total_units = successful_count
             failed_count = count - successful_count
             success_rate = 100 * successful_count / count if count > 0 else 0
         else:
-            total_units = sum(ep.get('eval.successful_items', 0) for ep in episodes)
-            total_possible = sum(ep.get('eval.total_items', 0) for ep in episodes)
+            total_units = sum(ep.get('eval.successful_items', 0) for ep in scored)
+            total_possible = sum(ep.get('eval.total_items', 0) for ep in scored)
             success_rate = 100 * total_units / total_possible if total_possible > 0 else 0
-            failed_count = sum(1 for ep in episodes if ep.get('eval.outcome') != 'Success')
+            failed_count = sum(1 for ep in scored if ep[OUTCOME] != Outcome.SUCCESS)
 
         return {
             'checkpoint': episodes[0]['checkpoint'],
@@ -462,15 +480,16 @@ def stacking_checkpoint_table():
     """Grouped table by checkpoint with UPH and MTBF metrics."""
 
     def group_fn(episodes: list[Episode]):
-        count = len(episodes)
-        total_duration = sum(_effective_duration('success_time', ep) for ep in episodes)
-        successful = [ep for ep in episodes if ep['success']]
-        failed = [ep for ep in episodes if not ep['success']]
+        scored = scored_episodes(episodes)
+        count = len(scored)
+        total_duration = sum(_effective_duration('success_time', ep) for ep in scored)
+        successful = [ep for ep in scored if ep['success']]
+        failed = [ep for ep in scored if not ep['success']]
 
         successful_count = len(successful)
         failed_count = len(failed)
 
-        total_units = sum(ep['units'] for ep in episodes)
+        total_units = sum(ep['units'] for ep in scored)
         uph_value = total_units / (total_duration / 3600) if total_duration > 0 else 0
 
         # MTBF: total duration / number of failures
@@ -484,7 +503,7 @@ def stacking_checkpoint_table():
         avg_success_time = np.mean(success_times) if success_times else None
 
         # Average max stacking success
-        max_successes = [ep['max_stacking_success'] for ep in episodes if ep['max_stacking_success'] is not None]
+        max_successes = [ep['max_stacking_success'] for ep in scored if ep['max_stacking_success'] is not None]
         avg_max_success = np.mean(max_successes) if max_successes else None
 
         result = {
@@ -613,6 +632,7 @@ PHAIL_OUTCOME_BADGE = RendererConfig(
         'Pass': {'label': 'Pass', 'variant': 'success'},
         'Fail': {'label': 'Fail', 'variant': 'danger'},
         'Safety': {'label': 'Safety', 'variant': 'warning'},
+        UNSCORED: {'label': UNSCORED, 'variant': 'default'},
     },
 )
 
@@ -622,10 +642,12 @@ def phail_model(ep: Episode) -> str:
 
 
 def phail_status(ep: Episode) -> str:
-    outcome = ep.get('eval.outcome', '')
-    if outcome == 'Success':
+    outcome = ep.get(OUTCOME, ABSENT)
+    if not is_scored(outcome):
+        return UNSCORED
+    if outcome == Outcome.SUCCESS:
         return 'Pass'
-    if outcome == 'Safety':
+    if outcome == Outcome.SAFETY:
         return 'Safety'
     return 'Fail'
 
@@ -904,13 +926,14 @@ def phail_episodes_table():
 @cfn.config()
 def phail_leaderboard():
     def group_fn(episodes: list[Episode]):
-        count = len(episodes)
-        total_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in episodes)
-        failed_count = sum(1 for ep in episodes if ep['status'] != 'Pass')
+        scored = scored_episodes(episodes)
+        count = len(scored)
+        total_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in scored)
+        failed_count = sum(1 for ep in scored if ep['status'] != 'Pass')
 
         # Per-object aggregation: compute UPH and completion per object type, then average equally.
         by_object: dict[str, list[Episode]] = defaultdict(list)
-        for ep in episodes:
+        for ep in scored:
             by_object[ep['eval.object']].append(ep)
 
         object_uphs = []

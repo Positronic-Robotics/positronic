@@ -18,6 +18,7 @@ import httpx
 import numpy as np
 import pos3
 import pytest
+from eval_vocabulary.outcome import OUTCOME, Outcome
 from websockets.sync.client import connect
 
 import pimm
@@ -31,11 +32,11 @@ from positronic.drivers import keyboard
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
-from positronic.gui.station import Episode, Outcome, Phase, Verdict
-from positronic.gui.web import EndBody, InstructionBody, StationConsole, Status
+from positronic.gui.station import Episode, Phase, Unrecorded, Verdict
+from positronic.gui.web import InstructionBody, StationConsole, Status, VerdictBody
 from positronic.inference import KeyboardOperator, real, web
 from positronic.policy import Policy
-from positronic.policy.base import Step
+from positronic.policy.base import Exit, Step
 from positronic.policy.harness import Harness, Rollout
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 from positronic.tests.testing_inference import (
@@ -254,7 +255,7 @@ def _wait_for(condition: Callable[[], Any], what: str, timeout: float = 90.0) ->
 def _run_episode(base: str, marks: Path, number: int, verdict: Verdict) -> Episode:
     httpx.post(f'{base}/episode/start').raise_for_status()
     _wait_for((marks / f'episode-{number}').exists, f'episode {number} to open')
-    httpx.post(f'{base}/episode/end', json=EndBody(verdict=verdict).model_dump(mode='json')).raise_for_status()
+    httpx.post(f'{base}/episode/end', json=VerdictBody(verdict=verdict).model_dump(mode='json')).raise_for_status()
 
     def closed() -> Status | None:
         status = read_status(base)
@@ -285,7 +286,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
         override = InstructionBody(override='pick up the red cube').model_dump()
         httpx.post(f'{base}/instruction', json=override).raise_for_status()
         last_frame = -1
-        for number, verdict in enumerate((Outcome.PASS, Outcome.FAIL), start=1):
+        for number, verdict in enumerate((Outcome.SUCCESS, Outcome.FAIL), start=1):
             assert _run_episode(base, marks, number, verdict).outcome is verdict
             dataset = LocalDataset(output_dir)
             assert len(dataset) == number
@@ -327,10 +328,10 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     assert first[keys.TASK] == 'pick up the red cube'
     assert first[eval_keys.INSTRUCTION_OVERRIDDEN] is True
     assert first[eval_keys.TRIAL_INDEX] == 0
-    assert first[eval_keys.SUCCESS] is True
+    assert first[OUTCOME] == Outcome.SUCCESS
     assert first[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_OPERATOR
     assert second[eval_keys.TRIAL_INDEX] == 1
-    assert second[eval_keys.SUCCESS] is False
+    assert second[OUTCOME] == Outcome.FAIL
 
 
 def _phase(base: str) -> Phase | None:
@@ -364,7 +365,7 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
         if retry
         else {eval_keys.TERMINATED: False}
     )
-    assert [answer.result() for answer in answers] == [expected]
+    assert [answer.result().terminal for answer in answers] == [expected]
 
 
 @pytest.mark.timeout(120.0)
@@ -372,7 +373,7 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     phases: list[Phase | None] = []
     statuses: list[Status | None] = []
 
-    verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
+    verdicts: list[tuple[int, Verdict]] = [(1, Outcome.SUCCESS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
         yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
@@ -381,7 +382,7 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
             yield from wait((tmp_path / f'episode-{number}').exists, clock)
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
-            post(base, '/episode/end', EndBody(verdict=verdict))
+            post(base, '/episode/end', VerdictBody(verdict=verdict))
             yield from wait(lambda: _phase(base) is Phase.READY, clock)
         statuses.append(read_status(base))
 
@@ -390,7 +391,39 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     assert phases == [Phase.RUNNING, Phase.RUNNING]
     [status] = statuses
     assert status is not None
-    assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
+    assert [episode.outcome for episode in status.run.episodes] == [Outcome.SUCCESS, Outcome.FAIL]
+
+
+class _EndingPolicy(Policy):
+    """Ends its episode with ``Exit.END`` on its second step."""
+
+    def run(self, runtime):
+        yield
+        yield Step({}, runtime.time_ns + 100_000_000)
+        while True:
+            yield Step({}, runtime.time_ns, exit=Exit.END)
+
+
+@pytest.mark.timeout(120.0)
+def test_a_policy_end_waits_for_the_verdict_before_the_next_start():
+    presses: list[int] = []
+    statuses: list[Status | None] = []
+
+    def script(base: str, clock: pimm.Clock):
+        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        presses.append(post(base, '/episode/start'))
+        yield from wait(lambda: _phase(base) is Phase.VERDICT_PENDING, clock)
+        presses.append(post(base, '/episode/start'))
+        presses.append(post(base, '/episode/verdict', VerdictBody(verdict=Outcome.FAIL)))
+        yield from wait(lambda: _phase(base) is Phase.READY, clock)
+        statuses.append(read_status(base))
+
+    run_attended(_EndingPolicy(), script)
+
+    assert presses == [200, 409, 200]
+    [status] = statuses
+    assert status is not None
+    assert [episode.outcome for episode in status.run.episodes] == [Outcome.FAIL]
 
 
 @pytest.mark.timeout(120.0)
@@ -399,7 +432,7 @@ def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp
     trial still runs until its own verdict."""
     phases: list[Phase | None] = []
     statuses: list[Status | None] = []
-    verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
+    verdicts: list[tuple[int, Verdict]] = [(1, Outcome.SUCCESS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
         yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
@@ -408,9 +441,9 @@ def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp
             yield from wait((tmp_path / f'episode-{number}').exists, clock, seconds=10.0)
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
-            post(base, '/episode/end', EndBody(verdict=verdict))
+            post(base, '/episode/end', VerdictBody(verdict=verdict))
             yield pimm.Sleep(0.2)
-            assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
+            assert post(base, '/episode/end', VerdictBody(verdict=verdict)) == 200
             yield from wait(lambda: _phase(base) is Phase.READY, clock, seconds=10.0)
         statuses.append(read_status(base))
 
@@ -419,7 +452,7 @@ def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp
     assert phases == [Phase.RUNNING, Phase.RUNNING]
     [status] = statuses
     assert status is not None
-    assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
+    assert [episode.outcome for episode in status.run.episodes] == [Outcome.SUCCESS, Outcome.FAIL]
 
 
 @pytest.mark.timeout(120.0)
@@ -438,7 +471,7 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
         statuses.append(read_status(base))
         presses.append(post(base, '/episode/start'))
         yield from wait((tmp_path / 'episode-1').exists, clock)
-        presses.append(post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
+        presses.append(post(base, '/episode/end', VerdictBody(verdict=Outcome.SUCCESS)))
         yield from wait(lambda: _phase(base) is Phase.READY, clock)
         statuses.append(read_status(base))
 
@@ -449,8 +482,8 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
     assert failed is not None and retried is not None
     assert failed.run.phase is Phase.READY
     [episode] = failed.run.episodes
-    assert (episode.outcome, episode.error) == (Outcome.ERROR, f'RuntimeError: {ARM_STOPPED_SHORT}')
-    assert [episode.outcome for episode in retried.run.episodes] == [Outcome.ERROR, Outcome.PASS]
+    assert (episode.outcome, episode.error) == (Unrecorded.ERROR, f'RuntimeError: {ARM_STOPPED_SHORT}')
+    assert [episode.outcome for episode in retried.run.episodes] == [Unrecorded.ERROR, Outcome.SUCCESS]
 
 
 @pytest.mark.timeout(240.0)
@@ -471,7 +504,7 @@ def test_end_run_waits_for_the_open_episode_and_then_stops_the_whole_command(tmp
         assert refused.status_code == 409
         assert 'finish the episode first' in refused.json()['detail']
 
-        verdict = EndBody(verdict=Outcome.PASS).model_dump(mode='json')
+        verdict = VerdictBody(verdict=Outcome.SUCCESS).model_dump(mode='json')
         httpx.post(f'{base}/episode/end', json=verdict).raise_for_status()
         _wait_for(lambda: (s := read_status(base)) and s.run.phase is Phase.READY, 'episode 1 to close')
         with connect(f'ws://127.0.0.1:{port}/video/{keys.WRIST_IMAGE}', open_timeout=10) as tile:

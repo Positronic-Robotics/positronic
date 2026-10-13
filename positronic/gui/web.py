@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 import uvicorn
+from eval_vocabulary.outcome import OUTCOME, Outcome
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.staticfiles import StaticFiles
@@ -25,12 +26,13 @@ from starlette.requests import HTTPConnection
 
 import pimm
 from positronic import keys
+from positronic.dataset.local_dataset import load_dataset
 from positronic.eval import Task
-from positronic.gui.station import Outcome, Refused, RunView, Station, Verdict, outcome_of
+from positronic.gui.station import Refused, RunView, Station, Verdict
 from positronic.gui.video_stream import VideoStream, codec_string
 from positronic.policy import Policy
 from positronic.policy import keys as policy_keys
-from positronic.policy.harness import Rollout
+from positronic.policy.harness import EpisodeEnd, Rollout
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,7 @@ class InstructionBody(BaseModel):
     override: str | None
 
 
-class EndBody(BaseModel):
+class VerdictBody(BaseModel):
     verdict: Verdict
 
 
@@ -107,7 +109,8 @@ class StationConsole(pimm.ControlSystem):
 
     Connect ``perform_task`` and ``done`` to Harness, and each camera to ``cameras``. Run this system in a
     background process so preview encoding can progress independently of policy execution. The policy and
-    tasks must be picklable; each rollout sends its own copy of the policy definition.
+    tasks must be picklable; each rollout sends its own copy of the policy definition. An outcome that the console
+    gives after the harness answered goes into the episode's edit log in ``output_path``.
     """
 
     def __init__(
@@ -121,18 +124,22 @@ class StationConsole(pimm.ControlSystem):
         self._host = host
         self._port = port
         self.cameras = pimm.ReceiverDict(self)
-        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, EpisodeEnd](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
         # The open episode's answer.
-        self._episode: pimm.calls.Answer[dict[str, Any]] | None = None
+        self._episode: pimm.calls.Answer[EpisodeEnd] | None = None
 
     @staticmethod
     def _raise_if_stopped(server_thread: threading.Thread) -> None:
         if not server_thread.is_alive():
             raise RuntimeError('The station console web server stopped')
 
+    def _record_outcome(self, uid: str, outcome: Outcome) -> None:
+        assert self._output_path is not None, 'only an episode that records has a uid'
+        load_dataset(self._output_path).set_static(uid, {OUTCOME: outcome})
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        station = Station(self._next_task)
+        station = Station(self._next_task, self._record_outcome)
         feeds = {name: CameraFeed() for name in self.cameras}
         tasks: queue.SimpleQueue[Task] = queue.SimpleQueue()
         app = self.build_app(station, feeds, tasks.put, clock, should_stop)
@@ -186,12 +193,12 @@ class StationConsole(pimm.ControlSystem):
             return
         episode, self._episode = self._episode, None
         try:  # rules-allow: swallowed-error — the page shows the error, and the operator decides whether to retry
-            result = episode.result()
+            end = episode.result()
         except Exception as exc:
             logger.exception('Episode failed')
-            station.close(Outcome.ERROR, clock.now(), error=''.join(traceback.format_exception_only(exc)).strip())
+            station.fail(''.join(traceback.format_exception_only(exc)).strip(), clock.now())
         else:
-            station.close(outcome_of(result), clock.now())
+            station.close(end, clock.now())
 
     def build_app(
         self,
@@ -241,8 +248,13 @@ class StationConsole(pimm.ControlSystem):
             return status()
 
         @app.post('/episode/end')
-        async def end(body: EndBody) -> Status:
+        async def end(body: VerdictBody) -> Status:
             self.done.emit(station.end(body.verdict))
+            return status()
+
+        @app.post('/episode/verdict')
+        async def verdict(body: VerdictBody) -> Status:
+            station.judge(body.verdict)
             return status()
 
         @app.post('/run/end')

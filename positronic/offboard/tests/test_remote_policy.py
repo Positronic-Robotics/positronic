@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from eval_vocabulary.outcome import Outcome
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server import protocol, spec
 from positronic_wire import grpc, registry, websocket, wire
@@ -19,8 +20,8 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Transform3D
-from positronic.gui.station import Outcome, Phase
-from positronic.gui.web import EndBody
+from positronic.gui.station import Phase
+from positronic.gui.web import VerdictBody
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
@@ -514,11 +515,11 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
 
     def script(base, clock):
         assert (yield from wait(lambda: read_status(base), clock, seconds=60))
-        for verdict in (Outcome.PASS, Outcome.FAIL):
+        for verdict in (Outcome.SUCCESS, Outcome.FAIL):
             calls = model.call_count
             assert post(base, '/episode/start') == 200
             assert (yield from wait(lambda calls=calls: model.call_count > calls, clock))
-            assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
+            assert post(base, '/episode/end', VerdictBody(verdict=verdict)) == 200
 
             def finished():
                 status = read_status(base)
@@ -531,7 +532,7 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
 
     [status] = statuses
     assert status is not None
-    assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
+    assert [episode.outcome for episode in status.run.episodes] == [Outcome.SUCCESS, Outcome.FAIL]
     assert model.end_session.call_count == 3  # Metadata and two completed episodes.
 
 

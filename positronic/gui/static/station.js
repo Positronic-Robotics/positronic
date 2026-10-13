@@ -6,20 +6,33 @@ const EDIT_DELAY_MS = 300;
 
 // Every name this page shares with the console's server, and the only place the page spells one. The server's
 // side is the routes of StationConsole.build_app, the models Status, RunView, Episode, CameraView, InstructionBody
-// and EndBody, the enums Phase and Outcome, and the `detail` of a FastAPI error answer.
+// and VerdictBody, the enum Phase, the outcomes in Ending, and the `detail` of a FastAPI error answer.
 const ROUTES = {
   status: '/status',
   instruction: '/instruction',
   start: '/episode/start',
   end: '/episode/end',
+  verdict: '/episode/verdict',
   endRun: '/run/end',
   video: '/video',
 };
-const PHASE = { ready: 'ready', running: 'running', ending: 'ending', runEnded: 'run_ended' };
-const OUTCOME = { pass: 'pass', fail: 'fail', timeout: 'timeout', error: 'error' };
+const PHASE = {
+  ready: 'ready',
+  running: 'running',
+  ending: 'ending',
+  verdictPending: 'verdict_pending',
+  runEnded: 'run_ended',
+};
+const OUTCOME = {
+  success: 'Success',
+  fail: 'Fail',
+  outOfTime: 'Ran out of time',
+  discarded: 'Discarded',
+  error: 'error',
+};
 const REQUEST = {
   instruction: (text) => ({ override: text }),
-  end: (verdict) => ({ verdict: verdict }),
+  verdict: (verdict) => ({ verdict: verdict }),
 };
 const errorDetail = (answer) => answer.detail;
 
@@ -69,25 +82,29 @@ const PHASE_VIEW = {
   [PHASE.ready]: { text: 'Ready', css: 'ready' },
   [PHASE.running]: { text: 'Running', css: 'running', doing: 'recording' },
   [PHASE.ending]: { text: 'Ending', css: 'ending', doing: 'ending' },
+  [PHASE.verdictPending]: { text: 'Verdict pending', css: 'pending', doing: 'ended · give the verdict' },
   [PHASE.runEnded]: { text: 'Run ended', css: 'run-ended' },
 };
 const OUTCOME_VIEW = {
-  [OUTCOME.pass]: { label: `${ICON.check}Success`, text: 'success', css: 'pass' },
+  [OUTCOME.success]: { label: `${ICON.check}Success`, text: 'success', css: 'pass' },
   [OUTCOME.fail]: { label: `${ICON.cross}Fail`, text: 'fail', css: 'fail' },
-  [OUTCOME.timeout]: { label: 'Timed out', text: 'timed out', css: 'timeout' },
+  [OUTCOME.outOfTime]: { label: 'Out of time', text: 'ran out of time', css: 'timeout' },
+  [OUTCOME.discarded]: { label: 'Discarded', text: 'discarded', css: 'discarded' },
   [OUTCOME.error]: { label: 'Error', text: 'error', css: 'error' },
 };
 // An open episode's row shows the phase in place of an outcome.
 const OPEN_VIEW = {
   [PHASE.running]: { label: '<span class="dot"></span>Running', css: 'running' },
   [PHASE.ending]: { label: 'Ending', css: 'ending' },
+  [PHASE.verdictPending]: { label: 'Verdict?', css: 'pending' },
 };
 
 const $ = (id) => document.getElementById(id);
 const textarea = $('instruction');
 const verdictButtons = [
-  [$('finish-pass'), OUTCOME.pass],
+  [$('finish-pass'), OUTCOME.success],
   [$('finish-fail'), OUTCOME.fail],
+  [$('discard'), OUTCOME.discarded],
 ];
 
 let current = null;
@@ -105,7 +122,8 @@ function clock(seconds) {
   return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-const isOpen = (phase) => phase === PHASE.running || phase === PHASE.ending;
+const isRecording = (phase) => phase === PHASE.running || phase === PHASE.ending;
+const isOpen = (phase) => isRecording(phase) || phase === PHASE.verdictPending;
 const runHasEnded = () => current !== null && current.phase === PHASE.runEnded;
 const openEpisode = (status) => (isOpen(status.phase) ? status.episodes[status.episodes.length - 1] : null);
 const nextNumber = (status) => status.episodes.length + 1;
@@ -284,9 +302,10 @@ function renderEpisodes(status) {
   $('ep-legend').hidden = episodes.length === 0;
   let sum = '<span>0 episodes</span>';
   if (episodes.length > 0) {
-    sum = `<span class="n-pass">Success: ${count(OUTCOME.pass)}</span>`;
+    sum = `<span class="n-pass">Success: ${count(OUTCOME.success)}</span>`;
     sum += `<span class="n-fail">${count(OUTCOME.fail)} fail</span>`;
-    if (count(OUTCOME.timeout)) sum += `<span>${count(OUTCOME.timeout)} timed out</span>`;
+    if (count(OUTCOME.outOfTime)) sum += `<span>${count(OUTCOME.outOfTime)} ran out of time</span>`;
+    if (count(OUTCOME.discarded)) sum += `<span>${count(OUTCOME.discarded)} discarded</span>`;
     if (count(OUTCOME.error)) sum += `<span>${count(OUTCOME.error)} error</span>`;
   }
   $('ep-sum').innerHTML = sum;
@@ -320,7 +339,7 @@ function renderTiles(status) {
     if (cameras.length === 0) grid.innerHTML = '<div class="cams-empty">This embodiment has no cameras.</div>';
     for (const camera of cameras) tiles.set(camera.name, makeTile(grid, camera));
   }
-  const recording = isOpen(status.phase);
+  const recording = isRecording(status.phase);
   for (const camera of cameras) {
     const tile = tiles.get(camera.name);
     if (!tile) continue;
@@ -478,7 +497,10 @@ $('start').addEventListener('click', () =>
 );
 
 for (const [button, verdict] of verdictButtons) {
-  button.addEventListener('click', () => act(() => post(ROUTES.end, REQUEST.end(verdict))));
+  button.addEventListener('click', () => {
+    const route = current.phase === PHASE.verdictPending ? ROUTES.verdict : ROUTES.end;
+    act(() => post(route, REQUEST.verdict(verdict)));
+  });
 }
 
 $('end-run').addEventListener('click', () => {
