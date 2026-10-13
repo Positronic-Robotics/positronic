@@ -6,7 +6,7 @@
 #   HF_TOKEN=<a read token> make -C docker build-serve-gr00t-n17-droid        # positro/gr00t-n17-droid:local
 #   docker buildx build --platform linux/amd64 --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
 #       -f docker/Dockerfile.serve-gr00t-n17-droid -t docker.io/<you>/gr00t-n17-droid:v1 --push .
-#   docker run --rm --network none docker.io/<you>/gr00t-n17-droid:v1        # the offline pre-flight
+#   docker run --rm --network none --gpus all docker.io/<you>/gr00t-n17-droid:v1        # the offline pre-flight
 #
 # Source and weights use `COPY --link`; source edits reuse the dependency and weight layers.
 #

@@ -7,7 +7,7 @@
 #   make -C docker build-serve-flux3-action        # positro/flux3-action:local
 #   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
 #       -f docker/Dockerfile.serve-flux3-action -t docker.io/<you>/flux3-action:v1 --push .
-#   docker run --rm --network none docker.io/<you>/flux3-action:v1        # the offline pre-flight
+#   docker run --rm --network none --gpus all docker.io/<you>/flux3-action:v1        # the offline pre-flight
 #
 # The layers go from the least often changed to the most: base with BFL's environment, positronic's
 # dependencies, source, weights. The source and the weights come in through `COPY --link`, and no step runs
@@ -29,9 +29,11 @@ ARG FLUX_BASE_REVISION=62878e2925e59b7a89ec14463ce89932624c490d
 # digest: a moved tag would download the weights again and push them as new layers. One large file per stage, and so
 # per layer. FOOTGUN: a registry can refuse a layer of 30 GB, and the DiT is one 13.9 GB file that cannot be split.
 # `variants/gd` is the guidance-distilled BF16 package.
+# The hub version is the version in BFL's lock at `FLUX_ACTION_REV`. Offline, BFL's loader finds a commit only
+# through the `trees/` listing in the cache, and an older hub writes no listing.
 FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS hub
 ENV HF_HOME=/opt/hf-home
-RUN pip install --no-cache-dir huggingface_hub==0.35.3
+RUN pip install --no-cache-dir huggingface_hub==1.30.0
 
 FROM hub AS dit
 ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER
