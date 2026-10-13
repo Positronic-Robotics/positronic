@@ -541,7 +541,7 @@ def robolab_label(episode: Path) -> Label | None:
     """RoboLab's labeler: a trial ends as in `molmo_label`, and the `subtask` signal gives its progress.
 
     A `SubtaskAchieved` event sits at the first sample of the signal, and at each sample where the count of
-    subtasks completed or the score changes. So the label's `subtask_score` is the score of the last sample.
+    subtasks completed or the score changes. The label's `subtask_score` is then the score of the last sample.
     A trial whose signal holds no sample has no label.
     """
     trial = _recorded_sim_trial(episode, BENCHMARK_TASK)

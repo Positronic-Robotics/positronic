@@ -30,8 +30,7 @@ LEGACY_TIME_COLUMN = 'timestamp'
 # The column of a signal file that holds each sample's value.
 VALUE_COLUMN = 'value'
 
-# RoboLab's progress on the task at each step, as the vector [status, completed, total, score]: the subtasks
-# completed, the subtasks of the task, and RoboLab's score of the progress, from 0 to 1.
+# RoboLab's progress at each step, as the vector [status, completed, total, score], with the score from 0 to 1.
 SUBTASK_SIGNAL = 'subtask'
 SUBTASK_COMPLETED_INDEX = 1
 SUBTASK_TOTAL_INDEX = 2
