@@ -247,7 +247,9 @@ holds each value below. The platform runs every image under them.
 ## Test the image before you submit
 
 Run it with the network denied, and wait for its server. This reproduces the platform's own
-conditions and needs no GPU:
+conditions and needs no GPU. It needs an amd64 machine: on an ARM machine, such as a Mac with Apple
+silicon, Docker emulates amd64, and the model does not load in the time limit. The test prints
+`Docker runs on '<arch>'` and does not start there.
 
 ```bash
 probe='import sys, urllib.error, urllib.request as u
@@ -261,7 +263,10 @@ except OSError as e:
     if not isinstance(reason, (ConnectionError, TimeoutError)):
         raise
     sys.exit(3)'
-if cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+arch=$(docker version -f '{{.Server.Arch}}')
+if [ "$arch" != amd64 ]; then
+  echo "Docker runs on '$arch'. Run this test on an amd64 machine."
+elif cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 900))
   while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
@@ -312,7 +317,10 @@ except OSError as e:
     if not isinstance(reason, (ConnectionError, TimeoutError)):
         raise
     sys.exit(3)'
-if cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+arch=$(docker version -f '{{.Server.Arch}}')
+if [ "$arch" != amd64 ]; then
+  echo "Docker runs on '$arch'. Run this test on an amd64 machine."
+elif cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 600))
   while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
