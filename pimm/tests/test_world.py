@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import traceback
+import types
 from collections.abc import Generator, Iterator
 from contextlib import nullcontext
 from functools import partial
@@ -260,6 +261,16 @@ class DummySMValue(SMCompliant):
 
     def read_from_buffer(self, buffer: memoryview | bytes) -> None:
         self.value = struct.unpack('d', buffer[:8])[0]
+
+
+@pytest.fixture
+def unimportable_in_the_manager(monkeypatch) -> type[DummySMValue]:
+    """A payload type whose module exists in this process only, so a spawned manager process cannot import it."""
+    module = types.ModuleType('pimm_tests_module_the_manager_lacks')
+    value_type = type('Value', (DummySMValue,), {'__module__': module.__name__})
+    vars(module)['Value'] = value_type
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    return value_type
 
 
 class TestQueueEmitter:
@@ -673,6 +684,18 @@ class TestWorld:
 
             emitter.emit('again', time=Time(capture=3))
             assert self._read(reader).data == 'again'
+
+    @pytest.mark.parametrize('transport', [TransportMode.QUEUE, TransportMode.SHARED_MEMORY])
+    def test_mp_pipes_carry_a_payload_whose_module_the_manager_cannot_import(
+        self, unimportable_in_the_manager, transport
+    ):
+        """A manager that imports no payload module cannot deadlock on two first imports of one package."""
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world, transport)
+            emitter.emit(unimportable_in_the_manager(2.5))
+
+            data = self._read(reader).data
+            assert (type(data), data.value) == (unimportable_in_the_manager, pytest.approx(2.5))
 
 
 class TestWorldControlSystems:

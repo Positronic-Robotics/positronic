@@ -21,6 +21,7 @@ from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.context import BaseContext
 from multiprocessing.managers import SyncManager
+from multiprocessing.reduction import ForkingPickler
 from multiprocessing.synchronize import Event as EventClass
 from multiprocessing.synchronize import Lock as LockClass
 from queue import Empty, Full, Queue
@@ -69,6 +70,12 @@ class TransportMode(IntEnum):
 
 
 MAX_PICKLED_TIME_BYTES = 4096
+
+
+def _pickled(obj: object) -> bytes:
+    # FOOTGUN: a manager unpickles each request on the thread of its client. Two threads that import a package and its
+    # submodule for the first time can deadlock, so a manager queue holds bytes only.
+    return bytes(ForkingPickler.dumps(obj))
 
 
 class _SharedTime:
@@ -127,13 +134,13 @@ class MultiprocessEmitter(SignalEmitter[T]):
     def __init__(
         self,
         clock: Clock,
-        queues: list[Queue],
+        queues: list[Queue[bytes]],
         mode_value: ctypes.c_int,
         lock: LockClass,
         time_value: _SharedTime,
         up_values: list[ctypes.c_bool],
         error_flags: list[ctypes.c_bool],
-        sm_queues: list[Queue],
+        sm_queues: list[Queue[bytes]],
         *,
         forced_mode: TransportMode | None = None,
     ):
@@ -182,7 +189,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
         return self._mode
 
     def _emit_queue(self, data: T, time: Time) -> bool:
-        msg = Message(data, time)
+        msg = _pickled(Message(data, time))
         success = False
 
         for q in self._queues:
@@ -213,8 +220,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
 
             # support multiple receivers
             for sm_q in self._sm_queues:
-                metadata = (self._sm.name, buf_size, self._data_type, data.instantiation_params())
-                sm_q.put(metadata)
+                sm_q.put(_pickled((self._sm.name, buf_size, self._data_type, data.instantiation_params())))
         else:
             assert self._expected_buf_size == buf_size, (
                 f'Buffer size mismatch: expected {self._expected_buf_size}, got {buf_size}. '
@@ -277,14 +283,14 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
     def __init__(
         self,
-        queue: Queue,
+        queue: Queue[bytes],
         clock: Clock,
         mode_value: ctypes.c_int,
         lock: LockClass,
         time_value: _SharedTime,
         up_value: ctypes.c_bool,
         error_flag: ctypes.c_bool,
-        sm_queue: Queue,
+        sm_queue: Queue[bytes],
         *,
         forced_mode: TransportMode | None = None,
     ):
@@ -322,9 +328,9 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
     def _read_queue(self) -> Message[T] | None:
         try:
-            message = self._queue.get_nowait()
+            message: Message[T] = pickle.loads(self._queue.get_nowait())
         except Empty:
-            message = None
+            pass
         else:
             self._last_queue_message = message._received(self._clock)
             if self._mode is TransportMode.UNDECIDED and not isinstance(message.data, SignalError):
@@ -341,7 +347,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
             return True
 
         try:
-            sm_name, buf_size, data_type, instantiation_params = self._sm_queue.get_nowait()
+            sm_name, buf_size, data_type, instantiation_params = pickle.loads(self._sm_queue.get_nowait())
         except Empty:
             return False
 
