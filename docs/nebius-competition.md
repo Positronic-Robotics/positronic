@@ -14,8 +14,11 @@ Linux machine with an x86-64 (amd64) processor, such as a [Nebius](https://nebiu
   emulates amd64. With emulation, the test is very slow, and it can fail.
 - The test loads your model into memory. Give the machine enough memory and free disk space for your
   model. For the π0.5 DROID example image, use 32 GB of memory and 100 GB of free disk space.
-- The first test needs no GPU. A GPU is necessary for [Test the image on a GPU](#test-the-image-on-a-gpu),
-  and to train your policy.
+  [What the example images use](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#what-the-example-images-use)
+  gives the values for each example image.
+- The first test needs no GPU. Some images stop on the missing GPU before they load their weights.
+  [Test the image on a GPU](#test-the-image-on-a-gpu) shows that the model loads and serves, as on the
+  platform. You also need a GPU to train your policy.
 
 ## Use a coding agent
 
@@ -119,8 +122,9 @@ a GPU. The loop ends with one of these lines:
   an amd64 machine, as [What you need](#what-you-need) says. An empty `<arch>` means that Docker does not
   answer.
 - `{"alive_seconds": ...}`: the server loaded its weights, and it serves on the CPU.
-- `the server exited`: read the log. A correct image loads its weights, and then it stops on the missing
-  GPU.
+- `the server exited`: read the log. An image that needs a GPU stops with an error about CUDA. The GR00T
+  N1.7, FLUX 3 Action and Cosmos3-Nano example images stop in this way, before they load their weights.
+  For such an image, run [Test the image on a GPU](#test-the-image-on-a-gpu) before you submit.
 - `the server answered HTTP <code>`: the server runs, but it refused the request. A `401` means that the
   server does not accept the token in `AUTH_TOKEN`. On the platform, this fails the run with
   `policy_setup_crash`.
@@ -320,6 +324,8 @@ fi
 - The loop calls the route every 5 s, for up to 600 s. A slow model binds port 8000 late: FLUX 3 Action
   binds it after about 140 s.
 - The route answers `{"alive_seconds": ...}` when the model has loaded and warmed.
+- The platform gives the image 40448 MiB of GPU memory. A larger GPU can hide a model that does not fit.
+  While the server runs, `nvidia-smi --query-gpu=memory.used --format=csv` shows the memory that it uses.
 - `the server exited` means that the server crashed. The log shows why.
 - `the server answered HTTP <code>` means that the server refused the request. A `401` means that it does
   not accept the token in `AUTH_TOKEN`.

@@ -61,6 +61,26 @@ Other models:
 - **A model of your own.** Write an inference server ([Connect your model](connect-your-model.md))
   and hold the image to the rules in [Life of a submission](#life-of-a-submission).
 
+### What the example images use
+
+Each value is from one run of the `latest` image on 2026-10-13. The GPU run used one `3g.40gb` slice of an
+H100, the network denied and the container limits of the platform. The run without a GPU is the first test
+in [Test the image before you submit](#test-the-image-before-you-submit). 1 GB is 10^9 bytes.
+
+| Image | Compressed | Disk that the pull used | GPU memory, peak | First keepalive answer on the GPU | Test without a GPU |
+|---|---|---|---|---|---|
+| `positro/pi05-droid` | 22.2 GB | 44.6 GB | 8575 MiB | 143 s | serves; 19.6 GB of RAM, peak |
+| `positro/gr00t-n17-droid` | 23.8 GB | 37.9 GB | 6659 MiB | 81 s | stops on the missing GPU |
+| `positro/molmoact2-droid` | 24.4 GB | 30.8 GB | 11627 MiB | 128 s | serves; 11.9 GB of RAM, peak |
+| `positro/flux3-action` | 25.4 GB | 36.4 GB | 33255 MiB | 80 s | stops on the missing GPU |
+| `positro/cosmos3-nano` | 37.1 GB | 54.1 GB | 32373 MiB | 208 s | stops on the missing GPU |
+
+- The time starts when the container starts. It does not include the pull.
+- The `flux3-action` row is from an image with the `trees/` listings in its hub cache, which the
+  [recipe](../docker/Dockerfile.serve-flux3-action) writes. Its weights were in the page cache, so a first
+  start takes longer than 80 s.
+- The slice has 40448 MiB. FLUX 3 Action leaves 7193 MiB of it free, and Cosmos3-Nano leaves 8075 MiB.
+
 ### Three traps in the `positro/*` bases
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
@@ -290,13 +310,14 @@ The probe exits with code 3 when the port is closed or the server does not answe
 loop then waits quietly. Any other failure stops the loop at once and shows its error: an error from
 `docker exec`, for example no Python at `/positronic/.venv/bin/python`, or a Python traceback.
 
-In a correct image, the server pins its checkpoint, starts the model process, and reads the
-weights from the image. The GR00T recipe then fails on the missing GPU with
-`Flash Attention 2 is not available on CPU`. The openpi and MolmoAct2 recipes load the model on the
-CPU and serve. For the FLUX 3 Action recipe, BFL's server exits on the missing GPU, and the server
-reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano recipe, NVIDIA's server exits
-the same way, and the server reports `Cosmos3 backend exited with code 1`. Everything you control is then
-correct. The log must not show `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
+In a correct image, the server pins its checkpoint and starts the model process. The openpi and
+MolmoAct2 recipes then load the model on the CPU and serve. The GR00T recipe stops on the missing GPU
+with `Flash Attention 2 is not available on CPU`. For the FLUX 3 Action recipe, BFL's server exits on
+the missing GPU, and the server reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano
+recipe, NVIDIA's server exits the same way, and the server reports `Cosmos3 backend exited with code 1`.
+These three stop before they read the weights, so this test does not show that the weights load offline.
+For them, run the test on a GPU below. The log must not show `NameResolutionError`, `dns error` or
+`OfflineModeIsEnabled`.
 albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints
 `A new version of the following files was downloaded` when `transformers` copies the model's code
 into its module cache; no download occurs.
