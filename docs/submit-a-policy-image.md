@@ -338,7 +338,9 @@ albumentations prints a `UserWarning` about fetching its version; ignore it. Mol
 into its module cache; no download occurs.
 
 On a machine with a GPU, serve it with the network denied, and wait until the keepalive route
-answers from inside the container with the token. The container gets one GPU, GPU 0, as on the platform:
+answers from inside the container with the token. The container gets one GPU, GPU 0, as on the
+platform. Use a GPU that MIG does not split: on a split GPU, `device=0` gives the container every slice
+of GPU 0:
 
 ```bash
 docker network create --internal noegress
