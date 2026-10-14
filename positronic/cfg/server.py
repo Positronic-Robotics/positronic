@@ -34,7 +34,7 @@ def eval_table():
     """The episode table for an eval run: only what every eval writes, nothing task-specific.
 
     ``eval.success`` is the env's report. It is absent, and the cell blank, when no env reported: on an episode that
-    never reached its terminal, on an episode that a console or a policy END ended, and on a rig with no env.
+    never reached its terminal, on an episode that a console or a policy ended, and on a rig with no env.
     ``eval.outcome`` is the verdict that a console wrote, and an episode without one reads as unscored.
     ``eval.terminated`` separates a task the policy failed from one whose budget ran out.
     """

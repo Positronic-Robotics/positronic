@@ -24,7 +24,7 @@ from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Exit, Obs, Policy, PolicyRun
+from positronic.policy.base import Answer, Obs, Policy, PolicyRun
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.utils import flatten_dict, frozen_view
 
@@ -98,6 +98,14 @@ class _EpisodeTelemetry:
         telemetry.force_flush()
 
 
+@dataclass(frozen=True)
+class _PolicyEnded:
+    """What a policy run returned, and the episode time at which it returned."""
+
+    end: eval_keys.PolicyEnd
+    time_ns: int
+
+
 class Harness(pimm.ControlSystem):
     """Run episode lifecycles and emit each policy step's commands immediately.
 
@@ -111,9 +119,9 @@ class Harness(pimm.ControlSystem):
     them. Each pass resets the sampling deadline. Harness appends commands after emission and waits for writer
     finalization before answering the rollout. A rollout without an output path, or ``record=False``, writes nothing.
 
-    Each ``perform_task`` call runs one ``Rollout`` until its deadline, a truthy ``done`` signal, or a step with
-    ``Exit.END``. A ``done`` or an END after the deadline counts as a timeout. When a ``done`` and an END come in
-    one iteration, the ``done`` ends the episode. Its answer is an ``EpisodeEnd``, or the error that failed the
+    Each ``perform_task`` call runs one ``Rollout`` until its deadline, a truthy ``done`` signal, or the return of
+    the policy run. A ``done`` or a return after the deadline counts as a timeout. When a ``done`` and a return come
+    in one iteration, the ``done`` ends the episode. Its answer is an ``EpisodeEnd``, or the error that failed the
     episode. The caller decides whether that error ends the run. Between episodes, manual commands pass through.
     Before each episode the harness asks every device to be ready, then prepares what the task names. A device
     that answers ready with an error fails the episode before it starts. A ``pimm.SignalError`` on an
@@ -294,9 +302,9 @@ class Harness(pimm.ControlSystem):
 
     def _step(
         self, task: Task, runtime: Executor, policy_run: PolicyRun, due_ns: int | None
-    ) -> tuple[int | None, int | None]:
-        """Read sensors, call the policy, emit commands, and return its clamped next wake-up time and the time at
-        which it returned ``Exit.END``. Both are ``None`` without an observation, and the second without an END.
+    ) -> int | _PolicyEnded | None:
+        """Read sensors, call the policy, emit commands, and return its clamped next wake-up time. Return a
+        ``_PolicyEnded`` when the policy run returns, and ``None`` without an observation.
 
         ``due_ns`` is the wake-up time the previous step returned, or ``None`` for the first step. The step span
         records the step's durations.
@@ -311,12 +319,14 @@ class Harness(pimm.ControlSystem):
                 policy_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
                 if obs is None:
-                    return None, None
+                    return None
                 runtime.start_tick()
                 started_at_ns = runtime.time_ns
-                step = policy_run.send(obs)
+                try:
+                    step = policy_run.send(obs)
+                except StopIteration as end:
+                    return _PolicyEnded(eval_keys.PolicyEnd(end.value), runtime.time_ns)
                 assert step is not None, 'a policy must yield a Step for each observation'
-                ended_ns = runtime.time_ns if step.exit is Exit.END else None
                 emit_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (emit_started_ns - policy_started_ns) / 1e6
                 self._telemetry.step()
@@ -329,20 +339,24 @@ class Harness(pimm.ControlSystem):
                 telemetry.set_attrs(span, **step_ms)
         period_sec = (step.resume_at_ns - started_at_ns) / 1e9
         period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, period_sec))
-        return started_at_ns + round(period_sec * 1e9), ended_ns
+        return started_at_ns + round(period_sec * 1e9)
 
     @staticmethod
     def _trial_terminal(
-        done: pimm.Message[dict] | None, ended_ns: int | None, now_ns: int, deadline_ns: int | None, timeline: str
+        done: pimm.Message[dict] | None, ended: _PolicyEnded | None, now_ns: int, deadline_ns: int | None, timeline: str
     ) -> dict[str, Any] | None:
-        """A done signal or an END after the deadline counts as a timeout, not a success.
+        """A done signal or a policy end after the deadline counts as a timeout, not a success.
 
-        The env's ``done`` is its ground truth, so it ends the episode in place of an END of the same iteration.
+        The env's ``done`` is its ground truth, so it ends the episode in place of a policy end of the same iteration.
         """
         if done is not None and done.data and (deadline_ns is None or done.time[timeline] <= deadline_ns):
             return {**done.data, eval_keys.TERMINATED: True}
-        if ended_ns is not None and (deadline_ns is None or ended_ns <= deadline_ns):
-            return {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.TERMINATED: True}
+        if ended is not None and (deadline_ns is None or ended.time_ns <= deadline_ns):
+            return {
+                eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY,
+                eval_keys.POLICY_END: ended.end.value,
+                eval_keys.TERMINATED: True,
+            }
         if deadline_ns is not None and now_ns >= deadline_ns:
             return {eval_keys.TERMINATED: False}
         return None
@@ -395,21 +409,25 @@ class Harness(pimm.ControlSystem):
     ) -> pimm.Run[dict[str, Any] | None]:
         payload = None
         resume_at_ns = None
-        ended_ns = None
+        ended = None
         sample_at_ns = runtime.time_ns
         completed = ()
         while not should_stop.value and payload is None:
             sampled_ns = runtime.time_ns
             if completed or resume_at_ns is None or sampled_ns >= resume_at_ns:
-                resume_at_ns, ended_ns = self._step(task, runtime, policy_run, resume_at_ns)
+                stepped = self._step(task, runtime, policy_run, resume_at_ns)
+                if isinstance(stepped, _PolicyEnded):
+                    ended = stepped
+                else:
+                    resume_at_ns = stepped
                 sample_at_ns = sampled_ns + self._recording_period_ns
             elif self._writer is not None and sampled_ns >= sample_at_ns:
                 self._sample()
                 sample_at_ns = sampled_ns + self._recording_period_ns
             # No complete observation yet: read the sensors again after one poll period.
             wake_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9) if resume_at_ns is None else resume_at_ns
-            if ended_ns is not None:
-                wake_at_ns = ended_ns
+            if ended is not None:
+                wake_at_ns = ended.time_ns
             if self._writer is not None:
                 wake_at_ns = min(wake_at_ns, sample_at_ns)
             if deadline_ns is not None:
@@ -420,7 +438,7 @@ class Harness(pimm.ControlSystem):
             pimm.read_updated(self.manual_command)
             payload = self._trial_terminal(
                 pimm.read_updated(self.done),
-                ended_ns,
+                ended,
                 runtime.time_ns,
                 deadline_ns,
                 EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL,

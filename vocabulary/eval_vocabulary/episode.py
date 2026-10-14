@@ -3,6 +3,8 @@
 The dataset writer imports these names, so it and a labeler cannot disagree.
 """
 
+from enum import StrEnum
+
 # The file in an episode's directory that holds its statics as one JSON object.
 STATIC_FILE = 'static.json'
 # The file in an episode's directory that holds its meta as one JSON object, and the episode's id in it.
@@ -17,8 +19,10 @@ TERMINATED = 'eval.terminated'
 ENDED_BY = 'eval.ended_by'
 # A person at the station ended the trial: a button on a console, or a key.
 ENDED_BY_OPERATOR = 'operator'
-# The policy ended the trial with an END in its step. That claims nothing about success.
+# The policy ended the trial: its run returned a `PolicyEnd`.
 ENDED_BY_POLICY = 'policy'
+# The `PolicyEnd` of a trial that the policy ended. It is the policy's claim, not a verdict.
+POLICY_END = 'eval.policy_end'
 # The instruction that the policy got.
 TASK = 'task'
 
@@ -28,3 +32,12 @@ SIGNAL_FILE_SUFFIX = '.parquet'
 TIMESTAMP_COLUMN_PREFIX = 'ts.'
 # The one time column of a signal file in the format before named timelines, on the world clock.
 LEGACY_TIME_COLUMN = 'timestamp'
+
+
+class PolicyEnd(StrEnum):
+    """What a policy says about its attempt when it ends the trial. A recorded value never changes."""
+
+    # The policy thinks that it did the task.
+    COMPLETE = 'complete'
+    # The policy stops before it did the task.
+    GIVE_UP = 'give_up'

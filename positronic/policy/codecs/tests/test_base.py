@@ -6,9 +6,10 @@ from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.eval.keys import PolicyEnd
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
-from positronic.policy.base import Exit, Step
+from positronic.policy.base import Step
 from positronic.policy.codecs import (
     ACTION,
     LEROBOT_FEATURES,
@@ -201,14 +202,19 @@ class _DoublingCodec(Codec):
         return {name: 2 * value for name, value in data.items()}
 
 
-def test_a_wrapped_step_with_commands_keeps_its_wake_up_time_and_exit():
+def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned():
     def run():
         yield
-        yield Step({'value': 1}, 123, exit=Exit.END)
+        yield Step({'value': 1}, 123)
+        return PolicyEnd.GIVE_UP
 
     inner = run()
     next(inner)
-    assert _DoublingCodec().wrap(inner).send({}) == Step({'value': 2}, 123, exit=Exit.END)
+    wrapped = _DoublingCodec().wrap(inner)
+    assert wrapped.send({}) == Step({'value': 2}, 123)
+    with pytest.raises(StopIteration) as end:
+        wrapped.send({})
+    assert end.value.value is PolicyEnd.GIVE_UP
 
 
 class TestCodecComposition:

@@ -75,6 +75,22 @@ def test_unavailability_withholds_commands_and_resumes_on_recovery(execution, st
         run.close()
 
 
+@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,))])
+def test_a_wrapper_returns_what_its_inner_run_returned(execution, wrapper):
+    runtime, _ = execution
+
+    def inner():
+        yield
+        return eval_keys.PolicyEnd.COMPLETE
+
+    child = inner()
+    next(child)
+    run = runtime.start(wrapper, child)
+    with pytest.raises(StopIteration) as end:
+        run.send({MOTOR: 1})
+    assert end.value.value is eval_keys.PolicyEnd.COMPLETE
+
+
 @pytest.mark.parametrize('pad_start', [True, False])
 def test_temporal_history_padding_sampling_and_fresh_runs(execution, pad_start):
     runtime, clock = execution

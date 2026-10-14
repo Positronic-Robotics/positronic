@@ -48,7 +48,7 @@ class Phase(StrEnum):
     RUNNING = 'running'
     # The judge ended the episode, and the harness has not answered yet.
     ENDING = 'ending'
-    # The episode ended with no outcome, as on a policy END. The judge gives it before the next Start.
+    # The episode ended with no outcome, as when the policy ends it. The judge gives it before the next Start.
     VERDICT_PENDING = 'verdict_pending'
     # The operator ended the run. The console stops, and that stops the World.
     RUN_ENDED = 'run_ended'

@@ -9,6 +9,7 @@ from contextlib import nullcontext
 import pytest
 
 from positronic import telemetry, telemetry_keys
+from positronic.eval.keys import PolicyEnd
 from positronic.policy.base import Policy, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, Metadata, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
@@ -96,7 +97,7 @@ def test_sequential_combines_component_metadata():
 
 @pytest.mark.parametrize('with_codec', [False, True])
 @pytest.mark.parametrize('timed', [False, True])
-def test_sequence_preserves_normal_processor_completion(with_codec, timed):
+def test_sequence_preserves_normal_processor_completion_and_its_return(with_codec, timed):
     closed = []
 
     class Finite(Policy):
@@ -104,6 +105,7 @@ def test_sequence_preserves_normal_processor_completion(with_codec, timed):
             try:
                 yield
                 yield Step({'value': 1}, 123)
+                return PolicyEnd.GIVE_UP
             finally:
                 closed.append(True)
 
@@ -113,8 +115,9 @@ def test_sequence_preserves_normal_processor_completion(with_codec, timed):
         run = runtime.start(stack)
         try:
             assert run.send({}) == Step({'value': 1}, 123)
-            with pytest.raises(StopIteration):
+            with pytest.raises(StopIteration) as end:
                 run.send({})
+            assert end.value.value is PolicyEnd.GIVE_UP
             assert closed == [True]
         finally:
             runtime.close()
@@ -208,6 +211,7 @@ def test_generator_forwards_exceptions_and_closes(finish, timed):
                     yield Step({}, 1)
                 except ValueError:
                     yield Step({}, 2)
+                return PolicyEnd.COMPLETE
             finally:
                 closed.append(True)
 

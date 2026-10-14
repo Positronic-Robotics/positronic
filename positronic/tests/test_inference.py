@@ -36,7 +36,7 @@ from positronic.gui.station import Episode, Phase, Unrecorded, Verdict
 from positronic.gui.web import InstructionBody, StationConsole, Status, VerdictBody
 from positronic.inference import KeyboardOperator, real, web
 from positronic.policy import Policy
-from positronic.policy.base import Exit, Step
+from positronic.policy.base import Step
 from positronic.policy.harness import Harness, Rollout
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 from positronic.tests.testing_inference import (
@@ -395,13 +395,12 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
 
 
 class _EndingPolicy(Policy):
-    """Ends its episode with ``Exit.END`` on its second step."""
+    """Ends its episode on its second call."""
 
     def run(self, runtime):
         yield
         yield Step({}, runtime.time_ns + 100_000_000)
-        while True:
-            yield Step({}, runtime.time_ns, exit=Exit.END)
+        return eval_keys.PolicyEnd.COMPLETE
 
 
 @pytest.mark.timeout(120.0)

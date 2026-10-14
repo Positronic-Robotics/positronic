@@ -36,7 +36,7 @@ from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Exit, Policy, PolicyRun, Step
+from positronic.policy.base import Obs, Policy, PolicyRun, Processor, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import POLL_PERIOD_SEC, EpisodeEnd, Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
@@ -169,7 +169,7 @@ def test_observations_refresh_on_signal_updates_independently_of_time(observed_h
     world, _, emitters, serializers, calls, step = observed_harness
     frame = np.array([1, 2])
     emitters[keys.WRIST_IMAGE].emit(frame)
-    assert step() == (None, None)
+    assert step() is None
     assert calls == []
 
     emitters[POSITION].emit(3)
@@ -459,11 +459,18 @@ def test_episode_deadline_uses_the_done_signal_timestamp(episode_harness, done_a
 
 
 class EndAfter(Policy):
-    """Command each step's number, and return ``Exit.END`` on step ``steps``. ``clock`` and ``slow_to_ns`` make
-    that step take until ``slow_to_ns``."""
+    """Command each call's number, and return ``end`` on call ``calls``. ``clock`` and ``slow_to_ns`` make that call
+    take until ``slow_to_ns``."""
 
-    def __init__(self, steps: int, clock: VirtualClock | None = None, slow_to_ns: int = 0):
-        self.steps = steps
+    def __init__(
+        self,
+        calls: int,
+        end: eval_keys.PolicyEnd = eval_keys.PolicyEnd.COMPLETE,
+        clock: VirtualClock | None = None,
+        slow_to_ns: int = 0,
+    ):
+        self.end_call = calls
+        self.end = end
         self.clock = clock
         self.slow_to_ns = slow_to_ns
         self.calls = 0
@@ -472,12 +479,12 @@ class EndAfter(Policy):
         yield
         while True:
             self.calls += 1
-            if self.calls < self.steps:
+            if self.calls < self.end_call:
                 yield Step({MOTOR: self.calls}, runtime.time_ns + 1_000_000)
                 continue
             if self.clock is not None:
                 self.clock.advance_to_ns(self.slow_to_ns)
-            yield Step({MOTOR: self.calls}, runtime.time_ns, exit=Exit.END)
+            return self.end
 
 
 def _until_answered(h, answer) -> EpisodeEnd:
@@ -488,17 +495,16 @@ def _until_answered(h, answer) -> EpisodeEnd:
     return answer.result()
 
 
-def test_an_end_inside_the_budget_ends_the_episode_after_its_commands_and_records_the_policy_as_the_ender(
-    episode_harness,
-):
+@pytest.mark.parametrize('end', list(eval_keys.PolicyEnd))
+def test_a_return_inside_the_budget_ends_the_episode_and_records_the_policy_and_its_end(episode_harness, end):
     h = episode_harness
-    policy = EndAfter(steps=3)
+    policy = EndAfter(calls=3, end=end)
     h.observation.emit(1)
     answer = h.caller(Rollout(Task('test', 1.0), policy, h.output_path))
-    ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.TERMINATED: True}
+    ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.POLICY_END: end, eval_keys.TERMINATED: True}
     assert _until_answered(h, answer) == EpisodeEnd(ended, 'episode-0')
     assert policy.calls == 3
-    assert [value for _, value in h.commands.values] == [1, 2, 3]
+    assert [value for _, value in h.commands.values] == [1, 2]
     [episode] = h.dataset.episodes
     assert episode.static.items() >= ended.items()
     assert eval_keys.SUCCESS not in episode.static
@@ -507,27 +513,40 @@ def test_an_end_inside_the_budget_ends_the_episode_after_its_commands_and_record
 def test_an_episode_that_records_nothing_answers_with_no_uid(episode_harness):
     h = episode_harness
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(steps=1), None))
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=1), None))
     assert _until_answered(h, answer).uid is None
     assert h.dataset.episodes == []
 
 
-def test_an_env_done_in_the_iteration_of_an_end_ends_the_episode(episode_harness):
+def test_an_env_done_in_the_iteration_of_a_return_ends_the_episode(episode_harness):
     h = episode_harness
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(steps=1), h.output_path))
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=1), h.output_path))
     next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     assert _until_answered(h, answer).terminal == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
 
 
-def test_an_end_after_the_deadline_counts_as_a_timeout(episode_harness):
+def test_a_return_after_the_deadline_counts_as_a_timeout(episode_harness):
     h = episode_harness
     h.observation.emit(1)
-    policy = EndAfter(steps=1, clock=h.world.clock, slow_to_ns=11_000_000)
+    policy = EndAfter(calls=1, clock=h.world.clock, slow_to_ns=11_000_000)
     answer = h.caller(Rollout(Task('test', 0.01), policy, h.output_path))
     assert _until_answered(h, answer).terminal == {eval_keys.TERMINATED: False}
     assert eval_keys.ENDED_BY not in h.dataset.episodes[0].static
+
+
+def test_a_return_that_is_not_a_policy_end_fails_the_episode(episode_harness):
+    h = episode_harness
+
+    class ReturnsNothing(Processor[Obs, Step, None]):
+        def run(self, runtime):
+            yield
+
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 1.0), cast(Policy, ReturnsNothing()), h.output_path))
+    with pytest.raises(ValueError, match='PolicyEnd'):
+        _until_answered(h, answer)
 
 
 @pytest.mark.parametrize('failure', ['startup', 'policy', 'conversion'])
@@ -1764,11 +1783,12 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
             yield
             now[0] = 500_000_000
             yield Step({}, requested_ns)
+            return eval_keys.PolicyEnd.COMPLETE
 
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
     try:
-        assert h.harness._step(Task('test', None), runtime, run, None) == (expected_ns, None)
+        assert h.harness._step(Task('test', None), runtime, run, None) == expected_ns
     finally:
         runtime.close()
         run.close()

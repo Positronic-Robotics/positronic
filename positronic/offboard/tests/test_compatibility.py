@@ -14,6 +14,7 @@ from positronic_wire import wire
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.eval.keys import PolicyEnd
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
@@ -21,7 +22,7 @@ from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import spec
 from positronic.policy.base import Step
 from positronic.policy.codecs import RestrictImageSize
-from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, from_v1_spec
+from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule
@@ -98,6 +99,21 @@ def test_v1_timing_preserves_horizon_and_chunk_boundary(controlled_runtime, decl
         assert calls[0][1]['wall_time_ns'] > 0
     finally:
         run.close()
+
+
+def test_stamped_observation_times_return_what_the_inner_run_returned(controlled_runtime):
+    runtime, _, _ = controlled_runtime
+
+    def inner():
+        yield
+        return PolicyEnd.GIVE_UP
+
+    child = inner()
+    next(child)
+    run = runtime.start(StampObservationTimes(), child)
+    with pytest.raises(StopIteration) as end:
+        run.send({})
+    assert end.value.value is PolicyEnd.GIVE_UP
 
 
 def test_v1_server_without_action_fps_runs_at_the_default_rate_and_warns(caplog):

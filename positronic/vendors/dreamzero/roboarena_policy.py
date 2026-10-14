@@ -196,8 +196,8 @@ class RoboarenaPolicy(Policy):
                 while True:
                     try:
                         step = stack.send(obs)
-                    except StopIteration:
-                        return
+                    except StopIteration as end:
+                        return end.value
                     obs = yield step
         finally:
             with connection_lock:

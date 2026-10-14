@@ -45,6 +45,7 @@ class _Policy(Policy):
 
     def run(self, runtime):
         yield
+        return eval_keys.PolicyEnd.COMPLETE
 
 
 class _Console:

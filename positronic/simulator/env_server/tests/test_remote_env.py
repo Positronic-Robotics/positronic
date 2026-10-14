@@ -698,7 +698,7 @@ class _JointposChunks(Policy):
         self.chunks = 0
 
     def run(self, runtime):
-        yield from ChunkedSchedule(self.fps).run(runtime, self.infer)
+        return (yield from ChunkedSchedule(self.fps).run(runtime, self.infer))
 
     def infer(self, obs):
         self.chunks += 1

@@ -2,7 +2,6 @@ import collections.abc as cabc
 from typing import Any, ClassVar, final, overload
 
 import numpy as np
-from attr import evolve
 from positronic_model_server.spec import PAR, SEQ
 
 from positronic import telemetry, telemetry_keys
@@ -61,7 +60,7 @@ class Codec:
     ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
-        Steps retain their wake-up time and exit; only nonempty commands are decoded. The caller owns the
+        Steps retain their wake-up time; only nonempty commands are decoded. The caller owns the
         wrapped dependency, including closing it when it is a generator.
         """
         if isinstance(function, cabc.Generator):
@@ -78,7 +77,7 @@ class Codec:
             encoded = encode(dict(obs))
             result = function(encoded)
             if isinstance(result, Step):
-                return evolve(result, commands=self.decode(dict(result.commands))) if result.commands else result
+                return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result
             return self.decode(result) if result is not None else None
 
         return call
@@ -89,8 +88,8 @@ class Codec:
         while True:
             try:
                 result = call(obs)
-            except StopIteration:
-                return
+            except StopIteration as end:
+                return end.value
             obs = yield result
 
     def to_spec(self) -> dict[str, Any]:
