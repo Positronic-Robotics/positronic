@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 import httpx
 import pytest
 from platform_client.client import AUTH_HEADER
+from platform_client.enums import ErrorCode
+from platform_client.errors import ApiErrorBody, ErrorEnvelope
 from platform_client.ids import ApiKey
 
 from positronic.cli.examples.nebius_competition import enter
@@ -89,8 +91,8 @@ def test_the_flag_without_a_key_stops_before_the_entry():
 
 def test_a_refusal_of_stale_terms_reaches_the_team(monkeypatch, capsys):
     message = 'the terms are now version 2027-01-01: read them at https://terms.example/terms and enter again'
-    envelope = {'error': {'code': 'bad_request', 'message': message, 'details': {}}}
-    gateway = StubGateway(refusal=httpx.Response(400, json=envelope))
+    envelope = ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.bad_request, message=message))
+    gateway = StubGateway(refusal=httpx.Response(400, json=envelope.model_dump(mode='json')))
     monkeypatch.setattr(enter, 'CompetitionClient', lambda platform_url: gateway.client())
     monkeypatch.setattr('sys.argv', ['competition-enter', '--accept-terms'])
 
@@ -114,6 +116,7 @@ def test_an_organizer_entry_says_so(capsys):
 
 def test_the_models_keep_the_gateway_s_field_names():
     """The gateway declares its own copy of these models, so each field name is a contract."""
+    # rules-allow: hardcoded-keys — these sets pin the wire names of the gateway's separate copy.
     assert set(CompetitionTerms.model_fields) == {'version', 'url'}
     assert set(enter.EnterRequest.model_fields) == {'terms_version'}
     assert set(CompetitionEntry.model_fields) == {'entered_at', 'terms_version'}
