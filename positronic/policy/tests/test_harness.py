@@ -1700,6 +1700,33 @@ def test_an_abort_in_a_start_stage_ends_the_episode_before_the_policy_and_logs_a
             assert 'the arm holds a fault' in caplog.text
 
 
+@pytest.mark.parametrize('stage', ['ready', 'start', 'prepare'])
+def test_an_abort_that_comes_with_the_last_answer_of_a_start_stage_ends_the_episode(stage):
+    with _episode_ports(devices=(ARM,), teleop=True) as h:
+        policy = Teleop()
+        h.observation.emit(0)
+        h.groups[TELEOP_POSE].emit(0)
+        answer = h.caller(Rollout(Task('drive', None, prepare_args={RESET: 'home'}), policy, h.output_path))
+        next(h.loop)
+        last = next(h.ready[ARM].incoming())
+        if stage != 'ready':
+            last.set_result(None)
+            next(h.loop)
+            last = next(h.start.incoming())
+        if stage == 'prepare':
+            last.set_result(None)
+            next(h.loop)
+            last = next(h.prepare[RESET].incoming())
+        last.set_result(None)
+        aborted = h.abort(None)
+        next(h.loop)
+        aborted.result()
+        with pytest.raises(EpisodeAborted):
+            answer.result()
+        assert [phase for _, phase in h.phases.values] == [Starting(), Aborted()]
+        assert policy.observations == h.dataset.episodes == []
+
+
 @pytest.mark.parametrize('answered', [None, 'result', 'error'])
 def test_the_next_group_start_stage_takes_a_kept_start_call_and_calls_again_only_after_an_error(answered, caplog):
     caplog.set_level(logging.INFO)

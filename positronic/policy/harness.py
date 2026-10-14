@@ -252,13 +252,16 @@ class Harness(pimm.ControlSystem):
     ) -> pimm.Run[None]:
         """Wait until ``answer`` is done or the world stops. Raise the error ``answer`` carries.
 
-        In a start stage an abort call ends the wait with ``EpisodeAborted``. At other times the harness refuses it.
+        In a start stage an abort call ends the wait with ``EpisodeAborted``, also one that came with the answer. At
+        other times the harness refuses it.
         """
-        while not answer.done() and not should_stop.value:
+        while True:
             if start_stage:
                 self._accept_abort()
             else:
                 self._refuse_abort()
+            if answer.done() or should_stop.value:
+                break
             yield self._yield()
         if answer.done():
             answer.result()
