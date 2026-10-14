@@ -99,8 +99,10 @@ build-robolab:
 	@echo "Building $(IMAGE_NAME_ROBOLAB)..."
 	docker build --platform linux/amd64 -f Dockerfile.robolab -t $(IMAGE_NAME_ROBOLAB):local ..
 
-# The GR00T backbone is gated on the Hub. BuildKit reads the token from HF_TOKEN, and it enters no layer.
+# The GR00T backbone and the FLUX 3 Action weights are gated on the Hub. BuildKit reads the token from HF_TOKEN,
+# and it enters no layer.
 SERVE_BUILD_FLAGS_gr00t-n17-droid := --secret id=hf_token,env=HF_TOKEN
+SERVE_BUILD_FLAGS_flux3-action := --secret id=hf_token,env=HF_TOKEN
 
 # `push-serve-<name>` builds and pushes in one BuildKit run, which needs a docker-container builder
 # (`docker buildx create --use`). The second argument of SERVE_IMAGE is the repository. The cache at

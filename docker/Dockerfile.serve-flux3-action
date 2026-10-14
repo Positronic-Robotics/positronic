@@ -4,8 +4,8 @@
 # network. docs/submit-a-policy-image.md § FLUX 3 Action says what it serves.
 #
 # Usage (from the repository root)
-#   make -C docker build-serve-flux3-action        # positro/flux3-action:local
-#   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+#   HF_TOKEN=<a read token> make -C docker build-serve-flux3-action        # positro/flux3-action:local
+#   docker buildx build --platform linux/amd64 --secret id=hf_token,src=$HOME/.hf_token --provenance=false --sbom=false \
 #       -f docker/Dockerfile.serve-flux3-action -t docker.io/<you>/flux3-action:v1 --push .
 #   docker run --rm --network none --gpus all docker.io/<you>/flux3-action:v1        # the offline pre-flight
 #
@@ -13,8 +13,8 @@
 # dependencies, source, weights. The source and the weights come in through `COPY --link`, and no step runs
 # after them, so a source change builds one new layer and pulls no cached layer.
 #
-# The build needs no credential: no repository it reads is gated. It downloads 25 GB of weights, and the image
-# is about 36 GB on disk. The weights are under the FLUX Kommunity License v1.0, which allows non-commercial use
+# The Hugging Face token is for both FLUX 3 Action repositories: they are gated, and BFL grants access on the
+# form. The token enters no layer. The build downloads 25 GB of weights, and the image is about 36 GB on disk. The weights are under the FLUX Kommunity License v1.0, which allows non-commercial use
 # only. The image carries the licence and the notice it requires (positronic/vendors/flux3_action/NOTICE).
 
 # The policy package the server loads. Offline, a load by `main` finds no ref, so it names the commit.
@@ -37,24 +37,34 @@ RUN pip install --no-cache-dir huggingface_hub==1.30.0
 
 FROM hub AS dit
 ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER
-RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_POLICY_REPO', revision='$FLUX_POLICY_REVISION', allow_patterns=['$FLUX_POLICY_SUBFOLDER/model.safetensors'])"
+RUN --mount=type=secret,id=hf_token \
+    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_POLICY_REPO', revision='$FLUX_POLICY_REVISION', allow_patterns=['$FLUX_POLICY_SUBFOLDER/model.safetensors'])"
 
 FROM hub AS video-vae
 ARG FLUX_BASE_REPO FLUX_BASE_REVISION
-RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['video_vae.safetensors'])"
+RUN --mount=type=secret,id=hf_token \
+    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['video_vae.safetensors'])"
 
 FROM hub AS text-encoder-1
 ARG FLUX_BASE_REPO FLUX_BASE_REVISION
-RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/model-00001-of-00002.safetensors'])"
+RUN --mount=type=secret,id=hf_token \
+    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/model-00001-of-00002.safetensors'])"
 
 FROM hub AS text-encoder-2
 ARG FLUX_BASE_REPO FLUX_BASE_REVISION
-RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/model-00002-of-00002.safetensors'])"
+RUN --mount=type=secret,id=hf_token \
+    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/model-00002-of-00002.safetensors'])"
 
 # The configs, the tokenizer, the model cards and the licence, which goes beside the notice in /opt/flux3_action.
 FROM hub AS small-files
 ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER FLUX_BASE_REPO FLUX_BASE_REVISION
-RUN python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_POLICY_REPO', revision='$FLUX_POLICY_REVISION', allow_patterns=['$FLUX_POLICY_SUBFOLDER/*.json', 'LICENSE.md'])" \
+RUN --mount=type=secret,id=hf_token \
+    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_POLICY_REPO', revision='$FLUX_POLICY_REVISION', allow_patterns=['$FLUX_POLICY_SUBFOLDER/*.json', 'LICENSE.md'])" \
  && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/*.json', 'text_encoder/*.txt', 'text_encoder/README.md'])" \
  && mkdir -p /opt/flux3_action \
  && cp -L "$HF_HOME/hub/models--$(echo "$FLUX_POLICY_REPO" | sed 's|/|--|g')/snapshots/$FLUX_POLICY_REVISION/LICENSE.md" \
