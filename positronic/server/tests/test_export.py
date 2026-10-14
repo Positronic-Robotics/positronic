@@ -290,7 +290,7 @@ def test_the_export_holds_no_episode_between_two_reads(dataset, tmp_path, monkey
     assert all(alive == set() for alive in alive_at_each_read)
 
 
-CAMERAS = ('image.exterior', 'image.wrist')
+CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE)
 
 
 def a_camera_dataset(root: Path, episodes: int) -> Dataset:
