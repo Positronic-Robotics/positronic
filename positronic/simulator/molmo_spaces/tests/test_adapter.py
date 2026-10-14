@@ -70,6 +70,13 @@ def test_a_one_exterior_benchmark_fills_both_exterior_slots_in_the_drawn_order(e
         assert obs[logical].array.reshape(-1, 3).mean(axis=0).argmax() == _SHOULDER_CHANNEL[side]
 
 
+def test_one_exterior_side_fills_image_exterior_alone():
+    payload = _payload()
+    obs = _adapter([ShoulderSide.LEFT]).observations(payload)
+    np.testing.assert_array_equal(obs[keys.EXTERIOR_IMAGE].array, payload[_EXTERIOR_OLD])
+    assert keys.EXTERIOR_IMAGE_2 not in obs
+
+
 def test_observations_prefer_the_first_camera_name_the_benchmark_carries():
     payload = _payload()
     payload[_WRIST_NEW] = payload.pop(_WRIST_OLD)
@@ -125,12 +132,27 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
     ]
 
 
+_LEFT_FIRST_PARAMS = {**_BENCH_PARAMS, molmo_keys.EXTERIOR_SIDES: [side.value for side in _LEFT_FIRST]}
+
+
 def test_reset_token_carries_benchmark_episode_and_seed():
     adapter = _adapter()
-    expected = {**_BENCH._asdict(), mapping.TOKEN_EPISODE_INDEX: 3, mapping.TOKEN_SEED: 7}
-    assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
-    assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 2}) == {
+    expected = {
+        **_BENCH._asdict(),
+        mapping.TOKEN_EPISODE_INDEX: 3,
+        mapping.TOKEN_SEED: 7,
+        mapping.WITH_RIGHT_SHOULDER: True,
+    }
+    assert adapter.reset_token({**_LEFT_FIRST_PARAMS, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
+    assert adapter.reset_token({**_LEFT_FIRST_PARAMS, molmo_keys.EPISODE_INDEX: 2}) == {
         **_BENCH._asdict(),
         mapping.TOKEN_EPISODE_INDEX: 2,
         mapping.TOKEN_SEED: None,
+        mapping.WITH_RIGHT_SHOULDER: True,
     }
+
+
+def test_reset_token_asks_for_the_right_shoulder_only_when_a_trial_serves_it():
+    adapter = _adapter([ShoulderSide.LEFT])
+    params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, molmo_keys.EXTERIOR_SIDES: [ShoulderSide.LEFT.value]}
+    assert adapter.reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is False

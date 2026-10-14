@@ -97,6 +97,8 @@ TOKEN_EPISODE_INDEX = 'episode_index'
 TOKEN_SEED = 'seed'
 
 SELECT_EPISODES = 'episodes'
+# In a selection and a reset token: whether the server adds the right shoulder camera.
+WITH_RIGHT_SHOULDER = 'with_right_shoulder'
 TASK_NAME = 'name'
 TASK_HORIZON_SEC = 'task_horizon_sec'
 

@@ -27,14 +27,13 @@ SHOULDER_CAMERAS = {
 }
 
 
+_EXTERIOR_SLOTS = (keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2)
+
+
 def camera_dict(exterior_sides: Sequence[ShoulderSide]) -> dict[str, tuple[str, ...]]:
     """The aliases of each camera the embodiment declares; ``exterior_sides`` names the shoulder of each exterior."""
-    first, second = exterior_sides
-    return {
-        keys.WRIST_IMAGE: WRIST_CAMERAS,
-        keys.EXTERIOR_IMAGE: SHOULDER_CAMERAS[first],
-        keys.EXTERIOR_IMAGE_2: SHOULDER_CAMERAS[second],
-    }
+    slots = zip(_EXTERIOR_SLOTS[: len(exterior_sides)], exterior_sides, strict=True)
+    return {keys.WRIST_IMAGE: WRIST_CAMERAS, **{slot: SHOULDER_CAMERAS[side] for slot, side in slots}}
 
 
 class MolmoAdapter(WireCommandAdapter):
@@ -60,6 +59,7 @@ class MolmoAdapter(WireCommandAdapter):
             **{dimension: params[key] for dimension, key in self._DIMENSION_KEYS.items()},
             mapping.TOKEN_EPISODE_INDEX: params[molmo_keys.EPISODE_INDEX],
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
+            mapping.WITH_RIGHT_SHOULDER: ShoulderSide.RIGHT in params[molmo_keys.EXTERIOR_SIDES],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
