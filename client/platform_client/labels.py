@@ -505,7 +505,6 @@ def molmo_label(episode: Path) -> Label | None:
 
 
 ROBOLAB_LABELER = LabelerRef('robolab')
-_SUBTASK_FILE = f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}'
 
 
 class _SubtaskSample(NamedTuple):
@@ -519,7 +518,7 @@ class _SubtaskSample(NamedTuple):
 
 def _subtask_samples(episode: Path) -> list[_SubtaskSample]:
     """Each sample of the `subtask` signal, which `recorded_span` has parsed."""
-    signal = episode / _SUBTASK_FILE
+    signal = episode / f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}'
     column = _world_time_column(signal) if signal.is_file() else None
     if column is None:
         return []
