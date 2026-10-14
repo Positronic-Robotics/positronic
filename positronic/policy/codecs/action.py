@@ -116,26 +116,33 @@ class JointPositionAction(Codec):
 
 
 class CartesianDeltaAction(Codec):
-    """Decode ``[translation(3), rotation-vector(3), grip(1)]`` into a Cartesian delta and absolute grip.
+    """Decode ``[translation(3), rotation, grip(1)]`` into a Cartesian delta and absolute grip.
 
-    Translation is in metres, rotation in radians, and grip in ``[0, 1]`` closure units.
+    ``rotation_rep`` selects the rotation format; the default is a rotation vector.
+    Translation is in metres, angles in radians, and grip in ``[0, 1]`` closure units.
     The driver applies each delta to its live pose; decoding does not integrate a chunk.
     """
 
     WIRE_NAME = 'cartesian_delta_action'
 
-    def __init__(self, *, action_key: str = ACTION):
+    def __init__(self, *, action_key: str = ACTION, rotation_rep: str = RotRep.ROTVEC.value):
         self._action_key = action_key
+        self._rotation_rep = RotRep(rotation_rep)
 
     def _decode_single(self, data: dict) -> dict:
         action = np.asarray(data[self._action_key])
-        if action.shape != (7,):
-            raise ValueError('Cartesian delta action must have shape (7,)')
-        delta = geom.Transform3D.from_vector(action[:6], RotRep.ROTVEC)
-        return {keys.ROBOT_COMMAND: command.CartesianDelta(delta=delta), keys.TARGET_GRIP: float(action[6])}
+        expected = 4 + self._rotation_rep.size
+        if action.shape != (expected,):
+            raise ValueError(f'Cartesian delta action must have shape ({expected},), got {action.shape}')
+        delta = geom.Transform3D.from_vector(action[:-1], self._rotation_rep)
+        return {keys.ROBOT_COMMAND: command.CartesianDelta(delta=delta), keys.TARGET_GRIP: float(action[-1])}
 
     def to_spec(self):
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'action_key': self._action_key}}
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'action_key': self._action_key, 'rotation_rep': self._rotation_rep.value},
+        }
 
 
 class AbsolutePositionAction(Codec):

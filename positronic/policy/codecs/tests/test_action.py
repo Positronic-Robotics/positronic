@@ -209,10 +209,37 @@ def test_cartesian_delta_action_spec_decodes_a_chunk_with_a_custom_key():
     np.testing.assert_array_equal(predictions, original)
 
 
-@pytest.mark.parametrize('action', [np.zeros(6), np.zeros(8), np.zeros((1, 7)), np.zeros((7, 1))])
-def test_cartesian_delta_action_requires_a_single_seven_channel_action(action):
-    with pytest.raises(ValueError, match='shape'):
-        CartesianDeltaAction().decode({ACTION: action})
+@pytest.mark.parametrize('rotation_rep', list(Rotation.Representation))
+def test_cartesian_delta_action_preserves_the_selected_rotation_format_through_json(rotation_rep):
+    expected = Transform3D([0.1, -0.2, 0.3], Rotation.from_rotvec(np.array([0.3, -0.6, 0.8])))
+    codec = CartesianDeltaAction(rotation_rep=rotation_rep.value)
+    description = json.loads(json.dumps(codec.to_spec()))
+    assert description[ARGS]['rotation_rep'] == rotation_rep.value
+    restored = from_spec(description)
+    assert isinstance(restored, CartesianDeltaAction)
+    assert restored.to_spec() == description
+    prediction = np.concatenate([expected.as_vector(rotation_rep), [0.25]])
+
+    decoded = restored.decode({ACTION: prediction})
+
+    command = decoded[obs_keys.ROBOT_COMMAND]
+    assert isinstance(command, cmd_module.CartesianDelta)
+    np.testing.assert_allclose(command.delta.as_matrix, expected.as_matrix, atol=1e-12)
+    assert decoded[obs_keys.TARGET_GRIP] == 0.25
+
+
+@pytest.mark.parametrize('rotation_rep', list(Rotation.Representation))
+def test_cartesian_delta_action_requires_the_selected_rotation_width(rotation_rep):
+    codec = CartesianDeltaAction(rotation_rep=rotation_rep.value)
+    size = 4 + rotation_rep.size
+    for action in (np.zeros(size - 1), np.zeros(size + 1), np.zeros((1, size)), np.zeros((size, 1))):
+        with pytest.raises(ValueError, match='shape'):
+            codec.decode({ACTION: action})
+
+
+def test_cartesian_delta_action_rejects_an_unknown_rotation_format():
+    with pytest.raises(ValueError):
+        from_spec(component('cartesian_delta_action', rotation_rep='unknown'))
 
 
 def test_absolute_position_action_encode_decode_quat():
