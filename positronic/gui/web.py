@@ -249,12 +249,8 @@ class StationConsole(pimm.ControlSystem):
 
         @app.post('/episode/end')
         async def end(body: VerdictBody) -> Status:
-            self.done.emit(station.end(body.verdict))
-            return status()
-
-        @app.post('/episode/verdict')
-        async def verdict(body: VerdictBody) -> Status:
-            station.judge(body.verdict)
+            if (payload := station.end(body.verdict)) is not None:
+                self.done.emit(payload)
             return status()
 
         @app.post('/run/end')

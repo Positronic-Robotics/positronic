@@ -12,7 +12,6 @@ const ROUTES = {
   instruction: '/instruction',
   start: '/episode/start',
   end: '/episode/end',
-  verdict: '/episode/verdict',
   endRun: '/run/end',
   video: '/video',
 };
@@ -497,10 +496,7 @@ $('start').addEventListener('click', () =>
 );
 
 for (const [button, verdict] of verdictButtons) {
-  button.addEventListener('click', () => {
-    const route = current.phase === PHASE.verdictPending ? ROUTES.verdict : ROUTES.end;
-    act(() => post(route, REQUEST.verdict(verdict)));
-  });
+  button.addEventListener('click', () => act(() => post(ROUTES.end, REQUEST.verdict(verdict))));
 }
 
 $('end-run').addEventListener('click', () => {

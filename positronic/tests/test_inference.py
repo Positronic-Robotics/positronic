@@ -414,7 +414,7 @@ def test_a_policy_end_waits_for_the_verdict_before_the_next_start():
         presses.append(post(base, '/episode/start'))
         yield from wait(lambda: _phase(base) is Phase.VERDICT_PENDING, clock)
         presses.append(post(base, '/episode/start'))
-        presses.append(post(base, '/episode/verdict', VerdictBody(verdict=Outcome.FAIL)))
+        presses.append(post(base, '/episode/end', VerdictBody(verdict=Outcome.FAIL)))
         yield from wait(lambda: _phase(base) is Phase.READY, clock)
         statuses.append(read_status(base))
 

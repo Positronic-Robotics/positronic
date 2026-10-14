@@ -159,16 +159,21 @@ class Station:
             meta = {**trial.meta, eval_keys.TRIAL_INDEX: number - 1, eval_keys.INSTRUCTION_OVERRIDDEN: overridden}
             return replace(trial, meta=meta)
 
-    def end(self, verdict: Verdict) -> dict[str, Any]:
-        """Mark the running episode as ending, and return the ``done`` payload that ends it with ``verdict``."""
+    def end(self, verdict: Verdict) -> dict[str, Any] | None:
+        """Give ``verdict`` to the open episode. Return the ``done`` payload that ends a running episode, or ``None``
+        for an episode that waits for a verdict. The station writes that verdict into the episode's recording."""
         with self._lock:
-            if self._awaits_verdict():
-                raise Refused('the episode has ended: give its verdict')
             if not self._is_open():
                 raise Refused('no episode is running')
-            self._ending_with = verdict
+            if not self._awaits_verdict():
+                self._ending_with = verdict
+                self._generation += 1
+                return terminal_payload(verdict)
+            if self._pending_uid is not None:
+                self._record(self._pending_uid, verdict)
+            self._episodes[-1].outcome, self._pending_uid = verdict, None
             self._generation += 1
-            return terminal_payload(verdict)
+            return None
 
     def close(self, end: EpisodeEnd, now: float) -> None:
         """Close the open episode on the harness's answer.
@@ -198,16 +203,6 @@ class Station:
             episode = self._episodes[-1]
             episode.ended_at, episode.outcome, episode.error = now, Unrecorded.ERROR, error
             self._ending_with = None
-            self._generation += 1
-
-    def judge(self, verdict: Verdict) -> None:
-        """Give ``verdict`` to the episode that waits for a verdict, and write it into that episode's recording."""
-        with self._lock:
-            if not self._awaits_verdict():
-                raise Refused('no episode waits for a verdict')
-            if self._pending_uid is not None:
-                self._record(self._pending_uid, verdict)
-            self._episodes[-1].outcome, self._pending_uid = verdict, None
             self._generation += 1
 
     def end_run(self) -> None:

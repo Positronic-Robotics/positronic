@@ -124,10 +124,9 @@ def test_each_verdict_emits_done_without_waiting_for_the_control_loop(console):
     ]
 
 
-@pytest.mark.parametrize('route', ['/episode/end', '/episode/verdict'])
-def test_the_page_offers_only_the_verdicts(console, route):
+def test_the_page_offers_only_the_verdicts(console):
     console.post('/episode/start')
-    assert console.client.post(route, json={'verdict': Outcome.OUT_OF_TIME.value}).status_code == 422
+    assert console.client.post('/episode/end', json={'verdict': Outcome.OUT_OF_TIME.value}).status_code == 422
     assert len(console.tasks) == 1
 
 
@@ -138,18 +137,11 @@ def test_after_a_policy_end_the_verdict_closes_the_episode_and_emits_no_done(con
     console.post('/episode/start')
     console.station.close(POLICY_END, now=1.0)
     assert Status.model_validate(console.client.get('/status').json()).run.phase is Phase.VERDICT_PENDING
-    status = console.post('/episode/verdict', VerdictBody(verdict=Outcome.SUCCESS))
+    status = console.post('/episode/end', VerdictBody(verdict=Outcome.SUCCESS))
     assert status.run.phase is Phase.READY
     assert status.run.episodes[0].outcome is Outcome.SUCCESS
     assert console.recorded == [('recording-1', Outcome.SUCCESS)]
     assert console.done.emitted == []
-
-
-def test_a_verdict_while_the_episode_runs_is_refused(console):
-    console.post('/episode/start')
-    refused = console.client.post('/episode/verdict', json=VerdictBody(verdict=Outcome.SUCCESS).model_dump())
-    assert refused.status_code == 409
-    assert refused.json()['detail'] == 'no episode waits for a verdict'
 
 
 def test_the_instruction_is_refused_while_an_episode_runs(console):
@@ -295,7 +287,7 @@ def test_a_verdict_after_a_policy_end_goes_into_the_edit_log(tmp_path):
     console._drive_episode(station, queue.SimpleQueue(), SystemClock())
     assert OUTCOME not in load_dataset(tmp_path)[0]
 
-    station.judge(Outcome.DISCARDED)
+    station.end(Outcome.DISCARDED)
 
     assert load_dataset(tmp_path)[0][OUTCOME] == Outcome.DISCARDED
 

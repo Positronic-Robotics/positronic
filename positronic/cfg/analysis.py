@@ -164,7 +164,7 @@ def unified_units_display(ep: Episode) -> str:
     if SUCCESSFUL_ITEMS in ep:
         return f'{ep[SUCCESSFUL_ITEMS]}/{ep[TOTAL_ITEMS]}'
     if 'stacking_success' in ep:
-        return str(1 if success(ep) else 0)
+        return str(units_sim(ep))
     return '-'
 
 
@@ -179,10 +179,7 @@ def unified_uph(ep: Episode) -> float | None:
         first, last = ep.bounds(timeline)
         return items / ((last - first) / 1e9 / 3600)
     if 'stacking_success' in ep:
-        t = success_time(ep)
-        if t is None:
-            return None
-        return 1 / (t / 3600)
+        return uph_sim(ep)
     return None
 
 
@@ -190,7 +187,7 @@ def unified_success_rate(ep: Episode) -> float:
     if SUCCESSFUL_ITEMS in ep:
         return 100 * ep[SUCCESSFUL_ITEMS] / ep[TOTAL_ITEMS]
     if 'stacking_success' in ep:
-        return 100.0 if success(ep) else 0.0
+        return 100.0 * units_sim(ep)
     return 0.0
 
 
@@ -262,7 +259,7 @@ def checkpoint_table():
             total_duration += (last - first) / 1e9
 
         if 'stacking_success' in episodes[0]:
-            successful_count = sum(1 for ep in scored if success(ep))
+            successful_count = sum(1 for ep in scored if unified_success_bool(ep))
             total_units = successful_count
             failed_count = count - successful_count
             success_rate = 100 * successful_count / count if count > 0 else 0
@@ -407,11 +404,13 @@ def ee_pose_movement(episode: Episode) -> float | None:
 
 def units_sim(episode: Episode) -> int:
     """Number of successful stacks (1 if success, 0 otherwise)."""
-    return 1 if success(episode) else 0
+    return 1 if unified_success_bool(episode) else 0
 
 
 def uph_sim(episode: Episode) -> float | None:
     """Units per hour based on success_time (not full episode duration)."""
+    if not unified_success_bool(episode):
+        return None
     t = success_time(episode)
     if t is None:
         return None
@@ -427,7 +426,7 @@ stacking_episodes = base_cfg.transform.override(
                 model=model,
                 checkpoint=ckpt,
                 max_stacking_success=max_stacking_success,
-                success=success,
+                success=unified_success_bool,
                 success_time=success_time,
                 box_distance_progress=box_distance_progress,
                 movement=ee_pose_movement,
@@ -449,9 +448,14 @@ def stacking_episodes_table():
         'checkpoint': C(label='CKPT', filter=True),
         'success': C(
             label='Pass',
+            default=UNSCORED,
             renderer=RendererConfig(
                 type='badge',
-                options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
+                options={
+                    True: {'label': 'Pass', 'variant': 'success'},
+                    False: {'label': 'Fail', 'variant': 'danger'},
+                    UNSCORED: {'label': UNSCORED, 'variant': 'default'},
+                },
             ),
         ),
         'success_time': C(label='Success Time', format='%.1f sec', default='-'),

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from eval_vocabulary.outcome import OUTCOME, Outcome
+from eval_vocabulary.outcome import OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome
 
 from pimm.time import RECEIVED_WORLD
 from positronic import keys
@@ -99,9 +99,9 @@ def test_analysis_derives_duration_and_rates_on_the_recording_clock(timelines):
     )
     episode = EpisodeContainer({
         'state': signal,
-        'eval.successful_items': 2,
-        'eval.total_items': 2,
-        'eval.outcome': 'Success',
+        SUCCESSFUL_ITEMS: 2,
+        TOTAL_ITEMS: 2,
+        OUTCOME: Outcome.SUCCESS,
         'checkpoint': 'test',
         'model': 'test',
     })
@@ -150,8 +150,8 @@ def _attended(outcome: Outcome | None, items: int) -> EpisodeContainer:
         'variant': '',
         'eval.object': 'cup',
         eval_keys.DURATION: 10.0,
-        'eval.successful_items': items,
-        'eval.total_items': 2,
+        SUCCESSFUL_ITEMS: items,
+        TOTAL_ITEMS: 2,
     }
     if outcome is not None:
         episode[OUTCOME] = outcome
@@ -184,3 +184,18 @@ def test_an_unscored_outcome_leaves_out_a_sim_episode(outcome):
     assert analysis.unified_success_bool(discarded) is None
     assert analysis.scored_episodes([scored, discarded]) == [scored]
     assert analysis.checkpoint_table().group_fn([scored, discarded])['count'] == 1
+
+
+@pytest.mark.parametrize(('outcome', 'signal_value'), [(Outcome.FAIL, 1.0), (Outcome.SUCCESS, 0.0)])
+def test_a_scored_outcome_decides_a_sim_episode_against_its_signal(outcome, signal_value):
+    signal = DummySignal([0, 10_000_000_000], [signal_value, signal_value], timelines=(HARNESS_WORLD,))
+    sim = EpisodeContainer({'stacking_success': signal, 'checkpoint': 'test', 'model': 'test', OUTCOME: outcome})
+    succeeded = outcome == Outcome.SUCCESS
+
+    assert analysis.success(sim) is not succeeded
+    assert analysis.unified_success_bool(sim) is succeeded
+    assert analysis.units_sim(sim) == int(succeeded)
+    assert analysis.unified_units_display(sim) == str(int(succeeded))
+    assert analysis.unified_success_rate(sim) == 100 * int(succeeded)
+    assert analysis.uph_sim(sim) is None
+    assert analysis.checkpoint_table().group_fn([sim])['failures'] == int(not succeeded)

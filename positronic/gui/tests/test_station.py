@@ -186,35 +186,24 @@ def test_after_a_policy_end_the_verdict_is_written_into_the_recording(verdict):
     assert (view.episodes[0].ended_at, view.episodes[0].outcome) == (2.0, None)
     assert recordings.written == []
 
-    station.judge(verdict)
+    assert station.end(verdict) is None
     view = station.view(now=4.0)
     assert (view.phase, view.episodes[0].outcome) == (Phase.READY, verdict)
     assert recordings.written == [(UID, verdict)]
 
 
-def test_a_pending_verdict_refuses_start_end_and_the_end_of_the_run():
+def test_a_pending_verdict_refuses_start_and_the_end_of_the_run():
     station = _station()
     station.start(now=1.0)
     station.close(POLICY_END, now=2.0)
     with pytest.raises(Refused, match='give the verdict'):
         station.start(now=3.0)
-    with pytest.raises(Refused, match='give its verdict'):
-        station.end(Outcome.SUCCESS)
     with pytest.raises(Refused, match='finish the episode first'):
         station.end_run()
-    station.judge(Outcome.FAIL)
-    with pytest.raises(Refused, match='no episode waits'):
-        station.judge(Outcome.SUCCESS)
+    station.end(Outcome.FAIL)
+    with pytest.raises(Refused, match='no episode is running'):
+        station.end(Outcome.SUCCESS)
     station.start(now=4.0)
-
-
-def test_a_judge_with_no_episode_waiting_is_refused():
-    station = _station()
-    with pytest.raises(Refused, match='no episode waits'):
-        station.judge(Outcome.SUCCESS)
-    station.start(now=1.0)
-    with pytest.raises(Refused, match='no episode waits'):
-        station.judge(Outcome.SUCCESS)
 
 
 def test_a_verdict_on_an_episode_that_recorded_nothing_writes_nothing():
@@ -222,7 +211,7 @@ def test_a_verdict_on_an_episode_that_recorded_nothing_writes_nothing():
     station = _station(recordings=recordings)
     station.start(now=1.0)
     station.close(EpisodeEnd(POLICY_END.terminal, None), now=2.0)
-    station.judge(Outcome.SUCCESS)
+    station.end(Outcome.SUCCESS)
     station.start(now=3.0)
     station.close(EpisodeEnd(TIMED_OUT.terminal, None), now=4.0)
     assert recordings.written == []
@@ -237,7 +226,7 @@ def test_a_failed_write_keeps_the_verdict_pending():
     station.start(now=1.0)
     station.close(POLICY_END, now=2.0)
     with pytest.raises(OSError, match='disk full'):
-        station.judge(Outcome.SUCCESS)
+        station.end(Outcome.SUCCESS)
     assert station.view(now=3.0).phase is Phase.VERDICT_PENDING
 
 
@@ -344,7 +333,7 @@ def test_each_change_advances_the_generation_and_a_view_does_not():
     station.start(now=3.0)
     station.close(POLICY_END, now=4.0)
     note()
-    station.judge(Outcome.FAIL)
+    station.end(Outcome.FAIL)
     note()
     assert generations == sorted(generations)
     assert len(set(generations)) == 7
