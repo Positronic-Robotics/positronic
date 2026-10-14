@@ -235,7 +235,7 @@ def test_recover_answers_not_cleared_when_the_activation_does_not_complete(monke
     bus, clock = FakeBus(), MockClock()
     driver, _, loop = _driven(monkeypatch, bus, clock)
     bus.completes = False
-    timeout = int(robotiq._ACTIVATION_TIMEOUT_S)
+    timeout = int(robotiq.TUNING_2F85.activation_timeout_s)
 
     answer = _recoverer(world, driver)(None)
     _pump(loop, clock, timeout - 1, seconds=1.0)

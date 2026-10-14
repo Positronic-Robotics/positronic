@@ -21,10 +21,6 @@ _BAUD_RATE = 115200
 _BYTESIZE = 8
 _PARITY = 'N'
 _STOPBITS = 1
-# A stuck gripper pushed at full current for about 9 s before its activation stroke broke free.
-_ACTIVATION_TIMEOUT_S = 30.0
-# A 2F-85 shut on nothing reads 229 against a request of 255.
-_ARRIVAL_TOLERANCE_COUNTS = 50
 
 
 class Activation(Enum):
@@ -84,14 +80,14 @@ class Reading:
         """How closed the fingers read back."""
         return self.position / 255.0
 
-    @property
-    def claims_arrival_far_from_request(self) -> bool:
-        """The gripper reports its fingers at the position request, and their position is far from it.
+    def claims_arrival_farther_than(self, tolerance: int) -> bool:
+        """The gripper reports its fingers at the position request, and their position is more than ``tolerance``
+        counts from it.
 
         A gripper that does not obey reports this, with ``gFLT`` at zero.
         """
         s = self.status
-        far = abs(self.position - self.requested) > _ARRIVAL_TOLERANCE_COUNTS
+        far = abs(self.position - self.requested) > tolerance
         return s.going and s.fingers is Fingers.AT_REQUEST and far
 
     def __str__(self) -> str:
@@ -100,6 +96,22 @@ class Reading:
             f'gACT={s.activated:d} gGTO={s.going:d} gSTA={s.activation.name} gOBJ={s.fingers.name} '
             f'gFLT=0x{s.fault:02X} gPR={self.requested} gPO={self.position} gCU={self.current}'
         )
+
+
+@dataclass(frozen=True)
+class RobotiqTuning:
+    """How long one gripper's activation may take, and how far from a request its fingers may stop."""
+
+    activation_timeout_s: float  # the reset and the activation together
+    arrival_tolerance: int  # in position counts
+
+
+TUNING_2F85 = RobotiqTuning(
+    # A stuck gripper pushed at full current for about 9 s before its activation stroke broke free.
+    activation_timeout_s=30.0,
+    # A 2F-85 shut on nothing reads 229 against a request of 255.
+    arrival_tolerance=50,
+)
 
 
 class _Gripper(DriverRun[float]):
@@ -114,12 +126,14 @@ class _Gripper(DriverRun[float]):
         sync_move: pimm.calls.ControlSystemHandler[float, None],
         async_move: pimm.SignalReceiver[float],
         out: pimm.SignalEmitter[float],
+        tuning: RobotiqTuning,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=200)  # the manual allows 200 Hz
         self._client = client
         self._out = out
+        self._tuning = tuning
         self._status: Status | None = None
         self._disobeys = False
 
@@ -130,7 +144,7 @@ class _Gripper(DriverRun[float]):
             self._status = reading.status
             level = logging.WARNING if reading.status.fault else logging.INFO
             logger.log(level, 'The Robotiq gripper reports %s', reading)
-        disobeys = reading.claims_arrival_far_from_request
+        disobeys = reading.claims_arrival_farther_than(self._tuning.arrival_tolerance)
         if disobeys and not self._disobeys:
             logger.warning('The Robotiq gripper reports its fingers at the request, far from it: %s', reading)
         self._disobeys = disobeys
@@ -146,7 +160,7 @@ class _Gripper(DriverRun[float]):
         CLEARED once the activation completes with no fault. The rising edge of ``rACT`` clears a major fault,
         and the fingers stroke fully open and closed.
         """
-        deadline = self.clock.now() + _ACTIVATION_TIMEOUT_S
+        deadline = self.clock.now() + self._tuning.activation_timeout_s
         self._write([0x0000, 0x0000, 0x0000])
         outcome = RecoveryOutcome.NOT_CLEARED
         if (yield from self._await(Activation.RESET, deadline)) is not None:
@@ -171,8 +185,9 @@ class _Gripper(DriverRun[float]):
 
 
 class Robotiq2F(pimm.ControlSystem):
-    def __init__(self, port: str):
+    def __init__(self, port: str, tuning: RobotiqTuning = TUNING_2F85):
         self._port = port
+        self._tuning = tuning
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
@@ -199,7 +214,7 @@ class Robotiq2F(pimm.ControlSystem):
             port=self._port, baudrate=_BAUD_RATE, bytesize=_BYTESIZE, parity=_PARITY, stopbits=_STOPBITS
         )
         assert client.connect(), f'Failed to connect to Robotiq gripper at {self._port}'
-        gripper = _Gripper(client, self.sync_move, self.target_grip, self.grip, should_stop, clock)
+        gripper = _Gripper(client, self.sync_move, self.target_grip, self.grip, self._tuning, should_stop, clock)
 
         try:
             yield from gripper.activate()
