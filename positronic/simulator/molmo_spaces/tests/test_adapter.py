@@ -130,9 +130,7 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
             molmo_keys.TASK_HORIZON: 30.0,
         }
     ]
-
-
-_LEFT_FIRST_PARAMS = {**_BENCH_PARAMS, molmo_keys.EXTERIOR_SIDES: [side.value for side in _LEFT_FIRST]}
+    assert adapter.reset_token(adapter.task_params([record])[0])[mapping.TOKEN_EPISODE_INDEX] == 3
 
 
 def test_reset_token_carries_benchmark_episode_and_seed():
@@ -143,8 +141,8 @@ def test_reset_token_carries_benchmark_episode_and_seed():
         mapping.TOKEN_SEED: 7,
         mapping.WITH_RIGHT_SHOULDER: True,
     }
-    assert adapter.reset_token({**_LEFT_FIRST_PARAMS, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
-    assert adapter.reset_token({**_LEFT_FIRST_PARAMS, molmo_keys.EPISODE_INDEX: 2}) == {
+    assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
+    assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 2}) == {
         **_BENCH._asdict(),
         mapping.TOKEN_EPISODE_INDEX: 2,
         mapping.TOKEN_SEED: None,
@@ -152,7 +150,7 @@ def test_reset_token_carries_benchmark_episode_and_seed():
     }
 
 
-def test_reset_token_asks_for_the_right_shoulder_only_when_a_trial_serves_it():
-    adapter = _adapter([ShoulderSide.LEFT])
-    params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, molmo_keys.EXTERIOR_SIDES: [ShoulderSide.LEFT.value]}
-    assert adapter.reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is False
+def test_reset_token_asks_for_the_right_shoulder_only_when_the_adapter_declares_it():
+    params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
+    assert _adapter([ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is False
+    assert _adapter([ShoulderSide.RIGHT, ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is True

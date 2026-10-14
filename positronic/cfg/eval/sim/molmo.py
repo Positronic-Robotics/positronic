@@ -27,7 +27,7 @@ _TIMEOUT_MARGIN_SEC = 1.0
     trial_count=1,
     timeout=None,
     seed=None,
-    right_shoulder=True,
+    with_right_shoulder=True,
 )
 def benchmarks(
     suite: str | list[str] | None,
@@ -38,7 +38,7 @@ def benchmarks(
     trial_count: int,
     timeout: float | None,
     seed: int | None,
-    right_shoulder: bool,
+    with_right_shoulder: bool,
 ) -> Eval:
     """A DROID evaluation over selected MolmoSpaces benchmark episodes.
 
@@ -51,13 +51,13 @@ def benchmarks(
     and every trial records it under ``molmo.exterior_sides``. The right shoulder camera hides the grasp site
     in some episodes; an open selection leaves those out, and a pinned one is refused.
 
-    ``right_shoulder=False`` serves the left shoulder camera alone, in ``image.exterior``, and runs every episode.
+    ``with_right_shoulder=False`` serves the left shoulder camera alone, in ``image.exterior``, and runs every episode.
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
     if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
         raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
-    exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if right_shoulder else [ShoulderSide.LEFT]
+    exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if with_right_shoulder else [ShoulderSide.LEFT]
     cameras = camera_dict(exterior_sides)
     proxy = RemoteEnvControlSystem(MolmoAdapter(cameras), serve_molmo_spaces())
     embodiment = remote_embodiment(
@@ -71,7 +71,7 @@ def benchmarks(
             scene_dataset=scene_dataset,
             task_config=task_config,
             benchmark=benchmark,
-            **{mapping.SELECT_EPISODES: episodes, mapping.WITH_RIGHT_SHOULDER: right_shoulder},
+            **{mapping.SELECT_EPISODES: episodes, mapping.WITH_RIGHT_SHOULDER: with_right_shoulder},
         )
         if timeout is not None:
             logging.warning('--eval.timeout %ss replaces the benchmark horizon backstop', timeout)

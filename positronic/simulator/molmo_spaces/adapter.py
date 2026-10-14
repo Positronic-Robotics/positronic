@@ -42,6 +42,7 @@ class MolmoAdapter(WireCommandAdapter):
     def __init__(self, cameras: Mapping[str, tuple[str, ...]]):
         super().__init__()
         self._cameras = cameras
+        self._with_right_shoulder = SHOULDER_CAMERAS[ShoulderSide.RIGHT] in cameras.values()
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
@@ -59,7 +60,7 @@ class MolmoAdapter(WireCommandAdapter):
             **{dimension: params[key] for dimension, key in self._DIMENSION_KEYS.items()},
             mapping.TOKEN_EPISODE_INDEX: params[molmo_keys.EPISODE_INDEX],
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
-            mapping.WITH_RIGHT_SHOULDER: ShoulderSide.RIGHT in params[molmo_keys.EXTERIOR_SIDES],
+            mapping.WITH_RIGHT_SHOULDER: self._with_right_shoulder,
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

@@ -122,7 +122,7 @@ def test_an_explicit_seed_fixes_the_exterior_order_and_seeds_draw_both_orders(as
 
 
 def test_a_run_without_the_right_shoulder_serves_the_left_shoulder_alone_and_keeps_every_episode(asked):
-    ev = benchmarks.override(right_shoulder=False, seed=3).instantiate()
+    ev = benchmarks.override(with_right_shoulder=False, seed=3).instantiate()
     assert _exterior_sides(ev) == [[ShoulderSide.LEFT.value]] * 2
     assert asked[-1] == {mapping.WITH_RIGHT_SHOULDER: False}
     assert keys.EXTERIOR_IMAGE in ev.embodiment.observations.keys()

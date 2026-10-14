@@ -161,12 +161,14 @@ class MolmoSpacesEnv(EnvProtocol):
         with_right.cameras = [*episode.cameras, right]
         return with_right
 
-    def _build(self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None, right_shoulder: bool) -> None:
+    def _build(
+        self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None, with_right_shoulder: bool
+    ) -> None:
         if self._sampler is not None:
             self._sampler.close()
         episodes = self._episodes_of(bench)
         episode = episodes[episode_index]
-        if right_shoulder:
+        if with_right_shoulder:
             episode = self._with_right_shoulder_camera(episode, mapping.episode_rng(bench, episode_index))
         cfg = _DroidEvalConfig()
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
