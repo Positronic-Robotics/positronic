@@ -2,6 +2,11 @@
 
 Runs in MolmoSpaces' isolated interpreter, with ``mapping``, ``server`` and ``protocol`` on ``PYTHONPATH``.
 End-effector poses describe ``gripper/grasp_site`` in the robot base frame.
+
+Usage
+  python env.py --port PORT [--host HOST]
+  python env.py --sweep BENCH[:EPISODES] ... --progress PROGRESS.jsonl   # writes right_view_blocked.json
+  # BENCH is a benchmark path under the asset packs; EPISODES is a list such as 0-20,40.
 """
 
 import argparse
@@ -40,6 +45,7 @@ import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
+from pydantic import BaseModel, ConfigDict  # noqa: E402
 from server import EnvProtocol, EnvServer  # noqa: E402
 
 # Loading the runner first avoids a circular import in json_eval_task_sampler.
@@ -133,6 +139,7 @@ class MolmoSpacesEnv(EnvProtocol):
     def __init__(self, assets_dir: Path) -> None:
         self._assets_dir = assets_dir
         self._found = mapping.discover_benchmarks(assets_dir)
+        self._right_view_blocked = mapping.load_right_view_blocked()
         self._episodes: dict[mapping.BenchmarkPath, list[Any]] = {}
         self._sampler: Any = None
         self._task: Any = None
@@ -150,6 +157,9 @@ class MolmoSpacesEnv(EnvProtocol):
                 raise ValueError(f'{bench.relative} holds no episodes')
             self._episodes[bench] = episodes
         return self._episodes[bench]
+
+    def episode_count(self, bench: mapping.BenchmarkPath) -> int:
+        return len(self._episodes_of(bench))
 
     def _assert_measures_at_grasp_site(self) -> None:
         """Require arm poses to track the benchmark's gripper grasp site."""
@@ -189,11 +199,8 @@ class MolmoSpacesEnv(EnvProtocol):
         records = []
         for bench in mapping.select_benchmarks(self._found, spec):
             episodes = self._episodes_of(bench)
-            count = len(episodes)
-            indices = list(range(count)) if pinned is None else pinned
-            out_of_range = [i for i in indices if not 0 <= i < count]
-            if out_of_range:
-                raise ValueError(f'episodes {out_of_range} out of range for the {count} episodes of {bench.relative}')
+            blocked = self._right_view_blocked.get(bench, frozenset())
+            indices = mapping.select_episodes(bench, len(episodes), pinned, blocked)
             horizon_sec = determine_task_horizon(episodes, None, cfg.policy_dt_ms) * cfg.policy_dt_ms / 1000.0
             records += [
                 {
@@ -205,6 +212,22 @@ class MolmoSpacesEnv(EnvProtocol):
                 for i in indices
             ]
         return records
+
+    def right_view_blocker(self, aspect: float) -> str | None:
+        """What hides the start grasp site from the right shoulder camera after ``reset``, or None if nothing does.
+
+        ``aspect`` is the right camera's image width over height. The camera sees through the robot's own links.
+        """
+        env = self._task.env
+        camera = env.camera_manager.registry[mapping.RIGHT_SHOULDER_CAMERA]
+        site = np.asarray(self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).leaf_frame_to_world)[:3, 3]
+        if not mapping.in_camera_view(camera.pos, camera.forward, camera.up, camera.fov, aspect, site):
+            return 'outside the field of view'
+        model = env.current_model
+        robot = env.current_robot.namespace
+        robot_geoms = {g for g in range(model.ngeom) if model.body(int(model.geom_bodyid[g])).name.startswith(robot)}
+        geom = mapping.first_occluding_geom(model, env.current_data, camera.pos, site, robot_geoms)
+        return None if geom is None else model.body(int(model.geom_bodyid[geom])).name
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         bench = mapping.BenchmarkPath(**{d: token[d] for d in mapping.BenchmarkPath._fields})
@@ -303,15 +326,95 @@ class MolmoSpacesEnv(EnvProtocol):
             self._task = None
 
 
+def _parse_episodes(text: str) -> list[int]:
+    """Indices from a list such as ``0-20,40``."""
+    indices = []
+    for part in text.split(','):
+        first, _, last = part.partition('-')
+        indices += list(range(int(first), int(last) + 1)) if last else [int(first)]
+    return indices
+
+
+class RightViewCheck(BaseModel):
+    """One sweep line: what hides the start grasp site from the right shoulder camera, if anything."""
+
+    model_config = ConfigDict(extra='ignore')
+
+    bench: str
+    episode: int
+    right_blocked: bool | None = None
+    blocker: str | None = None
+    error: str | None = None  # The episode failed to build or reset; a rerun checks it again.
+
+    @property
+    def clean(self) -> bool:
+        return self.error is None and self.right_blocked is not None
+
+
+def _check_right_view(env: MolmoSpacesEnv, bench: mapping.BenchmarkPath, index: int) -> RightViewCheck:
+    rel = bench.relative.as_posix()
+    try:
+        frame = env.reset({**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: index, mapping.TOKEN_SEED: None})
+        height, width = frame[protocol.FRAME_OBS][mapping.RIGHT_SHOULDER_CAMERA].shape[:2]
+        blocker = env.right_view_blocker(width / height)
+    except Exception as error:  # Record it; a rerun checks the episode again.
+        return RightViewCheck(bench=rel, episode=index, error=repr(error))
+    return RightViewCheck(bench=rel, episode=index, right_blocked=blocker is not None, blocker=blocker)
+
+
+def sweep_right_view(env: MolmoSpacesEnv, cases: list[str], progress: Path, blocked_list: Path) -> None:
+    """Check the right view on each episode of ``cases``, then record the blocked episodes of each swept benchmark.
+
+    A case is a benchmark path with an optional ``:EPISODES`` list. ``progress`` holds one JSON line per check; a
+    rerun skips an episode whose last line is clean. A benchmark whose episodes all have a clean line gets its entry
+    in ``blocked_list``.
+    """
+    lines = progress.read_text().splitlines() if progress.exists() else []
+    last = {(c.bench, c.episode): c for c in map(RightViewCheck.model_validate_json, lines)}
+    counts = {}
+    for case in cases:
+        rel, _, episodes = case.partition(':')
+        bench = mapping.BenchmarkPath.parse(rel)
+        counts[bench] = env.episode_count(bench)
+        for index in _parse_episodes(episodes) if episodes else range(counts[bench]):
+            done = last.get((rel, index))
+            if done is not None and done.clean:
+                continue
+            check = _check_right_view(env, bench, index)
+            last[rel, index] = check
+            with progress.open('a') as f:
+                f.write(check.model_dump_json() + '\n')
+            print(check.model_dump_json(), flush=True)
+    swept = {}
+    for bench, count in counts.items():
+        checks = [last.get((bench.relative.as_posix(), i)) for i in range(count)]
+        if all(c is not None and c.clean for c in checks):
+            swept[bench] = [c.episode for c in checks if c is not None and c.right_blocked]
+            print(f'{bench.relative}: {len(swept[bench])} of {count} blocked: {swept[bench]}', flush=True)
+    if swept:
+        mapping.write_right_view_blocked(swept, blocked_list)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description='Serve MolmoSpaces over the env-server protocol.')
     parser.add_argument('--host', default='localhost')
-    parser.add_argument('--port', type=int, required=True)
+    parser.add_argument('--port', type=int)
+    parser.add_argument('--sweep', nargs='+', metavar='BENCH[:EPISODES]', help='check the right view instead')
+    parser.add_argument('--progress', type=Path, help="the sweep's JSON lines, one per checked episode")
+    parser.add_argument('--blocked-list', type=Path, default=mapping.RIGHT_VIEW_BLOCKED_PATH)
     args = parser.parse_args()
+    if (args.port is None) == (args.sweep is None) or (args.sweep is not None) != (args.progress is not None):
+        parser.error('give --port to serve, or --sweep with --progress')
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
         parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     env = MolmoSpacesEnv(Path(assets))
+    if args.sweep is not None:
+        try:
+            sweep_right_view(env, args.sweep, args.progress, args.blocked_list)
+        finally:
+            env.close()
+        return
     EnvServer(env, args.host, args.port).serve_forever()
 
 

@@ -10,7 +10,9 @@ Run on a box with the asset packs (a GPU-less one uses mesa software EGL)::
         uv run --locked pytest positronic/simulator/molmo_spaces/tests/test_replay.py --no-cov
 """
 
+import json
 import os
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -98,3 +100,23 @@ def test_an_episode_serves_both_shoulder_cameras_and_one_right_view_for_any_tria
     for obs in frames:
         assert any(name in obs for name in mapping.LEFT_SHOULDER_CAMERAS) and mapping.RIGHT_SHOULDER_CAMERA in obs
     np.testing.assert_array_equal(*(obs[mapping.RIGHT_SHOULDER_CAMERA] for obs in frames))
+
+
+_PICK_BOARD = mapping.BenchmarkPath(
+    'molmospaces-bench-v2',
+    'procthor-10k',
+    'FrankaPickDroidMiniBench',
+    'FrankaPickDroidMiniBench_json_benchmark_20251231',
+)
+
+
+def test_the_sweep_flags_a_wall_hiding_the_grasp_site_and_clears_an_open_view(tmp_path: Path):
+    _skip_unless_present(_PICK_BOARD)
+    progress, blocked_list = tmp_path / 'progress.jsonl', tmp_path / 'blocked.json'
+    sweep = ['--sweep', f'{_PICK_BOARD.relative.as_posix()}:0,6', '--progress', str(progress)]
+    command = [str(launcher.ensure_molmo_venv()), str(Path(mapping.__file__).parent / 'env.py'), *sweep]
+    subprocess.run([*command, '--blocked-list', str(blocked_list)], env=launcher.molmo_subprocess_env(), check=True)
+    checks = {line['episode']: line for line in map(json.loads, progress.read_text().splitlines())}
+    assert checks[0]['right_blocked'] is False
+    assert checks[6]['right_blocked'] is True and checks[6]['blocker'].startswith('wall')
+    assert not blocked_list.exists()  # Two of the benchmark's episodes do not sweep it.

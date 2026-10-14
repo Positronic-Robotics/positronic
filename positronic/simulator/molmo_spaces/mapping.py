@@ -1,11 +1,13 @@
 """Shared benchmark selection and wire conversions for the client and MolmoSpaces server."""
 
 import hashlib
+import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -231,3 +233,78 @@ def episode_rng(bench: BenchmarkPath, episode_index: int) -> np.random.Generator
     """A generator keyed by the episode's place in the asset packs alone; no run or trial seed changes its draws."""
     digest = hashlib.sha256(f'{bench.relative.as_posix()}#{episode_index}'.encode()).digest()
     return np.random.default_rng(int.from_bytes(digest[:8], 'little'))
+
+
+# The episodes where scene geometry hides the start grasp site from the right shoulder camera, by benchmark path.
+# `env.py --sweep` writes a benchmark's entry once it has checked every episode; a benchmark absent from it is unswept.
+RIGHT_VIEW_BLOCKED_PATH = Path(__file__).parent / 'right_view_blocked.json'
+
+# The geom groups a MuJoCo camera renders under MjvOption's defaults.
+RENDERED_GEOM_GROUPS = np.array([1, 1, 1, 0, 0, 0], dtype=np.uint8)
+# A hit this close to the grasp site is the surface the grasp site touches or reaches into.
+GRASP_SITE_SURFACE_MARGIN_M = 0.15
+_MAX_SEE_THROUGH_HITS = 64
+
+
+def load_right_view_blocked(path: Path = RIGHT_VIEW_BLOCKED_PATH) -> dict[BenchmarkPath, frozenset[int]]:
+    """The blocked episodes of every swept benchmark."""
+    return {BenchmarkPath.parse(rel): frozenset(indices) for rel, indices in json.loads(path.read_text()).items()}
+
+
+def write_right_view_blocked(swept: dict[BenchmarkPath, Collection[int]], path: Path = RIGHT_VIEW_BLOCKED_PATH) -> None:
+    """Set the entries of ``swept`` in the file at ``path`` and keep its other entries."""
+    entries = {b.relative.as_posix(): sorted(v) for b, v in load_right_view_blocked(path).items()}
+    entries |= {b.relative.as_posix(): sorted(v) for b, v in swept.items()}
+    path.write_text(json.dumps(dict(sorted(entries.items())), indent=1) + '\n')
+
+
+def select_episodes(bench: BenchmarkPath, count: int, pinned: list[int] | None, blocked: frozenset[int]) -> list[int]:
+    """Every episode outside ``blocked`` when ``pinned`` is None, else ``pinned``, which must avoid ``blocked``."""
+    if pinned is None:
+        return [i for i in range(count) if i not in blocked]
+    out_of_range = [i for i in pinned if not 0 <= i < count]
+    if out_of_range:
+        raise ValueError(f'episodes {out_of_range} out of range for the {count} episodes of {bench.relative}')
+    hidden = sorted(set(pinned) & blocked)
+    if hidden:
+        raise ValueError(
+            f'episodes {hidden} of {bench.relative} hide the start grasp site from the right shoulder camera; '
+            f'select others ({RIGHT_VIEW_BLOCKED_PATH.name} lists them)'
+        )
+    return list(pinned)
+
+
+def in_camera_view(position: Any, forward: Any, up: Any, fovy_deg: float, aspect: float, point: Any) -> bool:
+    """Whether ``point`` is in front of the camera and inside its image; ``aspect`` is width over height."""
+    forward = np.asarray(forward, dtype=np.float64) / np.linalg.norm(forward)
+    up = np.asarray(up, dtype=np.float64)
+    up = up - forward * (up @ forward)
+    up /= np.linalg.norm(up)
+    right = np.cross(forward, up)
+    v = np.asarray(point, dtype=np.float64) - np.asarray(position, dtype=np.float64)
+    depth = v @ forward
+    half = np.tan(np.deg2rad(fovy_deg) / 2)
+    return bool(depth > 0 and abs(v @ up) <= half * depth and abs(v @ right) <= half * aspect * depth)
+
+
+def first_occluding_geom(
+    model: mujoco.MjModel, data: mujoco.MjData, origin: Any, target: Any, see_through: Collection[int]
+) -> int | None:
+    """The first rendered geom outside ``see_through`` on the segment from ``origin`` to ``target``, or None.
+
+    A hit within GRASP_SITE_SURFACE_MARGIN_M of ``target`` does not count.
+    """
+    origin = np.asarray(origin, dtype=np.float64)
+    span = np.asarray(target, dtype=np.float64) - origin
+    length = float(np.linalg.norm(span))
+    unit = span / length
+    travelled = 0.0
+    geom = np.zeros(1, dtype=np.int32)
+    for _ in range(_MAX_SEE_THROUGH_HITS):
+        hit = mujoco.mj_ray(model, data, origin + unit * travelled, unit, RENDERED_GEOM_GROUPS, 1, -1, geom)
+        if hit < 0 or travelled + hit >= length - GRASP_SITE_SURFACE_MARGIN_M:
+            return None
+        if int(geom[0]) not in see_through:
+            return int(geom[0])
+        travelled += hit + 1e-4
+    raise RuntimeError(f'the ray from {origin} passed {_MAX_SEE_THROUGH_HITS} see-through geoms')
