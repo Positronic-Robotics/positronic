@@ -32,7 +32,7 @@ from positronic.gui.station import Refused, RunView, Station, Verdict
 from positronic.gui.video_stream import VideoStream, codec_string
 from positronic.policy import Policy
 from positronic.policy import keys as policy_keys
-from positronic.policy.harness import EpisodeEnd, Rollout
+from positronic.policy.harness import EpisodeAborted, EpisodeEnd, EpisodePhase, Rollout, Running
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +107,9 @@ class StationConsole(pimm.ControlSystem):
     """Serves the station page and turns its presses into episodes. End run on the page returns from its loop, and
     that stops the World.
 
-    Connect ``perform_task`` and ``done`` to Harness, and each camera to ``cameras``. Run this system in a
-    background process so preview encoding can progress independently of policy execution. The policy and
-    tasks must be picklable; each rollout sends its own copy of the policy definition. An outcome that the console
+    Connect ``perform_task``, ``abort``, ``done`` and ``phase`` to Harness, and each camera to ``cameras``. Run this
+    system in a background process so preview encoding can progress independently of policy execution. The policy
+    and tasks must be picklable; each rollout sends its own copy of the policy definition. An outcome that the console
     gives after the harness answered goes into the episode's edit log in ``output_path``.
     """
 
@@ -125,9 +125,12 @@ class StationConsole(pimm.ControlSystem):
         self._port = port
         self.cameras = pimm.ReceiverDict(self)
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, EpisodeEnd](self)
+        self.abort = pimm.calls.ControlSystemCaller[None, None](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
+        self.phase = pimm.ControlSystemReceiver[EpisodePhase](self)
         # The open episode's answer.
         self._episode: pimm.calls.Answer[EpisodeEnd] | None = None
+        self._aborting: pimm.calls.Answer[None] | None = None
 
     @staticmethod
     def _raise_if_stopped(server_thread: threading.Thread) -> None:
@@ -142,7 +145,8 @@ class StationConsole(pimm.ControlSystem):
         station = Station(self._next_task, self._record_outcome)
         feeds = {name: CameraFeed() for name in self.cameras}
         tasks: queue.SimpleQueue[Task] = queue.SimpleQueue()
-        app = self.build_app(station, feeds, tasks.put, clock, should_stop)
+        aborts: queue.SimpleQueue[None] = queue.SimpleQueue()
+        app = self.build_app(station, feeds, tasks.put, lambda: aborts.put(None), clock, should_stop)
         # The legacy asyncio `websockets` backend drains the transport from its reader and keepalive coroutines
         # while the video loop sends, and an assertion then kills the feed. The sans-io backend serializes writes.
         config = uvicorn.Config(
@@ -161,6 +165,7 @@ class StationConsole(pimm.ControlSystem):
                 self._raise_if_stopped(server_thread)
                 self._push_frames(feeds, clock)
                 self._drive_episode(station, tasks, clock)
+                self._send_aborts(station, aborts)
                 if station.run_ended:
                     logger.info('The operator ended the run')
                     return
@@ -181,19 +186,41 @@ class StationConsole(pimm.ControlSystem):
             if message is not None and not isinstance(message.data, pimm.SignalError):
                 feed.push(message.data.array, clock.now())
 
+    def _send_aborts(self, station: Station, aborts: queue.SimpleQueue[None]) -> None:
+        """Call ``abort`` for each queued abort. A refused abort goes back to the station, which shows why."""
+        while True:
+            try:
+                aborts.get_nowait()
+            except queue.Empty:
+                break
+            self._aborting = self.abort(None)
+        if self._aborting is None or not self._aborting.done():
+            return
+        aborting, self._aborting = self._aborting, None
+        try:  # rules-allow: swallowed-error — a refused abort leaves the episode open, and the page shows why
+            aborting.result()
+        except Exception as exc:
+            logger.error(f'The harness refused the abort: {exc}')
+            station.abort_refused(str(exc))
+
     def _drive_episode(self, station: Station, tasks: queue.SimpleQueue[Task], clock: pimm.Clock) -> None:
-        """Submit queued tasks and update the page when an episode finishes."""
+        """Submit queued tasks, follow the episode phase, and update the page when an episode finishes."""
         while True:
             try:
                 task = tasks.get_nowait()
             except queue.Empty:
                 break
             self._episode = self.perform_task(Rollout(task, self._policy, self._output_path))
+        phase = pimm.read_updated(self.phase)
+        if phase is not None and isinstance(phase.data, Running):
+            station.policy_started()
         if self._episode is None or not self._episode.done():
             return
         episode, self._episode = self._episode, None
         try:  # rules-allow: swallowed-error — the page shows the error, and the operator decides whether to retry
             end = episode.result()
+        except EpisodeAborted:
+            station.aborted(clock.now())
         except Exception as exc:
             logger.exception('Episode failed')
             station.fail(''.join(traceback.format_exception_only(exc)).strip(), clock.now())
@@ -205,10 +232,12 @@ class StationConsole(pimm.ControlSystem):
         station: Station,
         feeds: dict[str, CameraFeed],
         submit: Callable[[Task], None],
+        abort: Callable[[], None],
         clock: pimm.Clock,
         should_stop: pimm.SignalReceiver,
     ) -> FastAPI:
-        """The console's HTTP surface. ``submit`` queues a task for the control loop."""
+        """The console's HTTP surface. ``submit`` queues a task, and ``abort`` queues an abort, for the control
+        loop."""
         app = FastAPI()
 
         def sent_from_another_site(connection: HTTPConnection) -> bool:
@@ -245,6 +274,12 @@ class StationConsole(pimm.ControlSystem):
         @app.post('/episode/start')
         async def start() -> Status:
             submit(station.start(clock.now()))
+            return status()
+
+        @app.post('/episode/abort')
+        async def abort_episode() -> Status:
+            station.abort()
+            abort()
             return status()
 
         @app.post('/episode/end')

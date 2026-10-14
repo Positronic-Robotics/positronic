@@ -7,12 +7,15 @@ import threading
 from contextlib import nullcontext
 
 import pytest
+from positronic_wire import wire
 
 from positronic import telemetry, telemetry_keys
+from positronic.eval import DeclarableGroup
 from positronic.policy.base import Policy, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, Metadata, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.remote import RemotePolicy
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 
@@ -92,6 +95,32 @@ def test_sequential_combines_component_metadata():
             return {'config': {'fault_handling': True, 'fps': 20}}
 
     assert Sequential(NamedPause(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
+
+
+class _Declaring(PauseOnUnavailable):
+    def channel_groups(self):
+        return frozenset({DeclarableGroup.TELEOP})
+
+
+def test_sequential_declares_every_channel_group_that_a_component_declares():
+    assert Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10)).channel_groups() == frozenset()
+    declared = Sequential(PauseOnUnavailable(), Sequential(_Declaring(), ChunkedSchedule(fps=10)))
+    assert declared.channel_groups() == frozenset({DeclarableGroup.TELEOP})
+
+
+def _remote() -> RemotePolicy:
+    return RemotePolicy('websocket', wire.HostPortAddress('localhost', 0, wire.SESSION_PATH, ''))
+
+
+def test_a_sequence_that_declares_a_group_cannot_hold_a_policy_that_sends_off_the_rig():
+    with pytest.raises(ValueError, match='another machine'):
+        Sequential(_Declaring(), Metadata({}), _remote())
+
+
+def test_a_sequence_that_declares_no_group_can_hold_a_policy_that_sends_off_the_rig():
+    stack = Sequential(PauseOnUnavailable(), Sequential(Metadata({}), _remote()))
+    assert stack.sends_off_rig()
+    assert stack.channel_groups() == frozenset()
 
 
 @pytest.mark.parametrize('with_codec', [False, True])

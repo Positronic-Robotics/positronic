@@ -8,8 +8,9 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
+from dataclasses import replace
 from functools import partial
-from itertools import pairwise
+from itertools import count, pairwise
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +120,42 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
     assert policy.observations[0][keys.TASK] == 'pick up the cube'
     assert eval_keys.ENDED_BY_OPERATOR in caplog.text
     assert policy.closed
+
+
+@pytest.mark.timeout(30.0)
+def test_a_keypress_aborts_an_episode_whose_rig_still_moves_and_the_next_start_runs_its_task(monkeypatch, caplog):
+    """The rig takes a second to reach the start pose, so the episode still starts when ``p`` comes."""
+    policy = _IdlePolicy()
+    draws = count()
+    tasks = make_trial('pick up the cube')
+
+    def next_task():
+        return replace(tasks(), meta={'draw': next(draws)})
+
+    def presses():
+        yield 's'
+        # The harness refuses an abort that reaches it before the episode, so the operator presses again.
+        while 'Episode aborted' not in caplog.text:
+            yield 'p'
+            for _ in range(10):
+                yield None
+        assert not policy.started
+        yield 's'
+        while not policy.observations:
+            yield None
+        yield 'p'
+        while 'Episode ended:' not in caplog.text:
+            yield None
+        yield 'q'
+
+    script = presses()
+    monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(script, None)))
+
+    with caplog.at_level(logging.INFO):
+        real(policy=policy, embodiment=make_embodiment(move_s=3.0), next_task=next_task)
+
+    assert next(draws) == 1
+    assert policy.observations[0][keys.TASK] == 'pick up the cube'
 
 
 def test_a_task_failure_is_reported_without_stopping_the_operator(monkeypatch, caplog):
@@ -255,6 +292,7 @@ def _wait_for(condition: Callable[[], Any], what: str, timeout: float = 90.0) ->
 def _run_episode(base: str, marks: Path, number: int, verdict: Verdict) -> Episode:
     httpx.post(f'{base}/episode/start').raise_for_status()
     _wait_for((marks / f'episode-{number}').exists, f'episode {number} to open')
+    _wait_for(lambda: _phase(base) is Phase.RUNNING, f'the console to see episode {number} run')
     httpx.post(f'{base}/episode/end', json=VerdictBody(verdict=verdict).model_dump(mode='json')).raise_for_status()
 
     def closed() -> Status | None:
@@ -456,6 +494,29 @@ def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp
 
 
 @pytest.mark.timeout(120.0)
+def test_an_abort_while_the_rig_moves_to_its_start_ends_the_episode_before_its_policy(tmp_path):
+    """The harness refuses an abort that reaches it before the episode; the page then shows Starting again, and the
+    operator presses Abort once more."""
+    statuses: list[Status | None] = []
+
+    def script(base: str, clock: pimm.Clock):
+        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        post(base, '/episode/start')
+        while _phase(base) is not Phase.READY:
+            assert (yield from wait(lambda: _phase(base) in (Phase.STARTING, Phase.READY), clock, seconds=10.0))
+            if _phase(base) is Phase.STARTING:
+                assert post(base, '/episode/abort') == 200
+        statuses.append(read_status(base))
+
+    run_attended(_MarkingPolicy(tmp_path), script, move_s=3.0)
+
+    [status] = statuses
+    assert status is not None
+    assert [episode.outcome for episode in status.run.episodes] == [Unrecorded.ABORTED]
+    assert not (tmp_path / 'episode-1').exists()
+
+
+@pytest.mark.timeout(120.0)
 def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_path):
     presses: list[int] = []
     statuses: list[Status | None] = []
@@ -471,6 +532,7 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
         statuses.append(read_status(base))
         presses.append(post(base, '/episode/start'))
         yield from wait((tmp_path / 'episode-1').exists, clock)
+        yield from wait(lambda: _phase(base) is Phase.RUNNING, clock)
         presses.append(post(base, '/episode/end', VerdictBody(verdict=Outcome.SUCCESS)))
         yield from wait(lambda: _phase(base) is Phase.READY, clock)
         statuses.append(read_status(base))
@@ -500,6 +562,7 @@ def test_end_run_waits_for_the_open_episode_and_then_stops_the_whole_command(tmp
         _wait_for(lambda: read_status(base), 'the console to answer')
         httpx.post(f'{base}/episode/start').raise_for_status()
         _wait_for((marks / 'episode-1').exists, 'episode 1 to open')
+        _wait_for(lambda: _phase(base) is Phase.RUNNING, 'the console to see episode 1 run')
         refused = httpx.post(f'{base}/run/end')
         assert refused.status_code == 409
         assert 'finish the episode first' in refused.json()['detail']

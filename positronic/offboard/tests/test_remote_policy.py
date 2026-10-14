@@ -19,6 +19,7 @@ from positronic_wire import grpc, registry, websocket, wire
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm.command import CartesianPosition
+from positronic.eval import DeclarableGroup
 from positronic.geom import Transform3D
 from positronic.gui.station import Phase
 from positronic.gui.web import VerdictBody
@@ -519,6 +520,7 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
             calls = model.call_count
             assert post(base, '/episode/start') == 200
             assert (yield from wait(lambda calls=calls: model.call_count > calls, clock))
+            assert (yield from wait(lambda: (status := read_status(base)) and status.run.phase is Phase.RUNNING, clock))
             assert post(base, '/episode/end', VerdictBody(verdict=verdict)) == 200
 
             def finished():
@@ -873,6 +875,30 @@ def test_invalid_declaration_fails_before_inference_and_closes_connection(runtim
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()
+
+
+def test_a_server_stack_that_declares_a_channel_group_fails_before_inference(runtime, monkeypatch):
+    monkeypatch.setattr(ChunkedSchedule, 'channel_groups', lambda self: frozenset({DeclarableGroup.TELEOP}))
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: ChunkedSchedule(fps=10).to_spec()})
+    assert policy.channel_groups() == frozenset()
+    with pytest.raises(ValueError, match='cannot declare channel groups'):
+        runtime.start(policy)
+    session.infer.assert_not_called()
+    session.close.assert_called_once()
+
+
+def test_the_keys_of_a_declarable_channel_group_do_not_reach_the_server(runtime):
+    stack = ChunkedSchedule(fps=10)
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()}, infer_return=[{}])
+    run = runtime.start(policy)
+    try:
+        pose = f'{DeclarableGroup.TELEOP}.pose'
+        run.send({keys.TASK: 'drive', pose: 1, f'{pose}.right': 2})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+    finally:
+        run.close()
+    [sent], _ = session.infer.call_args
+    assert set(sent) == {keys.TASK}
 
 
 def test_stack_failure_finishes_active_inference_before_closing_session(runtime):

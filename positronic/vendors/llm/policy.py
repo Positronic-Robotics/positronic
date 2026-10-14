@@ -354,6 +354,9 @@ class LLMPolicy(Policy):
             if tool is not Tool.REVEAL_FRAMES or images is Images.ON_DEMAND
         ]
 
+    def sends_off_rig(self) -> bool:
+        return True
+
     def meta(self) -> dict[str, Any]:
         return {
             policy_keys.TYPE: 'llm',

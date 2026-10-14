@@ -6,6 +6,7 @@ from typing import Any
 from positronic_model_server.spec import SEQ
 
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.eval import DeclarableGroup
 from positronic.policy.base import InputT, OutputT, Processor, ProcessorRun, Runtime
 from positronic.policy.codecs import Codec
 from positronic.utils import flatten_dict
@@ -28,6 +29,11 @@ class Sequential(Processor[InputT, OutputT]):
             for component in (first, *rest)
             for child in (component._components if type(component) is Sequential else (component,))
         )
+        if self.channel_groups() and self.sends_off_rig():
+            raise ValueError(
+                f'The sequence declares {sorted(self.channel_groups())}, and it holds a part that sends observations '
+                'to another machine'
+            )
 
     def run(self, runtime: Runtime, *dependencies: Any) -> ProcessorRun[InputT, OutputT]:
         children: list[ProcessorRun[Any, Any]] = []
@@ -63,6 +69,12 @@ class Sequential(Processor[InputT, OutputT]):
                 raise ValueError('Only one component in a sequence may convert the end-effector frame')
             meta.update(flatten_dict(values))
         return meta
+
+    def channel_groups(self) -> frozenset[DeclarableGroup]:
+        return frozenset().union(*(c.channel_groups() for c in self._components if isinstance(c, Processor)))
+
+    def sends_off_rig(self) -> bool:
+        return any(c.sends_off_rig() for c in self._components if isinstance(c, Processor))
 
     def to_spec(self) -> dict[str, Any]:
         return {SEQ: [component.to_spec() for component in self._components]}

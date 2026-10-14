@@ -97,6 +97,7 @@ def test_each_attempt_takes_the_next_number():
     station = _station()
     for verdict in (Outcome.FAIL, Outcome.SUCCESS):
         station.start(now=1.0)
+        station.policy_started()
         station.end(verdict)
         station.close(_judged(verdict), now=2.0)
     task = station.start(now=3.0)
@@ -104,10 +105,12 @@ def test_each_attempt_takes_the_next_number():
     assert [episode.number for episode in station.view(now=4.0).episodes] == [1, 2, 3]
 
 
-def test_the_phase_follows_start_verdict_and_answer():
+def test_the_phase_follows_start_policy_verdict_and_answer():
     station = _station()
     assert station.view(now=0.0).phase is Phase.READY
     station.start(now=1.0)
+    assert station.view(now=1.2).phase is Phase.STARTING
+    station.policy_started()
     assert station.view(now=1.5).phase is Phase.RUNNING
     station.end(Outcome.SUCCESS)
     assert station.view(now=2.0).phase is Phase.ENDING
@@ -115,6 +118,67 @@ def test_the_phase_follows_start_verdict_and_answer():
     view = station.view(now=3.0)
     assert view.phase is Phase.READY
     assert (view.episodes[0].started_at, view.episodes[0].ended_at) == (1.0, 2.5)
+
+
+def test_an_episode_aborts_only_before_its_policy_starts_and_takes_a_verdict_only_after():
+    station = _station()
+    with pytest.raises(Refused, match='no episode is starting'):
+        station.abort()
+    station.start(now=1.0)
+    with pytest.raises(Refused, match='abort the episode'):
+        station.end(Outcome.SUCCESS)
+    station.abort()
+    assert station.view(now=1.5).phase is Phase.ENDING
+    with pytest.raises(Refused, match='on its way'):
+        station.abort()
+    station.aborted(now=2.0)
+    view = station.view(now=2.5)
+    assert view.phase is Phase.READY
+    assert view.episodes[0].outcome is Unrecorded.ABORTED
+
+    station.start(now=3.0)
+    station.policy_started()
+    with pytest.raises(Refused, match='no episode is starting'):
+        station.abort()
+
+
+def test_an_aborted_episode_keeps_its_trial_for_the_next_start():
+    station = _station()
+    assert station.start(now=1.0).meta['draw'] == 0
+    station.abort()
+    station.aborted(now=2.0)
+    again = station.start(now=3.0)
+    assert again.meta['draw'] == 0
+    assert again.meta[eval_keys.TRIAL_INDEX] == 1
+    station.policy_started()
+    station.close(_judged(Outcome.SUCCESS), now=4.0)
+    assert station.start(now=5.0).meta['draw'] == 1
+
+
+def test_an_abort_is_refused_while_a_verdict_is_pending():
+    station = _station()
+    station.start(now=1.0)
+    station.policy_started()
+    station.close(POLICY_END, now=2.0)
+    with pytest.raises(Refused, match='give its verdict'):
+        station.abort()
+
+
+def test_a_verdict_ends_an_episode_whose_abort_came_too_late():
+    station = _station()
+    station.start(now=1.0)
+    station.abort()
+    assert station.view(now=1.5).phase is Phase.ENDING
+    station.policy_started()
+    station.abort_refused('no episode is in a start stage')
+    view = station.view(now=2.0)
+    assert (view.phase, view.abort_refusal) == (Phase.RUNNING, 'no episode is in a start stage')
+    with pytest.raises(Refused, match='no episode is starting'):
+        station.abort()
+    assert station.end(Outcome.FAIL) == terminal_payload(Outcome.FAIL)
+    assert station.view(now=2.5).phase is Phase.ENDING
+    station.close(_judged(Outcome.FAIL), now=3.0)
+    assert station.view(now=3.5).abort_refusal is None
 
 
 def test_a_failed_episode_keeps_its_error_and_the_next_start_opens_the_next_episode():
@@ -149,6 +213,7 @@ def test_one_episode_runs_at_a_time_and_accepts_verdicts_until_it_closes():
     station.start(now=1.0)
     with pytest.raises(Refused):
         station.start(now=1.5)
+    station.policy_started()
     assert station.end(Outcome.FAIL) == terminal_payload(Outcome.FAIL)
     assert station.end(Outcome.DISCARDED) == terminal_payload(Outcome.DISCARDED)
     station.close(_judged(Outcome.DISCARDED), now=2.0)
@@ -258,6 +323,7 @@ def test_a_verdict_pressed_while_a_policy_end_is_answered_closes_the_episode():
     recordings = _Recordings()
     station = _station(recordings=recordings)
     station.start(now=1.0)
+    station.policy_started()
     station.end(Outcome.DISCARDED)
     station.close(POLICY_END, now=2.0)
     view = station.view(now=3.0)
@@ -268,6 +334,7 @@ def test_a_verdict_pressed_while_a_policy_end_is_answered_closes_the_episode():
 def test_a_verdict_of_one_episode_does_not_close_the_next():
     station = _station()
     station.start(now=1.0)
+    station.policy_started()
     station.end(Outcome.SUCCESS)
     station.close(_judged(Outcome.SUCCESS), now=2.0)
     station.start(now=3.0)
@@ -336,18 +403,21 @@ def test_each_change_advances_the_generation_and_a_view_does_not():
     note()
     station.start(now=1.0)
     note()
+    station.policy_started()
+    note()
     station.end(Outcome.SUCCESS)
     note()
     station.close(_judged(Outcome.SUCCESS), now=2.0)
     note()
     note()
     station.start(now=3.0)
+    station.policy_started()
     station.close(POLICY_END, now=4.0)
     note()
     station.judge(Outcome.FAIL)
     note()
     assert generations == sorted(generations)
-    assert len(set(generations)) == 7
+    assert len(set(generations)) == 8
 
 
 def test_a_restarted_console_starts_above_the_generation_of_the_one_before_it(monkeypatch):

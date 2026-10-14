@@ -179,6 +179,9 @@ class RoboarenaPolicy(Policy):
         self._address = address
         self._headers = headers
 
+    def sends_off_rig(self) -> bool:
+        return True
+
     def run(self, runtime: Runtime) -> PolicyRun:
         client = RoboarenaClient(self._address.host, self._address.port, self._headers)
         # Held by each inference, so a failure that closes the episode waits for the one in flight.

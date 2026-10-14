@@ -1,7 +1,7 @@
 import logging
 import math
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -21,7 +21,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.ik import assert_default_frame
-from positronic.eval import Embodiment, Task
+from positronic.eval import ChannelGroup, Command, DeclarableGroup, Embodiment, Observation, Task, in_declarable_group
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Exit, Obs, Policy, PolicyRun
@@ -55,6 +55,36 @@ class EpisodeEnd:
 
     terminal: dict[str, Any]
     uid: str | None
+
+
+@dataclass(frozen=True)
+class Starting:
+    """The start stages: the devices get ready, the declared channel groups start, and the task prepares the rig."""
+
+
+@dataclass(frozen=True)
+class Running:
+    """The policy runs. ``deadline_ns`` is the end of the time limit on the world clock, ``None`` for no time limit."""
+
+    deadline_ns: int | None
+
+
+@dataclass(frozen=True)
+class Ended:
+    """The episode ended. The answer to ``perform_task`` holds the end keys or the error."""
+
+
+@dataclass(frozen=True)
+class Aborted:
+    """An abort call ended the episode before the policy started. The episode recorded nothing."""
+
+
+# The state of the episode that the Harness runs. The Harness emits one on ``Harness.phase`` at each change.
+EpisodePhase = Starting | Running | Ended | Aborted
+
+
+class EpisodeAborted(RuntimeError):
+    """The error that answers ``perform_task`` when an abort call ends the episode before the policy starts."""
 
 
 class _EpisodeTelemetry:
@@ -107,16 +137,27 @@ class Harness(pimm.ControlSystem):
     Real execution polls for completions at most every 5 ms while work is pending. Uncharged simulation
     handles completions before advancing time, including unrestricted chains of calls at one instant.
 
-    Recording samples observations and privileged inputs before policy calls and at ``recording_hz`` between
-    them. Each pass resets the sampling deadline. Harness appends commands after emission and waits for writer
-    finalization before answering the rollout. A rollout without an output path, or ``record=False``, writes nothing.
+    Recording samples the inputs before policy calls and at ``recording_hz`` between them. Each pass resets the
+    sampling deadline. Harness appends commands after emission and waits for writer finalization before answering
+    the rollout. A rollout without an output path, or ``record=False``, writes nothing.
+
+    The policy sees the embodiment observations and the inputs of each channel group that it declares. It sends
+    the embodiment commands and the outputs of those groups. The harness records the inputs of the other channel
+    groups, and skips a ``pimm.SignalError`` on them. It refuses a rollout whose policy declares a group that
+    the harness does not have.
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline, a truthy ``done`` signal, or a step with
     ``Exit.END``. A ``done`` or an END after the deadline counts as a timeout. When a ``done`` and an END come in
     one iteration, the ``done`` ends the episode. Its answer is an ``EpisodeEnd``, or the error that failed the
     episode. The caller decides whether that error ends the run. Between episodes, manual commands pass through.
-    Before each episode the harness asks every device to be ready, then prepares what the task names. A device
-    that answers ready with an error fails the episode before it starts. A ``pimm.SignalError`` on an
+    The start stages come before the policy and the time limit: every device gets ready, each declared channel
+    group with a start call answers it, and the task prepares what it names. An ``abort`` call in these stages
+    ends the episode with ``EpisodeAborted``, and the episode records nothing. At other times the harness answers
+    ``abort`` with an error. A call that has no answer when its stage ends stays. A kept start call that answers
+    before the next episode starts is logged and dropped. The next group start stage takes a kept start call that
+    answers later as its own, and calls again only after an error answer. The harness logs the error of a kept
+    ready or prepare call.
+    A device that answers ready with an error fails the episode before it starts. A ``pimm.SignalError`` on an
     observation fails the episode before the policy reads that value. Between episodes the harness repairs a
     device in error (``_ready_devices_in_error``).
     """
@@ -125,6 +166,7 @@ class Harness(pimm.ControlSystem):
         self,
         embodiment: Embodiment,
         *,
+        channel_groups: Sequence[ChannelGroup] = (),
         static_meta: dict[str, Any] | None = None,
         dataset_factory: DatasetFactory | None = None,
         recording_hz: float = 1000,
@@ -134,29 +176,50 @@ class Harness(pimm.ControlSystem):
             raise ValueError('recording_hz must be positive and at most 1 GHz')
         self._embodiment = embodiment
         self._static_meta = static_meta or {}
-        names = [*embodiment.observations, *embodiment.commands]
+        self.channel_groups = tuple(channel_groups)
+        inputs = [*embodiment.observations, *(name for group in self.channel_groups for name in group.inputs)]
+        outputs = [*embodiment.commands, *(name for group in self.channel_groups for name in group.outputs)]
+        names = [*inputs, *outputs]
         if len(names) != len(set(names)):
-            raise ValueError('Observation and command signal names must be distinct')
+            raise ValueError('Each signal name must occur once in the embodiment and the channel groups')
+        if any(in_declarable_group(name) for name in [*embodiment.observations, *embodiment.commands]):
+            raise ValueError('An embodiment signal name cannot start with the name of a declarable channel group')
+        declarable = [group.declarable_as for group in self.channel_groups if group.declarable_as is not None]
+        if len(declarable) != len(set(declarable)):
+            raise ValueError('Each declarable channel group must occur once')
+        self._declarable = frozenset(declarable)
         self._dataset_factory = (
             (dataset_factory or partial(LocalDatasetWriter, video_encoder=embodiment.video_encoder)) if record else None
         )
         self._recording_period_ns = round(1e9 / recording_hz)
         self._writer: EpisodeWriter | None = None
-        self._recorded_privileged: set[str] = set()
+        self._recorded_hidden: set[str] = set()
         self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
         self._telemetry = _EpisodeTelemetry()
         # A ready call the harness made between episodes, by device name, until the device answers it.
         self._repairs: dict[str, pimm.calls.Answer[None]] = {}
+        # A ready or prepare call that had no answer when its start stage ended early, until it answers.
+        self._kept: list[tuple[str, pimm.calls.Answer[None]]] = []
+        # A start call that had no answer when its stage ended early. The next group start stage takes it as its own.
+        self._starts: dict[DeclarableGroup, pimm.calls.Answer[None]] = {}
+        self._policy_inputs: dict[str, Observation] = {}
+        self._hidden_inputs: dict[str, Observation] = {}
+        self._policy_outputs: dict[str, Command] = {}
+        self._declare(frozenset())
 
-        self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
-        self.commands = pimm.EmitterDict(self, names=embodiment.commands)
-        self.privileged = pimm.ReceiverDict(self)
+        self.observations = pimm.ReceiverDict(self, names=inputs)
+        self.commands = pimm.EmitterDict(self, names=outputs)
         self.ready = pimm.calls.CallerDict[None, None](self, names=embodiment.ready_handlers)
+        self.start = pimm.calls.CallerDict[None, None](
+            self,
+            names=[g.declarable_as for g in self.channel_groups if g.declarable_as is not None and g.start is not None],
+        )
         self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
 
         self.perform_task = pimm.calls.ControlSystemHandler[Rollout, EpisodeEnd](self)
+        self.abort = pimm.calls.ControlSystemHandler[None, None](self)
         self.manual_command = pimm.ControlSystemReceiver(self)
-        self.deadline_ns = pimm.ControlSystemEmitter[int | None](self)
+        self.phase = pimm.ControlSystemEmitter[EpisodePhase](self)
         self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
         self.done = pimm.DefaultingReceiver[dict](self, default={})
 
@@ -164,16 +227,100 @@ class Harness(pimm.ControlSystem):
         """Yield one simulator tick, or sleep for ``delay_sec`` on a real rig."""
         return pimm.Yield() if self._embodiment.simulated else pimm.Sleep(delay_sec)
 
-    def _wait(self, should_stop: pimm.SignalReceiver, answer: pimm.calls.Answer[Any]) -> pimm.Run[None]:
-        """Wait until ``answer`` is done or the world stops. Raise the error ``answer`` carries."""
+    def _declare(self, declared: frozenset[DeclarableGroup]) -> None:
+        """Show the inputs of the ``declared`` channel groups to the policy, and take their outputs from it."""
+        shown = [group for group in self.channel_groups if group.declarable_as in declared]
+        hidden = [group for group in self.channel_groups if group.declarable_as not in declared]
+        self._policy_inputs = self._embodiment.observations | {n: o for g in shown for n, o in g.inputs.items()}
+        self._hidden_inputs = {name: obs for group in hidden for name, obs in group.inputs.items()}
+        self._policy_outputs = self._embodiment.commands | {n: c for g in shown for n, c in g.outputs.items()}
+
+    def _accept_abort(self) -> None:
+        """Answer each abort call, and raise ``EpisodeAborted`` when one came."""
+        calls = list(self.abort.incoming())
+        for call in calls:
+            call.set_result(None)
+        if calls:
+            raise EpisodeAborted('An abort call ended the episode before the policy started')
+
+    def _refuse_abort(self) -> None:
+        for call in self.abort.incoming():
+            call.set_exception(RuntimeError('No episode is in a start stage, so the harness cannot abort it'))
+
+    def _wait(
+        self, should_stop: pimm.SignalReceiver, answer: pimm.calls.Answer[Any], *, start_stage: bool
+    ) -> pimm.Run[None]:
+        """Wait until ``answer`` is done or the world stops. Raise the error ``answer`` carries.
+
+        In a start stage an abort call ends the wait with ``EpisodeAborted``. At other times the harness refuses it.
+        """
         while not answer.done() and not should_stop.value:
+            if start_stage:
+                self._accept_abort()
+            else:
+                self._refuse_abort()
             yield self._yield()
         if answer.done():
             answer.result()
 
+    def _wait_all(
+        self, should_stop: pimm.SignalReceiver, calls: dict[str, pimm.calls.Answer[None]], *, start_stage: bool
+    ) -> pimm.Run[None]:
+        """Wait for the answer to each of ``calls``. Keep each call that has no answer when the wait ends early."""
+        try:
+            yield from self._wait(should_stop, pimm.calls.all_of(calls.values()), start_stage=start_stage)
+        finally:
+            self._kept += [(name, answer) for name, answer in calls.items() if not answer.done()]
+
     def _ready_devices(self, should_stop: pimm.SignalReceiver) -> pimm.Run[None]:
         """Ask every device to be ready and wait for the answers. Raise the first error that a device answers."""
-        yield from self._wait(should_stop, pimm.calls.all_of([ready(None) for ready in self.ready.values()]))
+        calls = {f'The ready call of {name}': ready(None) for name, ready in self.ready.items()}
+        yield from self._wait_all(should_stop, calls, start_stage=True)
+
+    def _start_call(self, group: DeclarableGroup) -> pimm.calls.Answer[None]:
+        """The start call that the group start stage of ``group`` waits for.
+
+        A kept start call takes the place of a new call, also when it answered in this episode's earlier start stages.
+        The harness makes a new call only when the kept call answered with an error.
+        """
+        kept = self._starts.get(group)
+        if kept is None:
+            return self.start[group](None)
+        if kept.done():
+            # rules-allow: swallowed-error — the stage that waited for this call has ended, and a new call asks again.
+            try:
+                kept.result()
+            except Exception as e:
+                logging.error(f'The start call of the {group} channel group answered with an error: {e}')
+                return self.start[group](None)
+        return kept
+
+    def _drop_answered_starts(self) -> None:
+        """Log and stop keeping each kept start call that has its answer: the answer came before an episode started."""
+        for group, answer in list(self._starts.items()):
+            if not answer.done():
+                continue
+            del self._starts[group]
+            # rules-allow: swallowed-error — no stage waits for this call, so the log is the only reader of its answer.
+            try:
+                answer.result()
+            except Exception as e:
+                logging.error(f'The start call of the {group} channel group answered with an error: {e}')
+            else:
+                logging.info(f'The start call of the {group} channel group answered while no stage waited for it')
+
+    def _start_groups(self, should_stop: pimm.SignalReceiver, declared: frozenset[DeclarableGroup]) -> pimm.Run[None]:
+        """Call the start call of each declared channel group that has one, and wait for the answers."""
+        groups = sorted(declared & self.start.keys())
+        for group in groups:
+            self._starts[group] = self._start_call(group)
+        try:
+            answers = pimm.calls.all_of([self._starts[group] for group in groups])
+            yield from self._wait(should_stop, answers, start_stage=True)
+        finally:
+            for group in groups:
+                if self._starts[group].done():
+                    del self._starts[group]
 
     def _ready_devices_in_error(self) -> None:
         """Ask each device whose observation of the same name carries a ``pimm.SignalError`` to be ready.
@@ -195,13 +342,14 @@ class Harness(pimm.ControlSystem):
                 logging.warning(f'{name} sends an error, so the harness asks it to be ready: {message.data}')
                 self._repairs[name] = self.ready[name](None)
 
-    def _prepare(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> pimm.Run[None]:
+    def _prepare(self, should_stop: pimm.SignalReceiver, args: dict[str, Any], *, start_stage: bool) -> pimm.Run[None]:
         """Prepare only the named devices and wait for them. Empty args leave every device as it is."""
         unknown = sorted(set(args) - set(self.prepare))
         if unknown:
             rig = self._embodiment.descriptor or 'this rig'
             raise ValueError(f'{unknown} is not something {rig} readies; it readies {sorted(self.prepare)}')
-        yield from self._wait(should_stop, pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()]))
+        calls = {f'The prepare call of {name}': self.prepare[name](arg) for name, arg in args.items()}
+        yield from self._wait_all(should_stop, calls, start_stage=start_stage)
 
     def _statics(self) -> dict[str, Any]:
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
@@ -246,7 +394,7 @@ class Harness(pimm.ControlSystem):
         return values
 
     def _sample(self, step_ms: dict[str, float] | None = None) -> None:
-        for name, obs in self._embodiment.observations.items():
+        for name, obs in self._policy_inputs.items():
             read_started_ns = time.perf_counter_ns()
             message = self.observations[name].read()
             if step_ms is not None:
@@ -258,13 +406,13 @@ class Harness(pimm.ControlSystem):
             elif message.updated or not isinstance(self._obs_by_signal.get(name), dict):
                 self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
         if self._writer is not None:
-            for name, receiver in self.privileged.items():
-                message = receiver.read()
+            for name, obs in self._hidden_inputs.items():
+                message = self.observations[name].read()
                 if message is None or isinstance(message.data, pimm.SignalError):
                     continue
-                if message.updated or name not in self._recorded_privileged:
-                    self._convert_and_record(name, message, None)
-                    self._recorded_privileged.add(name)
+                if message.updated or name not in self._recorded_hidden:
+                    self._convert_and_record(name, message, obs.serializer)
+                    self._recorded_hidden.add(name)
 
     def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
         """Read sensors, reusing each signal's serialized fields until a new message arrives.
@@ -317,6 +465,10 @@ class Harness(pimm.ControlSystem):
                 step = policy_run.send(obs)
                 assert step is not None, 'a policy must yield a Step for each observation'
                 ended_ns = runtime.time_ns if step.exit is Exit.END else None
+                if unknown := step.commands.keys() - self._policy_outputs.keys():
+                    raise ValueError(
+                        f'The policy sends {sorted(unknown)}, and it can send only {sorted(self._policy_outputs)}'
+                    )
                 emit_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (emit_started_ns - policy_started_ns) / 1e6
                 self._telemetry.step()
@@ -324,7 +476,7 @@ class Harness(pimm.ControlSystem):
                 step_ms[telemetry_keys.ATTR_STEP_EMIT_MS] = (time.perf_counter_ns() - emit_started_ns) / 1e6
                 if self._writer is not None:
                     for name, message in messages.items():
-                        self._convert_and_record(name, message, self._embodiment.commands[name].serializer)
+                        self._convert_and_record(name, message, self._policy_outputs[name].serializer)
             finally:
                 telemetry.set_attrs(span, **step_ms)
         period_sec = (step.resume_at_ns - started_at_ns) / 1e9
@@ -382,7 +534,7 @@ class Harness(pimm.ControlSystem):
                 yield
         finally:
             self._writer = None
-            self._recorded_privileged.clear()
+            self._recorded_hidden.clear()
             self._obs_by_signal.clear()
 
     def _rollout(
@@ -417,6 +569,7 @@ class Harness(pimm.ControlSystem):
             completed = yield from self._wait_for_next_tick(runtime, wake_at_ns)
             if call := next(self.perform_task.incoming(), None):
                 call.set_exception(RuntimeError('An episode is already running'))
+            self._refuse_abort()
             pimm.read_updated(self.manual_command)
             payload = self._trial_terminal(
                 pimm.read_updated(self.done),
@@ -432,11 +585,52 @@ class Harness(pimm.ControlSystem):
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
     ) -> pimm.Run[EpisodeEnd | None]:
-        """Prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
+        """Start, run, record, and return the rig. Return None when stopped without a terminal payload."""
+        declared = rollout.policy.channel_groups()
+        if missing := declared - self._declarable:
+            raise ValueError(f'The policy declares {sorted(missing)}, and the harness has no such channel group')
+        phase: EpisodePhase = Ended()
+        self._drop_answered_starts()
+        self.phase.emit(Starting())
+        try:
+            end = yield from self._start_and_run(clock, should_stop, rollout, declared)
+        except EpisodeAborted:
+            phase = Aborted()
+            raise
+        finally:
+            self.phase.emit(phase)
+
+        if end is not None:
+            back_args = {k: v for k, v in rollout.task.prepare_args.items() if k != eval_keys.SCENE}
+            # rules-allow: swallowed-error — the move back is cleanup, and the recording is already complete.
+            try:
+                yield from self._prepare(should_stop, back_args, start_stage=False)
+            except Exception as exc:
+                logging.error(f'The rig failed to go back after the episode: {exc}')
+        return end
+
+    @contextmanager
+    def _showing(self, declared: frozenset[DeclarableGroup]) -> Iterator[None]:
+        self._declare(declared)
+        try:
+            yield
+        finally:
+            self._declare(frozenset())
+
+    def _start_and_run(
+        self,
+        clock: pimm.Clock,
+        should_stop: pimm.SignalReceiver,
+        rollout: Rollout,
+        declared: frozenset[DeclarableGroup],
+    ) -> pimm.Run[EpisodeEnd | None]:
+        """Run the start stages, then run and record the policy under the time limit."""
         task = rollout.task
+        yield from self._ready_devices(should_stop)
+        yield from self._start_groups(should_stop, declared)
         self._telemetry.begin(task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
-            yield from self._prepare(should_stop, task.prepare_args)
+            yield from self._prepare(should_stop, task.prepare_args, start_stage=True)
         if should_stop.value:
             return None
 
@@ -448,17 +642,14 @@ class Harness(pimm.ControlSystem):
         try:
             policy_run = runtime.start(rollout.policy)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
-            self.deadline_ns.emit(deadline_ns)
+            self.phase.emit(Running(deadline_ns))
             self._telemetry.start_rollout(clock.now())
-            try:
-                with self._recording(rollout.output_path):
-                    payload = yield from self._rollout(should_stop, task, runtime, policy_run, deadline_ns)
-                    if self._writer is not None:
-                        uid = self._writer.uid
-                        for name, value in (self._build_episode_meta(rollout, runtime) | (payload or {})).items():
-                            self._writer.set_static(name, value)
-            finally:
-                self.deadline_ns.emit(None)
+            with self._showing(declared), self._recording(rollout.output_path):
+                payload = yield from self._rollout(should_stop, task, runtime, policy_run, deadline_ns)
+                if self._writer is not None:
+                    uid = self._writer.uid
+                    for name, value in (self._build_episode_meta(rollout, runtime) | (payload or {})).items():
+                        self._writer.set_static(name, value)
         finally:
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
@@ -471,14 +662,19 @@ class Harness(pimm.ControlSystem):
                 logging.info('Policy closed')
 
         self._telemetry.end(clock.now())
-        if payload is not None:
-            back_args = {k: v for k, v in task.prepare_args.items() if k != eval_keys.SCENE}
-            # rules-allow: swallowed-error — the move back is cleanup, and the recording is already complete.
-            try:
-                yield from self._prepare(should_stop, back_args)
-            except Exception as exc:
-                logging.error(f'The rig failed to go back after the episode: {exc}')
         return EpisodeEnd(payload, uid) if payload is not None else None
+
+    def _log_kept_errors(self) -> None:
+        """Log the error of each kept ready or prepare call that has its answer, and stop keeping that call."""
+        for name, answer in self._kept:
+            if not answer.done():
+                continue
+            # rules-allow: swallowed-error — no stage waits for this call, so the log is the only reader of its error.
+            try:
+                answer.result()
+            except Exception as e:
+                logging.error(f'{name} answered with an error after its stage ended: {e}')
+        self._kept = [(name, answer) for name, answer in self._kept if not answer.done()]
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> pimm.Run[None]:
         for emitter in self.commands.values():
@@ -496,7 +692,6 @@ class Harness(pimm.ControlSystem):
                     failure: BaseException = pimm.calls.HandlerStopped()
                     # rules-allow: swallowed-error — the answer carries the error; the caller decides if the run ends
                     try:
-                        yield from self._ready_devices(should_stop)
                         end = yield from self._run_episode(clock, should_stop, call.request)
                     except Exception as exc:
                         failure = exc
@@ -510,5 +705,8 @@ class Harness(pimm.ControlSystem):
                     for name, value in manual.items():
                         self.commands[name].emit(value)
                 if not should_stop.value:
+                    self._refuse_abort()
                     self._ready_devices_in_error()
+                    self._log_kept_errors()
+                    self._drop_answered_starts()
                     yield self._yield()

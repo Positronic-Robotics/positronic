@@ -24,20 +24,21 @@ from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.web import StationConsole
 from positronic.policy import Policy
-from positronic.policy.harness import EpisodeEnd, Harness, Rollout
+from positronic.policy.harness import EpisodeAborted, EpisodeEnd, EpisodePhase, Harness, Rollout, Running
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
 
 
 class KeyboardOperator(KeyboardControl):
-    """The keyboard that runs episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one,
-    ``q`` ends the run.
+    """The keyboard that runs episodes: ``s`` asks for one through ``perform_task``, ``p`` aborts the live one while
+    it starts and ends it while its policy runs, ``q`` ends the run.
 
     One episode is in flight at a time: a press while one runs is declined here, with a warning. It holds
     the pending answer because that is where the episode's terminal, its error or a refused ask arrives, and
     it logs that as it lands. ``next_task`` makes the trial and the policy opens its session, once per accepted
-    press. Every episode records into ``output_path``, and none records when that is ``None``.
+    press. An aborted episode does not use up its trial: the next ``s`` runs the same task again. Every episode
+    records into ``output_path``, and none records when that is ``None``.
     """
 
     def __init__(self, next_task: Callable[[], Task], policy: Policy, output_path: Path | None):
@@ -46,28 +47,58 @@ class KeyboardOperator(KeyboardControl):
         self._policy = policy
         self._output_path = output_path
         self._pending: pimm.calls.Answer[EpisodeEnd] | None = None
+        # The task of the pending episode, and of an aborted one until the next press runs it again.
+        self._task: Task | None = None
+        self._aborting: pimm.calls.Answer[None] | None = None
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, EpisodeEnd](self)
+        self.abort = pimm.calls.ControlSystemCaller[None, None](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
+        self.phase = pimm.ControlSystemReceiver[EpisodePhase](self)
 
     def _each_round(self, key: str | None) -> None:
         super()._each_round(key)
         if self._pending is not None and self._pending.done():
             try:  # rules-allow: swallowed-error — the operator is who this failure is for
                 logger.info(f'Episode ended: {self._pending.result()}')
+                self._task = None
+            except EpisodeAborted:
+                logger.info('Episode aborted before its policy started: [s] runs its task again')
             except Exception as e:
                 logger.error(f'Episode failed: {e}')
+                self._task = None
             self._pending = None
+        if self._aborting is not None and self._aborting.done():
+            try:  # rules-allow: swallowed-error — the operator is who this failure is for
+                self._aborting.result()
+            except Exception as e:
+                logger.error(f'The harness refused the abort: {e}')
+            self._aborting = None
         match key:
             case 's' if self._pending is not None:
                 logger.warning('An episode is already running: press [p] to stop it')
             case 's':
                 try:
-                    rollout = Rollout(self._next_task(), self._policy, self._output_path)
-                    self._pending = self.perform_task(rollout)
+                    task = self._task if self._task is not None else self._next_task()
+                    self._pending = self.perform_task(Rollout(task, self._policy, self._output_path))
+                    self._task = task
                 except Exception as e:  # rules-allow: swallowed-error — the operator is who this failure is for
                     logger.error(f'Episode failed to open: {e}')
             case 'p':
-                self.done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR})
+                self._stop()
+
+    def _stop(self) -> None:
+        """End the pending episode while its policy runs, and abort it before that."""
+        if self._pending is None:
+            logger.warning('No episode runs: press [s] to start one')
+            return
+        if self._aborting is not None:
+            logger.warning('The abort of this episode is on its way')
+            return
+        message = self.phase.read()
+        if message is not None and isinstance(message.data, Running):
+            self.done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR})
+        else:
+            self._aborting = self.abort(None)
 
 
 def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir=None):
@@ -84,7 +115,8 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
         output_path = prepare_output_dir(output_dir)
         operator = KeyboardOperator(next_task, policy, output_path)
         logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
-        run_world(embodiment, operator, record=output_path is not None, done=operator.done)
+        record = output_path is not None
+        run_world(embodiment, operator, record=record, done=operator.done, abort=operator.abort, phase=operator.phase)
 
 
 real_cfg = cfn.Config(
@@ -106,10 +138,10 @@ def web(
 ):
     """Run one hardware embodiment attended from a browser, at ``http://{host}:{port}/``.
 
-    The page shows each camera, starts an episode on the trial ``next_task`` makes, and ends it with a verdict or a
-    discard. After the policy ends an episode, the page asks for the verdict. The run ends on the page's End run or on
-    Ctrl-C. The policy's metadata is read once before the page opens, so a policy that cannot answer stops the run
-    there.
+    The page shows each camera, starts an episode on the trial ``next_task`` makes, aborts it before its policy
+    starts, and ends it with a verdict or a discard. After the policy ends an episode, the page asks for the verdict.
+    The run ends on the page's End run or on Ctrl-C. The policy's metadata is read once before the page opens, so a
+    policy that cannot answer stops the run there.
     """
     if embodiment.simulated:
         raise ValueError('the web console drives hardware in real time; run a simulated embodiment as `sim`')
@@ -122,6 +154,8 @@ def web(
     with pimm.World() as world:
         wire.wire_embodiment(world, harness, embodiment, done=console.done)
         world.connect(console.perform_task, harness.perform_task)
+        world.connect(console.abort, harness.abort)
+        world.connect(harness.phase, console.phase)
         for name, observation in embodiment.observations.items():
             if name.startswith(keys.IMAGE_PREFIX):
                 world.connect(observation.source, console.cameras[name])

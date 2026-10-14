@@ -13,9 +13,10 @@ from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
 from positronic import telemetry, telemetry_keys
+from positronic.eval import in_declarable_group
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
-from positronic.utils import flatten_dict
+from positronic.utils import flatten_dict, frozen_view
 
 from .base import Policy, PolicyRun, Processor, Runtime
 from .compatibility import from_v1_spec
@@ -73,6 +74,10 @@ def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersi
         stack = from_spec(declared)
     if not isinstance(stack, Processor):
         raise ValueError('The declared client stack must be a processor')
+    if declared_groups := stack.channel_groups():
+        raise ValueError(
+            f'A server cannot declare channel groups, and its client stack declares {sorted(declared_groups)}'
+        )
     return stack
 
 
@@ -117,10 +122,11 @@ class RemotePolicy(Policy):
 
     ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG
     quality of images sent to a server that asks for compressed images.
-    Each run owns a server session and its connection. Submitted calls finish before the harness
-    closes the generator; closing the session waits for the server to release its state, then closes the
-    connection, and the run waits for that close only up to a bound. The declared stack determines when client
-    codecs run.
+    It declares no channel group, and it drops the keys of every declarable channel group before the declared
+    stack reads the observations. Each run owns a server session and its connection. Submitted calls finish
+    before the harness closes the generator; closing the session waits for the server to release its state, then
+    closes the connection, and the run waits for that close only up to a bound. The declared stack determines
+    when client codecs run.
     """
 
     def __init__(
@@ -138,6 +144,9 @@ class RemotePolicy(Policy):
         self._server_meta: dict[str, Any] | None = None
         self._client_meta: dict[str, Any] = {}
         self._jpeg_quality = jpeg_quality
+
+    def sends_off_rig(self) -> bool:
+        return True
 
     def meta(self) -> dict[str, Any]:
         if self._server_meta is None:
@@ -178,7 +187,7 @@ class RemotePolicy(Policy):
                 obs = yield
                 while True:
                     try:
-                        step = run.send(obs)
+                        step = run.send(frozen_view({k: v for k, v in obs.items() if not in_declarable_group(k)}))
                     except StopIteration:
                         return
                     obs = yield step

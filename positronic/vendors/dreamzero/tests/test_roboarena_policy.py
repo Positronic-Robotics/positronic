@@ -10,9 +10,12 @@ from positronic_wire.roboarena import RoboarenaAddress
 
 from positronic import keys as rig
 from positronic.drivers.roboarm import RobotStatus
+from positronic.eval import DeclarableGroup
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy.codecs import ACTION
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.processors import PauseOnUnavailable
+from positronic.policy.sequential import Sequential
 from positronic.vendors.dreamzero import roboarena as wire
 from positronic.vendors.dreamzero import roboarena_policy
 
@@ -427,3 +430,15 @@ class TestTheStack:
         one_inference(client, rig_observation(**{rig.ROBOT_STATUS: RobotStatus.AVAILABLE}))
 
         assert len(client.sent) == 1
+
+
+class _Declaring(PauseOnUnavailable):
+    def channel_groups(self):
+        return frozenset({DeclarableGroup.TELEOP})
+
+
+def test_a_sequence_that_declares_a_channel_group_cannot_hold_the_roboarena_policy():
+    policy = roboarena_policy.RoboarenaPolicy(ADDRESS)
+    assert policy.sends_off_rig()
+    with pytest.raises(ValueError, match='another machine'):
+        Sequential(_Declaring(), policy)

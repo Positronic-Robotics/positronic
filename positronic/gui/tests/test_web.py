@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 import pimm
+from pimm.tests.testing import Passive, wire_call
 from pimm.time import EMITTED_WORLD
 from pimm.world import SystemClock
 from positronic.dataset.episode import META_UID
@@ -48,10 +49,12 @@ class _Policy(Policy):
 
 
 class _Console:
-    """A station page served in-process, with queued tasks and emitted verdicts collected for inspection."""
+    """A station page served in-process, with queued tasks, queued aborts and emitted verdicts collected for
+    inspection."""
 
     def __init__(self):
         self.tasks: list[Task] = []
+        self.aborts: list[None] = []
         self.done = RecordingEmitter[dict[str, Any]]()
         self.feed = CameraFeed()
         self.should_stop = ManualCommandReceiver[bool]()
@@ -60,7 +63,14 @@ class _Console:
         self.station = Station(_trial, lambda uid, outcome: self.recorded.append((uid, outcome)))
         console = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
         console.done._bind(self.done, clock=SystemClock())
-        app = console.build_app(self.station, {CAMERA: self.feed}, self.tasks.append, SystemClock(), self.should_stop)
+        app = console.build_app(
+            self.station,
+            {CAMERA: self.feed},
+            self.tasks.append,
+            lambda: self.aborts.append(None),
+            SystemClock(),
+            self.should_stop,
+        )
         self.client = TestClient(app)
 
     def post(self, path: str, body: VerdictBody | InstructionBody | None = None) -> Status:
@@ -92,7 +102,14 @@ def test_the_status_is_the_json_the_page_reads(console):
     status['run'].pop('now')
     assert isinstance(status['run'].pop('generation'), int)
     assert status == {
-        'run': {'phase': 'ready', 'configured': CONFIGURED, 'override': None, 'override_since': None, 'episodes': []},
+        'run': {
+            'phase': 'ready',
+            'configured': CONFIGURED,
+            'override': None,
+            'override_since': None,
+            'episodes': [],
+            'abort_refusal': None,
+        },
         'cameras': [{'name': CAMERA, 'label': 'exterior 2', 'live': True, 'fps': 0.0, 'width': 640, 'height': 360}],
         'policy': 'remote',
         'host': '127.0.0.1',
@@ -101,7 +118,7 @@ def test_the_status_is_the_json_the_page_reads(console):
 
 def test_start_hands_the_trial_to_the_control_loop_once(console):
     console.post('/instruction', InstructionBody(override=OVERRIDE))
-    assert console.post('/episode/start').run.phase is Phase.RUNNING
+    assert console.post('/episode/start').run.phase is Phase.STARTING
     [task] = console.tasks
     assert isinstance(task, Task) and task.instruction == OVERRIDE
 
@@ -113,6 +130,7 @@ def test_start_hands_the_trial_to_the_control_loop_once(console):
 
 def test_each_verdict_emits_done_without_waiting_for_the_control_loop(console):
     console.post('/episode/start')
+    console.station.policy_started()
     assert console.post('/episode/end', VerdictBody(verdict=Outcome.FAIL)).run.phase is Phase.ENDING
     assert len(console.tasks) == 1
     [(_, payload)] = console.done.emitted
@@ -122,6 +140,34 @@ def test_each_verdict_emits_done_without_waiting_for_the_control_loop(console):
         terminal_payload(Outcome.FAIL),
         terminal_payload(Outcome.DISCARDED),
     ]
+
+
+def test_an_abort_while_the_episode_starts_is_queued_for_the_control_loop_once(console):
+    console.post('/episode/start')
+    assert console.post('/episode/abort').run.phase is Phase.ENDING
+    assert console.client.post('/episode/abort').status_code == 409
+    assert console.aborts == [None]
+    assert console.done.emitted == []
+
+
+def test_a_refused_abort_leaves_the_episode_open_and_shows_why():
+    console = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
+    station = Station(_trial, lambda uid, outcome: None)
+    aborts: queue.SimpleQueue[None] = queue.SimpleQueue()
+    with pimm.World() as world:
+        harness = pimm.calls.ControlSystemHandler[None, None](Passive())
+        wire_call(world, console.abort, harness)
+        station.start(now=1.0)
+        station.abort()
+        aborts.put(None)
+        console._send_aborts(station, aborts)
+        next(harness.incoming()).set_exception(RuntimeError('the policy runs'))
+        console._send_aborts(station, aborts)
+    view = station.view(now=2.0)
+    assert view.phase is Phase.STARTING
+    assert view.abort_refusal == 'the policy runs'
+    station.policy_started()
+    assert station.view(now=3.0).phase is Phase.RUNNING
 
 
 @pytest.mark.parametrize('route', ['/episode/end', '/episode/verdict'])

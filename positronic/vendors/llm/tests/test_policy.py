@@ -23,9 +23,12 @@ from pydantic_ai.messages import (
 from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.eval import DeclarableGroup
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Step
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.processors import PauseOnUnavailable
+from positronic.policy.sequential import Sequential
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion
 from positronic.vendors.llm.policy import Images, LLMPolicy, Tool, llm
@@ -422,3 +425,15 @@ def test_late_resume_emits_final_command_before_requesting_next_decision(model):
         assert len(requests) == 1
         complete(run, runtime, clock, observation(x=0.01))
         assert len(requests) == 2
+
+
+class _Declaring(PauseOnUnavailable):
+    def channel_groups(self):
+        return frozenset({DeclarableGroup.TELEOP})
+
+
+def test_a_sequence_that_declares_a_channel_group_cannot_hold_the_llm_policy():
+    policy = LLMPolicy(Endpoint('test'), Motion())
+    assert policy.sends_off_rig()
+    with pytest.raises(ValueError, match='another machine'):
+        Sequential(_Declaring(), policy)

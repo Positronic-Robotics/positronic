@@ -5,7 +5,7 @@ import configuronic as cfn
 
 from positronic.cfg.eval import number_trials, spec
 from positronic.drivers.roboarm.models import GRASP_SITE_LINK, bundled_franka_model
-from positronic.eval import Eval, Task
+from positronic.eval import ChannelGroup, Eval, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.molmo_spaces import keys as molmo_keys
@@ -51,7 +51,9 @@ def benchmarks(
     embodiment = remote_embodiment(
         proxy, CAMERAS, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
     )
-    privileged = {mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE]}
+    privileged = ChannelGroup(
+        inputs={mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}
+    )
 
     def tasks() -> list[Task]:
         selection = spec(

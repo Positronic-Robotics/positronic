@@ -186,6 +186,9 @@ the run processes an observation and returns control to the framework.
   ends the episode. An `END` after the time limit counts as a timeout, and an
   env's own end in the same framework iteration ends the episode in its place.
 - Observations contain the latest available sensor values, task, and rig descriptor.
+  A policy also sees the inputs of each channel group that it declares, and it can send
+  commands on the outputs of those groups. A channel group is a set of channels beside
+  the robot's own, for example the input of a teleoperator device.
   They form a read-only snapshot: later sensor updates must not change an earlier
   input. Current time comes from the runtime, separately from observations.
 - Returned commands are emitted towards the robot driver immediately.
@@ -296,6 +299,18 @@ whole definition and sends it to the rig as a description.
   [wire compatibility rules](../offboard/README.md#compatibility-and-deprecation)
   define the details.
 
+A remote policy declares no channel group. The client refuses a declared
+stack that declares one, and it removes the keys of every channel group that a
+policy can declare before the declared stack reads the observations.
+
+A part that sends observations to another machine, such as a remote policy,
+reports it with `sends_off_rig()`. A sequence that declares a channel group
+cannot hold such a part: a part before it could put the keys of the group under
+another key, which the key removal does not see. `Sequential` refuses that
+combination when it is built. It flattens nested sequences, so it checks every
+part at any depth. A processor that holds another processor reports the answer
+of that processor too.
+
 Each remote run opens a server session and runs the declared client stack
 around an ordinary inference function. The session identifies that run's calls
 and owns any server-side episode state. It ends when the run closes or the
@@ -319,10 +334,12 @@ goal is for the recording to reconstruct both flows after the episode:
 what each part saw, what it returned, and when. That includes inference inputs
 and outputs on other machines, and values a run chooses to record itself.
 
-The harness records sensor, privileged, and emitted-command signals in one episode dataset.
+The harness records sensor signals, the inputs of each channel group that it holds, and emitted
+commands in one episode dataset. It records a channel group also when the policy does not declare it.
 It records new inputs before each policy call and commands after emission. Between calls it
 samples every millisecond; each sampling pass resets that deadline. Reused inputs keep their
-original timestamps and are not written twice. Privileged inputs stay outside policy observations.
+original timestamps and are not written twice. The inputs of a channel group that the policy does
+not declare, for example the privileged ground truth of a simulator, stay outside policy observations.
 Inputs include receipt timestamps; commands use the emission timestamps returned by `emit()`.
 Harness adds `harness.world` and `harness.wall` to every record: first receipt for inputs,
 emission for commands. These coordinates align training, replay, and viewing without changing
@@ -417,6 +434,12 @@ class Processor(ABC, Generic[InputT, OutputT]):
 
     def meta(self) -> dict[str, Any]: ...
 
+    # Empty unless the processor reads or writes a channel group.
+    def channel_groups(self) -> frozenset[DeclarableGroup]: ...
+
+    # True for a processor that sends observations to another machine, or holds one.
+    def sends_off_rig(self) -> bool: ...
+
     # Optional for local code; required for a deliverable component.
     def to_spec(self) -> dict[str, Any]: ...
 
@@ -424,8 +447,11 @@ class Processor(ABC, Generic[InputT, OutputT]):
 Policy = Processor[Obs, Step]
 ```
 
-`meta()` reports definition metadata. `to_spec()` declares a registered component
-name, version, and plain-data constructor arguments; compositions contain nested specs.
+`meta()` reports definition metadata. `channel_groups()` declares the channel groups
+that the processor needs; `Sequential` combines the declarations of its parts. The
+privileged channel group is not in `DeclarableGroup`, so no policy can declare it.
+`to_spec()` declares a registered component name, version, and plain-data constructor
+arguments; compositions contain nested specs.
 
 A minimal policy yields no commands and asks to be called in 100 ms:
 

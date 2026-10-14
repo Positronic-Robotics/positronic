@@ -1,7 +1,7 @@
 import logging
 import os
 import uuid
-from collections.abc import Callable, Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
@@ -20,7 +20,7 @@ from positronic.cfg.eval import unset
 from positronic.cli.account.gateway import refusing_bad_input
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
-from positronic.eval import Embodiment, Eval, Task
+from positronic.eval import ChannelGroup, Embodiment, Eval, Task
 from positronic.policy import Policy
 from positronic.policy.harness import EpisodeEnd, Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
@@ -78,7 +78,7 @@ class TaskDriver(pimm.ControlSystem):
     It makes the plan on its first turn and submits one task at a time. The harness owns each episode's
     policy run and cleanup; every episode records into ``output_path``. A task whose episode fails on a
     ``pimm.SignalError`` runs again, and the run raises when one task fails so ``MAX_ATTEMPTS_PER_TASK`` times in
-    a row. Any other failed episode ends the run.
+    a row. Any other failed episode ends the run. It has no abort source.
     """
 
     def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, output_path: Path | None):
@@ -111,24 +111,31 @@ def run_world(
     driver,
     *,
     record: bool = True,
-    privileged: dict[str, pimm.ControlSystemEmitter] | None = None,
+    channel_groups: Sequence[ChannelGroup] = (),
     done: pimm.ControlSystemEmitter | None = None,
+    abort: pimm.calls.ControlSystemCaller[None, None] | None = None,
+    phase: pimm.ControlSystemReceiver | None = None,
 ) -> None:
-    """Wire one embodiment under a fresh Harness + World, and run it until a control system returns.
+    """Wire one embodiment and ``channel_groups`` under a fresh Harness + World, and run it until a control system
+    returns.
 
     An attended run and an unattended one differ only by their driver: any control system with a ``perform_task``
     caller — a plan walked to its end, a person at a keyboard, a console of somebody's own. The driver reads what it
-    decides from itself, so the runner wires nothing of it but that call. ``record`` off disables recording and
-    leaves privileged sources disconnected. Each rollout names its output path, or ``None`` to write nothing.
-    ``done`` ends an episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
+    decides from itself. The runner connects its ``perform_task`` call, and the ``done``, ``abort`` and ``phase``
+    ports that the caller gives. ``record`` off disables recording. Each rollout names its output path, or ``None``
+    to write nothing. ``done`` ends an episode from outside the policy: the env's terminal in a sim eval, the operator
+    in an attended run. ``abort`` ends an episode before its policy starts, and ``phase`` receives the episode phase.
     """
-    privileged = (privileged or {}) if record else {}
     if record:
         embodiment.video_encoder.ensure_available()
-    harness = Harness(embodiment, record=record)
+    harness = Harness(embodiment, channel_groups=channel_groups, record=record)
     with pimm.World(virtual_time=embodiment.simulated) as world:
-        wire.wire_embodiment(world, harness, embodiment, privileged=privileged, done=done)
+        wire.wire_embodiment(world, harness, embodiment, done=done)
         world.connect(driver.perform_task, harness.perform_task)
+        if abort is not None:
+            world.connect(abort, harness.abort)
+        if phase is not None:
+            world.connect(harness.phase, phase)
 
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         if embodiment.simulated:
@@ -221,7 +228,8 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
         with timed_pass(output_path, timing, policy):
             for ev in evals:
                 driver = TaskDriver(ev.tasks, policy, output_path)
-                run_world(ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done)
+                record = output_path is not None
+                run_world(ev.embodiment, driver, record=record, channel_groups=[ev.privileged], done=ev.done)
 
 
 def _refuse(inapplicable: dict[str, object], where: str) -> None:

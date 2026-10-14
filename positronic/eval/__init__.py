@@ -1,5 +1,6 @@
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 import pimm
@@ -14,9 +15,10 @@ ROBOT_STATIC_META = {eval_keys.JOINT_SIGNALS: [JOINTS], eval_keys.POSE_SIGNALS: 
 
 @dataclass
 class Observation:
-    """A policy-facing signal source and the serializer for its canonical entries.
+    """A signal source that the Harness reads, and the serializer for its canonical entries.
 
-    The same serializer feeds the policy *and* records the signal — recording is
+    An embodiment observation goes to the policy. A ``ChannelGroup`` input goes to a policy only when the
+    policy declares the group. The same serializer feeds the policy *and* records the signal — recording is
     canonical policy I/O. ``None`` passes the device value through unchanged. A
     serializer that returns ``None`` drops the value from both the recording and the
     policy input.
@@ -37,6 +39,48 @@ class Command:
 
     dest: pimm.ControlSystemReceiver
     serializer: Serializer | None
+
+
+class DeclarableGroup(StrEnum):
+    """A channel group that a policy can declare. The name of each channel of the group starts with
+    ``f'{group}.'``, so a reader can drop the keys of the group by their prefix.
+
+    The privileged channel group has no member, so no policy can declare it.
+    """
+
+    TELEOP = 'teleop'
+
+
+def in_declarable_group(name: str) -> bool:
+    """Whether ``name`` is the name of a channel, or of a recorded key, of a declarable channel group."""
+    return any(name.startswith(f'{group}.') for group in DeclarableGroup)
+
+
+@dataclass
+class ChannelGroup:
+    """Channels beside the embodiment's own, that the Harness gets through its constructor.
+
+    The Harness records the inputs whenever it records. A policy that declares ``declarable_as`` sees the inputs as
+    observations, sends the outputs as commands, and waits for ``start`` before the episode starts. A group with no
+    ``declarable_as``, as the privileged channel group, has only inputs: no policy sees them, and a
+    ``pimm.SignalError`` on them does not fail the episode.
+    """
+
+    inputs: dict[str, Observation]
+    outputs: dict[str, Command] = field(default_factory=dict)
+    # Answers when the group is ready for the policy to start.
+    start: pimm.calls.ControlSystemHandler[None, None] | None = None
+    declarable_as: DeclarableGroup | None = None
+
+    def __post_init__(self):
+        names = [*self.inputs, *self.outputs]
+        if self.declarable_as is None:
+            if self.outputs or self.start is not None:
+                raise ValueError('Only a declarable channel group has outputs or a start call')
+            if any(in_declarable_group(name) for name in names):
+                raise ValueError(f'{names} uses the prefix of a declarable channel group')
+        elif not all(name.startswith(f'{self.declarable_as}.') for name in names):
+            raise ValueError(f'Each channel of the {self.declarable_as} group must start with "{self.declarable_as}."')
 
 
 @dataclass
@@ -119,11 +163,12 @@ class Eval:
     """An eval = embodiment + the tasks to run on it, produced by a single config.
 
     ``privileged`` and ``done`` are per-run, not per-task: the World wires the signals once, before it runs.
+    ``privileged`` is the privileged channel group: the raw ground truth that the Harness records and no policy sees.
     ``tasks`` makes the sweep — one entry per (scenario, seed). A driver calls it when it starts, so a
     source that asks its env what tasks it has reaches a live one.
     """
 
     embodiment: Embodiment
     tasks: Callable[[], Iterable[Task]]
-    privileged: dict[str, pimm.ControlSystemEmitter] = field(default_factory=dict)
+    privileged: ChannelGroup = field(default_factory=lambda: ChannelGroup(inputs={}))
     done: pimm.ControlSystemEmitter | None = None

@@ -119,6 +119,8 @@ def run_attended(
     with pimm.World() as world:
         wire.wire_embodiment(world, harness, embodiment, done=console.done)
         world.connect(console.perform_task, harness.perform_task)
+        world.connect(console.abort, harness.abort)
+        world.connect(harness.phase, console.phase)
         world.run([operator, harness, *embodiment.control_systems], [console])
 
 

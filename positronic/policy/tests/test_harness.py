@@ -1,5 +1,6 @@
 """Timing contracts for processor execution and simulated chunk playback."""
 
+import logging
 import threading
 import time
 import traceback
@@ -31,14 +32,24 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, from_wire, to_wire
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import Command, Embodiment, Observation, Task
+from positronic.eval import ChannelGroup, Command, DeclarableGroup, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Exit, Policy, PolicyRun, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import POLL_PERIOD_SEC, EpisodeEnd, Harness, Rollout
+from positronic.policy.harness import (
+    POLL_PERIOD_SEC,
+    Aborted,
+    Ended,
+    EpisodeAborted,
+    EpisodeEnd,
+    Harness,
+    Rollout,
+    Running,
+    Starting,
+)
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -49,6 +60,8 @@ RESET = 'reset'
 CAMERA = 'camera'
 ARM = 'arm'
 GROUND_TRUTH = 'ground_truth'
+TELEOP_POSE = f'{DeclarableGroup.TELEOP}.pose'
+TELEOP_STATUS = f'{DeclarableGroup.TELEOP}.status'
 
 
 class StubPolicy(Policy):
@@ -154,7 +167,7 @@ def observed_harness():
         for name, receiver in harness.observations.items():
             emitters[name], physical_receiver = world.local_pipe()
             receiver._bind(physical_receiver)
-        harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
+        harness.phase._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
         step = partial(harness._step, Task('test', None), runtime, policy_run, None)
@@ -289,9 +302,12 @@ class MemoryDataset(DatasetWriter):
 
 
 @contextmanager
-def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = (), privileged: tuple[str, ...] = ()):
+def _episode_ports(
+    devices: tuple[str, ...] = (), observed: tuple[str, ...] = (), privileged: tuple[str, ...] = (), teleop=False
+):
     """A harness whose loop the test drives, with a ready handler for each of ``devices``, and an observation of the
-    same name for each of ``observed``."""
+    same name for each of ``observed``. ``privileged`` names the inputs of a group that no policy can declare.
+    ``teleop`` adds the declarable teleop group, with one input, one output and a start call."""
     with pimm.World(virtual_time=True) as world:
         source = Passive()
         serializer = Mock(side_effect=lambda value: value)
@@ -310,9 +326,22 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             ready_handlers=readiness,
             simulated=True,
         )
+        groups = [
+            ChannelGroup(inputs={name: Observation(pimm.ControlSystemEmitter(source), None)}) for name in privileged
+        ]
+        start = pimm.calls.ControlSystemHandler[None, None](source)
+        if teleop:
+            groups.append(
+                ChannelGroup(
+                    inputs={TELEOP_POSE: Observation(pimm.ControlSystemEmitter(source), serializer)},
+                    outputs={TELEOP_STATUS: Command(pimm.ControlSystemReceiver(source), None)},
+                    start=start,
+                    declarable_as=DeclarableGroup.TELEOP,
+                )
+            )
         dataset = MemoryDataset()
         dataset_factory = Mock(return_value=dataset)
-        harness = Harness(embodiment, dataset_factory=dataset_factory)
+        harness = Harness(embodiment, channel_groups=groups, dataset_factory=dataset_factory)
         for name, handler in readiness.items():
             wire_call(world, harness.ready[name], handler)
         for name, handler in preparation.items():
@@ -330,11 +359,15 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             emitter, physical_receiver = world.local_pipe()
             harness.observations[name]._bind(physical_receiver)
             device_observations[name] = emitter
-        privileged_emitters = {}
-        for name in privileged:
+        group_emitters = {}
+        for name in [*privileged, *([TELEOP_POSE] if teleop else [])]:
             emitter, physical_receiver = world.local_pipe()
-            harness.privileged[name]._bind(physical_receiver)
-            privileged_emitters[name] = emitter
+            harness.observations[name]._bind(physical_receiver)
+            group_emitters[name] = emitter
+        if teleop:
+            wire_call(world, harness.start[DeclarableGroup.TELEOP], start)
+        abort = pimm.calls.ControlSystemCaller[None, None](source)
+        wire_call(world, abort, harness.abort)
         ports = SimpleNamespace(
             world=world,
             harness=harness,
@@ -347,16 +380,21 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             done=done,
             observation=observation,
             device_observations=device_observations,
-            privileged=privileged_emitters,
+            groups=group_emitters,
+            start=start,
+            abort=abort,
             serializer=serializer,
             dataset=dataset,
             dataset_factory=dataset_factory,
             output_path=Path('recording'),
-            deadlines=Trace(world.clock),
+            phases=Trace(world.clock),
             commands=Trace(world.clock),
+            status=Trace(world.clock),
         )
-        harness.deadline_ns._bind(ports.deadlines, clock=world.clock)
+        harness.phase._bind(ports.phases, clock=world.clock)
         harness.commands[MOTOR]._bind(ports.commands, clock=world.clock)
+        if teleop:
+            harness.commands[TELEOP_STATUS]._bind(ports.status, clock=world.clock)
         try:
             yield ports
         finally:
@@ -401,7 +439,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     h.done.emit({'stale': True})
     first = h.caller(Rollout(Task('first', 0.01), Observe(), h.output_path))
     next(h.loop)
-    assert h.deadlines.values == [(0, 10_000_000)]
+    assert h.phases.values == [(0, Starting()), (0, Running(10_000_000))]
 
     h.manual.emit({MOTOR: 99})
     overlapping = h.caller(Rollout(Task('overlapping', None), Observe(), h.output_path))
@@ -412,7 +450,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     assert first.done()
     assert h.dataset.episodes[0].closed
     assert closed == [True]
-    assert h.deadlines.values[-1] == (12_000_000, None)
+    assert h.phases.values[-1] == (12_000_000, Ended())
     with pytest.raises(RuntimeError, match='already running'):
         overlapping.result()
     next(h.loop)
@@ -432,7 +470,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     with pytest.raises(pimm.calls.HandlerStopped):
         second.result()
     assert closed == [True, True]
-    assert h.deadlines.values[-1][1] is None
+    assert h.phases.values[-1][1] == Ended()
     assert len(h.dataset.episodes) == 2
     assert all(episode.closed and not episode.aborted for episode in h.dataset.episodes)
 
@@ -558,7 +596,8 @@ def test_a_failed_episode_closes_the_generator_answers_its_call_and_the_next_cal
     opened = failure != 'startup'
     assert len(h.dataset.episodes) == int(opened)
     assert all(episode.closed and episode.aborted for episode in h.dataset.episodes)
-    assert [deadline for _, deadline in h.deadlines.values] == ([10_000_000, None] if opened else [])
+    expected = [Starting(), Running(10_000_000), Ended()] if opened else [Starting(), Ended()]
+    assert [phase for _, phase in h.phases.values] == expected
 
     h.serializer.side_effect = lambda value: value
     h.caller(Rollout(Task('next', None), Hold(), h.output_path))
@@ -634,7 +673,7 @@ def test_an_observation_error_discards_the_episode_and_an_old_value_does_not(epi
     assert policy.seen == [1]
     assert policy.closed
     assert episode.closed and episode.aborted
-    assert h.deadlines.values[-1][1] is None
+    assert h.phases.values[-1][1] == Ended()
     assert isinstance(next(h.loop), pimm.Sleep)
 
 
@@ -719,7 +758,7 @@ def policy_world(policy, *, simulated=True, charged=False):
         world.pair(harness.done)
         commands = Trace(world.clock)
         harness.commands[MOTOR]._bind(commands, clock=world.clock)
-        harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
+        harness.phase._bind(Trace(world.clock), clock=world.clock)
         loop = world.start([harness, timer])
         caller(Rollout(Task('test', None, charge_inference_time=charged), policy, None))
         try:
@@ -899,8 +938,8 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
         motion.position._bind(observations, clock=world.clock)
         commands = Trace(world.clock, world.pair(motion.command))
         harness.commands[MOTOR]._bind(commands, clock=world.clock)
-        deadlines = Trace(world.clock)
-        harness.deadline_ns._bind(deadlines, clock=world.clock)
+        phases = Trace(world.clock)
+        harness.phase._bind(phases, clock=world.clock)
         world.connect(harness.prepare[RESET], motion.reset)
         loop = world.start([harness, motion])
         observations.emit(0)
@@ -918,7 +957,7 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
                     break
             assert answer.done()
             assert motion.resets == (2 if prepare else 0)
-            start_ns = deadlines.values[0][0]
+            start_ns = next(ns for ns, phase in phases.values if isinstance(phase, Running))
             assert start_ns == (8_000_000 if prepare else 0)
             fixture = Path(__file__).resolve().parents[3] / 'integration_tests/fixtures/act_stack/seed_4.npz'
             with np.load(fixture, allow_pickle=False) as reference:
@@ -1047,14 +1086,15 @@ def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
     task = Task('move', 0.01, prepare_args={RESET: 'home', eval_keys.SCENE: 42})
     answer = h.caller(Rollout(task, Hold(), None))
     next(h.loop)
-    assert h.deadlines.values == h.dataset.episodes == []
+    assert h.phases.values == [(0, Starting())]
+    assert h.dataset.episodes == []
     for name, request in task.prepare_args.items():
         call = next(h.prepare[name].incoming())
         assert call.request == request
         call.set_result(None)
     h.world.clock.advance_to_ns(1_000_000_000)
     next(h.loop)
-    assert h.deadlines.values == [(1_000_000_000, 1_010_000_000)]
+    assert h.phases.values[-1] == (1_000_000_000, Running(1_010_000_000))
     h.world.clock.advance_to_ns(1_010_000_000)
     next(h.loop)
     next(h.loop)
@@ -1342,9 +1382,9 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
             meta_source=None,
             simulated=True,
         )
-        harness = Harness(embodiment)
-        privileged = {GROUND_TRUTH: motion.position} if record_privileged else {}
-        wire.wire_embodiment(world, harness, embodiment, privileged=privileged)
+        privileged = [ChannelGroup(inputs={GROUND_TRUTH: Observation(motion.position, None)})]
+        harness = Harness(embodiment, channel_groups=privileged if record_privileged else ())
+        wire.wire_embodiment(world, harness, embodiment)
         caller = world.pair(harness.perform_task)
         loop = world.start([harness, motion])
         answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), Move(), tmp_path))
@@ -1382,11 +1422,33 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
 
 
 @pytest.mark.parametrize('name', [POSITION, MOTOR])
-def test_wiring_rejects_privileged_names_shared_with_policy_signals(episode_harness, name):
+def test_the_harness_refuses_a_channel_group_name_that_the_embodiment_has(episode_harness, name):
     h = episode_harness
-    privileged = {name: h.embodiment.observations[POSITION].source}
-    with pytest.raises(ValueError, match='signal names must be distinct'):
-        wire.wire_embodiment(h.world, h.harness, h.embodiment, privileged=privileged)
+    group = ChannelGroup(inputs={name: h.embodiment.observations[POSITION]})
+    with pytest.raises(ValueError, match='must occur once'):
+        Harness(h.embodiment, channel_groups=[group])
+
+
+def test_the_harness_refuses_an_embodiment_name_in_a_declarable_group_and_a_declarable_group_twice(episode_harness):
+    h = episode_harness
+    observation = h.embodiment.observations[POSITION]
+    with pytest.raises(ValueError, match='cannot start with'):
+        Harness(replace(h.embodiment, observations={TELEOP_POSE: observation}))
+    groups = [
+        ChannelGroup(inputs={f'{TELEOP_POSE}.{i}': observation}, declarable_as=DeclarableGroup.TELEOP) for i in range(2)
+    ]
+    with pytest.raises(ValueError, match='must occur once'):
+        Harness(h.embodiment, channel_groups=groups)
+
+
+def test_only_a_declarable_channel_group_has_outputs_a_start_call_and_names_under_its_prefix(episode_harness):
+    observation = episode_harness.embodiment.observations[POSITION]
+    with pytest.raises(ValueError, match='Only a declarable'):
+        ChannelGroup(inputs={}, start=episode_harness.start)
+    with pytest.raises(ValueError, match='prefix of a declarable'):
+        ChannelGroup(inputs={TELEOP_POSE: observation})
+    with pytest.raises(ValueError, match='must start with'):
+        ChannelGroup(inputs={GROUND_TRUTH: observation}, declarable_as=DeclarableGroup.TELEOP)
 
 
 def test_recorder_refuses_an_encoder_this_host_cannot_run():
@@ -1490,7 +1552,7 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
     with _episode_ports(privileged=(GROUND_TRUTH,)) as h:
         policy = Positions()
         h.observation.emit(0)
-        h.privileged[GROUND_TRUTH].emit(np.array([10]))
+        h.groups[GROUND_TRUTH].emit(np.array([10]))
         answer = h.caller(Rollout(Task('sample', None), policy, h.output_path))
         next(h.loop)
         episode = h.dataset.episodes[0]
@@ -1499,7 +1561,7 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         h.world.clock.advance_to_ns(1_000_000)
         frame = np.array([20])
         h.observation.emit(1)
-        h.privileged[GROUND_TRUTH].emit(frame)
+        h.groups[GROUND_TRUTH].emit(frame)
         next(h.loop)
         assert policy.seen == [0]
         frame[0] = 99
@@ -1509,7 +1571,7 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         assert h.serializer.call_count == 2
 
         h.world.clock.advance_to_ns(101_000_000)
-        h.privileged[GROUND_TRUTH].emit(np.array([30]))
+        h.groups[GROUND_TRUTH].emit(np.array([30]))
         h.done.emit({eval_keys.SUCCESS: True})
         next(h.loop)
         assert answer.done() and episode.closed
@@ -1524,11 +1586,259 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
 def test_disabled_recording_does_not_read_privileged_data_or_add_sampling_wakeups():
     with _episode_ports(privileged=(GROUND_TRUTH,)) as h:
         h.harness._embodiment = replace(h.embodiment, simulated=False)
-        h.harness.privileged[GROUND_TRUTH].read = Mock(side_effect=AssertionError('unexpected read'))
+        h.harness.observations[GROUND_TRUTH].read = Mock(side_effect=AssertionError('unexpected read'))
         h.observation.emit(0)
         h.caller(Rollout(Task('move', None), Hold(), None))
         assert next(h.loop) == pimm.Sleep(0.1)
         h.dataset_factory.assert_not_called()
+
+
+class Teleop(Policy):
+    """Declare the teleop group, keep what it observes, and send a status on the group's output."""
+
+    def __init__(self):
+        self.observations = []
+
+    def channel_groups(self):
+        return frozenset({DeclarableGroup.TELEOP})
+
+    def run(self, runtime):
+        obs = yield
+        while True:
+            self.observations.append(obs)
+            obs = yield Step({TELEOP_STATUS: 'driving'}, runtime.time_ns + 100_000_000)
+
+
+@pytest.mark.parametrize('declare', [False, True])
+def test_only_a_policy_that_declares_a_group_starts_it_sees_its_inputs_and_sends_on_it(declare):
+    with _episode_ports(teleop=True) as h:
+        policy = Teleop() if declare else Positions()
+        h.observation.emit(0)
+        h.groups[TELEOP_POSE].emit(7)
+        h.caller(Rollout(Task('drive', None), policy, h.output_path))
+        next(h.loop)
+        if declare:
+            assert policy.observations == []
+            next(h.start.incoming()).set_result(None)
+            next(h.loop)
+        else:
+            assert list(h.start.incoming()) == []
+        assert [TELEOP_POSE in obs for obs in policy.observations] == [declare]
+        assert TELEOP_POSE in [name for name, _, _ in h.dataset.episodes[0].records]
+        assert h.status.values == ([(0, 'driving')] if declare else [])
+
+
+def test_a_policy_that_sends_on_a_group_it_does_not_declare_fails_its_episode():
+    class Undeclared(Teleop):
+        def channel_groups(self):
+            return frozenset()
+
+    with _episode_ports(teleop=True) as h:
+        h.observation.emit(0)
+        answer = h.caller(Rollout(Task('drive', None), Undeclared(), None))
+        next(h.loop)
+        with pytest.raises(ValueError, match=TELEOP_STATUS):
+            answer.result()
+        assert h.status.values == []
+
+
+def test_a_rollout_whose_policy_declares_a_group_the_harness_does_not_have_is_refused(episode_harness):
+    h = episode_harness
+    answer = h.caller(Rollout(Task('drive', None), Teleop(), None))
+    next(h.loop)
+    with pytest.raises(ValueError, match='no such channel group'):
+        answer.result()
+    assert h.phases.values == []
+
+
+def test_the_group_start_stage_comes_after_ready_and_before_prepare_and_the_time_limit():
+    with _episode_ports(devices=(ARM,), teleop=True) as h:
+        h.observation.emit(0)
+        h.groups[TELEOP_POSE].emit(0)
+        h.caller(Rollout(Task('drive', 0.01, prepare_args={RESET: 'home'}), Teleop(), None))
+        next(h.loop)
+        assert list(h.start.incoming()) == []
+        next(h.ready[ARM].incoming()).set_result(None)
+        next(h.loop)
+        start = next(h.start.incoming())
+        assert list(h.prepare[RESET].incoming()) == []
+        h.world.clock.advance_to_ns(1_000_000_000)
+        start.set_result(None)
+        next(h.loop)
+        next(h.prepare[RESET].incoming()).set_result(None)
+        next(h.loop)
+        assert h.phases.values == [(0, Starting()), (1_000_000_000, Running(1_010_000_000))]
+
+
+@pytest.mark.parametrize('stage', ['ready', 'start', 'prepare'])
+def test_an_abort_in_a_start_stage_ends_the_episode_before_the_policy_and_logs_a_late_error(stage, caplog):
+    with _episode_ports(devices=(ARM,), teleop=True) as h:
+        policy = Teleop()
+        h.observation.emit(0)
+        h.groups[TELEOP_POSE].emit(0)
+        answer = h.caller(Rollout(Task('drive', None, prepare_args={RESET: 'home'}), policy, h.output_path))
+        next(h.loop)
+        kept = next(h.ready[ARM].incoming())
+        if stage != 'ready':
+            kept.set_result(None)
+            next(h.loop)
+            kept = next(h.start.incoming())
+        if stage == 'prepare':
+            kept.set_result(None)
+            next(h.loop)
+            kept = next(h.prepare[RESET].incoming())
+        aborted = h.abort(None)
+        next(h.loop)
+        aborted.result()
+        with pytest.raises(EpisodeAborted):
+            answer.result()
+        assert [phase for _, phase in h.phases.values] == [Starting(), Aborted()]
+        assert policy.observations == h.dataset.episodes == []
+        if stage != 'start':
+            kept.set_exception(RuntimeError('the arm holds a fault'))
+            next(h.loop)
+            assert 'the arm holds a fault' in caplog.text
+
+
+@pytest.mark.parametrize('answered', [None, 'result', 'error'])
+def test_the_next_group_start_stage_takes_a_kept_start_call_and_calls_again_only_after_an_error(answered, caplog):
+    caplog.set_level(logging.INFO)
+    with _episode_ports(teleop=True) as h:
+        h.observation.emit(0)
+        h.groups[TELEOP_POSE].emit(0)
+        first = h.caller(Rollout(Task('drive', None), Teleop(), None))
+        next(h.loop)
+        kept = next(h.start.incoming())
+        h.abort(None)
+        next(h.loop)
+        with pytest.raises(EpisodeAborted):
+            first.result()
+        if answered == 'result':
+            kept.set_result(None)
+        elif answered == 'error':
+            kept.set_exception(RuntimeError('the teleoperator left'))
+        h.caller(Rollout(Task('drive', None), Teleop(), None))
+        next(h.loop)
+        calls = list(h.start.incoming())
+        if answered is None:
+            assert calls == []
+            assert h.phases.values[-1][1] == Starting()
+            kept.set_result(None)
+        else:
+            assert len(calls) == 1
+            level = 'ERROR' if answered == 'error' else 'INFO'
+            assert [r.levelname for r in caplog.records if 'start call' in r.message] == [level]
+            calls[0].set_result(None)
+        next(h.loop)
+        assert h.phases.values[-1][1] == Running(None)
+
+
+def test_a_kept_start_call_answered_while_the_next_episode_readies_starts_that_episode():
+    with _episode_ports(devices=(ARM,), teleop=True) as h:
+        h.observation.emit(0)
+        h.groups[TELEOP_POSE].emit(0)
+        first = h.caller(Rollout(Task('drive', None), Teleop(), None))
+        next(h.loop)
+        next(h.ready[ARM].incoming()).set_result(None)
+        next(h.loop)
+        kept = next(h.start.incoming())
+        h.abort(None)
+        next(h.loop)
+        with pytest.raises(EpisodeAborted):
+            first.result()
+
+        h.caller(Rollout(Task('drive', None), Teleop(), None))
+        next(h.loop)
+        ready = next(h.ready[ARM].incoming())
+        kept.set_result(None)
+        next(h.loop)
+        ready.set_result(None)
+        next(h.loop)
+        assert list(h.start.incoming()) == []
+        assert h.phases.values[-1][1] == Running(None)
+
+
+def test_a_kept_start_call_that_answers_during_a_model_trial_does_not_start_the_next_human_trial(caplog):
+    caplog.set_level(logging.INFO)
+    with _episode_ports(teleop=True) as h:
+        h.observation.emit(0)
+        h.groups[TELEOP_POSE].emit(0)
+        human = h.caller(Rollout(Task('drive', None, prepare_args={RESET: 'home'}), Teleop(), None))
+        next(h.loop)
+        kept = next(h.start.incoming())
+        h.abort(None)
+        next(h.loop)
+        with pytest.raises(EpisodeAborted):
+            human.result()
+
+        model = h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), Positions(), None))
+        next(h.loop)
+        kept.set_result(None)
+        next(h.prepare[RESET].incoming()).set_result(None)
+        next(h.loop)
+        h.done.emit({eval_keys.SUCCESS: True})
+        next(h.loop)
+        next(h.prepare[RESET].incoming()).set_result(None)
+        next(h.loop)
+        assert model.result().terminal[eval_keys.SUCCESS] is True
+
+        h.caller(Rollout(Task('drive', None), Teleop(), None))
+        next(h.loop)
+        assert len(list(h.start.incoming())) == 1
+        assert h.phases.values[-1][1] == Starting()
+        assert 'answered while no stage waited for it' in caplog.text
+
+
+def test_an_abort_during_the_move_back_is_refused_and_the_rig_goes_back(episode_harness):
+    h = episode_harness
+    h.observation.emit(0)
+    answer = h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), Hold(), None))
+    next(h.loop)
+    next(h.prepare[RESET].incoming()).set_result(None)
+    next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    back = next(h.prepare[RESET].incoming())
+    refused = h.abort(None)
+    next(h.loop)
+    with pytest.raises(RuntimeError, match='start stage'):
+        refused.result()
+    assert not answer.done()
+    back.set_result(None)
+    next(h.loop)
+    assert answer.result().terminal[eval_keys.SUCCESS] is True
+
+
+def test_a_signal_error_on_a_group_the_policy_does_not_declare_does_not_fail_the_episode():
+    with _episode_ports(teleop=True) as h:
+        policy = Positions()
+        h.observation.emit(0)
+        h.groups[TELEOP_POSE].emit(pimm.SignalError('the headset left'))
+        answer = h.caller(Rollout(Task('move', None), policy, h.output_path))
+        next(h.loop)
+        h.world.clock.advance_to_ns(100_000_000)
+        h.groups[TELEOP_POSE].emit(3)
+        next(h.loop)
+        assert not answer.done()
+        assert policy.seen == [0, 0]
+        recorded = [data for name, data, _ in h.dataset.episodes[0].records if name == TELEOP_POSE]
+        assert recorded == [3]
+
+
+def test_an_abort_while_no_episode_starts_is_refused(episode_harness):
+    h = episode_harness
+    refused = h.abort(None)
+    next(h.loop)
+    with pytest.raises(RuntimeError, match='start stage'):
+        refused.result()
+    h.observation.emit(0)
+    answer = h.caller(Rollout(Task('move', None), Hold(), None))
+    next(h.loop)
+    refused = h.abort(None)
+    next(h.loop)
+    with pytest.raises(RuntimeError, match='start stage'):
+        refused.result()
+    assert not answer.done()
 
 
 def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_instant(episode_harness, tmp_path):
@@ -1688,7 +1998,7 @@ def test_writer_failure_reaches_the_episode_caller(episode_harness, failure, mon
         answer.result()
     if failure != 'close':
         assert episode.closed and episode.aborted
-    assert h.deadlines.values[-1][1] is None
+    assert h.phases.values[-1][1] == Ended()
 
 
 def test_cartesian_delta_wire_roundtrip():
@@ -1833,7 +2143,7 @@ def test_real_sleep_stops_at_episode_deadline(episode_harness):
     assert wake.seconds == pytest.approx(0.02)
     h.world.clock.advance_to_ns(20_000_000)
     next(h.loop)
-    assert h.deadlines.values[-1] == (20_000_000, None)
+    assert h.phases.values[-1] == (20_000_000, Ended())
     next(h.loop)
     assert answer.result().terminal == {eval_keys.TERMINATED: False}
 
@@ -1868,6 +2178,6 @@ def test_a_missing_observation_still_ends_the_episode_at_its_deadline(episode_ha
     assert wake.seconds == pytest.approx(0.05)
     h.world.clock.advance_to_ns(50_000_000)
     next(h.loop)
-    assert h.deadlines.values[-1] == (50_000_000, None)
+    assert h.phases.values[-1] == (50_000_000, Ended())
     next(h.loop)
     assert answer.result().terminal == {eval_keys.TERMINATED: False}

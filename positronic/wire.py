@@ -66,17 +66,10 @@ def wire(  # noqa: C901
 
 
 def wire_embodiment(
-    world: pimm.World,
-    harness: Harness,
-    embodiment: Embodiment,
-    *,
-    privileged: dict[str, pimm.ControlSystemEmitter] | None = None,
-    done: pimm.SignalEmitter | None = None,
+    world: pimm.World, harness: Harness, embodiment: Embodiment, *, done: pimm.SignalEmitter | None = None
 ):
-    """Connect policy inputs, commands, lifecycle handlers and recording-only privileged signals."""
-    privileged = privileged or {}
-    if privileged.keys() & (embodiment.observations.keys() | embodiment.commands.keys()):
-        raise ValueError('Observation, command and privileged signal names must be distinct')
+    """Connect policy inputs, commands, lifecycle handlers, and the channels and start call of each channel group
+    that ``harness`` holds."""
     for name, obs in embodiment.observations.items():
         world.connect(obs.source, harness.observations[name])
     for name, cmd in embodiment.commands.items():
@@ -89,6 +82,10 @@ def wire_embodiment(
         world.connect(embodiment.meta_source, harness.robot_meta_in)
     if done is not None:
         world.connect(done, harness.done)
-
-    for name, source in privileged.items():
-        world.connect(source, harness.privileged[name])
+    for group in harness.channel_groups:
+        for name, obs in group.inputs.items():
+            world.connect(obs.source, harness.observations[name])
+        for name, cmd in group.outputs.items():
+            world.connect(harness.commands[name], cmd.dest)
+        if group.declarable_as is not None and group.start is not None:
+            world.connect(harness.start[group.declarable_as], group.start)

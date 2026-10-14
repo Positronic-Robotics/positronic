@@ -12,6 +12,7 @@ from attr import dataclass
 from typing_extensions import TypeAliasType
 
 from positronic import telemetry
+from positronic.eval import DeclarableGroup
 
 
 class NotAnswered(RuntimeError):
@@ -156,6 +157,14 @@ class Processor(ABC, Generic[InputT, OutputT]):
     def meta(self) -> dict[str, Any]:
         """Model and configuration metadata shared across episodes."""
         return {}
+
+    def channel_groups(self) -> frozenset[DeclarableGroup]:
+        """The channel groups that this processor reads or writes."""
+        return frozenset()
+
+    def sends_off_rig(self) -> bool:
+        """Whether this processor, or a processor it holds, sends observations to another machine."""
+        return False
 
     def to_spec(self) -> dict[str, Any]:
         """A versioned component declaration with plain-data arguments."""

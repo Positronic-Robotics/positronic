@@ -11,6 +11,7 @@ const ROUTES = {
   status: '/status',
   instruction: '/instruction',
   start: '/episode/start',
+  abort: '/episode/abort',
   end: '/episode/end',
   verdict: '/episode/verdict',
   endRun: '/run/end',
@@ -18,6 +19,7 @@ const ROUTES = {
 };
 const PHASE = {
   ready: 'ready',
+  starting: 'starting',
   running: 'running',
   ending: 'ending',
   verdictPending: 'verdict_pending',
@@ -29,6 +31,7 @@ const OUTCOME = {
   outOfTime: 'Ran out of time',
   discarded: 'Discarded',
   error: 'error',
+  aborted: 'aborted',
 };
 const REQUEST = {
   instruction: (text) => ({ override: text }),
@@ -44,6 +47,7 @@ function readStatus(answer) {
     configured: run.configured,
     override: run.override,
     overrideSince: run.override_since,
+    abortRefusal: run.abort_refusal,
     generation: run.generation,
     now: run.now,
     episodes: run.episodes.map((e) => ({
@@ -80,6 +84,7 @@ const ICON = {
 // How the page draws each phase and each outcome: `css` names the style in station.css.
 const PHASE_VIEW = {
   [PHASE.ready]: { text: 'Ready', css: 'ready' },
+  [PHASE.starting]: { text: 'Starting', css: 'ending', doing: 'starting' },
   [PHASE.running]: { text: 'Running', css: 'running', doing: 'recording' },
   [PHASE.ending]: { text: 'Ending', css: 'ending', doing: 'ending' },
   [PHASE.verdictPending]: { text: 'Verdict pending', css: 'pending', doing: 'ended · give the verdict' },
@@ -91,9 +96,11 @@ const OUTCOME_VIEW = {
   [OUTCOME.outOfTime]: { label: 'Out of time', text: 'ran out of time', css: 'timeout' },
   [OUTCOME.discarded]: { label: 'Discarded', text: 'discarded', css: 'discarded' },
   [OUTCOME.error]: { label: 'Error', text: 'error', css: 'error' },
+  [OUTCOME.aborted]: { label: 'Aborted', text: 'aborted', css: 'timeout' },
 };
 // An open episode's row shows the phase in place of an outcome.
 const OPEN_VIEW = {
+  [PHASE.starting]: { label: 'Starting', css: 'ending' },
   [PHASE.running]: { label: '<span class="dot"></span>Running', css: 'running' },
   [PHASE.ending]: { label: 'Ending', css: 'ending' },
   [PHASE.verdictPending]: { label: 'Verdict?', css: 'pending' },
@@ -123,7 +130,8 @@ function clock(seconds) {
 }
 
 const isRecording = (phase) => phase === PHASE.running || phase === PHASE.ending;
-const isOpen = (phase) => isRecording(phase) || phase === PHASE.verdictPending;
+const takesVerdict = (phase) => isRecording(phase) || phase === PHASE.verdictPending;
+const isOpen = (phase) => phase === PHASE.starting || takesVerdict(phase);
 const runHasEnded = () => current !== null && current.phase === PHASE.runEnded;
 const openEpisode = (status) => (isOpen(status.phase) ? status.episodes[status.episodes.length - 1] : null);
 const nextNumber = (status) => status.episodes.length + 1;
@@ -213,6 +221,7 @@ function render(status) {
   renderStatusRow(status);
   renderInstruction(status);
   renderButtons();
+  if (status.abortRefusal !== null) showRefusal(new Error(status.abortRefusal));
   renderFailure(status);
   renderEpisodes(status);
 }
@@ -280,7 +289,8 @@ function renderButtons() {
   const phase = current ? current.phase : null;
   const idle = !offline && !busy;
   $('start').disabled = !(idle && phase === PHASE.ready);
-  for (const [button] of verdictButtons) button.disabled = !(idle && isOpen(phase));
+  $('abort').disabled = !(idle && phase === PHASE.starting);
+  for (const [button] of verdictButtons) button.disabled = !(idle && takesVerdict(phase));
   $('end-run').disabled = !idle || phase === null || phase === PHASE.runEnded;
 }
 
@@ -307,6 +317,7 @@ function renderEpisodes(status) {
     if (count(OUTCOME.outOfTime)) sum += `<span>${count(OUTCOME.outOfTime)} ran out of time</span>`;
     if (count(OUTCOME.discarded)) sum += `<span>${count(OUTCOME.discarded)} discarded</span>`;
     if (count(OUTCOME.error)) sum += `<span>${count(OUTCOME.error)} error</span>`;
+    if (count(OUTCOME.aborted)) sum += `<span>${count(OUTCOME.aborted)} aborted</span>`;
   }
   $('ep-sum').innerHTML = sum;
   const rows = episodes.map((episode) => row(episode, status)).join('');
@@ -495,6 +506,8 @@ $('start').addEventListener('click', () =>
     await post(ROUTES.start);
   }),
 );
+
+$('abort').addEventListener('click', () => act(() => post(ROUTES.abort)));
 
 for (const [button, verdict] of verdictButtons) {
   button.addEventListener('click', () => {
