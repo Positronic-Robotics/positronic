@@ -1,8 +1,9 @@
-"""The label of an episode, its views, and the labelers, against a recorded MolmoSpaces sweep.
+"""The label of an episode, its views, and the labelers, against a recorded MolmoSpaces sweep and a RoboLab sweep.
 
-The fixture holds 20 episodes of one sweep of `pi05_droid_jointpos`, in the `<block>/<episode>` layout that positronic
-records: each `static.json`, the id from each `meta.json`, and the time column of each `robot_state.q` signal. The
-labeler reads each end from that signal.
+The MolmoSpaces fixture holds 20 episodes of one sweep of `pi05_droid_jointpos`, in the `<block>/<episode>` layout that
+positronic records: each `static.json`, the id from each `meta.json`, and the time column of each `robot_state.q`
+signal. The labeler reads each end from that signal. The RoboLab fixture holds six episodes of one sweep of a pi05
+policy: each `static.json`, the id from each `meta.json`, and the last 15 samples of each `subtask` signal.
 """
 
 from __future__ import annotations
@@ -17,23 +18,28 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from eval_vocabulary.episode import (
+    BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
     LEGACY_TIME_COLUMN,
     META_FILE,
     SIGNAL_FILE_SUFFIX,
     STATIC_FILE,
+    SUBTASK_SCORE_INDEX,
+    SUBTASK_SIGNAL,
     SUCCESS,
     TASK,
     TERMINATED,
     TIMESTAMP_COLUMN_PREFIX,
     UID,
+    VALUE_COLUMN,
 )
 from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD
 from platform_client import labels
 from platform_client.labels import (
     MOLMO_LABELER,
     PUBLIC_LABELERS,
+    ROBOLAB_LABELER,
     Attempt,
     Fail,
     ItemName,
@@ -51,6 +57,7 @@ from platform_client.labels import (
     molmo_label,
     read_static,
     recorded_task_and_outcome,
+    robolab_label,
 )
 from platform_client.slug import slug_of
 from pydantic import ValidationError
@@ -480,6 +487,123 @@ def test_statics_that_are_not_a_json_object_have_no_label_and_are_not_fatal(tmp_
     assert molmo_label(episode) is None
 
 
+# --- the RoboLab labeler
+
+
+ROBOLAB_SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'robolab_sweep').glob('*/*') if p.is_dir())
+
+# Read from the RoboLab recording: each episode's task and the score of its last step. The signal is float32.
+ROBOLAB_LAST_STEP_SCORES = [
+    ('FruitsOnPlateTask', pytest.approx(1 / 7)),
+    ('GrabABagelTask', 0.0),
+    ('PickUpBluePitcherTask', 0.5),
+    ('PutBowlOnShelfTopTask', 0.0),
+    ('ToolsPickingAllHammersTask', 0.0),
+    ('ToyInBinTask', 0.0),
+]
+
+
+def _last_step_score(episode: Path) -> float:
+    signal = pq.read_table(episode / f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}', columns=[VALUE_COLUMN])
+    return signal.column(VALUE_COLUMN)[-1].as_py()[SUBTASK_SCORE_INDEX]
+
+
+def test_no_episode_of_the_robolab_sweep_completes_a_subtask_so_no_label_has_a_subtask_event():
+    given = [robolab_label(episode) for episode in ROBOLAB_SWEEP]
+    labelled = [given_label for given_label in given if given_label is not None]
+    assert len(labelled) == len(ROBOLAB_SWEEP)
+    assert [
+        (given_label.task, _last_step_score(episode))
+        for given_label, episode in zip(labelled, ROBOLAB_SWEEP, strict=True)
+    ] == ROBOLAB_LAST_STEP_SCORES
+    assert [given_label.events for given_label in labelled] == [
+        (Fail(seconds=given_label.seconds_to_end),) for given_label in labelled
+    ]
+    assert {(given_label.annotator, given_label.outcome, given_label.total_subtasks) for given_label in labelled} == {
+        (ROBOLAB_LABELER, Outcome.fail, 1)
+    }
+
+    first = labelled[0]
+    assert (first.uid, first.seconds_to_end) == ('306d7c4674d34152b5741ebcfcfc15ff', pytest.approx(0.933, abs=1e-3))
+
+
+BANANA = 'BananaInBowlTask'
+# A task of two subtasks, whose score also grades the progress within a subtask.
+CUBES_IN_BIN = 'CubesAndBlocksInBinTask'
+
+
+def _write_subtask(episode: Path, samples: list[tuple[float, list[float]]]) -> None:
+    """A `subtask` signal: the world time of each sample in seconds, and its `[status, completed, total, score]`."""
+    columns = {
+        f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WORLD}': pa.array([int(t * 1e9) for t, _ in samples], type=pa.int64()),
+        VALUE_COLUMN: pa.array([progress for _, progress in samples], type=pa.list_(pa.float32())),
+    }
+    pq.write_table(pa.table(columns), episode / f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}')
+
+
+def test_a_robolab_label_has_an_event_at_each_change_of_the_subtasks_count_and_none_for_the_score_alone(tmp_path: Path):
+    (episode,) = _episodes(
+        tmp_path,
+        {
+            TASK: 'put all the cubes and blocks in the bin',
+            BENCHMARK_TASK: CUBES_IN_BIN,
+            SUCCESS: False,
+            TERMINATED: True,
+        },
+    )
+    _write_subtask(
+        episode,
+        [
+            (0.0, [0.0, 0.0, 0.0, 0.0]),  # the frame of the reset
+            (1.0, [0.0, 0.0, 2.0, 0.0]),
+            (2.0, [0.0, 0.0, 2.0, 0.25]),
+            (3.0, [0.0, 1.0, 2.0, 0.5]),
+            (4.0, [0.0, 1.0, 2.0, 0.75]),
+            (5.0, [0.0, 1.0, 2.0, 0.75]),
+        ],
+    )
+    assert robolab_label(episode) == _label(
+        SubtaskAchieved(seconds=3.0, achieved=1, score=0.5),
+        Fail(seconds=5.0),
+        task=CUBES_IN_BIN,
+        seconds_to_end=5.0,
+        total_subtasks=2,
+        annotator=ROBOLAB_LABELER,
+    )
+
+
+@pytest.mark.parametrize(
+    ('verdict', 'outcome'),
+    [({SUCCESS: True, TERMINATED: True}, Outcome.success), ({SUCCESS: False, TERMINATED: False}, Outcome.out_of_time)],
+)
+def test_a_robolab_trial_ends_as_a_molmo_trial_ends(tmp_path: Path, verdict: dict[str, object], outcome: Outcome):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: CUBES_IN_BIN, **verdict})
+    _write_subtask(episode, [(0.0, [0.0, 0.0, 2.0, 0.0]), (1.0, [0.0, 1.0, 2.0, 0.5])])
+    given = robolab_label(episode)
+    assert given is not None
+    assert (given.outcome, given.subtask_score, given.seconds_to_end) == (outcome, 0.5, 1.0)
+
+
+def test_a_robolab_trial_with_no_subtask_sample_has_no_label_and_logs_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    missing, empty = _episodes(tmp_path, *[{BENCHMARK_TASK: BANANA, SUCCESS: True, TERMINATED: True}] * 2)
+    for episode in (missing, empty):
+        _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
+    _write_subtask(empty, [])
+    with caplog.at_level(logging.DEBUG, logger=labels.__name__):
+        assert [robolab_label(missing), robolab_label(empty)] == [None, None]
+    assert caplog.records == []
+
+
+def test_a_subtask_signal_of_reset_frames_only_states_no_total(tmp_path: Path):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: BANANA, SUCCESS: False, TERMINATED: True})
+    _write_subtask(episode, [(0.0, [0.0, 0.0, 0.0, 0.0])])
+    given = robolab_label(episode)
+    assert given is not None
+    assert (given.total_subtasks, given.subtask_score) == (None, None)
+
+
 # --- the recorded verdict
 
 
@@ -573,5 +697,5 @@ def test_label_takes_the_first_labeler_that_labels_the_episode():
 
 
 def test_label_refuses_a_labeler_that_the_table_does_not_hold():
-    with pytest.raises(LookupError, match="no labeler 'held_out'; the labelers are molmo"):
+    with pytest.raises(LookupError, match="no labeler 'held_out'; the labelers are molmo, robolab$"):
         label(SWEEP[0], (MOLMO_LABELER, LabelerRef('held_out')))

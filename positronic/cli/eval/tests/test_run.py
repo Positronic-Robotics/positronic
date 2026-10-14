@@ -9,10 +9,12 @@ from itertools import islice
 from types import SimpleNamespace
 from typing import cast
 
+import numpy as np
 import pos3
 import pytest
+from eval_vocabulary.episode import SUBTASK_SIGNAL
 from platform_client.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
-from platform_client.labels import MOLMO_LABELER, Label, Success, label
+from platform_client.labels import MOLMO_LABELER, ROBOLAB_LABELER, Fail, Label, SubtaskAchieved, Success, label
 from platform_client.scoring import score
 
 import pimm
@@ -267,6 +269,29 @@ def test_the_molmo_labeler_reads_the_outcome_that_positronic_records(tmp_path):
         events=(Success(seconds=4.5),),
     )
     assert score(MOLMO_SCORING, [given_label]).model_dump() == {'primary': 1.0, 'episodes': 1, 'unscored': 0}
+
+
+def test_the_robolab_labeler_reads_the_progress_that_positronic_records(tmp_path):
+    with LocalDatasetWriter(tmp_path) as writer, writer.new_episode() as episode:
+        episode.set_static(keys.TASK, 'put all the cubes and blocks in the bin')
+        episode.set_static(eval_keys.TASK, 'CubesAndBlocksInBinTask')
+        episode.set_static(eval_keys.SUCCESS, False)
+        episode.set_static(eval_keys.TERMINATED, True)
+        for world_ns, progress in ((0, [0, 0, 2, 0]), (1_000_000_000, [0, 1, 2, 0.5]), (2_000_000_000, [0, 1, 2, 0.5])):
+            subtask = np.array(progress, dtype=np.float32)
+            episode.append(SUBTASK_SIGNAL, subtask, Time(**{EMITTED_WORLD: world_ns, EMITTED_WALL: 10 * world_ns}))
+
+    assert label(episode.path, (ROBOLAB_LABELER,)) == (
+        ROBOLAB_LABELER,
+        Label(
+            uid=episode.meta[META_UID],
+            task='CubesAndBlocksInBinTask',
+            annotator=ROBOLAB_LABELER,
+            seconds_to_end=2.0,
+            total_subtasks=2,
+            events=(SubtaskAchieved(seconds=1.0, achieved=1, score=0.5), Fail(seconds=2.0)),
+        ),
+    )
 
 
 @pytest.mark.parametrize('name', ['molmo.held_out', ''])
