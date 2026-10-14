@@ -63,36 +63,15 @@ Other models:
 
 ### What the example images use
 
-Each value is from one run of an image that CI built. The GPU run used one `3g.40gb` slice of an H100,
-the network denied and the container limits of the platform. The run without a GPU is the first test in
-[Test the image before you submit](#test-the-image-before-you-submit). 1 GB is 10^9 bytes.
+Approximate values, from one run of each image. The platform gives each image 40 GB of GPU memory.
 
-| Image | Compressed | Disk that the pull used | GPU memory, peak | First keepalive answer on the GPU | Test without a GPU |
-|---|---|---|---|---|---|
-| `positro/pi05-droid` | 22.2 GB | 44.6 GB | 8575 MiB | 143 s | serves; 19.6 GB of RAM, peak |
-| `positro/gr00t-n17-droid` | 23.8 GB | 37.9 GB | 6659 MiB | 81 s | stops on the missing GPU |
-| `positro/molmoact2-droid` | 24.4 GB | 30.8 GB | 11627 MiB | 128 s | serves; 11.9 GB of RAM, peak |
-| `positro/flux3-action` | 25.4 GB | 36.4 GB | 33255 MiB | 233 s | stops on the missing GPU |
-| `positro/cosmos3-nano` | 37.1 GB | 54.1 GB | 32373 MiB | 208 s | stops on the missing GPU |
-
-- The time starts when the container starts. It does not include the pull.
-- Each GPU run started after the pull, as on the platform. The weights were probably in the page cache. A
-  start that reads the weights from the disk takes longer. Plan for the longer time of GR00T in
-  [Test the image before you submit](#test-the-image-before-you-submit): about 151 s.
-- The digests below the table are of the images that CI published on 14 October 2026. Except for
-  `positro/gr00t-n17-droid`, the runs used earlier builds. Each earlier build is different from the
-  published image only in the layer with the positronic source, 46 MB. The weights are the same.
-- The slice has 40448 MiB. FLUX 3 Action leaves 7193 MiB of it free, and Cosmos3-Nano leaves 8075 MiB.
-
-The digests of the published images:
-
-```
-positro/pi05-droid@sha256:895abf46398fbede4e65c3163fd937c073e9b72f45dcc4a4f1fc2d50f54dd672
-positro/gr00t-n17-droid@sha256:8d6777fb67b6e18c9c46e132c858bbaa6a8a9b03d4528552b964b900a48fcc9f
-positro/molmoact2-droid@sha256:546c88459a2fd83d42213899cdb2d2c5d6f49c4652397925434ac2586d101a5e
-positro/flux3-action@sha256:39650fc99ddee5fd433d053ea26b835d565a1c837c69d3f09330f77961de1189
-positro/cosmos3-nano@sha256:3d891fde2e319ac3150c55b2cb95d128bcdb80a22152970e7c997241ef7de354
-```
+| Image | Disk | Memory, test without a GPU | GPU memory |
+|---|---|---|---|
+| `positro/pi05-droid` | 50 GB | 20 GB | 10 GB |
+| `positro/gr00t-n17-droid` | 40 GB | needs a GPU | 10 GB |
+| `positro/molmoact2-droid` | 35 GB | 12 GB | 15 GB |
+| `positro/flux3-action` | 40 GB | needs a GPU | 35 GB |
+| `positro/cosmos3-nano` | 55 GB | needs a GPU | 35 GB |
 
 ### Three traps in the `positro/*` bases
 
@@ -328,18 +307,14 @@ MolmoAct2 recipes then load the model on the CPU and serve. The GR00T recipe sto
 with `Flash Attention 2 is not available on CPU`. For the FLUX 3 Action recipe, BFL's server exits on
 the missing GPU, and the server reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano
 recipe, NVIDIA's server exits the same way, and the server reports `Cosmos3 backend exited with code 1`.
-These three stop before they read the weights, so this test does not show that the weights load offline.
-For them, run the test on a GPU below. The log must not show `NameResolutionError`, `dns error` or
-`OfflineModeIsEnabled`.
+These three stop before they read the weights, so for them, also run the test on a GPU below. The log
+must not show `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
 albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints
 `A new version of the following files was downloaded` when `transformers` copies the model's code
 into its module cache; no download occurs.
 
 On a machine with a GPU, serve it with the network denied, and wait until the keepalive route
-answers from inside the container with the token. The container gets one GPU, GPU 0. Use a GPU that MIG
-does not split: on a split GPU, `device=0` gives the container every slice of GPU 0. The test checks the
-start with the network denied and the GPU memory. The platform's `3g.40gb` slice has less compute than a
-full GPU, so the start on the platform can take longer. Run the test:
+answers from inside the container with the token:
 
 ```bash
 docker network create --internal noegress
@@ -357,7 +332,7 @@ except OSError as e:
 arch=$(docker version -f '{{.Server.Arch}}')
 if [ "$arch" != amd64 ]; then
   echo "Docker runs on '$arch'. Run this test on an amd64 machine."
-elif cid=$(docker run -d --pull=always --network noegress --gpus device=0 -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+elif cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 600))
   while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
@@ -377,14 +352,8 @@ Action binds port 8000 after about 140 s, and GR00T loads in about 151 s. `no an
 means a hung server, or one too slow for the provisioning deadline, which it shares with VM boot
 and the pull.
 
-The platform gives the image 40448 MiB of GPU memory, and a larger GPU can hide a model that does not
-fit. The load and the warmup can use more memory for a short time. Use an idle GPU. Before you start the
-test, run this command in a second terminal. It prints each new peak:
-
-```bash
-nvidia-smi --id=0 --query-gpu=memory.used --format=csv,noheader,nounits --loop-ms=500 \
-  | awk '$1 > m { m = $1; print "peak", m, "MiB"; fflush() }'
-```
+The platform gives the image 40 GB of GPU memory. On a larger GPU, use `nvidia-smi` to make sure that
+your model uses less.
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:

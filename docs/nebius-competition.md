@@ -15,10 +15,9 @@ Linux machine with an x86-64 (amd64) processor, such as a [Nebius](https://nebiu
 - The test loads your model into memory. Give the machine enough memory and free disk space for your
   model. For the π0.5 DROID example image, use 32 GB of memory and 100 GB of free disk space.
   [What the example images use](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#what-the-example-images-use)
-  gives the values for each example image.
-- The first test needs no GPU. Some images stop on the missing GPU before they load their weights.
-  [Test the image on a GPU](#test-the-image-on-a-gpu) shows that the model loads and serves on a GPU with
-  the network denied. You also need a GPU to train your policy.
+  gives approximate values for each example image.
+- The first test needs no GPU, but some images stop without a GPU. A GPU is necessary for
+  [Test the image on a GPU](#test-the-image-on-a-gpu), and to train your policy.
 
 ## Use a coding agent
 
@@ -123,8 +122,8 @@ a GPU. The loop ends with one of these lines:
   answer.
 - `{"alive_seconds": ...}`: the server loaded its weights, and it serves on the CPU.
 - `the server exited`: read the log. An image that needs a GPU stops with an error about CUDA. The GR00T
-  N1.7, FLUX 3 Action and Cosmos3-Nano example images stop in this way, before they load their weights.
-  For such an image, run [Test the image on a GPU](#test-the-image-on-a-gpu) before you submit.
+  N1.7, FLUX 3 Action and Cosmos3-Nano example images stop in this way. For such an image, run
+  [Test the image on a GPU](#test-the-image-on-a-gpu) before you submit.
 - `the server answered HTTP <code>`: the server runs, but it refused the request. A `401` means that the
   server does not accept the token in `AUTH_TOKEN`. On the platform, this fails the run with
   `policy_setup_crash`.
@@ -288,10 +287,7 @@ What the platform does with your credential:
 ## Test the image on a GPU
 
 On a machine with a GPU, serve the image with the network denied. Then wait until the keepalive route
-answers, from inside the container, with the token. The container gets one GPU, GPU 0. Use a GPU that MIG
-does not split: on a split GPU, `device=0` gives the container every slice of GPU 0. The test checks the
-start with the network denied and the GPU memory. The platform's `3g.40gb` slice has less compute than a
-full GPU, so the start on the platform can take longer. Run the test:
+answers, from inside the container, with the token:
 
 ```bash
 docker network create --internal noegress
@@ -309,7 +305,7 @@ except OSError as e:
 arch=$(docker version -f '{{.Server.Arch}}')
 if [ "$arch" != amd64 ]; then
   echo "Docker runs on '$arch'. Run this test on an amd64 machine."
-elif cid=$(docker run -d --pull=always --network noegress --gpus device=0 -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
+elif cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
   deadline=$((SECONDS + 600))
   while :; do
     [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
@@ -327,14 +323,8 @@ fi
 - The loop calls the route every 5 s, for up to 600 s. A slow model binds port 8000 late: FLUX 3 Action
   binds it after about 140 s.
 - The route answers `{"alive_seconds": ...}` when the model has loaded and warmed.
-- The platform gives the image 40448 MiB of GPU memory. A larger GPU can hide a model that does not fit.
-  The load and the warmup can use more memory for a short time. Use an idle GPU. Before you start the
-  test, run this command in a second terminal. It prints each new peak:
-
-  ```bash
-  nvidia-smi --id=0 --query-gpu=memory.used --format=csv,noheader,nounits --loop-ms=500 \
-    | awk '$1 > m { m = $1; print "peak", m, "MiB"; fflush() }'
-  ```
+- The platform gives the image 40 GB of GPU memory. On a larger GPU, use `nvidia-smi` to make sure that
+  your model uses less.
 - `the server exited` means that the server crashed. The log shows why.
 - `the server answered HTTP <code>` means that the server refused the request. A `401` means that it does
   not accept the token in `AUTH_TOKEN`.
