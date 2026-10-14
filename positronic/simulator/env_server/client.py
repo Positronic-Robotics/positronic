@@ -38,7 +38,7 @@ class EnvConnection:
             try:
                 # Camera + full-state observations routinely exceed websockets' 1 MiB default frame size.
                 # Native scene loading can block the server's heartbeat replies for minutes.
-                # Deflate costs ~140 ms of CPU per step on two raw 720p frames and saves nothing on a local link.
+                # No deflate: see "The env-server wire" in positronic/simulator/README.md.
                 self._ws = connect(
                     uri, open_timeout=open_timeout, max_size=None, ping_timeout=ping_timeout, compression=None
                 )
