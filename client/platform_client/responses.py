@@ -509,7 +509,7 @@ class RankingRow(BaseModel):
     baseline: BaselineMark | None = None
 
     @model_validator(mode='after')
-    def _a_baseline_has_no_rank(self) -> Self:
+    def _ranked_exactly_when_not_a_baseline(self) -> Self:
         if (self.rank is None) != (self.baseline is not None):
             raise ValueError('a row has a rank when it is not a baseline, and only then')
         return self
