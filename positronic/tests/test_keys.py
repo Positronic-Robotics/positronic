@@ -39,6 +39,7 @@ _GUARDED = {
     *molmo_keys.BENCHMARK_DIMENSIONS,
     molmo_keys.EPISODE_INDEX,
     molmo_keys.TASK_HORIZON,
+    molmo_keys.EXTERIOR_SIDES,
 }
 # keys.GRIP and keys.TASK are deliberately not guarded: their values are bare tokens the wire reuses
 # across unrelated namespaces (action-command grip, vendor state-vectors, scene/reset tokens), so a

@@ -44,12 +44,17 @@ from server import EnvProtocol, EnvServer  # noqa: E402
 
 # Loading the runner first avoids a circular import in json_eval_task_sampler.
 import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401  # pyright: ignore[reportMissingImports]
+from molmo_spaces.configs.camera_configs import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    FrankaDroidCameraSystem,
+    FrankaOmniPurposeCameraSystem,
+)
 from molmo_spaces.configs.policy_configs import DummyPolicyConfig  # noqa: E402  # pyright: ignore[reportMissingImports]
 from molmo_spaces.configs.robot_configs import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     ActionNoiseConfig,
     FrankaRobotConfig,
 )
 from molmo_spaces.evaluation.benchmark_schema import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    RobotMountedCameraSpec,
     load_all_episodes,
 )
 from molmo_spaces.evaluation.configs.evaluation_configs import (  # noqa: E402  # pyright: ignore[reportMissingImports]
@@ -94,6 +99,7 @@ class MolmoSpacesEnv(EnvProtocol):
     def __init__(self, assets_dir: Path) -> None:
         self._assets_dir = assets_dir
         self._found = mapping.discover_benchmarks(assets_dir)
+        self._right_view_blocked = mapping.load_right_view_blocked()
         self._episodes: dict[mapping.BenchmarkPath, list[Any]] = {}
         self._sampler: Any = None
         self._task: Any = None
@@ -121,11 +127,45 @@ class MolmoSpacesEnv(EnvProtocol):
         if name != mapping.MOLMO_GRASP_SITE and not name.endswith(f'/{mapping.MOLMO_GRASP_SITE}'):
             raise ValueError(f'arm move group measures at site {name!r}, expected {mapping.MOLMO_GRASP_SITE!r}')
 
+    @staticmethod
+    def _left_shoulder_config(episode: Any) -> Any:
+        """The config of the episode's left shoulder camera, in the camera system that recorded the episode."""
+        # The camera systems that record the Franka benchmarks, by the name an episode's source gives.
+        systems = {system.__name__: system for system in (FrankaDroidCameraSystem, FrankaOmniPurposeCameraSystem)}
+        system = episode.source.camera_system_class if episode.source is not None else None
+        if system not in systems:
+            raise ValueError(f'camera system {system!r} is not one of {sorted(systems)}')
+        recorded = {camera.name for camera in episode.cameras}
+        for config in systems[system]().cameras:
+            if config.name in mapping.LEFT_SHOULDER_CAMERAS and config.name in recorded:
+                return config
+        raise ValueError(f'the episode records none of {mapping.LEFT_SHOULDER_CAMERAS}; it records {sorted(recorded)}')
+
+    @staticmethod
+    def _with_right_shoulder_camera(episode: Any, rng: np.random.Generator) -> Any:
+        """A copy of ``episode`` with a right shoulder camera: the left camera's nominal pose mirrored and jittered."""
+        left = MolmoSpacesEnv._left_shoulder_config(episode)
+        offset, quat = mapping.mirror_camera_pose(left.camera_offset, left.camera_quaternion)
+        offset, quat = mapping.jitter_camera_pose(
+            offset, quat, left.pos_noise_range, left.orientation_noise_degrees, rng
+        )
+        right = RobotMountedCameraSpec(
+            name=mapping.RIGHT_SHOULDER_CAMERA,
+            reference_body_names=left.reference_body_names,
+            camera_offset=offset.tolist(),
+            lookat_offset=left.lookat_offset,
+            camera_quaternion=quat.tolist(),
+            fov=left.fov,
+        )
+        with_right = episode.model_copy()
+        with_right.cameras = [*episode.cameras, right]
+        return with_right
+
     def _build(self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None) -> None:
         if self._sampler is not None:
             self._sampler.close()
         episodes = self._episodes_of(bench)
-        episode = episodes[episode_index]
+        episode = self._with_right_shoulder_camera(episodes[episode_index], mapping.episode_rng(bench, episode_index))
         cfg = _DroidEvalConfig()
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark.
@@ -150,11 +190,8 @@ class MolmoSpacesEnv(EnvProtocol):
         records = []
         for bench in mapping.select_benchmarks(self._found, spec):
             episodes = self._episodes_of(bench)
-            count = len(episodes)
-            indices = list(range(count)) if pinned is None else pinned
-            out_of_range = [i for i in indices if not 0 <= i < count]
-            if out_of_range:
-                raise ValueError(f'episodes {out_of_range} out of range for the {count} episodes of {bench.relative}')
+            blocked = self._right_view_blocked.get(bench, frozenset())
+            indices = mapping.select_episodes(bench, len(episodes), pinned, blocked)
             horizon_sec = determine_task_horizon(episodes, None, cfg.policy_dt_ms) * cfg.policy_dt_ms / 1000.0
             records += [
                 {

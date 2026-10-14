@@ -1,11 +1,14 @@
 """Shared benchmark selection and wire conversions for the client and MolmoSpaces server."""
 
+import hashlib
+import json
 import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 if __package__:
     from positronic.simulator.env_server import protocol
@@ -109,6 +112,11 @@ OBS_EEF_QUAT = 'eef_quat'  # Orientation in the robot base frame, wxyz.
 OBS_GRIP = 'grip'  # Closure in [0, 1].
 OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
 
+# The left shoulder camera under its benchmark names, in Pi-policy preference order.
+LEFT_SHOULDER_CAMERAS = ('droid_shoulder_light_randomization', 'exo_camera_1')
+# The robot's right shoulder camera. No benchmark records it, so the name is positronic's own.
+RIGHT_SHOULDER_CAMERA = 'right_shoulder_camera'
+
 # Closed finger joint position used by MolmoSpaces' pi_policy.py to normalize gripper observations.
 GRIPPER_QPOS_CLOSED = 0.824033
 
@@ -187,3 +195,67 @@ def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | 
         return int(override_seed)
     spec_seed = getattr(episode, 'seed', None)
     return int(spec_seed) if spec_seed is not None else int(episode_index)
+
+
+# A reflection across the robot base's XZ plane, and a flip of the camera's own x axis. A camera looks along -Z with +Y
+# up, so its view and up directions reflect, and its x axis turns to keep the frame right-handed.
+_REFLECT_Y = np.diag([1.0, -1.0, 1.0])
+_FLIP_CAMERA_X = np.diag([-1.0, 1.0, 1.0])
+
+
+def mirror_camera_pose(offset: Any, quat: Any) -> tuple[np.ndarray, np.ndarray]:
+    """A robot-mounted camera pose reflected to the other side of the robot base; ``quat`` is wxyz."""
+    rotation = Rotation.from_quat(np.asarray(quat, dtype=np.float64), scalar_first=True).as_matrix()
+    mirrored = Rotation.from_matrix(_REFLECT_Y @ rotation @ _FLIP_CAMERA_X)
+    return _REFLECT_Y @ np.asarray(offset, dtype=np.float64), mirrored.as_quat(scalar_first=True)
+
+
+def jitter_camera_pose(
+    offset: Any,
+    quat: Any,
+    pos_noise_range: tuple[float, float] | None,
+    orientation_noise_degrees: float | None,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """A robot-mounted camera pose randomized as MolmoSpaces' ``CameraManager`` does it, with draws from ``rng``."""
+    offset = np.asarray(offset, dtype=np.float64)
+    rotation = Rotation.from_quat(np.asarray(quat, dtype=np.float64), scalar_first=True)
+    if pos_noise_range is not None:
+        offset = offset + rng.uniform(pos_noise_range[0], pos_noise_range[1], size=3)
+    if orientation_noise_degrees is not None:
+        euler = rng.uniform(-orientation_noise_degrees, orientation_noise_degrees, size=3)
+        rotation = Rotation.from_euler('xyz', euler, degrees=True) * rotation
+    return offset, rotation.as_quat(scalar_first=True)
+
+
+def episode_rng(bench: BenchmarkPath, episode_index: int) -> np.random.Generator:
+    """A generator keyed by the episode's place in the asset packs alone; no run or trial seed changes its draws."""
+    digest = hashlib.sha256(f'{bench.relative.as_posix()}#{episode_index}'.encode()).digest()
+    return np.random.default_rng(int.from_bytes(digest[:8], 'little'))
+
+
+# The episodes where scene geometry hides the start grasp site from the right shoulder camera, by benchmark path.
+# A benchmark absent from the file is unswept. An offline sweep builds the file (internal#1869). Rebuild it when
+# the pinned MolmoSpaces revision or the asset packs change.
+RIGHT_VIEW_BLOCKED_PATH = Path(__file__).parent / 'right_view_blocked.json'
+
+
+def load_right_view_blocked(path: Path = RIGHT_VIEW_BLOCKED_PATH) -> dict[BenchmarkPath, frozenset[int]]:
+    """The blocked episodes of every swept benchmark."""
+    return {BenchmarkPath.parse(rel): frozenset(indices) for rel, indices in json.loads(path.read_text()).items()}
+
+
+def select_episodes(bench: BenchmarkPath, count: int, pinned: list[int] | None, blocked: frozenset[int]) -> list[int]:
+    """Every episode outside ``blocked`` when ``pinned`` is None, else ``pinned``, which must avoid ``blocked``."""
+    if pinned is None:
+        return [i for i in range(count) if i not in blocked]
+    out_of_range = [i for i in pinned if not 0 <= i < count]
+    if out_of_range:
+        raise ValueError(f'episodes {out_of_range} out of range for the {count} episodes of {bench.relative}')
+    hidden = sorted(set(pinned) & blocked)
+    if hidden:
+        raise ValueError(
+            f'episodes {hidden} of {bench.relative} hide the start grasp site from the right shoulder camera; '
+            f'select others ({RIGHT_VIEW_BLOCKED_PATH.name} lists them)'
+        )
+    return list(pinned)

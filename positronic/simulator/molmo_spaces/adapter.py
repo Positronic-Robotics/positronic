@@ -1,5 +1,7 @@
 """Client-side mapping between MolmoSpaces observations and the canonical embodiment contract."""
 
+from collections.abc import Mapping, Sequence
+from enum import StrEnum
 from typing import Any
 
 import pimm
@@ -11,15 +13,36 @@ from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
-# Camera aliases in MolmoSpaces Pi-policy preference order.
-CAMERAS = {
-    keys.WRIST_IMAGE: ('wrist_camera_zed_mini', 'wrist_camera'),
-    keys.EXTERIOR_IMAGE: ('droid_shoulder_light_randomization', 'exo_camera_1'),
+
+class ShoulderSide(StrEnum):
+    LEFT = 'left'
+    RIGHT = 'right'
+
+
+# Camera aliases in MolmoSpaces Pi-policy preference order, and the shoulder cameras by robot side.
+WRIST_CAMERAS = ('wrist_camera_zed_mini', 'wrist_camera')
+SHOULDER_CAMERAS = {
+    ShoulderSide.LEFT: mapping.LEFT_SHOULDER_CAMERAS,
+    ShoulderSide.RIGHT: (mapping.RIGHT_SHOULDER_CAMERA,),
 }
+
+
+def camera_dict(exterior_sides: Sequence[ShoulderSide]) -> dict[str, tuple[str, ...]]:
+    """The aliases of each camera the embodiment declares; ``exterior_sides`` names the shoulder of each exterior."""
+    first, second = exterior_sides
+    return {
+        keys.WRIST_IMAGE: WRIST_CAMERAS,
+        keys.EXTERIOR_IMAGE: SHOULDER_CAMERAS[first],
+        keys.EXTERIOR_IMAGE_2: SHOULDER_CAMERAS[second],
+    }
 
 
 class MolmoAdapter(WireCommandAdapter):
     _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
+
+    def __init__(self, cameras: Mapping[str, tuple[str, ...]]):
+        super().__init__()
+        self._cameras = cameras
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
@@ -44,7 +67,7 @@ class MolmoAdapter(WireCommandAdapter):
         state = MujocoFrankaState()
         state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
         obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[mapping.OBS_GRIP])}
-        for logical, candidates in CAMERAS.items():
+        for logical, candidates in self._cameras.items():
             key = next((c for c in candidates if c in raw_obs), candidates[-1])
             obs[logical] = pimm.shared_memory.NumpySMAdapter.lazy_init(raw_obs[key], None)
         return obs
