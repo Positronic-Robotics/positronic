@@ -29,10 +29,13 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 1. Install the commands and register me. Ask me for a team name first.
    Show me the sign-in code and link, and wait while I approve it.
    Keep the API key in my environment. Never print it again.
-2. Help me build a policy image, and push it to a container registry
+2. Enter me in the competition. Show me the terms link and what
+   becomes public, and ask whether I accept the terms for my team.
+   Never accept the terms without explicit human approval.
+3. Help me build a policy image, and push it to a container registry
    that I choose.
-3. Test the image with the network denied.
-4. Submit it, pinned by digest, and check its status until the scores
+4. Test the image with the network denied.
+5. Submit it, pinned by digest, and check its status until the scores
    arrive.
 ```
 
@@ -69,8 +72,21 @@ export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 ```
 
 - Keep the key secret. If you lose it, run `platform-register --rotate` to get a new key.
-- When you register, you accept the [terms](https://physical-ai-competition.positronic.ro/terms.html) of
-  the competition.
+
+### Enter the competition
+
+Read the [terms](https://competition.phail.ai/terms). The command shows their link and their version,
+and what becomes public. With `--accept-terms`, you accept the terms for your team, and your team enters.
+
+```bash
+competition-enter
+competition-enter --accept-terms
+```
+
+- When you enter, the competition publishes your team name and the date you entered. When a run is
+  scored, it publishes the scores and the videos of the run. All of this stays public after the
+  competition.
+- The platform refuses a competition submission from an account that has not entered.
 
 ### Build and push your image
 

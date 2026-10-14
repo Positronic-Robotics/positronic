@@ -69,6 +69,8 @@ positronic="positronic.cli:_internal_main"
 positronic-server="positronic.server.positronic_server:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
 positronic-data-collection="positronic.data_collection:_internal_main"
+# The one engagement command, kept in the engagement's own directory (positronic/cli/tests/test_vocabulary.py).
+competition-enter="positronic.cli.examples.nebius_competition.enter:main"
 
 
 [project.optional-dependencies]
