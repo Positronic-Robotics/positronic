@@ -471,7 +471,7 @@ def _filter_sets_by_group(
 def _build_recording_and_release(index: int) -> None:
     """Build the recording of episode `index` into the cache, then free what the build left behind."""
     ensure_episode_rrd(index)
-    # PyAV's containers sit in reference cycles, so a video an episode opened closes only at a collection.
+    # A video an episode opened closes only at a collection: PyAV keeps its containers in reference cycles.
     gc.collect()
 
 
