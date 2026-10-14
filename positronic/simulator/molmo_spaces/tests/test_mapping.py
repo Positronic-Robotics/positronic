@@ -304,32 +304,44 @@ def test_the_right_camera_jitter_takes_the_left_camera_ranges_in_the_robot_base_
 
 
 _BLOCKED = frozenset({3})
+_BROKEN = frozenset({4})
+_NONE: frozenset[int] = frozenset()
 
 
 def test_an_open_selection_leaves_out_the_blocked_episodes():
-    assert 3 not in mapping.select_episodes(_HARD, 6, None, _BLOCKED)
+    assert 3 not in mapping.select_episodes(_HARD, 6, None, _BLOCKED, _NONE)
 
 
 def test_an_open_selection_keeps_every_clear_episode():
-    assert mapping.select_episodes(_HARD, 6, None, _BLOCKED) == [0, 1, 2, 4, 5]
+    assert mapping.select_episodes(_HARD, 6, None, _BLOCKED, _BROKEN) == [0, 1, 2, 5]
+
+
+def test_an_open_selection_leaves_out_the_broken_episodes_with_no_blocked_list():
+    assert mapping.select_episodes(_HARD, 6, None, _NONE, _BROKEN) == [0, 1, 2, 3, 5]
 
 
 def test_a_pinned_selection_runs_its_clear_episodes_in_its_order():
-    assert mapping.select_episodes(_HARD, 6, [5, 1], _BLOCKED) == [5, 1]
+    assert mapping.select_episodes(_HARD, 6, [5, 1], _BLOCKED, _BROKEN) == [5, 1]
 
 
 def test_a_pinned_blocked_episode_is_refused():
     with pytest.raises(ValueError, match=r'episodes \[3\] of .* hide the start grasp site'):
-        mapping.select_episodes(_HARD, 6, [1, 3], _BLOCKED)
+        mapping.select_episodes(_HARD, 6, [1, 3], _BLOCKED, _NONE)
+
+
+def test_a_pinned_broken_episode_is_refused_with_no_blocked_list():
+    with pytest.raises(ValueError, match=r'episodes \[4\] of .* have a scene that cannot be built'):
+        mapping.select_episodes(_HARD, 6, [1, 4], _NONE, _BROKEN)
 
 
 def test_a_pinned_episode_out_of_range_is_refused():
     with pytest.raises(ValueError, match=r'episodes \[6\] out of range for the 6 episodes'):
-        mapping.select_episodes(_HARD, 6, [0, 6], frozenset())
+        mapping.select_episodes(_HARD, 6, [0, 6], _NONE, _NONE)
 
 
-def test_no_public_eval_pins_an_episode_the_committed_list_blocks():
-    blocked = mapping.load_right_view_blocked()
+@pytest.mark.parametrize('load', [mapping.load_right_view_blocked, mapping.load_broken_episodes])
+def test_no_public_eval_pins_an_episode_a_committed_list_drops(load):
+    dropped = load()
     for name in PUBLIC_EVALS:
         definition = public_eval(name)
         if definition.config != MOLMO_CONFIG:
@@ -337,4 +349,4 @@ def test_no_public_eval_pins_an_episode_the_committed_list_blocks():
         bench = mapping.BenchmarkPath(*(str(definition.args[d]) for d in mapping.BenchmarkPath._fields))
         episodes = definition.args[mapping.SELECT_EPISODES]
         assert isinstance(episodes, list)
-        assert not set(episodes) & blocked.get(bench, frozenset()), name
+        assert not set(episodes) & dropped.get(bench, frozenset()), name

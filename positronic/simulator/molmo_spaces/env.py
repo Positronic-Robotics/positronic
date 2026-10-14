@@ -100,6 +100,7 @@ class MolmoSpacesEnv(EnvProtocol):
         self._assets_dir = assets_dir
         self._found = mapping.discover_benchmarks(assets_dir)
         self._right_view_blocked = mapping.load_right_view_blocked()
+        self._broken_episodes = mapping.load_broken_episodes()
         self._episodes: dict[mapping.BenchmarkPath, list[Any]] = {}
         self._sampler: Any = None
         self._task: Any = None
@@ -197,7 +198,8 @@ class MolmoSpacesEnv(EnvProtocol):
             blocked = (
                 self._right_view_blocked.get(bench, frozenset()) if spec[mapping.WITH_RIGHT_SHOULDER] else frozenset()
             )
-            indices = mapping.select_episodes(bench, len(episodes), pinned, blocked)
+            broken = self._broken_episodes.get(bench, frozenset())
+            indices = mapping.select_episodes(bench, len(episodes), pinned, blocked, broken)
             horizon_sec = determine_task_horizon(episodes, None, cfg.policy_dt_ms) * cfg.policy_dt_ms / 1000.0
             records += [
                 {

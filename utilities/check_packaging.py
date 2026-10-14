@@ -62,8 +62,9 @@ try:
     from positronic.simulator.molmo_spaces import mapping
 
     mapping.load_right_view_blocked()
+    mapping.load_broken_episodes()
 except Exception as e:
-    failures.append(('positronic.simulator.molmo_spaces right view list', e))
+    failures.append(('positronic.simulator.molmo_spaces episode lists', e))
 
 if failures:
     for name, e in failures:
