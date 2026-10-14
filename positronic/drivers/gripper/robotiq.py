@@ -138,7 +138,7 @@ class _Gripper(DriverRun[float]):
         return reading
 
     def go_to(self, grip: float, speed: int, force: int) -> None:
-        self._write([0x0900, int(grip * 255), (force << 8) | speed])
+        self._write([0x0900, int(grip * 255), (speed << 8) | force])
 
     def activate(self) -> Generator[pimm.Command, None, RecoveryOutcome]:
         """Reset the gripper, activate it once it reports the reset, and yield until the activation ends.

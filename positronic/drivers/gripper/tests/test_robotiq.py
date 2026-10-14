@@ -254,3 +254,19 @@ def test_recover_answers_not_cleared_when_the_activation_ends_in_a_fault(monkeyp
     _pump(loop, clock, ACTIVATION_READS + 2)
 
     assert answer.result() is RecoveryOutcome.NOT_CLEARED
+
+
+def test_speed_and_force_reach_their_own_bytes(monkeypatch):
+    """``rSP`` is the high byte of the third command register, and ``rFR`` the low one."""
+    bus, clock = FakeBus(), MockClock()
+    driver, requests, loop = _driven(monkeypatch, bus, clock)
+    speed, force = ManualCommandReceiver(), ManualCommandReceiver()
+    driver.speed._bind(speed)
+    driver.force._bind(force)
+
+    speed.push(10)
+    force.push(200)
+    requests.push(1.0)
+    _pump(loop, clock, 1)
+
+    assert bus.writes[-1][2] == 10 << 8 | 200
