@@ -99,6 +99,10 @@ submission.
   `droid_3cam` in the recipe's `ENTRYPOINT`.
 - BFL's server compiles the model for about 140 s, and port 8000 binds after it. The GPU memory peaks
   at about 33 000 MiB.
+- `black-forest-labs/flux-3-action-droid` and `black-forest-labs/flux-3-action-base` are gated. Accept
+  BFL's terms on the Hub page of each, then put a read token in `$HOME/.hf_token`, or in `HF_TOKEN` for
+  `make -C docker build-serve-flux3-action`. The build reads the token through a secret mount, and it
+  enters no layer.
 
 ### Cosmos3-Nano
 
