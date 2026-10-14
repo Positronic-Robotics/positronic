@@ -49,9 +49,11 @@ def benchmarks(
     The policy sees the wrist camera and two shoulder cameras, left and right, in ``image.exterior`` and
     ``image.exterior_2``. The run draws their order once from ``seed``, or at random when ``seed`` is None,
     and every trial records it under ``molmo.exterior_sides``. The right shoulder camera hides the grasp site
-    in some episodes; an open selection leaves those out, and a pinned one is refused.
+    in some episodes; an open selection leaves those out, and a pinned one is refused. The scene of some other
+    episodes cannot be built; every selection leaves those out, with or without the right shoulder camera.
 
-    ``with_right_shoulder=False`` serves the left shoulder camera alone, in ``image.exterior``, and runs every episode.
+    ``with_right_shoulder=False`` serves the left shoulder camera alone, in ``image.exterior``, and keeps the episodes
+    where the right shoulder camera cannot see the grasp site.
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
