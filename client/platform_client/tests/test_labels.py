@@ -25,6 +25,7 @@ from eval_vocabulary.episode import (
     META_FILE,
     SIGNAL_FILE_SUFFIX,
     STATIC_FILE,
+    SUBTASK_SCORE_INDEX,
     SUBTASK_SIGNAL,
     SUCCESS,
     TASK,
@@ -492,7 +493,7 @@ def test_statics_that_are_not_a_json_object_have_no_label_and_are_not_fatal(tmp_
 ROBOLAB_SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'robolab_sweep').glob('*/*') if p.is_dir())
 
 # Read from the RoboLab recording: each episode's task and the score of its last step. The signal is float32.
-ROBOLAB_FINAL_SCORES = [
+ROBOLAB_LAST_STEP_SCORES = [
     ('FruitsOnPlateTask', pytest.approx(1 / 7)),
     ('GrabABagelTask', 0.0),
     ('PickUpBluePitcherTask', 0.5),
@@ -502,24 +503,33 @@ ROBOLAB_FINAL_SCORES = [
 ]
 
 
-def test_each_episode_of_the_robolab_sweep_has_a_label_with_the_score_of_its_last_step():
+def _last_step_score(episode: Path) -> float:
+    signal = pq.read_table(episode / f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}', columns=[VALUE_COLUMN])
+    return signal.column(VALUE_COLUMN)[-1].as_py()[SUBTASK_SCORE_INDEX]
+
+
+def test_no_episode_of_the_robolab_sweep_completes_a_subtask_so_no_label_has_a_subtask_event():
     given = [robolab_label(episode) for episode in ROBOLAB_SWEEP]
     labelled = [given_label for given_label in given if given_label is not None]
     assert len(labelled) == len(ROBOLAB_SWEEP)
-    assert [(given_label.task, given_label.subtask_score) for given_label in labelled] == ROBOLAB_FINAL_SCORES
+    assert [
+        (given_label.task, _last_step_score(episode))
+        for given_label, episode in zip(labelled, ROBOLAB_SWEEP, strict=True)
+    ] == ROBOLAB_LAST_STEP_SCORES
+    assert [given_label.events for given_label in labelled] == [
+        (Fail(seconds=given_label.seconds_to_end),) for given_label in labelled
+    ]
     assert {(given_label.annotator, given_label.outcome, given_label.total_subtasks) for given_label in labelled} == {
         (ROBOLAB_LABELER, Outcome.fail, 1)
     }
 
     first = labelled[0]
     assert (first.uid, first.seconds_to_end) == ('306d7c4674d34152b5741ebcfcfc15ff', pytest.approx(0.933, abs=1e-3))
-    assert first.events == (
-        SubtaskAchieved(seconds=0.0, achieved=0, score=first.subtask_score),
-        Fail(seconds=first.seconds_to_end),
-    )
 
 
 BANANA = 'BananaInBowlTask'
+# A task of two subtasks, whose score also grades the progress within a subtask.
+CUBES_IN_BIN = 'CubesAndBlocksInBinTask'
 
 
 def _write_subtask(episode: Path, samples: list[tuple[float, list[float]]]) -> None:
@@ -531,9 +541,15 @@ def _write_subtask(episode: Path, samples: list[tuple[float, list[float]]]) -> N
     pq.write_table(pa.table(columns), episode / f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}')
 
 
-def test_a_robolab_label_has_an_event_at_the_first_sample_and_at_each_change_of_progress(tmp_path: Path):
+def test_a_robolab_label_has_an_event_at_each_change_of_the_subtasks_count_and_none_for_the_score_alone(tmp_path: Path):
     (episode,) = _episodes(
-        tmp_path, {TASK: 'put the banana in the bowl', BENCHMARK_TASK: BANANA, SUCCESS: False, TERMINATED: True}
+        tmp_path,
+        {
+            TASK: 'put all the cubes and blocks in the bin',
+            BENCHMARK_TASK: CUBES_IN_BIN,
+            SUCCESS: False,
+            TERMINATED: True,
+        },
     )
     _write_subtask(
         episode,
@@ -542,17 +558,14 @@ def test_a_robolab_label_has_an_event_at_the_first_sample_and_at_each_change_of_
             (1.0, [0.0, 0.0, 2.0, 0.0]),
             (2.0, [0.0, 0.0, 2.0, 0.25]),
             (3.0, [0.0, 1.0, 2.0, 0.5]),
-            (4.0, [1.0, 1.0, 2.0, 0.5]),
-            (5.0, [0.0, 0.0, 2.0, 0.25]),  # the arm knocked the banana out of the bowl
+            (4.0, [0.0, 1.0, 2.0, 0.75]),
+            (5.0, [0.0, 1.0, 2.0, 0.75]),
         ],
     )
     assert robolab_label(episode) == _label(
-        SubtaskAchieved(seconds=0.0, achieved=0, score=0.0),
-        SubtaskAchieved(seconds=2.0, achieved=0, score=0.25),
         SubtaskAchieved(seconds=3.0, achieved=1, score=0.5),
-        SubtaskAchieved(seconds=5.0, achieved=0, score=0.25),
         Fail(seconds=5.0),
-        task=BANANA,
+        task=CUBES_IN_BIN,
         seconds_to_end=5.0,
         total_subtasks=2,
         annotator=ROBOLAB_LABELER,
@@ -564,7 +577,7 @@ def test_a_robolab_label_has_an_event_at_the_first_sample_and_at_each_change_of_
     [({SUCCESS: True, TERMINATED: True}, Outcome.success), ({SUCCESS: False, TERMINATED: False}, Outcome.out_of_time)],
 )
 def test_a_robolab_trial_ends_as_a_molmo_trial_ends(tmp_path: Path, verdict: dict[str, object], outcome: Outcome):
-    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: BANANA, **verdict})
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: CUBES_IN_BIN, **verdict})
     _write_subtask(episode, [(0.0, [0.0, 0.0, 2.0, 0.0]), (1.0, [0.0, 1.0, 2.0, 0.5])])
     given = robolab_label(episode)
     assert given is not None
@@ -588,7 +601,7 @@ def test_a_subtask_signal_of_reset_frames_only_states_no_total(tmp_path: Path):
     _write_subtask(episode, [(0.0, [0.0, 0.0, 0.0, 0.0])])
     given = robolab_label(episode)
     assert given is not None
-    assert (given.total_subtasks, given.subtask_score) == (None, 0.0)
+    assert (given.total_subtasks, given.subtask_score) == (None, None)
 
 
 # --- the recorded verdict

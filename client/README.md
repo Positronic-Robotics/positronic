@@ -329,8 +329,10 @@ the last, on the world clock. That time can exceed the trial by up to one contro
 
 The RoboLab labeler reads the end of a trial in the same way. Its task is the task id that RoboLab
 names, and not the instruction. It also reads the `subtask` signal, which RoboLab records at each
-step, and gives a `SubtaskAchieved` event for each change of the subtasks completed or of RoboLab's
-score. A RoboLab eval scores a success 1.0, and any other episode the score of its last step:
+step, and gives a `SubtaskAchieved` event, with RoboLab's score, for each change of the subtasks
+completed. A change of the score alone is not an event. A RoboLab eval scores a success 1.0, and any
+other episode the score at its last change of the count, or 0 where it completed no subtask. Where
+RoboLab grades progress within a subtask, this score does not count that progress:
 
 ```python
 from platform_client.labels import ROBOLAB_LABELER

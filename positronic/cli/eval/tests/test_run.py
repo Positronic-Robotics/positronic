@@ -273,8 +273,8 @@ def test_the_molmo_labeler_reads_the_outcome_that_positronic_records(tmp_path):
 
 def test_the_robolab_labeler_reads_the_progress_that_positronic_records(tmp_path):
     with LocalDatasetWriter(tmp_path) as writer, writer.new_episode() as episode:
-        episode.set_static(keys.TASK, 'put the banana in the bowl')
-        episode.set_static(eval_keys.TASK, 'BananaInBowlTask')
+        episode.set_static(keys.TASK, 'put all the cubes and blocks in the bin')
+        episode.set_static(eval_keys.TASK, 'CubesAndBlocksInBinTask')
         episode.set_static(eval_keys.SUCCESS, False)
         episode.set_static(eval_keys.TERMINATED, True)
         for world_ns, progress in ((0, [0, 0, 2, 0]), (1_000_000_000, [0, 1, 2, 0.5]), (2_000_000_000, [0, 1, 2, 0.5])):
@@ -285,15 +285,11 @@ def test_the_robolab_labeler_reads_the_progress_that_positronic_records(tmp_path
         ROBOLAB_LABELER,
         Label(
             uid=episode.meta[META_UID],
-            task='BananaInBowlTask',
+            task='CubesAndBlocksInBinTask',
             annotator=ROBOLAB_LABELER,
             seconds_to_end=2.0,
             total_subtasks=2,
-            events=(
-                SubtaskAchieved(seconds=0.0, achieved=0, score=0.0),
-                SubtaskAchieved(seconds=1.0, achieved=1, score=0.5),
-                Fail(seconds=2.0),
-            ),
+            events=(SubtaskAchieved(seconds=1.0, achieved=1, score=0.5), Fail(seconds=2.0)),
         ),
     )
 

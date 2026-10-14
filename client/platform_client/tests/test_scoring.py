@@ -1,7 +1,7 @@
 """The episode score of a label, and the scores of a run, against a recorded MolmoSpaces sweep and a RoboLab sweep.
 
 The fixtures are the sweeps that `test_labels.py` describes. Five of the twenty MolmoSpaces episodes succeeded, and
-none of the six RoboLab episodes did.
+none of the six RoboLab episodes completed a subtask.
 """
 
 from __future__ import annotations
@@ -71,28 +71,17 @@ def test_each_task_of_the_sweep_has_the_trials_and_successes_it_recorded():
     assert {task: (trials[task], successes[task]) for task in trials} == PER_TASK
 
 
-# A RoboLab eval scores a success 1.0, and any other episode the score of its last step, as RoboLab scores it.
+# A RoboLab eval scores a success 1.0, and any other episode the score at its last change of the subtasks count.
 ROBOLAB_SCORING = Scoring(
     labelers=(ROBOLAB_LABELER,), primary=MeanEpisodeScore(episode_score=EpisodeScore(use_subtask_score=True))
 )
 
 
-def test_each_robolab_episode_scores_the_float32_score_of_its_last_step():
+def test_a_robolab_episode_that_completes_no_subtask_scores_0_whatever_score_robolab_records():
     rule = ROBOLAB_SCORING.primary.episode_score
     given = _sweep_labels(ROBOLAB_SCORING, ROBOLAB_SWEEP)
-    assert [episode_score(given_label, rule, None) if given_label else None for given_label in given] == [
-        0.1428571492433548,
-        0.0,
-        0.5,
-        0.0,
-        0.0,
-        0.0,
-    ]
-    assert score(ROBOLAB_SCORING, given).model_dump(mode='json') == {
-        'primary': 0.1071428582072258,
-        'episodes': 6,
-        'unscored': 0,
-    }
+    assert [episode_score(given_label, rule, None) if given_label else None for given_label in given] == [0.0] * 6
+    assert score(ROBOLAB_SCORING, given).model_dump(mode='json') == {'primary': 0.0, 'episodes': 6, 'unscored': 0}
 
 
 @pytest.mark.parametrize('name', PUBLIC_EVALS)
