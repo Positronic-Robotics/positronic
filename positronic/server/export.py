@@ -468,13 +468,6 @@ def _filter_sets_by_group(
     return sets_by_group
 
 
-def _build_recording_and_release(index: int) -> None:
-    """Build the recording of episode `index` into the cache, then free what the build left behind."""
-    ensure_episode_rrd(index)
-    # A video an episode opened closes only at a collection: PyAV keeps its containers in reference cycles.
-    gc.collect()
-
-
 def _build_recordings(reads: Dataset, workers: int) -> None:
     """Build the recording of each episode of `reads` into the cache, `workers` at a time, with the app serving
     `reads`; one worker builds them on the calling thread.
@@ -485,12 +478,18 @@ def _build_recordings(reads: Dataset, workers: int) -> None:
     if workers < 1:
         raise ValueError(f'workers={workers}; a recording is built by at least one')
     install_dataset(reads)
+
+    def build_and_release(index: int) -> None:
+        ensure_episode_rrd(index)
+        # A video an episode opened closes only at a collection: PyAV keeps its containers in reference cycles.
+        gc.collect()
+
     if workers == 1:
         for index in range(len(reads)):
-            _build_recording_and_release(index)
+            build_and_release(index)
         return
     with ThreadPool(workers) as pool:
-        pool.map(_build_recording_and_release, range(len(reads)), chunksize=1)
+        pool.map(build_and_release, range(len(reads)), chunksize=1)
 
 
 def export_static(

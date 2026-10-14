@@ -249,18 +249,18 @@ class _Watched(Dataset):
         self._handed.append((index, weakref.ref(episode)))
         return episode
 
-    def alive(self) -> set[int]:
-        """The index of each episode handed out that something still holds."""
+    def indexes_still_held(self) -> set[int]:
+        """The index of each episode handed out that something still holds, after a collection."""
         gc.collect()
         return {index for index, handed in self._handed if handed() is not None}
 
 
 def test_the_export_holds_no_episode_between_two_reads(dataset, tmp_path, monkeypatch):
-    full, pages = _Watched(dataset), _Watched(shown(dataset))
-    alive_at_each_read: list[set[int]] = []
+    full_dataset, shown_dataset = _Watched(dataset), _Watched(shown(dataset))
+    held_at_each_read: list[set[int]] = []
 
     def watch() -> None:
-        alive_at_each_read.append(full.alive() | pages.alive())
+        held_at_each_read.append(full_dataset.indexes_still_held() | shown_dataset.indexes_still_held())
 
     def fetch_and_watch(client, path, params=None):
         watch()
@@ -276,18 +276,18 @@ def test_the_export_holds_no_episode_between_two_reads(dataset, tmp_path, monkey
     monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_watch)
 
     export_static(
-        pages,
+        shown_dataset,
         tmp_path / 'out',
         ep_table_cfg=TABLE,
         group_tables=GROUPS,
         max_resolution=64,
         assets=False,
-        full_dataset=full,
+        full_dataset=full_dataset,
         workers=1,
     )
 
-    assert len(alive_at_each_read) > len(dataset)
-    assert all(alive == set() for alive in alive_at_each_read)
+    assert len(held_at_each_read) > len(dataset)
+    assert all(held == set() for held in held_at_each_read)
 
 
 CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE)
@@ -309,10 +309,10 @@ def a_camera_dataset(root: Path, episodes: int) -> Dataset:
 def test_the_videos_of_a_built_recording_are_closed_before_the_next_recording_is_built(tmp_path, monkeypatch):
     dataset = a_camera_dataset(tmp_path / 'dataset', 3)
     stream = positronic_server.stream_episode_rrd
-    open_videos: list[int] = []
+    open_video_counts: list[int] = []
 
     def stream_and_count(ds, episode_id, **kwargs):
-        open_videos.append(sum(isinstance(o, InputContainer) for o in gc.get_objects()))
+        open_video_counts.append(sum(isinstance(o, InputContainer) for o in gc.get_objects()))
         yield from stream(ds, episode_id, **kwargs)
 
     monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_count)
@@ -325,8 +325,8 @@ def test_the_videos_of_a_built_recording_are_closed_before_the_next_recording_is
         gc.enable()
 
     # The video of the last frame decoded stays open in the frame cache, whatever the count of episodes.
-    assert len(open_videos) == 3
-    assert max(open_videos) <= 1
+    assert len(open_video_counts) == 3
+    assert max(open_video_counts) <= 1
 
 
 def _recording_builder_threads(monkeypatch) -> list[int]:
@@ -358,7 +358,7 @@ def test_each_recording_is_built_with_the_layout_the_export_is_given(dataset, tm
     assert layouts == [layout, layout]
 
 
-def test_the_recordings_are_built_on_worker_threads_and_the_export_copies_them(dataset, tmp_path, monkeypatch):
+def test_the_recordings_are_built_on_worker_threads_and_the_export_moves_them(dataset, tmp_path, monkeypatch):
     threads = _recording_builder_threads(monkeypatch)
 
     files = paths_of(an_export(dataset, tmp_path / 'out', workers=2))
