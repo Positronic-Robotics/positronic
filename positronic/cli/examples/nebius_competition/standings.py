@@ -5,8 +5,7 @@
 
 No key is needed: a public board is readable by anyone. With no `--board`, the script lists the
 boards `rankings.list` returns, with the eval each one ranks. With a slug, it prints every row of
-that board: rank, display name, tag, primary score and submission id. A baseline row shows `baseline`
-in place of a rank.
+that board: rank, display name, tag, primary score and submission id.
 
 The platform owns the set of boards and evals. Read the names here; do not copy them from a document.
 """

@@ -496,8 +496,7 @@ class RankingRow(BaseModel):
     The value the board ranks on is `scores.primary`. `replay` plays back the camera video of the
     submission's episodes, and it is absent until the platform has built the page.
 
-    A `baseline` row is a reference model. It has no `rank`, and the other rows rank 1..N among
-    themselves. The board lists all rows in score order, baselines included.
+    A `baseline` row is a reference model, and it has no `rank`.
     """
 
     rank: int | None
