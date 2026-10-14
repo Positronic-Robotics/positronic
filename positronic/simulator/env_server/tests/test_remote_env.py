@@ -184,6 +184,33 @@ def test_close_gives_up_on_a_peer_that_never_answers():
         assert time.monotonic() - started < _CLOSE_ACK_TIMEOUT + 10.0
 
 
+@pytest.mark.timeout(60.0)
+def test_a_connection_negotiates_no_deflate_with_a_server_that_offers_it():
+    """A stock websockets server offers permessage-deflate, and the env connection still opens uncompressed."""
+    negotiated = []
+
+    def handler(connection):
+        negotiated.append(connection.protocol.extensions)
+        for raw in connection:
+            if protocol.Command(protocol.decode(raw)[protocol.CMD]) is protocol.Command.CLOSE:
+                connection.send(protocol.encode({protocol.OK: True}))
+                return
+
+    host, port = 'localhost', free_port()
+    with websocket_serve(handler, host, port) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        EnvConnection(host, port).close()
+        server.shutdown()
+    assert negotiated == [[]]
+
+
+@pytest.mark.timeout(60.0)
+def test_the_env_server_negotiates_no_deflate_with_a_client_that_offers_it():
+    """A stock websockets client offers permessage-deflate, and the env server still answers uncompressed."""
+    with serve_env(_CountdownEnv()) as (host, port), websocket_connect(f'ws://{host}:{port}/') as ws:
+        assert ws.protocol.extensions == []
+
+
 @contextmanager
 def _serve_without_heartbeat(monkeypatch, answer_after: float | None):
     """Serve with PING frames dropped, answering each request after ``answer_after`` seconds (``None``: never).
