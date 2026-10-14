@@ -74,6 +74,7 @@ from platform_client.responses import (
     ArtifactEntry,
     ArtifactListResponse,
     ArtifactRefs,
+    BaselineMark,
     BlockedSubmissionView,
     BoardListResponse,
     BoardSummary,
@@ -308,6 +309,15 @@ MODELS: list[BaseModel] = [
         rankings=[
             RankingRow(rank=1, display_name='demo', tag='0ddba7', scores=SCORES, submission_id=SUB, submitted_at=AT),
             RankingRow(
+                rank=None,
+                display_name='reference',
+                tag='9c41de',
+                scores=SCORES,
+                submission_id=SUB,
+                submitted_at=AT,
+                baseline=BaselineMark(publisher='Example Labs'),
+            ),
+            RankingRow(
                 rank=2,
                 display_name='demo',
                 tag='3fa2c1',
@@ -489,6 +499,20 @@ def test_a_board_row_reads_the_link_to_its_replay_and_the_object_the_page_render
     assert RankingRow.model_validate(row).replay is None
     with pytest.raises(ValidationError, match='data_url'):
         RankingRow.model_validate({**row, 'replay': {'url': REPLAY_URL}})
+
+
+def test_a_board_row_has_a_rank_exactly_when_it_is_not_a_baseline():
+    row = {'display_name': 'demo', 'tag': '0ddba7', 'submission_id': '1f', 'submitted_at': AT.isoformat()}
+    mark = {'publisher': 'Example Labs'}
+    assert RankingRow.model_validate({**row, 'rank': None, 'baseline': mark}).baseline == BaselineMark(
+        publisher='Example Labs'
+    )
+    assert RankingRow.model_validate({**row, 'rank': 3}).baseline is None
+    for refused in ({'rank': None}, {'rank': 1, 'baseline': mark}, {'rank': None, 'baseline': {'publisher': ''}}):
+        with pytest.raises(ValidationError):
+            RankingRow.model_validate({**row, **refused})
+    with pytest.raises(ValidationError, match='rank'):
+        RankingRow.model_validate(row)
 
 
 def test_a_finished_run_replay_carries_no_data_object():

@@ -13,7 +13,7 @@ The library depends on `pydantic`, `httpx`, `typing-extensions`, `pyarrow` and
 installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.29.0"
+uv add "positronic-platform-client==0.30.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -381,6 +381,10 @@ readable by anyone, a tenant's board only by its members.
 A board row reads `<display name>#<tag>`. The name is an alias and is not unique — a board may hide
 it altogether — so the tag is what tells two rows apart, and it is how you find your own: it is the
 same on every board you appear on.
+
+A row with `baseline` set is a reference model, and `baseline.publisher` names the organization that
+released it. A baseline row has no `rank`. The other rows rank 1..N among themselves, and the board
+lists every row in score order.
 
 Each row carries `replay`, a page that plays back the camera video of the row's submission, with the
 task and outcome of each episode. The page opens without a key, and `replay` is absent until the

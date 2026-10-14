@@ -51,7 +51,7 @@ def run(client: PlatformClient, board: BoardRef | None) -> list[str]:
         return [header, 'no entries']
     rows = [
         [
-            str(row.rank),
+            'baseline' if row.rank is None else str(row.rank),
             f'{row.display_name}#{row.tag}',
             '-' if row.scores.primary is None else f'{row.scores.primary:.3f}',
             str(row.submission_id),
