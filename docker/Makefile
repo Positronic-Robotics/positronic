@@ -100,9 +100,10 @@ build-robolab:
 	docker build --platform linux/amd64 -f Dockerfile.robolab -t $(IMAGE_NAME_ROBOLAB):local ..
 
 # The GR00T backbone and the FLUX 3 Action weights are gated on the Hub. BuildKit reads the token from HF_TOKEN,
-# and it enters no layer.
-SERVE_BUILD_FLAGS_gr00t-n17-droid := --secret id=hf_token,env=HF_TOKEN
-SERVE_BUILD_FLAGS_flux3-action := --secret id=hf_token,env=HF_TOKEN
+# and it enters no layer. Every image's Dockerfile mounts the secret by this id.
+HF_TOKEN_BUILD_FLAGS := --secret id=hf_token,env=HF_TOKEN
+SERVE_BUILD_FLAGS_gr00t-n17-droid := $(HF_TOKEN_BUILD_FLAGS)
+SERVE_BUILD_FLAGS_flux3-action := $(HF_TOKEN_BUILD_FLAGS)
 
 # `push-serve-<name>` builds and pushes in one BuildKit run, which needs a docker-container builder
 # (`docker buildx create --use`). The second argument of SERVE_IMAGE is the repository. The cache at
@@ -130,7 +131,7 @@ $(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name),positro/$(name)
 # Galaxea's weights are gated and its licence allows internal evaluation only, so its image goes to a private
 # registry, built and pushed by hand. It is not in SERVE_IMAGES, which CI publishes to Docker Hub.
 GALAXEA_REPO ?= $(NEBIUS_REGISTRY)/galaxea
-SERVE_BUILD_FLAGS_galaxea := --secret id=hf_token,env=HF_TOKEN
+SERVE_BUILD_FLAGS_galaxea := $(HF_TOKEN_BUILD_FLAGS)
 $(eval $(call SERVE_IMAGE,galaxea,$(GALAXEA_REPO)))
 push-serve-galaxea: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(GALAXEA_REPO)),nebius-login)
 

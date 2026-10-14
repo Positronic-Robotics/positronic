@@ -24,6 +24,8 @@ ARG FLUX_POLICY_SUBFOLDER=variants/gd
 # The commit of FLUX 3 Action Base that the policy's config names for its encoders.
 ARG FLUX_BASE_REPO=black-forest-labs/flux-3-action-base
 ARG FLUX_BASE_REVISION=62878e2925e59b7a89ec14463ce89932624c490d
+# The BuildKit secret that holds the Hugging Face token, as docker/Makefile passes it.
+ARG HF_TOKEN_SECRET=hf_token
 
 # The weight stages do not build on the base, so a new base reuses the downloaded weights. Their own base is pinned by
 # digest: a moved tag would download the weights again and push them as new layers. One large file per stage, and so
@@ -36,34 +38,34 @@ ENV HF_HOME=/opt/hf-home
 RUN pip install --no-cache-dir huggingface_hub==1.30.0
 
 FROM hub AS dit
-ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER
-RUN --mount=type=secret,id=hf_token \
-    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER HF_TOKEN_SECRET
+RUN --mount=type=secret,id=$HF_TOKEN_SECRET \
+    export HF_TOKEN="$(cat /run/secrets/$HF_TOKEN_SECRET)" \
  && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_POLICY_REPO', revision='$FLUX_POLICY_REVISION', allow_patterns=['$FLUX_POLICY_SUBFOLDER/model.safetensors'])"
 
 FROM hub AS video-vae
-ARG FLUX_BASE_REPO FLUX_BASE_REVISION
-RUN --mount=type=secret,id=hf_token \
-    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ARG FLUX_BASE_REPO FLUX_BASE_REVISION HF_TOKEN_SECRET
+RUN --mount=type=secret,id=$HF_TOKEN_SECRET \
+    export HF_TOKEN="$(cat /run/secrets/$HF_TOKEN_SECRET)" \
  && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['video_vae.safetensors'])"
 
 FROM hub AS text-encoder-1
-ARG FLUX_BASE_REPO FLUX_BASE_REVISION
-RUN --mount=type=secret,id=hf_token \
-    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ARG FLUX_BASE_REPO FLUX_BASE_REVISION HF_TOKEN_SECRET
+RUN --mount=type=secret,id=$HF_TOKEN_SECRET \
+    export HF_TOKEN="$(cat /run/secrets/$HF_TOKEN_SECRET)" \
  && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/model-00001-of-00002.safetensors'])"
 
 FROM hub AS text-encoder-2
-ARG FLUX_BASE_REPO FLUX_BASE_REVISION
-RUN --mount=type=secret,id=hf_token \
-    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ARG FLUX_BASE_REPO FLUX_BASE_REVISION HF_TOKEN_SECRET
+RUN --mount=type=secret,id=$HF_TOKEN_SECRET \
+    export HF_TOKEN="$(cat /run/secrets/$HF_TOKEN_SECRET)" \
  && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/model-00002-of-00002.safetensors'])"
 
 # The configs, the tokenizer, the model cards and the licence, which goes beside the notice in /opt/flux3_action.
 FROM hub AS small-files
-ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER FLUX_BASE_REPO FLUX_BASE_REVISION
-RUN --mount=type=secret,id=hf_token \
-    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION FLUX_POLICY_SUBFOLDER FLUX_BASE_REPO FLUX_BASE_REVISION HF_TOKEN_SECRET
+RUN --mount=type=secret,id=$HF_TOKEN_SECRET \
+    export HF_TOKEN="$(cat /run/secrets/$HF_TOKEN_SECRET)" \
  && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_POLICY_REPO', revision='$FLUX_POLICY_REVISION', allow_patterns=['$FLUX_POLICY_SUBFOLDER/*.json', 'LICENSE.md'])" \
  && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', allow_patterns=['text_encoder/*.json', 'text_encoder/*.txt', 'text_encoder/README.md'])" \
  && mkdir -p /opt/flux3_action \
