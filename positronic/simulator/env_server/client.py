@@ -38,7 +38,10 @@ class EnvConnection:
             try:
                 # Camera + full-state observations routinely exceed websockets' 1 MiB default frame size.
                 # Native scene loading can block the server's heartbeat replies for minutes.
-                self._ws = connect(uri, open_timeout=open_timeout, max_size=None, ping_timeout=ping_timeout)
+                # No deflate: see "The env-server wire" in positronic/simulator/README.md.
+                self._ws = connect(
+                    uri, open_timeout=open_timeout, max_size=None, ping_timeout=ping_timeout, compression=None
+                )
                 break
             except (TimeoutError, OSError) as e:
                 if time.monotonic() >= deadline:

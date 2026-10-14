@@ -264,7 +264,8 @@ class EnvServer:
     def serve_forever(self) -> None:
         # Reset tokens can exceed the default frame size.
         # Bare TCP probes never reach ``_handle``, so they take no slot.
-        with serve(self._handle, self._host, self._port, max_size=None) as server:
+        # No deflate: see "The env-server wire" in positronic/simulator/README.md.
+        with serve(self._handle, self._host, self._port, max_size=None, compression=None) as server:
             self._server = server
             accept = threading.Thread(target=server.serve_forever, daemon=True)
             accept.start()
