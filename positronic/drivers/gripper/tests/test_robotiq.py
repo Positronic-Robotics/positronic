@@ -28,7 +28,7 @@ class FakeBus:
     leaves the fingers open, obeying again, and with the fault byte ``fault_after_activation``. With
     ``completes`` off the activation never ends. A position request moves the fingers ``STEP`` counts a read,
     to no more than ``SHUT``, and closing stops at ``object_at``. With ``obeying`` off the fingers stay where
-    they stand, and the gripper reports them at the request.
+    they stand, and the gripper reports them at the request. A read raises ``raises`` once it is set.
     """
 
     def __init__(self, object_at: int | None = None):
@@ -40,6 +40,7 @@ class FakeBus:
         self.fault_after_activation = 0
         self.fault = 0
         self.position = 0
+        self.raises: Exception | None = None
         self._act = False
         self._go = False
         self._requested = 0
@@ -69,6 +70,8 @@ class FakeBus:
 
     def read_input_registers(self, address: int, count: int, device_id: int) -> SimpleNamespace:
         assert (address, count, device_id) == (0x07D0, 3, 9)
+        if self.raises is not None:
+            raise self.raises
         self._step()
         status = self._fingers.value << 6 | self._activation.value << 4 | self._go << 3 | self._act
         return SimpleNamespace(registers=[status << 8, self.fault << 8 | self._requested, self.position << 8])
@@ -270,3 +273,17 @@ def test_speed_and_force_reach_their_own_bytes(monkeypatch):
     _pump(loop, clock, 1)
 
     assert bus.writes[-1][2] == 10 << 8 | 200
+
+
+def test_a_bus_error_during_recover_reaches_the_caller_and_ends_the_run(monkeypatch, world):
+    bus, clock = FakeBus(), MockClock()
+    driver, _, loop = _driven(monkeypatch, bus, clock)
+
+    answer = _recoverer(world, driver)(None)
+    _pump(loop, clock, 1)
+    bus.raises = ConnectionError('the serial port is gone')
+    with pytest.raises(ConnectionError):
+        _pump(loop, clock, 1)
+
+    with pytest.raises(ConnectionError):
+        answer.result()

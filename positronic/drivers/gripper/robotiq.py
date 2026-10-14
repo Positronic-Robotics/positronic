@@ -203,9 +203,17 @@ class Robotiq2F(pimm.ControlSystem):
     def _reactivate(
         self, gripper: _Gripper, asked: list[pimm.calls.Call[None, RecoveryOutcome]]
     ) -> Iterator[pimm.Command]:
-        """Activate the gripper again, then answer every call in ``asked`` with how the activation ended."""
+        """Activate the gripper again, then answer every call in ``asked`` with how the activation ended.
+
+        A throw reaches every call in ``asked``, then ends the run.
+        """
         logger.info('A console asked to re-activate the Robotiq gripper')
-        outcome = yield from gripper.activate()
+        try:
+            outcome = yield from gripper.activate()
+        except Exception as exc:
+            for call in asked:
+                call.set_exception(exc)
+            raise
         for call in asked:
             call.set_result(outcome)
 
