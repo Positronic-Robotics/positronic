@@ -132,7 +132,8 @@ def walkthrough(
         for board in boards:
             print(f'   {board.board}')
             for row in public.rankings(board=board.board).rankings:
-                print(f'   {row.rank:>4}  {row.display_name}#{row.tag}  {row.scores.primary}  {row.submission_id}')
+                rank = 'base' if row.rank is None else row.rank
+                print(f'   {rank:>4}  {row.display_name}#{row.tag}  {row.scores.primary}  {row.submission_id}')
 
 
 def main(argv: list[str] | None = None) -> None:

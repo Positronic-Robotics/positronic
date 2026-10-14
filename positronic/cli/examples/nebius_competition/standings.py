@@ -5,7 +5,8 @@
 
 No key is needed: a public board is readable by anyone. With no `--board`, the script lists the
 boards `rankings.list` returns, with the eval each one ranks. With a slug, it prints every row of
-that board: rank, display name, tag, primary score and submission id.
+that board: rank, display name, tag, primary score and submission id. A baseline row shows `baseline`
+in place of a rank.
 
 The platform owns the set of boards and evals. Read the names here; do not copy them from a document.
 """
@@ -51,7 +52,7 @@ def run(client: PlatformClient, board: BoardRef | None) -> list[str]:
         return [header, 'no entries']
     rows = [
         [
-            str(row.rank),
+            'baseline' if row.rank is None else str(row.rank),
             f'{row.display_name}#{row.tag}',
             '-' if row.scores.primary is None else f'{row.scores.primary:.3f}',
             str(row.submission_id),

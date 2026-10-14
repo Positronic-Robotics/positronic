@@ -479,6 +479,12 @@ class DataBackedReplayLink(BaseModel):
     data_url: str
 
 
+class BaselineMark(BaseModel):
+    """The mark of a reference model on a board. `publisher` names the organization that released the model."""
+
+    publisher: str = Field(min_length=1)
+
+
 class RankingRow(BaseModel):
     """One row of a board: a user's best submission on it.
 
@@ -489,15 +495,25 @@ class RankingRow(BaseModel):
 
     The value the board ranks on is `scores.primary`. `replay` plays back the camera video of the
     submission's episodes, and it is absent until the platform has built the page.
+
+    A `baseline` row is a reference model. It has no `rank`, and the other rows rank 1..N among
+    themselves. The board lists all rows in score order, baselines included.
     """
 
-    rank: int
+    rank: int | None
     display_name: str
     tag: str
     scores: Scores = Field(default_factory=Scores)
     submission_id: SubmissionId
     submitted_at: AwareDatetime
     replay: DataBackedReplayLink | None = None
+    baseline: BaselineMark | None = None
+
+    @model_validator(mode='after')
+    def _a_baseline_has_no_rank(self) -> Self:
+        if (self.rank is None) != (self.baseline is not None):
+            raise ValueError('a row has a rank when it is not a baseline, and only then')
+        return self
 
 
 class BoardSummary(BaseModel):

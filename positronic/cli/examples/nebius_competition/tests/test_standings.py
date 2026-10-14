@@ -43,6 +43,15 @@ STANDINGS = {  # rules-allow: hardcoded-keys — a wire fixture pins the server'
             'submitted_at': AT,
         },
         {
+            'rank': None,
+            'display_name': 'reference',
+            'tag': '9c41de',
+            'scores': {'primary': 0.5},
+            'submission_id': '7b2e04c1d9f3a650',
+            'submitted_at': AT,
+            'baseline': {'publisher': 'Example Labs'},
+        },
+        {
             'rank': 2,
             'display_name': 'ateam',
             'tag': 'e2fb9b',
@@ -94,16 +103,17 @@ def test_with_no_board_it_lists_every_board_and_the_eval_each_ranks(standings: d
     assert AUTH_HEADER not in platform.requests[0].headers
 
 
-def test_with_a_board_it_prints_rank_name_tag_score_and_submission(standings: dict[str, Any]):
+def test_with_a_board_it_prints_rank_name_tag_score_and_submission_and_marks_a_baseline(standings: dict[str, Any]):
     platform = Platform({routes.RANKINGS_GET: (STANDINGS, 200)})
 
     lines = standings['run'](make_client(platform), BoardRef('a.board'))
 
     assert lines == [
         'a.board: ranks a.eval by success_rate',
-        'rank  name#tag      success_rate  submission',
-        '1     ateam#0ddba7  0.750         5f3a91c2b7d40e18',
-        '2     ateam#e2fb9b  -             3903c0d9e7d4b5a8',
+        'rank      name#tag          success_rate  submission',
+        '1         ateam#0ddba7      0.750         5f3a91c2b7d40e18',
+        'baseline  reference#9c41de  0.500         7b2e04c1d9f3a650',
+        '2         ateam#e2fb9b      -             3903c0d9e7d4b5a8',
     ]
     query = platform.requests[0].url.params
     assert (
