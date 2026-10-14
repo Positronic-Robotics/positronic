@@ -1,13 +1,13 @@
 """Robotiq 2F-85 (and 2F-140) Modbus RTU driver (RS-485)."""
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from enum import Enum
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import Moves, RecoveryOutcome, grip_setpoint
+from positronic.drivers.utils import DriverRun, RecoveryOutcome, grip_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -21,7 +21,10 @@ _BAUD_RATE = 115200
 _BYTESIZE = 8
 _PARITY = 'N'
 _STOPBITS = 1
-_ACTIVATION_TIMEOUT_S = 10.0
+# A stuck gripper pushed at full current for about 9 s before its activation stroke broke free.
+_ACTIVATION_TIMEOUT_S = 30.0
+# A 2F-85 shut on nothing reads 229 against a request of 255.
+_ARRIVAL_TOLERANCE_COUNTS = 50
 
 
 class Activation(Enum):
@@ -81,6 +84,16 @@ class Reading:
         """How closed the fingers read back."""
         return self.position / 255.0
 
+    @property
+    def claims_arrival_far_from_request(self) -> bool:
+        """The gripper reports its fingers at the position request, and their position is far from it.
+
+        A gripper that does not obey reports this, with ``gFLT`` at zero.
+        """
+        s = self.status
+        far = abs(self.position - self.requested) > _ARRIVAL_TOLERANCE_COUNTS
+        return s.going and s.fingers is Fingers.AT_REQUEST and far
+
     def __str__(self) -> str:
         s = self.status
         return (
@@ -89,28 +102,72 @@ class Reading:
         )
 
 
-class _Gripper:
-    """A gripper on its Modbus client. Logs each change of the status it reports."""
+class _Gripper(DriverRun[float]):
+    """The gripper the driver drives: its Modbus client, and the status it last reported.
 
-    def __init__(self, client):
+    Logs each change of that status, and warns when the fingers claim the request far from it.
+    """
+
+    def __init__(
+        self,
+        client,
+        sync_move: pimm.calls.ControlSystemHandler[float, None],
+        async_move: pimm.SignalReceiver[float],
+        out: pimm.SignalEmitter[float],
+        should_stop: pimm.SignalReceiver,
+        clock: pimm.Clock,
+    ):
+        super().__init__(sync_move, async_move, should_stop, clock, hz=200)  # the manual allows 200 Hz
         self._client = client
+        self._out = out
         self._status: Status | None = None
+        self._disobeys = False
 
-    def read(self) -> Reading:
+    def observe(self) -> Reading:
+        """Read the gripper, publish how closed the fingers are, and log what changed."""
         reading = Reading.decode(self._client.read_input_registers(_REG_IN, count=3, device_id=_SLAVE).registers)
         if reading.status != self._status:
             self._status = reading.status
             level = logging.WARNING if reading.status.fault else logging.INFO
             logger.log(level, 'The Robotiq gripper reports %s', reading)
+        disobeys = reading.claims_arrival_far_from_request
+        if disobeys and not self._disobeys:
+            logger.warning('The Robotiq gripper reports its fingers at the request, far from it: %s', reading)
+        self._disobeys = disobeys
+        self._out.emit(reading.width)
         return reading
 
-    def activate(self) -> None:
-        """Reset the gripper, then activate it. The rising edge of ``rACT`` clears a major fault."""
-        self._client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
-        self._client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
-
     def go_to(self, grip: float, speed: int, force: int) -> None:
-        self._client.write_registers(_REG_CMD, [0x0900, int(grip * 255), (force << 8) | speed], device_id=_SLAVE)
+        self._write([0x0900, int(grip * 255), (force << 8) | speed])
+
+    def activate(self) -> Generator[pimm.Command, None, RecoveryOutcome]:
+        """Reset the gripper, activate it once it reports the reset, and yield until the activation ends.
+
+        CLEARED once the activation completes with no fault. The rising edge of ``rACT`` clears a major fault,
+        and the fingers stroke fully open and closed.
+        """
+        deadline = self.clock.now() + _ACTIVATION_TIMEOUT_S
+        self._write([0x0000, 0x0000, 0x0000])
+        outcome = RecoveryOutcome.NOT_CLEARED
+        if (yield from self._await(Activation.RESET, deadline)) is not None:
+            self._write([0x0100, 0x0000, 0x0000])
+            status = yield from self._await(Activation.COMPLETED, deadline)
+            if status is not None and not status.fault:
+                outcome = RecoveryOutcome.CLEARED
+        level = logging.INFO if outcome is RecoveryOutcome.CLEARED else logging.WARNING
+        logger.log(level, 'The Robotiq gripper activation returned %s', outcome.name)
+        return outcome
+
+    def _await(self, activation: Activation, deadline: float) -> Generator[pimm.Command, None, Status | None]:
+        """Yield until the gripper reports ``activation``. None when the deadline passes or the world stops."""
+        while not self.should_stop.value and self.clock.now() < deadline:
+            yield self.limiter.wait()
+            if (status := self.observe().status).activation is activation:
+                return status
+        return None
+
+    def _write(self, registers: list[int]) -> None:
+        self._client.write_registers(_REG_CMD, registers, device_id=_SLAVE)
 
 
 class Robotiq2F(pimm.ControlSystem):
@@ -124,42 +181,16 @@ class Robotiq2F(pimm.ControlSystem):
         self.force = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
         self.speed = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
 
-    def _observe(self, gripper: _Gripper) -> Reading:
-        """Read the gripper and publish how closed the fingers are."""
-        reading = gripper.read()
-        self.grip.emit(reading.width)
-        return reading
-
     def _command(self, gripper: _Gripper, grip: float) -> None:
         """Put ``grip`` on the fingers, at the force and speed asked for."""
         gripper.go_to(grip, int(max(0, min(255, self.speed.value))), int(max(0, min(255, self.force.value))))
 
     def _reactivate(
-        self,
-        gripper: _Gripper,
-        asked: list[pimm.calls.Call[None, RecoveryOutcome]],
-        should_stop: pimm.SignalReceiver,
-        clock: pimm.Clock,
-        limiter: pimm.RateLimiter,
+        self, gripper: _Gripper, asked: list[pimm.calls.Call[None, RecoveryOutcome]]
     ) -> Iterator[pimm.Command]:
-        """Reset and activate the gripper, then answer every call in ``asked``.
-
-        CLEARED needs the gripper to leave its completed activation, to come back to it and to hold no fault.
-        """
+        """Activate the gripper again, then answer every call in ``asked`` with how the activation ended."""
         logger.info('A console asked to re-activate the Robotiq gripper')
-        gripper.activate()
-        deadline = clock.now() + _ACTIVATION_TIMEOUT_S
-        left_completed = False
-        outcome = RecoveryOutcome.NOT_CLEARED
-        while not should_stop.value and clock.now() < deadline:
-            yield limiter.wait()
-            status = self._observe(gripper).status
-            if status.activation is not Activation.COMPLETED:
-                left_completed = True
-            elif left_completed:
-                outcome = RecoveryOutcome.NOT_CLEARED if status.fault else RecoveryOutcome.CLEARED
-                break
-        logger.info(f'The Robotiq gripper re-activation returned {outcome.name}')
+        outcome = yield from gripper.activate()
         for call in asked:
             call.set_result(outcome)
 
@@ -168,17 +199,16 @@ class Robotiq2F(pimm.ControlSystem):
             port=self._port, baudrate=_BAUD_RATE, bytesize=_BYTESIZE, parity=_PARITY, stopbits=_STOPBITS
         )
         assert client.connect(), f'Failed to connect to Robotiq gripper at {self._port}'
-        gripper = _Gripper(client)
+        gripper = _Gripper(client, self.sync_move, self.target_grip, self.grip, should_stop, clock)
 
         try:
-            limiter = pimm.RateLimiter(clock, hz=200)  # According to the manual, the gripper can handle 200Hz
-            gripper.activate()
+            yield from gripper.activate()
 
-            with Moves[float](self.sync_move, self.target_grip) as moves:
+            with gripper.moves as moves:
                 while not should_stop.value:
-                    grip = self._observe(gripper).width
+                    grip = gripper.observe().width
                     if asked := list(self.recover.incoming()):
-                        yield from self._reactivate(gripper, asked, should_stop, clock, limiter)
+                        yield from self._reactivate(gripper, asked)
                         continue
 
                     target = grip_setpoint(moves, grip, clock.now())
@@ -186,10 +216,10 @@ class Robotiq2F(pimm.ControlSystem):
                         self._command(gripper, target)
                     moves.answer()  # the width a settled move is answered with is on the fingers
 
-                    yield limiter.wait()
+                    yield gripper.limiter.wait()
 
                 if moves.active:  # the fingers push at the last width written to them, run or no run
-                    self._command(gripper, gripper.read().width)
+                    self._command(gripper, gripper.observe().width)
         finally:
             client.close()
 
