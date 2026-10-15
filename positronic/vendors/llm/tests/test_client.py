@@ -98,9 +98,9 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert policy.meta() == metadata
     with execution(policy) as (active, rt, clock):
         assert not complete(active, rt, clock, observation()).commands
+        assert len(clients) == 1 and not clients[0].is_closed
         assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
         meta = policy.meta() | rt.metadata_snapshot()
-        assert len(clients) == 1 and not clients[0].is_closed
         assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
     assert len(requests) == 2
     assert requests[0].url.host == 'endpoint-secret.invalid'
@@ -119,7 +119,7 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     with execution(policy) as (active, rt, clock):
         assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
         assert rt.metadata_snapshot()[policy_keys.STOP_REASON] == 'done'
-        assert len(clients) == 2 and not clients[1].is_closed
+        assert len(clients) == 2
     assert all(client.is_closed for client in clients)
     assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
 
