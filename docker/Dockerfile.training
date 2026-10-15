@@ -22,6 +22,7 @@ COPY client/ client/
 COPY wire/ wire/
 COPY model_server/ model_server/
 COPY vocabulary/ vocabulary/
+COPY evals/ evals/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project
 COPY . /positronic

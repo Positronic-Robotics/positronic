@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from platform_client.enums import CameraVantage, Placement, StartPose
 from platform_client.eval_plan import Clutter
-from platform_client.evals import EvalRef
-from platform_client.slug import Slugged
 from platform_client.tasks import TaskRef
+from positronic_evals.evals import EvalRef
+from positronic_evals.slug import Slugged
 from pydantic import BaseModel, Field
 
 

@@ -1,7 +1,7 @@
 """The closed sets a caller sees: error codes, terminal reason codes, submission and key status.
 
 `INVALID = 0` is the unset/parse-failure sentinel. The wire form is the slug
-(`platform_client.slug`).
+(`positronic_evals.slug`).
 """
 
 from __future__ import annotations

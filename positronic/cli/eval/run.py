@@ -11,8 +11,8 @@ from typing import Any
 import configuronic as cfn
 import pos3
 from platform_client.eval_plan import Sample
-from platform_client.evals import EvalRef, public_eval
 from platform_client.responses import SubmissionCreateResponse
+from positronic_evals.evals import EvalRef, public_eval
 
 import pimm
 import positronic.cfg.policy as policy_cfg

@@ -6,7 +6,7 @@ from typing import Annotated, Self
 from platform_client.enums import BillingMode, BillingRole, BillingState
 from platform_client.ids import INT64_MAX as INT64_MAX
 from platform_client.ids import OrgSlug, PackageId, PurchaseId, UserId
-from platform_client.slug import Slugged
+from positronic_evals.slug import Slugged
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 CREDIT_SCALE = 60_000_000_000
