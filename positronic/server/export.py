@@ -13,12 +13,12 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from multiprocessing.pool import ThreadPool
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import Any, cast, overload
 from urllib.parse import quote
 
 import configuronic as cfn
@@ -29,7 +29,7 @@ from jinja2.utils import htmlsafe_json_dumps
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
-from positronic.dataset import Dataset, Episode
+from positronic.dataset import Dataset, Episode, Time, TimeBounds
 from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, ReplayLayout, get_dataset_root
 from positronic.server.positronic_server import (
@@ -60,6 +60,7 @@ from positronic.server.positronic_server import (
     filter_spelling,
     group_api_link,
     group_link,
+    holds_download,
     install_dataset,
     normalized_base_href,
     validated_asset_dir,
@@ -75,7 +76,7 @@ BUILD_DIR = 'build'
 UNFILTERED_FILE = 'all.json'
 # An episode satisfies up to 2^k filter sets for k filter keys.
 MAX_FILTER_KEYS_PER_GROUP = 6
-# Each file of a group table is one read of the whole dataset.
+# A group table is one file per filter set.
 MAX_FILTER_SETS_PER_GROUP = 1024
 # The object key limit of an S3-style host.
 MAX_KEY_BYTES = 1024
@@ -88,7 +89,8 @@ def _available_cpus() -> int:
     return os.cpu_count() or 2
 
 
-# A recording's build holds about two cores, so this many at once fill the machine.
+# A recording's build holds about two cores, so this many at once fill the machine; it is also the count of
+# episodes an export reads at once.
 DEFAULT_WORKERS = max(1, _available_cpus() // 2)
 # Windows reports no path limit; its `MAX_PATH` counts UTF-16 units, the end mark included, unless a machine opts
 # into long paths.
@@ -169,7 +171,7 @@ def _path_length(path: Path) -> int:
 class _Output:
     """The files the export writes under `directory`, as any host or filesystem holds them.
 
-    Every path is planned before the first write, a write of a path outside the plan is refused, and `plan` refuses:
+    A path is planned before it is written, a write of a path outside the plan is refused, and `plan` refuses:
     - a key past a host's limit, with `key_prefix`, the base href, in front;
     - a local path past the filesystem's limit, with `directory` in front;
     - a component Windows reads as a device or trims;
@@ -187,7 +189,7 @@ class _Output:
         self._folded_directories: set[PurePosixPath] = set()
 
     def plan(self, paths: Iterable[PurePosixPath]) -> None:
-        """Register every path the export writes, before the first write."""
+        """Register `paths`, each before its write."""
         for path in paths:
             if path.is_absolute() or '\\' in str(path) or '..' in path.parts:
                 raise ValueError(f'{path} would land outside {self.directory}')
@@ -262,20 +264,28 @@ def _planned_fetch(
     return _Planned(path, reads, lambda out: out.write(path, *_fetch(client, route, params)))
 
 
-def filter_sets(episode_values: Iterable[Mapping[str, str]], most: int) -> list[dict[str, str]]:
-    """Every non-empty filter set some episode satisfies, the shortest first; more than `most` of them is
-    refused at the episode that passes the count, before the rest are read.
+class FilterSets:
+    """Every non-empty filter set the episodes added so far satisfy; the episode that takes the count past `most`
+    is refused.
 
     An episode satisfies each subset of its own values, so k filter keys give at most 2^k sets per
     episode, and a set no episode satisfies gets no file.
     """
-    satisfied: set[tuple[tuple[str, str], ...]] = set()
-    for values in episode_values:
+
+    def __init__(self, most: int):
+        self._most = most
+        self._satisfied: set[tuple[tuple[str, str], ...]] = set()
+
+    def add(self, values: Mapping[str, str]) -> None:
         items = sorted(values.items())
-        satisfied.update(chosen for n in range(1, len(items) + 1) for chosen in itertools.combinations(items, n))
-        if len(satisfied) > most:
-            raise ValueError(f'more than {most} filter sets; a filter key with a value per episode is the usual cause')
-    return [dict(chosen) for chosen in sorted(satisfied, key=lambda chosen: (len(chosen), chosen))]
+        self._satisfied.update(chosen for n in range(1, len(items) + 1) for chosen in itertools.combinations(items, n))
+        if len(self._satisfied) > self._most:
+            raise ValueError(
+                f'more than {self._most} filter sets; a filter key with a value per episode is the usual cause'
+            )
+
+    def shortest_first(self) -> list[dict[str, str]]:
+        return [dict(chosen) for chosen in sorted(self._satisfied, key=lambda chosen: (len(chosen), chosen))]
 
 
 def _large_file_path(link: str, build_id: str) -> PurePosixPath:
@@ -320,12 +330,6 @@ class _EpisodeLinks:
     download_links: list[str]
 
 
-def _episode_links(dataset: Dataset, index: int) -> _EpisodeLinks:
-    static = cast(Episode, dataset[index]).static
-    downloads = [download_link(index, field) for field in download_paths(static)]
-    return _EpisodeLinks(index, episode_rrd_link(index), downloads)
-
-
 def _episode_page(client: TestClient, reads: Dataset, links: _EpisodeLinks, build_id: str) -> _Planned:
     """The plan to write the page of one episode, with its links moved under the build."""
     route = episode_link(links.index)
@@ -342,15 +346,12 @@ def _episode_page(client: TestClient, reads: Dataset, links: _EpisodeLinks, buil
     return _Planned(path, reads, write)
 
 
-def _page_plans(
-    client: TestClient, reads: Dataset, group_names: Iterable[str], episodes: Iterable[_EpisodeLinks], build_id: str
-) -> list[_Planned]:
-    """The plans to write every page."""
+def _page_plans(client: TestClient, reads: Dataset, group_names: Iterable[str]) -> list[_Planned]:
+    """The plans to write every page but an episode's."""
     routes = [episodes_link(), *(group_link(name) for name in group_names)]
     return [
         _planned_fetch(client, '/', PurePosixPath(PAGE_FILE), reads),
         *(_planned_fetch(client, f'/{route}', PurePosixPath(route) / PAGE_FILE, reads) for route in routes),
-        *(_episode_page(client, reads, links, build_id) for links in episodes),
     ]
 
 
@@ -400,83 +401,173 @@ def _whole_api_routes() -> list[str]:
     ]
 
 
-def _full_checked_against(full: Dataset, shown: Dataset) -> Dataset:
-    """`full`, once it holds the episodes of `shown` at the same indexes, by uid, with every download `shown` links,
-    of the type and the size the page reports beside the link."""
-    if len(full) != len(shown):
-        raise ValueError(f'full_dataset holds {len(full)} episodes and dataset holds {len(shown)}')
-    for index in range(len(shown)):
-        full_episode, shown_episode = cast(Episode, full[index]), cast(Episode, shown[index])
-        if full_episode.meta[META_UID] != shown_episode.meta[META_UID]:
+def _closing_plans(
+    client: TestClient, reads: Dataset, sets_by_group: Mapping[str, list[dict[str, str]]]
+) -> list[_Planned]:
+    """The plans to write every file that reads all the episodes: the pages but an episode's, the API responses a
+    page reads whole, and the files of each group table, one per filter set of `sets_by_group`."""
+    return [
+        *_page_plans(client, reads, sets_by_group),
+        *(
+            _planned_fetch(client, f'/{route}', PurePosixPath(route + API_FILE_SUFFIX), reads)
+            for route in _whole_api_routes()
+        ),
+        *itertools.chain.from_iterable(_group_plans(client, reads, name, sets) for name, sets in sets_by_group.items()),
+    ]
+
+
+class _TableEpisode(Episode):
+    """What a table reads of one episode, kept after the export reads the episode no more: the static values a page
+    shows inline, the meta, and the bounds of each timeline."""
+
+    def __init__(self, static: dict[str, Any], meta: dict[str, Any], bounds: dict[str, TimeBounds[int]]):
+        self._static = static
+        self._meta = meta
+        self._bounds = bounds
+
+    def __getitem__(self, name: str) -> Any:
+        return self._static[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._static)
+
+    def __len__(self) -> int:
+        return len(self._static)
+
+    @property
+    def meta(self) -> dict:
+        return dict(self._meta)
+
+    @property
+    def timelines(self) -> tuple[str, ...]:
+        return tuple(self._bounds)
+
+    @overload
+    def bounds(self, timelines: str) -> TimeBounds[int]: ...
+
+    @overload
+    def bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]: ...
+
+    def bounds(self, timelines: str | tuple[str, ...]) -> TimeBounds[int] | TimeBounds[Time]:
+        if not isinstance(timelines, str):
+            raise TypeError(f'a table episode holds the bounds of one timeline at a time, got {timelines!r}')
+        if timelines not in self._bounds:
+            raise ValueError('Episode has no signals on the requested timelines')
+        return self._bounds[timelines]
+
+
+class _TableDataset(Dataset):
+    """The episodes the export has read, as a table reads them."""
+
+    def __init__(self):
+        self._episodes: list[_TableEpisode] = []
+
+    def append(self, episode: _TableEpisode) -> None:
+        self._episodes.append(episode)
+
+    def __len__(self) -> int:
+        return len(self._episodes)
+
+    def _get_episode(self, index: int) -> Episode:
+        return self._episodes[index]
+
+
+def _check_full_episode(full_episode: Episode, shown_episode: Episode, index: int) -> None:
+    """Refuse a full episode at `index` that is not the shown one, by uid, or that lacks a download the shown one
+    links, of the type and the size the page reports beside the link."""
+    if full_episode.meta[META_UID] != shown_episode.meta[META_UID]:
+        raise ValueError(
+            f'full_dataset episode {index} has uid {full_episode.meta[META_UID]!r} and dataset has '
+            f'{shown_episode.meta[META_UID]!r}'
+        )
+    for path in download_paths(shown_episode.static):
+        linked = download_metadata(cast(bytes | str, download_at(shown_episode.static, path)))
+        held = download_at(full_episode.static, path)
+        if held is None:
+            raise ValueError(f'full_dataset episode {index} has no download at {"/".join(path)!r}, which dataset links')
+        if download_metadata(held) != linked:
             raise ValueError(
-                f'full_dataset episode {index} has uid {full_episode.meta[META_UID]!r} and dataset has '
-                f'{shown_episode.meta[META_UID]!r}'
+                f'full_dataset episode {index} holds {download_metadata(held).type} of size '
+                f'{download_metadata(held).size} at {"/".join(path)!r}, and dataset links {linked.type} of size '
+                f'{linked.size}'
             )
-        for path in download_paths(shown_episode.static):
-            linked = download_metadata(cast(bytes | str, download_at(shown_episode.static, path)))
-            held = download_at(full_episode.static, path)
-            if held is None:
-                raise ValueError(
-                    f'full_dataset episode {index} has no download at {"/".join(path)!r}, which dataset links'
-                )
-            if download_metadata(held) != linked:
-                raise ValueError(
-                    f'full_dataset episode {index} holds {download_metadata(held).type} of size '
-                    f'{download_metadata(held).size} at {"/".join(path)!r}, and dataset links {linked.type} of size '
-                    f'{linked.size}'
-                )
-    return full
 
 
-def _write_serving(out: _Output, plans: Iterable[_Planned]) -> None:
-    """Write each of `plans` with the app serving the dataset it reads."""
+def _read_episode(shown: Dataset, full: Dataset, index: int) -> tuple[_EpisodeLinks, _TableEpisode]:
+    """The links the page of episode `index` carries, and what a table reads of it; `full` is checked against
+    `shown` where the two differ."""
+    episode = cast(Episode, shown[index])
+    if full is not shown:
+        _check_full_episode(cast(Episode, full[index]), episode, index)
+    static, meta = episode.static, episode.meta
+    links = _EpisodeLinks(index, episode_rrd_link(index), [download_link(index, f) for f in download_paths(static)])
+    table_episode = _TableEpisode(
+        {key: value for key, value in static.items() if not holds_download(value)},
+        {key: meta[key] for key in meta},
+        {timeline: episode.bounds(timeline) for timeline in episode.timelines},
+    )
+    return links, table_episode
+
+
+def _planned_episode(
+    out: _Output, client: TestClient, shown: Dataset, full: Dataset, index: int, build_id: str
+) -> tuple[list[_Planned], _TableEpisode]:
+    """The plans to write the page, the recording and the downloads of episode `index`, each path planned, and
+    what a table reads of the episode."""
+    links, table_episode = _read_episode(shown, full, index)
+    plans = [*_large_file_plans(client, full, links, build_id), _episode_page(client, shown, links, build_id)]
+    out.plan(planned.path for planned in plans)
+    return plans, table_episode
+
+
+def _write_serving(out: _Output, plans: Iterable[_Planned]) -> list[ExportedFile]:
+    """Write each of `plans` with the app serving the dataset it reads, and answer the files written."""
+    written: list[ExportedFile] = []
     serving: Dataset | None = None
     for planned in plans:
         if planned.reads is not serving:
             install_dataset(planned.reads)
             serving = planned.reads
-        planned.write(out)
+        written.append(planned.write(out))
+    return written
 
 
-def _filter_sets_by_group(
-    dataset: Dataset, group_tables: dict[str, GroupTableConfig] | None
-) -> dict[str, list[dict[str, str]]]:
-    """The non-empty filter sets each group table gets a file for; a group past either bound is refused."""
-    sets_by_group: dict[str, list[dict[str, str]]] = {}
-    for name, cfg in (group_tables or {}).items():
+def _filter_sets_by_group(group_tables: Mapping[str, GroupTableConfig]) -> dict[str, FilterSets]:
+    """No filter set yet for each group table; a group past the filter key bound is refused."""
+    for name, cfg in group_tables.items():
         if len(cfg.group_filter_keys) > MAX_FILTER_KEYS_PER_GROUP:
             raise ValueError(
                 f'group table {name!r} has {len(cfg.group_filter_keys)} filter keys; an export writes up to 2^k '
                 f'files per episode, so a group table takes at most {MAX_FILTER_KEYS_PER_GROUP}'
             )
-        # Each episode's values on the group's filter keys, as a filter spells them; an absent value is left out.
-        episode_values = (
-            {
-                key: spelling
-                for key in cfg.group_filter_keys
-                if (spelling := filter_spelling(cast(Episode, episode).static.get(key))) is not None
-            }
-            for episode in dataset
-        )
+    # One of the files is the unfiltered one.
+    return {name: FilterSets(MAX_FILTER_SETS_PER_GROUP - 1) for name in group_tables}
+
+
+def _add_filter_values(
+    sets_by_group: Mapping[str, FilterSets], group_tables: Mapping[str, GroupTableConfig], episode: Episode
+) -> None:
+    """Add the values `episode` holds on each group table's filter keys, as a filter spells them; an absent value
+    is left out."""
+    for name, sets in sets_by_group.items():
+        values = {
+            key: spelling
+            for key in group_tables[name].group_filter_keys
+            if (spelling := filter_spelling(episode.get(key))) is not None
+        }
         try:
-            # One of the files is the unfiltered one.
-            sets_by_group[name] = filter_sets(episode_values, MAX_FILTER_SETS_PER_GROUP - 1)
+            sets.add(values)
         except ValueError as past_bound:
-            raise ValueError(
-                f'group table {name!r} has {past_bound}; an export reads the dataset once per set'
-            ) from None
-    return sets_by_group
+            raise ValueError(f'group table {name!r} has {past_bound}; an export writes a file per set') from None
 
 
-def _build_recordings(reads: Dataset, workers: int) -> None:
-    """Build the recording of each episode of `reads` into the cache, `workers` at a time, with the app serving
-    `reads`; one worker builds them on the calling thread.
+def _build_recordings(reads: Dataset, indexes: range, workers: int) -> None:
+    """Build the recording of each episode of `reads` at `indexes` into the cache, `workers` at a time, with the app
+    serving `reads`; one worker builds them on the calling thread.
 
     The workers are threads: the decoder and the encoder release the interpreter lock, and a forked worker
     hangs on the threads a recording built earlier in the process leaves behind.
     """
-    if workers < 1:
-        raise ValueError(f'workers={workers}; a recording is built by at least one')
     install_dataset(reads)
 
     def build_and_release(index: int) -> None:
@@ -485,11 +576,20 @@ def _build_recordings(reads: Dataset, workers: int) -> None:
         gc.collect()
 
     if workers == 1:
-        for index in range(len(reads)):
+        for index in indexes:
             build_and_release(index)
         return
     with ThreadPool(workers) as pool:
-        pool.map(build_and_release, range(len(reads)), chunksize=1)
+        pool.map(build_and_release, indexes, chunksize=1)
+
+
+@dataclass(frozen=True)
+class ExportStep:
+    """The files one step of an export wrote: those of the episode at `episode`, or, at the last step, where
+    `episode` is None, the pages, the tables and the assets that read every episode."""
+
+    episode: int | None
+    files: list[ExportedFile]
 
 
 def export_static(
@@ -512,19 +612,25 @@ def export_static(
     attribution: Attribution | None = None,
     scratch_dir: Path | None = None,
     workers: int = DEFAULT_WORKERS,
-) -> list[ExportedFile]:
-    """Write the viewer for `dataset` under `out_dir` and give back every file written.
+) -> Iterator[ExportStep]:
+    """Write the viewer for `dataset` under `out_dir`, and yield the files of each step.
+
+    The export reads the episodes `workers` at a time, in index order. It builds their recordings in a directory
+    of its own under `scratch_dir`, or the system's temporary directory when None. Then it yields one step per
+    episode, with the episode's page, recording and downloads. After that step the export does not read the
+    episode again, so a caller may delete the episode and the step's files. The tables keep, for each episode, the
+    static values a page shows inline, the meta and the bounds of each timeline. The last step holds the pages,
+    the tables and the assets that read every episode. A problem in an episode stops the export before it writes
+    the files of that episode.
 
     The pages and the tables read `dataset`. The recordings and the downloads read `full_dataset`
     when given, which holds the same episodes in the same order; the recording builder reads an
-    episode's robot model out of its static values. The recordings are built `workers` at a time in a
-    directory of this export's own under `scratch_dir`, the system's temporary directory when None,
-    moved in from there, and the directory is removed at the end. `assets` writes the app's own scripts, styles
+    episode's robot model out of its static values. `assets` writes the app's own scripts, styles
     and viewer under `asset_dir`, a directory under `static/` the pages request at the host root, so it goes
     with the root base href only; an export under a prefix shares the host's copy. A host that serves several
     exports names a directory per set of assets, so an export never overwrites the assets another export's
-    pages read. An export holds the app's state for its duration, so a second export in the process waits for
-    it; one into the same directory is then refused, as the directory holds the first.
+    pages read. An export holds the app's state from its first step to its last, so a second export in the
+    process waits for it; one into the same directory is then refused, as the directory holds the first.
 
     The export holds no episode between two reads; a dataset that caches its episodes holds them all open.
     """
@@ -535,11 +641,15 @@ def export_static(
         )
     if assets and normalized_base_href(base_href) != '/':
         raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
+    if workers < 1:
+        raise ValueError(f'workers={workers}; a recording is built by at least one')
     validated_build_id(build_id)
     validated_asset_dir(asset_dir)
-    sets_by_group = _filter_sets_by_group(dataset, group_tables)
-    full = _full_checked_against(full_dataset, dataset) if full_dataset is not None else dataset
-    episodes = [_episode_links(dataset, index) for index in range(len(dataset))]
+    sets_by_group = _filter_sets_by_group(group_tables or {})
+    full = dataset if full_dataset is None else full_dataset
+    if len(full) != len(dataset):
+        raise ValueError(f'full_dataset holds {len(full)} episodes and dataset holds {len(dataset)}')
+    tables = _TableDataset()
     with app_state_restored(), tempfile.TemporaryDirectory(dir=scratch_dir) as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.
         if out.directory.exists() and any(out.directory.iterdir()):
@@ -563,26 +673,29 @@ def export_static(
             attribution=attribution,
         )
         client = TestClient(app)
-        # Past `configure_tables`, every group name is one segment the route builders spell.
-        plans = [
-            *_page_plans(client, dataset, sets_by_group, episodes, build_id),
-            *(
-                _planned_fetch(client, f'/{route}', PurePosixPath(route + API_FILE_SUFFIX), dataset)
-                for route in _whole_api_routes()
-            ),
-            *itertools.chain.from_iterable(
-                _group_plans(client, dataset, name, sets) for name, sets in sets_by_group.items()
-            ),
-            *itertools.chain.from_iterable(_large_file_plans(client, full, links, build_id) for links in episodes),
-        ]
+        # Past `configure_tables`, every group name is one segment the route builders spell. The files of the filter
+        # sets are known once every episode is read; every other path is planned before the first episode.
+        known_upfront = _closing_plans(client, tables, {name: [] for name in sets_by_group})
         assets_to_copy = asset_files(asset_dir) if assets else []
-        out.plan(itertools.chain((planned.path for planned in plans), (path for path, _ in assets_to_copy)))
-        _build_recordings(full, workers)
-        _write_serving(out, plans)
-    for path, file in assets_to_copy:
-        out.copy(path, file)
+        out.plan(itertools.chain((planned.path for planned in known_upfront), (path for path, _ in assets_to_copy)))
+        for start in range(0, len(dataset), workers):
+            window = range(start, min(start + workers, len(dataset)))
+            plans_by_episode: list[list[_Planned]] = []
+            for index in window:
+                plans, table_episode = _planned_episode(out, client, dataset, full, index, build_id)
+                _add_filter_values(sets_by_group, group_tables or {}, table_episode)
+                tables.append(table_episode)
+                plans_by_episode.append(plans)
+            _build_recordings(full, window, workers)
+            for index, plans in zip(window, plans_by_episode, strict=True):
+                yield ExportStep(index, _write_serving(out, plans))
+        closing = _closing_plans(client, tables, {name: sets.shortest_first() for name, sets in sets_by_group.items()})
+        planned_upfront = {planned.path for planned in known_upfront}
+        out.plan(planned.path for planned in closing if planned.path not in planned_upfront)
+        files = _write_serving(out, closing)
+    files.extend(out.copy(path, file) for path, file in assets_to_copy)
     logger.info('wrote %d files under %s', len(out.files), out_dir)
-    return out.files
+    yield ExportStep(None, files)
 
 
 @cfn.config(dataset=positronic.cfg.ds.local_all, ep_table_cfg=default_table, group_tables=None)
@@ -620,9 +733,9 @@ def main(
         build_id: Names one build; the recordings and the downloads are written under `build/<build_id>/`
         assets: Whether to write the app's own assets under `asset_dir`; with the root base href only
         asset_dir: Directory under `static/` the assets sit in, so a host holds one per set of assets
-        workers: Recordings built at once; half the machine's cores by default
+        workers: Recordings built at once, so episodes held at once; half the machine's cores by default
     """
-    written = export_static(
+    steps = export_static(
         dataset,
         Path(out_dir).expanduser(),
         ep_table_cfg=ep_table_cfg,
@@ -639,6 +752,7 @@ def main(
         asset_dir=PurePosixPath(asset_dir),
         workers=workers,
     )
+    written = [file for step in steps for file in step.files]
     logging.info(f'{len(written)} files, {sum(file.size for file in written) / 1e6:.1f} MB, under {out_dir}')
 
 
