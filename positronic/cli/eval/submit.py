@@ -13,22 +13,24 @@ from platform_client.responses import SubmissionCreateResponse
 from positronic_evals.evals import EvalRef
 from pydantic import SecretStr
 
-from positronic.cli.account.gateway import gateway, refusing_bad_input
+from positronic.cli.account.gateway import CommandFailed, Fault, gateway, refusing_bad_input
 
 
 def _credential(username: str | None, password_file: object | None) -> RegistryCredential | None:
     """The credential that opens a private registry, from the two flags that state it."""
     if (username is None) != (password_file is None):
-        raise SystemExit('--registry-username and --registry-password-file state one credential: pass both')
+        raise CommandFailed(
+            '--registry-username and --registry-password-file state one credential: pass both', Fault.USAGE
+        )
     if username is None or password_file is None:
         return None
     # configuronic hands `1` or `[]` through as an int or a list. Either may be a pasted password.
     if not isinstance(password_file, str):
-        raise SystemExit('--registry-password-file names no file: pass its path')
+        raise CommandFailed('--registry-password-file names no file: pass its path', Fault.USAGE)
     try:
         password = password_from_file(Path(password_file))
     except ValueError as exc:
-        raise SystemExit(f'--registry-password-file names no readable password: {exc}') from exc
+        raise CommandFailed(f'--registry-password-file names no readable password: {exc}', Fault.USAGE) from exc
     return RegistryCredential(username=username, password=SecretStr(password))
 
 
@@ -73,5 +75,5 @@ def submit(
     # These terminal statuses can never carry a result, so the submission fails rather than returns.
     if submission.status in NO_RESULT_STATUSES:
         reason = submission.reason_code.name if submission.reason_code is not None else submission.status.name
-        raise SystemExit(f'rejected: {reason}')
+        raise CommandFailed(f'rejected: {reason}', Fault.CALLER)
     return submission

@@ -39,6 +39,7 @@ class StubPlatform:
         self.paths: list[str] = []
         self.base_url: str | None = None
         self.api_key: ApiKey | None = None
+        self.no_answer: httpx.TransportError | None = None
 
     def answer(self, payload: object, *, status: int = 200) -> None:
         self.payload, self.status = payload, status
@@ -54,6 +55,8 @@ class StubPlatform:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.seen = request
         self.paths.append(request.url.path)
+        if self.no_answer is not None:
+            raise self.no_answer
         if queued := self.in_turn.get(request.url.path):
             payload, status = queued.pop(0)
         else:

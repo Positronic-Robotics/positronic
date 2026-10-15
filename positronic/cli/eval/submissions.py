@@ -8,7 +8,7 @@ from platform_client.enums import ErrorCode
 from platform_client.errors import PlatformError
 from platform_client.ids import SubmissionId
 from platform_client.requests import CancelRequest
-from platform_client.responses import ID_FIELD, STATUS_FIELD, SubmissionListRow, SubmissionView
+from platform_client.responses import ID_FIELD, STATUS_FIELD, SubmissionListResponse, SubmissionListRow, SubmissionView
 
 from positronic.cli.account.gateway import gateway, parse_id, refusing_bad_input
 
@@ -18,10 +18,13 @@ _HEADER_FIELDS = frozenset({ID_FIELD, STATUS_FIELD})
 
 
 @cfn.config()
-def status(id: str, platform_url: str | None = None):
-    """Report what one run is doing, and what it produced once it is done."""
-    with gateway(platform_url) as client:
+def status(id: str, platform_url: str | None = None, json: bool = False):
+    """Report what one run is doing, and what it produced once it is done. `--json` prints the view as JSON."""
+    with gateway(platform_url, refusal_as_json=json) as client:
         view: SubmissionView = client.get_submission(parse_id(id, SubmissionId))
+    if json:
+        print(view.model_dump_json(indent=2))
+        return
     print(f'submission {view.id} {view.status.name}')
     for name, value in view.model_dump(mode='json', exclude=set(_HEADER_FIELDS)).items():
         print(f'  {name}: {value}')
@@ -40,10 +43,13 @@ def _every_submission(client: PlatformClient) -> list[SubmissionListRow]:
 
 
 @cfn.config()
-def list_submissions(platform_url: str | None = None):
-    """List the runs this API key can see, oldest first."""
-    with gateway(platform_url) as client:
+def list_submissions(platform_url: str | None = None, json: bool = False):
+    """List the runs this API key can see, oldest first. `--json` prints every page as one JSON page."""
+    with gateway(platform_url, refusal_as_json=json) as client:
         rows = _every_submission(client)
+    if json:
+        print(SubmissionListResponse(submissions=rows).model_dump_json(indent=2))
+        return
     for row in rows:
         named = f' {row.eval}' if row.eval else ''
         alias = f' {row.alias}' if row.alias else ''
@@ -63,13 +69,13 @@ def cancel(id: str, platform_url: str | None = None):
 
 
 @cfn.config()
-def catalog(platform_url: str | None = None):
+def catalog(platform_url: str | None = None, json: bool = False):
     """Print what this key may name: the evals a plan names, and the tasks a plan composes.
 
     A key with no customer grant composes no plan, so `catalog.tasks` refuses it; the evals print, and
-    the refusal goes to stderr.
+    the refusal goes to stderr. Both print as JSON; `--json` prints a refusal of the evals as JSON too.
     """
-    with gateway(platform_url) as client:
+    with gateway(platform_url, refusal_as_json=json) as client:
         evals = client.catalog_evals()
         try:
             tasks = client.catalog_tasks().model_dump_json(indent=2)

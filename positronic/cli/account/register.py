@@ -6,7 +6,7 @@ import configuronic as cfn
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, write_config
 from platform_client.requests import RegisterRequest
 
-from positronic.cli.account.gateway import credential, gateway, refusing_bad_input
+from positronic.cli.account.gateway import CommandFailed, Fault, credential, gateway, refusing_bad_input
 
 
 @cfn.config()
@@ -32,9 +32,10 @@ def register(alias: str | None = None, rotate: bool = False, platform_url: str |
         write_config(directory, Config(platform_url=base_url, api_key=response.api_key))
     except OSError as exc:
         # The key cannot be fetched again, so the message says how to mint another and does not print this one.
-        raise SystemExit(
+        raise CommandFailed(
             f'the platform issued a key for user {response.user_id}, and writing '
             f'{directory / CONFIG_FILENAME} failed: {exc.strerror or exc}. The key is not shown; '
-            'run `positronic account register --rotate` to mint another.'
+            'run `positronic account register --rotate` to mint another.',
+            Fault.CALLER,
         ) from exc
     print(f'key saved in {directory / CONFIG_FILENAME}')

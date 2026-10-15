@@ -18,7 +18,7 @@ import pimm
 import positronic.cfg.policy as policy_cfg
 from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import unset
-from positronic.cli.account.gateway import refusing_bad_input
+from positronic.cli.account.gateway import CommandFailed, Fault, refusing_bad_input
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
 from positronic.eval import Embodiment, Eval, Task
@@ -233,7 +233,7 @@ def _refuse(inapplicable: dict[str, object], where: str) -> None:
     """
     asked = sorted(flag for flag, value in inapplicable.items() if given(value))
     if asked:
-        raise SystemExit(f'a {where} run has no {", ".join(asked)}')
+        raise CommandFailed(f'a {where} run has no {", ".join(asked)}', Fault.USAGE)
 
 
 # The policy flag chooses where the eval runs.
@@ -272,7 +272,7 @@ def _public_eval_config(name: str) -> cfn.Config:
     try:
         definition = public_eval(EvalRef(name))
     except (ValueError, LookupError) as e:
-        raise SystemExit(f'--eval={name!r}: {e}. --policy-image runs an eval on the platform') from None
+        raise CommandFailed(f'--eval={name!r}: {e}. --policy-image runs an eval on the platform', Fault.USAGE) from None
     _warn_on_revision_mismatch(definition.positronic_revision)
     overrides = {f'eval.{arg}': value for arg, value in definition.args.items()}
     return _eval_at.override(eval=definition.config).override_data(**overrides)
@@ -336,7 +336,9 @@ def run(
     the id without parsing what was printed. A local run's result is the dataset it wrote.
     """
     if policy is not None and policy_image is not None:
-        raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
+        raise CommandFailed(
+            '--policy runs the eval here and --policy-image runs it on the platform; pass one', Fault.USAGE
+        )
     # A switch stated at what every place already does asks for nothing, so it normalises to unstated.
     # Only a switch does: `--alias=False` stays a value, and is refused like `--alias=''`.
     local_only = {
@@ -366,13 +368,15 @@ def run(
             'local',
         )
         if policy is None:
-            raise SystemExit(_NO_POLICY_NAMED)
+            raise CommandFailed(_NO_POLICY_NAMED, Fault.USAGE)
         if isinstance(eval, str):
             chosen: Eval = _public_eval_config(eval).instantiate()
         elif isinstance(eval, Eval):
             chosen = eval
         else:
-            raise SystemExit(f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval')
+            raise CommandFailed(
+                f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval', Fault.USAGE
+            )
         chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge_inference_time))
         main(policy=policy, evals=[chosen], output_dir=output_dir, timing=timing)
         return None
@@ -381,8 +385,9 @@ def run(
         # The platform owns its own trial sweep, its own output and its own telemetry.
         _refuse({**local_only, '--from-file': from_file}, 'platform')
         if not isinstance(eval, str):
-            raise SystemExit(
-                'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer'
+            raise CommandFailed(
+                'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer',
+                Fault.USAGE,
             )
         return submit(
             eval,
@@ -401,4 +406,4 @@ def run(
         _refuse({**local_only, **platform_only}, 'rig')
         return file_plan(read_plan(source, transaction_key, alias, org), platform_url)
 
-    raise SystemExit(_NO_POLICY_NAMED)
+    raise CommandFailed(_NO_POLICY_NAMED, Fault.USAGE)

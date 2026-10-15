@@ -22,6 +22,7 @@ from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.cfg.eval.real import droid as real_droid
+from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
 from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import LocalDatasetWriter
@@ -302,8 +303,9 @@ def test_a_local_run_refuses_a_name_the_public_code_does_not_define(run_command,
 
 @pytest.mark.parametrize('value', [None, 1])
 def test_a_local_run_refuses_an_eval_that_is_neither_a_config_nor_a_name(run_command, value: object):
-    with pytest.raises(SystemExit, match=f'--eval={value!r} names nothing to run'):
+    with pytest.raises(CommandFailed, match=f'--eval={value!r} names nothing to run') as exit_info:
         run_command(run_module.run, eval=value, policy='a policy')
+    assert exit_info.value.fault is Fault.USAGE
 
 
 PINNED = public_eval(EvalRef(SMOKE)).positronic_revision
