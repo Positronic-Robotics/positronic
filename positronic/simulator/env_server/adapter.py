@@ -139,7 +139,7 @@ class WireCommandAdapter(EnvAdapter):
 
     def _channel_payload(self, name: str) -> Any:
         if not keys.is_robot_command(name):
-            return float(self._held.get(name, 0.0))
+            return self._held.get(name, 0.0)
         # The server maps the held command into its controller's action. A delta — Cartesian or joint — is a
         # one-shot relative motion, forwarded once then dropped: re-sending a stale delta would re-compose it
         # against the moving arm every tick (the eef drifts, or the joints walk toward their limits), so after
