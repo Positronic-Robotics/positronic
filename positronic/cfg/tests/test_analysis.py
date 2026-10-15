@@ -280,6 +280,18 @@ def test_a_stacking_row_counts_every_run_and_shows_the_signal_without_a_verdict(
     assert row['avg_max_success'] == pytest.approx(0.8)
 
 
+def test_a_stacking_failure_counts_its_whole_episode_even_when_its_signal_crossed_the_threshold():
+    signal = DummySignal([0, 10_000_000_000], [1.0, 1.0], timelines=(HARNESS_WORLD,))
+    sim = {'stacking_success': signal, 'checkpoint': 'test', 'model': 'test', 'max_stacking_success': 1.0}
+    failed = EpisodeContainer({**sim, OUTCOME: Outcome.FAIL, 'success': False, 'success_time': 4.0, 'units': 0})
+    succeeded = EpisodeContainer({**sim, OUTCOME: Outcome.SUCCESS, 'success': True, 'success_time': 6.0, 'units': 1})
+
+    row = analysis.stacking_checkpoint_table.instantiate().group_fn([failed, succeeded])
+
+    assert row['MTBF'] == pytest.approx(16.0)
+    assert row['UPH'] == pytest.approx(3600 / 16.0)
+
+
 def test_a_discarded_episode_with_item_counts_shows_no_units_no_rate_and_no_uph():
     discarded = _attended(Outcome.DISCARDED, 2)
 

@@ -431,8 +431,10 @@ def stacking_episodes_table():
 
 def _effective_duration(key: str, ep: Episode) -> float:
     t = ep.get(key)
-    if t is not None:
-        return t
+    return t if t is not None else _episode_duration(ep)
+
+
+def _episode_duration(ep: Episode) -> float:
     timelines = ep.timelines
     # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
     timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
@@ -448,7 +450,9 @@ def stacking_checkpoint_table():
         # The signal metric counts every episode. The rest count only the episodes with a counted outcome.
         scored = scored_episodes(episodes)
         count = len(scored)
-        total_duration = sum(_effective_duration('success_time', ep) for ep in scored)
+        total_duration = sum(
+            _effective_duration('success_time', ep) if ep['success'] else _episode_duration(ep) for ep in scored
+        )
         successful = [ep for ep in scored if ep['success']]
         failed = [ep for ep in scored if not ep['success']]
 
