@@ -4,7 +4,7 @@ from datetime import datetime
 
 import configuronic as cfn
 import pos3
-from eval_vocabulary.outcome import ABSENT, OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, is_scored
+from eval_vocabulary.outcome import ABSENT, OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, counted_outcome, is_scored
 from eval_vocabulary.progress import LADDER, STATE_SIGNAL, Stage
 
 from pimm.logging import init_logging
@@ -33,10 +33,11 @@ from .ds import internal
 def eval_table():
     """The episode table for an eval run: only what every eval writes, nothing task-specific.
 
-    ``eval.success`` is the env's report. It is absent, and the cell blank, when no env reported: on an episode that
-    never reached its terminal, on an episode that a console or a policy ended, and on a rig with no env.
-    ``eval.outcome`` is the verdict that a console wrote, and an episode without one reads as unscored.
-    ``eval.terminated`` separates a task the policy failed from one whose budget ran out.
+    The columns are the facts that ``counted_outcome`` counts an episode from. ``eval.success`` is the env's report.
+    It is absent, and the cell blank, when no env reported: on an episode that never reached its terminal, on an
+    episode that a console or a policy ended, and on a rig with no env. ``eval.outcome`` is the verdict that a console
+    wrote. ``eval.policy_end`` is what the policy said when it ended the episode. ``eval.terminated`` separates a task
+    the policy failed from one whose budget ran out.
     """
     return {
         '__index__': C(label='#', format='%d'),
@@ -49,7 +50,8 @@ def eval_table():
                 options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
             ),
         ),
-        OUTCOME: C(label='Outcome', default=ABSENT, renderer=OUTCOME_BADGE, filter=True, align='center'),
+        OUTCOME: C(label='Verdict', default=ABSENT, renderer=OUTCOME_BADGE, filter=True, align='center'),
+        eval_keys.POLICY_END: C(label='Policy end'),
         eval_keys.TERMINATED: C(label='Ended', default=False),
     }
 
@@ -223,7 +225,7 @@ def rollouts_episodes_table():
         '__duration__': C(label='Duration', format='%.0f sec'),
         keys.TASK: C(label='Task', filter=True),
         DERIVED_MODEL: C(label='Model', filter=True),
-        DERIVED_OUTCOME: C(label='Outcome', renderer=OUTCOME_BADGE, filter=True, align='center'),
+        DERIVED_OUTCOME: C(label='Verdict', renderer=OUTCOME_BADGE, filter=True, align='center'),
         DERIVED_STAGE: C(label='Stage'),
         DERIVED_ITEMS: C(label='Items', default='-'),
         DERIVED_STARTED: C(label='Started', format='%Y-%m-%d %H:%M:%S'),
@@ -233,10 +235,10 @@ def rollouts_episodes_table():
 @cfn.config()
 def rollouts_by_model():
     def group_fn(episodes: list[Episode]):
-        # An episode the operator discarded or never scored measures nothing, so it is listed and
+        # An episode that the operator discarded, or that nothing scored, measures nothing, so it is listed and
         # counted and stays out of the rate.
-        scored = [ep for ep in episodes if is_scored(ep[DERIVED_OUTCOME])]
-        successes = sum(1 for ep in scored if ep[DERIVED_OUTCOME] == Outcome.SUCCESS)
+        scored = [outcome for outcome in map(counted_outcome, episodes) if is_scored(outcome)]
+        successes = scored.count(Outcome.SUCCESS)
         # FOOTGUN: count from the target up. The ladder is append-only, and a rung added past the
         # target passed through it.
         at_target = LADDER.index(Stage.AT_TARGET)

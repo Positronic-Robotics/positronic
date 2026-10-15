@@ -48,11 +48,16 @@ def _with_stages(*codes):
     return EpisodeContainer({STATE_SIGNAL: [(code, 0) for code in codes]})
 
 
-def _row(outcome, stage=NO_STAGE, model='pi05'):
-    """One episode as the model table reads it: the three fields the preset derived onto it."""
+def _row(outcome, stage=NO_STAGE, model='pi05', statics=None):
+    """One episode as the model table reads it: ``outcome`` in ``eval.outcome``, ``statics`` beside it, and the three
+    fields the preset derived onto it."""
+    recorded = dict(statics or {})
+    if outcome is not None:
+        recorded[OUTCOME] = outcome
     return EpisodeContainer({
+        **recorded,
         cfg_server.DERIVED_MODEL: model,
-        cfg_server.DERIVED_OUTCOME: outcome,
+        cfg_server.DERIVED_OUTCOME: cfg_server.rollout_outcome(EpisodeContainer(recorded)),
         cfg_server.DERIVED_STAGE: stage,
     })
 
@@ -156,13 +161,15 @@ def test_a_rung_below_the_target_does_not_count_as_reaching_it():
     assert row['at_target'] == 0
 
 
-def test_the_eval_table_shows_the_verdict_beside_the_env_report_and_no_report_as_blank():
-    """A sim run records the env's report in `eval.success`, and a console records the verdict in `eval.outcome`."""
+def test_the_eval_table_shows_every_fact_that_the_count_reads_and_no_report_as_blank():
+    """A sim run records the env's report in `eval.success`, a console records the verdict in `eval.outcome`, and the
+    harness records the policy end in `eval.policy_end`."""
     table = cfg_server.eval_table.instantiate()
 
-    assert {eval_keys.SUCCESS, OUTCOME} <= set(table)
+    assert {eval_keys.SUCCESS, OUTCOME, eval_keys.POLICY_END, eval_keys.TERMINATED} <= set(table)
     assert table[OUTCOME].default == Outcome.UNSCORED
     assert table[eval_keys.SUCCESS].default is None
+    assert table[eval_keys.POLICY_END].default is None
 
 
 def test_an_episode_nobody_scored_reads_as_unscored():
@@ -185,6 +192,20 @@ def test_an_episode_the_operator_discarded_is_listed_and_left_out_of_the_rate():
     assert row['scored'] == 1
     assert row['successes'] == 1
     assert row['success_rate'].rate == 100
+
+
+def test_the_rate_counts_a_policy_end_with_no_verdict_by_the_rule():
+    """The column shows the verdict, and the rate counts what `counted_outcome` gives."""
+    group = cfg_server.rollouts_by_model.instantiate()
+    ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.TERMINATED: True}
+    gave_up = _row(None, statics={**ended, eval_keys.POLICY_END: eval_keys.PolicyEnd.GIVE_UP})
+    completed = _row(None, statics={**ended, eval_keys.POLICY_END: eval_keys.PolicyEnd.COMPLETE})
+
+    row = group.group_fn([_row(Outcome.SUCCESS), gave_up, completed])
+
+    assert gave_up[cfg_server.DERIVED_OUTCOME] == Outcome.UNSCORED
+    assert (row['count'], row['scored'], row['successes']) == (3, 2, 1)
+    assert row['success_rate'].rate == 50
 
 
 def test_a_model_nobody_scored_has_no_rate_rather_than_a_zero():

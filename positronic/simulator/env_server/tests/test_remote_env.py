@@ -20,6 +20,7 @@ from pimm.time import EMITTED_WORLD
 from positronic import geom, keys
 from positronic.cfg.eval import number_trials
 from positronic.cfg.eval.sim import libero as libero_cfg
+from positronic.cfg.eval.sim import molmo as molmo_cfg
 from positronic.cfg.eval.sim import positronic as native_cfg
 from positronic.cfg.eval.sim import robolab as robolab_cfg
 from positronic.cli.eval.run import main
@@ -412,6 +413,19 @@ class TestRemoteEmbodimentChannels:
             'robot_command.left.pose',
             'robot_command.right.pose',
         ]
+
+
+@pytest.mark.parametrize(
+    'eval_cfg', [libero_cfg.spatial, robolab_cfg.benchmark, molmo_cfg.bench_v1], ids=['libero', 'robolab', 'molmo']
+)
+def test_every_benchmark_records_that_its_env_ends_the_trial_on_success(eval_cfg):
+    assert eval_cfg.instantiate().embodiment.static_meta[eval_keys.ENV_ENDS_ON_SUCCESS] is True
+
+
+def test_an_env_whose_adapter_states_nothing_records_that_it_does_not_end_on_success():
+    proxy = RemoteEnvControlSystem(_CommandOnlyAdapter(), nullcontext(('localhost', 0)))
+    embodiment = remote_embodiment(proxy, {keys.EXTERIOR_IMAGE: 'cam'}, descriptor='remote.test')
+    assert embodiment.static_meta[eval_keys.ENV_ENDS_ON_SUCCESS] is False
 
 
 def test_a_pinned_control_mode_rides_the_wire():

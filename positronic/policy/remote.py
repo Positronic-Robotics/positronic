@@ -171,9 +171,7 @@ class RemotePolicy(Policy):
                     return round_trip(session, obs, compress_images, self._jpeg_quality)
 
             # TODO: Let a model server end its policy run. The server sends a `PolicyEnd` with its actions, and a
-            #  client processor returns it. Then each labeler of sim runs in `platform_client.labels` must count a
-            #  policy end with no env report as a failure. If not, a model can end its failing trials early and keep
-            #  them out of its rate.
+            #  client processor returns it.
             with closing(runtime.start(stack, infer)) as run:
                 obs = yield
                 while True:

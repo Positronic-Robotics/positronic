@@ -23,6 +23,8 @@ ENDED_BY_OPERATOR = 'operator'
 ENDED_BY_POLICY = 'policy'
 # The `PolicyEnd` of a trial that the policy ended. It is the policy's claim, not a verdict.
 POLICY_END = 'eval.policy_end'
+# True when the env ends the trial at the step where it sees success. A policy end then means that the env saw none.
+ENV_ENDS_ON_SUCCESS = 'eval.env_ends_on_success'
 # The instruction that the policy got.
 TASK = 'task'
 

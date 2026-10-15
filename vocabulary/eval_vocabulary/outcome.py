@@ -1,4 +1,4 @@
-"""The outcome an operator gives an episode, recorded as `eval.outcome`.
+"""The outcome an operator gives an episode, recorded as `eval.outcome`, and the outcome a reader counts.
 
 An episode on disk carries the value it was scored with, so a member is append-only and a value
 never changes.
@@ -6,7 +6,18 @@ never changes.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
+
+from eval_vocabulary.episode import (
+    ENDED_BY,
+    ENDED_BY_POLICY,
+    ENV_ENDS_ON_SUCCESS,
+    POLICY_END,
+    SUCCESS,
+    TERMINATED,
+    PolicyEnd,
+)
 
 # The statics that the operator gives an attended episode: the verdict and the item counts. The
 # harness writes the rest.
@@ -44,3 +55,21 @@ ABSENT = Outcome.UNSCORED
 def is_scored(value: str | None) -> bool:
     """True only for a verdict. An absent outcome, `UNSCORED` and `DISCARDED` are not scored."""
     return value in VERDICTS
+
+
+def counted_outcome(static: Mapping[str, object]) -> Outcome:
+    """The outcome that every reader counts for the episode with the statics `static`."""
+    verdict = static.get(OUTCOME)
+    if verdict in VERDICTS or verdict == Outcome.DISCARDED:
+        return Outcome(verdict)
+    if static.get(TERMINATED) is False:
+        return Outcome.OUT_OF_TIME
+    success = static.get(SUCCESS)
+    if isinstance(success, bool):
+        return Outcome.SUCCESS if success else Outcome.FAIL
+    # A policy end that counts as nothing lets a policy keep a failing trial out of its rate.
+    if static.get(ENDED_BY) == ENDED_BY_POLICY and (
+        static.get(POLICY_END) == PolicyEnd.GIVE_UP or static.get(ENV_ENDS_ON_SUCCESS) is True
+    ):
+        return Outcome.FAIL
+    return Outcome.UNSCORED

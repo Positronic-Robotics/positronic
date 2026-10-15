@@ -174,7 +174,11 @@ def remote_embodiment(
         commands=commands,
         # A remote env readies its own robot when it draws the scene; the proxy has no lever of its own
         prepare_handlers={eval_keys.SCENE: proxy.env_reset},
-        static_meta={**signal_meta, **(static_meta or {})},
+        static_meta={
+            **signal_meta,
+            eval_keys.ENV_ENDS_ON_SUCCESS: proxy._adapter.ends_on_success,
+            **(static_meta or {}),
+        },
         meta_source=proxy.robot_meta,
         control_systems=(proxy,),
         simulated=True,

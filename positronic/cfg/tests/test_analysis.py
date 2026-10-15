@@ -73,12 +73,11 @@ def test_ckpt_remote_resolves_lerobot_pretrained_model_path():
 
 @pytest.mark.parametrize('held_ns', [200_000_000, 300_000_000])
 @pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
-def test_success_duration_uses_the_recording_clock(held_ns, timeline):
+def test_success_time_uses_the_recording_clock(held_ns, timeline):
     signal = DummySignal(
         [[0, 0], [100_000_000, 1], [100_000_000 + held_ns, 2]], [0.0, 1.0, 1.0], timelines=(timeline, 'tick')
     )
     episode = EpisodeContainer({'stacking_success': signal})
-    assert analysis.success(episode) == (held_ns >= 250_000_000)
     expected = (100_000_000 + held_ns) / 1e9 if held_ns >= 250_000_000 else None
     assert analysis.success_time(episode) == expected
 
@@ -141,8 +140,11 @@ def test_an_episode_nobody_scored_is_neither_a_success_nor_a_failure(outcome):
     assert analysis.phail_status(failed) == 'Fail'
 
 
-def _attended(outcome: Outcome | None, items: int) -> EpisodeContainer:
-    """A 10 s attended episode that delivered ``items`` of 2, with ``outcome`` in ``eval.outcome``."""
+def _attended(outcome: Outcome | None, items: int | None, **statics: object) -> EpisodeContainer:
+    """A 10 s episode that delivered ``items`` of 2, with ``outcome`` in ``eval.outcome`` and ``statics`` beside it.
+
+    ``items=None`` records no item counts.
+    """
     episode = {
         'state': DummySignal([0, 10_000_000_000], [0, 1], timelines=(HARNESS_WORLD,)),
         'checkpoint': 'test',
@@ -150,9 +152,10 @@ def _attended(outcome: Outcome | None, items: int) -> EpisodeContainer:
         'variant': '',
         'eval.object': 'cup',
         eval_keys.DURATION: 10.0,
-        SUCCESSFUL_ITEMS: items,
-        TOTAL_ITEMS: 2,
+        **statics,
     }
+    if items is not None:
+        episode |= {SUCCESSFUL_ITEMS: items, TOTAL_ITEMS: 2}
     if outcome is not None:
         episode[OUTCOME] = outcome
     container = EpisodeContainer(episode)
@@ -174,16 +177,60 @@ def test_every_aggregate_leaves_out_an_episode_nobody_scored():
     assert (leaderboard['count'], leaderboard['completion'], leaderboard['MTBF']) == (2, 50, 20 / 60)
 
 
-@pytest.mark.parametrize('outcome', [Outcome.DISCARDED, Outcome.UNSCORED])
-def test_an_unscored_outcome_leaves_out_a_sim_episode(outcome):
-    signal = DummySignal([0, 10_000_000_000], [1.0, 1.0], timelines=(HARNESS_WORLD,))
-    sim = {'stacking_success': signal, 'checkpoint': 'test', 'model': 'test'}
-    scored = EpisodeContainer(sim)
-    discarded = EpisodeContainer({**sim, OUTCOME: outcome})
+# The statics of an episode that the policy ended before its time limit, with no verdict.
+GAVE_UP = {
+    eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY,
+    eval_keys.POLICY_END: eval_keys.PolicyEnd.GIVE_UP,
+    eval_keys.TERMINATED: True,
+}
+COMPLETED = {**GAVE_UP, eval_keys.POLICY_END: eval_keys.PolicyEnd.COMPLETE}
 
-    assert analysis.unified_success_bool(discarded) is None
-    assert analysis.scored_episodes([scored, discarded]) == [scored]
-    assert analysis.checkpoint_table().group_fn([scored, discarded])['count'] == 1
+
+def test_a_give_up_counts_as_a_failure_in_every_aggregate_and_adds_no_items():
+    succeeded, gave_up = _attended(Outcome.SUCCESS, 2), _attended(None, None, **GAVE_UP)
+
+    assert analysis.unified_success_bool(gave_up) is False
+    assert analysis.phail_status(gave_up) == 'Fail'
+    checkpoint = analysis.checkpoint_table().group_fn([succeeded, gave_up])
+    assert (checkpoint['count'], checkpoint['failures'], checkpoint['success_rate']) == (2, 1, 100)
+    leaderboard = analysis.phail_leaderboard().group_fn([succeeded, gave_up])
+    assert (leaderboard['count'], leaderboard['completion'], leaderboard['MTBF']) == (2, 100, 20 / 60)
+
+
+def test_a_complete_in_an_env_that_ends_on_success_counts_as_a_failure():
+    completed = _attended(None, None, **COMPLETED, **{eval_keys.ENV_ENDS_ON_SUCCESS: True})
+
+    assert analysis.unified_success_bool(completed) is False
+    assert analysis.phail_status(completed) == 'Fail'
+    assert analysis.checkpoint_table().group_fn([completed])['failures'] == 1
+
+
+def test_a_complete_with_no_other_fact_is_unscored_and_left_out_of_every_aggregate():
+    succeeded, completed = _attended(Outcome.SUCCESS, 2), _attended(None, None, **COMPLETED)
+
+    assert analysis.unified_success_bool(completed) is None
+    assert analysis.phail_status(completed) == analysis.UNSCORED
+    assert analysis.scored_episodes([succeeded, completed]) == [succeeded]
+    assert analysis.checkpoint_table().group_fn([succeeded, completed])['count'] == 1
+
+
+@pytest.mark.parametrize('success', [True, False])
+def test_an_env_report_scores_an_episode_with_no_verdict(success):
+    reported = _attended(None, None, **{eval_keys.SUCCESS: success, eval_keys.TERMINATED: True})
+
+    assert analysis.unified_success_bool(reported) is success
+    assert analysis.scored_episodes([reported]) == [reported]
+
+
+def test_a_stacking_signal_alone_scores_nothing_and_still_shows():
+    signal = DummySignal([0, 10_000_000_000], [1.0, 1.0], timelines=(HARNESS_WORLD,))
+    sim = EpisodeContainer({'stacking_success': signal, 'checkpoint': 'test', 'model': 'test'})
+
+    assert analysis.unified_success_bool(sim) is None
+    assert analysis.scored_episodes([sim]) == []
+    assert analysis.checkpoint_table().group_fn([sim])['count'] == 0
+    assert analysis.max_stacking_success(sim) == 1.0
+    assert analysis.success_time(sim) == 10.0
 
 
 @pytest.mark.parametrize(('outcome', 'signal_value'), [(Outcome.FAIL, 1.0), (Outcome.SUCCESS, 0.0)])
@@ -192,7 +239,6 @@ def test_a_scored_outcome_decides_a_sim_episode_against_its_signal(outcome, sign
     sim = EpisodeContainer({'stacking_success': signal, 'checkpoint': 'test', 'model': 'test', OUTCOME: outcome})
     succeeded = outcome == Outcome.SUCCESS
 
-    assert analysis.success(sim) is not succeeded
     assert analysis.unified_success_bool(sim) is succeeded
     assert analysis.units_sim(sim) == int(succeeded)
     assert analysis.unified_units_display(sim) == str(int(succeeded))

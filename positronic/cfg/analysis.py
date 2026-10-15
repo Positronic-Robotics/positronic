@@ -6,7 +6,7 @@ from functools import partial
 import configuronic as cfn
 import numpy as np
 import pos3
-from eval_vocabulary.outcome import ABSENT, OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, is_scored
+from eval_vocabulary.outcome import SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, counted_outcome, is_scored
 from positronic_model_server import keys as offboard_keys
 
 import positronic.cfg.ds as base_cfg
@@ -152,12 +152,9 @@ def is_sim_episode(ep: Episode) -> bool:
 
 
 def unified_success_bool(ep: Episode) -> bool | None:
-    """Whether the episode succeeded. ``None`` for an episode that nobody scored."""
-    if OUTCOME in ep:
-        return ep[OUTCOME] == Outcome.SUCCESS if is_scored(ep[OUTCOME]) else None
-    if 'stacking_success' in ep:
-        return success(ep)
-    return None
+    """Whether ``counted_outcome`` counts the episode as a success. ``None`` for an episode that it does not score."""
+    outcome = counted_outcome(ep)
+    return outcome == Outcome.SUCCESS if is_scored(outcome) else None
 
 
 def unified_units_display(ep: Episode) -> str:
@@ -241,7 +238,7 @@ def episodes_table():
 
 
 def scored_episodes(episodes: Sequence[Episode]) -> list[Episode]:
-    """The episodes that every aggregate counts: the ones that ``unified_success_bool`` scores."""
+    """The episodes that every aggregate counts: the ones that ``counted_outcome`` scores."""
     return [ep for ep in episodes if unified_success_bool(ep) is not None]
 
 
@@ -267,7 +264,7 @@ def checkpoint_table():
             total_units = sum(ep.get(SUCCESSFUL_ITEMS, 0) for ep in scored)
             total_possible = sum(ep.get(TOTAL_ITEMS, 0) for ep in scored)
             success_rate = 100 * total_units / total_possible if total_possible > 0 else 0
-            failed_count = sum(1 for ep in scored if ep[OUTCOME] != Outcome.SUCCESS)
+            failed_count = sum(1 for ep in scored if not unified_success_bool(ep))
 
         return {
             'checkpoint': episodes[0]['checkpoint'],
@@ -309,38 +306,6 @@ def max_stacking_success(episode: Episode) -> float | None:
     if len(success_signal) == 0:
         return None
     return max(v for v, _ in success_signal)
-
-
-def success(episode: Episode, score_threshold: float = 0.95) -> bool:
-    """Check if stacking_success reached score_threshold and stayed there for at least 0.5 seconds."""
-    if 'stacking_success' not in episode:
-        return False
-    success_signal = episode['stacking_success']
-    if len(success_signal) == 0:
-        return False
-
-    threshold_ns = int(0.25 * 1e9)  # 0.25 seconds in nanoseconds
-
-    in_success = False
-    success_start_ts = None
-    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-    timeline = next(
-        (name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in success_signal.timelines), RECORDED_TIME
-    )
-
-    for value, timestamps in success_signal:
-        timestamp = timestamps[timeline]
-        if value >= score_threshold:
-            if not in_success:
-                in_success = True
-                success_start_ts = timestamp
-            elif timestamp - success_start_ts >= threshold_ns:
-                return True
-        else:
-            in_success = False
-            success_start_ts = None
-
-    return False
 
 
 def success_time(episode: Episode, score_threshold: float = 0.95) -> float | None:
@@ -645,7 +610,7 @@ def phail_model(ep: Episode) -> str:
 
 
 def phail_status(ep: Episode) -> str:
-    outcome = ep.get(OUTCOME, ABSENT)
+    outcome = counted_outcome(ep)
     if not is_scored(outcome):
         return UNSCORED
     if outcome == Outcome.SUCCESS:
@@ -943,8 +908,8 @@ def phail_leaderboard():
         object_completions = []
         for obj_eps in by_object.values():
             obj_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in obj_eps)
-            obj_items = sum(ep[SUCCESSFUL_ITEMS] for ep in obj_eps)
-            obj_possible = sum(ep[TOTAL_ITEMS] for ep in obj_eps)
+            obj_items = sum(ep.get(SUCCESSFUL_ITEMS, 0) for ep in obj_eps)
+            obj_possible = sum(ep.get(TOTAL_ITEMS, 0) for ep in obj_eps)
             if obj_duration > 0:
                 object_uphs.append(obj_items / (obj_duration / 3600))
             if obj_possible > 0:
