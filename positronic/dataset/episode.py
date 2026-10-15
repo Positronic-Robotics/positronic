@@ -128,6 +128,10 @@ class Episode(ABC, Mapping[str, Any]):
         validate_timelines(timelines)
         return {name: signal for name, signal in self.signals.items() if set(timelines).issubset(signal.timelines)}
 
+    def _signal_bounds_on(self, timelines: tuple[str, ...]) -> list[TimeBounds[Time]]:
+        """The bounds of each signal that has every one of `timelines`."""
+        return [signal.bounds(timelines) for signal in self._signals_on(timelines).values()]
+
     @overload
     def bounds(self, timelines: str) -> TimeBounds[int]: ...
 
@@ -137,7 +141,7 @@ class Episode(ABC, Mapping[str, Any]):
     def bounds(self, timelines: str | tuple[str, ...]) -> TimeBounds[int] | TimeBounds[Time]:
         """Coordinatewise latest starts and finishes of signals on every selected timeline."""
         names = (timelines,) if isinstance(timelines, str) else timelines
-        bounds = [signal.bounds(names) for signal in self._signals_on(names).values()]
+        bounds = self._signal_bounds_on(names)
         if not bounds:
             raise ValueError('Episode has no signals on the requested timelines')
         start = Time(**{name: max(bound.start[name] for bound in bounds) for name in names})
