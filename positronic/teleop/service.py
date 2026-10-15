@@ -6,9 +6,12 @@ of the run and the state of the trial. The teleoperator uses the buttons of the 
 
 import asyncio
 import logging
+import os
+import stat
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Coroutine, Iterator, Sequence
+from concurrent.futures import Future
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -25,7 +28,7 @@ from positronic_wire.wire import PeerDisconnected
 import pimm
 import positronic.cfg.webxr
 from positronic import geom
-from positronic.drivers.webxr import WebXR
+from positronic.drivers.webxr import RIGHT, WebXR
 
 from .session import (
     ATTEMPT_STARTED,
@@ -67,38 +70,42 @@ class ButtonMap:
         # The buttons whose press did something already, until they go up.
         self._used: set[int] = set()
 
-    def _pressed(self, buttons: Sequence[float], now_ns: int) -> set[int]:
+    def _new_presses(self, buttons: Sequence[float], now_ns: int) -> set[int]:
         """Record the state of the buttons, and return the buttons that went down since the previous sample."""
-        pressed = set()
+        new_presses = set()
         for button in (_STICK, _A, _B):
             if buttons[button] < _PRESSED:
                 self._down_since.pop(button, None)
                 self._used.discard(button)
             elif button not in self._down_since:
                 self._down_since[button] = now_ns
-                pressed.add(button)
-        return pressed
+                new_presses.add(button)
+        return new_presses
+
+    def observe(self, buttons: Sequence[float], now_ns: int) -> None:
+        """Record the state of the buttons, outside a trial. A button that is down here does not press in the next."""
+        self._used.update(self._new_presses(buttons, now_ns))
 
     def _is_held(self, button: int, now_ns: int) -> bool:
         since = self._down_since.get(button)
         return since is not None and button not in self._used and now_ns - since >= self._hold_ns
 
     def ready_reply(self, buttons: Sequence[float], now_ns: int) -> Reply | None:
-        pressed = self._pressed(buttons, now_ns)
-        if _B in pressed:
+        new_presses = self._new_presses(buttons, now_ns)
+        if _B in new_presses:
             self._used.add(_B)
             return Reply.READY
-        if _STICK in pressed:
+        if _STICK in new_presses:
             self._used.add(_STICK)
             return Reply.CANCELLED
         return None
 
     def events(self, buttons: Sequence[float], now_ns: int, attempt_started: bool) -> list[Event]:
-        pressed = self._pressed(buttons, now_ns)
+        new_presses = self._new_presses(buttons, now_ns)
         events = []
-        if _A in pressed:
+        if _A in new_presses:
             events.append(Event.CLUTCH)
-        if _B in pressed and not attempt_started:
+        if _B in new_presses and not attempt_started:
             self._used.add(_B)
             events.append(Event.START_TASK)
         # Complete comes only after Start task.
@@ -124,15 +131,6 @@ class Phase(Enum):
     ENDED = auto()
 
 
-@dataclass(frozen=True)
-class _Sample:
-    """What the headset sent last, and its number in the order of the samples."""
-
-    number: int
-    pose: geom.Transform3D | None
-    buttons: Sequence[float] | None
-
-
 _VIEW_SHAPE = (480, 640, 3)
 
 
@@ -146,6 +144,26 @@ def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
     return view
 
 
+def _check_private_directory(directory: Path) -> None:
+    """Create ``directory`` for this user only, or check that it is private to this user.
+
+    Any account that can write to the directory of the socket can bind the socket first, and get the sessions.
+    """
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    mode = directory.stat()
+    if mode.st_uid != os.getuid() or stat.S_IMODE(mode.st_mode) & 0o077:
+        raise PermissionError(f'{directory} must belong to this user, with no access for others (mode 700)')
+
+
+@dataclass(frozen=True)
+class _Sample:
+    """What the headset sent last, and its number in the order of the samples."""
+
+    number: int
+    pose: geom.Transform3D | None
+    buttons: Sequence[float] | None
+
+
 class TeleopService:
     """Serve one ``TeleopPolicy`` session at a time on the Unix socket ``uds``.
 
@@ -155,6 +173,7 @@ class TeleopService:
     """
 
     def __init__(self, uds: Path, ready_limit: float, silence_limit: float, hold_sec: float):
+        self._uds = uds
         self._ready_limit = ready_limit
         self._silence_limit = silence_limit
         self._buttons = ButtonMap(hold_sec)
@@ -166,38 +185,60 @@ class TeleopService:
         self._events: list[Event] = []
         self._display: dict[str, Any] = {}
         self._open = False
+        # A wait ends at once when its session ended, or when the service stops.
+        self._session_ended = False
+        self._stopping = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
 
     def __enter__(self) -> 'TeleopService':
-        started = threading.Event()
+        _check_private_directory(self._uds.parent)
+        started: Future[None] = Future()
 
         async def serve() -> None:
             self._loop = asyncio.get_running_loop()
-            await self._wire.start(self._session, lambda: None, lambda _headers: True)
-            started.set()
+            try:
+                await self._wire.start(self._session, lambda: None, lambda _headers: True)
+            except BaseException as failed:
+                started.set_exception(failed)
+                raise
+            started.set_result(None)
             await self._wire.serve()
 
         self._thread = threading.Thread(target=asyncio.run, args=(serve(),), name='teleop-service', daemon=True)
         self._thread.start()
-        if not started.wait(timeout=10):
-            raise RuntimeError('the teleop service did not start')
+        started.result(timeout=10)
         return self
 
     def __exit__(self, *exc: object) -> None:
         assert self._loop is not None and self._thread is not None
+        with self._changed:
+            self._stopping = True
+            self._changed.notify_all()
         asyncio.run_coroutine_threadsafe(self._wire.stop(), self._loop).result(timeout=10)
         self._thread.join(timeout=10)
+
+    def _end_session(self) -> None:
+        with self._changed:
+            self._session_ended = True
+            self._changed.notify_all()
+
+    def _waits_must_end(self) -> bool:
+        return self._session_ended or self._stopping
 
     def take_sample(self, pose: geom.Transform3D | None, buttons: Sequence[float] | None) -> None:
         """Take one sample of the right controller. ``None`` is a part that the headset does not track."""
         now_ns = time.monotonic_ns()
         with self._changed:
             self._sample = _Sample(self._sample.number + 1, pose, buttons)
-            if buttons is not None and self._phase is Phase.READY_WAIT and self._ready is None:
+            if buttons is None:
+                pass
+            elif self._phase is Phase.READY_WAIT and self._ready is None:
                 self._ready = self._buttons.ready_reply(buttons, now_ns)
-            elif buttons is not None and self._phase is Phase.RUNNING:
+            elif self._phase is Phase.RUNNING:
                 self._events += self._buttons.events(buttons, now_ns, bool(self._display.get(ATTEMPT_STARTED)))
+            else:
+                self._buttons.observe(buttons, now_ns)
             self._changed.notify_all()
 
     @property
@@ -226,6 +267,9 @@ class TeleopService:
             self._phase, self._ready, self._events, self._display = Phase.READY_WAIT, None, [], {}
             while self._ready is None:
                 left = deadline - time.monotonic()
+                if self._waits_must_end():
+                    self._phase = Phase.IDLE
+                    return {KIND: Reply.ERROR, MESSAGE: 'the teleop service ended the session'}
                 if left <= 0:
                     self._phase = Phase.IDLE
                     return {KIND: Reply.ERROR, MESSAGE: f'the teleoperator was not ready within {self._ready_limit} s'}
@@ -238,7 +282,9 @@ class TeleopService:
         with self._changed:
             self._display = display
             seen = self._sample.number
-            while self._sample.number == seen and (left := deadline - time.monotonic()) > 0:
+            while (
+                self._sample.number == seen and not self._waits_must_end() and (left := deadline - time.monotonic()) > 0
+            ):
                 self._changed.wait(left)
             sample = self._sample if self._sample.number != seen else _Sample(seen, None, None)
             events, self._events = self._events, []
@@ -258,6 +304,8 @@ class TeleopService:
             await connection.refuse('the teleop service serves one session at a time')
             return
         self._open = True
+        with self._changed:
+            self._session_ended = False
         try:
             await self._serve(connection)
         finally:
@@ -271,13 +319,34 @@ class TeleopService:
             try:
                 request = deserialise(await connection.receive())
             except PeerDisconnected:
-                return  # The policy closed its session: its episode ended.
+                return  # The policy closed its end of the session.
             match Request(request[KIND]):
                 case Request.READY:
-                    reply = await asyncio.to_thread(self._await_ready)
+                    reply = await self._unless_disconnected(connection, asyncio.to_thread(self._await_ready))
                 case Request.FRAME:
                     reply = await asyncio.to_thread(self._next_frame, request[DISPLAY])
+            if reply is None:
+                return
             await connection.send(serialise(reply))
+
+    async def _unless_disconnected(
+        self, connection: server_wire.ServerConnection, wait: Coroutine[Any, Any, dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """The answer of ``wait``, or ``None`` when the policy disconnects or sends again first.
+
+        The policy sends nothing while it waits for an answer, so a message then is a protocol error, and the session
+        ends.
+        """
+        answer = asyncio.ensure_future(wait)
+        peer = asyncio.ensure_future(connection.receive())
+        await asyncio.wait({answer, peer}, return_when=asyncio.FIRST_COMPLETED)
+        if answer.done():
+            peer.cancel()
+            return answer.result()
+        peer.exception()
+        self._end_session()
+        await answer
+        return None
 
 
 class _Headset(pimm.ControlSystem):
@@ -296,8 +365,8 @@ class _Headset(pimm.ControlSystem):
             positions = pimm.read_updated(self.controller_positions)
             if positions is not None:
                 buttons = self.buttons.read()
-                right = None if buttons is None else buttons.data['right']
-                self._service.take_sample(positions.data['right'], right)
+                right = None if buttons is None else buttons.data[RIGHT]
+                self._service.take_sample(positions.data[RIGHT], right)
             self.view.emit(self._service.view())
             yield pimm.Sleep(self.VIEW_PERIOD_SEC)
 

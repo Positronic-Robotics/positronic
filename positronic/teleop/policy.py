@@ -20,6 +20,10 @@ from .session import ATTEMPT_STARTED, CONTROL, IMAGE, TASK, Event, Frame, Teleop
 _IDLE_NS = 1_000_000_000
 
 
+def _robot_pose(obs: Mapping[str, Any]) -> geom.Transform3D:
+    return geom.Transform3D.from_vector(np.asarray(obs[keys.EE_POSE], dtype=float), geom.Rotation.Representation.QUAT)
+
+
 # HACK: The run reads wall time, so it learns whether its clock is simulated. A person needs the episode clock to run
 #  with the wall clock, as a charged sim clock does.
 # TODO: Let a policy state that it needs a charged clock, and let `eval run` refuse an uncharged run for it.
@@ -40,10 +44,6 @@ class _MovingClock:
             raise RuntimeError(
                 'the episode clock stands still while a person waits: run the sim with charged inference time'
             )
-
-
-def _robot_pose(obs: Mapping[str, Any]) -> geom.Transform3D:
-    return geom.Transform3D.from_vector(np.asarray(obs[keys.EE_POSE], dtype=float), geom.Rotation.Representation.QUAT)
 
 
 class TeleopPolicy(Policy):

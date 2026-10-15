@@ -30,10 +30,14 @@ _LOG_CONFIG = {
 }
 
 
+# The names of the controllers in the positions and the buttons that ``WebXR`` emits.
+LEFT, RIGHT = 'left', 'right'
+
+
 def _parse_controller_data(data: dict):
-    controller_positions = {'left': None, 'right': None}
-    buttons_dict = {'left': None, 'right': None}
-    for side in ['right', 'left']:
+    controller_positions = {LEFT: None, RIGHT: None}
+    buttons_dict = {LEFT: None, RIGHT: None}
+    for side in [RIGHT, LEFT]:
         if data['controllers'][side] is not None:
             translation = np.array(data['controllers'][side]['position'], dtype=np.float64)
             rotation = np.array(data['controllers'][side]['orientation'], dtype=np.float64)
@@ -147,12 +151,8 @@ class WebXR(pimm.ControlSystem):
             return None
         return msg
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        app = FastAPI()
-
-        def encode_frame(encoder: turbojpeg.TurboJPEG, image):
-            buffer = encoder.encode(image, quality=50)
-            return base64.b64encode(buffer).decode('utf-8')
+    def _add_page_routes(self, app: FastAPI) -> None:
+        """The page and its scripts, from the package assets."""
 
         @app.get('/')
         async def root():
@@ -179,6 +179,13 @@ class WebXR(pimm.ControlSystem):
             async def video_player():
                 return FileResponse(utils.package_assets_path('assets/webxr/video-player.js'))
 
+    def _add_video_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
+        """``/video``: each new frame as base64 JPEG."""
+
+        def encode_frame(encoder: turbojpeg.TurboJPEG, image):
+            buffer = encoder.encode(image, quality=50)
+            return base64.b64encode(buffer).decode('utf-8')
+
         @app.websocket('/video')
         async def video_stream(websocket: WebSocket):
             await websocket.accept()
@@ -204,6 +211,9 @@ class WebXR(pimm.ControlSystem):
             finally:
                 logger.info('Video WebSocket connection closed')
 
+    def _add_controller_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
+        """``/ws``: the controller stream from the page."""
+
         @app.websocket('/ws')
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
@@ -221,9 +231,9 @@ class WebXR(pimm.ControlSystem):
                             if transform is not None:
                                 controller_positions[side].translation *= self.sensitivity
 
-                        if controller_positions['left'] is not None or controller_positions['right'] is not None:
+                        if controller_positions[LEFT] is not None or controller_positions[RIGHT] is not None:
                             self.controller_positions.emit(controller_positions)
-                        if buttons['left'] is not None or buttons['right'] is not None:
+                        if buttons[LEFT] is not None or buttons[RIGHT] is not None:
                             self.buttons.emit(buttons)
                         fps.tick()
                     except TimeoutError:
@@ -235,6 +245,7 @@ class WebXR(pimm.ControlSystem):
             except Exception as e:
                 logger.error(f'WebSocket error: {e}')
 
+    def _server(self, app: FastAPI) -> uvicorn.Server:
         ssl_kwargs = {}
         if self.use_https:
             keyfile, certfile = _get_or_create_ssl_files(
@@ -242,7 +253,14 @@ class WebXR(pimm.ControlSystem):
             )
             ssl_kwargs = {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
         config = uvicorn.Config(app, host='0.0.0.0', port=self.port, log_config=_LOG_CONFIG, **ssl_kwargs)
-        server = uvicorn.Server(config)
+        return uvicorn.Server(config)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        app = FastAPI()
+        self._add_page_routes(app)
+        self._add_video_route(app, should_stop)
+        self._add_controller_route(app, should_stop)
+        server = self._server(app)
         self.server_thread = threading.Thread(target=server.run, daemon=True)
         self.server_thread.start()
 

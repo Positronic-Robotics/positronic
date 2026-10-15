@@ -1,3 +1,4 @@
+import os
 import tempfile
 import threading
 import time
@@ -6,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pos3
 import pytest
+from positronic_model_server.serialization import serialise
+from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, PeerDisconnected, UnixSocketAddress
 
 import positronic.cfg.simulator
@@ -305,3 +308,62 @@ def test_a_person_completes_a_trial_on_mujoco_franka(service, socket_path, tmp_p
     assert episode.static[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
     assert f'{policy_keys.POLICY_META}.{policy_keys.ATTEMPT_START_NS}' in episode.static
     assert keys.TARGET_EE_POSE in episode.signals
+
+
+class TestButtonsBetweenTrials:
+    def test_a_button_released_after_the_trial_presses_again_in_the_next(self):
+        buttons = ButtonMap(HOLD_SEC)
+        buttons.events(_buttons(b=1.0), 0, True)
+        assert buttons.events(_buttons(b=1.0), 500_000_000, True) == [session.Event.COMPLETE]
+        buttons.observe(_buttons(), 600_000_000)
+        assert buttons.ready_reply(_buttons(b=1.0), 700_000_000) is session.Reply.READY
+
+    def test_a_button_held_from_the_last_trial_is_no_ready(self):
+        buttons = ButtonMap(HOLD_SEC)
+        buttons.observe(_buttons(b=1.0), 0)
+        assert buttons.ready_reply(_buttons(b=1.0), 100_000_000) is None
+
+
+def test_a_policy_that_stops_waiting_for_ready_releases_the_session(socket_path, runtime):
+    with TeleopService(socket_path, ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC) as service:
+        with pytest.raises(TimeoutError):
+            runtime.start(_policy(socket_path, ready_timeout=0.2))
+        _until_phase(service, Phase.IDLE)
+        with _Headset(service) as headset:
+            run = _readied_run(service, headset, runtime, socket_path)
+            run.close()
+
+
+def test_a_stop_of_the_service_ends_its_waits(socket_path):
+    service = TeleopService(socket_path, ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC)
+    with service:
+        connection = registry.client_wire('websocket_unix').dial(
+            UnixSocketAddress(socket_path, SESSION_PATH, ''), None, 5
+        )
+        connection.send(serialise({session.KIND: session.Request.READY}))
+        _until_phase(service, Phase.READY_WAIT)
+        stopped_at = time.monotonic()
+    assert time.monotonic() - stopped_at < 5
+    connection.close()
+
+
+def test_a_service_that_cannot_bind_raises_the_cause_at_once(tmp_path):
+    started_at = time.monotonic()
+    with pytest.raises(OSError, match='too long'):
+        with TeleopService(tmp_path / ('x' * 120) / 'teleop.sock', 1.0, 0.1, HOLD_SEC):
+            pass
+    assert time.monotonic() - started_at < 5
+
+
+def test_a_socket_directory_that_others_can_open_is_refused(tmp_path):
+    shared = tmp_path / 'shared'
+    shared.mkdir(mode=0o755)
+    shared.chmod(0o755)
+    with pytest.raises(PermissionError, match='mode 700'):
+        with TeleopService(shared / 'teleop.sock', 1.0, 0.1, HOLD_SEC):
+            pass
+
+
+def test_the_default_socket_with_no_runtime_directory_is_in_a_directory_of_the_user(monkeypatch):
+    monkeypatch.delenv('XDG_RUNTIME_DIR', raising=False)
+    assert session.default_socket_path().parent.name == f'positronic-{os.getuid()}'
