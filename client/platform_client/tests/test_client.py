@@ -801,6 +801,17 @@ def test_create_submission_posts_a_whole_plan_and_parses_the_id():
     assert body['episodes_per_endpoint'] == 10 and body['transaction_key'] is None
 
 
+def test_create_submission_sends_the_session_limit_a_remote_endpoint_states():
+    gateway = Gateway(200, {'submission_id': '2a', 'status': 'pending'})
+    plan = EvalPlan.model_validate({
+        **PLAN.model_dump(),
+        'endpoints': [{**PLAN.endpoints[0].model_dump(), 'max_concurrent_sessions': 1}],
+    })
+    make_client(gateway).create_submission(plan)
+
+    assert gateway.body()['endpoints'][0]['max_concurrent_sessions'] == 1
+
+
 def test_a_run_carries_its_episode_counts_into_the_view():
     gateway = Gateway(
         200,

@@ -13,7 +13,7 @@ the eval names and definitions (`evals/`). So a service that only speaks to the 
 its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.34.0"
+uv add "positronic-platform-client==0.35.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -181,6 +181,11 @@ Each kind carries its own locator:
 
 - A record carries no URL. A `url` field is refused. A scheme in `host` is refused.
 - The kinds refuse each other's fields. An entry carries one answer to each question.
+
+A `remote` endpoint may state `max_concurrent_sessions`, an integer of 1 or more. The platform then
+holds at most that many sessions open to the policy at once. A server that serves one session at a
+time states 1. With no value, the platform picks the count. Only an entry that names its `address`
+states it: a label on a task takes the value of the plan endpoint it names.
 
 Each address field holds one grammar. The wire writes each value into what it dials with no change,
 so the grammar admits only a value the wire can write as it is:
