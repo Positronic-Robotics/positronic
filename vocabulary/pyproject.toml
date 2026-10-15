@@ -2,8 +2,8 @@
 name = "positronic-eval-vocabulary"
 # The words an attended rollout records. Bumped by the change that edits this distribution, so a
 # consumer pinning it can say which words it was written against.
-version = "0.5.0"
-description = "The vocabulary an attended rollout records and the rule that counts an episode: the verdict, the policy end and the progress ladder"
+version = "0.4.0"
+description = "The vocabulary an attended rollout records: the operator's verdict and the progress ladder"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
