@@ -410,6 +410,7 @@ class LLMPolicy(Policy):
                         index += 1
                         due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
                     obs = yield Step(commands, due_ns)
+            # TODO: Return `PolicyEnd.COMPLETE` after `Finish`.
             while True:
                 yield Step({}, runtime.time_ns + 1_000_000_000)
 
