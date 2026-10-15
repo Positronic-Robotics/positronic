@@ -75,8 +75,13 @@ export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 ### Enter the competition
 
-Read the [terms](https://competition.phail.ai/terms). The command shows their link and their version,
-and what becomes public. With `--accept-terms`, you accept the terms for your team, and your team enters.
+Read the [terms](https://competition.phail.ai/terms). You can enter in your browser or with a command.
+Both enter the same team, so do one of the two.
+
+- In your browser, open the [entry page](https://physical-ai-competition.positronic.ro/enter). Sign in
+  with the GitHub account that you used for `platform-register`, and accept the terms.
+- With the command, `competition-enter` shows the link and the version of the terms, and what becomes
+  public. With `--accept-terms`, you accept the terms for your team, and your team enters.
 
 ```bash
 competition-enter
@@ -171,6 +176,10 @@ positronic eval run --eval=<eval> \
 positronic eval status --id=<submission id>
 positronic eval list
 ```
+
+Your submissions also show in your browser: the
+[account page](https://physical-ai-competition.positronic.ro/enter/account) shows the status of each one.
+Sign in with the same GitHub account.
 
 - Pin the image by its digest. A tag can move to an image that you did not test.
 - Reuse the transaction key only to retry the same submission. The same key returns the same submission,
