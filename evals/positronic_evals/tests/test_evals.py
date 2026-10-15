@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
-
 import pytest
 from positronic_evals.evals import (
     MOLMO_CONFIG,
@@ -13,7 +11,6 @@ from positronic_evals.evals import (
     EvalRef,
     public_eval,
 )
-from positronic_evals.molmo_spaces import RIGHT_VIEW_BLOCKED_PATH, read_episode_list
 from pydantic import ValidationError
 
 
@@ -95,17 +92,3 @@ def test_a_definition_refuses_a_field_no_run_can_use(change: dict):
 
     with pytest.raises(ValidationError):
         EvalDefinition.model_validate({**stated, **change})
-
-
-# The four arguments that name a MolmoSpaces benchmark, in the order of its path below the asset packs.
-_BENCHMARK_ARGS = ('suite', 'scene_dataset', 'task_config', 'benchmark')
-
-
-@pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == MOLMO_CONFIG])
-def test_no_molmo_definition_pins_an_episode_the_right_view_list_blocks(name: EvalRef):
-    definition = public_eval(name)
-    benchmark = PurePosixPath(*(str(definition.args[arg]) for arg in _BENCHMARK_ARGS))
-    episodes = definition.args['episodes']
-    assert isinstance(episodes, list)
-
-    assert not set(episodes) & read_episode_list(RIGHT_VIEW_BLOCKED_PATH).get(benchmark, frozenset())
