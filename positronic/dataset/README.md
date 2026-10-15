@@ -57,7 +57,7 @@ __Dataset__ – ordered collection of Episodes with sequence-style access (index
 A dataset read composes up to four layers, all behind the same `Dataset`/`Episode` interface:
 
 1. **Storage backends** read immutable recordings — `LocalDataset` (the native on-disk format), `RemoteDataset` (HTTP). The API is deliberately format-agnostic so further formats can plug in as read adapters.
-2. **Edits** persist post-hoc facts (operator verdicts, analysis scores) as a declarative log applied as a view — see [Editing datasets](#editing-datasets).
+2. **Edits** persist post-hoc facts (judges' verdicts, analysis scores) as a declarative log applied as a view — see [Editing datasets](#editing-datasets).
 3. **Transforms** are lazy compute views (derived signals, renames, model codecs) — see [Transforms](#transforms).
 4. **Consumers** — training pipelines, viewers, converters — work against the interface and don't know which layers sit underneath.
 
@@ -324,13 +324,13 @@ with dataset_writer.new_episode() as episode:
 
 ### Editing datasets
 
-Recorded episodes are immutable. Post-hoc facts — an operator's verdict, analysis scores — are *edits*: declarative records appended to `edits.jsonl` in the episode's own directory and applied as a view on load. The edit layer lives in `positronic.dataset.edits`.
+Recorded episodes are immutable. Post-hoc facts — a judge's verdict, analysis scores — are *edits*: declarative records appended to `edits.jsonl` in the episode's own directory and applied as a view on load. The edit layer lives in `positronic.dataset.edits`.
 
 ```python
 from positronic.dataset.local_dataset import load_dataset
 
 ds = load_dataset(root)  # an EditedDataset: LocalDataset(root) with the edit logs applied
-ds = ds.set_static(episode.meta['uid'], {'eval.outcome': 'success', 'notes': 'clean run'})
+ds = ds.set_static(episode.meta['uid'], {'eval.outcome': 'Success', 'notes': 'clean run'})
 ds = ds.drop(bad_episode.meta['uid'])  # remove from the view; the recording stays on disk
 ```
 

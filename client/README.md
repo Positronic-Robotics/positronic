@@ -13,7 +13,7 @@ The library depends on `pydantic`, `httpx`, `typing-extensions`, `pyarrow` and
 installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.32.0"
+uv add "positronic-platform-client==0.33.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -325,7 +325,12 @@ as failures. No file holds a score: a score is a function of the labels.
 `PUBLIC_LABELERS` holds the labelers that this package publishes, `molmo` and `robolab`. A caller with
 labelers of its own passes `label` a table that holds them beside `PUBLIC_LABELERS`. The MolmoSpaces
 labeler takes the end of a trial from the episode's signal files: the time from the first sample to
-the last, on the world clock. That time can exceed the trial by up to one control step.
+the last, on the world clock. That time can exceed the trial by up to one control step. It takes the
+outcome from `eval_vocabulary.outcome.counted_outcome`, so it and every other reader count one
+recording the same way. `Success`, `Ran out of time` and `Safety` give `success`, `out_of_time` and
+`safety`. `Fail` and `System` give `fail`. An episode that is `UNSCORED` or `Discarded` has no label.
+Both labelers read the statics with the edits of the episode's own edit log over them, so a verdict
+that a console gave after the recording closed counts. An episode that the log drops has no label.
 
 The RoboLab labeler reads the end of a trial in the same way. Its task is the task id that RoboLab
 names, and not the instruction. It also reads the `subtask` signal, which RoboLab records at each

@@ -76,6 +76,7 @@
             <button class="btn btn-fail" id="finish-fail" type="button" disabled>
               <svg class="i" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Finish <small>· fail</small>
             </button>
+            <button class="btn btn-discard" id="discard" type="button" disabled>Discard</button>
           </div>
         </div>
       </section>
@@ -87,11 +88,11 @@
         </div>
         <div class="ep-empty" id="ep-empty">
           <div class="big">No episodes yet</div>
-          Start records an episode with the instruction on the left. Finish it with a verdict.
+          Start records an episode with the instruction on the left. Finish it with a verdict, or discard it.
         </div>
         <ol class="ep-list" id="ep-list"></ol>
         <div class="ep-legend" id="ep-legend" hidden>
-          <span><span class="tag">override</span>the operator changed the instruction for this episode</span>
+          <span><span class="tag">override</span>the judge changed the instruction for this episode</span>
         </div>
       </section>
     </main>

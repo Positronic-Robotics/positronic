@@ -1,14 +1,18 @@
 import itertools
+from collections.abc import Callable
 
 import pytest
+from eval_vocabulary.outcome import OUTCOME, Outcome
 
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.gui import station as station_module
-from positronic.gui.station import Outcome, Phase, Refused, Station, outcome_of, terminal_payload
+from positronic.gui.station import Phase, Refused, Station, Unrecorded, outcome_of, terminal_payload
+from positronic.policy.harness import EpisodeEnd
 
 CONFIGURED = 'put the cup in the tote'
 OVERRIDE = 'put the red cup in the grey tote'
+UID = 'recording-1'
 
 
 def _trials(instruction: str = CONFIGURED):
@@ -17,23 +21,46 @@ def _trials(instruction: str = CONFIGURED):
     return lambda: Task(instruction_source=instruction, timeout_sec=None, meta={'draw': next(draws)})
 
 
+class _Recordings:
+    """The outcomes that a station writes into recordings, by uid."""
+
+    def __init__(self):
+        self.written: list[tuple[str, Outcome]] = []
+
+    def __call__(self, uid: str, outcome: Outcome) -> None:
+        self.written.append((uid, outcome))
+
+
+def _station(trials=None, recordings: Callable[[str, Outcome], None] | None = None) -> Station:
+    return Station(trials or _trials(), recordings or _Recordings())
+
+
+def _judged(judgement, uid: str | None = UID) -> EpisodeEnd:
+    """The harness's answer to an episode that the judge ended with ``judgement``."""
+    return EpisodeEnd({**terminal_payload(judgement), eval_keys.TERMINATED: True}, uid)
+
+
+POLICY_END = EpisodeEnd({eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.TERMINATED: True}, UID)
+TIMED_OUT = EpisodeEnd({eval_keys.TERMINATED: False}, UID)
+
+
 def test_start_sends_the_trial_drawn_before_it_and_draws_the_next():
-    station = Station(_trials())
+    station = _station()
     task = station.start(now=10.0)
     assert task.instruction == CONFIGURED
     assert task.meta == {'draw': 0, eval_keys.TRIAL_INDEX: 0, eval_keys.INSTRUCTION_OVERRIDDEN: False}
-    station.close(Outcome.PASS, now=12.0)
+    station.close(_judged(Outcome.SUCCESS), now=12.0)
     assert station.start(now=20.0).meta['draw'] == 1
 
 
 def test_an_override_replaces_the_instruction_until_it_is_reset():
-    station = Station(_trials())
+    station = _station()
     station.set_override(OVERRIDE)
     for now in (1.0, 2.0):
         task = station.start(now)
         assert task.instruction == OVERRIDE
         assert task.meta[eval_keys.INSTRUCTION_OVERRIDDEN] is True
-        station.close(Outcome.PASS, now + 0.5)
+        station.close(_judged(Outcome.SUCCESS), now + 0.5)
     assert station.view(now=3.0).override_since == 1
 
     station.set_override(None)
@@ -43,16 +70,16 @@ def test_an_override_replaces_the_instruction_until_it_is_reset():
 
 
 def test_the_configured_text_is_no_override():
-    station = Station(_trials())
+    station = _station()
     station.set_override(CONFIGURED)
     assert station.view(now=0.0).override is None
 
 
 def test_a_changed_override_has_no_episode_until_one_sends_it():
-    station = Station(_trials())
+    station = _station()
     station.set_override(OVERRIDE)
     station.start(now=1.0)
-    station.close(Outcome.FAIL, now=2.0)
+    station.close(_judged(Outcome.FAIL), now=2.0)
     station.set_override('another text')
     assert station.view(now=3.0).override_since is None
     station.start(now=4.0)
@@ -60,53 +87,54 @@ def test_a_changed_override_has_no_episode_until_one_sends_it():
 
 
 def test_the_instruction_is_locked_while_an_episode_runs():
-    station = Station(_trials())
+    station = _station()
     station.start(now=1.0)
     with pytest.raises(Refused, match='locked'):
         station.set_override(OVERRIDE)
 
 
 def test_each_attempt_takes_the_next_number():
-    station = Station(_trials())
-    for outcome in (Outcome.FAIL, Outcome.PASS):
+    station = _station()
+    for judgement in (Outcome.FAIL, Outcome.SUCCESS):
         station.start(now=1.0)
-        station.end(outcome)
-        station.close(outcome, now=2.0)
+        station.end(judgement)
+        station.close(_judged(judgement), now=2.0)
     task = station.start(now=3.0)
     assert task.meta[eval_keys.TRIAL_INDEX] == 2
     assert [episode.number for episode in station.view(now=4.0).episodes] == [1, 2, 3]
 
 
-def test_the_phase_follows_start_verdict_and_answer():
-    station = Station(_trials())
+def test_the_phase_follows_start_judgement_and_answer():
+    station = _station()
     assert station.view(now=0.0).phase is Phase.READY
     station.start(now=1.0)
     assert station.view(now=1.5).phase is Phase.RUNNING
-    station.end(Outcome.PASS)
+    station.end(Outcome.SUCCESS)
     assert station.view(now=2.0).phase is Phase.ENDING
-    station.close(Outcome.PASS, now=2.5)
+    station.close(_judged(Outcome.SUCCESS), now=2.5)
     view = station.view(now=3.0)
     assert view.phase is Phase.READY
     assert (view.episodes[0].started_at, view.episodes[0].ended_at) == (1.0, 2.5)
 
 
 def test_a_failed_episode_keeps_its_error_and_the_next_start_opens_the_next_episode():
-    station = Station(_trials())
+    station = _station()
     station.start(now=1.0)
-    station.close(Outcome.ERROR, now=2.0, error='RuntimeError: the arm stopped short of its target')
+    station.fail('RuntimeError: the arm stopped short of its target', now=2.0)
     view = station.view(now=3.0)
     assert view.phase is Phase.READY
+    assert view.episodes[0].outcome is Unrecorded.ERROR
     assert view.episodes[0].error == 'RuntimeError: the arm stopped short of its target'
     assert station.start(now=4.0).meta[eval_keys.TRIAL_INDEX] == 1
 
 
 def test_the_run_ends_only_after_the_open_episode_and_then_takes_no_start():
-    station = Station(_trials())
+    station = _station()
     station.start(now=1.0)
     with pytest.raises(Refused, match='finish the episode first'):
         station.end_run()
     assert not station.run_ended
-    station.close(Outcome.PASS, now=2.0)
+    station.close(_judged(Outcome.SUCCESS), now=2.0)
     station.end_run()
     assert station.run_ended
     assert station.view(now=3.0).phase is Phase.RUN_ENDED
@@ -114,23 +142,204 @@ def test_the_run_ends_only_after_the_open_episode_and_then_takes_no_start():
         station.start(now=4.0)
 
 
-def test_one_episode_runs_at_a_time_and_accepts_verdicts_until_it_closes():
-    station = Station(_trials())
+def test_one_episode_runs_at_a_time_and_accepts_judgements_until_it_closes():
+    station = _station()
     with pytest.raises(Refused):
-        station.end(Outcome.PASS)
+        station.end(Outcome.SUCCESS)
     station.start(now=1.0)
     with pytest.raises(Refused):
         station.start(now=1.5)
     assert station.end(Outcome.FAIL) == terminal_payload(Outcome.FAIL)
-    assert station.end(Outcome.PASS) == terminal_payload(Outcome.PASS)
-    station.close(Outcome.PASS, now=2.0)
+    assert station.end(Outcome.DISCARDED) == terminal_payload(Outcome.DISCARDED)
+    station.close(_judged(Outcome.DISCARDED), now=2.0)
     with pytest.raises(Refused):
-        station.end(Outcome.PASS)
+        station.end(Outcome.SUCCESS)
+
+
+def test_a_judgement_that_ends_the_episode_is_recorded_by_the_harness_and_not_written_again():
+    recordings = _Recordings()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.close(_judged(Outcome.DISCARDED), now=2.0)
+    assert station.view(now=3.0).episodes[0].outcome is Outcome.DISCARDED
+    assert recordings.written == []
+
+
+def test_an_episode_that_runs_out_of_time_shows_it_and_writes_nothing():
+    """The harness records ``eval.terminated = False``, and the count reads the timeout from it."""
+    recordings = _Recordings()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.close(TIMED_OUT, now=2.0)
+    view = station.view(now=3.0)
+    assert (view.phase, view.episodes[0].outcome) == (Phase.READY, Outcome.OUT_OF_TIME)
+    assert recordings.written == []
+
+
+def test_a_discard_pressed_before_the_time_limit_answer_wins_and_is_written():
+    recordings = _Recordings()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.end(Outcome.DISCARDED)
+    station.close(TIMED_OUT, now=2.0)
+    view = station.view(now=3.0)
+    assert (view.phase, view.episodes[0].outcome) == (Phase.READY, Outcome.DISCARDED)
+    assert recordings.written == [(UID, Outcome.DISCARDED)]
+
+
+def test_the_view_lists_the_judgements_that_the_station_takes():
+    station = _station()
+    every = [Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED]
+    assert station.view(now=0.0).judgements == []
+    station.start(now=1.0)
+    assert station.view(now=1.5).judgements == every
+    station.close(POLICY_END, now=2.0)
+    assert station.view(now=2.5).judgements == every
+    station.end(Outcome.FAIL)
+    assert station.view(now=3.0).judgements == []
+
+
+def test_a_success_pressed_before_the_time_limit_answer_still_ran_out_of_time():
+    recordings = _Recordings()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.end(Outcome.SUCCESS)
+    station.close(TIMED_OUT, now=2.0)
+    assert station.view(now=3.0).episodes[0].outcome is Outcome.OUT_OF_TIME
+    assert recordings.written == []
+
+
+@pytest.mark.parametrize('judgement', [Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED])
+def test_after_a_policy_end_the_judgement_is_written_into_the_recording(judgement):
+    recordings = _Recordings()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.close(POLICY_END, now=2.0)
+    view = station.view(now=3.0)
+    assert view.phase is Phase.JUDGEMENT_PENDING
+    assert (view.episodes[0].ended_at, view.episodes[0].outcome) == (2.0, None)
+    assert recordings.written == []
+
+    assert station.end(judgement) is None
+    view = station.view(now=4.0)
+    assert (view.phase, view.episodes[0].outcome) == (Phase.READY, judgement)
+    assert recordings.written == [(UID, judgement)]
+
+
+def test_a_pending_judgement_refuses_start_and_the_end_of_the_run():
+    station = _station()
+    station.start(now=1.0)
+    station.close(POLICY_END, now=2.0)
+    with pytest.raises(Refused, match='judge the last episode first'):
+        station.start(now=3.0)
+    with pytest.raises(Refused, match='finish the episode first'):
+        station.end_run()
+    station.end(Outcome.FAIL)
+    with pytest.raises(Refused, match='no episode is running'):
+        station.end(Outcome.SUCCESS)
+    station.start(now=4.0)
+
+
+def test_a_judgement_on_an_episode_that_recorded_nothing_writes_nothing():
+    recordings = _Recordings()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.close(EpisodeEnd(POLICY_END.terminal, None), now=2.0)
+    station.end(Outcome.SUCCESS)
+    station.start(now=3.0)
+    station.close(EpisodeEnd(TIMED_OUT.terminal, None), now=4.0)
+    assert recordings.written == []
+    assert [episode.outcome for episode in station.view(now=5.0).episodes] == [Outcome.SUCCESS, Outcome.OUT_OF_TIME]
+
+
+class _FailingOnce:
+    """Recordings whose first write fails, as on a full disk."""
+
+    def __init__(self):
+        self.written: list[tuple[str, Outcome]] = []
+        self._fails = True
+
+    def __call__(self, uid: str, judgement: Outcome) -> None:
+        if self._fails:
+            self._fails = False
+            raise OSError('disk full')
+        self.written.append((uid, judgement))
+
+
+def test_a_failed_write_refuses_the_judgement_keeps_it_pending_and_a_second_press_writes_it():
+    recordings = _FailingOnce()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.close(POLICY_END, now=2.0)
+    with pytest.raises(Refused, match='the judgement is not in the recording: OSError: disk full'):
+        station.end(Outcome.SUCCESS)
+    view = station.view(now=3.0)
+    assert (view.phase, view.episodes[0].error) == (Phase.JUDGEMENT_PENDING, 'OSError: disk full')
+    station.end(Outcome.SUCCESS)
+    view = station.view(now=4.0)
+    assert (view.phase, view.episodes[0].outcome, view.episodes[0].error) == (Phase.READY, Outcome.SUCCESS, None)
+    assert recordings.written == [(UID, Outcome.SUCCESS)]
+
+
+def test_a_judgement_pressed_while_a_policy_end_is_answered_waits_again_when_its_write_fails(caplog):
+    recordings = _FailingOnce()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.end(Outcome.SUCCESS)
+    station.close(POLICY_END, now=2.0)
+    view = station.view(now=3.0)
+    assert (view.phase, view.episodes[0].outcome) == (Phase.JUDGEMENT_PENDING, None)
+    assert view.episodes[0].error == 'OSError: disk full'
+    assert 'disk full' in caplog.text
+    station.end(Outcome.SUCCESS)
+    assert recordings.written == [(UID, Outcome.SUCCESS)]
+
+
+def test_after_a_failed_discard_write_at_the_time_limit_only_a_discard_applies():
+    """A Success or a Fail would put a verdict over ``eval.terminated = False``, and the timeout would not count."""
+    recordings = _FailingOnce()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.end(Outcome.DISCARDED)
+    station.close(TIMED_OUT, now=2.0)
+    assert station.view(now=3.0).phase is Phase.JUDGEMENT_PENDING
+
+    assert station.view(now=3.0).judgements == [Outcome.DISCARDED]
+    for judgement in (Outcome.SUCCESS, Outcome.FAIL):
+        with pytest.raises(Refused, match='ran out of time, so only Discard applies'):
+            station.end(judgement)
+    assert recordings.written == []
+    station.end(Outcome.DISCARDED)
+
+    view = station.view(now=4.0)
+    assert (view.phase, view.episodes[0].outcome) == (Phase.READY, Outcome.DISCARDED)
+    assert recordings.written == [(UID, Outcome.DISCARDED)]
+
+
+def test_a_judgement_pressed_while_a_policy_end_is_answered_closes_the_episode():
+    recordings = _Recordings()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.end(Outcome.DISCARDED)
+    station.close(POLICY_END, now=2.0)
+    view = station.view(now=3.0)
+    assert (view.phase, view.episodes[0].outcome) == (Phase.READY, Outcome.DISCARDED)
+    assert recordings.written == [(UID, Outcome.DISCARDED)]
+
+
+def test_a_judgement_of_one_episode_does_not_close_the_next():
+    station = _station()
+    station.start(now=1.0)
+    station.end(Outcome.SUCCESS)
+    station.close(_judged(Outcome.SUCCESS), now=2.0)
+    station.start(now=3.0)
+    station.close(POLICY_END, now=4.0)
+    assert station.view(now=5.0).phase is Phase.JUDGEMENT_PENDING
 
 
 def test_a_trial_source_that_fails_leaves_the_station_as_it_was():
     draws = iter([Task(instruction_source=CONFIGURED, timeout_sec=None)])
-    station = Station(lambda: next(draws))
+    station = _station(lambda: next(draws))
     with pytest.raises(StopIteration):
         station.start(now=1.0)
     view = station.view(now=2.0)
@@ -138,18 +347,22 @@ def test_a_trial_source_that_fails_leaves_the_station_as_it_was():
     assert view.episodes == []
 
 
-@pytest.mark.parametrize('verdict', [Outcome.PASS, Outcome.FAIL])
-def test_the_outcome_reads_back_the_verdict_from_the_harness_answer(verdict):
-    assert outcome_of({**terminal_payload(verdict), eval_keys.TERMINATED: True}) is verdict
+@pytest.mark.parametrize('judgement', [Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED])
+def test_the_outcome_reads_back_the_judgement_from_the_harness_answer(judgement):
+    assert outcome_of(_judged(judgement).terminal) is judgement
 
 
-def test_a_verdict_that_arrives_after_the_budget_reads_as_a_timeout():
-    assert outcome_of({eval_keys.TERMINATED: False}) is Outcome.TIMEOUT
+def test_a_judgement_that_arrives_after_the_budget_reads_as_out_of_time():
+    assert outcome_of({eval_keys.TERMINATED: False}) is Outcome.OUT_OF_TIME
 
 
-def test_the_verdicts_record_who_ended_the_episode():
-    assert terminal_payload(Outcome.PASS) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True}
-    assert terminal_payload(Outcome.FAIL) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: False}
+def test_an_answer_with_no_outcome_reads_as_none():
+    assert outcome_of(POLICY_END.terminal) is None
+
+
+def test_the_judgements_record_who_ended_the_episode_and_the_outcome():
+    for judgement in (Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED):
+        assert terminal_payload(judgement) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, OUTCOME: judgement}
 
 
 def _known_after_reset() -> str:
@@ -158,7 +371,7 @@ def _known_after_reset() -> str:
 
 def test_a_trial_whose_instruction_is_known_only_after_its_reset_is_refused_at_startup():
     with pytest.raises(TypeError, match='string'):
-        Station(lambda: Task(instruction_source=_known_after_reset, timeout_sec=None))
+        _station(lambda: Task(instruction_source=_known_after_reset, timeout_sec=None))
 
 
 def test_a_later_trial_whose_instruction_is_known_only_after_its_reset_is_refused_at_start():
@@ -166,7 +379,7 @@ def test_a_later_trial_whose_instruction_is_known_only_after_its_reset_is_refuse
         Task(instruction_source=CONFIGURED, timeout_sec=None),
         Task(instruction_source=_known_after_reset, timeout_sec=None),
     ])
-    station = Station(lambda: next(draws))
+    station = _station(lambda: next(draws))
     with pytest.raises(TypeError, match='string'):
         station.start(now=1.0)
     view = station.view(now=2.0)
@@ -175,7 +388,7 @@ def test_a_later_trial_whose_instruction_is_known_only_after_its_reset_is_refuse
 
 
 def test_each_change_advances_the_generation_and_a_view_does_not():
-    station = Station(_trials())
+    station = _station()
     generations = [station.view(now=0.0).generation]
 
     def note():
@@ -185,19 +398,24 @@ def test_each_change_advances_the_generation_and_a_view_does_not():
     note()
     station.start(now=1.0)
     note()
-    station.end(Outcome.PASS)
+    station.end(Outcome.SUCCESS)
     note()
-    station.close(Outcome.PASS, now=2.0)
+    station.close(_judged(Outcome.SUCCESS), now=2.0)
     note()
+    note()
+    station.start(now=3.0)
+    station.close(POLICY_END, now=4.0)
+    note()
+    station.end(Outcome.FAIL)
     note()
     assert generations == sorted(generations)
-    assert len(set(generations)) == 5
+    assert len(set(generations)) == 7
 
 
 def test_a_restarted_console_starts_above_the_generation_of_the_one_before_it(monkeypatch):
     monkeypatch.setattr(station_module.time, 'time_ns', lambda: 1_000_000_000_000)
-    before = Station(_trials())
+    before = _station()
     for _ in range(1000):
         before.set_override(OVERRIDE)
     monkeypatch.setattr(station_module.time, 'time_ns', lambda: 1_001_000_000_000)
-    assert Station(_trials()).view(now=0.0).generation > before.view(now=0.0).generation
+    assert _station().view(now=0.0).generation > before.view(now=0.0).generation

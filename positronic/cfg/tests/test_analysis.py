@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from eval_vocabulary.outcome import OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome
 
 from pimm.time import RECEIVED_WORLD
 from positronic import keys
@@ -72,12 +73,11 @@ def test_ckpt_remote_resolves_lerobot_pretrained_model_path():
 
 @pytest.mark.parametrize('held_ns', [200_000_000, 300_000_000])
 @pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
-def test_success_duration_uses_the_recording_clock(held_ns, timeline):
+def test_success_time_uses_the_recording_clock(held_ns, timeline):
     signal = DummySignal(
         [[0, 0], [100_000_000, 1], [100_000_000 + held_ns, 2]], [0.0, 1.0, 1.0], timelines=(timeline, 'tick')
     )
     episode = EpisodeContainer({'stacking_success': signal})
-    assert analysis.success(episode) == (held_ns >= 250_000_000)
     expected = (100_000_000 + held_ns) / 1e9 if held_ns >= 250_000_000 else None
     assert analysis.success_time(episode) == expected
 
@@ -98,9 +98,9 @@ def test_analysis_derives_duration_and_rates_on_the_recording_clock(timelines):
     )
     episode = EpisodeContainer({
         'state': signal,
-        'eval.successful_items': 2,
-        'eval.total_items': 2,
-        'eval.outcome': 'Success',
+        SUCCESSFUL_ITEMS: 2,
+        TOTAL_ITEMS: 2,
+        OUTCOME: Outcome.SUCCESS,
         'checkpoint': 'test',
         'model': 'test',
     })
@@ -124,3 +124,219 @@ def test_item_counting_samples_the_recording_clock(timeline):
         ),
     })
     assert analysis.calculate_units(episode) == 1
+
+
+@pytest.mark.parametrize('outcome', [Outcome.DISCARDED, Outcome.UNSCORED, None])
+def test_an_episode_nobody_scored_is_neither_a_success_nor_a_failure(outcome):
+    signal = DummySignal([0, 10_000_000_000], [0, 1], timelines=(HARNESS_WORLD,))
+    statics = {} if outcome is None else {OUTCOME: outcome}
+    unscored = EpisodeContainer({'state': signal, 'checkpoint': 'test', 'model': 'test', **statics})
+    failed = EpisodeContainer({'state': signal, 'checkpoint': 'test', 'model': 'test', OUTCOME: Outcome.FAIL})
+
+    assert analysis.unified_success_bool(unscored) is None
+    assert analysis.unified_success_bool(failed) is False
+    assert analysis.checkpoint_table().group_fn([unscored, failed])['failures'] == 1
+    assert analysis.phail_status(unscored) == analysis.UNSCORED
+    assert analysis.phail_status(failed) == 'Fail'
+
+
+def _attended(outcome: Outcome | None, items: int | None, **statics: object) -> EpisodeContainer:
+    """A 10 s episode that delivered ``items`` of 2, with ``outcome`` in ``eval.outcome`` and ``statics`` beside it.
+
+    ``items=None`` records no item counts.
+    """
+    episode = {
+        'state': DummySignal([0, 10_000_000_000], [0, 1], timelines=(HARNESS_WORLD,)),
+        'checkpoint': 'test',
+        'model': 'test',
+        'variant': '',
+        eval_keys.OBJECT: 'cup',
+        eval_keys.DURATION: 10.0,
+        **statics,
+    }
+    if items is not None:
+        episode |= {SUCCESSFUL_ITEMS: items, TOTAL_ITEMS: 2}
+    if outcome is not None:
+        episode[OUTCOME] = outcome
+    container = EpisodeContainer(episode)
+    return EpisodeContainer({**episode, 'status': analysis.phail_status(container)})
+
+
+def test_every_aggregate_leaves_out_an_episode_nobody_scored():
+    scored = [_attended(Outcome.SUCCESS, 2), _attended(Outcome.FAIL, 0)]
+    unscored = [_attended(Outcome.DISCARDED, 2), _attended(Outcome.UNSCORED, 2), _attended(None, 2)]
+
+    assert analysis.scored_episodes(scored + unscored) == scored
+    checkpoint = analysis.checkpoint_table().group_fn(scored + unscored)
+    assert {**checkpoint, 'count': 2} == analysis.checkpoint_table().group_fn(scored)
+    assert (checkpoint['count'], checkpoint['scored'], checkpoint['failures'], checkpoint['success_rate']) == (
+        5,
+        2,
+        1,
+        50,
+    )
+    assert checkpoint['UPH'] == pytest.approx(2 / (20 / 3600))
+    assert checkpoint['MTBF'] == 20
+    leaderboard = analysis.phail_leaderboard().group_fn(scored + unscored)
+    assert leaderboard == analysis.phail_leaderboard().group_fn(scored)
+    assert (leaderboard['count'], leaderboard['completion'], leaderboard['MTBF']) == (2, 50, 20 / 60)
+
+
+# The statics of an episode that the policy ended before its time limit, with no verdict.
+GAVE_UP = {
+    eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY,
+    eval_keys.POLICY_END: eval_keys.PolicyEnd.GIVE_UP,
+    eval_keys.TERMINATED: True,
+}
+COMPLETED = {**GAVE_UP, eval_keys.POLICY_END: eval_keys.PolicyEnd.COMPLETE}
+
+
+def test_a_give_up_counts_as_a_failure_in_every_aggregate_and_adds_no_items():
+    succeeded, gave_up = _attended(Outcome.SUCCESS, 2), _attended(None, None, **GAVE_UP)
+
+    assert analysis.unified_success_bool(gave_up) is False
+    assert analysis.phail_status(gave_up) == 'Fail'
+    checkpoint = analysis.checkpoint_table().group_fn([succeeded, gave_up])
+    assert (checkpoint['count'], checkpoint['failures'], checkpoint['success_rate']) == (2, 1, 50)
+    assert checkpoint['items_done'] == 100
+    leaderboard = analysis.phail_leaderboard().group_fn([succeeded, gave_up])
+    assert (leaderboard['count'], leaderboard['completion'], leaderboard['MTBF']) == (2, 100, 20 / 60)
+
+
+def test_a_complete_in_an_env_that_ends_on_success_counts_as_a_failure():
+    completed = _attended(None, None, **COMPLETED, **{eval_keys.ENV_ENDS_ON_SUCCESS: True})
+
+    assert analysis.unified_success_bool(completed) is False
+    assert analysis.phail_status(completed) == 'Fail'
+    assert analysis.checkpoint_table().group_fn([completed])['failures'] == 1
+
+
+def test_a_complete_with_no_other_fact_is_unscored_and_left_out_of_every_aggregate():
+    succeeded, completed = _attended(Outcome.SUCCESS, 2), _attended(None, None, **COMPLETED)
+
+    assert analysis.unified_success_bool(completed) is None
+    assert analysis.phail_status(completed) == analysis.UNSCORED
+    assert analysis.scored_episodes([succeeded, completed]) == [succeeded]
+    assert analysis.checkpoint_table().group_fn([succeeded, completed])['scored'] == 1
+
+
+@pytest.mark.parametrize('success', [True, False])
+def test_an_env_report_scores_an_episode_with_no_verdict(success):
+    reported = _attended(None, None, **{eval_keys.SUCCESS: success, eval_keys.TERMINATED: True})
+
+    assert analysis.unified_success_bool(reported) is success
+    assert analysis.scored_episodes([reported]) == [reported]
+    assert analysis.unified_units_display(reported) == str(int(success))
+    assert analysis.unified_success_rate(reported) == 100 * int(success)
+
+
+def test_a_sim_episode_with_an_env_report_and_no_signal_counts_in_the_checkpoint_table():
+    """A MolmoSpaces episode records `eval.success`, no `eval.outcome`, no item counts and no `stacking_success`."""
+    reported = {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+    succeeded, failed = (
+        _attended(None, None, **reported),
+        _attended(None, None, **{**reported, eval_keys.SUCCESS: False}),
+    )
+
+    row = analysis.checkpoint_table().group_fn([succeeded, failed])
+
+    assert (row['count'], row['failures'], row['success_rate'], row['items_done']) == (2, 1, 50, None)
+    assert row['UPH'] == pytest.approx(1 / (20 / 3600))
+
+
+def test_a_checkpoint_row_counts_a_real_episode_and_a_sim_episode_each_by_its_own_facts():
+    real = _attended(Outcome.SUCCESS, 2)
+    sim = _attended(None, None, **{eval_keys.SUCCESS: False, eval_keys.TERMINATED: True})
+
+    row = analysis.checkpoint_table().group_fn([real, sim])
+
+    assert (row['count'], row['scored'], row['failures'], row['success_rate'], row['items_done']) == (2, 2, 1, 50, 100)
+
+
+def test_an_episode_with_no_verdict_and_no_fact_raises_nothing_and_shows_no_rate():
+    bare = _attended(None, None)
+
+    assert analysis.phail_leaderboard().group_fn([bare])['count'] == 0
+    assert (analysis.unified_units_display(bare), analysis.unified_success_rate(bare)) == ('-', None)
+
+
+@pytest.mark.parametrize('table', [analysis.checkpoint_table, analysis.stacking_checkpoint_table])
+def test_a_row_with_no_scored_episode_shows_no_rate_and_no_uph_rather_than_a_zero(table):
+    """A zero would read as a checkpoint that failed every run, which is the opposite of unscored."""
+    signal = DummySignal([0, 10_000_000_000], [0.0, 0.0], timelines=(HARNESS_WORLD,))
+    bare = EpisodeContainer({
+        'stacking_success': signal,
+        'checkpoint': 'test',
+        'model': 'test',
+        'success': None,
+        'success_time': None,
+        'units': 0,
+        'max_stacking_success': 0.0,
+    })
+    group = table.instantiate()
+
+    row = group.group_fn([bare])
+
+    assert (row['success_rate'], row['UPH']) == (None, None)
+    assert group.format_table['success_rate'].default == '-'
+    assert group.format_table['UPH'].default == '-'
+
+
+def test_a_stacking_row_counts_every_run_and_shows_the_signal_without_a_verdict():
+    signal = DummySignal([0, 10_000_000_000], [0.5, 0.8], timelines=(HARNESS_WORLD,))
+    sim = {'stacking_success': signal, 'checkpoint': 'test', 'model': 'test', 'max_stacking_success': 0.8}
+    unscored = EpisodeContainer({**sim, 'success': None, 'success_time': None, 'units': None})
+    failed = EpisodeContainer({**sim, OUTCOME: Outcome.FAIL, 'success': False, 'success_time': None, 'units': 0})
+
+    row = analysis.stacking_checkpoint_table.instantiate().group_fn([unscored, failed])
+
+    assert (row['count'], row['scored'], row['failures'], row['success_rate']) == (2, 1, 1, 0)
+    assert row['avg_max_success'] == pytest.approx(0.8)
+
+
+def test_a_stacking_failure_counts_its_whole_episode_even_when_its_signal_crossed_the_threshold():
+    signal = DummySignal([0, 10_000_000_000], [1.0, 1.0], timelines=(HARNESS_WORLD,))
+    sim = {'stacking_success': signal, 'checkpoint': 'test', 'model': 'test', 'max_stacking_success': 1.0}
+    failed = EpisodeContainer({**sim, OUTCOME: Outcome.FAIL, 'success': False, 'success_time': 4.0, 'units': 0})
+    succeeded = EpisodeContainer({**sim, OUTCOME: Outcome.SUCCESS, 'success': True, 'success_time': 6.0, 'units': 1})
+
+    row = analysis.stacking_checkpoint_table.instantiate().group_fn([failed, succeeded])
+
+    assert row['MTBF'] == pytest.approx(16.0)
+    assert row['UPH'] == pytest.approx(3600 / 16.0)
+
+
+def test_a_discarded_episode_with_item_counts_shows_no_units_no_rate_and_no_uph():
+    discarded = _attended(Outcome.DISCARDED, 2)
+
+    assert analysis.unified_units_display(discarded) == '-'
+    assert analysis.unified_success_rate(discarded) is None
+    assert analysis.unified_uph(discarded) is None
+
+
+def test_a_stacking_signal_alone_scores_nothing_and_still_shows():
+    signal = DummySignal([0, 10_000_000_000], [1.0, 1.0], timelines=(HARNESS_WORLD,))
+    sim = EpisodeContainer({'stacking_success': signal, 'checkpoint': 'test', 'model': 'test'})
+
+    assert analysis.unified_success_bool(sim) is None
+    assert analysis.scored_episodes([sim]) == []
+    row = analysis.checkpoint_table().group_fn([sim])
+    assert (row['count'], row['scored']) == (1, 0)
+    assert (analysis.unified_units_display(sim), analysis.unified_uph(sim)) == ('-', None)
+    assert (analysis.success_units(sim), analysis.uph_sim(sim)) == (None, None)
+    assert analysis.max_stacking_success(sim) == 1.0
+    assert analysis.success_time(sim) == 10.0
+
+
+@pytest.mark.parametrize(('outcome', 'signal_value'), [(Outcome.FAIL, 1.0), (Outcome.SUCCESS, 0.0)])
+def test_a_scored_outcome_decides_a_sim_episode_against_its_signal(outcome, signal_value):
+    signal = DummySignal([0, 10_000_000_000], [signal_value, signal_value], timelines=(HARNESS_WORLD,))
+    sim = EpisodeContainer({'stacking_success': signal, 'checkpoint': 'test', 'model': 'test', OUTCOME: outcome})
+    succeeded = outcome == Outcome.SUCCESS
+
+    assert analysis.unified_success_bool(sim) is succeeded
+    assert analysis.success_units(sim) == int(succeeded)
+    assert analysis.unified_units_display(sim) == str(int(succeeded))
+    assert analysis.unified_success_rate(sim) == 100 * int(succeeded)
+    assert analysis.uph_sim(sim) is None
+    assert analysis.checkpoint_table().group_fn([sim])['failures'] == int(not succeeded)

@@ -181,6 +181,12 @@ the run processes an observation and returns control to the framework.
 
 - Each resumption receives observations and produces commands to execute now
   (possibly none), together with the requested time of the next call.
+- The run ends the episode when it returns. It returns a `PolicyEnd`:
+  `COMPLETE` when it thinks that it did the task, and `GIVE_UP` when it stops
+  before that. This is a claim, not a verdict. A return after the time limit
+  counts as a timeout, and an env's own end in the same framework iteration
+  ends the episode in its place. A run around another run returns what that
+  run returned.
 - Observations contain the latest available sensor values, task, and rig descriptor.
   They form a read-only snapshot: later sensor updates must not change an earlier
   input. Current time comes from the runtime, separately from observations.
@@ -353,17 +359,23 @@ class Step:
     resume_at_ns: int
 
 
+class PolicyEnd(StrEnum):
+    COMPLETE = 'complete'
+    GIVE_UP = 'give_up'
+
+
 # Keep input first in both Processor and ProcessorRun.
+ReturnT = TypeVar('ReturnT', default=Any)
 ProcessorRun = TypeAliasType(
-    'ProcessorRun', Generator[OutputT | None, InputT, None],
-    type_params=(InputT, OutputT),
+    'ProcessorRun', Generator[OutputT | None, InputT, ReturnT],
+    type_params=(InputT, OutputT, ReturnT),
 )
-PolicyRun = ProcessorRun[Obs, Step]
+PolicyRun = ProcessorRun[Obs, Step, PolicyEnd]
 ```
 
 The runtime primes a generator to its first yield, which must be `None`.
 After that, sending an input returns its next output. A policy run must yield
-a step for each observation.
+a step for each observation, or return its `PolicyEnd`.
 
 ### Answers
 
@@ -392,8 +404,8 @@ class Runtime(ABC):
     def tick(self) -> int: ...
 
     def start(
-        self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
-    ) -> ProcessorRun[InputT, OutputT]: ...
+        self, processor: Processor[InputT, OutputT, ReturnT], /, *args: Any, **kwargs: Any
+    ) -> ProcessorRun[InputT, OutputT, ReturnT]: ...
 
     def submit(
         self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
@@ -403,8 +415,8 @@ class Runtime(ABC):
 ### Processors and policies
 
 ```python
-class Processor(ABC, Generic[InputT, OutputT]):
-    def run(self, runtime: Runtime, *args: Any, **kwargs: Any) -> ProcessorRun[InputT, OutputT]: ...
+class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
+    def run(self, runtime: Runtime, *args: Any, **kwargs: Any) -> ProcessorRun[InputT, OutputT, ReturnT]: ...
 
     def meta(self) -> dict[str, Any]: ...
 
@@ -412,7 +424,7 @@ class Processor(ABC, Generic[InputT, OutputT]):
     def to_spec(self) -> dict[str, Any]: ...
 
 
-Policy = Processor[Obs, Step]
+Policy = Processor[Obs, Step, PolicyEnd]
 ```
 
 `meta()` reports definition metadata. `to_spec()` declares a registered component

@@ -42,6 +42,10 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
     def set_static(self, name: str, data: Any) -> None:
         self.statics[name] = data
 
+    @property
+    def uid(self) -> str:
+        return 'fake'
+
     def __exit__(self, exc_type, exc, tb) -> None:
         self.exited = True
 

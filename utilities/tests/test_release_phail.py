@@ -1,4 +1,5 @@
 import pytest
+from eval_vocabulary.outcome import SUCCESSFUL_ITEMS, TOTAL_ITEMS
 
 from pimm.time import RECEIVED_WORLD
 from positronic.dataset.episode import EpisodeContainer
@@ -39,9 +40,9 @@ def test_verification_checks_outliers_without_duration_metadata(timeline):
     episodes = [
         EpisodeContainer({
             'model': 'act',
-            'eval.object': 'cube',
-            'eval.successful_items': count,
-            'eval.total_items': count,
+            eval_keys.OBJECT: 'cube',
+            SUCCESSFUL_ITEMS: count,
+            TOTAL_ITEMS: count,
             'state': DummySignal([0, 1_000_000_000], [0, 1], timelines=(timeline,)),
         })
         for count in [1] * 10 + [100]

@@ -4,7 +4,7 @@ from datetime import datetime
 
 import configuronic as cfn
 import pos3
-from eval_vocabulary.outcome import ABSENT, OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, is_scored
+from eval_vocabulary.outcome import OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, counted_outcome, is_scored
 from eval_vocabulary.progress import LADDER, STATE_SIGNAL, Stage
 
 from pimm.logging import init_logging
@@ -33,22 +33,25 @@ from .ds import internal
 def eval_table():
     """The episode table for an eval run: only what every eval writes, nothing task-specific.
 
-    ``eval.success`` is absent on an episode that never reached its terminal, so it defaults to False;
-    ``eval.terminated`` separates a task the policy failed from one whose budget ran out.
+    The columns are the recorded facts that ``counted_outcome`` counts an episode from, and a blank cell is a fact that
+    the episode does not record. A plain table derives no column, so it cannot show the counted outcome itself.
     """
     return {
         '__index__': C(label='#', format='%d'),
         '__duration__': C(label='Duration', format='%.2f sec'),
         keys.TASK: C(label='Task', filter=True),
         eval_keys.SUCCESS: C(
-            label='Pass',
-            default=False,
+            label='Env report',
             renderer=RendererConfig(
                 type='badge',
                 options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
             ),
         ),
-        eval_keys.TERMINATED: C(label='Ended', default=False),
+        OUTCOME: C(label='Verdict', renderer=OUTCOME_BADGE, filter=True, align='center'),
+        eval_keys.ENDED_BY: C(label='Ended by'),
+        eval_keys.POLICY_END: C(label='Policy end'),
+        eval_keys.ENV_ENDS_ON_SUCCESS: C(label='Ends on success'),
+        eval_keys.TERMINATED: C(label='Ended'),
     }
 
 
@@ -102,9 +105,7 @@ finetune_ds = ds.transform.override(
 ft_eval_ds = ds.transform.override(
     base=ds.transform.override(
         base=finetune_ds,
-        transforms=[
-            Group(Identity(remove=['units']), Rename(**{'eval.successful_items': 'units', 'eval.total_items': 'units'}))
-        ],
+        transforms=[Group(Identity(remove=['units']), Rename(**{SUCCESSFUL_ITEMS: 'units', TOTAL_ITEMS: 'units'}))],
     ),
     transforms=[
         ds.group.override(
@@ -177,11 +178,6 @@ def rollout_model(ep: Episode) -> str:
     return ep[POLICY_LABEL] if POLICY_LABEL in ep else analysis_cfg.model(ep)
 
 
-def rollout_outcome(ep: Episode) -> str:
-    """The word the recording holds, or `ABSENT` where it holds none."""
-    return ep[OUTCOME] if OUTCOME in ep else ABSENT
-
-
 def highest_rollout_stage(ep: Episode) -> StageCell:
     """The highest rung the arm reached, as the cell `positronic.server.rollouts` defines."""
     marked = {value for value, _ in ep[STATE_SIGNAL]} if STATE_SIGNAL in ep else set()
@@ -202,7 +198,7 @@ rollouts_ds = ds.transform.override(
                 Identity(),
                 Derive(**{
                     DERIVED_MODEL: rollout_model,
-                    DERIVED_OUTCOME: rollout_outcome,
+                    DERIVED_OUTCOME: counted_outcome,
                     DERIVED_STAGE: highest_rollout_stage,
                     DERIVED_ITEMS: rollout_items,
                     DERIVED_STARTED: analysis_cfg.started,
@@ -231,7 +227,7 @@ def rollouts_episodes_table():
 @cfn.config()
 def rollouts_by_model():
     def group_fn(episodes: list[Episode]):
-        # An episode the operator discarded or never scored measures nothing, so it is listed and
+        # An episode the judge discarded or never scored measures nothing, so it is listed and
         # counted and stays out of the rate.
         scored = [ep for ep in episodes if is_scored(ep[DERIVED_OUTCOME])]
         successes = sum(1 for ep in scored if ep[DERIVED_OUTCOME] == Outcome.SUCCESS)

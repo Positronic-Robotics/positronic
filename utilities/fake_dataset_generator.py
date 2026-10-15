@@ -4,6 +4,7 @@ from pathlib import Path
 import configuronic as cfn
 import numpy as np
 import pos3
+from eval_vocabulary.outcome import OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome
 
 import pimm
 from positronic import geom, keys
@@ -61,8 +62,8 @@ TASKS = [TOWELS_TASK, SPOONS_TASK, SCISSORS_TASK]
 
 META_MAP = {'act': ACT_META, 'openpi': OPENPI_META, 'groot': GROOT_META}
 
-# Fake eval outcomes, named as an operator console offers them.
-FAILURE_OUTCOMES = ('Fail', 'Ran out of time', 'Safety', 'System')
+# Fake eval outcomes, named as a console offers them.
+FAILURE_OUTCOMES = (Outcome.FAIL, Outcome.OUT_OF_TIME, Outcome.SAFETY, Outcome.SYSTEM)
 # Weights are relative probabilities when an episode is not a success.
 FAILURE_OUTCOME_WEIGHTS = (0.25, 0.20, 0.10, 0.10)
 
@@ -112,16 +113,16 @@ class FakeGenerator(pimm.ControlSystem):
             is_success = random.random() < self.success_rate
 
             if is_success:
-                outcome = 'Success'
+                outcome = Outcome.SUCCESS
                 successful_items = total_items
                 notes = ''
             else:
                 # Randomly choose a failure mode (includes explicit "Fail")
                 outcome = random.choices(FAILURE_OUTCOMES, FAILURE_OUTCOME_WEIGHTS)[0]
                 successful_items = random.randint(0, total_items - 1)
-                if outcome == 'Fail':
+                if outcome is Outcome.FAIL:
                     notes = 'Task failed'
-                elif outcome == 'Safety':
+                elif outcome is Outcome.SAFETY:
                     notes = 'Safety violation'
                 else:
                     notes = 'System error or timeout'
@@ -132,15 +133,15 @@ class FakeGenerator(pimm.ControlSystem):
             episode_duration = max(1.0, random.normalvariate(base_duration, base_duration * 0.1))
 
             static_data = {
-                'task': task,
-                'eval.total_items': total_items,
-                'eval.successful_items': successful_items,
-                'eval.outcome': outcome,
+                keys.TASK: task,
+                TOTAL_ITEMS: total_items,
+                SUCCESSFUL_ITEMS: successful_items,
+                OUTCOME: outcome,
                 'eval.notes': notes,
                 eval_keys.DURATION: episode_duration,
                 'eval.cap_per_item': self.cap_per_item,
-                'eval.tote_placement': random.choice(['left', 'right']),
-                'eval.external_camera': random.choices(['left', 'right', 'NA'], [5, 5, 1])[0],
+                eval_keys.TOTE_PLACEMENT: random.choice(['left', 'right']),
+                eval_keys.EXTERNAL_CAMERA: random.choices(['left', 'right', 'NA'], [5, 5, 1])[0],
                 'inference.policy_fps': self.fps,
                 eval_keys.CHARGE_INFERENCE_TIME: False,
                 **self.policy_meta,

@@ -127,6 +127,7 @@ svg.i { width: 16px; height: 16px; flex: 0 0 auto; }
 .status-row.is-ready { background: linear-gradient(to right, rgba(177, 231, 79, 0.10), transparent 75%); }
 .status-row.is-running { background: linear-gradient(to right, rgba(249, 115, 115, 0.14), transparent 75%); }
 .status-row.is-ending { background: linear-gradient(to right, rgba(251, 191, 36, 0.12), transparent 75%); }
+.status-row.is-pending { background: linear-gradient(to right, rgba(96, 165, 250, 0.14), transparent 75%); }
 .status {
   display: inline-flex; align-items: center; gap: 9px;
   padding: 6px 14px 6px 12px; border-radius: var(--radius-pill);
@@ -138,6 +139,8 @@ svg.i { width: 16px; height: 16px; flex: 0 0 auto; }
 .status--running .dot { background: var(--danger); box-shadow: 0 0 10px var(--danger); }
 .status--ending { background: rgba(251, 191, 36, 0.14); color: #fcd34d; border: 1px solid rgba(251, 191, 36, 0.45); }
 .status--ending .dot { background: var(--warning); }
+.status--pending { background: var(--override-soft); color: #93c5fd; border: 1px solid var(--override-line); }
+.status--pending .dot { background: var(--override); }
 .status--run-ended { background: rgba(148, 163, 184, 0.12); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
 .status--run-ended .dot { background: var(--text-soft); }
 .status-detail { color: var(--text-secondary); font-size: 1.05rem; }
@@ -226,7 +229,7 @@ svg.i { width: 16px; height: 16px; flex: 0 0 auto; }
   display: block; margin-top: 4px; font-family: var(--font-mono); font-size: 0.8rem;
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.actions { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 10px; }
+.actions { display: grid; grid-template-columns: 1.15fr 1fr 1fr 1fr; gap: 10px; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   height: 60px; padding: 0 16px; border-radius: var(--radius-pill);
@@ -236,6 +239,7 @@ svg.i { width: 16px; height: 16px; flex: 0 0 auto; }
 .btn-start { background: var(--accent); color: var(--text-invert); box-shadow: 0 0 0 1px rgba(17, 24, 39, 0.9), 0 10px 24px rgba(177, 231, 79, 0.32); }
 .btn-pass { background: var(--success-soft); color: #86efac; border-color: rgba(74, 222, 128, 0.5); }
 .btn-fail { background: var(--danger-soft); color: #fca5a5; border-color: rgba(249, 115, 115, 0.5); }
+.btn-discard { background: rgba(148, 163, 184, 0.12); color: var(--text-secondary); border-color: var(--border-strong); }
 .btn:disabled {
   background: rgba(15, 23, 42, 0.6); color: var(--text-soft); border-color: var(--border-subtle);
   box-shadow: none; cursor: not-allowed;
@@ -280,6 +284,8 @@ svg.i { width: 16px; height: 16px; flex: 0 0 auto; }
 .out--running { color: #fca5a5; background: transparent; border-color: rgba(249, 115, 115, 0.45); }
 .out--running .dot { background: var(--danger); width: 6px; height: 6px; }
 .out--ending { color: #fcd34d; background: transparent; border-color: rgba(251, 191, 36, 0.45); }
+.out--pending { color: #93c5fd; background: transparent; border-color: var(--override-line); }
+.out--discarded { color: var(--text-muted); background: rgba(148, 163, 184, 0.08); border-color: var(--border-strong); }
 
 .ep-empty { margin: auto; padding: 0 40px 30px; text-align: center; color: var(--text-muted); font-size: 0.9rem; max-width: 380px; }
 .ep-empty .big { color: var(--text-secondary); font-size: 1rem; margin-bottom: 6px; font-weight: 600; }

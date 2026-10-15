@@ -36,9 +36,9 @@ from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Policy, PolicyRun, Step
+from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
+from positronic.policy.harness import POLL_PERIOD_SEC, EpisodeEnd, Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -249,11 +249,16 @@ def test_observation_conversion_errors_propagate(observed_harness):
 
 
 class MemoryEpisode(EpisodeWriter):
-    def __init__(self):
+    def __init__(self, uid: str):
+        self._uid = uid
         self.records = []
         self.static = {}
         self.closed = False
         self.aborted = False
+
+    @property
+    def uid(self):
+        return self._uid
 
     def append(self, signal_name, data, timestamps):
         self.records.append((signal_name, data, timestamps))
@@ -275,7 +280,7 @@ class MemoryDataset(DatasetWriter):
         self.episodes = []
 
     def new_episode(self):
-        episode = MemoryEpisode()
+        episode = MemoryEpisode(f'episode-{len(self.episodes)}')
         self.episodes.append(episode)
         return episode
 
@@ -312,7 +317,7 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             wire_call(world, harness.ready[name], handler)
         for name, handler in preparation.items():
             wire_call(world, harness.prepare[name], handler)
-        caller = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](source)
+        caller = pimm.calls.ControlSystemCaller[Rollout, EpisodeEnd](source)
         wire_call(world, caller, harness.perform_task)
         emitters = []
         for receiver in (harness.manual_command, harness.done, harness.observations[POSITION]):
@@ -411,7 +416,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     with pytest.raises(RuntimeError, match='already running'):
         overlapping.result()
     next(h.loop)
-    assert first.result() == {'success': True, eval_keys.TERMINATED: True}
+    assert first.result().terminal == {'success': True, eval_keys.TERMINATED: True}
     assert h.dataset.episodes[-1].static[keys.TASK] == 'first'
 
     frame[0] = 2  # No new signal: the next episode must rebuild its observation cache.
@@ -450,7 +455,96 @@ def test_episode_deadline_uses_the_done_signal_timestamp(episode_harness, done_a
     h.world.clock.advance_to_ns(12_000_000)
     next(h.loop)
     next(h.loop)
-    assert answer.result()[eval_keys.TERMINATED] is terminated
+    assert answer.result().terminal[eval_keys.TERMINATED] is terminated
+
+
+class EndAfter(Policy):
+    """Command each call's number, and return ``end`` on call ``calls``. ``clock`` and ``slow_to_ns`` make that call
+    take until ``slow_to_ns``."""
+
+    def __init__(
+        self, calls: int, end: PolicyEnd = PolicyEnd.COMPLETE, clock: VirtualClock | None = None, slow_to_ns: int = 0
+    ):
+        self.end_call = calls
+        self.end = end
+        self.clock = clock
+        self.slow_to_ns = slow_to_ns
+        self.calls = 0
+
+    def run(self, runtime):
+        yield
+        while True:
+            self.calls += 1
+            if self.calls < self.end_call:
+                yield Step({MOTOR: self.calls}, runtime.time_ns + 1_000_000)
+                continue
+            if self.clock is not None:
+                self.clock.advance_to_ns(self.slow_to_ns)
+            return self.end
+
+
+def _until_answered(h, answer) -> EpisodeEnd:
+    """Run the harness loop, with the clock one poll period on at each turn, until it answers ``answer``."""
+    while not answer.done():
+        next(h.loop)
+        h.world.clock.advance_to_ns(h.world.clock.now_ns() + round(POLL_PERIOD_SEC * 1e9))
+    return answer.result()
+
+
+@pytest.mark.parametrize('end', list(PolicyEnd))
+def test_a_return_inside_the_budget_ends_the_episode_and_records_the_policy_and_its_end(episode_harness, end):
+    h = episode_harness
+    policy = EndAfter(calls=3, end=end)
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 1.0), policy, h.output_path))
+    ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.POLICY_END: end, eval_keys.TERMINATED: True}
+    assert _until_answered(h, answer) == EpisodeEnd(ended, 'episode-0')
+    assert policy.calls == 3
+    assert [value for _, value in h.commands.values] == [1, 2]
+    [episode] = h.dataset.episodes
+    assert episode.static.items() >= ended.items()
+    assert eval_keys.SUCCESS not in episode.static
+
+
+def test_an_episode_that_records_nothing_answers_with_no_uid(episode_harness):
+    h = episode_harness
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=1), None))
+    assert _until_answered(h, answer).uid is None
+    assert h.dataset.episodes == []
+
+
+def test_an_env_done_in_the_iteration_of_a_return_ends_the_episode(episode_harness):
+    h = episode_harness
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=1), h.output_path))
+    next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    assert _until_answered(h, answer).terminal == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+
+
+def test_a_return_after_the_deadline_counts_as_a_timeout(episode_harness):
+    h = episode_harness
+    h.observation.emit(1)
+    policy = EndAfter(calls=1, clock=h.world.clock, slow_to_ns=11_000_000)
+    answer = h.caller(Rollout(Task('test', 0.01), policy, h.output_path))
+    assert _until_answered(h, answer).terminal == {eval_keys.TERMINATED: False}
+    assert eval_keys.ENDED_BY not in h.dataset.episodes[0].static
+
+
+@pytest.mark.parametrize('returned', [None, PolicyEnd.COMPLETE.value])
+def test_a_return_that_is_not_a_policy_end_fails_the_episode(episode_harness, returned):
+    h = episode_harness
+
+    class ReturnsSomethingElse(Processor[Obs, Step, object]):
+        def run(self, runtime):
+            yield
+            return returned
+
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 1.0), cast(Policy, ReturnsSomethingElse()), h.output_path))
+    with pytest.raises(ValueError, match='PolicyEnd'):
+        _until_answered(h, answer)
 
 
 @pytest.mark.parametrize('failure', ['startup', 'policy', 'conversion'])
@@ -576,7 +670,7 @@ def test_recorder_polls_do_not_fail_on_errors_between_policy_calls(episode_harne
         h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
     if finish:
-        assert answer.result() == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+        assert answer.result().terminal == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
         assert policy.seen == [1]
     else:
         assert not answer.done()
@@ -885,7 +979,7 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
     next(h.loop)
-    assert answer.result()[eval_keys.TERMINATED] is True
+    assert answer.result().terminal[eval_keys.TERMINATED] is True
     if not record:
         assert h.dataset.episodes == []
         return
@@ -897,7 +991,7 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     assert meta[eval_keys.UNIVERSE] == 'sim'
     assert eval_keys.TIMEOUT not in meta
     assert meta[eval_keys.SUCCESS] is True
-    assert answer.result()[eval_keys.TERMINATED] is True
+    assert answer.result().terminal[eval_keys.TERMINATED] is True
 
 
 def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(episode_harness, tmp_path):
@@ -959,7 +1053,7 @@ def test_policy_cleanup_failure_keeps_recording_and_next_episode_inputs(episode_
     next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
-    assert answer.result()[eval_keys.SUCCESS] is True
+    assert answer.result().terminal[eval_keys.SUCCESS] is True
     dataset = LocalDataset(tmp_path)
     assert len(dataset) == 2
     assert list(dataset[1][POSITION].values()) == [1]
@@ -987,7 +1081,7 @@ def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
     assert list(h.prepare[eval_keys.SCENE].incoming()) == []
     back.set_result(None)
     next(h.loop)
-    assert answer.result() == {eval_keys.TERMINATED: False}
+    assert answer.result().terminal == {eval_keys.TERMINATED: False}
 
 
 @pytest.mark.parametrize('failure', ['unknown', 'prepare', 'return'])
@@ -1019,7 +1113,7 @@ def test_preparation_errors_and_failed_return(episode_harness, failure, caplog):
             back = next(h.prepare[RESET].incoming())
             back.set_exception(ValueError('return failed'))
             next(h.loop)
-            assert answer.result()[eval_keys.SUCCESS] is True
+            assert answer.result().terminal[eval_keys.SUCCESS] is True
             assert 'return failed' in caplog.text
             return
     assert h.dataset.episodes == []
@@ -1046,7 +1140,7 @@ def test_every_device_is_asked_to_be_ready_before_each_episode_and_before_its_pr
         next(h.loop)
         next(h.prepare[RESET].incoming()).set_result(None)
         next(h.loop)
-        assert answer.result() == {eval_keys.TERMINATED: False}
+        assert answer.result().terminal == {eval_keys.TERMINATED: False}
 
 
 @pytest.mark.parametrize('error', [pimm.SignalError('camera lost'), RuntimeError('the arm holds a fault')])
@@ -1276,7 +1370,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
                 next(loop)
                 if answer.done():
                     break
-            assert answer.result() == {eval_keys.TERMINATED: False}
+            assert answer.result().terminal == {eval_keys.TERMINATED: False}
         finally:
             world.request_stop()
             list(loop)
@@ -1474,7 +1568,7 @@ def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_ins
     assert h.world.clock.now_ns() == 0
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
-    assert answer.result() == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+    assert answer.result().terminal == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
     episode = LocalDataset(tmp_path)[0]
     commands = episode[MOTOR]
     assert list(commands.values()) == list(range(5))
@@ -1553,7 +1647,7 @@ def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_ha
     next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
-    assert answer.result()[eval_keys.TERMINATED]
+    assert answer.result().terminal[eval_keys.TERMINATED]
     np.testing.assert_array_equal(observations, [[99], [99]])
     np.testing.assert_array_equal(LocalDataset(tmp_path)[0][POSITION].values(), [[10], [20]])
 
@@ -1687,6 +1781,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
             yield
             now[0] = 500_000_000
             yield Step({}, requested_ns)
+            return PolicyEnd.COMPLETE
 
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
@@ -1758,7 +1853,7 @@ def test_real_sleep_stops_at_episode_deadline(episode_harness):
     next(h.loop)
     assert h.deadlines.values[-1] == (20_000_000, None)
     next(h.loop)
-    assert answer.result() == {eval_keys.TERMINATED: False}
+    assert answer.result().terminal == {eval_keys.TERMINATED: False}
 
 
 def test_a_missing_observation_is_read_again_after_one_poll_period(episode_harness):
@@ -1793,4 +1888,4 @@ def test_a_missing_observation_still_ends_the_episode_at_its_deadline(episode_ha
     next(h.loop)
     assert h.deadlines.values[-1] == (50_000_000, None)
     next(h.loop)
-    assert answer.result() == {eval_keys.TERMINATED: False}
+    assert answer.result().terminal == {eval_keys.TERMINATED: False}

@@ -9,7 +9,7 @@ import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.policy import executor as module
-from positronic.policy.base import NotAnswered, Policy, Step
+from positronic.policy.base import NotAnswered, Policy, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitResult, WaitStatus, _UnchargedAnswer
 
 
@@ -87,6 +87,7 @@ def test_worker_span_keeps_parent_after_processor_yields(executors, tmp_path):
             yield Step({}, 1)
             assert answer.result() == 42
             yield Step({}, 2)
+            return PolicyEnd.COMPLETE
 
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'async-stack'):
         run = runtime.start(Submit())

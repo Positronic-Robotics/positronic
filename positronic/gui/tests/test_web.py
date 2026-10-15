@@ -1,20 +1,36 @@
 import queue
 import re
+import threading
 from collections.abc import Iterator
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal, get_args, get_origin
 
 import numpy as np
 import pytest
+from eval_vocabulary.outcome import OUTCOME, Outcome, counted_outcome
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 import pimm
+from pimm.time import EMITTED_WORLD
 from pimm.world import SystemClock
+from positronic.dataset.episode import META_UID
+from positronic.dataset.local_dataset import LocalDatasetWriter, load_dataset
 from positronic.eval import Task
-from positronic.gui.station import Episode, Outcome, Phase, RunView, Station, terminal_payload
-from positronic.gui.web import STATIC_DIR, CameraFeed, CameraView, EndBody, InstructionBody, StationConsole, Status
-from positronic.policy import Policy
+from positronic.eval import keys as eval_keys
+from positronic.gui.station import Ending, Episode, Phase, RunView, Station, Unrecorded, terminal_payload
+from positronic.gui.web import (
+    STATIC_DIR,
+    CameraFeed,
+    CameraView,
+    InstructionBody,
+    JudgementBody,
+    StationConsole,
+    Status,
+)
+from positronic.policy import Policy, PolicyEnd
 from positronic.policy import keys as policy_keys
+from positronic.policy.harness import EpisodeEnd
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 CONFIGURED = 'put the cup in the tote'
@@ -38,10 +54,11 @@ class _Policy(Policy):
 
     def run(self, runtime):
         yield
+        return PolicyEnd.COMPLETE
 
 
 class _Console:
-    """A station page served in-process, with queued tasks and emitted verdicts collected for inspection."""
+    """A station page served in-process, with queued tasks and emitted judgements collected for inspection."""
 
     def __init__(self):
         self.tasks: list[Task] = []
@@ -49,13 +66,14 @@ class _Console:
         self.feed = CameraFeed()
         self.should_stop = ManualCommandReceiver[bool]()
         self.should_stop.push(False)
-        self.station = Station(_trial)
+        self.recorded: list[tuple[str, Outcome]] = []
+        self.station = Station(_trial, lambda uid, outcome: self.recorded.append((uid, outcome)))
         console = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
         console.done._bind(self.done, clock=SystemClock())
         app = console.build_app(self.station, {CAMERA: self.feed}, self.tasks.append, SystemClock(), self.should_stop)
         self.client = TestClient(app)
 
-    def post(self, path: str, body: EndBody | InstructionBody | None = None) -> Status:
+    def post(self, path: str, body: JudgementBody | InstructionBody | None = None) -> Status:
         response = self.client.post(path, json=None if body is None else body.model_dump(mode='json'))
         response.raise_for_status()
         return Status.model_validate(response.json())
@@ -84,7 +102,14 @@ def test_the_status_is_the_json_the_page_reads(console):
     status['run'].pop('now')
     assert isinstance(status['run'].pop('generation'), int)
     assert status == {
-        'run': {'phase': 'ready', 'configured': CONFIGURED, 'override': None, 'override_since': None, 'episodes': []},
+        'run': {
+            'phase': 'ready',
+            'configured': CONFIGURED,
+            'override': None,
+            'override_since': None,
+            'judgements': [],
+            'episodes': [],
+        },
         'cameras': [{'name': CAMERA, 'label': 'exterior 2', 'live': True, 'fps': 0.0, 'width': 640, 'height': 360}],
         'policy': 'remote',
         'host': '127.0.0.1',
@@ -103,23 +128,106 @@ def test_start_hands_the_trial_to_the_control_loop_once(console):
     assert len(console.tasks) == 1
 
 
-def test_each_verdict_emits_done_without_waiting_for_the_control_loop(console):
+def test_each_judgement_emits_done_without_waiting_for_the_control_loop(console):
     console.post('/episode/start')
-    assert console.post('/episode/end', EndBody(verdict=Outcome.FAIL)).run.phase is Phase.ENDING
+    assert console.post('/episode/end', JudgementBody(judgement=Outcome.FAIL)).run.phase is Phase.ENDING
     assert len(console.tasks) == 1
     [(_, payload)] = console.done.emitted
     assert payload == terminal_payload(Outcome.FAIL)
-    assert console.post('/episode/end', EndBody(verdict=Outcome.PASS)).run.phase is Phase.ENDING
+    assert console.post('/episode/end', JudgementBody(judgement=Outcome.DISCARDED)).run.phase is Phase.ENDING
     assert [payload for _, payload in console.done.emitted] == [
         terminal_payload(Outcome.FAIL),
-        terminal_payload(Outcome.PASS),
+        terminal_payload(Outcome.DISCARDED),
     ]
 
 
-def test_the_page_offers_only_the_operator_verdicts(console):
+def test_the_page_offers_only_the_judgements(console):
     console.post('/episode/start')
-    assert console.client.post('/episode/end', json={'verdict': Outcome.TIMEOUT.value}).status_code == 422
+    assert console.client.post('/episode/end', json={'judgement': Outcome.OUT_OF_TIME.value}).status_code == 422
     assert len(console.tasks) == 1
+
+
+POLICY_END = EpisodeEnd({eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.TERMINATED: True}, 'recording-1')
+
+
+class _Actions(pimm.SignalEmitter[dict[str, Any]]):
+    """The order in which the World gets the console's actions: each submitted task, and each ``done``."""
+
+    def __init__(self):
+        self.order: list[str] = []
+
+    def submit(self, task: Task) -> None:
+        self.order.append('start')
+
+    def _emit(self, data: dict[str, Any], time: pimm.Time) -> None:
+        self.order.append('done')
+
+
+def test_a_press_reaches_the_world_before_a_later_start_even_when_the_policy_ends_its_episode_between(
+    console, monkeypatch
+):
+    """A press reads the station, the policy ends that episode, and a second client presses Start. The press's
+    ``done`` must reach the World before the new task, or it ends the new episode with the old judgement."""
+    actions = _Actions()
+    station = Station(_trial, lambda uid, judgement: None)
+    console_system = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
+    console_system.done._bind(actions, clock=SystemClock())
+    app = console_system.build_app(station, {CAMERA: console.feed}, actions.submit, SystemClock(), console.should_stop)
+    pressed, released = threading.Event(), threading.Event()
+    end = station.end
+
+    def end_and_pause(judgement):
+        payload = end(judgement)
+        pressed.set()
+        released.wait(timeout=5.0)
+        return payload
+
+    monkeypatch.setattr(station, 'end', end_and_pause)
+    TestClient(app).post('/episode/start').raise_for_status()
+    body = JudgementBody(judgement=Outcome.SUCCESS).model_dump(mode='json')
+    press = threading.Thread(target=lambda: TestClient(app).post('/episode/end', json=body))
+    press.start()
+    assert pressed.wait(timeout=5.0)
+
+    station.close(POLICY_END, now=1.0)
+    second_start = threading.Thread(target=lambda: TestClient(app).post('/episode/start'))
+    second_start.start()
+    second_start.join(timeout=0.5)
+    released.set()
+    press.join(timeout=5.0)
+    second_start.join(timeout=5.0)
+
+    assert actions.order == ['start', 'done', 'start']
+
+
+def test_a_judgement_that_does_not_reach_the_recording_is_refused_with_the_reason(console):
+    def broken(uid: str, judgement: Outcome) -> None:
+        raise OSError('disk full')
+
+    console.station = Station(_trial, broken)
+    app = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0).build_app(
+        console.station, {CAMERA: console.feed}, console.tasks.append, SystemClock(), console.should_stop
+    )
+    client = TestClient(app)
+    client.post('/episode/start').raise_for_status()
+    console.station.close(POLICY_END, now=1.0)
+
+    answer = client.post('/episode/end', json=JudgementBody(judgement=Outcome.SUCCESS).model_dump(mode='json'))
+
+    assert answer.status_code == 409
+    assert answer.json()['detail'] == 'the judgement is not in the recording: OSError: disk full'
+    assert Status.model_validate(client.get('/status').json()).run.phase is Phase.JUDGEMENT_PENDING
+
+
+def test_after_a_policy_end_the_judgement_closes_the_episode_and_emits_no_done(console):
+    console.post('/episode/start')
+    console.station.close(POLICY_END, now=1.0)
+    assert Status.model_validate(console.client.get('/status').json()).run.phase is Phase.JUDGEMENT_PENDING
+    status = console.post('/episode/end', JudgementBody(judgement=Outcome.SUCCESS))
+    assert status.run.phase is Phase.READY
+    assert status.run.episodes[0].outcome is Outcome.SUCCESS
+    assert console.recorded == [('recording-1', Outcome.SUCCESS)]
+    assert console.done.emitted == []
 
 
 def test_the_instruction_is_refused_while_an_episode_runs(console):
@@ -134,7 +242,7 @@ def test_end_run_is_refused_while_an_episode_runs_and_ends_the_run_after_it(cons
     refused = console.client.post('/run/end')
     assert refused.status_code == 409
     assert refused.json()['detail'] == 'finish the episode first, then end the run'
-    console.station.close(Outcome.PASS, now=1.0)
+    console.station.close(EpisodeEnd({eval_keys.TERMINATED: False}, None), now=1.0)
     assert console.post('/run/end').run.phase is Phase.RUN_ENDED
 
 
@@ -221,7 +329,57 @@ def test_a_camera_that_gives_data_again_updates_its_tile():
     feed.stream.close()
 
 
-class _Failed(pimm.calls.Answer[dict[str, Any]]):
+class _Answered(pimm.calls.Answer[EpisodeEnd]):
+    """An episode answer that the harness gave."""
+
+    def __init__(self, end: EpisodeEnd):
+        self._end = end
+
+    def done(self) -> bool:
+        return True
+
+    def result(self) -> EpisodeEnd:
+        return self._end
+
+
+def _recorded_episode(path: Path) -> str:
+    """Record one episode into the dataset at ``path``, and return its uid."""
+    with LocalDatasetWriter(path) as dataset, dataset.new_episode() as episode:
+        episode.append('signal', 1, pimm.Time(**{EMITTED_WORLD: 0}))
+        episode.set_static(eval_keys.TERMINATED, False)
+        return episode.meta[META_UID]
+
+
+def test_an_episode_that_runs_out_of_time_shows_it_and_counts_it_from_the_recording_alone(tmp_path):
+    uid = _recorded_episode(tmp_path)
+    console = StationConsole(_trial, _Policy(), tmp_path, host='127.0.0.1', port=0)
+    station = Station(_trial, console._record_judgement)
+    station.start(now=0.0)
+    console._episode = _Answered(EpisodeEnd({eval_keys.TERMINATED: False}, uid))
+
+    console._drive_episode(station, queue.SimpleQueue(), SystemClock())
+
+    [episode] = load_dataset(tmp_path)
+    assert OUTCOME not in episode
+    assert counted_outcome(episode) is Outcome.OUT_OF_TIME
+    assert station.view(now=0.0).episodes[0].outcome is Outcome.OUT_OF_TIME
+
+
+def test_a_judgement_after_a_policy_end_goes_into_the_edit_log(tmp_path):
+    uid = _recorded_episode(tmp_path)
+    console = StationConsole(_trial, _Policy(), tmp_path, host='127.0.0.1', port=0)
+    station = Station(_trial, console._record_judgement)
+    station.start(now=0.0)
+    console._episode = _Answered(EpisodeEnd(POLICY_END.terminal, uid))
+    console._drive_episode(station, queue.SimpleQueue(), SystemClock())
+    assert OUTCOME not in load_dataset(tmp_path)[0]
+
+    station.end(Outcome.DISCARDED)
+
+    assert load_dataset(tmp_path)[0][OUTCOME] == Outcome.DISCARDED
+
+
+class _Failed(pimm.calls.Answer[EpisodeEnd]):
     """An episode answer that the harness failed with ``error``."""
 
     def __init__(self, error: Exception):
@@ -230,20 +388,20 @@ class _Failed(pimm.calls.Answer[dict[str, Any]]):
     def done(self) -> bool:
         return True
 
-    def result(self) -> dict[str, Any]:
+    def result(self) -> EpisodeEnd:
         raise self._error
 
 
 def test_an_arm_error_that_fails_an_episode_reaches_the_page_and_is_not_skipped_as_a_frame_is():
     console = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
-    station = Station(_trial)
+    station = Station(_trial, console._record_judgement)
     station.start(now=0.0)
     console._episode = _Failed(pimm.SignalError('Release the emergency stop button'))
 
     console._drive_episode(station, queue.SimpleQueue(), SystemClock())
 
     [episode] = station.view(now=0.0).episodes
-    assert episode.outcome is Outcome.ERROR
+    assert episode.outcome is Unrecorded.ERROR
     assert episode.error is not None and episode.error.endswith('Release the emergency stop button')
 
 
@@ -261,20 +419,32 @@ def _script_object(name: str) -> str:
     return _script_part(rf'const {name} = {{(.*?)}};', re.DOTALL)
 
 
+def _members(annotation) -> Iterator[Any]:
+    """The values of a union of ``Literal`` types and enums."""
+    for arg in get_args(annotation):
+        yield from get_args(arg) if get_origin(arg) is Literal else arg
+
+
 def test_the_page_names_the_phases_and_outcomes_the_server_sends():
     assert set(re.findall(r"'([^']*)'", _script_object('PHASE'))) == {phase.value for phase in Phase}
-    assert set(re.findall(r"'([^']*)'", _script_object('OUTCOME'))) == {outcome.value for outcome in Outcome}
+    assert set(re.findall(r"'([^']*)'", _script_object('OUTCOME'))) == {outcome.value for outcome in _members(Ending)}
 
 
 def test_the_page_sends_the_request_fields_the_server_reads():
     sent = set(re.findall(r'\(\{ (\w+):', _script_object('REQUEST')))
-    assert sent == set(InstructionBody.model_fields) | set(EndBody.model_fields)
+    assert sent == set(InstructionBody.model_fields) | set(JudgementBody.model_fields)
 
 
 def test_the_page_reads_every_status_field_the_server_sends():
     reader = _script_part(r'^function readStatus\(answer\) \{(.*?)^\}$', re.MULTILINE | re.DOTALL)
     read = set(re.findall(r'\b(?:answer|run|e|c)\.(\w+)', reader))
     assert read == {field for model in (Status, RunView, Episode, CameraView) for field in model.model_fields}
+
+
+def test_the_page_enables_only_the_judgement_buttons_that_the_station_takes():
+    buttons = _script_part(r'^function renderButtons\(\) \{(.*?)^\}$', re.MULTILINE | re.DOTALL)
+    assert 'current.judgements' in buttons
+    assert 'judgements.includes(judgement)' in buttons
 
 
 def test_the_page_calls_the_routes_the_server_serves(console):

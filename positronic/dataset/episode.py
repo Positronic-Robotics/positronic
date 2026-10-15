@@ -199,6 +199,11 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
         pass
 
     @property
+    @abstractmethod
+    def uid(self) -> str:
+        """The identity of the episode, which its meta holds under ``META_UID``."""
+
+    @property
     def meta(self) -> dict:
         """Metadata for the episode, known at the time of request."""
         return {}

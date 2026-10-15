@@ -746,16 +746,6 @@
                 }
             }
         ],
-        "./positronic/cfg/analysis.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 21,
-                    "endColumn": 55,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/cfg/ds/__init__.py": [
             {
                 "code": "reportArgumentType",

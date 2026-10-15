@@ -2,12 +2,17 @@
 
 from eval_vocabulary.episode import BENCHMARK_TASK
 
-# The verdict a trial writes in its episode's statics: the harness's ``TERMINATED``, False when the budget ran out,
-# and the env's ``SUCCESS``, which a failure can leave absent.
+# How a trial ended, in its episode's statics: the harness's ``TERMINATED``, False when the budget ran out, the env's
+# ``SUCCESS``, which a failure can leave absent, ``ENDED_BY``, who ended it when the env did not, and ``POLICY_END``,
+# what the policy said when it ended it. ``ENV_ENDS_ON_SUCCESS`` is what a remote env states about its own end.
 from eval_vocabulary.episode import ENDED_BY as ENDED_BY
 from eval_vocabulary.episode import ENDED_BY_OPERATOR as ENDED_BY_OPERATOR
+from eval_vocabulary.episode import ENDED_BY_POLICY as ENDED_BY_POLICY
+from eval_vocabulary.episode import ENV_ENDS_ON_SUCCESS as ENV_ENDS_ON_SUCCESS
+from eval_vocabulary.episode import POLICY_END as POLICY_END
 from eval_vocabulary.episode import SUCCESS as SUCCESS
 from eval_vocabulary.episode import TERMINATED as TERMINATED
+from eval_vocabulary.episode import PolicyEnd as PolicyEnd
 
 DURATION = 'eval.duration'
 
@@ -47,6 +52,11 @@ TRIAL_COUNT = 'eval.trial_count'
 # The id of the task a trial runs, as the benchmark names it. The episode records it; positronic never reads
 # inside it.
 TASK = BENCHMARK_TASK
+# The object that a pick-and-place trial moves, as its task names it. Analysis groups the trials by it.
+OBJECT = 'eval.object'
+# The side of a pick-and-place trial's tote and of its external camera, as the trial records them.
+TOTE_PLACEMENT = 'eval.tote_placement'
+EXTERNAL_CAMERA = 'eval.external_camera'
 
 # The chunk schedule's waypoint counters, keyed f'{SCHEDULE}.{DROPPED}' under ``policy.keys.POLICY_META``.
 # ``DROPPED`` counts a due waypoint that a later waypoint replaced.

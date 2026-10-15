@@ -6,7 +6,7 @@ const EDIT_DELAY_MS = 300;
 
 // Every name this page shares with the console's server, and the only place the page spells one. The server's
 // side is the routes of StationConsole.build_app, the models Status, RunView, Episode, CameraView, InstructionBody
-// and EndBody, the enums Phase and Outcome, and the `detail` of a FastAPI error answer.
+// and JudgementBody, the enum Phase, the outcomes in Ending, and the `detail` of a FastAPI error answer.
 const ROUTES = {
   status: '/status',
   instruction: '/instruction',
@@ -15,11 +15,23 @@ const ROUTES = {
   endRun: '/run/end',
   video: '/video',
 };
-const PHASE = { ready: 'ready', running: 'running', ending: 'ending', runEnded: 'run_ended' };
-const OUTCOME = { pass: 'pass', fail: 'fail', timeout: 'timeout', error: 'error' };
+const PHASE = {
+  ready: 'ready',
+  running: 'running',
+  ending: 'ending',
+  judgementPending: 'judgement_pending',
+  runEnded: 'run_ended',
+};
+const OUTCOME = {
+  success: 'Success',
+  fail: 'Fail',
+  outOfTime: 'Ran out of time',
+  discarded: 'Discarded',
+  error: 'error',
+};
 const REQUEST = {
   instruction: (text) => ({ override: text }),
-  end: (verdict) => ({ verdict: verdict }),
+  judgement: (judgement) => ({ judgement: judgement }),
 };
 const errorDetail = (answer) => answer.detail;
 
@@ -31,6 +43,7 @@ function readStatus(answer) {
     configured: run.configured,
     override: run.override,
     overrideSince: run.override_since,
+    judgements: run.judgements,
     generation: run.generation,
     now: run.now,
     episodes: run.episodes.map((e) => ({
@@ -69,25 +82,29 @@ const PHASE_VIEW = {
   [PHASE.ready]: { text: 'Ready', css: 'ready' },
   [PHASE.running]: { text: 'Running', css: 'running', doing: 'recording' },
   [PHASE.ending]: { text: 'Ending', css: 'ending', doing: 'ending' },
+  [PHASE.judgementPending]: { text: 'Judgement pending', css: 'pending', doing: 'ended · judge the episode' },
   [PHASE.runEnded]: { text: 'Run ended', css: 'run-ended' },
 };
 const OUTCOME_VIEW = {
-  [OUTCOME.pass]: { label: `${ICON.check}Success`, text: 'success', css: 'pass' },
+  [OUTCOME.success]: { label: `${ICON.check}Success`, text: 'success', css: 'pass' },
   [OUTCOME.fail]: { label: `${ICON.cross}Fail`, text: 'fail', css: 'fail' },
-  [OUTCOME.timeout]: { label: 'Timed out', text: 'timed out', css: 'timeout' },
+  [OUTCOME.outOfTime]: { label: 'Out of time', text: 'ran out of time', css: 'timeout' },
+  [OUTCOME.discarded]: { label: 'Discarded', text: 'discarded', css: 'discarded' },
   [OUTCOME.error]: { label: 'Error', text: 'error', css: 'error' },
 };
 // An open episode's row shows the phase in place of an outcome.
 const OPEN_VIEW = {
   [PHASE.running]: { label: '<span class="dot"></span>Running', css: 'running' },
   [PHASE.ending]: { label: 'Ending', css: 'ending' },
+  [PHASE.judgementPending]: { label: 'Judge?', css: 'pending' },
 };
 
 const $ = (id) => document.getElementById(id);
 const textarea = $('instruction');
-const verdictButtons = [
-  [$('finish-pass'), OUTCOME.pass],
+const judgementButtons = [
+  [$('finish-pass'), OUTCOME.success],
   [$('finish-fail'), OUTCOME.fail],
+  [$('discard'), OUTCOME.discarded],
 ];
 
 let current = null;
@@ -105,7 +122,8 @@ function clock(seconds) {
   return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-const isOpen = (phase) => phase === PHASE.running || phase === PHASE.ending;
+const isRecording = (phase) => phase === PHASE.running || phase === PHASE.ending;
+const isOpen = (phase) => isRecording(phase) || phase === PHASE.judgementPending;
 const runHasEnded = () => current !== null && current.phase === PHASE.runEnded;
 const openEpisode = (status) => (isOpen(status.phase) ? status.episodes[status.episodes.length - 1] : null);
 const nextNumber = (status) => status.episodes.length + 1;
@@ -133,7 +151,7 @@ function showRefusal(error) {
 }
 
 // The last instruction request in the queue. Each waits for the one before it, so the console applies the edits and
-// the reset in the order the operator made them, and Start waits for all of them. It never rejects.
+// the reset in the order the judge made them, and Start waits for all of them. It never rejects.
 let instructionQueue = Promise.resolve();
 
 function postInstruction(text) {
@@ -262,16 +280,24 @@ function renderButtons() {
   const phase = current ? current.phase : null;
   const idle = !offline && !busy;
   $('start').disabled = !(idle && phase === PHASE.ready);
-  for (const [button] of verdictButtons) button.disabled = !(idle && isOpen(phase));
+  const judgements = current ? current.judgements : [];
+  for (const [button, judgement] of judgementButtons) button.disabled = !(idle && judgements.includes(judgement));
   $('end-run').disabled = !idle || phase === null || phase === PHASE.runEnded;
 }
 
 function renderFailure(status) {
   const last = status.episodes[status.episodes.length - 1];
   const failed = status.phase === PHASE.ready && last !== undefined && last.outcome === OUTCOME.error;
-  $('failure').hidden = !failed;
-  if (!failed) return;
-  $('failure-head').textContent = `Episode ${last.number} failed. Start runs the next episode.`;
+  // A judgement whose write failed: the episode waits for the judgement again.
+  const unwritten = status.phase === PHASE.judgementPending && Boolean(last.error);
+  $('failure').hidden = !(failed || unwritten);
+  if (failed) {
+    $('failure-head').textContent = `Episode ${last.number} failed. Start runs the next episode.`;
+  } else if (unwritten) {
+    $('failure-head').textContent = `The judgement of episode ${last.number} is not in the recording. Judge it again.`;
+  } else {
+    return;
+  }
   $('failure-text').textContent = last.error ?? '';
 }
 
@@ -284,9 +310,10 @@ function renderEpisodes(status) {
   $('ep-legend').hidden = episodes.length === 0;
   let sum = '<span>0 episodes</span>';
   if (episodes.length > 0) {
-    sum = `<span class="n-pass">Success: ${count(OUTCOME.pass)}</span>`;
+    sum = `<span class="n-pass">Success: ${count(OUTCOME.success)}</span>`;
     sum += `<span class="n-fail">${count(OUTCOME.fail)} fail</span>`;
-    if (count(OUTCOME.timeout)) sum += `<span>${count(OUTCOME.timeout)} timed out</span>`;
+    if (count(OUTCOME.outOfTime)) sum += `<span>${count(OUTCOME.outOfTime)} ran out of time</span>`;
+    if (count(OUTCOME.discarded)) sum += `<span>${count(OUTCOME.discarded)} discarded</span>`;
     if (count(OUTCOME.error)) sum += `<span>${count(OUTCOME.error)} error</span>`;
   }
   $('ep-sum').innerHTML = sum;
@@ -320,7 +347,7 @@ function renderTiles(status) {
     if (cameras.length === 0) grid.innerHTML = '<div class="cams-empty">This embodiment has no cameras.</div>';
     for (const camera of cameras) tiles.set(camera.name, makeTile(grid, camera));
   }
-  const recording = isOpen(status.phase);
+  const recording = isRecording(status.phase);
   for (const camera of cameras) {
     const tile = tiles.get(camera.name);
     if (!tile) continue;
@@ -477,8 +504,8 @@ $('start').addEventListener('click', () =>
   }),
 );
 
-for (const [button, verdict] of verdictButtons) {
-  button.addEventListener('click', () => act(() => post(ROUTES.end, REQUEST.end(verdict))));
+for (const [button, judgement] of judgementButtons) {
+  button.addEventListener('click', () => act(() => post(ROUTES.end, REQUEST.judgement(judgement))));
 }
 
 $('end-run').addEventListener('click', () => {

@@ -49,7 +49,7 @@ Migration preserves every coordinate exposed by the source API.
 
 ## Identity
 
-Every episode is stamped with `meta['uid']` (a uuid4 hex) at recording time — the identity contract. Episodes lacking a stamped uid derive a stable `ts-<created_ts_ns>` one from their recording timestamp, which is equally immutable and travels with the episode. Position in a `Dataset` is *access*, not identity: `FilterDataset`/`ConcatDataset` renumber episodes freely. The uid is *reference* — stable across views, processes, copies, and exports. Because transforms pass meta through unchanged, a transformed episode keeps its recording's uid: it is a view of the same recording event.
+Every episode is stamped with `meta['uid']` (a uuid4 hex) at recording time — the identity contract. Every `EpisodeWriter` reports it as `uid`. Episodes lacking a stamped uid derive a stable `ts-<created_ts_ns>` one from their recording timestamp, which is equally immutable and travels with the episode. Position in a `Dataset` is *access*, not identity: `FilterDataset`/`ConcatDataset` renumber episodes freely. The uid is *reference* — stable across views, processes, copies, and exports. Because transforms pass meta through unchanged, a transformed episode keeps its recording's uid: it is a view of the same recording event.
 
 ## Edits
 
