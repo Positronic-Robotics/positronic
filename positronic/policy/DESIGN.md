@@ -169,6 +169,9 @@ One algorithm may drive several robots at once.
   so a driver can run the same trial again, and each driver decides. The
   three built-in drivers do: `TaskDriver` of `positronic eval run`, the
   station console, and `KeyboardOperator` at its next press.
+- A `done` that arrives before the episode starts, during `prepare` or that
+  block, is an `EpisodeNotStarted` too. So an early Finish press records no
+  verdict.
 - A stop of the world waits for that block. So the run must limit its own
   wait.
 

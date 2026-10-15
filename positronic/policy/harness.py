@@ -132,9 +132,9 @@ class Harness(pimm.ControlSystem):
     the episode. The caller decides whether that error ends the run. Between episodes, manual commands pass through.
     Before each episode the harness asks every device to be ready, then prepares what the task names. A device
     that answers ready with an error fails the episode before it starts. An error of the policy run before its first
-    yield is an ``EpisodeNotStarted``, and its span is not an episode span. A ``pimm.SignalError`` on an observation
-    fails the episode before the policy reads that value. Between episodes the harness repairs a device in error
-    (``_ready_devices_in_error``).
+    yield is an ``EpisodeNotStarted``, and so is a ``done`` that arrives before the episode starts. Its span is not an
+    episode span. A ``pimm.SignalError`` on an observation fails the episode before the policy reads that value.
+    Between episodes the harness repairs a device in error (``_ready_devices_in_error``).
     """
 
     def __init__(
@@ -479,6 +479,10 @@ class Harness(pimm.ControlSystem):
             except Exception as exc:
                 self._telemetry.not_started()
                 raise EpisodeNotStarted(f'{type(exc).__name__}: {exc}') from exc
+            # The idle loop clears a done of an earlier episode, so this one came during `prepare` or the start.
+            if (early := pimm.read_updated(self.done)) is not None and early.data:
+                self._telemetry.not_started()
+                raise EpisodeNotStarted('a done signal arrived before the episode started')
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())

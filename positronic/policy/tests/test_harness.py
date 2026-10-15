@@ -1254,6 +1254,32 @@ def test_a_run_that_waits_before_its_first_yield_starts_its_time_limit_and_recor
     assert answer.result() == {eval_keys.TERMINATED: False}
 
 
+@pytest.mark.parametrize('arrives', ['during prepare', 'before the first yield'])
+def test_a_done_before_the_episode_starts_keeps_it_from_starting(episode_harness, arrives):
+    h = episode_harness
+
+    class PressedWhileItGetsReady(Policy):
+        def run(self, runtime):
+            if arrives == 'before the first yield':
+                h.done.emit({eval_keys.SUCCESS: True})
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 100_000_000)
+
+    h.observation.emit(1)
+    answer = h.caller(
+        Rollout(Task('move', None, prepare_args={RESET: 'home'}), PressedWhileItGetsReady(), h.output_path)
+    )
+    next(h.loop)
+    if arrives == 'during prepare':
+        h.done.emit({eval_keys.SUCCESS: True})
+    next(h.prepare[RESET].incoming()).set_result(None)
+    next(h.loop)
+    with pytest.raises(EpisodeNotStarted, match='a done signal arrived before the episode started'):
+        answer.result()
+    assert h.deadlines.values == [] and h.dataset.episodes == []
+
+
 def test_an_error_before_the_first_yield_exports_no_episode_span_and_leaves_no_span_without_its_parent(
     episode_harness, tmp_path
 ):
