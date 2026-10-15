@@ -165,18 +165,21 @@ class Station:
     def close(self, outcome: Outcome, now: float, error: str | None = None) -> None:
         """Record how the open episode ended."""
         with self._lock:
-            episode = self._episodes[-1]
-            episode.ended_at, episode.outcome, episode.error = now, outcome, error
-            self._open_trial = None
-            self._ending = False
-            self._generation += 1
+            self._close(outcome, now, error)
 
     def not_started(self, now: float, error: str) -> None:
         """Record that the open episode failed before it started, and keep its trial for the next Start."""
         with self._lock:
             assert self._open_trial is not None, 'an episode is open'
             self._trial, self._drawn_next = self._open_trial, self._trial
-        self.close(Outcome.ERROR, now, error=error)
+            self._close(Outcome.ERROR, now, error)
+
+    def _close(self, outcome: Outcome, now: float, error: str | None) -> None:
+        episode = self._episodes[-1]
+        episode.ended_at, episode.outcome, episode.error = now, outcome, error
+        self._open_trial = None
+        self._ending = False
+        self._generation += 1
 
     def end_run(self) -> None:
         """End the run. An open episode must end first."""
