@@ -242,15 +242,22 @@ class StationConsole(pimm.ControlSystem):
             station.set_override(body.override)
             return status()
 
+        # The routes run in a thread pool. A route that changes the station and then acts on the World holds this lock
+        # across both, so the World gets the actions in the order of the changes. Else a stale ``done`` from one press
+        # can reach the episode that a later Start opened.
+        acting = threading.Lock()
+
         @app.post('/episode/start')
         def start() -> Status:
-            submit(station.start(clock.now()))
+            with acting:
+                submit(station.start(clock.now()))
             return status()
 
         @app.post('/episode/end')
         def end(body: JudgementBody) -> Status:
-            if (payload := station.end(body.judgement)) is not None:
-                self.done.emit(payload)
+            with acting:
+                if (payload := station.end(body.judgement)) is not None:
+                    self.done.emit(payload)
             return status()
 
         @app.post('/run/end')

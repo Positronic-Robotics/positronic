@@ -1,5 +1,6 @@
 import queue
 import re
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal, get_args, get_origin
@@ -140,6 +141,56 @@ def test_the_page_offers_only_the_judgements(console):
 
 
 POLICY_END = EpisodeEnd({eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.TERMINATED: True}, 'recording-1')
+
+
+class _Actions(pimm.SignalEmitter[dict[str, Any]]):
+    """The order in which the World gets the console's actions: each submitted task, and each ``done``."""
+
+    def __init__(self):
+        self.order: list[str] = []
+
+    def submit(self, task: Task) -> None:
+        self.order.append('start')
+
+    def _emit(self, data: dict[str, Any], time: pimm.Time) -> None:
+        self.order.append('done')
+
+
+def test_a_press_reaches_the_world_before_a_later_start_even_when_the_policy_ends_its_episode_between(
+    console, monkeypatch
+):
+    """A press reads the station, the policy ends that episode, and a second client presses Start. The press's
+    ``done`` must reach the World before the new task, or it ends the new episode with the old judgement."""
+    actions = _Actions()
+    station = Station(_trial, lambda uid, judgement: None)
+    console_system = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
+    console_system.done._bind(actions, clock=SystemClock())
+    app = console_system.build_app(station, {CAMERA: console.feed}, actions.submit, SystemClock(), console.should_stop)
+    pressed, released = threading.Event(), threading.Event()
+    end = station.end
+
+    def end_and_pause(judgement):
+        payload = end(judgement)
+        pressed.set()
+        released.wait(timeout=5.0)
+        return payload
+
+    monkeypatch.setattr(station, 'end', end_and_pause)
+    TestClient(app).post('/episode/start').raise_for_status()
+    body = JudgementBody(judgement=Outcome.SUCCESS).model_dump(mode='json')
+    press = threading.Thread(target=lambda: TestClient(app).post('/episode/end', json=body))
+    press.start()
+    assert pressed.wait(timeout=5.0)
+
+    station.close(POLICY_END, now=1.0)
+    second_start = threading.Thread(target=lambda: TestClient(app).post('/episode/start'))
+    second_start.start()
+    second_start.join(timeout=0.5)
+    released.set()
+    press.join(timeout=5.0)
+    second_start.join(timeout=5.0)
+
+    assert actions.order == ['start', 'done', 'start']
 
 
 def test_a_judgement_that_does_not_reach_the_recording_is_refused_with_the_reason(console):
