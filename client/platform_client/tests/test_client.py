@@ -40,7 +40,6 @@ from platform_client.eval_plan import (
     credential_from_file,
     plan_of_image,
 )
-from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
@@ -58,6 +57,7 @@ from platform_client.responses import (
     SubmissionListResponse,
 )
 from platform_client.tasks import TaskRef
+from positronic_evals.evals import EvalRef
 from pydantic import ValidationError
 
 BASE = 'http://gateway.test'

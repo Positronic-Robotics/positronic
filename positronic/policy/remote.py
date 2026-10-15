@@ -175,8 +175,8 @@ class RemotePolicy(Policy):
                 while True:
                     try:
                         step = run.send(obs)
-                    except StopIteration:
-                        return
+                    except StopIteration as end:
+                        return end.value
                     obs = yield step
         finally:
             # Generator failure can reach cleanup while inference still owns the connection.

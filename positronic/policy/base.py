@@ -5,10 +5,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping
 from functools import partial
-from typing import Any, ClassVar, Generic, ParamSpec, TypeVar
+from typing import Any, ClassVar, Generic, ParamSpec
 
 from attr import dataclass
-from typing_extensions import TypeAliasType
+from eval_vocabulary.episode import PolicyEnd
+from typing_extensions import TypeAliasType, TypeVar
 
 from positronic import telemetry
 
@@ -57,8 +58,11 @@ class Step:
 P = ParamSpec('P')
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
+ReturnT = TypeVar('ReturnT', default=Any)
 
-ProcessorRun = TypeAliasType('ProcessorRun', Generator[OutputT | None, InputT, None], type_params=(InputT, OutputT))
+ProcessorRun = TypeAliasType(
+    'ProcessorRun', Generator[OutputT | None, InputT, ReturnT], type_params=(InputT, OutputT, ReturnT)
+)
 
 
 class Runtime(ABC):
@@ -84,7 +88,7 @@ class Runtime(ABC):
         pass
 
     @staticmethod
-    def _timed_run(run: ProcessorRun[InputT, OutputT], name: str) -> ProcessorRun[InputT, OutputT]:
+    def _timed_run(run: ProcessorRun[InputT, OutputT, ReturnT], name: str) -> ProcessorRun[InputT, OutputT, ReturnT]:
         """Time each resumption, leaving no span active while the generator is suspended."""
         result = None
         try:
@@ -100,14 +104,14 @@ class Runtime(ABC):
                 with telemetry.span(name):
                     try:
                         result = resume()
-                    except StopIteration:
-                        return
+                    except StopIteration as end:
+                        return end.value
         finally:
             run.close()
 
     def start(
-        self, processor: Processor[InputT, OutputT], /, *args: Any, **kwargs: Any
-    ) -> ProcessorRun[InputT, OutputT]:
+        self, processor: Processor[InputT, OutputT, ReturnT], /, *args: Any, **kwargs: Any
+    ) -> ProcessorRun[InputT, OutputT, ReturnT]:
         """Create and prime an episode generator. The caller owns its closure.
 
         Bind telemetry before starting processors; timing wrappers are selected at startup.
@@ -127,13 +131,14 @@ class Runtime(ABC):
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...
 
 
-class Processor(ABC, Generic[InputT, OutputT]):
+class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
     """A reusable computation definition with typed inputs and outputs.
 
     Constructors hold configuration. Each ``run`` creates one episode's generator, keeping mutable
     episode state in its locals. ``Runtime.start`` advances it to its first yield, which must be
     ``None``, after which ``send(input)`` returns one output. Dependencies are supplied live and already
-    primed when they are generators. Whoever starts a generator owns its closure.
+    primed when they are generators. Whoever starts a generator owns its closure. A run ends when it returns. A policy
+    run returns a ``PolicyEnd``, and a run around another run returns what that run returned.
     """
 
     # A receiver resolves this name through its registry of installed processor classes.
@@ -141,7 +146,7 @@ class Processor(ABC, Generic[InputT, OutputT]):
     WIRE_VERSION: ClassVar[int] = 1
 
     @abstractmethod
-    def run(self, runtime: Runtime, *args: Any, **kwargs: Any) -> ProcessorRun[InputT, OutputT]: ...
+    def run(self, runtime: Runtime, *args: Any, **kwargs: Any) -> ProcessorRun[InputT, OutputT, ReturnT]: ...
 
     def meta(self) -> dict[str, Any]:
         """Model and configuration metadata shared across episodes."""
@@ -152,5 +157,5 @@ class Processor(ABC, Generic[InputT, OutputT]):
         raise NotImplementedError(f'{type(self).__name__} has no wire spec')
 
 
-Policy = Processor[Obs, Step]
-PolicyRun = ProcessorRun[Obs, Step]
+Policy = Processor[Obs, Step, PolicyEnd]
+PolicyRun = ProcessorRun[Obs, Step, PolicyEnd]

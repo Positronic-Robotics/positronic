@@ -1,0 +1,27 @@
+[project]
+name = "positronic-evals"
+# Bumped by the change that edits this distribution, so a consumer pinning it can say which definitions it
+# was written against.
+version = "0.1.0"
+description = "The public evals of the Positronic platform: their definitions, labelers, scoring rules and episode lists"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# No robotics stack and no platform client: a service that scores a run installs this subdirectory alone
+# (`git+…#subdirectory=evals`).
+dependencies = [
+    # The client's floor. No older pydantic is tested.
+    "pydantic>=2.11",
+    # The labelers read the time of each sample from an episode's signal files.
+    "pyarrow",
+    # The names an episode records, which the labelers read. The root pins it exactly at the same version.
+    "positronic-eval-vocabulary==0.4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Hatchling ships the named directory verbatim: `py.typed` and the episode lists with the modules.
+packages = ["positronic_evals"]

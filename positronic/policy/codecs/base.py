@@ -88,8 +88,8 @@ class Codec:
         while True:
             try:
                 result = call(obs)
-            except StopIteration:
-                return
+            except StopIteration as end:
+                return end.value
             obs = yield result
 
     def to_spec(self) -> dict[str, Any]:

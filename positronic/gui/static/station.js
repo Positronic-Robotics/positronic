@@ -16,7 +16,7 @@ const ROUTES = {
   video: '/video',
 };
 const PHASE = { ready: 'ready', running: 'running', ending: 'ending', runEnded: 'run_ended' };
-const OUTCOME = { pass: 'pass', fail: 'fail', timeout: 'timeout', error: 'error' };
+const OUTCOME = { pass: 'pass', fail: 'fail', timeout: 'timeout', policyEnded: 'policy_ended', error: 'error' };
 const REQUEST = {
   instruction: (text) => ({ override: text }),
   end: (verdict) => ({ verdict: verdict }),
@@ -75,6 +75,7 @@ const OUTCOME_VIEW = {
   [OUTCOME.pass]: { label: `${ICON.check}Success`, text: 'success', css: 'pass' },
   [OUTCOME.fail]: { label: `${ICON.cross}Fail`, text: 'fail', css: 'fail' },
   [OUTCOME.timeout]: { label: 'Timed out', text: 'timed out', css: 'timeout' },
+  [OUTCOME.policyEnded]: { label: 'Ended by policy', text: 'ended by policy', css: 'policy-ended' },
   [OUTCOME.error]: { label: 'Error', text: 'error', css: 'error' },
 };
 // An open episode's row shows the phase in place of an outcome.
@@ -287,6 +288,7 @@ function renderEpisodes(status) {
     sum = `<span class="n-pass">Success: ${count(OUTCOME.pass)}</span>`;
     sum += `<span class="n-fail">${count(OUTCOME.fail)} fail</span>`;
     if (count(OUTCOME.timeout)) sum += `<span>${count(OUTCOME.timeout)} timed out</span>`;
+    if (count(OUTCOME.policyEnded)) sum += `<span>${count(OUTCOME.policyEnded)} ended by policy</span>`;
     if (count(OUTCOME.error)) sum += `<span>${count(OUTCOME.error)} error</span>`;
   }
   $('ep-sum').innerHTML = sum;

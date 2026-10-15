@@ -15,7 +15,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, JointPosition,
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
-from positronic.policy.base import Policy, Step
+from positronic.policy.base import Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -73,6 +73,22 @@ def test_unavailability_withholds_commands_and_resumes_on_recovery(execution, st
         assert run.send({MOTOR: 1}) == Step({MOTOR: 1}, 100_000_000)
     finally:
         run.close()
+
+
+@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,))])
+def test_a_wrapper_returns_what_its_inner_run_returned(execution, wrapper):
+    runtime, _ = execution
+
+    def inner():
+        yield
+        return PolicyEnd.COMPLETE
+
+    child = inner()
+    next(child)
+    run = runtime.start(wrapper, child)
+    with pytest.raises(StopIteration) as end:
+        run.send({MOTOR: 1})
+    assert end.value.value is PolicyEnd.COMPLETE
 
 
 @pytest.mark.parametrize('pad_start', [True, False])

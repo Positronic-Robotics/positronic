@@ -236,14 +236,9 @@ def episode_rng(bench: BenchmarkPath, episode_index: int) -> np.random.Generator
     return np.random.default_rng(int.from_bytes(digest[:8], 'little'))
 
 
-# The episodes where scene geometry hides the start grasp site from the right shoulder camera, by benchmark path.
-# A benchmark absent from the file is unswept. An offline sweep builds the file (internal#1869). Rebuild it when
-# the pinned MolmoSpaces revision or the asset packs change.
-RIGHT_VIEW_BLOCKED_PATH = Path(__file__).parent / 'right_view_blocked.json'
-
-
-def load_right_view_blocked(path: Path = RIGHT_VIEW_BLOCKED_PATH) -> dict[BenchmarkPath, frozenset[int]]:
-    """The blocked episodes of every swept benchmark."""
+# `positronic_evals.molmo_spaces` holds the list, and the sim server's interpreter cannot import that package.
+def load_right_view_blocked(path: Path) -> dict[BenchmarkPath, frozenset[int]]:
+    """The blocked episodes of every swept benchmark, from the right-view blocked list at ``path``."""
     return {BenchmarkPath.parse(rel): frozenset(indices) for rel, indices in json.loads(path.read_text()).items()}
 
 
@@ -258,6 +253,6 @@ def select_episodes(bench: BenchmarkPath, count: int, pinned: list[int] | None, 
     if hidden:
         raise ValueError(
             f'episodes {hidden} of {bench.relative} hide the start grasp site from the right shoulder camera; '
-            f'select others ({RIGHT_VIEW_BLOCKED_PATH.name} lists them)'
+            'select others (the right-view blocked list names them)'
         )
     return list(pinned)

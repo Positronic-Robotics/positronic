@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from platform_client.enums import ErrorCode, ReasonCode
-from platform_client.evals import EvalRef
 from platform_client.responses import QuotaLimit
-from platform_client.slug import Slugged, members_by_slug
 from platform_client.tasks import TaskRef
+from positronic_evals.evals import EvalRef
+from positronic_evals.slug import Slugged, members_by_slug
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 # The `details` keys the gateway writes and this module reads.

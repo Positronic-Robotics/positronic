@@ -6,6 +6,7 @@ from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.gui import station as station_module
 from positronic.gui.station import Outcome, Phase, Refused, Station, outcome_of, terminal_payload
+from positronic.policy import PolicyEnd
 
 CONFIGURED = 'put the cup in the tote'
 OVERRIDE = 'put the red cup in the grey tote'
@@ -145,6 +146,12 @@ def test_the_outcome_reads_back_the_verdict_from_the_harness_answer(verdict):
 
 def test_a_verdict_that_arrives_after_the_budget_reads_as_a_timeout():
     assert outcome_of({eval_keys.TERMINATED: False}) is Outcome.TIMEOUT
+
+
+@pytest.mark.parametrize('end', list(PolicyEnd))
+def test_an_episode_that_the_policy_ended_reads_as_ended_by_the_policy(end):
+    ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.POLICY_END: end, eval_keys.TERMINATED: True}
+    assert outcome_of(ended) is Outcome.POLICY_ENDED
 
 
 def test_the_verdicts_record_who_ended_the_episode():

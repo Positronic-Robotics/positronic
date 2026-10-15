@@ -117,7 +117,7 @@ def main() -> None:
     args = parser.parse_args()
     np.random.seed(0)
 
-    sim_env = env.MolmoSpacesEnv(Path(os.environ[mapping.ASSETS_DIR_ENV]))
+    sim_env = env.MolmoSpacesEnv(Path(os.environ[mapping.ASSETS_DIR_ENV]), right_view_blocked={})
     token = {
         **args.benchmark._asdict(),
         mapping.TOKEN_EPISODE_INDEX: args.episode_index,
