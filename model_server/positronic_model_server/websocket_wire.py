@@ -101,11 +101,27 @@ class WebsocketServerConnection(server_wire.ServerConnection):
             await self._send({'type': 'websocket.close', 'code': 1000})
 
 
+# The kernel picks a port free on the first address only, and another process can hold it on the next one.
+PORT_ZERO_BIND_ATTEMPTS = 5
+
+
 def _listening_sockets(host: str, port: int) -> list[socket.socket]:
     """A listening socket for every address ``host`` resolves to, all on one port.
 
-    A ``port`` of 0 takes the port the first socket bound, so the whole set still answers on one port.
+    A ``port`` of 0 takes the port the first socket bound, and draws a new one when a later address has it taken.
     """
+    if port:
+        return _bind_each_address_on_one_port(host, port)
+    for _ in range(PORT_ZERO_BIND_ATTEMPTS - 1):
+        try:
+            return _bind_each_address_on_one_port(host, 0)
+        except OSError as taken:
+            if taken.errno != errno.EADDRINUSE:
+                raise
+    return _bind_each_address_on_one_port(host, 0)
+
+
+def _bind_each_address_on_one_port(host: str, port: int) -> list[socket.socket]:
     sockets: list[socket.socket] = []
     bound_port = port
     try:

@@ -36,10 +36,7 @@ from eval_vocabulary.episode import (
     UID,
     VALUE_COLUMN,
 )
-from eval_vocabulary.outcome import Outcome as CountedOutcome
-from eval_vocabulary.outcome import counted_outcome
 from eval_vocabulary.timeline import EMITTED_WORLD
-from platform_client.slug import Slugged
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -51,6 +48,8 @@ from pydantic import (
     model_validator,
 )
 from pydantic_core import core_schema
+
+from positronic_evals.slug import Slugged
 
 log = logging.getLogger(__name__)
 
@@ -379,26 +378,22 @@ def recorded_uid(episode: Path) -> str | None:
     return uid
 
 
-# The outcome of a label for each outcome that `counted_outcome` gives.
-_LABEL_OUTCOMES: Mapping[CountedOutcome, Outcome] = MappingProxyType({
-    CountedOutcome.SUCCESS: Outcome.success,
-    CountedOutcome.FAIL: Outcome.fail,
-    CountedOutcome.OUT_OF_TIME: Outcome.out_of_time,
-    CountedOutcome.SAFETY: Outcome.safety,
-    CountedOutcome.SYSTEM: Outcome.fail,
-})
-
-
 def recorded_task_and_outcome(static: Mapping[str, object], task_key: str) -> tuple[str, Outcome] | None:
-    """The task under `task_key` and the outcome that `counted_outcome` gives, or None when either is missing.
+    """The task under `task_key` and how the trial ended, or None when either is missing or of the wrong type.
 
-    `UNSCORED` and `DISCARDED` give no outcome. A success or a timeout marker of the wrong type is logged, and
-    `counted_outcome` reads it as absent.
+    A trial that ran out of time ended `out_of_time`, and the success that it recorded does not count. A success of
+    the wrong type is still logged.
     """
     terminated = static.get(TERMINATED)
     if TERMINATED in static and not isinstance(terminated, bool):
         log.error('%s=%r is not a bool; reading it as absent', TERMINATED, terminated)
-    outcome = _LABEL_OUTCOMES.get(counted_outcome(static))
+    success = static.get(SUCCESS)
+    if terminated is False:
+        outcome = Outcome.out_of_time
+    elif isinstance(success, bool):
+        outcome = Outcome.success if success else Outcome.fail
+    else:
+        outcome = None
     task = static.get(task_key)
     recorded = (task, outcome) if isinstance(task, str) and outcome is not None else None
     misrecorded = [
@@ -408,7 +403,7 @@ def recorded_task_and_outcome(static: Mapping[str, object], task_key: str) -> tu
     ]
     if misrecorded:
         # One damaged record leaves the other episodes labelled, so this is logged, not raised.
-        verdict = 'this episode has no label' if recorded is None else f'the trial counts as {recorded[1].name}'
+        verdict = 'this episode has no label' if recorded is None else 'the trial ran out of time'
         log.error('%s; %s', '; '.join(misrecorded), verdict)
     return recorded
 
@@ -476,8 +471,7 @@ class _SimTrial(NamedTuple):
 def _recorded_sim_trial(episode: Path, task_key: str) -> _SimTrial | None:
     """The trial that `episode` records, with its task under `task_key`.
 
-    None when an operator ended the trial, when the episode gives no outcome that a label states, or when it records no
-    id or no world time.
+    None when an operator ended the trial, or the episode records no verdict, no id or no world time.
     """
     static = read_static(episode)
     if static is None or static.get(ENDED_BY) == ENDED_BY_OPERATOR:
@@ -495,9 +489,9 @@ MOLMO_LABELER = LabelerRef('molmo')
 
 
 def molmo_label(episode: Path) -> Label | None:
-    """MolmoSpaces' labeler: a trial ends with the outcome that `counted_outcome` gives, at the end of its signals.
+    """MolmoSpaces' labeler: a trial succeeds or fails at its end, or runs out of time.
 
-    A trial that an operator ended has no label, and neither has an episode that `counted_outcome` leaves unscored.
+    A trial that an operator ended has no label.
     """
     trial = _recorded_sim_trial(episode, TASK)
     if trial is None:

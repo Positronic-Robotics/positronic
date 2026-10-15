@@ -10,8 +10,8 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-from platform_client.evals import MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
-from platform_client.labels import (
+from positronic_evals.evals import MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
+from positronic_evals.labels import (
     PUBLIC_LABELERS,
     ROBOLAB_LABELER,
     Fail,
@@ -26,8 +26,7 @@ from platform_client.labels import (
     Success,
     label,
 )
-from platform_client.responses import Scores as PublishedScores
-from platform_client.scoring import EpisodeScore, MeanEpisodeScore, Scores, Scoring, episode_score, score
+from positronic_evals.scoring import EpisodeScore, MeanEpisodeScore, Scoring, episode_score, score
 from pydantic import ValidationError
 
 FIXTURES = Path(__file__).parent / 'fixtures'
@@ -87,13 +86,6 @@ def test_a_robolab_episode_that_completes_no_subtask_scores_0_whatever_score_rob
 @pytest.mark.parametrize('name', PUBLIC_EVALS)
 def test_every_public_eval_names_only_public_labelers(name: EvalRef):
     assert set(public_eval(name).scoring.labelers) <= set(PUBLIC_LABELERS)
-
-
-def test_the_published_scores_are_a_subset_of_the_record():
-    record = score(MOLMO_SCORING, _sweep_labels()).model_dump(mode='json')
-    assert set(PublishedScores.model_fields) < set(Scores.model_fields)
-    published = PublishedScores.model_validate(record).model_dump(mode='json')
-    assert published == {name: record[name] for name in PublishedScores.model_fields}
 
 
 # --- one episode

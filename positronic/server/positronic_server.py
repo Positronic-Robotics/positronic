@@ -472,6 +472,11 @@ def download_paths(static: dict) -> Iterator[tuple[str, ...]]:
         yield key_path
 
 
+def holds_download(value: object) -> bool:
+    """Whether a page links `value`, or a value inside it, as a download."""
+    return next(_downloads(value, ()), None) is not None
+
+
 _MISSING = object()
 
 
@@ -652,7 +657,9 @@ class GroupTableConfig:
 
     Attributes:
         group_keys: Column key(s) to group episodes by. A single string or tuple of strings.
-        group_fn: Aggregation function that takes a list of episodes and returns a row dict.
+        group_fn: Aggregation function that takes a list of episodes and returns a row dict. In a static
+            export an episode holds its static values a page shows inline, its downloads at the episode table's
+            columns, its meta and the bounds of each of its signals, and no signal.
         format_table: Column definitions for the output table.
         group_filter_keys: Server-side filter dropdowns — maps column key to display label.
         default_sort: Initial sort order applied on first page load.
@@ -718,7 +725,7 @@ async def api_episodes(request: Request):
 
     def table_row(i: int, ep: Episode) -> dict:
         duration = None
-        timeline = duration_timeline(ep.timelines) if ep.signals else None
+        timeline = duration_timeline(ep.timelines)
         if timeline is not None:
             first, last = ep.bounds(timeline)
             duration = (last - first) / 1e9

@@ -19,19 +19,6 @@ import positronic.cfg.analysis
 from positronic.dataset import Dataset
 
 
-def success_rate_points(
-    data_by_ckpt: dict[str, list[dict[str, Any]]], ckpts: list[str]
-) -> tuple[list[str], list[float]]:
-    """The checkpoints with a scored episode, and the success rate over their scored episodes, in percent."""
-    rated_ckpts, success_rates = [], []
-    for ckpt in ckpts:
-        scored = [e['success'] for e in data_by_ckpt[ckpt] if e['success'] is not None]
-        if scored:
-            rated_ckpts.append(ckpt)
-            success_rates.append(sum(scored) / len(scored) * 100)
-    return rated_ckpts, success_rates
-
-
 @cfn.config(dataset=positronic.cfg.analysis.stacking_episodes, output='eval_plots.html')
 def main(dataset: Dataset, output: str):  # noqa: C901
     """
@@ -66,8 +53,8 @@ def main(dataset: Dataset, output: str):  # noqa: C901
             if val is not None:
                 entry[m] = val
 
-        # ``None`` for an episode that ``counted_outcome`` does not score.
-        entry['success'] = ep.get('success')
+        # Success is boolean in config, ensure we handle it
+        entry['success'] = ep.get('success', False)
 
         data_by_ckpt[ckpt].append(entry)
 
@@ -112,9 +99,17 @@ def main(dataset: Dataset, output: str):  # noqa: C901
     )
 
     # 1. Success Rate
-    rated_ckpts, success_rates = success_rate_points(data_by_ckpt, sorted_ckpts)
+    success_rates = []
+    for ckpt in sorted_ckpts:
+        entries = data_by_ckpt[ckpt]
+        if not entries:
+            success_rates.append(0)
+            continue
+        success_count = sum(1 for e in entries if e.get('success'))
+        success_rates.append(success_count / len(entries) * 100)
+
     fig.add_trace(
-        go.Scatter(x=rated_ckpts, y=success_rates, mode='lines+markers', name='Success Rate (%)'), row=1, col=1
+        go.Scatter(x=sorted_ckpts, y=success_rates, mode='lines+markers', name='Success Rate (%)'), row=1, col=1
     )
 
     # Helper for box plots

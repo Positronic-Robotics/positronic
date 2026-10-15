@@ -21,9 +21,6 @@ from positronic.simulator.robolab import keys as robolab_keys
 
 
 class RobolabAdapter(WireCommandAdapter):
-    # RoboLab freezes an env when its success term fires, and a frozen env ends the trial.
-    ends_on_success = True
-
     def __init__(self, camera_dict: dict[str, str]):
         # Converting here is what lets one checkpoint run on RoboLab and on the rig it stands in for unchanged.
         super().__init__(DROID_EE_FRAME)

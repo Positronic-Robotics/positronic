@@ -38,9 +38,6 @@ def camera_dict(exterior_sides: Sequence[ShoulderSide]) -> dict[str, tuple[str, 
 
 
 class MolmoAdapter(WireCommandAdapter):
-    # MolmoSpaces judges success at every step, and a success ends the trial.
-    ends_on_success = True
-
     _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
 
     def __init__(self, cameras: Mapping[str, tuple[str, ...]]):
