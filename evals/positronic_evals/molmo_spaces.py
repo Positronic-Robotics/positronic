@@ -1,7 +1,6 @@
-"""MolmoSpaces' committed episode lists.
+"""MolmoSpaces' committed episode lists, by benchmark path below the asset packs' `benchmarks` directory.
 
-A list holds episode indices by benchmark path, below the asset packs' `benchmarks` directory. An offline sweep
-builds each list. Rebuild it when the pinned MolmoSpaces revision or the asset packs change.
+An offline sweep builds each list. Rebuild it when the pinned MolmoSpaces revision or the asset packs change.
 """
 
 from __future__ import annotations
