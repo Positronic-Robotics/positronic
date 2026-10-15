@@ -88,7 +88,44 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
     with pytest.raises(SystemExit) as exit_info:
         run_command(run, eval='fake.smokey', policy_image='org/p:v1')
 
-    assert 'evals on offer: fake.smoke, robolab.public_subset' in str(exit_info.value)
+    assert '  evals: ["fake.smoke", "robolab.public_subset"]' in str(exit_info.value)
+
+
+QUOTA = {'key': 'submissions.day', 'limit': 3, 'used': 3, 'resets_at': '2026-03-05T00:00:00Z'}
+
+
+@pytest.mark.parametrize(
+    ('status', 'code', 'details', 'printed'),
+    [
+        (400, 'bad_request', {'tasks': ['marker-in-mug']}, '  tasks: ["marker-in-mug"]'),
+        (429, 'quota_exceeded', {'quota': QUOTA}, '"resets_at": "2026-03-05T00:00:00Z"'),
+        (
+            422,
+            'bad_request',
+            {'fields': [{'type': 'missing', 'loc': ['body', 'eval'], 'msg': 'Field required'}]},
+            '"eval"',
+        ),
+    ],
+    ids=['tasks-on-offer', 'quota', 'fields'],
+)
+def test_a_refusal_prints_the_details_the_platform_sent(platform, run_command, status, code, details, printed):
+    # The details name the next step, so a refusal that drops them leaves the caller to guess it.
+    platform.answer({'error': {'code': code, 'message': 'refused', 'details': details}}, status=status)
+
+    with pytest.raises(SystemExit) as exit_info:
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+
+    assert str(exit_info.value).startswith(f'{code}: refused\n')
+    assert printed in str(exit_info.value)
+
+
+def test_a_refusal_with_no_details_is_one_line(platform, run_command):
+    platform.answer({'error': {'code': 'unauthorized', 'message': 'invalid api key', 'details': {}}}, status=401)
+
+    with pytest.raises(SystemExit) as exit_info:
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+
+    assert str(exit_info.value) == 'unauthorized: invalid api key'
 
 
 @pytest.mark.parametrize(

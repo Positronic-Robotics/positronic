@@ -6,6 +6,7 @@ key or a credential is never an argument: a command line is readable by every pr
 lands in shell history.
 """
 
+import json
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -67,11 +68,9 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
         try:
             yield client
         except PlatformError as exc:
+            # The details name the next step: the names on offer, the quota that refused, the fields to fix.
             lines = [f'{exc.code.name}: {exc.message}']
-            # The platform owns the set of evals, so a name it does not know is answered with the
-            # names it does — print them rather than making the user guess a second time.
-            if exc.evals is not None:
-                lines.append(f'evals on offer: {", ".join(exc.evals)}')
+            lines += [f'  {key}: {json.dumps(value)}' for key, value in exc.details.items()]
             raise SystemExit('\n'.join(lines)) from exc
         except ValidationError as exc:
             # A 2xx whose body is not the route's response model. The body stays out of the message.
