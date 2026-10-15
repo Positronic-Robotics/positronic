@@ -160,17 +160,6 @@ One algorithm may drive several robots at once.
 - Whoever starts a run is responsible for closing it and the resources it owns.
   Submitted work must finish before those resources close. Closure happens
   between resumptions, never while the run is processing an input.
-- A run may block before its first yield to get ready, for example to open a
-  server session or to wait for a person. The framework starts the run after
-  it prepares the rig and before the time limit and the recording start, so
-  that time is in neither. The block stops every control system in the
-  process of the framework.
-- An exception before the first yield is an `EpisodeNotStarted`. No step ran,
-  so a driver can run the same trial again, and each driver decides. The
-  three built-in drivers do: `TaskDriver` of `positronic eval run`, the
-  station console, and `KeyboardOperator` at its next press.
-- A stop of the world waits for that block. So the run must limit its own
-  wait.
 
 For readers familiar with [PyTorch modules](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html),
 the composition idea is similar: a component can call other components as part

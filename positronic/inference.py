@@ -24,7 +24,7 @@ from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.web import StationConsole
 from positronic.policy import Policy
-from positronic.policy.harness import EpisodeNotStarted, Harness, Rollout
+from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
@@ -37,8 +37,7 @@ class KeyboardOperator(KeyboardControl):
     One episode is in flight at a time: a press while one runs is declined here, with a warning. It holds
     the pending answer because that is where the episode's terminal, its error or a refused ask arrives, and
     it logs that as it lands. ``next_task`` makes the trial and the policy opens its session, once per accepted
-    press. After an ``EpisodeNotStarted`` the next press runs the same trial again and makes no new one. Every
-    episode records into ``output_path``, and none records when that is ``None``.
+    press. Every episode records into ``output_path``, and none records when that is ``None``.
     """
 
     def __init__(self, next_task: Callable[[], Task], policy: Policy, output_path: Path | None):
@@ -47,9 +46,6 @@ class KeyboardOperator(KeyboardControl):
         self._policy = policy
         self._output_path = output_path
         self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
-        # The trial of the last ask, and the trial that the next press runs again.
-        self._asked: Task | None = None
-        self._again: Task | None = None
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
@@ -58,9 +54,6 @@ class KeyboardOperator(KeyboardControl):
         if self._pending is not None and self._pending.done():
             try:  # rules-allow: swallowed-error — the operator is who this failure is for
                 logger.info(f'Episode ended: {self._pending.result()}')
-            except EpisodeNotStarted as e:
-                logger.error(f'Episode did not start, so [s] runs the same trial again: {e}')
-                self._again = self._asked
             except Exception as e:
                 logger.error(f'Episode failed: {e}')
             self._pending = None
@@ -69,9 +62,8 @@ class KeyboardOperator(KeyboardControl):
                 logger.warning('An episode is already running: press [p] to stop it')
             case 's':
                 try:
-                    task = self._again if self._again is not None else self._next_task()
-                    self._asked, self._again = task, None
-                    self._pending = self.perform_task(Rollout(task, self._policy, self._output_path))
+                    rollout = Rollout(self._next_task(), self._policy, self._output_path)
+                    self._pending = self.perform_task(rollout)
                 except Exception as e:  # rules-allow: swallowed-error — the operator is who this failure is for
                     logger.error(f'Episode failed to open: {e}')
             case 'p':
