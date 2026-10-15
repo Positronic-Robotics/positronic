@@ -30,7 +30,7 @@ from positronic.gui.station import Outcome, Refused, RunView, Station, Verdict, 
 from positronic.gui.video_stream import VideoStream, codec_string
 from positronic.policy import Policy
 from positronic.policy import keys as policy_keys
-from positronic.policy.harness import EpisodeNotStarted, Rollout
+from positronic.policy.harness import Rollout
 
 logger = logging.getLogger(__name__)
 
@@ -187,9 +187,6 @@ class StationConsole(pimm.ControlSystem):
         episode, self._episode = self._episode, None
         try:  # rules-allow: swallowed-error — the page shows the error, and the operator decides whether to retry
             result = episode.result()
-        except EpisodeNotStarted as exc:
-            logger.exception('Episode did not start')
-            station.not_started(clock.now(), str(exc))
         except Exception as exc:
             logger.exception('Episode failed')
             station.close(Outcome.ERROR, clock.now(), error=''.join(traceback.format_exception_only(exc)).strip())
