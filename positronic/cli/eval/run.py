@@ -23,7 +23,7 @@ from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
 from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy
-from positronic.policy.harness import EpisodeNotStarted, Harness, Rollout
+from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.utils.git import get_package_git_state
 
@@ -78,8 +78,8 @@ class TaskDriver(pimm.ControlSystem):
 
     It makes the plan on its first turn and submits one task at a time. The harness owns each episode's
     policy run and cleanup; every episode records into ``output_path``. A task whose episode fails on a
-    ``pimm.SignalError`` or an ``EpisodeNotStarted`` runs again, and the run raises when one task fails so
-    ``MAX_ATTEMPTS_PER_TASK`` times in a row. Any other failed episode ends the run.
+    ``pimm.SignalError`` runs again, and the run raises when one task fails so ``MAX_ATTEMPTS_PER_TASK`` times in
+    a row. Any other failed episode ends the run.
     """
 
     def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, output_path: Path | None):
@@ -96,15 +96,15 @@ class TaskDriver(pimm.ControlSystem):
                     if should_stop.value:
                         return
                     yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
-                # rules-allow: swallowed-error — no policy step saw this task, or a device gave no data and the next
-                # ask makes it ready first; the last attempt raises.
+                # rules-allow: swallowed-error — a device gave no data, and the next ask makes it ready first; the
+                # last attempt raises.
                 try:
                     answer.result()  # any other failed episode raises here, and that ends the run
                     break
-                except (pimm.SignalError, EpisodeNotStarted) as e:
+                except pimm.SignalError as e:
                     if attempt == MAX_ATTEMPTS_PER_TASK:
                         raise
-                    logger.warning(f'The episode failed, so the task runs again: {e}')
+                    logger.warning(f'A device gave no data, so the task runs again: {e}')
 
 
 def run_world(

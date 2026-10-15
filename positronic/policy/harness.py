@@ -48,11 +48,6 @@ class Rollout:
     output_path: Path | None
 
 
-# TODO: Raise `EpisodeNotStarted` for a device ready error and a failed `prepare` too.
-class EpisodeNotStarted(RuntimeError):
-    """The policy run failed before the episode started: no policy step ran, and nothing was recorded."""
-
-
 class _EpisodeTelemetry:
     """Parent reset, inference, and recorder spans to one episode; count its steps and virtual duration."""
 
@@ -119,11 +114,10 @@ class Harness(pimm.ControlSystem):
     the policy run. A ``done`` or a return after the deadline counts as a timeout. When a ``done`` and a return come
     in one iteration, the ``done`` ends the episode. Its answer carries the terminal payload, or the error that failed
     the episode. The caller decides whether that error ends the run. Between episodes, manual commands pass through.
-    Before each episode the harness asks every device to be ready, starts the policy run and waits for its ready
-    calls, then prepares what the task names. A device that answers ready with an error fails the episode before it
-    starts. An error of the policy run before its first yield, or a failed ready call, is an ``EpisodeNotStarted``. A
-    ``pimm.SignalError`` on an observation fails the episode before the policy reads that value. Between episodes the
-    harness repairs a device in error (``_ready_devices_in_error``).
+    Before each episode the harness asks every device to be ready, then prepares what the task names. A device
+    that answers ready with an error fails the episode before it starts. A ``pimm.SignalError`` on an
+    observation fails the episode before the policy reads that value. Between episodes the harness repairs a
+    device in error (``_ready_devices_in_error``).
     """
 
     def __init__(
@@ -179,14 +173,6 @@ class Harness(pimm.ControlSystem):
     def _ready_devices(self, should_stop: pimm.SignalReceiver) -> pimm.Run[None]:
         """Ask every device to be ready and wait for the answers. Raise the first error that a device answers."""
         yield from self._wait(should_stop, pimm.calls.all_of([ready(None) for ready in self.ready.values()]))
-
-    def _wait_ready(self, should_stop: pimm.SignalReceiver, runtime: Executor) -> pimm.Run[None]:
-        """Wait until every ready call of the policy run answers or the world stops. Raise the first error."""
-        while not all(call.done() for call in runtime.ready_calls) and not should_stop.value:
-            yield self._yield()
-        if not should_stop.value:
-            for call in runtime.ready_calls:
-                call.result()
 
     def _ready_devices_in_error(self) -> None:
         """Ask each device whose observation of the same name carries a ``pimm.SignalError`` to be ready.
@@ -458,25 +444,20 @@ class Harness(pimm.ControlSystem):
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
     ) -> pimm.Run[dict[str, Any] | None]:
-        """Ready, prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
+        """Prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
         task = rollout.task
+        self._telemetry.begin(task.meta)
+        with telemetry.span(telemetry_keys.SPAN_RESET):
+            yield from self._prepare(should_stop, task.prepare_args)
+        if should_stop.value:
+            return None
+
         runtime = Executor(
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
         policy_run = None
         try:
-            try:
-                policy_run = runtime.start(rollout.policy)
-                yield from self._wait_ready(should_stop, runtime)
-            except Exception as exc:
-                raise EpisodeNotStarted(f'{type(exc).__name__}: {exc}') from exc
-            if should_stop.value:
-                return None
-            self._telemetry.begin(task.meta)
-            with telemetry.span(telemetry_keys.SPAN_RESET):
-                yield from self._prepare(should_stop, task.prepare_args)
-            if should_stop.value:
-                return None
+            policy_run = runtime.start(rollout.policy)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())

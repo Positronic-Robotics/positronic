@@ -38,7 +38,7 @@ from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import POLL_PERIOD_SEC, EpisodeNotStarted, Harness, Rollout
+from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -550,7 +550,7 @@ def test_a_failed_episode_closes_the_generator_answers_its_call_and_the_next_cal
                 closed.append(True)
 
     h.observation.emit(1)
-    error = EpisodeNotStarted if failure == 'startup' else ValueError
+    error = ValueError
     if failure == 'conversion':
         error = pimm.NoValueException
         h.serializer.side_effect = error('conversion failed')
@@ -1148,130 +1148,6 @@ def test_a_device_that_answers_ready_with_an_error_fails_the_ask_and_is_asked_ag
     h.caller(Rollout(task, Hold(), None))
     next(h.loop)
     assert [call.request for handler in h.ready.values() for call in handler.incoming()] == [None, None]
-
-
-class ReadyOn(Policy):
-    """Submit one ready call that answers when ``answered`` is set, or raises ``error`` then. Command nothing."""
-
-    def __init__(self, answered: threading.Event, error: Exception | None = None):
-        self.answered = answered
-        self.error = error
-        self.result = None
-        self.closed = False
-
-    def run(self, runtime):
-        def wait_for_the_person():
-            assert self.answered.wait(timeout=5)
-            if self.error is not None:
-                raise self.error
-            return 'ready'
-
-        call = runtime.submit(wait_for_the_person)
-        try:
-            yield
-            self.result = call.result()
-            while True:
-                yield Step({}, runtime.time_ns + 100_000_000)
-        finally:
-            self.closed = True
-
-
-def _until_prepare_is_asked(h) -> Any:
-    for _ in range(200):
-        if asked := next(h.prepare[RESET].incoming(), None):
-            return asked
-        next(h.loop)
-        time.sleep(0.005)
-    raise AssertionError('the harness never asked to prepare')
-
-
-def test_the_harness_prepares_only_after_the_ready_call_answers_and_the_wait_is_outside_the_episode(episode_harness):
-    h = episode_harness
-    answered = threading.Event()
-    policy = ReadyOn(answered)
-    h.observation.emit(1)
-    answer = h.caller(Rollout(Task('move', 0.01, prepare_args={RESET: 'home'}), policy, h.output_path))
-    for _ in range(3):
-        assert isinstance(next(h.loop), pimm.Yield)  # the world ticks while the harness waits
-    assert list(h.prepare[RESET].incoming()) == []
-    assert h.deadlines.values == [] and h.dataset.episodes == []
-
-    h.world.clock.advance_to_ns(500_000_000)
-    answered.set()
-    _until_prepare_is_asked(h).set_result(None)
-    next(h.loop)
-    assert [deadline for _, deadline in h.deadlines.values] == [510_000_000]
-    assert len(h.dataset.episodes) == 1
-    assert policy.result == 'ready'
-
-    h.world.clock.advance_to_ns(520_000_000)
-    next(h.loop)
-    next(h.prepare[RESET].incoming()).set_result(None)  # the move back
-    next(h.loop)
-    assert answer.result() == {eval_keys.TERMINATED: False}
-
-
-def test_a_ready_call_that_fails_keeps_the_episode_from_starting(episode_harness):
-    h = episode_harness
-    answered = threading.Event()
-    policy = ReadyOn(answered, error=RuntimeError('the teleoperator cancelled'))
-    answer = h.caller(Rollout(Task('move', 0.01, prepare_args={RESET: 'home'}), policy, h.output_path))
-    next(h.loop)
-    answered.set()
-    for _ in range(200):
-        if answer.done():
-            break
-        next(h.loop)
-        time.sleep(0.005)
-    with pytest.raises(EpisodeNotStarted, match='the teleoperator cancelled'):
-        answer.result()
-    assert policy.closed
-    assert list(h.prepare[RESET].incoming()) == []
-    assert h.deadlines.values == [] and h.dataset.episodes == []
-
-
-def test_a_stop_during_the_ready_wait_prepares_nothing(episode_harness):
-    h = episode_harness
-    answered = threading.Event()
-    answer = h.caller(Rollout(Task('move', 0.01, prepare_args={RESET: 'home'}), ReadyOn(answered), h.output_path))
-    next(h.loop)
-    h.world.request_stop()
-    answered.set()
-    list(h.loop)
-    assert list(h.prepare[RESET].incoming()) == []
-    with pytest.raises(pimm.calls.HandlerStopped):
-        answer.result()
-
-
-def test_the_ready_wait_is_outside_the_episode_span_and_a_failed_ready_call_emits_none(episode_harness, tmp_path):
-    h = episode_harness
-    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-ready'):
-        cancelled = threading.Event()
-        failed = h.caller(Rollout(Task('move', None), ReadyOn(cancelled, error=RuntimeError('cancelled')), None))
-        next(h.loop)
-        cancelled.set()
-        while not failed.done():
-            next(h.loop)
-            time.sleep(0.005)
-        answered = threading.Event()
-        h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), ReadyOn(answered), None))
-        next(h.loop)
-        answered_ns = time.time_ns()
-        answered.set()
-        _until_prepare_is_asked(h).set_result(None)
-        next(h.loop)
-        h.world.request_stop()
-        list(h.loop)
-    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
-    (episode,) = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
-    assert episode.start_ns >= answered_ns
-
-
-def test_a_policy_run_with_no_ready_call_is_prepared_in_the_turn_that_starts_it(episode_harness):
-    h = episode_harness
-    h.caller(Rollout(Task('move', 0.01, prepare_args={RESET: 'home'}), Hold(), h.output_path))
-    next(h.loop)
-    assert next(h.prepare[RESET].incoming()).request == 'home'
 
 
 def _ready_calls(h) -> dict[str, int]:
