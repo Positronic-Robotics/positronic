@@ -1,10 +1,12 @@
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime
 from functools import partial
 
 import configuronic as cfn
 import numpy as np
 import pos3
+from eval_vocabulary.outcome import SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, counted_outcome, is_scored
 from positronic_model_server import keys as offboard_keys
 
 import positronic.cfg.ds as base_cfg
@@ -23,6 +25,7 @@ from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
+from positronic.server.rollouts import outcome_label
 
 
 def task_code(ep: Episode) -> str:
@@ -141,192 +144,29 @@ def uph(ep: Episode) -> float | None:
 # Unified configs (real + sim)
 ########################
 
+# What a table shows for an episode that nobody scored. It is not a failure.
+UNSCORED = outcome_label(Outcome.UNSCORED)
 
-def is_sim_episode(ep: Episode) -> bool:
-    return 'stacking_success' in ep
+
+def unified_success_bool(ep: Episode) -> bool | None:
+    """Whether ``counted_outcome`` counts the episode as a success. ``None`` for an episode that it does not score."""
+    outcome = counted_outcome(ep)
+    return outcome == Outcome.SUCCESS if is_scored(outcome) else None
 
 
-def unified_success_bool(ep: Episode) -> bool:
-    if 'eval.outcome' in ep:
-        return ep['eval.outcome'] == 'Success'
-    if 'stacking_success' in ep:
-        return success(ep)
-    return False
+def success_units(episode: Episode) -> int | None:
+    """1 for an episode that ``counted_outcome`` counts as a success, 0 for a failure, ``None`` when it is unscored."""
+    success = unified_success_bool(episode)
+    return None if success is None else int(success)
 
 
 def unified_units_display(ep: Episode) -> str:
-    if 'eval.successful_items' in ep:
-        return f'{ep["eval.successful_items"]}/{ep["eval.total_items"]}'
-    if 'stacking_success' in ep:
-        return str(1 if success(ep) else 0)
-    return '-'
-
-
-def unified_uph(ep: Episode) -> float | None:
-    if 'eval.successful_items' in ep:
-        items = ep['eval.successful_items']
-        if items == 0:
-            return None
-        timelines = ep.timelines
-        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
-        first, last = ep.bounds(timeline)
-        return items / ((last - first) / 1e9 / 3600)
-    if 'stacking_success' in ep:
-        t = success_time(ep)
-        if t is None:
-            return None
-        return 1 / (t / 3600)
-    return None
-
-
-def unified_success_rate(ep: Episode) -> float:
-    if 'eval.successful_items' in ep:
-        return 100 * ep['eval.successful_items'] / ep['eval.total_items']
-    if 'stacking_success' in ep:
-        return 100.0 if success(ep) else 0.0
-    return 0.0
-
-
-episodes = base_cfg.transform.override(
-    base=base_cfg.local,
-    transforms=[
-        Group(
-            Identity(),
-            Derive(
-                task_code=task_code,
-                model=model,
-                checkpoint=ckpt,
-                is_sim=is_sim_episode,
-                success_bool=unified_success_bool,
-                units_display=unified_units_display,
-                uph=unified_uph,
-                success_rate=unified_success_rate,
-                started=started,
-            ),
-        ),
-        internal.REAL_ROBOT_TRANSFORM,
-    ],
-)
-
-
-@cfn.config()
-def episodes_table():
-    return {
-        '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.1f sec'),
-        'task_code': C(label='Task', filter=True),
-        'model': C(label='Model', filter=True),
-        'checkpoint': C(label='Checkpoint', filter=True),
-        'success_bool': C(
-            label='Pass',
-            renderer=RendererConfig(
-                type='badge',
-                options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
-            ),
-        ),
-        'units_display': C(label='Units'),
-        'uph': C(label='UPH', format='%.1f', default='-'),
-        'success_rate': C(label='Success', format='%.1f%%'),
-        'started': C(label='Started', format='%Y-%m-%d %H:%M:%S'),
-    }
-
-
-@cfn.config()
-def checkpoint_table():
-    def group_fn(episodes: list[Episode]):
-        count = len(episodes)
-        total_duration = 0.0
-        for ep in episodes:
-            timelines = ep.timelines
-            # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-            timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
-            first, last = ep.bounds(timeline)
-            total_duration += (last - first) / 1e9
-
-        if 'stacking_success' in episodes[0]:
-            successful_count = sum(1 for ep in episodes if success(ep))
-            total_units = successful_count
-            failed_count = count - successful_count
-            success_rate = 100 * successful_count / count if count > 0 else 0
-        else:
-            total_units = sum(ep.get('eval.successful_items', 0) for ep in episodes)
-            total_possible = sum(ep.get('eval.total_items', 0) for ep in episodes)
-            success_rate = 100 * total_units / total_possible if total_possible > 0 else 0
-            failed_count = sum(1 for ep in episodes if ep.get('eval.outcome') != 'Success')
-
-        return {
-            'checkpoint': episodes[0]['checkpoint'],
-            'model': episodes[0]['model'],
-            'count': count,
-            'UPH': total_units / (total_duration / 3600) if total_duration > 0 else 0,
-            'success_rate': success_rate,
-            'MTBF': total_duration / failed_count if failed_count > 0 else None,
-            'failures': failed_count,
-        }
-
-    format_table = {
-        'model': C(label='Model'),
-        'checkpoint': C(label='Checkpoint'),
-        'count': C(label='Runs', format='%d'),
-        'UPH': C(label='UPH', format='%.1f'),
-        'success_rate': C(label='Success', format='%.1f%%'),
-        'MTBF': C(label='MTBF', format='%.1f sec', default='-'),
-        'failures': C(label='Failures', format='%d'),
-    }
-
-    return GroupTableConfig(
-        group_keys=('model', 'checkpoint'),
-        group_fn=group_fn,
-        format_table=format_table,
-        group_filter_keys={'checkpoint': 'Checkpoint', 'model': 'Model'},
-    )
-
-
-########################
-# Extended simulator evaluation #
-########################
-
-
-def max_stacking_success(episode: Episode) -> float | None:
-    if 'stacking_success' not in episode:
-        return None
-    success_signal = episode['stacking_success']
-    if len(success_signal) == 0:
-        return None
-    return max(v for v, _ in success_signal)
-
-
-def success(episode: Episode, score_threshold: float = 0.95) -> bool:
-    """Check if stacking_success reached score_threshold and stayed there for at least 0.5 seconds."""
-    if 'stacking_success' not in episode:
-        return False
-    success_signal = episode['stacking_success']
-    if len(success_signal) == 0:
-        return False
-
-    threshold_ns = int(0.25 * 1e9)  # 0.25 seconds in nanoseconds
-
-    in_success = False
-    success_start_ts = None
-    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-    timeline = next(
-        (name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in success_signal.timelines), RECORDED_TIME
-    )
-
-    for value, timestamps in success_signal:
-        timestamp = timestamps[timeline]
-        if value >= score_threshold:
-            if not in_success:
-                in_success = True
-                success_start_ts = timestamp
-            elif timestamp - success_start_ts >= threshold_ns:
-                return True
-        else:
-            in_success = False
-            success_start_ts = None
-
-    return False
+    units = success_units(ep)
+    if units is None:
+        return '-'
+    if SUCCESSFUL_ITEMS in ep:
+        return f'{ep[SUCCESSFUL_ITEMS]}/{ep[TOTAL_ITEMS]}'
+    return str(units)
 
 
 def success_time(episode: Episode, score_threshold: float = 0.95) -> float | None:
@@ -360,6 +200,161 @@ def success_time(episode: Episode, score_threshold: float = 0.95) -> float | Non
     return None
 
 
+def success_time_uph(episode: Episode) -> float | None:
+    """Units per hour based on success_time (not full episode duration)."""
+    if not unified_success_bool(episode):
+        return None
+    t = success_time(episode)
+    if t is None:
+        return None
+    return 1 / (t / 3600)
+
+
+def unified_uph(ep: Episode) -> float | None:
+    if unified_success_bool(ep) is None:
+        return None
+    if SUCCESSFUL_ITEMS in ep:
+        items = ep[SUCCESSFUL_ITEMS]
+        if items == 0:
+            return None
+        timelines = ep.timelines
+        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+        first, last = ep.bounds(timeline)
+        return items / ((last - first) / 1e9 / 3600)
+    return success_time_uph(ep)
+
+
+def unified_success_rate(ep: Episode) -> float | None:
+    units = success_units(ep)
+    if units is None:
+        return None
+    if SUCCESSFUL_ITEMS in ep:
+        return 100 * ep[SUCCESSFUL_ITEMS] / ep[TOTAL_ITEMS]
+    return 100.0 * units
+
+
+episodes = base_cfg.transform.override(
+    base=base_cfg.local,
+    transforms=[
+        Group(
+            Identity(),
+            Derive(
+                task_code=task_code,
+                model=model,
+                checkpoint=ckpt,
+                success_bool=unified_success_bool,
+                units_display=unified_units_display,
+                uph=unified_uph,
+                success_rate=unified_success_rate,
+                started=started,
+            ),
+        ),
+        internal.REAL_ROBOT_TRANSFORM,
+    ],
+)
+
+
+@cfn.config()
+def episodes_table():
+    return {
+        '__index__': C(label='#', format='%d'),
+        '__duration__': C(label='Duration', format='%.1f sec'),
+        'task_code': C(label='Task', filter=True),
+        'model': C(label='Model', filter=True),
+        'checkpoint': C(label='Checkpoint', filter=True),
+        'success_bool': C(
+            label='Pass',
+            default=UNSCORED,
+            renderer=RendererConfig(
+                type='badge',
+                options={
+                    True: {'label': 'Pass', 'variant': 'success'},
+                    False: {'label': 'Fail', 'variant': 'danger'},
+                    UNSCORED: {'label': UNSCORED, 'variant': 'default'},
+                },
+            ),
+        ),
+        'units_display': C(label='Units'),
+        'uph': C(label='UPH', format='%.1f', default='-'),
+        'success_rate': C(label='Success', format='%.1f%%', default='-'),
+        'started': C(label='Started', format='%Y-%m-%d %H:%M:%S'),
+    }
+
+
+def scored_episodes(episodes: Sequence[Episode]) -> list[Episode]:
+    """The episodes that every aggregate counts: the ones that ``counted_outcome`` scores."""
+    return [ep for ep in episodes if unified_success_bool(ep) is not None]
+
+
+def _episode_duration(ep: Episode) -> float:
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    first, last = ep.bounds(timeline)
+    return (last - first) / 1e9
+
+
+@cfn.config()
+def checkpoint_table():
+    def group_fn(episodes: list[Episode]):
+        scored = scored_episodes(episodes)
+        scored_count = len(scored)
+        total_duration = sum(_episode_duration(ep) for ep in scored)
+
+        successful_count = sum(1 for ep in scored if unified_success_bool(ep))
+        failed_count = scored_count - successful_count
+        items = sum(ep.get(SUCCESSFUL_ITEMS, 0) for ep in scored)
+        possible_items = sum(ep.get(TOTAL_ITEMS, 0) for ep in scored)
+        # A unit is an item that a judge counted, or a success in an episode that counts no items.
+        total_units = sum(ep.get(SUCCESSFUL_ITEMS, success_units(ep) or 0) for ep in scored)
+
+        return {
+            'checkpoint': episodes[0]['checkpoint'],
+            'model': episodes[0]['model'],
+            'count': len(episodes),
+            'scored': scored_count,
+            'UPH': total_units / (total_duration / 3600) if total_duration > 0 else None,
+            'success_rate': 100 * successful_count / scored_count if scored_count > 0 else None,
+            'items_done': 100 * items / possible_items if possible_items > 0 else None,
+            'MTBF': total_duration / failed_count if failed_count > 0 else None,
+            'failures': failed_count,
+        }
+
+    format_table = {
+        'model': C(label='Model'),
+        'checkpoint': C(label='Checkpoint'),
+        'count': C(label='Runs', format='%d'),
+        'scored': C(label='Scored', format='%d'),
+        'UPH': C(label='UPH', format='%.1f', default='-'),
+        'success_rate': C(label='Success', format='%.1f%%', default='-'),
+        'items_done': C(label='Items done', format='%.1f%%', default='-'),
+        'MTBF': C(label='MTBF', format='%.1f sec', default='-'),
+        'failures': C(label='Failures', format='%d'),
+    }
+
+    return GroupTableConfig(
+        group_keys=('model', 'checkpoint'),
+        group_fn=group_fn,
+        format_table=format_table,
+        group_filter_keys={'checkpoint': 'Checkpoint', 'model': 'Model'},
+    )
+
+
+########################
+# Extended simulator evaluation #
+########################
+
+
+def max_stacking_success(episode: Episode) -> float | None:
+    if 'stacking_success' not in episode:
+        return None
+    success_signal = episode['stacking_success']
+    if len(success_signal) == 0:
+        return None
+    return max(v for v, _ in success_signal)
+
+
 def box_distance_progress(episode: Episode) -> float | None:
     if 'box_distance' not in episode:
         return None
@@ -388,19 +383,6 @@ def ee_pose_movement(episode: Episode) -> float | None:
     return result
 
 
-def units_sim(episode: Episode) -> int:
-    """Number of successful stacks (1 if success, 0 otherwise)."""
-    return 1 if success(episode) else 0
-
-
-def uph_sim(episode: Episode) -> float | None:
-    """Units per hour based on success_time (not full episode duration)."""
-    t = success_time(episode)
-    if t is None:
-        return None
-    return 1 / (t / 3600)
-
-
 stacking_episodes = base_cfg.transform.override(
     base=base_cfg.local_all,
     transforms=[
@@ -410,12 +392,12 @@ stacking_episodes = base_cfg.transform.override(
                 model=model,
                 checkpoint=ckpt,
                 max_stacking_success=max_stacking_success,
-                success=success,
+                success=unified_success_bool,
                 success_time=success_time,
                 box_distance_progress=box_distance_progress,
                 movement=ee_pose_movement,
-                units=units_sim,
-                uph=uph_sim,
+                units=success_units,
+                uph=success_time_uph,
             ),
         ),
         internal.SIM_ROBOT_TRANSFORM,
@@ -432,13 +414,18 @@ def stacking_episodes_table():
         'checkpoint': C(label='CKPT', filter=True),
         'success': C(
             label='Pass',
+            default=UNSCORED,
             renderer=RendererConfig(
                 type='badge',
-                options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
+                options={
+                    True: {'label': 'Pass', 'variant': 'success'},
+                    False: {'label': 'Fail', 'variant': 'danger'},
+                    UNSCORED: {'label': UNSCORED, 'variant': 'default'},
+                },
             ),
         ),
         'success_time': C(label='Success Time', format='%.1f sec', default='-'),
-        'units': C(label='Units', format='%d'),
+        'units': C(label='Units', format='%d', default='-'),
         'uph': C(label='UPH', format='%.1f', default='-'),
         'max_stacking_success': C(label='Max Success', format='%.2f'),
         'box_distance_progress': C(label='Box Progress', format='%.1f%%', default='-'),
@@ -448,13 +435,7 @@ def stacking_episodes_table():
 
 def _effective_duration(key: str, ep: Episode) -> float:
     t = ep.get(key)
-    if t is not None:
-        return t
-    timelines = ep.timelines
-    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
-    first, last = ep.bounds(timeline)
-    return (last - first) / 1e9
+    return t if t is not None else _episode_duration(ep)
 
 
 @cfn.config()
@@ -462,22 +443,26 @@ def stacking_checkpoint_table():
     """Grouped table by checkpoint with UPH and MTBF metrics."""
 
     def group_fn(episodes: list[Episode]):
-        count = len(episodes)
-        total_duration = sum(_effective_duration('success_time', ep) for ep in episodes)
-        successful = [ep for ep in episodes if ep['success']]
-        failed = [ep for ep in episodes if not ep['success']]
+        # The signal metric counts every episode. The rest count only the episodes with a counted outcome.
+        scored = scored_episodes(episodes)
+        scored_count = len(scored)
+        total_duration = sum(
+            _effective_duration('success_time', ep) if ep['success'] else _episode_duration(ep) for ep in scored
+        )
+        successful = [ep for ep in scored if ep['success']]
+        failed = [ep for ep in scored if not ep['success']]
 
         successful_count = len(successful)
         failed_count = len(failed)
 
-        total_units = sum(ep['units'] for ep in episodes)
-        uph_value = total_units / (total_duration / 3600) if total_duration > 0 else 0
+        total_units = sum(ep['units'] for ep in scored)
+        uph_value = total_units / (total_duration / 3600) if total_duration > 0 else None
 
         # MTBF: total duration / number of failures
         mtbf_value = total_duration / failed_count if failed_count > 0 else None
 
         # Success rate
-        success_rate = 100 * successful_count / count if count > 0 else 0
+        success_rate = 100 * successful_count / scored_count if scored_count > 0 else None
 
         # Average time to success (for successful episodes only)
         success_times = [ep['success_time'] for ep in successful if ep['success_time'] is not None]
@@ -490,7 +475,8 @@ def stacking_checkpoint_table():
         result = {
             'model': episodes[0]['model'],
             'checkpoint': episodes[0]['checkpoint'],
-            'count': count,
+            'count': len(episodes),
+            'scored': scored_count,
             'UPH': uph_value,
             'success_rate': success_rate,
             'MTBF': mtbf_value,
@@ -504,8 +490,9 @@ def stacking_checkpoint_table():
         'model': C(label='Model'),
         'checkpoint': C(label='Checkpoint'),
         'count': C(label='Runs', format='%d'),
-        'UPH': C(label='UPH', format='%.1f'),
-        'success_rate': C(label='Success', format='%.1f%%'),
+        'scored': C(label='Scored', format='%d'),
+        'UPH': C(label='UPH', format='%.1f', default='-'),
+        'success_rate': C(label='Success', format='%.1f%%', default='-'),
         'MTBF': C(label='MTBF', format='%.1f sec', default='-'),
         'avg_success_time': C(label='Avg Time', format='%.1f sec', default='-'),
         'avg_max_success': C(label='Avg Max', format='%.2f', default='-'),
@@ -613,6 +600,7 @@ PHAIL_OUTCOME_BADGE = RendererConfig(
         'Pass': {'label': 'Pass', 'variant': 'success'},
         'Fail': {'label': 'Fail', 'variant': 'danger'},
         'Safety': {'label': 'Safety', 'variant': 'warning'},
+        UNSCORED: {'label': UNSCORED, 'variant': 'default'},
     },
 )
 
@@ -622,26 +610,28 @@ def phail_model(ep: Episode) -> str:
 
 
 def phail_status(ep: Episode) -> str:
-    outcome = ep.get('eval.outcome', '')
-    if outcome == 'Success':
+    outcome = counted_outcome(ep)
+    if not is_scored(outcome):
+        return UNSCORED
+    if outcome == Outcome.SUCCESS:
         return 'Pass'
-    if outcome == 'Safety':
+    if outcome == Outcome.SAFETY:
         return 'Safety'
     return 'Fail'
 
 
 def phail_completion(ep: Episode) -> float:
-    s = ep.get('eval.successful_items', 0)
-    t = ep.get('eval.total_items', 0)
+    s = ep.get(SUCCESSFUL_ITEMS, 0)
+    t = ep.get(TOTAL_ITEMS, 0)
     return 100 * s / t if t else 0.0
 
 
 def phail_units(ep: Episode) -> str:
-    return f'{ep.get("eval.successful_items", 0)}/{ep.get("eval.total_items", 0)}'
+    return f'{ep.get(SUCCESSFUL_ITEMS, 0)}/{ep.get(TOTAL_ITEMS, 0)}'
 
 
 def phail_uph(ep: Episode) -> float | None:
-    items = ep.get('eval.successful_items', 0)
+    items = ep.get(SUCCESSFUL_ITEMS, 0)
     if not items:
         return None
     timelines = ep.timelines
@@ -904,21 +894,22 @@ def phail_episodes_table():
 @cfn.config()
 def phail_leaderboard():
     def group_fn(episodes: list[Episode]):
-        count = len(episodes)
-        total_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in episodes)
-        failed_count = sum(1 for ep in episodes if ep['status'] != 'Pass')
+        scored = scored_episodes(episodes)
+        count = len(scored)
+        total_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in scored)
+        failed_count = sum(1 for ep in scored if ep['status'] != 'Pass')
 
         # Per-object aggregation: compute UPH and completion per object type, then average equally.
         by_object: dict[str, list[Episode]] = defaultdict(list)
-        for ep in episodes:
+        for ep in scored:
             by_object[ep['eval.object']].append(ep)
 
         object_uphs = []
         object_completions = []
         for obj_eps in by_object.values():
             obj_duration = sum(_effective_duration(eval_keys.DURATION, ep) for ep in obj_eps)
-            obj_items = sum(ep['eval.successful_items'] for ep in obj_eps)
-            obj_possible = sum(ep['eval.total_items'] for ep in obj_eps)
+            obj_items = sum(ep.get(SUCCESSFUL_ITEMS, 0) for ep in obj_eps)
+            obj_possible = sum(ep.get(TOTAL_ITEMS, 0) for ep in obj_eps)
             if obj_duration > 0:
                 object_uphs.append(obj_items / (obj_duration / 3600))
             if obj_possible > 0:
