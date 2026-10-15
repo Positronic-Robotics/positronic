@@ -166,7 +166,9 @@ One algorithm may drive several robots at once.
   that time is in neither. The block stops every control system in the
   process of the framework.
 - An exception before the first yield is an `EpisodeNotStarted`. No step ran,
-  so the driver runs the same trial again.
+  so a driver can run the same trial again, and each driver decides. The
+  three built-in drivers do: `TaskDriver` of `positronic eval run`, the
+  station console, and `KeyboardOperator` at its next press.
 - A stop of the world waits for that block. So the run must limit its own
   wait.
 

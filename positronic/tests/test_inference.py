@@ -36,7 +36,7 @@ from positronic.gui.web import EndBody, InstructionBody, StationConsole, Status
 from positronic.inference import KeyboardOperator, real, web
 from positronic.policy import Policy
 from positronic.policy.base import Step
-from positronic.policy.harness import Harness, Rollout
+from positronic.policy.harness import EpisodeNotStarted, Harness, Rollout
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 from positronic.tests.testing_inference import (
     ARM_STOPPED_SHORT,
@@ -134,6 +134,29 @@ def test_a_task_failure_is_reported_without_stopping_the_operator(monkeypatch, c
         with caplog.at_level(logging.ERROR):
             drive_scheduler(world.start([operator, scripted_driver((refuse, 0.1), (None, 0.1))]))
     assert 'endpoint down' in caplog.text
+
+
+def test_the_next_press_after_an_episode_that_did_not_start_runs_the_same_trial(monkeypatch):
+    drawn = iter([Task(instruction_source=f'trial {n}', timeout_sec=None) for n in range(2)])
+    presses = iter(['s', *[None] * 9, 's'])
+    monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
+    operator = KeyboardOperator(lambda: next(drawn), _IdlePolicy(), None)
+    with pimm.World(virtual_time=True) as world:
+        harness = world.pair(operator.perform_task)
+        received = []
+
+        def not_started():
+            for call in harness.incoming():
+                received.append(call.request.task.instruction)
+                call.set_exception(EpisodeNotStarted('RuntimeError: the teleoperator cancelled'))
+
+        def hold_the_ask():
+            received.extend(call.request.task.instruction for call in harness.incoming())
+
+        steps = [(not_started, 0.05), *[(hold_the_ask, 0.02)] * 10]
+        drive_scheduler(world.start([operator, scripted_driver(*steps)]))
+
+    assert received == ['trial 0', 'trial 0']
 
 
 def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog):
