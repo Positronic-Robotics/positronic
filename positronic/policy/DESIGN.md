@@ -116,9 +116,10 @@ model and commands on the way back.
 An episode begins, and the assembled half becomes a run — the
 running instance of the policy that controls this robot for this
 episode. The framework resumes the run repeatedly, sending the sensor
-data. The run reads world time from its runtime. Every resumption yields
-commands and the time of the next call. The framework sends the commands
-to the robot immediately.
+data. The run reads world time from its runtime. A resumption yields
+commands and the time of the next call, and the framework sends the
+commands to the robot immediately. The run can also return instead of a
+yield, and the return ends the episode.
 
 The run holds the control state the episode remembers between calls. This
 state lives on the rig: a reaction that crosses a wire arrives late,
@@ -179,8 +180,9 @@ The policy run is a reader of observations and a writer of commands.
 Everything around it is asynchronous, but each resumption is synchronous:
 the run processes an observation and returns control to the framework.
 
-- Each resumption receives observations and produces commands to execute now
-  (possibly none), together with the requested time of the next call.
+- Each resumption receives observations. It yields commands to execute now
+  (possibly none), together with the requested time of the next call, or it
+  returns.
 - The run ends the episode when it returns. It returns a `PolicyEnd`:
   `COMPLETE` when it thinks that it did the task, and `GIVE_UP` when it stops
   before that. This is a claim, not a verdict. A return after the time limit
