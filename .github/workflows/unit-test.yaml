@@ -81,8 +81,29 @@ jobs:
       - name: Install as package and verify imports
         run: |
           uv venv --python ${{ matrix.python }} /tmp/pkg-test
-          uv pip install --no-sources --python /tmp/pkg-test ./client ./wire ./model_server ./vocabulary . jinja2
+          uv pip install --no-sources --python /tmp/pkg-test ./client ./evals ./wire ./model_server ./vocabulary . jinja2
           /tmp/pkg-test/bin/python utilities/check_packaging.py
+
+  # The evals install with no positronic and no client, and their tests pass in that environment.
+  evals-packaging:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build the wheels
+        run: |
+          uv build --package positronic-eval-vocabulary --out-dir /tmp/evals-wheels
+          uv build --package positronic-evals --out-dir /tmp/evals-wheels
+      - name: Install the evals alone
+        run: |
+          uv venv --python ${{ matrix.python }} /tmp/evals-package
+          uv pip install --python /tmp/evals-package --find-links /tmp/evals-wheels positronic-evals pytest
+      - name: Run the package tests
+        run: /tmp/evals-package/bin/python -I -m pytest -p no:cacheprovider -c /dev/null --import-mode=importlib evals/positronic_evals/tests
 
   model-server-packaging:
     runs-on: ubuntu-latest

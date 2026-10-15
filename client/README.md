@@ -8,18 +8,18 @@ endpoint.
 > and nothing here is covered by a backwards-compatibility guarantee. Pin the exact version you
 > tested against, and expect to edit your code when you move off it.
 
-The library depends on `pydantic`, `httpx`, `typing-extensions`, `pyarrow` and
-`positronic-eval-vocabulary`, which has no dependencies. So a service that only speaks to the platform
-installs it on its own, at the exact version it was written against:
+The library depends on `pydantic`, `httpx`, `typing-extensions` and `positronic-evals`, which holds
+the eval names and definitions (`evals/`). So a service that only speaks to the platform installs it on
+its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.33.0"
+uv add "positronic-platform-client==0.34.0"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
 The package is not on PyPI yet. Until it is, use the second line, pinned to a tag or a commit. The
-client pins `positronic-eval-vocabulary` exactly, and the index supplies it. So a git install of an
-unreleased client needs that vocabulary version released first. The
+client pins `positronic-evals` exactly, and the index supplies it. So a git install of an unreleased
+client needs that `positronic-evals` version released first. The
 platform serves the same contract as an OpenAPI schema at `<platform>/openapi.json`, and `/docs`
 browses it.
 
@@ -278,70 +278,10 @@ definition.
 
 `ResolvedPlan.rig_shape` names the plan's rig shape. Missing or invalid shapes fail response validation.
 
-## Public evals
+## Public evals, labels and scores
 
-`platform_client.evals` carries the definitions of the public evals. A definition pins what the
-platform runs under the eval's name: the positronic eval config and its arguments, the trials, the
-time limit of one run, its scoring, and the positronic commit that the platform runs the config at.
-`public_eval(name)` returns one definition, and `PUBLIC_EVALS` names them all. The platform also
-offers evals that it does not publish, and `public_eval` refuses their names.
-
-`positronic eval run` with `--policy` takes a public eval's name as `--eval`, and runs that eval on
-your machine. The run uses the positronic you installed. It warns when that positronic is not the
-commit the definition names, because the two runs can then differ. A local run does not stop at the
-time limit.
-
-## Labels and scores
-
-`platform_client.labels` reads what happened in a recorded episode. A labeler reads one episode
-directory and gives its `Label`: the episode's id and task, its end, and a list of timed events. An
-event is a stage that the arm reached, a count of items delivered, a count of subtasks achieved, or
-one of the three end events: `Success`, `Fail` and `Safety`. The earliest end event gives the
-`outcome`. A label with no end event ran out of time. The label's other views, such as
-`stage_seconds` and `placements`, are properties computed from its events. `Label.until(seconds)`
-gives the label as it stood at that time.
-
-`platform_client.scoring` states what a label is worth. An eval's `Scoring` names its labelers in
-order of precedence, and its primary metric. `label(episode, scoring.labelers)` gives a pair: the
-first labeler that labels the episode, and its label. It gives None when no labeler labels the
-episode. `score(scoring, labels)` takes the label of each episode, or None. For the episode
-directories `episodes` of one run:
-
-```python
-from platform_client.evals import EvalRef, public_eval
-from platform_client.labels import label
-from platform_client.scoring import score
-
-scoring = public_eval(EvalRef('molmo.franka_pick_mini')).scoring
-picked = [label(episode, scoring.labelers) for episode in episodes]
-scores = score(scoring, [None if given is None else given[1] for given in picked])
-```
-
-`score` gives `Scores`, which holds three numbers. `primary` is the mean episode score, or the mean
-of the task means where the metric sets `per_task`, and a board ranks on it. `episodes` counts every
-episode, and `unscored` counts the episodes that no labeler labelled. `primary` does not count those
-as failures. No file holds a score: a score is a function of the labels.
-
-`PUBLIC_LABELERS` holds the labelers that this package publishes, `molmo` and `robolab`. A caller with
-labelers of its own passes `label` a table that holds them beside `PUBLIC_LABELERS`. The MolmoSpaces
-labeler takes the end of a trial from the episode's signal files: the time from the first sample to
-the last, on the world clock. That time can exceed the trial by up to one control step.
-
-The RoboLab labeler reads the end of a trial in the same way. Its task is the task id that RoboLab
-names, and not the instruction. It also reads the `subtask` signal, which RoboLab records at each
-step, and gives a `SubtaskAchieved` event, with RoboLab's score, for each change of the subtasks
-completed. A change of the score alone is not an event. A RoboLab eval scores a success 1.0, and any
-other episode the score at its last change of the count, or 0 where it completed no subtask. Where
-RoboLab grades progress within a subtask, this score does not count that progress:
-
-```python
-from platform_client.labels import ROBOLAB_LABELER
-from platform_client.scoring import EpisodeScore, MeanEpisodeScore, Scoring
-
-robolab = Scoring(
-    labelers=(ROBOLAB_LABELER,), primary=MeanEpisodeScore(episode_score=EpisodeScore(use_subtask_score=True))
-)
-```
+`positronic-evals` holds the definitions of the public evals, the labelers and the scoring rules.
+Its README describes them. An eval name, `EvalRef`, is `positronic_evals.evals.EvalRef`.
 
 ## From the command line
 

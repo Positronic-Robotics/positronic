@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Annotated, Generic, Literal, Self
 
 from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, RigShape, StartPose, Wire
-from platform_client.evals import EvalRef
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
-from platform_client.slug import Slugged, members_by_slug, slug_of
 from platform_client.tasks import TaskRef
+from positronic_evals.evals import EvalRef
+from positronic_evals.slug import Slugged, members_by_slug, slug_of
 from pydantic import (
     AfterValidator,
     BaseModel,

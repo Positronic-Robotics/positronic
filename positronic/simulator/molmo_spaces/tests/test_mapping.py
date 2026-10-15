@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from platform_client.evals import MOLMO_CONFIG, PUBLIC_EVALS, public_eval
+from positronic_evals.molmo_spaces import RIGHT_VIEW_BLOCKED_PATH, read_episode_list
 from scipy.spatial.transform import Rotation
 
 from positronic.simulator.env_server import protocol
@@ -328,13 +328,7 @@ def test_a_pinned_episode_out_of_range_is_refused():
         mapping.select_episodes(_HARD, 6, [0, 6], frozenset())
 
 
-def test_no_public_eval_pins_an_episode_the_committed_list_blocks():
-    blocked = mapping.load_right_view_blocked()
-    for name in PUBLIC_EVALS:
-        definition = public_eval(name)
-        if definition.config != MOLMO_CONFIG:
-            continue
-        bench = mapping.BenchmarkPath(*(str(definition.args[d]) for d in mapping.BenchmarkPath._fields))
-        episodes = definition.args[mapping.SELECT_EPISODES]
-        assert isinstance(episodes, list)
-        assert not set(episodes) & blocked.get(bench, frozenset()), name
+def test_the_server_reads_the_right_view_list_every_other_reader_reads():
+    shared = read_episode_list(RIGHT_VIEW_BLOCKED_PATH)
+    server = mapping.load_right_view_blocked(RIGHT_VIEW_BLOCKED_PATH)
+    assert server == {mapping.BenchmarkPath(*benchmark.parts): episodes for benchmark, episodes in shared.items()}
