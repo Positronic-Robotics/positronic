@@ -276,7 +276,7 @@ svg.i { width: 16px; height: 16px; flex: 0 0 auto; }
 .out svg.i { width: 13px; height: 13px; }
 .out--pass { color: #86efac; background: rgba(74, 222, 128, 0.12); border-color: rgba(74, 222, 128, 0.3); }
 .out--fail { color: #fca5a5; background: rgba(248, 113, 113, 0.12); border-color: rgba(248, 113, 113, 0.3); }
-.out--timeout, .out--error { color: #fcd34d; background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.35); }
+.out--timeout, .out--policy-ended, .out--error { color: #fcd34d; background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.35); }
 .out--running { color: #fca5a5; background: transparent; border-color: rgba(249, 115, 115, 0.45); }
 .out--running .dot { background: var(--danger); width: 6px; height: 6px; }
 .out--ending { color: #fcd34d; background: transparent; border-color: rgba(251, 191, 36, 0.45); }

@@ -13,6 +13,7 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.usage import RequestUsage
 
 from positronic import keys
+from positronic.policy import PolicyEnd
 from positronic.policy import keys as policy_keys
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.policy import llm
@@ -97,9 +98,9 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert policy.meta() == metadata
     with execution(policy) as (active, rt, clock):
         assert not complete(active, rt, clock, observation()).commands
-        complete(active, rt, clock, observation())
-        meta = policy.meta() | rt.metadata_snapshot()
         assert len(clients) == 1 and not clients[0].is_closed
+        assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
+        meta = policy.meta() | rt.metadata_snapshot()
         assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
     assert len(requests) == 2
     assert requests[0].url.host == 'endpoint-secret.invalid'
@@ -116,9 +117,9 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert 'path-secret' not in recorded
     assert clients and all(client.is_closed for client in clients)
     with execution(policy) as (active, rt, clock):
-        complete(active, rt, clock, observation())
+        assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
         assert rt.metadata_snapshot()[policy_keys.STOP_REASON] == 'done'
-        assert len(clients) == 2 and not clients[1].is_closed
+        assert len(clients) == 2
     assert all(client.is_closed for client in clients)
     assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
 
@@ -134,7 +135,7 @@ def test_run_records_compact_reply_and_usage(monkeypatch):
     policy = llm(model=FunctionModel(respond))
     with execution(policy) as (active, rt, clock):
         clock.advance_to_ns(1000)
-        complete(active, rt, clock, observation())
+        assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
         meta = policy.meta() | rt.metadata_snapshot()
     recorded = json.dumps(meta)
     assert 'base_url' not in meta
@@ -213,6 +214,6 @@ def test_config_accepts_a_configured_model_and_records_generation_settings():
     model = FunctionModel(respond, model_name='configured', settings={'temperature': 0.25})
     policy = llm(model=model, timeout=2, settings={'temperature': 0.5})
     with execution(policy) as (active, rt, clock):
-        assert not complete(active, rt, clock, observation()).commands
+        assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
         assert policy.meta()['model'] == 'function:configured'
         assert policy.meta()['settings.temperature'] == 0.5
