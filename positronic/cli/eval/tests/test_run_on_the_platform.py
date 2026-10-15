@@ -1,11 +1,15 @@
 """`positronic eval run` with a policy image: the run goes to the platform, over a stub transport."""
 
 import sys
+from datetime import UTC, datetime
 
 import configuronic as cfn
 import pytest
 from platform_client import routes
+from platform_client.enums import OnExhausted, QuotaSubject
+from platform_client.errors import EVALS_DETAIL, QUOTA_DETAIL, TASKS_DETAIL
 from platform_client.ids import SubmissionId
+from platform_client.responses import QUOTA_SUBMISSIONS_DAY, QuotaLimit
 
 from positronic.cli.conftest import ID, KEY, runs_of_four
 from positronic.cli.eval.run import run
@@ -79,7 +83,7 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
             'error': {
                 'code': 'not_found',
                 'message': "unknown eval 'fake.smokey'",
-                'details': {'evals': ['fake.smoke', 'robolab.public_subset']},
+                'details': {EVALS_DETAIL: ['fake.smoke', 'robolab.public_subset']},
             }
         },
         status=404,
@@ -88,17 +92,32 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
     with pytest.raises(SystemExit) as exit_info:
         run_command(run, eval='fake.smokey', policy_image='org/p:v1')
 
-    assert '  evals: ["fake.smoke", "robolab.public_subset"]' in str(exit_info.value)
-
-
-QUOTA = {'key': 'submissions.day', 'limit': 3, 'used': 3, 'resets_at': '2026-03-05T00:00:00Z'}
+    assert f'  {EVALS_DETAIL}: ["fake.smoke", "robolab.public_subset"]' in str(exit_info.value)
 
 
 @pytest.mark.parametrize(
     ('status', 'code', 'details', 'printed'),
     [
-        (400, 'bad_request', {'tasks': ['marker-in-mug']}, '  tasks: ["marker-in-mug"]'),
-        (429, 'quota_exceeded', {'quota': QUOTA}, '"resets_at": "2026-03-05T00:00:00Z"'),
+        (400, 'bad_request', {TASKS_DETAIL: ['marker-in-mug']}, f'  {TASKS_DETAIL}: ["marker-in-mug"]'),
+        (
+            429,
+            'quota_exceeded',
+            {
+                QUOTA_DETAIL: QuotaLimit(
+                    key=QUOTA_SUBMISSIONS_DAY,
+                    meter='submissions',
+                    unit='submission',
+                    scale=1,
+                    window='day',
+                    subject=QuotaSubject.user,
+                    limit=3,
+                    used=3,
+                    resets_at=datetime(2026, 3, 5, tzinfo=UTC),
+                    on_exhausted=OnExhausted.block,
+                ).model_dump(mode='json')
+            },
+            '"2026-03-05T00:00:00Z"',
+        ),
         (
             422,
             'bad_request',
