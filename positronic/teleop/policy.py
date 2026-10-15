@@ -1,8 +1,10 @@
+import time
 from collections.abc import Generator, Mapping
 from contextlib import closing
 from typing import Any
 
 import numpy as np
+from positronic_model_server.serialization import encode_jpeg
 from positronic_wire import registry
 from positronic_wire.wire import ConnectRefused, SessionAddress
 
@@ -12,10 +14,32 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Runtime, Step
 
 from .clutch import OperatorPosition, Tracker
-from .session import ATTEMPT_STARTED, CONTROL, TASK, Event, Frame, TeleopSession
+from .session import ATTEMPT_STARTED, CONTROL, IMAGE, TASK, Event, Frame, TeleopSession
 
 # A frame answer wakes the run. This is the latest time at which the run asks for its next step without one.
 _IDLE_NS = 1_000_000_000
+
+
+# HACK: The run reads wall time, so it learns whether its clock is simulated. A person needs the episode clock to run
+#  with the wall clock, as a charged sim clock does.
+# TODO: Let a policy state that it needs a charged clock, and let `eval run` refuse an uncharged run for it.
+class _MovingClock:
+    """Raise when the episode clock stands still for ``STILL_LIMIT_NS`` of wall time."""
+
+    STILL_LIMIT_NS = 1_000_000_000
+
+    def __init__(self):
+        self._time_ns: int | None = None
+        self._still_since_ns = time.monotonic_ns()
+
+    def check(self, time_ns: int) -> None:
+        now_ns = time.monotonic_ns()
+        if time_ns != self._time_ns:
+            self._time_ns, self._still_since_ns = time_ns, now_ns
+        elif now_ns - self._still_since_ns > self.STILL_LIMIT_NS:
+            raise RuntimeError(
+                'the episode clock stands still while a person waits: run the sim with charged inference time'
+            )
 
 
 def _robot_pose(obs: Mapping[str, Any]) -> geom.Transform3D:
@@ -36,6 +60,7 @@ class TeleopPolicy(Policy):
         wire: str,
         address: SessionAddress,
         operator_position: OperatorPosition = OperatorPosition.FRONT,
+        camera: str | None = keys.EXTERIOR_IMAGE,
         open_timeout: float = 10.0,
         ready_timeout: float = 130.0,
         frame_timeout: float = 5.0,
@@ -43,6 +68,7 @@ class TeleopPolicy(Policy):
         self._wire = wire
         self._address = address
         self._operator_position = operator_position
+        self._camera = camera
         self._open_timeout = open_timeout
         self._ready_timeout = ready_timeout
         self._frame_timeout = frame_timeout
@@ -72,8 +98,13 @@ class TeleopPolicy(Policy):
         tracker = Tracker(self._operator_position.value)
         attempt_started = False
 
+        clock = _MovingClock()
+
         def display(obs: Mapping[str, Any]) -> dict[str, Any]:
-            return {TASK: obs[keys.TASK], CONTROL: tracker.on, ATTEMPT_STARTED: attempt_started}
+            shown = {TASK: obs[keys.TASK], CONTROL: tracker.on, ATTEMPT_STARTED: attempt_started}
+            if self._camera is not None:
+                shown[IMAGE] = encode_jpeg(np.asarray(obs[self._camera]))
+            return shown
 
         # A stay command, so that every command signal starts at the episode start. It asks for the pose that the arm
         # has, so the arm does not move.
@@ -81,6 +112,7 @@ class TeleopPolicy(Policy):
         pending = runtime.submit(session.frame, display(obs))
         obs = yield Step(stay, runtime.time_ns + _IDLE_NS)
         while True:
+            clock.check(runtime.time_ns)
             if not pending.done():
                 obs = yield Step({}, runtime.time_ns + _IDLE_NS)
                 continue

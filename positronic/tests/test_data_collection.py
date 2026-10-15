@@ -1,6 +1,10 @@
+import time
+import types
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import cast
 
+import httpx
 import numpy as np
 import pytest
 
@@ -16,6 +20,7 @@ from positronic.drivers.webxr import WebXR
 from positronic.geom import Rotation, Transform3D
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
+from positronic.tests.testing_inference import free_port
 
 
 # TODO: Move these fixtures into a common module so that others can reuse them.
@@ -341,6 +346,29 @@ def test_the_headset_video_skips_a_lost_camera_and_resumes_on_its_next_frame(wor
     emitter.emit('frame 2')
     second = webxr._next_frame(first.time)
     assert second is not None and second.data == 'frame 2'
+
+
+@pytest.mark.parametrize('route', ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js'])
+def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeypatch, route):
+    monkeypatch.chdir(tmp_path)
+    port = free_port()
+    webxr = WebXR(port=port, use_https=False)
+    stop = types.SimpleNamespace(value=False)
+    run = webxr.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, None))
+    next(run)
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                response = httpx.get(f'http://127.0.0.1:{port}{route}', timeout=1.0)
+                break
+            except httpx.TransportError:
+                assert time.monotonic() < deadline, 'the headset page never answered'
+                time.sleep(0.05)
+        assert response.status_code == 200
+    finally:
+        stop.value = True
+        list(run)
 
 
 def test_data_collection_with_mujoco_robot_gripper(tmp_path):

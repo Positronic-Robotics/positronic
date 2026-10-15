@@ -4,12 +4,13 @@ import pos3
 from pimm.logging import init_logging
 from positronic.cli.account import commands as account_commands
 from positronic.cli.eval import commands as eval_commands
+from positronic.teleop.service import serve as teleop
 
 
 @pos3.with_mirror()
 def _internal_main():
     init_logging()
-    cfn.cli({'eval': eval_commands, 'account': account_commands})
+    cfn.cli({'eval': eval_commands, 'account': account_commands, 'teleop': teleop})
 
 
 if __name__ == '__main__':

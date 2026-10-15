@@ -8,6 +8,8 @@ from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
 from positronic.policy import RemotePolicy
+from positronic.teleop import TeleopPolicy
+from positronic.teleop.session import default_socket_path
 from positronic.utils import nebius
 
 
@@ -39,6 +41,10 @@ def socket_address(uds: str, query: str) -> UnixSocketAddress:
 
 
 remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
+
+teleop = cfn.Config(
+    TeleopPolicy, wire='websocket_unix', address=socket_address.override(uds=str(default_socket_path()))
+)
 
 
 @cfn.config()

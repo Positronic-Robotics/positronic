@@ -24,6 +24,7 @@ OBS = {
     keys.EE_POSE: ROBOT_POSE.as_vector(geom.Rotation.Representation.QUAT),
     keys.GRIP: 0.25,
     keys.TASK: 'pick up the cube',
+    keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 128, dtype=np.uint8),
 }
 HAND = geom.Transform3D(np.array([0.1, 0.2, 1.0]), geom.Rotation.identity)
 
@@ -80,15 +81,25 @@ def service(monkeypatch):
     return service
 
 
+class _Clock:
+    """An episode clock that moves 1 ns at each read, from a time that a test can set."""
+
+    def __init__(self):
+        self.ns = 0
+
+    def __call__(self) -> int:
+        self.ns += 1
+        return self.ns
+
+
 @pytest.fixture
 def clock():
-    """The episode time in ns, as a list that a test can set."""
-    return [0]
+    return _Clock()
 
 
 @pytest.fixture
 def runtime(clock):
-    executor = Executor(lambda: clock[0], simulated=False, charge_inference_time=False)
+    executor = Executor(clock, simulated=False, charge_inference_time=False)
     yield executor
     executor.close()
 
@@ -167,7 +178,10 @@ def test_the_first_step_holds_the_robot_where_it_is(runtime, service):
     assert isinstance(command, CartesianPosition)
     np.testing.assert_allclose(command.pose.as_vector('quat'), OBS[keys.EE_POSE])
     assert stay.commands[keys.TARGET_GRIP] == OBS[keys.GRIP]
-    assert service.requests[1] == {
+    request = service.requests[1]
+    image = request[session.DISPLAY].pop(session.IMAGE)
+    assert image.shape == OBS[keys.EXTERIOR_IMAGE].shape
+    assert request == {
         session.KIND: session.Request.FRAME,
         session.DISPLAY: {session.TASK: OBS[keys.TASK], session.CONTROL: False, session.ATTEMPT_STARTED: False},
     }
@@ -221,11 +235,12 @@ def test_a_clutch_press_while_the_hand_is_lost_does_nothing(runtime, service):
 
 def test_start_task_marks_the_attempt_start_once(runtime, service, clock):
     run, _ = _started(runtime, service)
-    clock[0] = 3_000_000_000
+    clock.ns = 3_000_000_000
     _answer(run, service, _frame(HAND, 0.5, session.Event.START_TASK))
-    clock[0] = 5_000_000_000
+    clock.ns = 5_000_000_000
     _answer(run, service, _frame(HAND, 0.5, session.Event.START_TASK))
-    assert runtime.metadata_snapshot() == {policy_keys.ATTEMPT_START_NS: 3_000_000_000}
+    [(name, start_ns)] = runtime.metadata_snapshot().items()
+    assert name == policy_keys.ATTEMPT_START_NS and 3_000_000_000 < start_ns < 5_000_000_000
     assert service.requests[-1][session.DISPLAY][session.ATTEMPT_STARTED] is True
 
 
@@ -280,3 +295,24 @@ def test_meta_after_a_run_does_not_probe(monkeypatch):
         runtime.close()
     assert policy.meta()[policy_keys.TYPE] == 'teleop'
     assert wire.probes == 0
+
+
+def test_a_policy_with_no_camera_sends_no_image(runtime, service):
+    service.replies.put({session.KIND: session.Reply.READY})
+    run = runtime.start(TeleopPolicy(WIRE, ADDRESS, camera=None))
+    run.send({key: value for key, value in OBS.items() if key != keys.EXTERIOR_IMAGE})
+    assert _holds_within(lambda: len(service.requests) == 2, seconds=2.0)
+    assert session.IMAGE not in service.requests[1][session.DISPLAY]
+
+
+def test_an_episode_clock_that_stands_still_fails_the_run(service):
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    try:
+        run, _ = _started(runtime, service)
+        with pytest.raises(RuntimeError, match='stands still'):
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                run.send(OBS)
+                time.sleep(0.01)
+    finally:
+        runtime.close()

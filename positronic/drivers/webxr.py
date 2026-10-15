@@ -149,42 +149,43 @@ class WebXR(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         app = FastAPI()
-        jpeg_encoder = turbojpeg.TurboJPEG()
 
-        def encode_frame(image):
-            buffer = jpeg_encoder.encode(image, quality=50)
+        def encode_frame(encoder: turbojpeg.TurboJPEG, image):
+            buffer = encoder.encode(image, quality=50)
             return base64.b64encode(buffer).decode('utf-8')
 
         @app.get('/')
         async def root():
             if self.frontend == 'oculus':
-                return FileResponse('positronic/assets/webxr/index.html')
+                return FileResponse(utils.package_assets_path('assets/webxr/index.html'))
             else:
-                return FileResponse('positronic/assets/webxr_iphone/index.html')
+                return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
 
         @app.get('/three.min.js')
         async def three_min():
-            return FileResponse('positronic/assets/webxr/three.min.js')
+            return FileResponse(utils.package_assets_path('assets/webxr/three.min.js'))
 
         @app.get('/webxr-button.js')
         async def webxr_button():
-            return FileResponse('positronic/assets/webxr/webxr-button.js')
+            return FileResponse(utils.package_assets_path('assets/webxr/webxr-button.js'))
 
         @app.get('/core.js')
         async def webxr_core():
-            return FileResponse('positronic/assets/webxr/core.js')
+            return FileResponse(utils.package_assets_path('assets/webxr/core.js'))
 
         if self.frontend == 'oculus':
 
             @app.get('/video-player.js')
             async def video_player():
-                return FileResponse('positronic/assets/webxr/video-player.js')
+                return FileResponse(utils.package_assets_path('assets/webxr/video-player.js'))
 
         @app.websocket('/video')
         async def video_stream(websocket: WebSocket):
             await websocket.accept()
             logger.info('Video WebSocket connection accepted')
             try:
+                # The video needs libturbojpeg, and the page does not. So the encoder loads only here.
+                jpeg_encoder = turbojpeg.TurboJPEG()
                 fps = pimm.utils.RateCounter('Video Stream')
                 last_sent_time = None
                 while not should_stop.value:
@@ -194,7 +195,7 @@ class WebXR(pimm.ControlSystem):
                     if msg is None:
                         continue
                     last_sent_time = msg.time
-                    base64_frame = encode_frame(msg.data)
+                    base64_frame = encode_frame(jpeg_encoder, msg.data)
                     await websocket.send_text(base64_frame)
                     fps.tick()
             except Exception as e:

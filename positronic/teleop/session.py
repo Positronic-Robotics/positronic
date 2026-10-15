@@ -4,8 +4,11 @@ The policy sends one request and waits for its answer. The first request is ``re
 ``frame``. Each message is one msgpack map, with ``KIND`` naming the request or the reply.
 """
 
+import os
+import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -55,6 +58,13 @@ MESSAGE = 'message'
 TASK = 'task'
 CONTROL = 'control'
 ATTEMPT_STARTED = 'attempt_started'
+# One camera image from `Obs`, JPEG-encoded, for the headset. It is absent when the policy shows no camera.
+IMAGE = 'image'
+
+
+def default_socket_path() -> Path:
+    """The socket of the teleop service: in the runtime directory of the user, where only that user can open it."""
+    return Path(os.environ.get('XDG_RUNTIME_DIR') or tempfile.gettempdir()) / 'positronic-teleop.sock'
 
 
 class Cancelled(Exception):
