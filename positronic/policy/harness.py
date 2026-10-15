@@ -461,7 +461,6 @@ class Harness(pimm.ControlSystem):
     ) -> pimm.Run[dict[str, Any] | None]:
         """Ready, prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
         task = rollout.task
-        self._telemetry.begin(task.meta)
         runtime = Executor(
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
@@ -472,6 +471,9 @@ class Harness(pimm.ControlSystem):
                 yield from self._wait_ready(should_stop, runtime)
             except Exception as exc:
                 raise EpisodeNotStarted(f'{type(exc).__name__}: {exc}') from exc
+            if should_stop.value:
+                return None
+            self._telemetry.begin(task.meta)
             with telemetry.span(telemetry_keys.SPAN_RESET):
                 yield from self._prepare(should_stop, task.prepare_args)
             if should_stop.value:

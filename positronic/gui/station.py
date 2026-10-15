@@ -96,6 +96,8 @@ class Station:
         self._trial = self._draw()
         # The trial of the open episode, before the override.
         self._open_trial: Task | None = None
+        # The trial drawn before an episode that did not start. It runs after that episode's trial.
+        self._drawn_next: Task | None = None
         self._override: str | None = None
         self._override_since: int | None = None
         self._episodes: list[Episode] = []
@@ -132,7 +134,11 @@ class Station:
                 raise Refused('the run has ended')
             if self._is_open():
                 raise Refused('an episode is already running')
-            trial, self._trial = self._trial, self._draw()
+            trial = self._trial
+            if self._drawn_next is not None:
+                self._trial, self._drawn_next = self._drawn_next, None
+            else:
+                self._trial = self._draw()
             self._open_trial = trial
             number = len(self._episodes) + 1
             override = self._override
@@ -169,7 +175,7 @@ class Station:
         """Record that the open episode failed before it started, and keep its trial for the next Start."""
         with self._lock:
             assert self._open_trial is not None, 'an episode is open'
-            self._trial = self._open_trial
+            self._trial, self._drawn_next = self._open_trial, self._trial
         self.close(Outcome.ERROR, now, error=error)
 
     def end_run(self) -> None:

@@ -116,6 +116,18 @@ def test_an_episode_that_did_not_start_keeps_its_trial_for_the_next_start():
     assert again.instruction == OVERRIDE
 
 
+def test_a_retry_of_a_trial_that_did_not_start_draws_nothing_and_keeps_the_drawn_trial_next():
+    draws = iter([Task(instruction_source=f'trial {n}', timeout_sec=None) for n in range(3)])
+    station = Station(lambda: next(draws))
+    assert station.start(now=1.0).instruction == 'trial 0'
+    station.not_started(now=2.0, error='RuntimeError: the teleoperator cancelled')
+    assert station.view(now=3.0).configured == 'trial 0'
+    assert station.start(now=4.0).instruction == 'trial 0'
+    station.close(Outcome.PASS, now=5.0)
+    assert station.view(now=6.0).configured == 'trial 1'
+    assert station.start(now=7.0).instruction == 'trial 1'
+
+
 def test_the_run_ends_only_after_the_open_episode_and_then_takes_no_start():
     station = Station(_trials())
     station.start(now=1.0)

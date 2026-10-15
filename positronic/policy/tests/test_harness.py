@@ -1230,6 +1230,43 @@ def test_a_ready_call_that_fails_keeps_the_episode_from_starting(episode_harness
     assert h.deadlines.values == [] and h.dataset.episodes == []
 
 
+def test_a_stop_during_the_ready_wait_prepares_nothing(episode_harness):
+    h = episode_harness
+    answered = threading.Event()
+    answer = h.caller(Rollout(Task('move', 0.01, prepare_args={RESET: 'home'}), ReadyOn(answered), h.output_path))
+    next(h.loop)
+    h.world.request_stop()
+    answered.set()
+    list(h.loop)
+    assert list(h.prepare[RESET].incoming()) == []
+    with pytest.raises(pimm.calls.HandlerStopped):
+        answer.result()
+
+
+def test_the_ready_wait_is_outside_the_episode_span_and_a_failed_ready_call_emits_none(episode_harness, tmp_path):
+    h = episode_harness
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-ready'):
+        cancelled = threading.Event()
+        failed = h.caller(Rollout(Task('move', None), ReadyOn(cancelled, error=RuntimeError('cancelled')), None))
+        next(h.loop)
+        cancelled.set()
+        while not failed.done():
+            next(h.loop)
+            time.sleep(0.005)
+        answered = threading.Event()
+        h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), ReadyOn(answered), None))
+        next(h.loop)
+        answered_ns = time.time_ns()
+        answered.set()
+        _until_prepare_is_asked(h).set_result(None)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    (episode,) = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert episode.start_ns >= answered_ns
+
+
 def test_a_policy_run_with_no_ready_call_is_prepared_in_the_turn_that_starts_it(episode_harness):
     h = episode_harness
     h.caller(Rollout(Task('move', 0.01, prepare_args={RESET: 'home'}), Hold(), h.output_path))
