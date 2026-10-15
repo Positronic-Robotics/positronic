@@ -29,7 +29,7 @@ from jinja2.utils import htmlsafe_json_dumps
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
-from positronic.dataset import Dataset, Episode, Time, TimeBounds
+from positronic.dataset import Dataset, Episode, Signal, Time, TimeBounds
 from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, ReplayLayout, get_dataset_root
 from positronic.server.positronic_server import (
@@ -418,14 +418,17 @@ def _closing_plans(
 
 class _TableEpisode(Episode):
     """What a table reads of one episode, kept after the export reads the episode no more: the static values a page
-    shows inline, the meta, and the bounds of each timeline."""
+    shows inline, the meta, and the bounds of each timeline. A read of anything else raises."""
 
     def __init__(self, static: dict[str, Any], meta: dict[str, Any], bounds: dict[str, TimeBounds[int]]):
-        self._static = static
+        self._static = {key: value for key, value in static.items() if not holds_download(value)}
+        self._downloads = frozenset(static) - frozenset(self._static)
         self._meta = meta
         self._bounds = bounds
 
     def __getitem__(self, name: str) -> Any:
+        if name in self._downloads:
+            raise KeyError(f'{name!r} holds a download, and a table episode keeps no download')
         return self._static[name]
 
     def __iter__(self) -> Iterator[str]:
@@ -437,6 +440,14 @@ class _TableEpisode(Episode):
     @property
     def meta(self) -> dict:
         return dict(self._meta)
+
+    @property
+    def signals(self) -> dict[str, Signal[Any]]:
+        raise TypeError('a table episode keeps no signal; it holds the bounds of each timeline')
+
+    @property
+    def time(self):
+        raise TypeError('a table episode keeps no signal to read at a time')
 
     @property
     def timelines(self) -> tuple[str, ...]:
@@ -502,9 +513,7 @@ def _read_episode(shown: Dataset, full: Dataset, index: int) -> tuple[_EpisodeLi
     static, meta = episode.static, episode.meta
     links = _EpisodeLinks(index, episode_rrd_link(index), [download_link(index, f) for f in download_paths(static)])
     table_episode = _TableEpisode(
-        {key: value for key, value in static.items() if not holds_download(value)},
-        {key: meta[key] for key in meta},
-        {timeline: episode.bounds(timeline) for timeline in episode.timelines},
+        static, {key: meta[key] for key in meta}, {timeline: episode.bounds(timeline) for timeline in episode.timelines}
     )
     return links, table_episode
 

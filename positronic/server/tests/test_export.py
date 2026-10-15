@@ -486,6 +486,21 @@ def test_a_table_holds_no_download_of_an_episode(dataset, tmp_path):
     assert keys_seen and all(OUTCOME in seen and not {'notes', 'artifacts'} & seen for seen in keys_seen)
 
 
+@pytest.mark.parametrize(
+    ('read', 'refusal'),
+    [(lambda episode: episode.signals, 'keeps no signal'), (lambda episode: episode['notes'], 'keeps no download')],
+    ids=['signal', 'download'],
+)
+def test_a_group_function_that_reads_a_signal_or_a_download_stops_the_export(dataset, tmp_path, read, refusal):
+    group = GroupTableConfig(
+        group_keys=OUTCOME,
+        group_fn=lambda episodes: {'count': len([read(episode) for episode in episodes])},
+        format_table=GROUPS['outcomes'].format_table,
+    )
+    with pytest.raises((TypeError, KeyError), match=refusal):
+        an_export(dataset, tmp_path / 'out', group_tables={'outcomes': group})
+
+
 def _episode_paths(index: int) -> re.Pattern[str]:
     return re.compile(rf'(episode/{index}/index\.html|api/episode_rrd/{index}|api/episode/{index}/static/.+)')
 
