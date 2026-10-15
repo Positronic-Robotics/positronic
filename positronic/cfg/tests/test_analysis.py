@@ -168,8 +168,13 @@ def test_every_aggregate_leaves_out_an_episode_nobody_scored():
 
     assert analysis.scored_episodes(scored + unscored) == scored
     checkpoint = analysis.checkpoint_table().group_fn(scored + unscored)
-    assert checkpoint == analysis.checkpoint_table().group_fn(scored)
-    assert (checkpoint['count'], checkpoint['failures'], checkpoint['success_rate']) == (2, 1, 50)
+    assert {**checkpoint, 'count': 2} == analysis.checkpoint_table().group_fn(scored)
+    assert (checkpoint['count'], checkpoint['scored'], checkpoint['failures'], checkpoint['success_rate']) == (
+        5,
+        2,
+        1,
+        50,
+    )
     assert checkpoint['UPH'] == pytest.approx(2 / (20 / 3600))
     assert checkpoint['MTBF'] == 20
     leaderboard = analysis.phail_leaderboard().group_fn(scored + unscored)
@@ -212,7 +217,7 @@ def test_a_complete_with_no_other_fact_is_unscored_and_left_out_of_every_aggrega
     assert analysis.unified_success_bool(completed) is None
     assert analysis.phail_status(completed) == analysis.UNSCORED
     assert analysis.scored_episodes([succeeded, completed]) == [succeeded]
-    assert analysis.checkpoint_table().group_fn([succeeded, completed])['count'] == 1
+    assert analysis.checkpoint_table().group_fn([succeeded, completed])['scored'] == 1
 
 
 @pytest.mark.parametrize('success', [True, False])
@@ -237,6 +242,15 @@ def test_a_sim_episode_with_an_env_report_and_no_signal_counts_in_the_checkpoint
 
     assert (row['count'], row['failures'], row['success_rate'], row['items_done']) == (2, 1, 50, None)
     assert row['UPH'] == pytest.approx(1 / (20 / 3600))
+
+
+def test_a_checkpoint_row_counts_a_real_episode_and_a_sim_episode_each_by_its_own_facts():
+    real = _attended(Outcome.SUCCESS, 2)
+    sim = _attended(None, None, **{eval_keys.SUCCESS: False, eval_keys.TERMINATED: True})
+
+    row = analysis.checkpoint_table().group_fn([real, sim])
+
+    assert (row['count'], row['scored'], row['failures'], row['success_rate'], row['items_done']) == (2, 2, 1, 50, 100)
 
 
 def test_an_episode_with_no_verdict_and_no_fact_raises_nothing_and_shows_no_rate():
@@ -306,7 +320,8 @@ def test_a_stacking_signal_alone_scores_nothing_and_still_shows():
 
     assert analysis.unified_success_bool(sim) is None
     assert analysis.scored_episodes([sim]) == []
-    assert analysis.checkpoint_table().group_fn([sim])['count'] == 0
+    row = analysis.checkpoint_table().group_fn([sim])
+    assert (row['count'], row['scored']) == (1, 0)
     assert (analysis.unified_units_display(sim), analysis.unified_uph(sim)) == ('-', None)
     assert (analysis.success_units(sim), analysis.uph_sim(sim)) == (None, None)
     assert analysis.max_stacking_success(sim) == 1.0

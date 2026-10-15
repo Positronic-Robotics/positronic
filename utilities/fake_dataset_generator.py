@@ -133,7 +133,7 @@ class FakeGenerator(pimm.ControlSystem):
             episode_duration = max(1.0, random.normalvariate(base_duration, base_duration * 0.1))
 
             static_data = {
-                'task': task,
+                keys.TASK: task,
                 TOTAL_ITEMS: total_items,
                 SUCCESSFUL_ITEMS: successful_items,
                 OUTCOME: outcome,

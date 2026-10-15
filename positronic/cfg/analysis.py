@@ -287,21 +287,23 @@ def scored_episodes(episodes: Sequence[Episode]) -> list[Episode]:
     return [ep for ep in episodes if unified_success_bool(ep) is not None]
 
 
+def _episode_duration(ep: Episode) -> float:
+    timelines = ep.timelines
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    first, last = ep.bounds(timeline)
+    return (last - first) / 1e9
+
+
 @cfn.config()
 def checkpoint_table():
     def group_fn(episodes: list[Episode]):
         scored = scored_episodes(episodes)
-        count = len(scored)
-        total_duration = 0.0
-        for ep in scored:
-            timelines = ep.timelines
-            # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-            timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
-            first, last = ep.bounds(timeline)
-            total_duration += (last - first) / 1e9
+        scored_count = len(scored)
+        total_duration = sum(_episode_duration(ep) for ep in scored)
 
         successful_count = sum(1 for ep in scored if unified_success_bool(ep))
-        failed_count = count - successful_count
+        failed_count = scored_count - successful_count
         items = sum(ep.get(SUCCESSFUL_ITEMS, 0) for ep in scored)
         possible_items = sum(ep.get(TOTAL_ITEMS, 0) for ep in scored)
         # A unit is an item that a judge counted, or a success in an episode that counts no items.
@@ -310,9 +312,10 @@ def checkpoint_table():
         return {
             'checkpoint': episodes[0]['checkpoint'],
             'model': episodes[0]['model'],
-            'count': count,
+            'count': len(episodes),
+            'scored': scored_count,
             'UPH': total_units / (total_duration / 3600) if total_duration > 0 else None,
-            'success_rate': 100 * successful_count / count if count > 0 else None,
+            'success_rate': 100 * successful_count / scored_count if scored_count > 0 else None,
             'items_done': 100 * items / possible_items if possible_items > 0 else None,
             'MTBF': total_duration / failed_count if failed_count > 0 else None,
             'failures': failed_count,
@@ -322,6 +325,7 @@ def checkpoint_table():
         'model': C(label='Model'),
         'checkpoint': C(label='Checkpoint'),
         'count': C(label='Runs', format='%d'),
+        'scored': C(label='Scored', format='%d'),
         'UPH': C(label='UPH', format='%.1f', default='-'),
         'success_rate': C(label='Success', format='%.1f%%', default='-'),
         'items_done': C(label='Items done', format='%.1f%%', default='-'),
@@ -434,14 +438,6 @@ def _effective_duration(key: str, ep: Episode) -> float:
     return t if t is not None else _episode_duration(ep)
 
 
-def _episode_duration(ep: Episode) -> float:
-    timelines = ep.timelines
-    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
-    first, last = ep.bounds(timeline)
-    return (last - first) / 1e9
-
-
 @cfn.config()
 def stacking_checkpoint_table():
     """Grouped table by checkpoint with UPH and MTBF metrics."""
@@ -449,7 +445,7 @@ def stacking_checkpoint_table():
     def group_fn(episodes: list[Episode]):
         # The signal metric counts every episode. The rest count only the episodes with a counted outcome.
         scored = scored_episodes(episodes)
-        count = len(scored)
+        scored_count = len(scored)
         total_duration = sum(
             _effective_duration('success_time', ep) if ep['success'] else _episode_duration(ep) for ep in scored
         )
@@ -466,7 +462,7 @@ def stacking_checkpoint_table():
         mtbf_value = total_duration / failed_count if failed_count > 0 else None
 
         # Success rate
-        success_rate = 100 * successful_count / count if count > 0 else None
+        success_rate = 100 * successful_count / scored_count if scored_count > 0 else None
 
         # Average time to success (for successful episodes only)
         success_times = [ep['success_time'] for ep in successful if ep['success_time'] is not None]
@@ -480,7 +476,7 @@ def stacking_checkpoint_table():
             'model': episodes[0]['model'],
             'checkpoint': episodes[0]['checkpoint'],
             'count': len(episodes),
-            'scored': count,
+            'scored': scored_count,
             'UPH': uph_value,
             'success_rate': success_rate,
             'MTBF': mtbf_value,

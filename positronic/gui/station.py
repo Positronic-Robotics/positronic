@@ -28,7 +28,8 @@ class Unrecorded(StrEnum):
 # What the judge gives an episode: the verdict success or fail, or a discard, which leaves the episode unscored.
 Judgement = Literal[Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED]
 JUDGEMENTS: tuple[Judgement, ...] = get_args(Judgement)
-# How an episode ended. ``OUT_OF_TIME`` is what the page shows for ``eval.terminated = False``. Nothing writes it.
+# How an episode ended. ``OUT_OF_TIME`` is what the page shows for ``eval.terminated = False``. The station writes
+# nothing for it.
 Ending = Judgement | Literal[Outcome.OUT_OF_TIME] | Unrecorded
 
 

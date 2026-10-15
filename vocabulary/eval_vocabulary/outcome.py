@@ -36,7 +36,8 @@ class Outcome(StrEnum):
     OUT_OF_TIME = 'Ran out of time'
     SAFETY = 'Safety'
     SYSTEM = 'System'
-    # What an episode nobody scored carries. A reader reads an absent outcome as this too.
+    # What an episode nobody scored carries. A reader counts an episode, with or without an outcome, by
+    # `counted_outcome`.
     UNSCORED = 'UNSCORED'
     # What the judge's Discard writes: the attempt is not scored at all.
     DISCARDED = 'Discarded'
@@ -48,8 +49,8 @@ class Outcome(StrEnum):
 # The verdicts the judge gives, in the order the console's radio lists them.
 VERDICTS: tuple[Outcome, ...] = (Outcome.SUCCESS, Outcome.FAIL, Outcome.OUT_OF_TIME, Outcome.SAFETY, Outcome.SYSTEM)
 
-# What an episode carrying no `eval.outcome` at all means. One name, so a reader that defaults and a
-# console that seeds the field cannot disagree about it.
+# The value a console seeds `eval.outcome` with before a judgement. `counted_outcome` reads an absent outcome by the
+# other facts of the episode.
 ABSENT = Outcome.UNSCORED
 
 

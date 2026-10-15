@@ -268,7 +268,7 @@ def _run_episode(base: str, marks: Path, number: int, judgement: Judgement) -> E
 @pytest.mark.timeout(240.0)
 def test_the_web_console_records_each_episode_with_its_instruction_and_judgement(tmp_path):
     """The whole command, in a process of its own: the page streams the camera, and each episode it starts
-    records the instruction it sent, the override flag, its number, and the operator's judgement."""
+    records the instruction it sent, the override flag, its number, and the judge's judgement."""
     port = free_port()
     base = f'http://127.0.0.1:{port}'
     marks = tmp_path / 'marks'
