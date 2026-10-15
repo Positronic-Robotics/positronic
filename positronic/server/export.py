@@ -4,6 +4,7 @@ The app is composed in this process and read with a test client. A page lands at
 `<route>/index.html` and an API response at `api/<route>.json`.
 """
 
+import gc
 import itertools
 import json
 import logging
@@ -28,7 +29,7 @@ from jinja2.utils import htmlsafe_json_dumps
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
-from positronic.dataset import CachedDataset, Dataset, Episode
+from positronic.dataset import Dataset, Episode
 from positronic.dataset.episode import META_UID
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, ReplayLayout, get_dataset_root
 from positronic.server.positronic_server import (
@@ -221,6 +222,13 @@ class _Output:
         shutil.copyfile(source, target)
         return self._record(path, asset_content_type(source), target.stat().st_size)
 
+    def move(self, path: PurePosixPath, source: Path) -> ExportedFile:
+        """Move the file at `source` to `path`, so the disk holds one copy of it."""
+        target = self._target(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(source, target)
+        return self._record(path, asset_content_type(source), target.stat().st_size)
+
     def _target(self, path: PurePosixPath) -> Path:
         if path not in self._planned:
             raise ValueError(f'{path} is not in the export plan')
@@ -362,12 +370,12 @@ def _group_plans(client: TestClient, reads: Dataset, name: str, sets: Iterable[d
 
 
 def _large_file_plans(client: TestClient, reads: Dataset, links: _EpisodeLinks, build_id: str) -> list[_Planned]:
-    """The plans to write the recording and the downloads of one episode, under the build; the recording is copied
+    """The plans to write the recording and the downloads of one episode, under the build; the recording is moved
     from the file the app builds, the downloads are read through the client."""
     recording = _large_file_path(links.recording_link, build_id)
     downloads = [(link, _large_file_path(link, build_id)) for link in links.download_links]
     return [
-        _Planned(recording, reads, lambda out: out.copy(recording, ensure_episode_rrd(links.index))),
+        _Planned(recording, reads, lambda out: out.move(recording, ensure_episode_rrd(links.index))),
         *(_planned_fetch(client, f'/{link}', path, reads) for link, path in downloads),
     ]
 
@@ -470,12 +478,18 @@ def _build_recordings(reads: Dataset, workers: int) -> None:
     if workers < 1:
         raise ValueError(f'workers={workers}; a recording is built by at least one')
     install_dataset(reads)
+
+    def build_and_release(index: int) -> None:
+        ensure_episode_rrd(index)
+        # A video an episode opened closes only at a collection: PyAV keeps its containers in reference cycles.
+        gc.collect()
+
     if workers == 1:
         for index in range(len(reads)):
-            ensure_episode_rrd(index)
+            build_and_release(index)
         return
     with ThreadPool(workers) as pool:
-        pool.map(ensure_episode_rrd, range(len(reads)), chunksize=1)
+        pool.map(build_and_release, range(len(reads)), chunksize=1)
 
 
 def export_static(
@@ -505,12 +519,14 @@ def export_static(
     when given, which holds the same episodes in the same order; the recording builder reads an
     episode's robot model out of its static values. The recordings are built `workers` at a time in a
     directory of this export's own under `scratch_dir`, the system's temporary directory when None,
-    copied in from there, and the directory is removed at the end. `assets` writes the app's own scripts, styles
+    moved in from there, and the directory is removed at the end. `assets` writes the app's own scripts, styles
     and viewer under `asset_dir`, a directory under `static/` the pages request at the host root, so it goes
     with the root base href only; an export under a prefix shares the host's copy. A host that serves several
     exports names a directory per set of assets, so an export never overwrites the assets another export's
     pages read. An export holds the app's state for its duration, so a second export in the process waits for
     it; one into the same directory is then refused, as the directory holds the first.
+
+    The export holds no episode between two reads; a dataset that caches its episodes holds them all open.
     """
     out = _Output(Path(out_dir), normalized_base_href(base_href).removeprefix('/'))
     if scratch_dir is not None and Path(scratch_dir).resolve().is_relative_to(out.directory.resolve()):
@@ -521,10 +537,9 @@ def export_static(
         raise ValueError('assets sit under static/ at the host root; an export under a prefix takes assets=False')
     validated_build_id(build_id)
     validated_asset_dir(asset_dir)
-    shown = CachedDataset(dataset)
-    sets_by_group = _filter_sets_by_group(shown, group_tables)
-    full = _full_checked_against(CachedDataset(full_dataset), shown) if full_dataset is not None else shown
-    episodes = [_episode_links(shown, index) for index in range(len(shown))]
+    sets_by_group = _filter_sets_by_group(dataset, group_tables)
+    full = _full_checked_against(full_dataset, dataset) if full_dataset is not None else dataset
+    episodes = [_episode_links(dataset, index) for index in range(len(dataset))]
     with app_state_restored(), tempfile.TemporaryDirectory(dir=scratch_dir) as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.
         if out.directory.exists() and any(out.directory.iterdir()):
@@ -550,13 +565,13 @@ def export_static(
         client = TestClient(app)
         # Past `configure_tables`, every group name is one segment the route builders spell.
         plans = [
-            *_page_plans(client, shown, sets_by_group, episodes, build_id),
+            *_page_plans(client, dataset, sets_by_group, episodes, build_id),
             *(
-                _planned_fetch(client, f'/{route}', PurePosixPath(route + API_FILE_SUFFIX), shown)
+                _planned_fetch(client, f'/{route}', PurePosixPath(route + API_FILE_SUFFIX), dataset)
                 for route in _whole_api_routes()
             ),
             *itertools.chain.from_iterable(
-                _group_plans(client, shown, name, sets) for name, sets in sets_by_group.items()
+                _group_plans(client, dataset, name, sets) for name, sets in sets_by_group.items()
             ),
             *itertools.chain.from_iterable(_large_file_plans(client, full, links, build_id) for links in episodes),
         ]

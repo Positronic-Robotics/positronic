@@ -276,6 +276,8 @@ class _Arm(DriverRun[command.CommandType]):
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=2000)
         self.robot = robot
+        # The failure of a Desk step that turned FCI off and did not connect again; None while ``robot`` drives the arm.
+        self.disconnect_cause: Exception | None = None
         self.out = out
         self.state = FrankaState()
         self._dynamics_factor = dynamics_factor
@@ -369,6 +371,11 @@ class _Arm(DriverRun[command.CommandType]):
             return held
         return self.moves.next_request()
 
+    def refuse_moves(self) -> None:
+        """Answer every waiting sync move with the failure that ended the connection, and drop a streamed one."""
+        while isinstance(asked := self.next_request(), pimm.calls.Call):
+            asked.set_exception(RuntimeError(f'the driver has no connection to the arm: {self.disconnect_cause}'))
+
     @staticmethod
     def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
         """The pf mode carrying ``mode``'s gains; ``None`` — no pin — and a bare ``PositionControl`` take pf's own."""
@@ -428,6 +435,12 @@ class _Arm(DriverRun[command.CommandType]):
             if self._refusals > 1:  # the line above already reported a single one, with its reason
                 logger.warning(f'The arm refused {self._refusals} moves in a row; it accepts them again')
             self._refusals = 0
+
+    def recover(self) -> RecoveryOutcome:
+        """Run the vendor's error recovery. NOT_CLEARED with no connection: only the Desk step reaches the arm then."""
+        if self.disconnect_cause is not None:
+            return RecoveryOutcome.NOT_CLEARED
+        return RecoveryOutcome.CLEARED if self.robot.recover_from_errors() else RecoveryOutcome.NOT_CLEARED
 
     def clear_held_fault(self) -> None:
         """Clear a fault the arm holds, so the move about to go out is not rejected before it starts.
@@ -799,7 +812,8 @@ class Robot(pimm.ControlSystem):
         and run the recovery on the new connection.
 
         It runs only where the driver holds a Desk session, and on a reading that found every safe input clear:
-        a person may hold the arm, and only they release it.
+        a person may hold the arm, and only they release it. A failure once FCI is off leaves the driver with no
+        connection to the arm, and only this step connects again.
         """
         if desk is None:
             return RecoveryOutcome.NOT_CLEARED
@@ -814,12 +828,18 @@ class Robot(pimm.ControlSystem):
         # A self-test that Desk.prepare() runs needs locked brakes. A safety stop can lock them before the driver does.
         if _BrakeState.UNLOCKED in desk.safety_status()[BRAKE_STATE]:
             brakes.close()
-        desk.deactivate_fci()
-        desk.prepare()
-        brakes.record_opened()
-        del self._robot  # FCI off ended the connection this handle holds
-        self._init_robot(self._robot)
-        arm.robot = self._robot  # only a configured handle drives the arm; a failed one ends the run, as at start
+        # A failed step turned FCI off, and a box in Recovery refuses requests until prepare() acknowledges the error.
+        if arm.disconnect_cause is None:
+            desk.deactivate_fci()
+            del self._robot  # FCI off ended the connection this handle holds
+        try:
+            desk.prepare()
+            brakes.record_opened()
+            self._init_robot(self._robot)
+        except Exception as exc:
+            arm.disconnect_cause = exc
+            raise
+        arm.robot, arm.disconnect_cause = self._robot, None  # only a configured handle drives the arm
         cleared = arm.robot.recover_from_errors()
         logger.info(f'After Desk prepared the arm, recover_from_errors returned {cleared}')
         return RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
@@ -834,10 +854,9 @@ class Robot(pimm.ControlSystem):
         the callers that asked and counts as NOT_CLEARED; one nobody asked for reaches no caller, so it ends the run.
         """
         try:
-            cleared = arm.robot.recover_from_errors()
+            outcome = arm.recover()
             if asked:
-                logger.info(f'A console asked to clear a fault; recover_from_errors returned {cleared}')
-            outcome = RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
+                logger.info(f'A console asked to clear a fault; the recovery returned {outcome.name}')
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
                 outcome = self._clear_with_desk_prepare(desk, arm, brakes)
         # rules-allow: swallowed-error — the throw is handed to every caller that asked
@@ -855,19 +874,20 @@ class Robot(pimm.ControlSystem):
     def _ready(self, desk: Desk | None, arm: _Arm, brakes: _Brakes, call: pimm.calls.Call[None, None]) -> None:
         """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
 
-        Where the recovery leaves the error, ``_clear_with_desk_prepare`` runs. Answer with the error instead when it
-        stays. A pressed emergency stop gets the release instruction, and no recovery.
+        Where the recovery leaves the error, or the driver has no connection to the arm, ``_clear_with_desk_prepare``
+        runs. Answer with the error instead when it stays. A pressed emergency stop gets the release instruction, and
+        no recovery.
         """
         with pimm.calls.raise_to(call):
             if arm.stop_pressed:
                 raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
-            st = arm.robot.state()
             if (
-                st.error != 0
-                and not arm.robot.recover_from_errors()
+                (arm.disconnect_cause is not None or arm.robot.state().error != 0)
+                and arm.recover() is RecoveryOutcome.NOT_CLEARED
                 and self._clear_with_desk_prepare(desk, arm, brakes) is RecoveryOutcome.NOT_CLEARED
             ):
-                remaining = arm.robot.state().error_message  # Desk's step may have replaced the connection
+                # Desk's step may have replaced the connection, or left none
+                remaining = arm.disconnect_cause or arm.robot.state().error_message
                 raise RuntimeError(f'the arm holds an error that the recovery did not clear: {remaining}')
             arm.clear_held_fault()
             if arm.rejects_moves and not arm.safe_inputs.confirmed_clear:
@@ -893,6 +913,12 @@ class Robot(pimm.ControlSystem):
             while not should_stop.value:
                 for call in self.ready.incoming():
                     self._ready(desk, arm, brakes, call)
+                if arm.disconnect_cause is not None:
+                    arm.refuse_moves()
+                    if asked_to_recover := list(self.recover.incoming()):
+                        self._recover(desk, arm, brakes, asked_to_recover)
+                    yield arm.limiter.wait()
+                    continue
                 st = arm.robot.state()
                 arm.publish(st)
                 goal = arm.robot.goal()
@@ -923,8 +949,9 @@ class Robot(pimm.ControlSystem):
 
                 yield arm.limiter.wait()
 
-            with brakes.opened():
-                yield from arm.park(at_teardown=True)
+            if arm.disconnect_cause is None:
+                with brakes.opened():
+                    yield from arm.park(at_teardown=True)
 
 
 if __name__ == '__main__':

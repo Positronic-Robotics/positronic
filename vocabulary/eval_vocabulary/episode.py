@@ -18,6 +18,8 @@ ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
 # The instruction that the policy got.
 TASK = 'task'
+# The id of the task that a trial runs, as the benchmark names it.
+BENCHMARK_TASK = 'eval.task'
 
 # A recorded signal is the file `<signal name><SIGNAL_FILE_SUFFIX>`.
 SIGNAL_FILE_SUFFIX = '.parquet'
@@ -25,3 +27,11 @@ SIGNAL_FILE_SUFFIX = '.parquet'
 TIMESTAMP_COLUMN_PREFIX = 'ts.'
 # The one time column of a signal file in the format before named timelines, on the world clock.
 LEGACY_TIME_COLUMN = 'timestamp'
+# The column of a signal file that holds each sample's value.
+VALUE_COLUMN = 'value'
+
+# RoboLab's progress at each step, as the vector [status, completed, total, score], with the score from 0 to 1.
+SUBTASK_SIGNAL = 'subtask'
+SUBTASK_COMPLETED_INDEX = 1
+SUBTASK_TOTAL_INDEX = 2
+SUBTASK_SCORE_INDEX = 3

@@ -1,5 +1,6 @@
 import logging
 import math
+import random
 
 import configuronic as cfn
 
@@ -10,7 +11,7 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
-from positronic.simulator.molmo_spaces.adapter import CAMERAS, MolmoAdapter
+from positronic.simulator.molmo_spaces.adapter import MolmoAdapter, ShoulderSide, camera_dict
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
 # Margin for the harness to observe the simulator's terminal signal.
@@ -42,14 +43,20 @@ def benchmarks(
     Each benchmark dimension accepts a name, a list or None (all found); ``episodes`` accepts indices.
     ``seed=None`` follows the benchmark's seed convention. The default timeout is the benchmark horizon
     plus a margin; an explicit timeout replaces it.
+
+    The policy sees the wrist camera and two shoulder cameras, left and right, in ``image.exterior`` and
+    ``image.exterior_2``. The run draws their order once from ``seed``, or at random when ``seed`` is None,
+    and every trial records it under ``molmo.exterior_sides``.
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
     if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
         raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
-    proxy = RemoteEnvControlSystem(MolmoAdapter(), serve_molmo_spaces())
+    exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2)
+    cameras = camera_dict(exterior_sides)
+    proxy = RemoteEnvControlSystem(MolmoAdapter(cameras), serve_molmo_spaces())
     embodiment = remote_embodiment(
-        proxy, CAMERAS, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
+        proxy, cameras, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
     )
     privileged = {mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE]}
 
@@ -67,8 +74,9 @@ def benchmarks(
         for params in proxy.tasks(selection):
             deadline = timeout if timeout is not None else params[molmo_keys.TASK_HORIZON] + _TIMEOUT_MARGIN_SEC
             task = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=deadline)
+            scene = {**params, molmo_keys.EXTERIOR_SIDES: [side.value for side in exterior_sides]}
             trials += [
-                (task, {**params, **({eval_keys.SEED: seed + t} if seed is not None else {})})
+                (task, {**scene, **({eval_keys.SEED: seed + t} if seed is not None else {})})
                 for t in range(trial_count)
             ]
         return number_trials(trials)

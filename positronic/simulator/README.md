@@ -32,3 +32,10 @@ claim, and holds whether or not the constant is right.
 
 TODO: have the env report the offset itself, so positronic stops restating it from a robot model that is not
 the env's.
+
+## The env-server wire
+
+The env server and its harness send raw frames, and neither end accepts permessage-deflate. A sim usually runs on
+the harness's machine, where deflate saves no time and costs ~140 ms of CPU per step on two 720p frames. A sim on
+another machine needs an image codec, as the policy wire has (`compress_images` sends JPEG frames,
+`positronic/policy/remote.py`): deflate shrinks camera frames only to about half.

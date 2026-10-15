@@ -11,12 +11,11 @@ from typing import Any
 
 import numpy as np
 
-from positronic import keys
 from positronic.simulator.molmo_spaces import mapping
-from positronic.simulator.molmo_spaces.adapter import CAMERAS
+from positronic.simulator.molmo_spaces.adapter import WRIST_CAMERAS
 
-# Legacy DROID benchmark camera names.
-_WRIST, _EXTERIOR = (CAMERAS[k][-1] for k in (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE))
+# Legacy DROID benchmark camera names, and the right shoulder camera the server adds.
+_WRIST, _LEFT, _RIGHT = WRIST_CAMERAS[-1], mapping.LEFT_SHOULDER_CAMERAS[-1], mapping.RIGHT_SHOULDER_CAMERA
 
 RIG_HEIGHT, RIG_WIDTH = 36, 64  # DROID camera aspect ratio.
 
@@ -37,7 +36,8 @@ def build_payload() -> dict[str, Any]:
         mapping.OBS_EEF_QUAT: np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
         mapping.OBS_GRIP: np.float32(0.5),
         _WRIST: _marked_frame((200, 40, 40)),
-        _EXTERIOR: _marked_frame((40, 160, 40)),
+        _LEFT: _marked_frame((40, 160, 40)),
+        _RIGHT: _marked_frame((40, 40, 200)),
     }
 
 

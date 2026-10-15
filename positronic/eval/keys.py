@@ -1,5 +1,7 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
+from eval_vocabulary.episode import BENCHMARK_TASK
+
 # The verdict a trial writes in its episode's statics: the harness's ``TERMINATED``, False when the budget ran out,
 # and the env's ``SUCCESS``, which a failure can leave absent.
 from eval_vocabulary.episode import ENDED_BY as ENDED_BY
@@ -44,7 +46,7 @@ TRIAL_COUNT = 'eval.trial_count'
 
 # The id of the task a trial runs, as the benchmark names it. The episode records it; positronic never reads
 # inside it.
-TASK = 'eval.task'
+TASK = BENCHMARK_TASK
 
 # The chunk schedule's waypoint counters, keyed f'{SCHEDULE}.{DROPPED}' under ``policy.keys.POLICY_META``.
 # ``DROPPED`` counts a due waypoint that a later waypoint replaced.

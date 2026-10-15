@@ -1,10 +1,12 @@
 """What one export writes, where, and what it keeps off a page."""
 
+import gc
 import json
 import os
 import re
 import shutil
 import threading
+import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import partial
@@ -16,6 +18,7 @@ from urllib.request import urlopen
 import numpy as np
 import pytest
 import rerun as rr
+from av.container import InputContainer
 
 from positronic import keys
 from positronic.dataset import Dataset, Time
@@ -203,22 +206,22 @@ def test_without_a_build_id_the_large_files_sit_at_their_routes(dataset, tmp_pat
     assert {'api/episode_rrd/0', 'api/episode_rrd/1', 'api/episode/0/static/notes'} <= written
 
 
-def test_a_recording_is_copied_from_the_file_built_under_the_scratch_dir_and_not_read_through_the_client(
+def test_a_recording_is_moved_from_the_file_built_under_the_scratch_dir_and_not_read_through_the_client(
     dataset, tmp_path, monkeypatch
 ):
     def fetch_no_recording(client, path, params=None):
         assert 'episode_rrd' not in path, path
         return _fetch(client, path, params)
 
-    copied: dict[Path, Path] = {}
-    copyfile = shutil.copyfile
+    moved: dict[Path, Path] = {}
+    move = shutil.move
 
-    def copy_recording(source, target):
-        copied[Path(target)] = Path(source)
-        return copyfile(source, target)
+    def move_recording(source, target):
+        moved[Path(target)] = Path(source)
+        return move(source, target)
 
     monkeypatch.setattr('positronic.server.export._fetch', fetch_no_recording)
-    monkeypatch.setattr(shutil, 'copyfile', copy_recording)
+    monkeypatch.setattr(shutil, 'move', move_recording)
     scratch = tmp_path / 'scratch'
     scratch.mkdir()
 
@@ -226,8 +229,104 @@ def test_a_recording_is_copied_from_the_file_built_under_the_scratch_dir_and_not
 
     recordings = [tmp_path / 'out' / path for path in paths_of(files) if 'episode_rrd' in path]
     assert len(recordings) == 2
-    assert all(copied[target].is_relative_to(scratch) and copied[target].suffix == '.rrd' for target in recordings)
+    assert all(moved[target].is_relative_to(scratch) and moved[target].suffix == '.rrd' for target in recordings)
+    assert all(target.stat().st_size > 0 for target in recordings)
     assert not any(scratch.iterdir())
+
+
+class _Watched(Dataset):
+    """`dataset`, with a weak reference to each episode it hands out."""
+
+    def __init__(self, dataset: Dataset):
+        self._dataset = dataset
+        self._handed: list[tuple[int, weakref.ref[Episode]]] = []
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def _get_episode(self, index: int) -> Episode:
+        episode = cast(Episode, self._dataset[index])
+        self._handed.append((index, weakref.ref(episode)))
+        return episode
+
+    def indexes_still_held(self) -> set[int]:
+        """The index of each episode handed out that something still holds, after a collection."""
+        gc.collect()
+        return {index for index, handed in self._handed if handed() is not None}
+
+
+def test_the_export_holds_no_episode_between_two_reads(dataset, tmp_path, monkeypatch):
+    full_dataset, shown_dataset = _Watched(dataset), _Watched(shown(dataset))
+    held_at_each_read: list[set[int]] = []
+
+    def watch() -> None:
+        held_at_each_read.append(full_dataset.indexes_still_held() | shown_dataset.indexes_still_held())
+
+    def fetch_and_watch(client, path, params=None):
+        watch()
+        return _fetch(client, path, params)
+
+    stream = positronic_server.stream_episode_rrd
+
+    def stream_and_watch(ds, episode_id, **kwargs):
+        watch()
+        yield from stream(ds, episode_id, **kwargs)
+
+    monkeypatch.setattr('positronic.server.export._fetch', fetch_and_watch)
+    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_watch)
+
+    export_static(
+        shown_dataset,
+        tmp_path / 'out',
+        ep_table_cfg=TABLE,
+        group_tables=GROUPS,
+        max_resolution=64,
+        assets=False,
+        full_dataset=full_dataset,
+        workers=1,
+    )
+
+    assert len(held_at_each_read) > len(dataset)
+    assert all(held == set() for held in held_at_each_read)
+
+
+CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE)
+
+
+def a_camera_dataset(root: Path, episodes: int) -> Dataset:
+    """`episodes` episodes, each with four frames of each camera and four joint samples."""
+    with LocalDatasetWriter(root) as writer:
+        for _ in range(episodes):
+            with writer.new_episode() as episode:
+                for step in range(4):
+                    at = Time(**{RECORDED_TIME: 10_000 + step * 1_000})
+                    for camera in CAMERAS:
+                        episode.append(camera, np.zeros((16, 16, 3), dtype=np.uint8), at)
+                    episode.append(keys.JOINTS, np.zeros(7, dtype=np.float32), at)
+    return load_all_datasets(root)
+
+
+def test_the_videos_of_a_built_recording_are_closed_before_the_next_recording_is_built(tmp_path, monkeypatch):
+    dataset = a_camera_dataset(tmp_path / 'dataset', 3)
+    stream = positronic_server.stream_episode_rrd
+    open_video_counts: list[int] = []
+
+    def stream_and_count(ds, episode_id, **kwargs):
+        open_video_counts.append(sum(isinstance(o, InputContainer) for o in gc.get_objects()))
+        yield from stream(ds, episode_id, **kwargs)
+
+    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_count)
+    gc.collect()
+    # Off, so only the export's own collection can close a video.
+    gc.disable()
+    try:
+        export_static(dataset, tmp_path / 'out', max_resolution=64, assets=False, workers=1)
+    finally:
+        gc.enable()
+
+    # The video of the last frame decoded stays open in the frame cache, whatever the count of episodes.
+    assert len(open_video_counts) == 3
+    assert max(open_video_counts) <= 1
 
 
 def _recording_builder_threads(monkeypatch) -> list[int]:
@@ -259,7 +358,7 @@ def test_each_recording_is_built_with_the_layout_the_export_is_given(dataset, tm
     assert layouts == [layout, layout]
 
 
-def test_the_recordings_are_built_on_worker_threads_and_the_export_copies_them(dataset, tmp_path, monkeypatch):
+def test_the_recordings_are_built_on_worker_threads_and_the_export_moves_them(dataset, tmp_path, monkeypatch):
     threads = _recording_builder_threads(monkeypatch)
 
     files = paths_of(an_export(dataset, tmp_path / 'out', workers=2))

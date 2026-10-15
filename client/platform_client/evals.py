@@ -90,7 +90,8 @@ def _franka_pick_mini(episodes: list[int]) -> EvalDefinition:
 
 
 _PUBLIC_EVALS: dict[EvalRef, EvalDefinition] = {
-    EvalRef('molmo.franka_pick_mini'): _franka_pick_mini(list(range(20))),
+    # Episode 6 hides the start grasp site from the right shoulder camera; the sim server refuses it.
+    EvalRef('molmo.franka_pick_mini'): _franka_pick_mini([*range(6), *range(7, 21)]),
     EvalRef('molmo.franka_pick_mini_smoke'): _franka_pick_mini([0, 1, 2, 3, 4]),
 }
 
