@@ -1,7 +1,6 @@
 import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
-from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -30,6 +29,9 @@ from positronic.drivers.webxr import WebXR
 from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+
+# TODO: Replace this module with a `TeleopPolicy` run, and keep the clutch only in `positronic.teleop`.
+from positronic.teleop.clutch import OperatorPosition, Tracker
 from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
 
@@ -51,54 +53,6 @@ def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
 
 def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
-
-
-class _Tracker:
-    on = False
-    _offset = geom.Transform3D()
-    _teleop_t = geom.Transform3D()
-
-    def __init__(self, operator_position: geom.Transform3D | None):
-        self._operator_position = operator_position
-        self.on = self.umi_mode
-
-    @property
-    def umi_mode(self):
-        return self._operator_position is None
-
-    def turn_on(self, robot_pos: geom.Transform3D):
-        if self.umi_mode:
-            logging.info('Ignoring tracking on/off in UMI mode')
-            return
-
-        self.on = True
-        logging.info('Starting tracking')
-        self._offset = geom.Transform3D(
-            -self._teleop_t.translation + robot_pos.translation, self._teleop_t.rotation.inv * robot_pos.rotation
-        )
-
-    def turn_off(self):
-        if self.umi_mode:
-            logging.info('Ignoring tracking on/off in UMI mode')
-            return
-        self.on = False
-        logging.info('Stopped tracking')
-
-    def update(self, tracker_pos: geom.Transform3D):
-        if self.umi_mode:
-            return tracker_pos
-
-        self._teleop_t = self._operator_position * tracker_pos * self._operator_position.inv
-        return geom.Transform3D(
-            self._teleop_t.translation + self._offset.translation, self._teleop_t.rotation * self._offset.rotation
-        )
-
-
-class OperatorPosition(Enum):
-    # map xyz -> zxy
-    FRONT = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
-    # map xyz -> zxy + flip x and y
-    BACK = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
 class DataCollectionController(pimm.ControlSystem):
@@ -169,7 +123,7 @@ class DataCollectionController(pimm.ControlSystem):
         abort_wav_path = sounds / 'recording-has-been-aborted.wav'
         error_wav_path = sounds / 'error-occurred.wav'
 
-        tracker = _Tracker(self.operator_position)
+        tracker = Tracker(self.operator_position)
         button_handler = ButtonHandler()
 
         recording = False
