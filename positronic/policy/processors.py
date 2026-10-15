@@ -30,7 +30,18 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import interpolate_commands
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Commands, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime, Step
+from positronic.policy.base import (
+    Answer,
+    Commands,
+    Obs,
+    Policy,
+    PolicyRun,
+    Processor,
+    ProcessorRun,
+    ReturnT,
+    Runtime,
+    Step,
+)
 from positronic.policy.keys import ACTION_FPS
 
 
@@ -68,7 +79,11 @@ class PauseOnUnavailable(Policy):
         obs = yield
         while True:
             if _arms_available(obs):
-                obs = yield inner.send(obs)
+                try:
+                    step = inner.send(obs)
+                except StopIteration as end:
+                    return end.value
+                obs = yield step
             else:
                 obs = yield Step({}, runtime.time_ns + MILLISECOND_NS)
 
@@ -486,7 +501,7 @@ class _StackBuffer:
 OutputT = TypeVar('OutputT')
 
 
-class TemporalStack(Processor[Obs, OutputT]):
+class TemporalStack(Processor[Obs, OutputT, ReturnT]):
     """Replaces each named observation entry with a temporal stack of recent samples.
 
     Every sent observation records the selected channels on the runtime's clock, then passes the stacked
@@ -510,13 +525,17 @@ class TemporalStack(Processor[Obs, OutputT]):
             'in-range targets and the stack would be empty'
         )
 
-    def run(self, runtime: Runtime, inner: ProcessorRun[Obs, OutputT]) -> ProcessorRun[Obs, OutputT]:
+    def run(self, runtime: Runtime, inner: ProcessorRun[Obs, OutputT, ReturnT]) -> ProcessorRun[Obs, OutputT, ReturnT]:
         buffer = _StackBuffer(self._offsets_sec, pad_start=self._pad_start)
         obs = yield
         while True:
             now_sec = runtime.time_ns / 1e9
             buffer.append(now_sec, {k: obs[k] for k in self._keys})
-            obs = yield inner.send(buffer.sample(now_sec, obs))
+            try:
+                output = inner.send(buffer.sample(now_sec, obs))
+            except StopIteration as end:
+                return end.value
+            obs = yield output
 
     def to_spec(self) -> dict[str, Any]:
         return {

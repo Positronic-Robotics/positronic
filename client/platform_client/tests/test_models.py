@@ -51,7 +51,6 @@ from platform_client.eval_plan import (
     TaskNode,
     plan_of_image,
 )
-from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey, UserId
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
@@ -104,8 +103,10 @@ from platform_client.responses import (
     SubmissionListRow,
     SubmissionView,
 )
-from platform_client.slug import slug_of
 from platform_client.tasks import TaskRef
+from positronic_evals import scoring
+from positronic_evals.evals import EvalRef
+from positronic_evals.slug import slug_of
 from pydantic import BaseModel, Tag, TypeAdapter, ValidationError
 
 AT = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
@@ -366,6 +367,13 @@ def test_a_model_round_trips_through_its_json_form(model: BaseModel):
 @pytest.mark.parametrize('model', MODELS, ids=lambda m: type(m).__name__)
 def test_a_model_round_trips_through_a_real_json_string(model: BaseModel):
     assert type(model).model_validate_json(model.model_dump_json()) == model
+
+
+def test_the_published_scores_are_a_subset_of_the_record():
+    record = scoring.Scores(primary=0.25, episodes=20, unscored=0).model_dump(mode='json')
+    assert set(Scores.model_fields) < set(scoring.Scores.model_fields)
+    published = Scores.model_validate(record).model_dump(mode='json')
+    assert published == {name: record[name] for name in Scores.model_fields}
 
 
 def test_a_task_summary_that_states_no_start_pose_reads_the_nominal():

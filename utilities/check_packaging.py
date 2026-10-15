@@ -17,6 +17,7 @@ for module_name, source_dir in (
     ('positronic_wire', root / 'wire' / 'positronic_wire'),
     ('positronic_model_server', root / 'model_server' / 'positronic_model_server'),
     ('eval_vocabulary', root / 'vocabulary' / 'eval_vocabulary'),
+    ('positronic_evals', root / 'evals' / 'positronic_evals'),
 ):
     module = importlib.import_module(module_name)
     for module_path in module.__path__:
@@ -59,12 +60,12 @@ for pkg_name in CORE_PACKAGES:
 
 # Package data the MolmoSpaces sim server reads when it starts; no import above reads it.
 try:
-    from positronic.simulator.molmo_spaces import mapping
+    from positronic_evals.molmo_spaces import BROKEN_EPISODES_PATH, RIGHT_VIEW_BLOCKED_PATH, read_episode_list
 
-    mapping.load_right_view_blocked()
-    mapping.load_broken_episodes()
+    read_episode_list(RIGHT_VIEW_BLOCKED_PATH)
+    read_episode_list(BROKEN_EPISODES_PATH)
 except Exception as e:
-    failures.append(('positronic.simulator.molmo_spaces episode lists', e))
+    failures.append(('positronic_evals.molmo_spaces episode lists', e))
 
 if failures:
     for name, e in failures:

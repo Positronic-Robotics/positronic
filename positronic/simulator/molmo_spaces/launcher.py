@@ -12,6 +12,8 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
+from positronic_evals.molmo_spaces import BROKEN_EPISODES_PATH, RIGHT_VIEW_BLOCKED_PATH
+
 from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
 from positronic.simulator.molmo_spaces import mapping
 
@@ -78,6 +80,7 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
         raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     python = ensure_molmo_venv()
     command = [str(python), str(_ENV_SCRIPT), '--host', host, '--port', str(port)]
+    command += ['--right-view-blocked', str(RIGHT_VIEW_BLOCKED_PATH), '--broken-episodes', str(BROKEN_EPISODES_PATH)]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 

@@ -20,6 +20,9 @@ class Outcome(StrEnum):
     PASS = 'pass'
     FAIL = 'fail'
     TIMEOUT = 'timeout'
+    # The policy ended the episode. The console gives no verdict for it.
+    # TODO: Ask the operator for the verdict after a policy end, and write it into the episode's edit log.
+    POLICY_ENDED = 'policy_ended'
     ERROR = 'error'
 
 
@@ -35,6 +38,8 @@ def outcome_of(result: dict[str, Any]) -> Outcome:
     """The outcome that the harness's answer to an episode carries."""
     if not result[eval_keys.TERMINATED]:
         return Outcome.TIMEOUT
+    if result.get(eval_keys.ENDED_BY) == eval_keys.ENDED_BY_POLICY:
+        return Outcome.POLICY_ENDED
     return Outcome.PASS if result[eval_keys.SUCCESS] else Outcome.FAIL
 
 

@@ -119,7 +119,7 @@ ENV HF_HOME=/workspace/.cache/huggingface \
     POLICY_REPO=${POLICY_REPO} \
     POLICY_REVISION=${POLICY_REVISION} \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary
+    PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary:/positronic/evals
 
 # positronic's server runs in an environment of its own, beside NVIDIA's. The dependencies install from the lock
 # alone, so a source change does not reinstall them. The server imports none of the skipped packages, which take
@@ -133,6 +133,7 @@ COPY client/pyproject.toml client/
 COPY wire/pyproject.toml wire/
 COPY model_server/pyproject.toml model_server/
 COPY vocabulary/pyproject.toml vocabulary/
+COPY evals/pyproject.toml evals/
 RUN uv sync --locked --python 3.13 --no-dev --no-install-workspace $SKIP_UNIMPORTED_PACKAGES && uv cache clean
 
 # The workspace installs from its manifests and package stubs, which records each package's metadata.
@@ -142,12 +143,14 @@ COPY client/README.md client/
 COPY wire/README.md wire/
 COPY model_server/README.md model_server/
 COPY vocabulary/README.md vocabulary/
+COPY evals/README.md evals/
 COPY positronic/__init__.py positronic/
 COPY pimm/__init__.py pimm/
 COPY client/platform_client/py.typed client/platform_client/
 COPY wire/positronic_wire/py.typed wire/positronic_wire/
 COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
 COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
+COPY evals/positronic_evals/py.typed evals/positronic_evals/
 RUN uv sync --locked --python 3.13 --no-dev $SKIP_UNIMPORTED_PACKAGES && uv cache clean
 
 COPY --link . /positronic

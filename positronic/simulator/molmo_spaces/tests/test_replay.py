@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from positronic_evals.molmo_spaces import RIGHT_VIEW_BLOCKED_PATH
 
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
@@ -118,7 +119,7 @@ def test_an_episode_without_the_right_shoulder_serves_the_left_shoulder_alone():
 
 def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
     _skip_unless_present(_HARD_BENCHMARK)
-    blocked = sorted(mapping.load_right_view_blocked()[_HARD_BENCHMARK])
+    blocked = sorted(mapping.load_episode_list(RIGHT_VIEW_BLOCKED_PATH)[_HARD_BENCHMARK])
     spec = {**_HARD_BENCHMARK._asdict(), mapping.SELECT_EPISODES: blocked}
     with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)

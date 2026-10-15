@@ -1,6 +1,7 @@
-"""The episode score of a label, and the scores of a run, against a recorded MolmoSpaces sweep.
+"""The episode score of a label, and the scores of a run, against a recorded MolmoSpaces sweep and a RoboLab sweep.
 
-The fixture is the sweep that `test_labels.py` describes. Five of its twenty episodes succeeded.
+The fixtures are the sweeps that `test_labels.py` describes. Five of the twenty MolmoSpaces episodes succeeded, and
+none of the six RoboLab episodes completed a subtask.
 """
 
 from __future__ import annotations
@@ -9,9 +10,10 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-from platform_client.evals import MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
-from platform_client.labels import (
+from positronic_evals.evals import MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
+from positronic_evals.labels import (
     PUBLIC_LABELERS,
+    ROBOLAB_LABELER,
     Fail,
     ItemsDelivered,
     Label,
@@ -24,15 +26,16 @@ from platform_client.labels import (
     Success,
     label,
 )
-from platform_client.responses import Scores as PublishedScores
-from platform_client.scoring import EpisodeScore, MeanEpisodeScore, Scores, Scoring, episode_score, score
+from positronic_evals.scoring import EpisodeScore, MeanEpisodeScore, Scoring, episode_score, score
 from pydantic import ValidationError
 
-SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'molmo_sweep').glob('*/*') if p.is_dir())
+FIXTURES = Path(__file__).parent / 'fixtures'
+SWEEP = sorted(p for p in (FIXTURES / 'molmo_sweep').glob('*/*') if p.is_dir())
+ROBOLAB_SWEEP = sorted(p for p in (FIXTURES / 'robolab_sweep').glob('*/*') if p.is_dir())
 
 
-def _sweep_labels() -> list[Label | None]:
-    picked = [label(episode, MOLMO_SCORING.labelers) for episode in SWEEP]
+def _sweep_labels(scoring: Scoring = MOLMO_SCORING, sweep: list[Path] = SWEEP) -> list[Label | None]:
+    picked = [label(episode, scoring.labelers) for episode in sweep]
     return [given[1] if given is not None else None for given in picked]
 
 
@@ -67,16 +70,22 @@ def test_each_task_of_the_sweep_has_the_trials_and_successes_it_recorded():
     assert {task: (trials[task], successes[task]) for task in trials} == PER_TASK
 
 
+# A RoboLab eval scores a success 1.0, and any other episode the score at its last change of the subtasks count.
+ROBOLAB_SCORING = Scoring(
+    labelers=(ROBOLAB_LABELER,), primary=MeanEpisodeScore(episode_score=EpisodeScore(use_subtask_score=True))
+)
+
+
+def test_a_robolab_episode_that_completes_no_subtask_scores_0_whatever_score_robolab_records():
+    rule = ROBOLAB_SCORING.primary.episode_score
+    given = _sweep_labels(ROBOLAB_SCORING, ROBOLAB_SWEEP)
+    assert [episode_score(given_label, rule, None) if given_label else None for given_label in given] == [0.0] * 6
+    assert score(ROBOLAB_SCORING, given).model_dump(mode='json') == {'primary': 0.0, 'episodes': 6, 'unscored': 0}
+
+
 @pytest.mark.parametrize('name', PUBLIC_EVALS)
 def test_every_public_eval_names_only_public_labelers(name: EvalRef):
     assert set(public_eval(name).scoring.labelers) <= set(PUBLIC_LABELERS)
-
-
-def test_the_published_scores_are_a_subset_of_the_record():
-    record = score(MOLMO_SCORING, _sweep_labels()).model_dump(mode='json')
-    assert set(PublishedScores.model_fields) < set(Scores.model_fields)
-    published = PublishedScores.model_validate(record).model_dump(mode='json')
-    assert published == {name: record[name] for name in PublishedScores.model_fields}
 
 
 # --- one episode

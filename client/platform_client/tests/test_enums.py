@@ -31,7 +31,7 @@ from platform_client.enums import (
     SubmissionStatus,
     Wire,
 )
-from platform_client.slug import members_by_slug
+from positronic_evals.slug import members_by_slug
 from positronic_wire import registry
 
 ERROR_CODE_VALUES = {

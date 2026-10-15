@@ -96,11 +96,16 @@ class _JointGraspSampler(JsonEvalTaskSampler):
 class MolmoSpacesEnv(EnvProtocol):
     """A MolmoSpaces benchmark environment with one active episode."""
 
-    def __init__(self, assets_dir: Path) -> None:
+    def __init__(
+        self,
+        assets_dir: Path,
+        right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]],
+        broken_episodes: dict[mapping.BenchmarkPath, frozenset[int]],
+    ) -> None:
         self._assets_dir = assets_dir
         self._found = mapping.discover_benchmarks(assets_dir)
-        self._right_view_blocked = mapping.load_right_view_blocked()
-        self._broken_episodes = mapping.load_broken_episodes()
+        self._right_view_blocked = right_view_blocked
+        self._broken_episodes = broken_episodes
         self._episodes: dict[mapping.BenchmarkPath, list[Any]] = {}
         self._sampler: Any = None
         self._task: Any = None
@@ -315,11 +320,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='Serve MolmoSpaces over the env-server protocol.')
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
+    parser.add_argument('--right-view-blocked', type=Path, required=True)
+    parser.add_argument('--broken-episodes', type=Path, required=True)
     args = parser.parse_args()
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
         parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
-    env = MolmoSpacesEnv(Path(assets))
+    env = MolmoSpacesEnv(
+        Path(assets),
+        mapping.load_episode_list(args.right_view_blocked),
+        mapping.load_episode_list(args.broken_episodes),
+    )
     EnvServer(env, args.host, args.port).serve_forever()
 
 

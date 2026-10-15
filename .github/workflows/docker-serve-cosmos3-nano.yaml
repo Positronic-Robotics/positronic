@@ -20,6 +20,7 @@ on:
       - wire/**
       - model_server/**
       - vocabulary/**
+      - evals/**
       - .github/workflows/docker-serve-cosmos3-nano.yaml
       - .github/workflows/docker-serve-image.yaml
       - '!**/tests/**'

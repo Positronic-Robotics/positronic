@@ -7,10 +7,10 @@ from pathlib import Path
 
 from platform_client.enums import NO_RESULT_STATUSES
 from platform_client.eval_plan import RegistryCredential, Sample, password_from_file, plan_of_image
-from platform_client.evals import EvalRef
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import SubmissionCreateResponse
+from positronic_evals.evals import EvalRef
 from pydantic import SecretStr
 
 from positronic.cli.account.gateway import gateway, refusing_bad_input

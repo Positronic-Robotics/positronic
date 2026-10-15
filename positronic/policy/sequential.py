@@ -6,12 +6,12 @@ from typing import Any
 from positronic_model_server.spec import SEQ
 
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.policy.base import InputT, OutputT, Processor, ProcessorRun, Runtime
+from positronic.policy.base import InputT, OutputT, Processor, ProcessorRun, ReturnT, Runtime
 from positronic.policy.codecs import Codec
 from positronic.utils import flatten_dict
 
 
-class Sequential(Processor[InputT, OutputT]):
+class Sequential(Processor[InputT, OutputT, ReturnT]):
     """Nest processors and codecs, with the first outermost.
 
     ``runtime.start(Sequential(A(...), B(...)), infer)`` passes ``infer`` to B's generator and B's
@@ -22,15 +22,17 @@ class Sequential(Processor[InputT, OutputT]):
     This sequence owns the generators it creates; external dependencies remain owned by their caller.
     """
 
-    def __init__(self, first: Processor[InputT, OutputT] | Codec, /, *rest: Processor[Any, Any] | Codec) -> None:
+    def __init__(
+        self, first: Processor[InputT, OutputT, ReturnT] | Codec, /, *rest: Processor[Any, Any, Any] | Codec
+    ) -> None:
         self._components = tuple(
             child
             for component in (first, *rest)
             for child in (component._components if type(component) is Sequential else (component,))
         )
 
-    def run(self, runtime: Runtime, *dependencies: Any) -> ProcessorRun[InputT, OutputT]:
-        children: list[ProcessorRun[Any, Any]] = []
+    def run(self, runtime: Runtime, *dependencies: Any) -> ProcessorRun[InputT, OutputT, ReturnT]:
+        children: list[ProcessorRun[Any, Any, Any]] = []
         try:
             for component in reversed(self._components):
                 if isinstance(component, Processor):
@@ -47,8 +49,8 @@ class Sequential(Processor[InputT, OutputT]):
             while True:
                 try:
                     result = call(value)
-                except StopIteration:
-                    return
+                except StopIteration as end:
+                    return end.value
                 value = yield result
         finally:
             for child in reversed(children):

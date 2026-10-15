@@ -11,9 +11,10 @@ from collections.abc import Iterable
 from statistics import fmean
 from typing import Annotated, Literal
 
-from platform_client.labels import Label, LabelerRef, Outcome, Stage
-from platform_client.slug import Slugged
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat
+
+from positronic_evals.labels import Label, LabelerRef, Outcome, Stage
+from positronic_evals.slug import Slugged
 
 _SCORING_CONFIG = ConfigDict(extra='forbid', frozen=True)
 
@@ -63,7 +64,7 @@ class Scores(BaseModel):
 
     A board ranks on `primary`, the run's value under the eval's primary metric. `episodes` counts every episode,
     and `unscored` counts the episodes that no labeler labelled. `primary` does not include those, and does not
-    count them as failures. `responses.Scores` publishes a subset of this record.
+    count them as failures. `platform_client.responses.Scores` publishes a subset of this record.
     """
 
     primary: float

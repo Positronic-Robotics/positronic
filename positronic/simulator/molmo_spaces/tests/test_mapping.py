@@ -5,7 +5,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from platform_client.evals import MOLMO_CONFIG, PUBLIC_EVALS, public_eval
+from positronic_evals.evals import MOLMO_CONFIG, PUBLIC_EVALS, public_eval
+from positronic_evals.molmo_spaces import BROKEN_EPISODES_PATH, RIGHT_VIEW_BLOCKED_PATH, read_episode_list
 from scipy.spatial.transform import Rotation
 
 from positronic.simulator.env_server import protocol
@@ -339,9 +340,9 @@ def test_a_pinned_episode_out_of_range_is_refused():
         mapping.select_episodes(_HARD, 6, [0, 6], _NONE, _NONE)
 
 
-@pytest.mark.parametrize('load', [mapping.load_right_view_blocked, mapping.load_broken_episodes])
-def test_no_public_eval_pins_an_episode_a_committed_list_drops(load):
-    dropped = load()
+@pytest.mark.parametrize('path', [RIGHT_VIEW_BLOCKED_PATH, BROKEN_EPISODES_PATH])
+def test_no_public_eval_pins_an_episode_a_committed_list_drops(path):
+    dropped = mapping.load_episode_list(path)
     for name in PUBLIC_EVALS:
         definition = public_eval(name)
         if definition.config != MOLMO_CONFIG:
@@ -350,3 +351,10 @@ def test_no_public_eval_pins_an_episode_a_committed_list_drops(load):
         episodes = definition.args[mapping.SELECT_EPISODES]
         assert isinstance(episodes, list)
         assert not set(episodes) & dropped.get(bench, frozenset()), name
+
+
+@pytest.mark.parametrize('path', [RIGHT_VIEW_BLOCKED_PATH, BROKEN_EPISODES_PATH])
+def test_the_server_reads_each_episode_list_every_other_reader_reads(path):
+    shared = read_episode_list(path)
+    server = mapping.load_episode_list(path)
+    assert server == {mapping.BenchmarkPath(*benchmark.parts): episodes for benchmark, episodes in shared.items()}

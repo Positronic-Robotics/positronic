@@ -24,7 +24,7 @@ from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Obs, Step
+from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion
@@ -76,7 +76,7 @@ def model(monkeypatch):
 def execution(policy):
     clock = VirtualClock()
     runtime = Executor(clock.now_ns, simulated=True, charge_inference_time=False)
-    run = cast(Generator[Step, Obs, None], runtime.start(policy))
+    run = cast(Generator[Step, Obs, PolicyEnd], runtime.start(policy))
     try:
         yield run, runtime, clock
     finally:
@@ -84,10 +84,14 @@ def execution(policy):
         run.close()
 
 
-def complete(run, runtime, clock, obs) -> Step:
+def complete(run, runtime, clock, obs) -> Step | PolicyEnd:
+    """The step after the model's next decision, or the ``PolicyEnd`` that the run returns."""
     accepted = sum(e['event'] == 'accepted' for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT])
     for _ in range(1000):
-        step = run.send(obs)
+        try:
+            step = run.send(obs)
+        except StopIteration as end:
+            return end.value
         metadata = runtime.metadata_snapshot()
         if (
             policy_keys.STOP_REASON in metadata
@@ -118,9 +122,11 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
     replies.extend([move(), move(), finish()])
     policy = LLMPolicy(Endpoint('test'), Motion(), image_size=8)
     with execution(policy) as (run, runtime, clock):
+        decisions = []
         for second in range(3):
             clock.advance_to_ns(second * 1_000_000_000)
-            complete(run, runtime, clock, observation())
+            decisions.append(complete(run, runtime, clock, observation()))
+        assert decisions[-1] is PolicyEnd.COMPLETE
         assert runtime.metadata_snapshot()[policy_keys.STOP_REASON] == 'done'
         assert runtime.metadata_snapshot()[policy_keys.HINDSIGHT] == 'Inspect the final image.'
         events = runtime.metadata_snapshot()[policy_keys.TRANSCRIPT]
@@ -136,7 +142,7 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
     with execution(policy) as (fresh, runtime, clock):
         assert runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] == []
         replies.append(finish('give_up'))
-        complete(fresh, runtime, clock, observation())
+        assert complete(fresh, runtime, clock, observation()) is PolicyEnd.GIVE_UP
         assert len(frames(requests[-1][0])) == 2
         assert 'Inspect the final image.' not in str(requests[-1][0])
         assert [e['call'] for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] if e['event'] == 'request'] == [
@@ -151,7 +157,7 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
     ])
     replies.extend([picture, picture, finish()])
     with execution(LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND)) as (run, runtime, clock):
-        complete(run, runtime, clock, observation())
+        assert complete(run, runtime, clock, observation()) is PolicyEnd.COMPLETE
         events = runtime.metadata_snapshot()[policy_keys.TRANSCRIPT]
     assert [len(frames(messages)) for messages, _ in requests] == [0, 1, 1]
     assert 'already revealed' in str(requests[-1][0])
@@ -222,7 +228,9 @@ def test_follow_up_needs_another_tick_and_uses_the_frozen_observation(model, rep
         assert run.send(later) == Step({}, 2)
         assert runtime.wait(5).status is WaitStatus.ANSWERS_READY
         assert len(requests) == 2
-        assert not run.send(later).commands
+        with pytest.raises(StopIteration) as end:
+            run.send(later)
+        assert end.value.value is PolicyEnd.COMPLETE
         events = runtime.metadata_snapshot()[policy_keys.TRANSCRIPT]
     assert [e[policy_keys.OBS_TIME_NS] for e in events if e['event'] == 'request'] == [1, 1]
     assert len([e for e in events if e['event'] == 'observation']) == 1
@@ -253,8 +261,10 @@ def test_invalid_reply_gets_correction_and_has_finite_retry_budget(model, bad):
     assert 'Rejected' in str(requests[-1][0])
 
 
-@pytest.mark.parametrize('ending', ['done', 'give_up', 'call_budget'])
-def test_finished_run_stays_idle_and_new_run_starts_fresh(model, ending):
+@pytest.mark.parametrize(
+    'ending,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP), ('call_budget', PolicyEnd.GIVE_UP)]
+)
+def test_a_finished_run_returns_its_end_and_a_new_run_starts_fresh(model, ending, end):
     requests, replies = model
     replies.append(
         ModelResponse([ToolCallPart(Tool.REVEAL_FRAMES.value, {'cameras': [], 'note': 'Look.'})])
@@ -263,19 +273,14 @@ def test_finished_run_stays_idle_and_new_run_starts_fresh(model, ending):
     )
     policy = llm(model='test', images='on_demand', max_calls=1)
     with execution(policy) as (run, runtime, clock):
-        assert not complete(run, runtime, clock, observation()).commands
-        meta = runtime.metadata_snapshot()
-        assert meta[policy_keys.STOP_REASON] == ending
-        for status in (RobotStatus.AVAILABLE, RobotStatus.ERROR, RobotStatus.AVAILABLE):
-            clock.advance_to_ns(clock.now_ns() + 1_000_000_000)
-            assert not run.send(observation() | {keys.ROBOT_STATUS: status}).commands
-        assert runtime.metadata_snapshot() == meta
+        assert complete(run, runtime, clock, observation()) is end
+        assert runtime.metadata_snapshot()[policy_keys.STOP_REASON] == ending
     assert len(requests) == 1
     replies.append(finish())
     with execution(policy) as (fresh, runtime, clock):
         assert policy_keys.STOP_REASON not in runtime.metadata_snapshot()
         assert runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] == []
-        complete(fresh, runtime, clock, observation())
+        assert complete(fresh, runtime, clock, observation()) is PolicyEnd.COMPLETE
         assert [e['call'] for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] if e['event'] == 'request'] == [
             1
         ]
@@ -359,7 +364,7 @@ def test_corrected_replies_are_preserved_in_transcript(model, bad):
     replies.extend([bad, finish()])
     with execution(LLMPolicy(Endpoint('test'), Motion())) as (run, runtime, clock):
         clock.advance_to_ns(123)
-        complete(run, runtime, clock, observation())
+        assert complete(run, runtime, clock, observation()) is PolicyEnd.COMPLETE
         events = runtime.metadata_snapshot()[policy_keys.TRANSCRIPT]
     assert [e['call'] for e in events if e['event'] == 'response'] == [1, 2]
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [1]
@@ -392,7 +397,7 @@ def test_motion_uses_delivery_pose_and_waits_for_final_period_before_observing(
         assert run.send(observation(x=expected_x)) == Step({}, end_ns)
         assert len(requests) == 1
         clock.advance_to_ns(end_ns)
-        complete(run, runtime, clock, observation(x=expected_x))
+        assert complete(run, runtime, clock, observation(x=expected_x)) is PolicyEnd.COMPLETE
         events = runtime.metadata_snapshot()[policy_keys.TRANSCRIPT]
     assert len(requests) == 2
     assert not any(e['event'] == 'rejected' for e in events)
@@ -420,5 +425,5 @@ def test_late_resume_emits_final_command_before_requesting_next_decision(model):
         step = run.send(observation())
         assert step.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.01)
         assert len(requests) == 1
-        complete(run, runtime, clock, observation(x=0.01))
+        assert complete(run, runtime, clock, observation(x=0.01)) is PolicyEnd.COMPLETE
         assert len(requests) == 2

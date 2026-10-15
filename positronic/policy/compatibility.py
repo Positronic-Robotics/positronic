@@ -37,7 +37,11 @@ class StampObservationTimes(Policy):
         obs = yield
         while True:
             stamped = {**obs, policy_keys.OBS_TIME_NS: runtime.time_ns, WALL_TIME_NS: time.time_ns()}
-            obs = yield inner.send(stamped)
+            try:
+                step = inner.send(stamped)
+            except StopIteration as end:
+                return end.value
+            obs = yield step
 
 
 class ChunkFromV1Answer(Codec):

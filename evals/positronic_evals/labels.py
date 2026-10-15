@@ -1,4 +1,4 @@
-"""One labeler's account of one recorded episode, and the labelers of the public evals.
+"""One labeler's account of one recorded episode, and the labelers that this package publishes.
 
 A `Label` holds one episode's timed events, its end and its totals, and its views are properties of the events.
 `label` gives the first labeler, in precedence order, that labels an episode directory, with its label.
@@ -18,20 +18,25 @@ from typing import Annotated, ClassVar, Literal, NamedTuple, NewType, Self
 import pyarrow as pa
 import pyarrow.parquet as pq
 from eval_vocabulary.episode import (
+    BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
     LEGACY_TIME_COLUMN,
     META_FILE,
     SIGNAL_FILE_SUFFIX,
     STATIC_FILE,
+    SUBTASK_COMPLETED_INDEX,
+    SUBTASK_SCORE_INDEX,
+    SUBTASK_SIGNAL,
+    SUBTASK_TOTAL_INDEX,
     SUCCESS,
     TASK,
     TERMINATED,
     TIMESTAMP_COLUMN_PREFIX,
     UID,
+    VALUE_COLUMN,
 )
 from eval_vocabulary.timeline import EMITTED_WORLD
-from platform_client.slug import Slugged
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -43,6 +48,8 @@ from pydantic import (
     model_validator,
 )
 from pydantic_core import core_schema
+
+from positronic_evals.slug import Slugged
 
 log = logging.getLogger(__name__)
 
@@ -404,17 +411,22 @@ def recorded_task_and_outcome(static: Mapping[str, object], task_key: str) -> tu
 _WORLD_TIME_COLUMN = f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WORLD}'
 
 
-def recorded_seconds_to_end(episode: Path) -> float | None:
-    """The seconds from the first sample of the episode's signals to the last, on the world clock.
+def _world_time_column(signal: Path) -> str | None:
+    """The column of `signal` that holds each sample's world time, or None. ArrowInvalid when it does not parse."""
+    names = pq.read_schema(signal).names
+    return next((name for name in (_WORLD_TIME_COLUMN, LEGACY_TIME_COLUMN) if name in names), None)
 
-    It can exceed the trial by up to one control step.
+
+def recorded_span(episode: Path) -> tuple[int, int] | None:
+    """The world times of the first and the last sample of the episode's signals, in nanoseconds.
+
+    The last can fall up to one control step after the end of the trial.
     None when no signal file holds a world time, or one does not parse.
     """
     firsts, lasts = [], []
     for signal in sorted(episode.glob(f'*{SIGNAL_FILE_SUFFIX}')):
         try:
-            names = pq.read_schema(signal).names
-            column = next((name for name in (_WORLD_TIME_COLUMN, LEGACY_TIME_COLUMN) if name in names), None)
+            column = _world_time_column(signal)
             if column is None:
                 continue
             times = pq.read_table(signal, columns=[column]).column(column)
@@ -433,12 +445,47 @@ def recorded_seconds_to_end(episode: Path) -> float | None:
             LEGACY_TIME_COLUMN,
         )
         return None
-    return (max(lasts) - min(firsts)) / 1e9
+    return min(firsts), max(lasts)
+
+
+# The end event of each outcome that one states. `out_of_time` has none.
+_END_EVENTS: Mapping[Outcome, type[EndEvent]] = MappingProxyType({end.outcome: end for end in (Success, Fail, Safety)})
+
+
+class _SimTrial(NamedTuple):
+    """What a sim episode records of its trial."""
+
+    uid: str
+    task: str
+    outcome: Outcome
+    start_ns: int  # the world time of the first sample of the episode's signals
+    seconds_to_end: float
+
+    @property
+    def end_events(self) -> tuple[EndEvent, ...]:
+        """The end event that the outcome states, at the end of the trial."""
+        end = _END_EVENTS.get(self.outcome)
+        return (end(seconds=self.seconds_to_end),) if end is not None else ()
+
+
+def _recorded_sim_trial(episode: Path, task_key: str) -> _SimTrial | None:
+    """The trial that `episode` records, with its task under `task_key`.
+
+    None when an operator ended the trial, or the episode records no verdict, no id or no world time.
+    """
+    static = read_static(episode)
+    if static is None or static.get(ENDED_BY) == ENDED_BY_OPERATOR:
+        return None
+    recorded = recorded_task_and_outcome(static, task_key)
+    uid = recorded_uid(episode) if recorded is not None else None
+    span = recorded_span(episode) if uid is not None else None
+    if recorded is None or uid is None or span is None:
+        return None
+    start_ns, end_ns = span
+    return _SimTrial(uid, *recorded, start_ns, (end_ns - start_ns) / 1e9)
 
 
 MOLMO_LABELER = LabelerRef('molmo')
-# The end event of each outcome that one states. `out_of_time` has none.
-_END_EVENTS: Mapping[Outcome, type[EndEvent]] = MappingProxyType({end.outcome: end for end in (Success, Fail, Safety)})
 
 
 def molmo_label(episode: Path) -> Label | None:
@@ -446,21 +493,83 @@ def molmo_label(episode: Path) -> Label | None:
 
     A trial that an operator ended has no label.
     """
-    static = read_static(episode)
-    if static is None or static.get(ENDED_BY) == ENDED_BY_OPERATOR:
+    trial = _recorded_sim_trial(episode, TASK)
+    if trial is None:
         return None
-    recorded = recorded_task_and_outcome(static, TASK)
-    uid = recorded_uid(episode) if recorded is not None else None
-    seconds_to_end = recorded_seconds_to_end(episode) if uid is not None else None
-    if recorded is None or uid is None or seconds_to_end is None:
-        return None
-    task, outcome = recorded
-    end = _END_EVENTS.get(outcome)
-    events = (end(seconds=seconds_to_end),) if end is not None else ()
-    return Label(uid=uid, task=task, annotator=MOLMO_LABELER, seconds_to_end=seconds_to_end, events=events)
+    return Label(
+        uid=trial.uid,
+        task=trial.task,
+        annotator=MOLMO_LABELER,
+        seconds_to_end=trial.seconds_to_end,
+        events=trial.end_events,
+    )
 
 
-PUBLIC_LABELERS: Mapping[LabelerRef, Labeler] = MappingProxyType({MOLMO_LABELER: molmo_label})
+ROBOLAB_LABELER = LabelerRef('robolab')
+
+
+class _SubtaskSample(NamedTuple):
+    """One sample of the `subtask` signal."""
+
+    time_ns: int  # on the world clock
+    completed: int
+    total: int
+    score: float
+
+
+def _subtask_samples(episode: Path) -> list[_SubtaskSample]:
+    """Each sample of the `subtask` signal, which `recorded_span` has parsed."""
+    signal = episode / f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}'
+    column = _world_time_column(signal) if signal.is_file() else None
+    if column is None:
+        return []
+    table = pq.read_table(signal, columns=[column, VALUE_COLUMN])
+    return [
+        _SubtaskSample(
+            time_ns,
+            int(vector[SUBTASK_COMPLETED_INDEX]),
+            int(vector[SUBTASK_TOTAL_INDEX]),
+            float(vector[SUBTASK_SCORE_INDEX]),
+        )
+        for time_ns, vector in zip(
+            table.column(column).to_pylist(), table.column(VALUE_COLUMN).to_pylist(), strict=True
+        )
+    ]
+
+
+def robolab_label(episode: Path) -> Label | None:
+    """RoboLab's labeler: a trial ends as in `molmo_label`, and the `subtask` signal gives its progress.
+
+    A `SubtaskAchieved` event sits at each sample where the count of subtasks completed changes, with the score
+    of that sample. A change of the score alone is not an event, so the label's `subtask_score` is the score at
+    the last change of the count. A trial whose signal holds no sample has no label.
+    """
+    trial = _recorded_sim_trial(episode, BENCHMARK_TASK)
+    samples = _subtask_samples(episode) if trial is not None else []
+    if trial is None or not samples:
+        return None
+    events: list[SubtaskAchieved] = []
+    achieved = 0
+    for sample in samples:
+        if sample.completed != achieved:
+            achieved = sample.completed
+            seconds = (sample.time_ns - trial.start_ns) / 1e9
+            events.append(SubtaskAchieved(seconds=seconds, achieved=achieved, score=sample.score))
+    return Label(
+        uid=trial.uid,
+        task=trial.task,
+        annotator=ROBOLAB_LABELER,
+        seconds_to_end=trial.seconds_to_end,
+        # The env records zeros on the frame of a reset, and a total of 0 states no total.
+        total_subtasks=samples[-1].total or None,
+        events=(*events, *trial.end_events),
+    )
+
+
+PUBLIC_LABELERS: Mapping[LabelerRef, Labeler] = MappingProxyType({
+    MOLMO_LABELER: molmo_label,
+    ROBOLAB_LABELER: robolab_label,
+})
 
 
 def label(

@@ -13,7 +13,7 @@ from pimm.world import SystemClock
 from positronic.eval import Task
 from positronic.gui.station import Episode, Outcome, Phase, RunView, Station, terminal_payload
 from positronic.gui.web import STATIC_DIR, CameraFeed, CameraView, EndBody, InstructionBody, StationConsole, Status
-from positronic.policy import Policy
+from positronic.policy import Policy, PolicyEnd
 from positronic.policy import keys as policy_keys
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
@@ -38,6 +38,7 @@ class _Policy(Policy):
 
     def run(self, runtime):
         yield
+        return PolicyEnd.COMPLETE
 
 
 class _Console:
