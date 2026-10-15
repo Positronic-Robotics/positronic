@@ -10,6 +10,7 @@ from platform_client import routes
 from platform_client.billing import CREDIT_SCALE, Tariff
 from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
+from platform_client.enums import ErrorCode
 from platform_client.ids import ApiKey
 from pydantic import ValidationError
 
@@ -18,6 +19,7 @@ from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.credits import account, buy, get_purchase, list_purchases
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.account.register import register
+from positronic.cli.conftest import refusal
 
 
 def test_register_saves_the_minted_key_in_the_record(platform, run_command, capsys):
@@ -310,7 +312,7 @@ def test_credit_commands_require_an_org_without_a_sole_membership(command, args,
     ids=['account', 'get-purchase', 'list-purchases'],
 )
 def test_a_credit_read_under_json_prints_the_refusal_envelope(command, args, platform, run_command, capsys):
-    envelope = {'error': {'code': 'forbidden', 'message': 'not a member', 'details': {}}}
+    envelope = refusal(ErrorCode.forbidden, 'not a member')
     platform.answer(envelope, status=403)
 
     with pytest.raises(SystemExit) as exit_info:
