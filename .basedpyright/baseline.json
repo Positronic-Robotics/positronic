@@ -860,6 +860,22 @@
         ],
         "./positronic/data_collection.py": [
             {
+                "code": "reportOptionalOperand",
+                "range": {
+                    "startColumn": 25,
+                    "endColumn": 48,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 89,
+                    "endColumn": 92,
+                    "lineCount": 1
+                }
+            },
+            {
                 "code": "reportPossiblyUnboundVariable",
                 "range": {
                     "startColumn": 64,

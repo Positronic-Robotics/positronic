@@ -68,9 +68,6 @@ ProcessorRun = TypeAliasType(
 class Runtime(ABC):
     """What the framework offers one episode. Every episode gets its own.
 
-    A call that a run submits before its first ``yield`` is a ready call. The episode starts only after every ready
-    call answers, on the wall clock and with no time charged, and a ready call that fails keeps it from starting.
-
     At episode shutdown, drain submitted work before closing live generators whose resources it may use.
     """
 

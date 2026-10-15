@@ -21,8 +21,6 @@ SERVER = 'server'
 TRANSCRIPT = 'transcript'
 STOP_REASON = 'stop_reason'
 HINDSIGHT = 'hindsight'
-# The episode time, in ns, at which a teleoperator started the real attempt. The moves before it are trial moves.
-ATTEMPT_START_NS = 'attempt_start_ns'
 
 POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'
