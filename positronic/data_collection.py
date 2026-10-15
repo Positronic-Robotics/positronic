@@ -148,7 +148,7 @@ class DataCollectionController(pimm.ControlSystem):
                         tracker.turn_off()
                     else:
                         tracker.turn_on(self.robot_state.value.ee_pose)
-                elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
+                elif button_handler.just_pressed('right_stick') and not tracker.is_umi_mode:
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
                         self.sound.emit(abort_wav_path)

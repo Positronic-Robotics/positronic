@@ -100,7 +100,7 @@ def _frame(pose: geom.Transform3D | None = HAND, grip: float = 0.5, *events: ses
     return reply
 
 
-def _wait(condition, seconds: float = 2.0) -> bool:
+def _holds_within(condition, seconds: float) -> bool:
     deadline = time.monotonic() + seconds
     while not condition():
         if time.monotonic() > deadline:
@@ -115,7 +115,7 @@ def _started(runtime: Executor, service: _Service):
     run = runtime.start(TeleopPolicy(WIRE, ADDRESS, OperatorPosition.FRONT))
     stay = run.send(OBS)
     assert stay is not None
-    assert _wait(lambda: len(service.requests) == 2)
+    assert _holds_within(lambda: len(service.requests) == 2, seconds=2.0), 'the run sent no frame request'
     return run, stay
 
 
@@ -128,7 +128,7 @@ def _answer(run, service: _Service, reply: dict) -> Step | PolicyEnd:
             step = run.send(OBS)
         except StopIteration as end:
             return end.value
-        if _wait(lambda: len(service.requests) > sent, seconds=0.005):
+        if _holds_within(lambda: len(service.requests) > sent, seconds=0.005):
             assert step is not None
             return step
     raise AssertionError('the run made no step from the frame')
@@ -265,3 +265,18 @@ def test_a_probed_policy_pickles_with_its_probe(monkeypatch):
     policy.meta()
     pickle.loads(pickle.dumps(policy)).meta()
     assert wire.probes == 1
+
+
+def test_meta_after_a_run_does_not_probe(monkeypatch):
+    service = _Service()
+    wire = _Wire(service, Refusal.SILENT)
+    monkeypatch.setitem(registry.CLIENT_WIRES, WIRE, wire)
+    policy = TeleopPolicy(WIRE, ADDRESS)
+    service.replies.put({session.KIND: session.Reply.READY})
+    runtime = Executor(lambda: 0, simulated=False, charge_inference_time=False)
+    try:
+        runtime.start(policy)
+    finally:
+        runtime.close()
+    assert policy.meta()[policy_keys.TYPE] == 'teleop'
+    assert wire.probes == 0

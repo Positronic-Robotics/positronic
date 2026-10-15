@@ -1,4 +1,5 @@
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import closing
 from typing import Any
 
 import numpy as np
@@ -8,7 +9,7 @@ from positronic_wire.wire import ConnectRefused, SessionAddress
 from positronic import geom, keys
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
+from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Runtime, Step
 
 from .clutch import OperatorPosition, Tracker
 from .session import ATTEMPT_STARTED, CONTROL, TASK, Event, Frame, TeleopSession
@@ -48,7 +49,7 @@ class TeleopPolicy(Policy):
         self._probed = False
 
     def meta(self) -> dict[str, Any]:
-        """Probe the service on the first call only. A later call is inside a recording, and must not fail it."""
+        """Probe the service once, unless a run already opened a session with it. Raise when it does not answer."""
         if not self._probed:
             refusal = registry.client_wire(self._wire).probe(self._address, None, self._open_timeout)
             if refusal is not None:
@@ -58,49 +59,51 @@ class TeleopPolicy(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         connection = registry.client_wire(self._wire).dial(self._address, None, self._open_timeout)
-        session = TeleopSession(connection, self._ready_timeout, self._frame_timeout)
-        try:
+        self._probed = True
+        with closing(TeleopSession(connection, self._ready_timeout, self._frame_timeout)) as session:
             # Before the first `yield`, so the wait is outside the recording and the time limit. It blocks the control
             # thread of the World, so the ready timeout bounds it.
             session.ready()
             obs = yield
-            tracker = Tracker(self._operator_position.value)
-            attempt_started = False
+            return (yield from self._control(runtime, session, obs))
 
-            def display(obs: Mapping[str, Any]) -> dict[str, Any]:
-                return {TASK: obs[keys.TASK], CONTROL: tracker.on, ATTEMPT_STARTED: attempt_started}
+    def _control(self, runtime: Runtime, session: TeleopSession, obs: Obs) -> Generator[Step, Obs, PolicyEnd]:
+        """Hold the robot, then move it with the hand while control is on, until the teleoperator ends the run."""
+        tracker = Tracker(self._operator_position.value)
+        attempt_started = False
 
-            # A stay command, so that every command signal starts at the episode start. It asks for the pose that
-            # the arm has, so the arm does not move.
-            stay = {keys.ROBOT_COMMAND: CartesianPosition(_robot_pose(obs)), keys.TARGET_GRIP: float(obs[keys.GRIP])}
+        def display(obs: Mapping[str, Any]) -> dict[str, Any]:
+            return {TASK: obs[keys.TASK], CONTROL: tracker.on, ATTEMPT_STARTED: attempt_started}
+
+        # A stay command, so that every command signal starts at the episode start. It asks for the pose that the arm
+        # has, so the arm does not move.
+        stay = {keys.ROBOT_COMMAND: CartesianPosition(_robot_pose(obs)), keys.TARGET_GRIP: float(obs[keys.GRIP])}
+        pending = runtime.submit(session.frame, display(obs))
+        obs = yield Step(stay, runtime.time_ns + _IDLE_NS)
+        while True:
+            if not pending.done():
+                obs = yield Step({}, runtime.time_ns + _IDLE_NS)
+                continue
+            frame: Frame = pending.result()
+            target = None if frame.pose is None else tracker.update(frame.pose)
+            for event in frame.events:
+                match event:
+                    case Event.CLUTCH if tracker.on:
+                        tracker.turn_off()
+                    case Event.CLUTCH if frame.pose is not None:
+                        tracker.turn_on(_robot_pose(obs))
+                        target = tracker.update(frame.pose)
+                    case Event.START_TASK if not attempt_started:
+                        runtime.set_metadata(policy_keys.ATTEMPT_START_NS, runtime.time_ns)
+                        attempt_started = True
+                    case Event.COMPLETE:
+                        return PolicyEnd.COMPLETE
+                    case Event.GIVE_UP:
+                        return PolicyEnd.GIVE_UP
+            if target is None and tracker.on:
+                tracker.turn_off()
+            commands = {}
+            if tracker.on and target is not None:
+                commands = {keys.ROBOT_COMMAND: CartesianPosition(target), keys.TARGET_GRIP: frame.grip}
             pending = runtime.submit(session.frame, display(obs))
-            obs = yield Step(stay, runtime.time_ns + _IDLE_NS)
-            while True:
-                if not pending.done():
-                    obs = yield Step({}, runtime.time_ns + _IDLE_NS)
-                    continue
-                frame: Frame = pending.result()
-                target = None if frame.pose is None else tracker.update(frame.pose)
-                for event in frame.events:
-                    match event:
-                        case Event.CLUTCH if tracker.on:
-                            tracker.turn_off()
-                        case Event.CLUTCH if frame.pose is not None:
-                            tracker.turn_on(_robot_pose(obs))
-                            target = tracker.update(frame.pose)
-                        case Event.START_TASK if not attempt_started:
-                            runtime.set_metadata(policy_keys.ATTEMPT_START_NS, runtime.time_ns)
-                            attempt_started = True
-                        case Event.COMPLETE:
-                            return PolicyEnd.COMPLETE
-                        case Event.GIVE_UP:
-                            return PolicyEnd.GIVE_UP
-                if target is None and tracker.on:
-                    tracker.turn_off()
-                commands = {}
-                if tracker.on and target is not None:
-                    commands = {keys.ROBOT_COMMAND: CartesianPosition(target), keys.TARGET_GRIP: frame.grip}
-                pending = runtime.submit(session.frame, display(obs))
-                obs = yield Step(commands, runtime.time_ns + _IDLE_NS)
-        finally:
-            session.close()
+            obs = yield Step(commands, runtime.time_ns + _IDLE_NS)
