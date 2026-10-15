@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Annotated, Generic, Literal, Self
 
 from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, RigShape, StartPose, Wire
-from platform_client.evals import EvalRef
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
-from platform_client.slug import Slugged, members_by_slug, slug_of
 from platform_client.tasks import TaskRef
+from positronic_evals.evals import EvalRef
+from positronic_evals.slug import Slugged, members_by_slug, slug_of
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -294,6 +294,15 @@ class Endpoint(Cascade, Generic[Credential]):
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
     image_credential: Credential | None = None
+    # The most sessions the platform holds open to a remote policy at once. None leaves the count to the platform.
+    max_concurrent_sessions: int | None = Field(default=None, ge=1)
+
+    @model_serializer(mode='wrap')
+    def _without_an_unstated_session_limit(self, handler: SerializerFunctionWrapHandler):
+        serialized: dict[str, object] = handler(self)
+        if self.max_concurrent_sessions is None:
+            serialized.pop('max_concurrent_sessions', None)
+        return serialized
 
     @model_validator(mode='before')
     @classmethod
@@ -356,6 +365,22 @@ class Endpoint(Cascade, Generic[Credential]):
             raise ValueError(
                 f'endpoint {self.name!r} states image_credential and names no image; a credential opens the '
                 'image the entry that states it names'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _a_session_limit_bounds_a_remote_address(self) -> Self:
+        if self.max_concurrent_sessions is None:
+            return self
+        if self.kind is not EndpointKind.remote:
+            raise ValueError(
+                f'{slug_of(self.kind)} endpoint {self.name!r} states max_concurrent_sessions, which only a remote '
+                'endpoint carries: the platform serves this policy and opens its sessions'
+            )
+        if self.address is None:
+            raise ValueError(
+                f'endpoint {self.name!r} states max_concurrent_sessions and names no address: state it on the plan '
+                'endpoint this label names'
             )
         return self
 

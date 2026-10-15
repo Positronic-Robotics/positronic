@@ -13,9 +13,9 @@ import numpy as np
 import pos3
 import pytest
 from eval_vocabulary.episode import SUBTASK_SIGNAL
-from platform_client.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
-from platform_client.labels import MOLMO_LABELER, ROBOLAB_LABELER, Fail, Label, SubtaskAchieved, Success, label
-from platform_client.scoring import score
+from positronic_evals.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
+from positronic_evals.labels import MOLMO_LABELER, ROBOLAB_LABELER, Fail, Label, SubtaskAchieved, Success, label
+from positronic_evals.scoring import score
 
 import pimm
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time

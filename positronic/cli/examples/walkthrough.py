@@ -30,11 +30,11 @@ from platform_client.client import API_KEY_ENV, CREDENTIAL_ENV, PlatformClient
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import plan_of_image
-from platform_client.evals import EvalRef
 from platform_client.ids import SubmissionId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import RegisterRequest
 from platform_client.responses import ErroredSubmissionView, FinishedSubmissionView, SubmissionView
+from positronic_evals.evals import EvalRef
 
 
 def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None:

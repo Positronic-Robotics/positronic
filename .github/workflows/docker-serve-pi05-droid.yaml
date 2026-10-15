@@ -20,6 +20,7 @@ on:
       - wire/**
       - model_server/**
       - vocabulary/**
+      - evals/**
       - .github/workflows/docker-serve-pi05-droid.yaml
       - .github/workflows/docker-serve-image.yaml
       - '!**/tests/**'

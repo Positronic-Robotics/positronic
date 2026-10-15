@@ -1,17 +1,18 @@
 """The one name a caller picks a run by, and the definitions of the public evals.
 
 A name is a task suite AND the embodiment that runs it, so there is no second axis to get wrong.
-The platform owns the set, so a name this client has never heard of still reaches the server.
+The platform owns the set, so a name that this package does not define still reaches the platform.
 
 The platform holds the definitions of the evals it does not publish.
 """
 
 from __future__ import annotations
 
-from platform_client.labels import MOLMO_LABELER
-from platform_client.scoring import MeanEpisodeScore, Scoring
 from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, JsonValue, PositiveInt
 from pydantic_core import core_schema
+
+from positronic_evals.labels import MOLMO_LABELER
+from positronic_evals.scoring import MeanEpisodeScore, Scoring
 
 
 class EvalRef(str):

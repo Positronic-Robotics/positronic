@@ -19,28 +19,30 @@ import numpy as np
 import pytest
 import rerun as rr
 from av.container import InputContainer
+from fastapi.testclient import TestClient
 
 from positronic import keys
 from positronic.dataset import Dataset, Time
 from positronic.dataset.dataset import FilterDataset
-from positronic.dataset.episode import Episode, EpisodeContainer
+from positronic.dataset.episode import META_PATH, Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.dataset.transforms import TransformedDataset
-from positronic.dataset.transforms.episode import EpisodeTransform, Identity
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.server import export, positronic_server
-from positronic.server.dataset_utils import ReplayLayout
+from positronic.server.dataset_utils import DEFAULT_MAX_HZ, ReplayLayout, get_dataset_root
 from positronic.server.export import (
     GROUP_INDEX_FILE,
     MAX_FILTER_KEYS_PER_GROUP,
     UNFILTERED_FILE,
+    ExportedFile,
     FileKind,
+    FilterSets,
     _fetch,
     _Output,
     asset_content_type,
     asset_files,
     export_static,
-    filter_sets,
     large_file_links_under,
     validated_build_id,
 )
@@ -52,6 +54,7 @@ from positronic.server.positronic_server import (
     ColumnConfig,
     GroupTableConfig,
     TableConfig,
+    app,
     app_state,
     download_link,
 )
@@ -138,9 +141,14 @@ def shown(dataset):
     return TransformedDataset(dataset, _KeepStatic((keys.TASK, OUTCOME, OBJECT, ATTEMPT, 'notes', 'artifacts')))
 
 
+def export_all(dataset, out, **settings) -> list[ExportedFile]:
+    """Every file an export of `dataset` writes, its steps run to the end."""
+    return [file for step in export_static(dataset, out, **settings) for file in step.files]
+
+
 def an_export(dataset, out, **overrides):
     settings = {'ep_table_cfg': TABLE, 'max_resolution': 64, 'assets': False, 'full_dataset': dataset}
-    return export_static(shown(dataset), out, **{**settings, **overrides})
+    return export_all(shown(dataset), out, **{**settings, **overrides})
 
 
 def paths_of(files) -> set[str]:
@@ -275,7 +283,7 @@ def test_the_export_holds_no_episode_between_two_reads(dataset, tmp_path, monkey
     monkeypatch.setattr('positronic.server.export._fetch', fetch_and_watch)
     monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_watch)
 
-    export_static(
+    export_all(
         shown_dataset,
         tmp_path / 'out',
         ep_table_cfg=TABLE,
@@ -320,7 +328,7 @@ def test_the_videos_of_a_built_recording_are_closed_before_the_next_recording_is
     # Off, so only the export's own collection can close a video.
     gc.disable()
     try:
-        export_static(dataset, tmp_path / 'out', max_resolution=64, assets=False, workers=1)
+        export_all(dataset, tmp_path / 'out', max_resolution=64, assets=False, workers=1)
     finally:
         gc.enable()
 
@@ -392,6 +400,156 @@ def test_two_views_of_one_dataset_through_one_scratch_dir_each_get_their_own_rec
     recording = next(path for path in whole if 'episode_rrd/0' in path)
     assert recording in thinned
     assert (tmp_path / 'whole' / recording).stat().st_size > (tmp_path / 'thinned' / recording).stat().st_size
+
+
+# The key `staged` derives.
+STAGE = 'stage'
+STAGED_TABLE = {
+    **TABLE,
+    '__duration__': ColumnConfig(label='Duration', format='%.3f sec'),
+    STAGE: ColumnConfig(label='Stage', filter=True),
+    # A column whose value is a download in the `dataset` fixture.
+    'notes': ColumnConfig(label='Notes'),
+}
+
+
+def _seconds(episode: Episode) -> float:
+    first, last = episode.bounds(RECORDED_TIME)
+    return (last - first) / 1e9
+
+
+STAGED_GROUPS = {
+    'outcomes': GroupTableConfig(
+        group_keys=OUTCOME,
+        group_fn=lambda episodes: {
+            'count': len(episodes),
+            'seconds': sum(_seconds(episode) for episode in episodes),
+            'first': min(episode.bounds((RECORDED_TIME,)).start[RECORDED_TIME] for episode in episodes),
+            STAGE: max(episode[STAGE] for episode in episodes),
+        },
+        format_table={
+            OUTCOME: ColumnConfig(label='Outcome'),
+            'count': ColumnConfig(label='Episodes', format='%d'),
+            'seconds': ColumnConfig(label='Seconds', format='%.3f'),
+            'first': ColumnConfig(label='First', format='%d'),
+            STAGE: ColumnConfig(label='Stage'),
+        },
+        group_filter_keys={OBJECT: 'Object', STAGE: 'Stage'},
+    )
+}
+
+
+def _joint_samples(episode: Episode) -> int:
+    return len(episode[keys.JOINTS])
+
+
+def staged(dataset: Dataset) -> Dataset:
+    """`dataset` with a static value derived from a recorded signal, as a view of rollouts derives its stage."""
+    return TransformedDataset(dataset, Group(Identity(), Derive(stage=_joint_samples)))
+
+
+def test_the_tables_an_export_writes_are_what_the_app_serves_reading_every_episode_whole(dataset, tmp_path):
+    view, out = staged(dataset), tmp_path / 'out'
+    export_all(view, out, ep_table_cfg=STAGED_TABLE, group_tables=STAGED_GROUPS, max_resolution=64, assets=False)
+
+    with positronic_server.app_state_restored():
+        positronic_server.configure_tables(
+            root=get_dataset_root(view) or 'unknown_dataset',
+            cache_dir=tmp_path / 'cache',
+            ep_table_cfg=STAGED_TABLE,
+            group_tables=STAGED_GROUPS,
+            home_page=None,
+            max_resolution=64,
+            max_hz=DEFAULT_MAX_HZ,
+            layout=None,
+        )
+        positronic_server.configure_pages(show_paths=False, static_export=True)
+        positronic_server.install_dataset(view)
+        client = TestClient(app)
+        for route in ('api/episodes', 'api/dataset_info'):
+            assert (out / f'{route}.json').read_bytes() == _fetch(client, f'/{route}')[0]
+        index = json.loads((out / 'api/groups/outcomes' / GROUP_INDEX_FILE).read_text())
+        assert len(index) > 2
+        for entry in index:
+            served = _fetch(client, '/api/groups/outcomes', entry['params'])[0]
+            assert (out / 'api/groups/outcomes' / entry['file']).read_bytes() == served
+
+
+def test_a_table_holds_no_download_of_an_episode(dataset, tmp_path):
+    keys_seen: list[set[str]] = []
+
+    def count_and_record(episodes: list[Episode]) -> dict:
+        keys_seen.extend(set(episode) for episode in episodes)
+        return {'count': len(episodes)}
+
+    group = GroupTableConfig(
+        group_keys=OUTCOME, group_fn=count_and_record, format_table=GROUPS['outcomes'].format_table
+    )
+    an_export(dataset, tmp_path / 'out', group_tables={'outcomes': group})
+
+    assert keys_seen and all(OUTCOME in seen and not {'notes', 'artifacts'} & seen for seen in keys_seen)
+
+
+@pytest.mark.parametrize(
+    ('read', 'refusal'),
+    [
+        (lambda episode: episode.signals, 'keeps no signal'),
+        (lambda episode: episode['notes'], 'keeps no download'),
+        (lambda episode: episode.get('notes'), 'keeps no download'),
+        (lambda episode: 'notes' in episode, 'keeps no download'),
+    ],
+    ids=['signal', 'download', 'download-by-get', 'download-by-in'],
+)
+def test_a_group_function_that_reads_a_signal_or_a_download_stops_the_export(dataset, tmp_path, read, refusal):
+    group = GroupTableConfig(
+        group_keys=OUTCOME,
+        group_fn=lambda episodes: {'count': len([read(episode) for episode in episodes])},
+        format_table=GROUPS['outcomes'].format_table,
+    )
+    with pytest.raises(TypeError, match=refusal):
+        an_export(dataset, tmp_path / 'out', group_tables={'outcomes': group})
+
+
+def _episode_paths(index: int) -> re.Pattern[str]:
+    return re.compile(rf'(episode/{index}/index\.html|api/episode_rrd/{index}|api/episode/{index}/static/.+)')
+
+
+def test_each_episode_is_a_step_of_its_own_files_and_the_last_step_holds_the_rest(dataset, tmp_path):
+    settings = {'ep_table_cfg': TABLE, 'group_tables': GROUPS, 'max_resolution': 64, 'full_dataset': dataset}
+    steps = list(export_static(shown(dataset), tmp_path / 'out', assets=False, **settings))
+
+    assert [step.episode_index for step in steps] == [0, 1, None]
+    for index, step in enumerate(steps[:-1]):
+        assert all(_episode_paths(index).fullmatch(str(file.path)) for file in step.files)
+    assert not any(_episode_paths(index).fullmatch(str(file.path)) for index in (0, 1) for file in steps[-1].files)
+    assert {'index.html', 'api/episodes.json', 'api/groups/outcomes/index.json'} <= paths_of(steps[-1].files)
+
+
+@pytest.mark.parametrize('workers', [1, 2])
+def test_a_caller_that_deletes_each_episode_and_its_files_at_its_step_publishes_what_an_export_writes(
+    tmp_path, workers
+):
+    """Each step is copied to a host directory, then the episode and the step's files are deleted."""
+    dataset = a_camera_dataset(tmp_path / 'dataset', 3)
+    directories = [Path(cast(Episode, episode).meta[META_PATH]) for episode in dataset]
+    settings = {'ep_table_cfg': STAGED_TABLE, 'group_tables': STAGED_GROUPS, 'max_resolution': 64, 'assets': False}
+    kept = tmp_path / 'kept'
+    export_all(staged(dataset), kept, **settings)
+
+    out, host = tmp_path / 'out', tmp_path / 'host'
+    for step in export_static(staged(dataset), out, workers=workers, **settings):
+        for file in step.files:
+            (host / file.path).parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(out / file.path, host / file.path)
+        if step.episode_index is not None:
+            shutil.rmtree(directories[step.episode_index])
+
+    published = {str(PurePosixPath(path.relative_to(host))) for path in host.rglob('*') if path.is_file()}
+    assert published == {str(PurePosixPath(path.relative_to(kept))) for path in kept.rglob('*') if path.is_file()}
+    for path in published:
+        if 'episode_rrd' not in path:
+            assert (host / path).read_bytes() == (kept / path).read_bytes(), path
+    assert not any(directory.exists() for directory in directories)
 
 
 def test_a_recording_is_built_from_the_full_dataset(dataset, tmp_path):
@@ -501,17 +659,20 @@ def test_an_asset_directory_outside_the_asset_route_or_past_one_segment_each_is_
 
 
 def test_every_non_empty_filter_set_an_episode_satisfies_is_listed_once_and_the_shortest_first():
-    episodes = [{'a': 'x', 'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
+    sets = FilterSets(most=10)
+    for values in ({'a': 'x', 'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}):
+        sets.add(values)
 
-    assert filter_sets(episodes, most=10) == [{'a': 'x'}, {'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
+    assert sets.shortest_first() == [{'a': 'x'}, {'b': '1'}, {'b': '2'}, {'a': 'x', 'b': '1'}]
 
 
-def test_filter_sets_past_the_bound_are_refused_before_every_episode_is_read():
-    endless = ({'k': str(n)} for n in range(10_000))
+def test_filter_sets_past_the_bound_are_refused_at_the_episode_that_passes_the_count():
+    sets = FilterSets(most=5)
+    for n in range(5):
+        sets.add({'k': str(n)})
 
     with pytest.raises(ValueError, match='more than 5 filter sets'):
-        filter_sets(endless, most=5)
-    assert next(endless) == {'k': '6'}  # the sixth value passed the count; the rest were never read
+        sets.add({'k': '5'})
 
 
 def test_a_filter_set_no_episode_satisfies_gets_no_file(dataset, tmp_path):
@@ -577,7 +738,7 @@ def test_a_static_host_serves_every_download_at_the_link_the_page_carries(tmp_pa
         {keys.TASK: 'Put the banana on the plate', 'a/b': b'slashed', 'a': {'b': b'nested'}, ESCAPED_KEY: 'n' * 2000},
     )
     out = tmp_path / 'out'
-    export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld')
+    export_all(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld')
     page = (out / 'episode/0/index.html').read_text()
     carried = re.findall(r'"__download__": "([^"]+)"', page)
 
@@ -592,7 +753,7 @@ def test_a_static_value_equal_to_a_link_stays_as_it_is(tmp_path):
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'twin': 'api/episode_rrd/0'})
     out = tmp_path / 'out'
 
-    export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld')
+    export_all(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld')
 
     page = (out / 'episode/0/index.html').read_text()
     assert 'appUrl("build/bld/api/episode_rrd/0")' in page
@@ -630,7 +791,7 @@ def test_a_static_value_whose_key_a_browser_rewrites_stops_the_export_before_it_
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'a': {'..': b'a step'}})
 
     with pytest.raises(ValueError, match='no link'):
-        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+        export_all(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
     assert not (tmp_path / 'out').exists()
 
 
@@ -638,7 +799,7 @@ def test_a_static_value_named_with_a_backslash_is_linked_encoded_and_written(tmp
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'models\\scene': b'a mesh'})
     out = tmp_path / 'out'
 
-    written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
+    written = paths_of(export_all(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
 
     assert '"api/episode/0/static/models%255Cscene"' in (out / 'episode/0/index.html').read_text()
     assert 'api/episode/0/static/models%5Cscene' in written
@@ -652,7 +813,7 @@ def test_a_dotted_top_level_key_and_a_nested_value_that_spell_alike_are_written_
     )
     out = tmp_path / 'out'
 
-    written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
+    written = paths_of(export_all(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
 
     assert {'api/episode/0/static/scene.mesh', 'api/episode/0/static/scene/mesh'} <= written
     assert (out / 'api/episode/0/static/scene.mesh').read_bytes() == b'top'
@@ -663,7 +824,7 @@ def test_a_short_key_and_a_slashed_key_that_share_a_prefix_are_written_apart(tmp
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', 'a': b'1', 'a/b': b'2'})
     out = tmp_path / 'out'
 
-    written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
+    written = paths_of(export_all(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False))
 
     assert {'api/episode/0/static/a', 'api/episode/0/static/a%2Fb'} <= written
     assert (out / 'api/episode/0/static/a').read_bytes() == b'1'
@@ -800,9 +961,7 @@ def test_a_full_dataset_whose_download_differs_from_the_shown_one_in_type_or_siz
     shown_only = TransformedDataset(full, _WithStatic(notes=shown_notes))
 
     with pytest.raises(ValueError, match="at 'notes'"):
-        export_static(
-            shown_only, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, full_dataset=full
-        )
+        export_all(shown_only, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, full_dataset=full)
     assert not (tmp_path / 'out').exists()
 
 
@@ -811,7 +970,7 @@ def test_a_full_dataset_whose_download_matches_the_shown_one_in_type_and_size_an
     shown_only = TransformedDataset(full, _WithStatic(notes='n' * 2000))
     out = tmp_path / 'out'
 
-    export_static(shown_only, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, full_dataset=full)
+    export_all(shown_only, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, full_dataset=full)
 
     assert (out / 'api/episode/0/static/notes').read_bytes() == b'm' * 2000
 
@@ -822,9 +981,7 @@ def test_a_hidden_download_of_the_full_dataset_under_a_key_no_link_carries_is_le
     shown_only = TransformedDataset(full, _KeepStatic((keys.TASK, 'notes')))
 
     files = paths_of(
-        export_static(
-            shown_only, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, full_dataset=full
-        )
+        export_all(shown_only, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, full_dataset=full)
     )
 
     assert 'api/episode/0/static/notes' in files
@@ -836,7 +993,7 @@ def test_a_download_whose_key_is_past_a_file_name_s_limit_stops_the_export_befor
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', long_key: b'a mesh'})
 
     with pytest.raises(ValueError, match='no link'):
-        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+        export_all(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
     assert not (tmp_path / 'out').exists()
 
 
@@ -889,7 +1046,7 @@ def test_a_download_whose_field_name_a_url_cannot_carry_as_it_is_is_linked_encod
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put the banana on the plate', ESCAPED_KEY: 'n' * 2000})
     out = tmp_path / 'out'
 
-    written = paths_of(export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld'))
+    written = paths_of(export_all(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id='bld'))
 
     encoded = 'notes%20%26%20%C3%A9%3F'
     asked = 'notes%2520%2526%2520%25C3%25A9%253F'
@@ -921,20 +1078,20 @@ def test_two_group_names_that_differ_past_their_case_are_both_written(dataset, t
 def test_two_downloads_of_one_episode_that_are_one_file_on_a_filesystem_folding_case_stop_the_export(tmp_path):
     dataset = a_dataset(tmp_path / 'dataset', {'Notes': 'n' * 2000, 'notes': 'm' * 2000})
     with pytest.raises(ValueError, match='folds case'):
-        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+        export_all(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
     assert not (tmp_path / 'out').exists()
 
 
 def test_a_download_and_the_directory_of_another_that_fold_to_one_name_stop_the_export(tmp_path):
     dataset = a_dataset(tmp_path / 'dataset', {'Scene': {'mesh': 'n' * 2000}, 'scene': 'm' * 2000})
     with pytest.raises(ValueError, match='folds case'):
-        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+        export_all(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
     assert not (tmp_path / 'out').exists()
 
 
 def test_downloads_of_two_episodes_that_differ_in_case_alone_are_written_apart(tmp_path):
     dataset = a_dataset(tmp_path / 'dataset', {'Notes': 'n' * 2000}, {'notes': 'm' * 2000})
-    files = paths_of(export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False))
+    files = paths_of(export_all(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False))
     assert {'api/episode/0/static/Notes', 'api/episode/1/static/notes'} <= files
 
 
@@ -948,13 +1105,13 @@ def test_a_group_named_as_a_windows_device_is_refused_before_a_write(dataset, tm
 def test_a_download_named_as_a_windows_device_or_with_a_trailing_dot_stops_the_export_before_it_writes(tmp_path, key):
     dataset = a_dataset(tmp_path / 'dataset', {key: 'n' * 2000})
     with pytest.raises(ValueError, match='Windows'):
-        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
+        export_all(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False)
     assert not (tmp_path / 'out').exists()
 
 
 def test_a_download_named_past_a_windows_device_name_is_written(tmp_path):
     dataset = a_dataset(tmp_path / 'dataset', {'console': 'n' * 2000, 'aux2': 'm' * 2000, 'lpt': 'o' * 2000})
-    files = paths_of(export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False))
+    files = paths_of(export_all(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False))
     assert {'api/episode/0/static/console', 'api/episode/0/static/aux2', 'api/episode/0/static/lpt'} <= files
 
 
@@ -979,7 +1136,7 @@ def test_a_download_whose_path_on_disk_is_past_a_host_s_key_limit_stops_the_expo
     dataset = a_dataset(tmp_path / 'dataset', static)
 
     with pytest.raises(ValueError, match='key limit'):
-        export_static(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id=build_id)
+        export_all(dataset, tmp_path / 'out', ep_table_cfg=TABLE, max_resolution=64, assets=False, build_id=build_id)
     assert not (tmp_path / 'out').exists()
 
 
@@ -994,11 +1151,15 @@ def test_a_path_at_a_host_s_key_limit_is_held_and_one_past_it_is_refused(monkeyp
         out.plan([PurePosixPath(stem + 'c' * (export.MAX_KEY_BYTES + 1 - len(stem)))])
 
 
-def test_a_group_table_past_the_filter_set_bound_is_refused_before_a_write(dataset, tmp_path, monkeypatch):
+def test_a_group_table_past_the_filter_set_bound_is_refused_before_the_episode_that_passes_it_is_written(
+    dataset, tmp_path, monkeypatch
+):
     monkeypatch.setattr(export, 'MAX_FILTER_SETS_PER_GROUP', 6)
+    out = tmp_path / 'out'
     with pytest.raises(ValueError, match='filter sets'):
-        an_export(dataset, tmp_path / 'out', group_tables={'pairs': GROUPS['pairs']})
-    assert not (tmp_path / 'out').exists()
+        an_export(dataset, out, group_tables={'pairs': GROUPS['pairs']}, workers=1)
+    assert (out / 'episode/0/index.html').is_file()
+    assert not (out / 'episode/1').exists()
 
 
 def test_a_group_table_at_the_filter_set_bound_is_written(dataset, tmp_path, monkeypatch):
@@ -1042,14 +1203,14 @@ def test_a_page_or_an_api_file_past_the_filesystem_s_limit_stops_the_export_befo
     longest path does not."""
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put it down'})
     out = tmp_path / 'out'
-    probe = paths_of(export_static(dataset, tmp_path / 'probe', ep_table_cfg=TABLE, max_resolution=64, assets=False))
+    probe = paths_of(export_all(dataset, tmp_path / 'probe', ep_table_cfg=TABLE, max_resolution=64, assets=False))
     local = {path: export._path_length(out.joinpath(*PurePosixPath(path).parts)) for path in probe}
     longest = max(local.values())
     assert local['api/episode_rrd/0'] < longest
 
     monkeypatch.setattr(export, '_path_max', lambda directory: longest)
     with pytest.raises(ValueError, match='path limit'):
-        export_static(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False)
+        export_all(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False)
     assert not out.exists()
 
 
