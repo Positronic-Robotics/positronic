@@ -57,20 +57,20 @@ Provider-specific behavior follows the library defaults. The example explicitly 
 
 ## Control contract
 
-The default config composes `PauseOnUnavailable` with `LLMPolicy`. Each episode runs a processor generator that yields `Step` values with commands and the next requested call time. A decision sees one frozen observation. The control thread prepares the messages and images, then submits one model invocation to the worker runtime. SDK network retries belong to that invocation. The processor consumes the reply on a later control-loop call. It can request a correction or picture, play a move, or remain idle. Picture and correction requests share the frozen observation. Once the waypoints play, the next decision receives measured state. Each observation includes the previous target and remaining translation/gripper error.
+The default config composes `PauseOnUnavailable` with `LLMPolicy`. Each episode runs a processor generator that yields `Step` values with commands and the next requested call time. A decision sees one frozen observation. The control thread prepares the messages and images, then submits one model invocation to the worker runtime. SDK network retries belong to that invocation. The processor consumes the reply on a later control-loop call. It can request a correction or picture, play a move, or end the episode. Picture and correction requests share the frozen observation. Once the waypoints play, the next decision receives measured state. Each observation includes the previous target and remaining translation/gripper error.
 
 Only the task instruction, measured hand pose/gripper, and selected labelled RGB images enter the model prompt. Privileged simulator state and ground-truth success do not. Positions use the measured pose's coordinate frame, in metres. Orientations use roll/pitch/yaw in radians, with `R = Rz(yaw) Ry(pitch) Rx(roll)`. Gripper values run from 0 (open) to 1 (closed).
 
 | Tool | Arguments / effect |
 | --- | --- |
 | `move_to` | Absolute `x`, `y`, `z`, `roll`, `pitch`, `yaw`, `gripper`, and a short `note` |
-| `done` | `reason` and `hindsight`; stop issuing actions for this episode |
-| `give_up` | `reason` and `hindsight`; stop issuing actions for this episode |
+| `done` | `reason` and `hindsight`; end the episode with `PolicyEnd.COMPLETE` |
+| `give_up` | `reason` and `hindsight`; end the episode with `PolicyEnd.GIVE_UP` |
 | `reveal_frames` | `cameras` and `note`; reveal selected frames in `images=on_demand` mode |
 
-The model must return exactly one tool call. Malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Oversized moves are clamped and accepted with the bounded target in the tool result. Three consecutive invalid replies raise an error. SDK retry defaults apply, and terminal API errors propagate. The overall timeout covers the invocation and its retry waits. The episode has a budget of 100 model invocations, including pictures and corrections; individual network attempts within an invocation do not consume additional budget. Exhaustion stops further actions and model invocations.
+The model must return exactly one tool call. Malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Oversized moves are clamped and accepted with the bounded target in the tool result. Three consecutive invalid replies raise an error. SDK retry defaults apply, and terminal API errors propagate. The overall timeout covers the invocation and its retry waits. The episode has a budget of 100 model invocations, including pictures and corrections; individual network attempts within an invocation do not consume additional budget. Exhaustion ends the episode with `PolicyEnd.GIVE_UP`.
 
-After `done`, `give_up`, or call-budget exhaustion, the processor emits no commands and makes no further API requests. Drivers retain their last commanded target. The episode and recording continue until the simulator or operator ends it, or its timeout expires. An episode without a timeout requires external completion. Each new episode gets a fresh conversation.
+After `done`, `give_up`, or call-budget exhaustion, the run returns its `PolicyEnd`, and the harness ends the episode at once. The episode records `eval.ended_by = policy` and `eval.policy_end`. The `PolicyEnd` is the claim of the model, not a verdict. Each new episode gets a fresh conversation.
 
 The policy's stop reason and hindsight are recorded for inspection, without setting a success label or carrying advice into other episodes. There are no code-execution, crop, VLA, or skill-selection tools.
 

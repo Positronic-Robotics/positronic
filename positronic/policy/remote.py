@@ -170,8 +170,6 @@ class RemotePolicy(Policy):
                 with connection_lock:
                     return round_trip(session, obs, compress_images, self._jpeg_quality)
 
-            # TODO: Let a model server end its policy run. The server sends a `PolicyEnd` with its actions, and a
-            #  client processor returns it.
             with closing(runtime.start(stack, infer)) as run:
                 obs = yield
                 while True:

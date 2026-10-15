@@ -28,7 +28,7 @@ from pydantic_ai.tools import ToolDefinition
 
 from positronic import geom, keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Policy, PolicyRun, Runtime, Step
+from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.policy.processors import PauseOnUnavailable
 from positronic.policy.sequential import Sequential
 
@@ -383,7 +383,7 @@ class LLMPolicy(Policy):
                         'time_ns': runtime.time_ns,
                         policy_keys.STOP_REASON: 'call_budget',
                     })
-                    break
+                    return PolicyEnd.GIVE_UP
                 if conversation._obs is None:
                     conversation._observe(obs, runtime.time_ns)
                 messages = conversation._request_messages()
@@ -399,7 +399,7 @@ class LLMPolicy(Policy):
                 if isinstance(data, Finish):
                     runtime.set_metadata(policy_keys.STOP_REASON, call.tool_name)
                     runtime.set_metadata(policy_keys.HINDSIGHT, data.hindsight)
-                    break
+                    return PolicyEnd.COMPLETE if call.tool_name == Tool.DONE else PolicyEnd.GIVE_UP
                 started_ns, index = runtime.time_ns, 0
                 end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)
                 while index < len(chunk) or runtime.time_ns < end_ns:
@@ -410,9 +410,6 @@ class LLMPolicy(Policy):
                         index += 1
                         due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
                     obs = yield Step(commands, due_ns)
-            # TODO: Return `PolicyEnd.COMPLETE` after `Finish`.
-            while True:
-                yield Step({}, runtime.time_ns + 1_000_000_000)
 
 
 @cfn.config(
