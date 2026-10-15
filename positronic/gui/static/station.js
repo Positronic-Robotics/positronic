@@ -6,7 +6,7 @@ const EDIT_DELAY_MS = 300;
 
 // Every name this page shares with the console's server, and the only place the page spells one. The server's
 // side is the routes of StationConsole.build_app, the models Status, RunView, Episode, CameraView, InstructionBody
-// and VerdictBody, the enum Phase, the outcomes in Ending, and the `detail` of a FastAPI error answer.
+// and JudgementBody, the enum Phase, the outcomes in Ending, and the `detail` of a FastAPI error answer.
 const ROUTES = {
   status: '/status',
   instruction: '/instruction',
@@ -19,7 +19,7 @@ const PHASE = {
   ready: 'ready',
   running: 'running',
   ending: 'ending',
-  verdictPending: 'verdict_pending',
+  judgementPending: 'judgement_pending',
   runEnded: 'run_ended',
 };
 const OUTCOME = {
@@ -31,7 +31,7 @@ const OUTCOME = {
 };
 const REQUEST = {
   instruction: (text) => ({ override: text }),
-  verdict: (verdict) => ({ verdict: verdict }),
+  judgement: (judgement) => ({ judgement: judgement }),
 };
 const errorDetail = (answer) => answer.detail;
 
@@ -81,7 +81,7 @@ const PHASE_VIEW = {
   [PHASE.ready]: { text: 'Ready', css: 'ready' },
   [PHASE.running]: { text: 'Running', css: 'running', doing: 'recording' },
   [PHASE.ending]: { text: 'Ending', css: 'ending', doing: 'ending' },
-  [PHASE.verdictPending]: { text: 'Verdict pending', css: 'pending', doing: 'ended · give the verdict' },
+  [PHASE.judgementPending]: { text: 'Judgement pending', css: 'pending', doing: 'ended · judge the episode' },
   [PHASE.runEnded]: { text: 'Run ended', css: 'run-ended' },
 };
 const OUTCOME_VIEW = {
@@ -95,12 +95,12 @@ const OUTCOME_VIEW = {
 const OPEN_VIEW = {
   [PHASE.running]: { label: '<span class="dot"></span>Running', css: 'running' },
   [PHASE.ending]: { label: 'Ending', css: 'ending' },
-  [PHASE.verdictPending]: { label: 'Verdict?', css: 'pending' },
+  [PHASE.judgementPending]: { label: 'Judge?', css: 'pending' },
 };
 
 const $ = (id) => document.getElementById(id);
 const textarea = $('instruction');
-const verdictButtons = [
+const judgementButtons = [
   [$('finish-pass'), OUTCOME.success],
   [$('finish-fail'), OUTCOME.fail],
   [$('discard'), OUTCOME.discarded],
@@ -122,7 +122,7 @@ function clock(seconds) {
 }
 
 const isRecording = (phase) => phase === PHASE.running || phase === PHASE.ending;
-const isOpen = (phase) => isRecording(phase) || phase === PHASE.verdictPending;
+const isOpen = (phase) => isRecording(phase) || phase === PHASE.judgementPending;
 const runHasEnded = () => current !== null && current.phase === PHASE.runEnded;
 const openEpisode = (status) => (isOpen(status.phase) ? status.episodes[status.episodes.length - 1] : null);
 const nextNumber = (status) => status.episodes.length + 1;
@@ -279,7 +279,7 @@ function renderButtons() {
   const phase = current ? current.phase : null;
   const idle = !offline && !busy;
   $('start').disabled = !(idle && phase === PHASE.ready);
-  for (const [button] of verdictButtons) button.disabled = !(idle && isOpen(phase));
+  for (const [button] of judgementButtons) button.disabled = !(idle && isOpen(phase));
   $('end-run').disabled = !idle || phase === null || phase === PHASE.runEnded;
 }
 
@@ -495,8 +495,8 @@ $('start').addEventListener('click', () =>
   }),
 );
 
-for (const [button, verdict] of verdictButtons) {
-  button.addEventListener('click', () => act(() => post(ROUTES.end, REQUEST.verdict(verdict))));
+for (const [button, judgement] of judgementButtons) {
+  button.addEventListener('click', () => act(() => post(ROUTES.end, REQUEST.judgement(judgement))));
 }
 
 $('end-run').addEventListener('click', () => {

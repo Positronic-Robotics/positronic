@@ -21,7 +21,7 @@ from positronic.cfg import codecs
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Transform3D
 from positronic.gui.station import Phase
-from positronic.gui.web import VerdictBody
+from positronic.gui.web import JudgementBody
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
@@ -519,7 +519,7 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
             calls = model.call_count
             assert post(base, '/episode/start') == 200
             assert (yield from wait(lambda calls=calls: model.call_count > calls, clock))
-            assert post(base, '/episode/end', VerdictBody(verdict=verdict)) == 200
+            assert post(base, '/episode/end', JudgementBody(judgement=verdict)) == 200
 
             def finished():
                 status = read_status(base)

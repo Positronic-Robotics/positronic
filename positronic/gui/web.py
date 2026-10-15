@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 import uvicorn
-from eval_vocabulary.outcome import OUTCOME, Outcome
+from eval_vocabulary.outcome import OUTCOME
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.staticfiles import StaticFiles
@@ -28,7 +28,7 @@ import pimm
 from positronic import keys
 from positronic.dataset.local_dataset import load_dataset
 from positronic.eval import Task
-from positronic.gui.station import Refused, RunView, Station, Verdict
+from positronic.gui.station import Judgement, Refused, RunView, Station
 from positronic.gui.video_stream import VideoStream, codec_string
 from positronic.policy import Policy
 from positronic.policy import keys as policy_keys
@@ -69,8 +69,8 @@ class InstructionBody(BaseModel):
     override: str | None
 
 
-class VerdictBody(BaseModel):
-    verdict: Verdict
+class JudgementBody(BaseModel):
+    judgement: Judgement
 
 
 class CameraFeed:
@@ -109,8 +109,8 @@ class StationConsole(pimm.ControlSystem):
 
     Connect ``perform_task`` and ``done`` to Harness, and each camera to ``cameras``. Run this system in a
     background process so preview encoding can progress independently of policy execution. The policy and
-    tasks must be picklable; each rollout sends its own copy of the policy definition. An outcome that the console
-    gives after the harness answered goes into the episode's edit log in ``output_path``.
+    tasks must be picklable; each rollout sends its own copy of the policy definition. A judgement that the recording
+    does not hold goes into the episode's edit log in ``output_path``.
     """
 
     def __init__(
@@ -134,12 +134,12 @@ class StationConsole(pimm.ControlSystem):
         if not server_thread.is_alive():
             raise RuntimeError('The station console web server stopped')
 
-    def _record_outcome(self, uid: str, outcome: Outcome) -> None:
+    def _record_judgement(self, uid: str, judgement: Judgement) -> None:
         assert self._output_path is not None, 'only an episode that records has a uid'
-        load_dataset(self._output_path).set_static(uid, {OUTCOME: outcome})
+        load_dataset(self._output_path).set_static(uid, {OUTCOME: judgement})
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        station = Station(self._next_task, self._record_outcome)
+        station = Station(self._next_task, self._record_judgement)
         feeds = {name: CameraFeed() for name in self.cameras}
         tasks: queue.SimpleQueue[Task] = queue.SimpleQueue()
         app = self.build_app(station, feeds, tasks.put, clock, should_stop)
@@ -234,27 +234,27 @@ class StationConsole(pimm.ControlSystem):
             return Status(run=station.view(now), cameras=cameras, policy=self._policy_label, host=self._host)
 
         @app.get('/status')
-        async def get_status() -> Status:
+        def get_status() -> Status:
             return status()
 
         @app.post('/instruction')
-        async def instruction(body: InstructionBody) -> Status:
+        def instruction(body: InstructionBody) -> Status:
             station.set_override(body.override)
             return status()
 
         @app.post('/episode/start')
-        async def start() -> Status:
+        def start() -> Status:
             submit(station.start(clock.now()))
             return status()
 
         @app.post('/episode/end')
-        async def end(body: VerdictBody) -> Status:
-            if (payload := station.end(body.verdict)) is not None:
+        def end(body: JudgementBody) -> Status:
+            if (payload := station.end(body.judgement)) is not None:
                 self.done.emit(payload)
             return status()
 
         @app.post('/run/end')
-        async def end_run() -> Status:
+        def end_run() -> Status:
             station.end_run()
             return status()
 

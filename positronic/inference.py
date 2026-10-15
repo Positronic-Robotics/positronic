@@ -107,7 +107,7 @@ def web(
     """Run one hardware embodiment attended from a browser, at ``http://{host}:{port}/``.
 
     The page shows each camera, starts an episode on the trial ``next_task`` makes, and ends it with a verdict or a
-    discard. After the policy ends an episode, the page asks for the verdict. The run ends on the page's End run or on
+    discard. After the policy ends an episode, the page asks for the judgement. The run ends on the page's End run or on
     Ctrl-C. The policy's metadata is read once before the page opens, so a policy that cannot answer stops the run
     there.
     """

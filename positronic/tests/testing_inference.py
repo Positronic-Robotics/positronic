@@ -12,7 +12,7 @@ import pimm
 from positronic import wire
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
-from positronic.gui.web import StationConsole, Status, VerdictBody
+from positronic.gui.web import JudgementBody, StationConsole, Status
 from positronic.policy import Policy
 from positronic.policy.harness import Harness
 
@@ -122,6 +122,6 @@ def run_attended(
         world.run([operator, harness, *embodiment.control_systems], [console])
 
 
-def post(base: str, path: str, body: VerdictBody | None = None) -> int:
+def post(base: str, path: str, body: JudgementBody | None = None) -> int:
     """The HTTP status of the press. A press the console refuses must not raise inside the world."""
     return httpx.post(f'{base}{path}', json=None if body is None else body.model_dump(mode='json')).status_code

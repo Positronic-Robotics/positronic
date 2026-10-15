@@ -6,7 +6,7 @@ from typing import Any, Literal, get_args, get_origin
 
 import numpy as np
 import pytest
-from eval_vocabulary.outcome import OUTCOME, Outcome
+from eval_vocabulary.outcome import OUTCOME, Outcome, counted_outcome
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -18,7 +18,15 @@ from positronic.dataset.local_dataset import LocalDatasetWriter, load_dataset
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.station import Ending, Episode, Phase, RunView, Station, Unrecorded, terminal_payload
-from positronic.gui.web import STATIC_DIR, CameraFeed, CameraView, InstructionBody, StationConsole, Status, VerdictBody
+from positronic.gui.web import (
+    STATIC_DIR,
+    CameraFeed,
+    CameraView,
+    InstructionBody,
+    JudgementBody,
+    StationConsole,
+    Status,
+)
 from positronic.policy import Policy, PolicyEnd
 from positronic.policy import keys as policy_keys
 from positronic.policy.harness import EpisodeEnd
@@ -49,7 +57,7 @@ class _Policy(Policy):
 
 
 class _Console:
-    """A station page served in-process, with queued tasks and emitted verdicts collected for inspection."""
+    """A station page served in-process, with queued tasks and emitted judgements collected for inspection."""
 
     def __init__(self):
         self.tasks: list[Task] = []
@@ -64,7 +72,7 @@ class _Console:
         app = console.build_app(self.station, {CAMERA: self.feed}, self.tasks.append, SystemClock(), self.should_stop)
         self.client = TestClient(app)
 
-    def post(self, path: str, body: VerdictBody | InstructionBody | None = None) -> Status:
+    def post(self, path: str, body: JudgementBody | InstructionBody | None = None) -> Status:
         response = self.client.post(path, json=None if body is None else body.model_dump(mode='json'))
         response.raise_for_status()
         return Status.model_validate(response.json())
@@ -112,33 +120,52 @@ def test_start_hands_the_trial_to_the_control_loop_once(console):
     assert len(console.tasks) == 1
 
 
-def test_each_verdict_emits_done_without_waiting_for_the_control_loop(console):
+def test_each_judgement_emits_done_without_waiting_for_the_control_loop(console):
     console.post('/episode/start')
-    assert console.post('/episode/end', VerdictBody(verdict=Outcome.FAIL)).run.phase is Phase.ENDING
+    assert console.post('/episode/end', JudgementBody(judgement=Outcome.FAIL)).run.phase is Phase.ENDING
     assert len(console.tasks) == 1
     [(_, payload)] = console.done.emitted
     assert payload == terminal_payload(Outcome.FAIL)
-    assert console.post('/episode/end', VerdictBody(verdict=Outcome.DISCARDED)).run.phase is Phase.ENDING
+    assert console.post('/episode/end', JudgementBody(judgement=Outcome.DISCARDED)).run.phase is Phase.ENDING
     assert [payload for _, payload in console.done.emitted] == [
         terminal_payload(Outcome.FAIL),
         terminal_payload(Outcome.DISCARDED),
     ]
 
 
-def test_the_page_offers_only_the_verdicts(console):
+def test_the_page_offers_only_the_judgements(console):
     console.post('/episode/start')
-    assert console.client.post('/episode/end', json={'verdict': Outcome.OUT_OF_TIME.value}).status_code == 422
+    assert console.client.post('/episode/end', json={'judgement': Outcome.OUT_OF_TIME.value}).status_code == 422
     assert len(console.tasks) == 1
 
 
 POLICY_END = EpisodeEnd({eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.TERMINATED: True}, 'recording-1')
 
 
-def test_after_a_policy_end_the_verdict_closes_the_episode_and_emits_no_done(console):
+def test_a_judgement_that_does_not_reach_the_recording_is_refused_with_the_reason(console):
+    def broken(uid: str, judgement: Outcome) -> None:
+        raise OSError('disk full')
+
+    console.station = Station(_trial, broken)
+    app = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0).build_app(
+        console.station, {CAMERA: console.feed}, console.tasks.append, SystemClock(), console.should_stop
+    )
+    client = TestClient(app)
+    client.post('/episode/start').raise_for_status()
+    console.station.close(POLICY_END, now=1.0)
+
+    answer = client.post('/episode/end', json=JudgementBody(judgement=Outcome.SUCCESS).model_dump(mode='json'))
+
+    assert answer.status_code == 409
+    assert answer.json()['detail'] == 'the judgement is not in the recording: OSError: disk full'
+    assert Status.model_validate(client.get('/status').json()).run.phase is Phase.JUDGEMENT_PENDING
+
+
+def test_after_a_policy_end_the_judgement_closes_the_episode_and_emits_no_done(console):
     console.post('/episode/start')
     console.station.close(POLICY_END, now=1.0)
-    assert Status.model_validate(console.client.get('/status').json()).run.phase is Phase.VERDICT_PENDING
-    status = console.post('/episode/end', VerdictBody(verdict=Outcome.SUCCESS))
+    assert Status.model_validate(console.client.get('/status').json()).run.phase is Phase.JUDGEMENT_PENDING
+    status = console.post('/episode/end', JudgementBody(judgement=Outcome.SUCCESS))
     assert status.run.phase is Phase.READY
     assert status.run.episodes[0].outcome is Outcome.SUCCESS
     assert console.recorded == [('recording-1', Outcome.SUCCESS)]
@@ -265,24 +292,25 @@ def _recorded_episode(path: Path) -> str:
         return episode.meta[META_UID]
 
 
-def test_an_episode_that_runs_out_of_time_gets_its_outcome_in_the_edit_log(tmp_path):
+def test_an_episode_that_runs_out_of_time_shows_it_and_counts_it_from_the_recording_alone(tmp_path):
     uid = _recorded_episode(tmp_path)
     console = StationConsole(_trial, _Policy(), tmp_path, host='127.0.0.1', port=0)
-    station = Station(_trial, console._record_outcome)
+    station = Station(_trial, console._record_judgement)
     station.start(now=0.0)
     console._episode = _Answered(EpisodeEnd({eval_keys.TERMINATED: False}, uid))
 
     console._drive_episode(station, queue.SimpleQueue(), SystemClock())
 
     [episode] = load_dataset(tmp_path)
-    assert episode[OUTCOME] == Outcome.OUT_OF_TIME
+    assert OUTCOME not in episode
+    assert counted_outcome(episode) is Outcome.OUT_OF_TIME
     assert station.view(now=0.0).episodes[0].outcome is Outcome.OUT_OF_TIME
 
 
-def test_a_verdict_after_a_policy_end_goes_into_the_edit_log(tmp_path):
+def test_a_judgement_after_a_policy_end_goes_into_the_edit_log(tmp_path):
     uid = _recorded_episode(tmp_path)
     console = StationConsole(_trial, _Policy(), tmp_path, host='127.0.0.1', port=0)
-    station = Station(_trial, console._record_outcome)
+    station = Station(_trial, console._record_judgement)
     station.start(now=0.0)
     console._episode = _Answered(EpisodeEnd(POLICY_END.terminal, uid))
     console._drive_episode(station, queue.SimpleQueue(), SystemClock())
@@ -308,7 +336,7 @@ class _Failed(pimm.calls.Answer[EpisodeEnd]):
 
 def test_an_arm_error_that_fails_an_episode_reaches_the_page_and_is_not_skipped_as_a_frame_is():
     console = StationConsole(_trial, _Policy(), None, host='127.0.0.1', port=0)
-    station = Station(_trial, console._record_outcome)
+    station = Station(_trial, console._record_judgement)
     station.start(now=0.0)
     console._episode = _Failed(pimm.SignalError('Release the emergency stop button'))
 
@@ -346,7 +374,7 @@ def test_the_page_names_the_phases_and_outcomes_the_server_sends():
 
 def test_the_page_sends_the_request_fields_the_server_reads():
     sent = set(re.findall(r'\(\{ (\w+):', _script_object('REQUEST')))
-    assert sent == set(InstructionBody.model_fields) | set(VerdictBody.model_fields)
+    assert sent == set(InstructionBody.model_fields) | set(JudgementBody.model_fields)
 
 
 def test_the_page_reads_every_status_field_the_server_sends():
