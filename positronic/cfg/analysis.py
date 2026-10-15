@@ -200,7 +200,7 @@ def success_time(episode: Episode, score_threshold: float = 0.95) -> float | Non
     return None
 
 
-def uph_sim(episode: Episode) -> float | None:
+def success_time_uph(episode: Episode) -> float | None:
     """Units per hour based on success_time (not full episode duration)."""
     if not unified_success_bool(episode):
         return None
@@ -222,7 +222,7 @@ def unified_uph(ep: Episode) -> float | None:
         timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
         first, last = ep.bounds(timeline)
         return items / ((last - first) / 1e9 / 3600)
-    return uph_sim(ep)
+    return success_time_uph(ep)
 
 
 def unified_success_rate(ep: Episode) -> float | None:
@@ -397,7 +397,7 @@ stacking_episodes = base_cfg.transform.override(
                 box_distance_progress=box_distance_progress,
                 movement=ee_pose_movement,
                 units=success_units,
-                uph=uph_sim,
+                uph=success_time_uph,
             ),
         ),
         internal.SIM_ROBOT_TRANSFORM,

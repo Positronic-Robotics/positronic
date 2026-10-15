@@ -324,7 +324,7 @@ def test_a_stacking_signal_alone_scores_nothing_and_still_shows():
     row = analysis.checkpoint_table().group_fn([sim])
     assert (row['count'], row['scored']) == (1, 0)
     assert (analysis.unified_units_display(sim), analysis.unified_uph(sim)) == ('-', None)
-    assert (analysis.success_units(sim), analysis.uph_sim(sim)) == (None, None)
+    assert (analysis.success_units(sim), analysis.success_time_uph(sim)) == (None, None)
     assert analysis.max_stacking_success(sim) == 1.0
     assert analysis.success_time(sim) == 10.0
 
@@ -339,5 +339,5 @@ def test_a_scored_outcome_decides_a_sim_episode_against_its_signal(outcome, sign
     assert analysis.success_units(sim) == int(succeeded)
     assert analysis.unified_units_display(sim) == str(int(succeeded))
     assert analysis.unified_success_rate(sim) == 100 * int(succeeded)
-    assert analysis.uph_sim(sim) is None
+    assert analysis.success_time_uph(sim) is None
     assert analysis.checkpoint_table().group_fn([sim])['failures'] == int(not succeeded)
