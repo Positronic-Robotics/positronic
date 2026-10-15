@@ -8,7 +8,7 @@ benchmark ships one adapter (``vendors/``-style); the native ``MujocoSim`` fixtu
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, final
+from typing import Any, ClassVar, final
 
 import numpy as np
 
@@ -20,6 +20,9 @@ from positronic.simulator.env_server import protocol
 
 class EnvAdapter(ABC):
     """The mappings between the canonical embodiment contract and an env's raw wire payloads."""
+
+    # True when the env ends the trial at the step where it sees success.
+    ends_on_success: ClassVar[bool] = False
 
     @abstractmethod
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -231,6 +231,7 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
         assert wire[protocol.TARGET_GRIP] == 0.0
 
     assert episode.static[eval_keys.TERMINATED] is (done_after is not None)
+    assert episode.static[eval_keys.ENV_ENDS_ON_SUCCESS] is True
     if done_after is not None:
         assert episode.static[eval_keys.SUCCESS] is False
         assert len(env.actions) == done_after

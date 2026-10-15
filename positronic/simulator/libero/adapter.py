@@ -20,6 +20,9 @@ from positronic.simulator.mujoco.sim import MujocoFrankaState
 
 
 class LiberoAdapter(WireCommandAdapter):
+    # LIBERO's ``done`` is its success check.
+    ends_on_success = True
+
     def __init__(self, camera_dict: dict[str, str]):
         super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key

@@ -21,8 +21,11 @@ from eval_vocabulary.episode import (
     BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    ENDED_BY_POLICY,
+    ENV_ENDS_ON_SUCCESS,
     LEGACY_TIME_COLUMN,
     META_FILE,
+    POLICY_END,
     SIGNAL_FILE_SUFFIX,
     STATIC_FILE,
     SUBTASK_SCORE_INDEX,
@@ -33,7 +36,10 @@ from eval_vocabulary.episode import (
     TIMESTAMP_COLUMN_PREFIX,
     UID,
     VALUE_COLUMN,
+    PolicyEnd,
 )
+from eval_vocabulary.outcome import OUTCOME
+from eval_vocabulary.outcome import Outcome as CountedOutcome
 from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD
 from platform_client import labels
 from platform_client.labels import (
@@ -426,6 +432,17 @@ def test_a_trial_that_an_operator_ended_has_no_label(tmp_path: Path):
     assert molmo_label(episode) is None
 
 
+def test_a_trial_that_the_policy_gave_up_fails_at_its_end(tmp_path: Path):
+    (episode,) = _episodes(
+        tmp_path, {TASK: CUP, ENDED_BY: ENDED_BY_POLICY, POLICY_END: PolicyEnd.GIVE_UP, TERMINATED: True}
+    )
+    _write_timed_signal(episode, 'grip', [0, 2_000_000_000])
+    assert molmo_label(episode) == _label(Fail(seconds=2.0), seconds_to_end=2.0, annotator=MOLMO_LABELER)
+
+
+COMPLETED = {TASK: CUP, ENDED_BY: ENDED_BY_POLICY, POLICY_END: PolicyEnd.COMPLETE, TERMINATED: True}
+
+
 def test_the_end_is_the_span_of_all_signals_on_the_world_clock(tmp_path: Path):
     (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True})
     _write_timed_signal(episode, 'grip', [2_000_000_000, 3_000_000_000])
@@ -574,7 +591,15 @@ def test_a_robolab_label_has_an_event_at_each_change_of_the_subtasks_count_and_n
 
 @pytest.mark.parametrize(
     ('verdict', 'outcome'),
-    [({SUCCESS: True, TERMINATED: True}, Outcome.success), ({SUCCESS: False, TERMINATED: False}, Outcome.out_of_time)],
+    [
+        ({SUCCESS: True, TERMINATED: True}, Outcome.success),
+        ({SUCCESS: False, TERMINATED: False}, Outcome.out_of_time),
+        (
+            {ENDED_BY: ENDED_BY_POLICY, POLICY_END: PolicyEnd.COMPLETE, TERMINATED: True, ENV_ENDS_ON_SUCCESS: True},
+            Outcome.fail,
+        ),
+        ({TERMINATED: True, OUTCOME: CountedOutcome.SAFETY}, Outcome.safety),
+    ],
 )
 def test_a_robolab_trial_ends_as_a_molmo_trial_ends(tmp_path: Path, verdict: dict[str, object], outcome: Outcome):
     (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: CUBES_IN_BIN, **verdict})
@@ -617,10 +642,34 @@ TIMED_OUT = {TASK: CUP, TERMINATED: False}
         ({TASK: CUP, SUCCESS: False, TERMINATED: True}, (CUP, Outcome.fail)),
         (TIMED_OUT, (CUP, Outcome.out_of_time)),
         ({**TIMED_OUT, SUCCESS: True}, (CUP, Outcome.out_of_time)),
+        ({**COMPLETED, ENV_ENDS_ON_SUCCESS: True}, (CUP, Outcome.fail)),
+        ({**COMPLETED, OUTCOME: CountedOutcome.SUCCESS}, (CUP, Outcome.success)),
     ],
 )
 def test_the_recorded_verdict_gives_the_outcome(static: dict[str, object], recorded: tuple[str, Outcome]):
     assert recorded_task_and_outcome(static, TASK) == recorded
+
+
+@pytest.mark.parametrize(
+    ('counted', 'outcome'),
+    [
+        (CountedOutcome.SUCCESS, Outcome.success),
+        (CountedOutcome.FAIL, Outcome.fail),
+        (CountedOutcome.OUT_OF_TIME, Outcome.out_of_time),
+        (CountedOutcome.SAFETY, Outcome.safety),
+        (CountedOutcome.SYSTEM, Outcome.fail),
+        (CountedOutcome.UNSCORED, None),
+        (CountedOutcome.DISCARDED, None),
+    ],
+)
+def test_each_counted_outcome_gives_its_label_outcome_or_none(counted: CountedOutcome, outcome: Outcome | None):
+    assert recorded_task_and_outcome({TASK: CUP, OUTCOME: counted}, TASK) == (
+        None if outcome is None else (CUP, outcome)
+    )
+
+
+def test_a_complete_that_nobody_confirmed_has_no_outcome():
+    assert recorded_task_and_outcome(COMPLETED, TASK) is None
 
 
 def test_a_success_of_the_wrong_type_beside_a_timeout_is_logged_and_the_trial_still_ran_out_of_time(
