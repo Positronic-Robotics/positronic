@@ -30,7 +30,6 @@ __all__ = [
     'CommandFailed',
     'Fault',
     'credential',
-    'fault_of',
     'gateway',
     'one_line',
     'parse_id',
@@ -54,13 +53,6 @@ class CommandFailed(SystemExit):
         self.fault = fault
 
 
-def fault_of(exc: PlatformError) -> Fault:
-    """The platform's fault for a 5xx or a code that names its own failure, else the caller's."""
-    if exc.http_status >= 500 or exc.code in (ErrorCode.internal_error, ErrorCode.upstream_unavailable):
-        return Fault.PLATFORM
-    return Fault.CALLER
-
-
 def one_line(exc: ValidationError) -> str:
     """Every validation error on one line with its field and message."""
     return '; '.join(f'{".".join(str(part) for part in error["loc"])}: {error["msg"]}' for error in exc.errors())
@@ -77,6 +69,13 @@ def refusing_bad_input() -> Iterator[None]:
         yield
     except ValueError as exc:
         raise CommandFailed(str(exc), Fault.USAGE) from exc
+
+
+def _fault_of(exc: PlatformError) -> Fault:
+    """The platform's fault for a 5xx or a code that names its own failure, else the caller's."""
+    if exc.http_status >= 500 or exc.code in (ErrorCode.internal_error, ErrorCode.upstream_unavailable):
+        return Fault.PLATFORM
+    return Fault.CALLER
 
 
 @contextmanager
@@ -100,12 +99,13 @@ def gateway(
         try:
             yield client
         except PlatformError as exc:
+            fault = _fault_of(exc)
             if refusal_as_json:
                 print(exc.envelope.model_dump_json(indent=2))
-                raise SystemExit(fault_of(exc)) from exc
+                raise SystemExit(fault) from exc
             lines = [f'{exc.code.name}: {exc.message}']
             lines += [f'  {key}: {json.dumps(value)}' for key, value in exc.details.items()]
-            raise CommandFailed('\n'.join(lines), fault_of(exc)) from exc
+            raise CommandFailed('\n'.join(lines), fault) from exc
         except ValidationError as exc:
             # A 2xx whose body is not the route's response model. The body stays out of the message.
             codes = '; '.join(error['type'] for error in exc.errors())
