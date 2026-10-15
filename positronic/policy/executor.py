@@ -13,7 +13,7 @@ from functools import partial
 from typing import Any, ParamSpec, TypeVar
 
 from positronic import telemetry, telemetry_keys
-from positronic.policy.base import Answer, NotAnswered, Runtime
+from positronic.policy.base import Answer, InputT, NotAnswered, OutputT, Processor, ProcessorRun, ReturnT, Runtime
 
 P = ParamSpec('P')
 T = TypeVar('T')
@@ -97,6 +97,9 @@ class Executor(Runtime):
     simulation, charged calls include queueing and execution time; uncharged calls hold the simulator
     until the worker finishes. Submission and result reads belong to the control thread; submitted
     functions must not mutate episode state.
+
+    A call submitted while the first processor that this runtime starts runs to its first yield is a ready call. It
+    answers on the wall clock, it charges no time, and its completion does not resume the policy.
     """
 
     def __init__(
@@ -109,6 +112,9 @@ class Executor(Runtime):
         self._tick_time_ns: int | None = None
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._answers: set[_UnchargedAnswer[Any]] = set()
+        self._ready_calls: list[_UnchargedAnswer[Any]] = []
+        self._start_depth = 0
+        self._started = False
         self._metadata: dict[str, Any] = {}
 
     def set_metadata(self, name: str, value: Any) -> None:
@@ -133,6 +139,20 @@ class Executor(Runtime):
         if now_ns != self._tick_time_ns:
             self._tick += 1
             self._tick_time_ns = now_ns
+
+    @property
+    def ready_calls(self) -> tuple[Answer[Any], ...]:
+        return tuple(self._ready_calls)
+
+    def start(
+        self, processor: Processor[InputT, OutputT, ReturnT], /, *args: Any, **kwargs: Any
+    ) -> ProcessorRun[InputT, OutputT, ReturnT]:
+        self._start_depth += 1
+        try:
+            return super().start(processor, *args, **kwargs)
+        finally:
+            self._start_depth -= 1
+            self._started = self._started or self._start_depth == 0
 
     @property
     def has_pending(self) -> bool:
@@ -164,6 +184,10 @@ class Executor(Runtime):
         if telemetry.enabled():
             invoke = telemetry.traced(telemetry_keys.SPAN_POLICY_SUBMIT)(invoke)
         work = partial(context.run, invoke)
+        if self._start_depth and not self._started:
+            ready = _UnchargedAnswer(self._pool.submit(work))
+            self._ready_calls.append(ready)
+            return ready
         answer = (
             _ChargedAnswer(self._pool, self._clock, work)
             if self._simulated and self._charge_inference_time
@@ -203,10 +227,11 @@ class Executor(Runtime):
     def close(self) -> None:
         """Cancel queued calls, drain running calls, and report failures whose results were never read."""
         self._pool.shutdown(wait=True, cancel_futures=True)
-        for answer in self._answers:
+        for answer in (*self._answers, *self._ready_calls):
             if answer.result_read or answer.call.cancelled():
                 continue
             # rules-allow: swallowed-error — the caller dropped this answer; report its failure during cleanup.
             if (exc := answer.call.exception()) is not None:
                 logging.error('A submitted function failed without its result being read: %s', exc)
         self._answers.clear()
+        self._ready_calls.clear()

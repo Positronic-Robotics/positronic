@@ -101,6 +101,21 @@ def test_a_failed_episode_keeps_its_error_and_the_next_start_opens_the_next_epis
     assert station.start(now=4.0).meta[eval_keys.TRIAL_INDEX] == 1
 
 
+def test_an_episode_that_did_not_start_keeps_its_trial_for_the_next_start():
+    station = Station(_trials())
+    station.set_override(OVERRIDE)
+    station.start(now=1.0)
+    station.not_started(now=2.0, error='RuntimeError: the teleoperator cancelled')
+    view = station.view(now=3.0)
+    assert view.phase is Phase.READY
+    assert view.configured == CONFIGURED
+    assert view.episodes[0].outcome is Outcome.ERROR
+    assert view.episodes[0].error == 'RuntimeError: the teleoperator cancelled'
+    again = station.start(now=4.0)
+    assert again.meta['draw'] == 0
+    assert again.instruction == OVERRIDE
+
+
 def test_the_run_ends_only_after_the_open_episode_and_then_takes_no_start():
     station = Station(_trials())
     station.start(now=1.0)

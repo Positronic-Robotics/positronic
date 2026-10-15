@@ -113,9 +113,12 @@ which run near the robot and which stay remote. It assembles the local
 half: a chain of parts that transform observations on the way to the
 model and commands on the way back.
 
-An episode begins, and the assembled half becomes a run — the
-running instance of the policy that controls this robot for this
-episode. The framework resumes the run repeatedly, sending the sensor
+For each trial the assembled half becomes a run — the running instance of
+the policy that controls this robot for this episode. Before its first
+yield, the run can submit ready calls: work that must finish before the
+episode can start, such as a wait for a person. The framework waits for
+them, then prepares the rig, and then the episode begins. The framework
+resumes the run repeatedly, sending the sensor
 data. The run reads world time from its runtime. A resumption yields
 commands and the time of the next call, and the framework sends the
 commands to the robot immediately. The run can also return instead of a
@@ -238,6 +241,18 @@ real latency.
   server-side effects.
 - A remote function's inputs and outputs must be supported by its transport.
 - A run computes only during its resumption or inside a submitted function.
+
+A call submitted before the run's first yield is a ready call:
+
+- The framework waits for every ready call before it prepares the rig. Only
+  then the episode starts, with its time limit and its recording. So the
+  wait is not part of the episode, and no clock charges it.
+- A ready call answers on the wall clock, in simulation too. The simulator
+  keeps its ticks during the wait.
+- A ready call that fails keeps the episode from starting, so no step runs.
+  An error of the run before its first yield does the same.
+- A stop of the world during the wait waits for the running ready call. So a
+  ready call must answer in a limited time.
 
 Real execution exposes finished answers immediately. Charged simulation exposes
 them only when simulated time includes their queueing and execution duration.
