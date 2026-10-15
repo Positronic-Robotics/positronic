@@ -6,9 +6,8 @@ from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.eval.keys import PolicyEnd
 from positronic.geom import Rotation, Transform3D
-from positronic.policy import spec
+from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Step
 from positronic.policy.codecs import (
     ACTION,

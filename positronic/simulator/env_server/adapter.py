@@ -21,7 +21,7 @@ from positronic.simulator.env_server import protocol
 class EnvAdapter(ABC):
     """The mappings between the canonical embodiment contract and an env's raw wire payloads."""
 
-    # True when the env ends the trial at the step where it sees success. Every episode of the env records it.
+    # True when the env ends the trial at the step where it sees success.
     ends_on_success: ClassVar[bool] = False
 
     @abstractmethod

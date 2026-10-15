@@ -35,7 +35,7 @@ from positronic.eval import keys as eval_keys
 from positronic.gui.station import Episode, Phase, Unrecorded, Verdict
 from positronic.gui.web import InstructionBody, StationConsole, Status, VerdictBody
 from positronic.inference import KeyboardOperator, real, web
-from positronic.policy import Policy
+from positronic.policy import Policy, PolicyEnd
 from positronic.policy.base import Step
 from positronic.policy.harness import Harness, Rollout
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
@@ -400,7 +400,7 @@ class _EndingPolicy(Policy):
     def run(self, runtime):
         yield
         yield Step({}, runtime.time_ns + 100_000_000)
-        return eval_keys.PolicyEnd.COMPLETE
+        return PolicyEnd.COMPLETE
 
 
 @pytest.mark.timeout(120.0)

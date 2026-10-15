@@ -14,12 +14,11 @@ from positronic_wire import wire
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.eval.keys import PolicyEnd
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy import spec
+from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Step
 from positronic.policy.codecs import RestrictImageSize
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec

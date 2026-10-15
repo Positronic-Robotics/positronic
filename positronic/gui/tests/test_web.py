@@ -19,7 +19,7 @@ from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.station import Ending, Episode, Phase, RunView, Station, Unrecorded, terminal_payload
 from positronic.gui.web import STATIC_DIR, CameraFeed, CameraView, InstructionBody, StationConsole, Status, VerdictBody
-from positronic.policy import Policy
+from positronic.policy import Policy, PolicyEnd
 from positronic.policy import keys as policy_keys
 from positronic.policy.harness import EpisodeEnd
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
@@ -45,7 +45,7 @@ class _Policy(Policy):
 
     def run(self, runtime):
         yield
-        return eval_keys.PolicyEnd.COMPLETE
+        return PolicyEnd.COMPLETE
 
 
 class _Console:

@@ -54,6 +54,11 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._meta: dict[str, Any] | None = None
 
     @property
+    def ends_on_success(self) -> bool:
+        """Whether the env ends the trial at the step where it sees success, as its adapter states."""
+        return self._adapter.ends_on_success
+
+    @property
     def meta(self) -> dict[str, Any]:
         """The env's scene meta from the latest ``reset`` (suite, task, …); a client reads its task from here."""
         assert self._meta is not None, 'meta read before the first reset'
@@ -174,11 +179,7 @@ def remote_embodiment(
         commands=commands,
         # A remote env readies its own robot when it draws the scene; the proxy has no lever of its own
         prepare_handlers={eval_keys.SCENE: proxy.env_reset},
-        static_meta={
-            **signal_meta,
-            eval_keys.ENV_ENDS_ON_SUCCESS: proxy._adapter.ends_on_success,
-            **(static_meta or {}),
-        },
+        static_meta={**signal_meta, eval_keys.ENV_ENDS_ON_SUCCESS: proxy.ends_on_success, **(static_meta or {})},
         meta_source=proxy.robot_meta,
         control_systems=(proxy,),
         simulated=True,

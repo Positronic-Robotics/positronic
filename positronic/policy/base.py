@@ -8,10 +8,10 @@ from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec
 
 from attr import dataclass
+from eval_vocabulary.episode import PolicyEnd
 from typing_extensions import TypeAliasType, TypeVar
 
 from positronic import telemetry
-from positronic.eval.keys import PolicyEnd
 
 
 class NotAnswered(RuntimeError):

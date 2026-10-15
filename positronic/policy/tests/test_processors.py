@@ -15,7 +15,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, JointPosition,
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
-from positronic.policy.base import Policy, Step
+from positronic.policy.base import Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -81,14 +81,14 @@ def test_a_wrapper_returns_what_its_inner_run_returned(execution, wrapper):
 
     def inner():
         yield
-        return eval_keys.PolicyEnd.COMPLETE
+        return PolicyEnd.COMPLETE
 
     child = inner()
     next(child)
     run = runtime.start(wrapper, child)
     with pytest.raises(StopIteration) as end:
         run.send({MOTOR: 1})
-    assert end.value.value is eval_keys.PolicyEnd.COMPLETE
+    assert end.value.value is PolicyEnd.COMPLETE
 
 
 @pytest.mark.parametrize('pad_start', [True, False])

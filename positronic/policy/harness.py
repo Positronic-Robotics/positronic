@@ -24,7 +24,7 @@ from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Obs, Policy, PolicyRun
+from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.utils import flatten_dict, frozen_view
 
@@ -102,7 +102,7 @@ class _EpisodeTelemetry:
 class _PolicyEnded:
     """What a policy run returned, and the episode time at which it returned."""
 
-    end: eval_keys.PolicyEnd
+    end: PolicyEnd
     time_ns: int
 
 
@@ -325,7 +325,9 @@ class Harness(pimm.ControlSystem):
                 try:
                     step = policy_run.send(obs)
                 except StopIteration as end:
-                    return _PolicyEnded(eval_keys.PolicyEnd(end.value), runtime.time_ns)
+                    if not isinstance(end.value, PolicyEnd):
+                        raise ValueError(f'a policy run returned {end.value!r}, which is not a PolicyEnd') from None
+                    return _PolicyEnded(end.value, runtime.time_ns)
                 assert step is not None, 'a policy must yield a Step for each observation'
                 emit_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (emit_started_ns - policy_started_ns) / 1e6

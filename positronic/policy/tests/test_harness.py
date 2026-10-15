@@ -36,7 +36,7 @@ from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Obs, Policy, PolicyRun, Processor, Step
+from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import POLL_PERIOD_SEC, EpisodeEnd, Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
@@ -463,11 +463,7 @@ class EndAfter(Policy):
     take until ``slow_to_ns``."""
 
     def __init__(
-        self,
-        calls: int,
-        end: eval_keys.PolicyEnd = eval_keys.PolicyEnd.COMPLETE,
-        clock: VirtualClock | None = None,
-        slow_to_ns: int = 0,
+        self, calls: int, end: PolicyEnd = PolicyEnd.COMPLETE, clock: VirtualClock | None = None, slow_to_ns: int = 0
     ):
         self.end_call = calls
         self.end = end
@@ -495,7 +491,7 @@ def _until_answered(h, answer) -> EpisodeEnd:
     return answer.result()
 
 
-@pytest.mark.parametrize('end', list(eval_keys.PolicyEnd))
+@pytest.mark.parametrize('end', list(PolicyEnd))
 def test_a_return_inside_the_budget_ends_the_episode_and_records_the_policy_and_its_end(episode_harness, end):
     h = episode_harness
     policy = EndAfter(calls=3, end=end)
@@ -536,15 +532,17 @@ def test_a_return_after_the_deadline_counts_as_a_timeout(episode_harness):
     assert eval_keys.ENDED_BY not in h.dataset.episodes[0].static
 
 
-def test_a_return_that_is_not_a_policy_end_fails_the_episode(episode_harness):
+@pytest.mark.parametrize('returned', [None, PolicyEnd.COMPLETE.value])
+def test_a_return_that_is_not_a_policy_end_fails_the_episode(episode_harness, returned):
     h = episode_harness
 
-    class ReturnsNothing(Processor[Obs, Step, None]):
+    class ReturnsSomethingElse(Processor[Obs, Step, object]):
         def run(self, runtime):
             yield
+            return returned
 
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('test', 1.0), cast(Policy, ReturnsNothing()), h.output_path))
+    answer = h.caller(Rollout(Task('test', 1.0), cast(Policy, ReturnsSomethingElse()), h.output_path))
     with pytest.raises(ValueError, match='PolicyEnd'):
         _until_answered(h, answer)
 
@@ -1783,7 +1781,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
             yield
             now[0] = 500_000_000
             yield Step({}, requested_ns)
-            return eval_keys.PolicyEnd.COMPLETE
+            return PolicyEnd.COMPLETE
 
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
