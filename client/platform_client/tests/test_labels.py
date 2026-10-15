@@ -19,11 +19,8 @@ import pytest
 from eval_vocabulary.episode import (
     ENDED_BY,
     ENDED_BY_OPERATOR,
-    ENDED_BY_POLICY,
-    ENV_ENDS_ON_SUCCESS,
     LEGACY_TIME_COLUMN,
     META_FILE,
-    POLICY_END,
     SIGNAL_FILE_SUFFIX,
     STATIC_FILE,
     SUCCESS,
@@ -31,10 +28,7 @@ from eval_vocabulary.episode import (
     TERMINATED,
     TIMESTAMP_COLUMN_PREFIX,
     UID,
-    PolicyEnd,
 )
-from eval_vocabulary.outcome import OUTCOME
-from eval_vocabulary.outcome import Outcome as CountedOutcome
 from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD
 from platform_client import labels
 from platform_client.labels import (
@@ -419,24 +413,10 @@ def test_a_trial_that_ran_out_of_time_has_a_label_with_no_end_event(tmp_path: Pa
     assert ran_out is not None and ran_out.outcome is Outcome.out_of_time
 
 
-def test_a_trial_that_an_operator_ended_has_the_label_of_its_verdict_and_none_without_one(tmp_path: Path):
-    ended = {TASK: CUP, ENDED_BY: ENDED_BY_OPERATOR, TERMINATED: True}
-    judged, unjudged, discarded = _episodes(
-        tmp_path, {**ended, OUTCOME: CountedOutcome.FAIL}, ended, {**ended, OUTCOME: CountedOutcome.DISCARDED}
-    )
-    for episode in (judged, unjudged, discarded):
-        _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
-    assert molmo_label(judged) == _label(Fail(seconds=1.0), seconds_to_end=1.0, annotator=MOLMO_LABELER)
-    assert molmo_label(unjudged) is None
-    assert molmo_label(discarded) is None
-
-
-def test_a_trial_that_the_policy_gave_up_fails_at_its_end(tmp_path: Path):
-    (episode,) = _episodes(
-        tmp_path, {TASK: CUP, ENDED_BY: ENDED_BY_POLICY, POLICY_END: PolicyEnd.GIVE_UP, TERMINATED: True}
-    )
-    _write_timed_signal(episode, 'grip', [0, 2_000_000_000])
-    assert molmo_label(episode) == _label(Fail(seconds=2.0), seconds_to_end=2.0, annotator=MOLMO_LABELER)
+def test_a_trial_that_an_operator_ended_has_no_label(tmp_path: Path):
+    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, ENDED_BY: ENDED_BY_OPERATOR})
+    _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
+    assert molmo_label(episode) is None
 
 
 def test_the_end_is_the_span_of_all_signals_on_the_world_clock(tmp_path: Path):
@@ -504,7 +484,6 @@ def test_statics_that_are_not_a_json_object_have_no_label_and_are_not_fatal(tmp_
 
 
 TIMED_OUT = {TASK: CUP, TERMINATED: False}
-COMPLETED = {TASK: CUP, ENDED_BY: ENDED_BY_POLICY, POLICY_END: PolicyEnd.COMPLETE, TERMINATED: True}
 
 
 @pytest.mark.parametrize(
@@ -514,34 +493,10 @@ COMPLETED = {TASK: CUP, ENDED_BY: ENDED_BY_POLICY, POLICY_END: PolicyEnd.COMPLET
         ({TASK: CUP, SUCCESS: False, TERMINATED: True}, (CUP, Outcome.fail)),
         (TIMED_OUT, (CUP, Outcome.out_of_time)),
         ({**TIMED_OUT, SUCCESS: True}, (CUP, Outcome.out_of_time)),
-        ({**COMPLETED, ENV_ENDS_ON_SUCCESS: True}, (CUP, Outcome.fail)),
-        ({**COMPLETED, OUTCOME: CountedOutcome.SUCCESS}, (CUP, Outcome.success)),
     ],
 )
 def test_the_recorded_verdict_gives_the_outcome(static: dict[str, object], recorded: tuple[str, Outcome]):
     assert recorded_task_and_outcome(static, TASK) == recorded
-
-
-@pytest.mark.parametrize(
-    ('counted', 'outcome'),
-    [
-        (CountedOutcome.SUCCESS, Outcome.success),
-        (CountedOutcome.FAIL, Outcome.fail),
-        (CountedOutcome.OUT_OF_TIME, Outcome.out_of_time),
-        (CountedOutcome.SAFETY, Outcome.safety),
-        (CountedOutcome.SYSTEM, Outcome.fail),
-        (CountedOutcome.UNSCORED, None),
-        (CountedOutcome.DISCARDED, None),
-    ],
-)
-def test_each_counted_outcome_gives_its_label_outcome_or_none(counted: CountedOutcome, outcome: Outcome | None):
-    assert recorded_task_and_outcome({TASK: CUP, OUTCOME: counted}, TASK) == (
-        None if outcome is None else (CUP, outcome)
-    )
-
-
-def test_a_complete_that_nobody_confirmed_has_no_outcome():
-    assert recorded_task_and_outcome(COMPLETED, TASK) is None
 
 
 def test_a_success_of_the_wrong_type_beside_a_timeout_is_logged_and_the_trial_still_ran_out_of_time(
