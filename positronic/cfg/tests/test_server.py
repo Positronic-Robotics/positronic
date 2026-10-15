@@ -164,9 +164,16 @@ def test_a_rung_below_the_target_does_not_count_as_reaching_it():
 def test_the_eval_table_shows_every_fact_that_the_count_reads_and_an_absent_fact_as_blank():
     """The plain table cannot derive the counted outcome, so it shows each fact that `counted_outcome` reads."""
     table = cfg_server.eval_table.instantiate()
-    facts = (eval_keys.SUCCESS, OUTCOME, eval_keys.ENDED_BY, eval_keys.POLICY_END, eval_keys.ENV_ENDS_ON_SUCCESS)
+    facts = (
+        eval_keys.SUCCESS,
+        OUTCOME,
+        eval_keys.ENDED_BY,
+        eval_keys.POLICY_END,
+        eval_keys.ENV_ENDS_ON_SUCCESS,
+        eval_keys.TERMINATED,
+    )
 
-    assert {*facts, eval_keys.TERMINATED} <= set(table)
+    assert set(facts) <= set(table)
     assert [table[key].default for key in facts] == [None] * len(facts)
 
 

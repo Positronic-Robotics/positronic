@@ -51,7 +51,7 @@ def eval_table():
         eval_keys.ENDED_BY: C(label='Ended by'),
         eval_keys.POLICY_END: C(label='Policy end'),
         eval_keys.ENV_ENDS_ON_SUCCESS: C(label='Ends on success'),
-        eval_keys.TERMINATED: C(label='Ended', default=False),
+        eval_keys.TERMINATED: C(label='Ended'),
     }
 
 
