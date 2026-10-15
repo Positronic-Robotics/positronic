@@ -330,7 +330,7 @@ Recorded episodes are immutable. Post-hoc facts — an operator's verdict, analy
 from positronic.dataset.local_dataset import load_dataset
 
 ds = load_dataset(root)  # an EditedDataset: LocalDataset(root) with the edit logs applied
-ds = ds.set_static(episode.meta['uid'], {'eval.outcome': 'success', 'notes': 'clean run'})
+ds = ds.set_static(episode.meta['uid'], {'eval.outcome': 'Success', 'notes': 'clean run'})
 ds = ds.drop(bad_episode.meta['uid'])  # remove from the view; the recording stays on disk
 ```
 

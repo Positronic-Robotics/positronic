@@ -6,7 +6,7 @@ from functools import partial
 import configuronic as cfn
 import numpy as np
 import pos3
-from eval_vocabulary.outcome import SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, counted_outcome, is_scored
+from eval_vocabulary.outcome import OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, counted_outcome, is_scored
 from positronic_model_server import keys as offboard_keys
 
 import positronic.cfg.ds as base_cfg
@@ -147,10 +147,6 @@ def uph(ep: Episode) -> float | None:
 UNSCORED = 'Unscored'
 
 
-def is_sim_episode(ep: Episode) -> bool:
-    return 'stacking_success' in ep
-
-
 def unified_success_bool(ep: Episode) -> bool | None:
     """Whether ``counted_outcome`` counts the episode as a success. ``None`` for an episode that it does not score."""
     outcome = counted_outcome(ep)
@@ -158,14 +154,17 @@ def unified_success_bool(ep: Episode) -> bool | None:
 
 
 def unified_units_display(ep: Episode) -> str:
+    units = success_units(ep)
+    if units is None:
+        return '-'
     if SUCCESSFUL_ITEMS in ep:
         return f'{ep[SUCCESSFUL_ITEMS]}/{ep[TOTAL_ITEMS]}'
-    if 'stacking_success' in ep:
-        return str(units_sim(ep))
-    return '-'
+    return str(units)
 
 
 def unified_uph(ep: Episode) -> float | None:
+    if unified_success_bool(ep) is None:
+        return None
     if SUCCESSFUL_ITEMS in ep:
         items = ep[SUCCESSFUL_ITEMS]
         if items == 0:
@@ -175,17 +174,16 @@ def unified_uph(ep: Episode) -> float | None:
         timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
         first, last = ep.bounds(timeline)
         return items / ((last - first) / 1e9 / 3600)
-    if 'stacking_success' in ep:
-        return uph_sim(ep)
-    return None
+    return uph_sim(ep)
 
 
-def unified_success_rate(ep: Episode) -> float:
+def unified_success_rate(ep: Episode) -> float | None:
+    units = success_units(ep)
+    if units is None:
+        return None
     if SUCCESSFUL_ITEMS in ep:
         return 100 * ep[SUCCESSFUL_ITEMS] / ep[TOTAL_ITEMS]
-    if 'stacking_success' in ep:
-        return 100.0 * units_sim(ep)
-    return 0.0
+    return 100.0 * units
 
 
 episodes = base_cfg.transform.override(
@@ -197,7 +195,6 @@ episodes = base_cfg.transform.override(
                 task_code=task_code,
                 model=model,
                 checkpoint=ckpt,
-                is_sim=is_sim_episode,
                 success_bool=unified_success_bool,
                 units_display=unified_units_display,
                 uph=unified_uph,
@@ -232,7 +229,7 @@ def episodes_table():
         ),
         'units_display': C(label='Units'),
         'uph': C(label='UPH', format='%.1f', default='-'),
-        'success_rate': C(label='Success', format='%.1f%%'),
+        'success_rate': C(label='Success', format='%.1f%%', default='-'),
         'started': C(label='Started', format='%Y-%m-%d %H:%M:%S'),
     }
 
@@ -255,23 +252,20 @@ def checkpoint_table():
             first, last = ep.bounds(timeline)
             total_duration += (last - first) / 1e9
 
-        if 'stacking_success' in episodes[0]:
-            successful_count = sum(1 for ep in scored if unified_success_bool(ep))
-            total_units = successful_count
-            failed_count = count - successful_count
-            success_rate = 100 * successful_count / count if count > 0 else 0
-        else:
-            total_units = sum(ep.get(SUCCESSFUL_ITEMS, 0) for ep in scored)
-            total_possible = sum(ep.get(TOTAL_ITEMS, 0) for ep in scored)
-            success_rate = 100 * total_units / total_possible if total_possible > 0 else 0
-            failed_count = sum(1 for ep in scored if not unified_success_bool(ep))
+        successful_count = sum(1 for ep in scored if unified_success_bool(ep))
+        failed_count = count - successful_count
+        items = sum(ep.get(SUCCESSFUL_ITEMS, 0) for ep in scored)
+        possible_items = sum(ep.get(TOTAL_ITEMS, 0) for ep in scored)
+        # A unit is an item that a judge counted, or a success in an episode that counts no items.
+        total_units = sum(ep.get(SUCCESSFUL_ITEMS, success_units(ep) or 0) for ep in scored)
 
         return {
             'checkpoint': episodes[0]['checkpoint'],
             'model': episodes[0]['model'],
             'count': count,
-            'UPH': total_units / (total_duration / 3600) if total_duration > 0 else 0,
-            'success_rate': success_rate,
+            'UPH': total_units / (total_duration / 3600) if total_duration > 0 else None,
+            'success_rate': 100 * successful_count / count if count > 0 else None,
+            'items_done': 100 * items / possible_items if possible_items > 0 else None,
             'MTBF': total_duration / failed_count if failed_count > 0 else None,
             'failures': failed_count,
         }
@@ -280,8 +274,9 @@ def checkpoint_table():
         'model': C(label='Model'),
         'checkpoint': C(label='Checkpoint'),
         'count': C(label='Runs', format='%d'),
-        'UPH': C(label='UPH', format='%.1f'),
-        'success_rate': C(label='Success', format='%.1f%%'),
+        'UPH': C(label='UPH', format='%.1f', default='-'),
+        'success_rate': C(label='Success', format='%.1f%%', default='-'),
+        'items_done': C(label='Items done', format='%.1f%%', default='-'),
         'MTBF': C(label='MTBF', format='%.1f sec', default='-'),
         'failures': C(label='Failures', format='%d'),
     }
@@ -367,9 +362,10 @@ def ee_pose_movement(episode: Episode) -> float | None:
     return result
 
 
-def units_sim(episode: Episode) -> int:
-    """Number of successful stacks (1 if success, 0 otherwise)."""
-    return 1 if unified_success_bool(episode) else 0
+def success_units(episode: Episode) -> int | None:
+    """1 for an episode that ``counted_outcome`` counts as a success, 0 for a failure, ``None`` when it is unscored."""
+    success = unified_success_bool(episode)
+    return None if success is None else int(success)
 
 
 def uph_sim(episode: Episode) -> float | None:
@@ -395,7 +391,7 @@ stacking_episodes = base_cfg.transform.override(
                 success_time=success_time,
                 box_distance_progress=box_distance_progress,
                 movement=ee_pose_movement,
-                units=units_sim,
+                units=success_units,
                 uph=uph_sim,
             ),
         ),
@@ -424,7 +420,7 @@ def stacking_episodes_table():
             ),
         ),
         'success_time': C(label='Success Time', format='%.1f sec', default='-'),
-        'units': C(label='Units', format='%d'),
+        'units': C(label='Units', format='%d', default='-'),
         'uph': C(label='UPH', format='%.1f', default='-'),
         'max_stacking_success': C(label='Max Success', format='%.2f'),
         'box_distance_progress': C(label='Box Progress', format='%.1f%%', default='-'),
@@ -458,13 +454,13 @@ def stacking_checkpoint_table():
         failed_count = len(failed)
 
         total_units = sum(ep['units'] for ep in scored)
-        uph_value = total_units / (total_duration / 3600) if total_duration > 0 else 0
+        uph_value = total_units / (total_duration / 3600) if total_duration > 0 else None
 
         # MTBF: total duration / number of failures
         mtbf_value = total_duration / failed_count if failed_count > 0 else None
 
         # Success rate
-        success_rate = 100 * successful_count / count if count > 0 else 0
+        success_rate = 100 * successful_count / count if count > 0 else None
 
         # Average time to success (for successful episodes only)
         success_times = [ep['success_time'] for ep in successful if ep['success_time'] is not None]
@@ -491,8 +487,8 @@ def stacking_checkpoint_table():
         'model': C(label='Model'),
         'checkpoint': C(label='Checkpoint'),
         'count': C(label='Runs', format='%d'),
-        'UPH': C(label='UPH', format='%.1f'),
-        'success_rate': C(label='Success', format='%.1f%%'),
+        'UPH': C(label='UPH', format='%.1f', default='-'),
+        'success_rate': C(label='Success', format='%.1f%%', default='-'),
         'MTBF': C(label='MTBF', format='%.1f sec', default='-'),
         'avg_success_time': C(label='Avg Time', format='%.1f sec', default='-'),
         'avg_max_success': C(label='Avg Max', format='%.2f', default='-'),
@@ -713,7 +709,7 @@ _PHAIL_BASELINE = {
     'variant': FromValue(''),
     'equipment': FromValue('DROID'),
     'eval.object': _phail_task_label,
-    'eval.outcome': FromValue('Success'),
+    OUTCOME: FromValue(Outcome.SUCCESS),
     'completion': FromValue(100.0),
     'started': started,
 }
@@ -847,7 +843,7 @@ phail_teleop_release = base_cfg.transform.override(
                 'model': FromValue('teleop'),
                 'variant': FromValue(''),
                 'eval.object': task_code,
-                'eval.outcome': FromValue('Success'),
+                OUTCOME: FromValue(Outcome.SUCCESS),
                 SUCCESSFUL_ITEMS: lambda ep: ep['item_count'],
                 TOTAL_ITEMS: lambda ep: ep['item_count'],
             }),
@@ -865,7 +861,7 @@ phail_human_release = base_cfg.transform.override(
                 'model': FromValue('human'),
                 'variant': FromValue(''),
                 'eval.object': task_code,
-                'eval.outcome': FromValue('Success'),
+                OUTCOME: FromValue(Outcome.SUCCESS),
                 SUCCESSFUL_ITEMS: FromValue(8),
                 TOTAL_ITEMS: FromValue(8),
             }),

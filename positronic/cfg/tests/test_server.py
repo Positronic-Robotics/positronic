@@ -1,7 +1,7 @@
 """Server presets: derived episode values and table cells."""
 
 import pytest
-from eval_vocabulary.outcome import OUTCOME, Outcome
+from eval_vocabulary.outcome import OUTCOME, Outcome, counted_outcome
 from eval_vocabulary.progress import LADDER, STAGE_LABELS, STATE_SIGNAL, Stage
 
 from pimm.time import RECEIVED_WORLD
@@ -57,7 +57,7 @@ def _row(outcome, stage=NO_STAGE, model='pi05', statics=None):
     return EpisodeContainer({
         **recorded,
         cfg_server.DERIVED_MODEL: model,
-        cfg_server.DERIVED_OUTCOME: cfg_server.rollout_outcome(EpisodeContainer(recorded)),
+        cfg_server.DERIVED_OUTCOME: counted_outcome(recorded),
         cfg_server.DERIVED_STAGE: stage,
     })
 
@@ -161,25 +161,13 @@ def test_a_rung_below_the_target_does_not_count_as_reaching_it():
     assert row['at_target'] == 0
 
 
-def test_the_eval_table_shows_every_fact_that_the_count_reads_and_no_report_as_blank():
+def test_the_eval_table_shows_every_fact_that_the_count_reads_and_an_absent_fact_as_blank():
     """A sim run records the env's report in `eval.success`, a console records the verdict in `eval.outcome`, and the
-    harness records the policy end in `eval.policy_end`."""
+    harness records the policy end in `eval.policy_end`. The plain table cannot derive the counted outcome."""
     table = cfg_server.eval_table.instantiate()
 
     assert {eval_keys.SUCCESS, OUTCOME, eval_keys.POLICY_END, eval_keys.TERMINATED} <= set(table)
-    assert table[OUTCOME].default == Outcome.UNSCORED
-    assert table[eval_keys.SUCCESS].default is None
-    assert table[eval_keys.POLICY_END].default is None
-
-
-def test_an_episode_nobody_scored_reads_as_unscored():
-    """An absent outcome and `UNSCORED` are one state, and the page shows one word for it."""
-    assert cfg_server.rollout_outcome(EpisodeContainer({})) == Outcome.UNSCORED
-    assert cfg_server.rollout_outcome(EpisodeContainer({OUTCOME: Outcome.UNSCORED})) == Outcome.UNSCORED
-
-
-def test_a_word_this_vocabulary_does_not_carry_reaches_the_page_as_itself():
-    assert cfg_server.rollout_outcome(EpisodeContainer({OUTCOME: 'Rescored by hand'})) == 'Rescored by hand'
+    assert [table[key].default for key in (eval_keys.SUCCESS, OUTCOME, eval_keys.POLICY_END)] == [None, None, None]
 
 
 def test_an_episode_the_operator_discarded_is_listed_and_left_out_of_the_rate():
@@ -194,8 +182,7 @@ def test_an_episode_the_operator_discarded_is_listed_and_left_out_of_the_rate():
     assert row['success_rate'].rate == 100
 
 
-def test_the_rate_counts_a_policy_end_with_no_verdict_by_the_rule():
-    """The column shows the verdict, and the rate counts what `counted_outcome` gives."""
+def test_the_outcome_column_and_the_rate_both_count_a_policy_end_with_no_verdict_by_the_rule():
     group = cfg_server.rollouts_by_model.instantiate()
     ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.TERMINATED: True}
     gave_up = _row(None, statics={**ended, eval_keys.POLICY_END: eval_keys.PolicyEnd.GIVE_UP})
@@ -203,7 +190,10 @@ def test_the_rate_counts_a_policy_end_with_no_verdict_by_the_rule():
 
     row = group.group_fn([_row(Outcome.SUCCESS), gave_up, completed])
 
-    assert gave_up[cfg_server.DERIVED_OUTCOME] == Outcome.UNSCORED
+    assert (gave_up[cfg_server.DERIVED_OUTCOME], completed[cfg_server.DERIVED_OUTCOME]) == (
+        Outcome.FAIL,
+        Outcome.UNSCORED,
+    )
     assert (row['count'], row['scored'], row['successes']) == (3, 2, 1)
     assert row['success_rate'].rate == 50
 

@@ -192,7 +192,8 @@ def test_a_give_up_counts_as_a_failure_in_every_aggregate_and_adds_no_items():
     assert analysis.unified_success_bool(gave_up) is False
     assert analysis.phail_status(gave_up) == 'Fail'
     checkpoint = analysis.checkpoint_table().group_fn([succeeded, gave_up])
-    assert (checkpoint['count'], checkpoint['failures'], checkpoint['success_rate']) == (2, 1, 100)
+    assert (checkpoint['count'], checkpoint['failures'], checkpoint['success_rate']) == (2, 1, 50)
+    assert checkpoint['items_done'] == 100
     leaderboard = analysis.phail_leaderboard().group_fn([succeeded, gave_up])
     assert (leaderboard['count'], leaderboard['completion'], leaderboard['MTBF']) == (2, 100, 20 / 60)
 
@@ -220,6 +221,59 @@ def test_an_env_report_scores_an_episode_with_no_verdict(success):
 
     assert analysis.unified_success_bool(reported) is success
     assert analysis.scored_episodes([reported]) == [reported]
+    assert analysis.unified_units_display(reported) == str(int(success))
+    assert analysis.unified_success_rate(reported) == 100 * int(success)
+
+
+def test_a_sim_episode_with_an_env_report_and_no_signal_counts_in_the_checkpoint_table():
+    """A MolmoSpaces episode records `eval.success`, no `eval.outcome`, no item counts and no `stacking_success`."""
+    reported = {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+    succeeded, failed = (
+        _attended(None, None, **reported),
+        _attended(None, None, **{**reported, eval_keys.SUCCESS: False}),
+    )
+
+    row = analysis.checkpoint_table().group_fn([succeeded, failed])
+
+    assert (row['count'], row['failures'], row['success_rate'], row['items_done']) == (2, 1, 50, None)
+    assert row['UPH'] == pytest.approx(1 / (20 / 3600))
+
+
+def test_an_episode_with_no_verdict_and_no_fact_raises_nothing_and_shows_no_rate():
+    bare = _attended(None, None)
+
+    assert analysis.phail_leaderboard().group_fn([bare])['count'] == 0
+    assert (analysis.unified_units_display(bare), analysis.unified_success_rate(bare)) == ('-', None)
+
+
+@pytest.mark.parametrize('table', [analysis.checkpoint_table, analysis.stacking_checkpoint_table])
+def test_a_row_with_no_scored_episode_shows_no_rate_and_no_uph_rather_than_a_zero(table):
+    """A zero would read as a checkpoint that failed every run, which is the opposite of unscored."""
+    signal = DummySignal([0, 10_000_000_000], [0.0, 0.0], timelines=(HARNESS_WORLD,))
+    bare = EpisodeContainer({
+        'stacking_success': signal,
+        'checkpoint': 'test',
+        'model': 'test',
+        'success': None,
+        'success_time': None,
+        'units': 0,
+        'max_stacking_success': 0.0,
+    })
+    group = table.instantiate()
+
+    row = group.group_fn([bare])
+
+    assert (row['count'], row['success_rate'], row['UPH']) == (0, None, None)
+    assert group.format_table['success_rate'].default == '-'
+    assert group.format_table['UPH'].default == '-'
+
+
+def test_a_discarded_episode_with_item_counts_shows_no_units_no_rate_and_no_uph():
+    discarded = _attended(Outcome.DISCARDED, 2)
+
+    assert analysis.unified_units_display(discarded) == '-'
+    assert analysis.unified_success_rate(discarded) is None
+    assert analysis.unified_uph(discarded) is None
 
 
 def test_a_stacking_signal_alone_scores_nothing_and_still_shows():
@@ -229,6 +283,8 @@ def test_a_stacking_signal_alone_scores_nothing_and_still_shows():
     assert analysis.unified_success_bool(sim) is None
     assert analysis.scored_episodes([sim]) == []
     assert analysis.checkpoint_table().group_fn([sim])['count'] == 0
+    assert (analysis.unified_units_display(sim), analysis.unified_uph(sim)) == ('-', None)
+    assert (analysis.success_units(sim), analysis.uph_sim(sim)) == (None, None)
     assert analysis.max_stacking_success(sim) == 1.0
     assert analysis.success_time(sim) == 10.0
 
@@ -240,7 +296,7 @@ def test_a_scored_outcome_decides_a_sim_episode_against_its_signal(outcome, sign
     succeeded = outcome == Outcome.SUCCESS
 
     assert analysis.unified_success_bool(sim) is succeeded
-    assert analysis.units_sim(sim) == int(succeeded)
+    assert analysis.success_units(sim) == int(succeeded)
     assert analysis.unified_units_display(sim) == str(int(succeeded))
     assert analysis.unified_success_rate(sim) == 100 * int(succeeded)
     assert analysis.uph_sim(sim) is None
