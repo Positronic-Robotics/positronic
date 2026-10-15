@@ -1268,6 +1268,20 @@ def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harne
     assert {s.parent_id for s in policy_spans} == {first.span_id, second.span_id}
 
 
+def test_the_step_that_the_policy_ends_records_the_policy_duration(episode_harness, tmp_path):
+    h = episode_harness
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-policy-end-step'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EndAfter(1), None))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    (step,) = [s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP]
+    assert step.attrs[telemetry_keys.ATTR_STEP_POLICY_MS] >= 0
+    assert telemetry_keys.ATTR_STEP_EMIT_MS not in step.attrs
+
+
 def test_a_step_without_an_observation_records_only_the_observe_values(episode_harness, tmp_path):
     h = episode_harness
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-missing-observation'):

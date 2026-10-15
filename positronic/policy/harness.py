@@ -319,9 +319,10 @@ class Harness(pimm.ControlSystem):
                     if not isinstance(end.value, PolicyEnd):
                         raise ValueError(f'a policy run returned {end.value!r}, which is not a PolicyEnd') from None
                     return _PolicyEnded(end.value, runtime.time_ns)
+                finally:
+                    step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (time.perf_counter_ns() - policy_started_ns) / 1e6
                 assert step is not None, 'a policy must yield a Step for each observation'
                 emit_started_ns = time.perf_counter_ns()
-                step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (emit_started_ns - policy_started_ns) / 1e6
                 self._telemetry.step()
                 messages = {name: self.commands[name].emit(value) for name, value in step.commands.items()}
                 step_ms[telemetry_keys.ATTR_STEP_EMIT_MS] = (time.perf_counter_ns() - emit_started_ns) / 1e6
