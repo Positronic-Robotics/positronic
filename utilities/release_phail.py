@@ -27,7 +27,7 @@ from collections import defaultdict
 import configuronic as cfn
 import numpy as np
 import pos3
-from eval_vocabulary.outcome import OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS
+from eval_vocabulary.outcome import OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome
 
 from pimm.logging import init_logging
 from pimm.time import RECEIVED_WORLD
@@ -129,7 +129,7 @@ def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
         outcome = ep.get(OUTCOME, '')
         successful = ep.get(SUCCESSFUL_ITEMS, 0)
         total = ep.get(TOTAL_ITEMS, 0)
-        if outcome == 'Success' and successful != total:
+        if outcome == Outcome.SUCCESS and successful != total:
             issues.append(f'  [{i}] {model}: Success but {successful}/{total}')
         if total == 0:
             issues.append(f'  [{i}] {model}: total_items is 0')
