@@ -10,6 +10,15 @@ STATIC_FILE = 'static.json'
 # The file in an episode's directory that holds its meta as one JSON object, and the episode's id in it.
 META_FILE = 'meta.json'
 UID = 'uid'
+# The file in an episode's directory that holds its edit log: one JSON record on each line, in the order of the edits.
+# A record holds its operation, the version of the format, the uid of its episode and, to set statics, their values.
+EDITS_FILE = 'edits.jsonl'
+EDIT_OP = 'op'
+EDIT_FORMAT = 'v'
+EDIT_EPISODE = 'ep'
+EDIT_DATA = 'data'
+# The version of the record format that `EDIT_FORMAT` holds.
+EDIT_FORMAT_VERSION = 1
 
 # The success that the env reports when the trial ends.
 SUCCESS = 'eval.success'
@@ -44,6 +53,16 @@ SUBTASK_SIGNAL = 'subtask'
 SUBTASK_COMPLETED_INDEX = 1
 SUBTASK_TOTAL_INDEX = 2
 SUBTASK_SCORE_INDEX = 3
+
+
+class EditOp(StrEnum):
+    """What a record of the edit log does to its episode. A recorded value never changes."""
+
+    # Put the values of the record over the statics of the episode. The last value of a key wins.
+    SET_STATIC = 'set_static'
+    # Remove the episode from the view of its dataset. The recording stays. The last drop or undrop wins.
+    DROP = 'drop'
+    UNDROP = 'undrop'
 
 
 class PolicyEnd(StrEnum):
