@@ -40,7 +40,6 @@ from platform_client.eval_plan import (
     credential_from_file,
     plan_of_image,
 )
-from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
@@ -58,6 +57,7 @@ from platform_client.responses import (
     SubmissionListResponse,
 )
 from platform_client.tasks import TaskRef
+from positronic_evals.evals import EvalRef
 from pydantic import ValidationError
 
 BASE = 'http://gateway.test'
@@ -799,6 +799,17 @@ def test_create_submission_posts_a_whole_plan_and_parses_the_id():
         'start_pose': None,
     }
     assert body['episodes_per_endpoint'] == 10 and body['transaction_key'] is None
+
+
+def test_create_submission_sends_the_session_limit_a_remote_endpoint_states():
+    gateway = Gateway(200, {'submission_id': '2a', 'status': 'pending'})
+    plan = EvalPlan.model_validate({
+        **PLAN.model_dump(),
+        'endpoints': [{**PLAN.endpoints[0].model_dump(), 'max_concurrent_sessions': 1}],
+    })
+    make_client(gateway).create_submission(plan)
+
+    assert gateway.body()['endpoints'][0]['max_concurrent_sessions'] == 1
 
 
 def test_a_run_carries_its_episode_counts_into_the_view():

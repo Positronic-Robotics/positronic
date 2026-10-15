@@ -179,6 +179,66 @@ def test_an_address_resolved_twice_binds_once(monkeypatch):
             sock.close()
 
 
+def _loopback_then_ipv6_loopback(host, port, *_args, **_kwargs):
+    return [
+        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.1', port)),
+        (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('::1', port, 0, 0)),
+    ]
+
+
+def _take_the_ipv6_port_before_each_bind(monkeypatch, times: int) -> list[socket.socket]:
+    """Make another socket hold the IPv6 port before each of the next ``times`` binds to it. Returns the holders."""
+    holders: list[socket.socket] = []
+    real_socket = socket.socket
+
+    class Contested(real_socket):
+        def bind(self, address, /) -> None:
+            if self.family == socket.AF_INET6 and isinstance(address, tuple) and address[1] and len(holders) < times:
+                holder = real_socket(socket.AF_INET6, socket.SOCK_STREAM)
+                holder.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                holder.bind(('::1', address[1]))
+                holder.listen()
+                holders.append(holder)
+            super().bind(address)
+
+    monkeypatch.setattr(socket, 'getaddrinfo', _loopback_then_ipv6_loopback)
+    monkeypatch.setattr(socket, 'socket', Contested)
+    return holders
+
+
+def test_a_port_taken_on_a_later_address_draws_a_new_port_for_the_whole_set(monkeypatch):
+    holders = _take_the_ipv6_port_before_each_bind(monkeypatch, times=2)
+    try:
+        sockets = websocket_wire._listening_sockets('dual-stack.test', 0)
+    finally:
+        taken = {holder.getsockname()[1] for holder in holders}
+        for holder in holders:
+            holder.close()
+    try:
+        assert [sock.getsockname()[0] for sock in sockets] == ['127.0.0.1', '::1']
+        ports = {sock.getsockname()[1] for sock in sockets}
+        assert len(ports) == 1, 'the two addresses took different ports'
+        assert not ports & taken, 'the set bound a port another socket held'
+    finally:
+        for sock in sockets:
+            sock.close()
+
+
+def test_a_named_port_taken_on_a_later_address_is_refused(monkeypatch):
+    """A caller that names the port gets that port or an error, never another one."""
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+    holders = _take_the_ipv6_port_before_each_bind(monkeypatch, times=1)
+    try:
+        with pytest.raises(OSError) as refusal:
+            websocket_wire._listening_sockets('dual-stack.test', port)
+        assert refusal.value.errno == errno.EADDRINUSE
+    finally:
+        for holder in holders:
+            holder.close()
+
+
 def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took():
     bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))
     asyncio.run(bound.start(MagicMock(), MagicMock(), lambda _headers: True))

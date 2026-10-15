@@ -35,8 +35,8 @@ from eval_vocabulary.episode import (
     VALUE_COLUMN,
 )
 from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD
-from platform_client import labels
-from platform_client.labels import (
+from positronic_evals import labels
+from positronic_evals.labels import (
     MOLMO_LABELER,
     PUBLIC_LABELERS,
     ROBOLAB_LABELER,
@@ -59,7 +59,7 @@ from platform_client.labels import (
     recorded_task_and_outcome,
     robolab_label,
 )
-from platform_client.slug import slug_of
+from positronic_evals.slug import slug_of
 from pydantic import ValidationError
 
 SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'molmo_sweep').glob('*/*') if p.is_dir())

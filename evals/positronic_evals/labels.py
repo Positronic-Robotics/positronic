@@ -37,7 +37,6 @@ from eval_vocabulary.episode import (
     VALUE_COLUMN,
 )
 from eval_vocabulary.timeline import EMITTED_WORLD
-from platform_client.slug import Slugged
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -49,6 +48,8 @@ from pydantic import (
     model_validator,
 )
 from pydantic_core import core_schema
+
+from positronic_evals.slug import Slugged
 
 log = logging.getLogger(__name__)
 

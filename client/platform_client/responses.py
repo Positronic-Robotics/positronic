@@ -1,7 +1,7 @@
 """What every gateway endpoint answers with — the typed shape both sides bind to.
 
 Timestamps are aware UTC, ids are hex strings (`platform_client.ids`), closed sets are slugs
-(`platform_client.slug`), and locations are opaque. `submissions.get` answers one variant per status,
+(`positronic_evals.slug`), and locations are opaque. `submissions.get` answers one variant per status,
 discriminated on the status slug.
 """
 
@@ -27,10 +27,10 @@ from platform_client.enums import (
     Wire,
 )
 from platform_client.eval_plan import Clutter, EndpointAddress
-from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, OrgSlug, SubmissionId, UserId
-from platform_client.slug import Slugged, slug_of
 from platform_client.tasks import TaskRef
+from positronic_evals.evals import EvalRef
+from positronic_evals.slug import Slugged, slug_of
 from pydantic import AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
 
 

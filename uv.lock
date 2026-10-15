@@ -71,6 +71,7 @@ positronic-franka = false
 members = [
     "positronic",
     "positronic-eval-vocabulary",
+    "positronic-evals",
     "positronic-model-server",
     "positronic-platform-client",
     "positronic-wire",
@@ -5172,6 +5173,7 @@ dependencies = [
     { name = "plotly" },
     { name = "pos3" },
     { name = "positronic-eval-vocabulary" },
+    { name = "positronic-evals" },
     { name = "positronic-model-server", extra = ["grpc", "websocket"] },
     { name = "positronic-platform-client" },
     { name = "positronic-wire", extra = ["grpc", "websocket"] },
@@ -5317,6 +5319,7 @@ requires-dist = [
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-google'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
     { name = "positronic-eval-vocabulary", editable = "vocabulary" },
+    { name = "positronic-evals", editable = "evals" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.1" },
     { name = "positronic-model-server", extras = ["websocket", "grpc"], editable = "model_server" },
     { name = "positronic-platform-client", editable = "client" },
@@ -5382,6 +5385,23 @@ version = "0.4.0"
 source = { editable = "vocabulary" }
 
 [[package]]
+name = "positronic-evals"
+version = "0.1.0"
+source = { editable = "evals" }
+dependencies = [
+    { name = "positronic-eval-vocabulary" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "positronic-eval-vocabulary", editable = "vocabulary" },
+    { name = "pyarrow" },
+    { name = "pydantic", specifier = ">=2.11" },
+]
+
+[[package]]
 name = "positronic-franka"
 version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5394,7 +5414,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/fb/f3/a0b05ac0e47c970b5
 
 [[package]]
 name = "positronic-model-server"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },
@@ -5427,12 +5447,11 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.33.0"
+version = "0.35.0"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
-    { name = "positronic-eval-vocabulary" },
-    { name = "pyarrow" },
+    { name = "positronic-evals" },
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
@@ -5440,8 +5459,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "positronic-eval-vocabulary", editable = "vocabulary" },
-    { name = "pyarrow" },
+    { name = "positronic-evals", editable = "evals" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "typing-extensions", specifier = ">=4.12.2" },
 ]

@@ -42,14 +42,17 @@ dependencies = [
     # (.github/workflows/release.yaml). Pinned exactly, because that package guarantees no
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
-    "positronic-platform-client==0.33.0",
+    "positronic-platform-client==0.35.0",
     # The client side of every wire and the facts both ends share. A workspace member in a clone;
     # a released `positronic` resolves it from the index, so it is published first, and it is pinned
     # exactly for the same reason the client is (wire/README.md).
     "positronic-wire[websocket,grpc]==0.12.0",
-    "positronic-model-server[websocket,grpc]==0.2.1",
+    "positronic-model-server[websocket,grpc]==0.2.2",
     # The words an attended rollout records, which the rollouts viewer colours and counts.
     "positronic-eval-vocabulary==0.4.0",
+    # The public evals that `positronic eval run` runs here, and the episode lists the MolmoSpaces sim server
+    # reads. A workspace member in a clone; pinned exactly for the same reason the client is.
+    "positronic-evals==0.1.0",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
@@ -158,7 +161,7 @@ dev = [
 
 [tool.uv.workspace]
 # Each member builds an independently installable distribution.
-members = ["client", "wire", "model_server", "vocabulary"]
+members = ["client", "evals", "wire", "model_server", "vocabulary"]
 
 [tool.uv]
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
@@ -203,6 +206,7 @@ positronic-platform-client = { workspace = true }
 positronic-wire = { workspace = true }
 positronic-model-server = { workspace = true }
 positronic-eval-vocabulary = { workspace = true }
+positronic-evals = { workspace = true }
 # ZED SDK ships one ABI-specific wheel per CPython version; pick by interpreter.
 pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", marker = "python_full_version < '3.12'" },
@@ -214,7 +218,7 @@ i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb3
 
 [tool.pytest.ini_options]
 # Search roots, not a list of suites, so a new `tests/` directory is collected without being registered
-testpaths = ["client", "model_server", "pimm", "positronic", "utilities", "vocabulary", "wire"]
+testpaths = ["client", "evals", "model_server", "pimm", "positronic", "utilities", "vocabulary", "wire"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
     # The suite waits on spawned processes and sockets about as much as it computes, so it scales with cores.
@@ -232,7 +236,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["pimm", "platform_client", "positronic", "positronic_wire", "positronic_model_server"]
+source = ["pimm", "platform_client", "positronic", "positronic_evals", "positronic_wire", "positronic_model_server"]
 
 [tool.coverage.report]
 show_missing = true
@@ -279,7 +283,7 @@ skip-magic-trailing-comma = true
 # .basedpyright/baseline.json; only NEW errors fail. Modules are strictened incrementally.
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
-include = ["client", "model_server", "pimm", "positronic", "wire"]
+include = ["client", "evals", "model_server", "pimm", "positronic", "wire"]
 # mujoco ships no `.pyi` and re-exports from binary extension modules, so its whole API reads as
 # attribute errors without these. Regenerate with utilities/generate_mujoco_stubs.py.
 stubPath = "stubs"
@@ -320,6 +324,4 @@ positronic = [
   "server/templates/**",
   # The launcher needs these dependency constraints in installed distributions too.
   "simulator/molmo_spaces/molmo_constraints.txt",
-  # The MolmoSpaces sim server reads this list when it starts.
-  "simulator/molmo_spaces/right_view_blocked.json",
 ]

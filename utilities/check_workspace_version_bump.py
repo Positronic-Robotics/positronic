@@ -44,6 +44,7 @@ class Member(NamedTuple):
 
 MEMBERS = (
     Member(PurePosixPath('client'), 'positronic-platform-client', 'platform_client'),
+    Member(PurePosixPath('evals'), 'positronic-evals', 'positronic_evals'),
     Member(PurePosixPath('wire'), 'positronic-wire', 'positronic_wire'),
     Member(PurePosixPath('model_server'), 'positronic-model-server', 'positronic_model_server'),
     Member(PurePosixPath('vocabulary'), 'positronic-eval-vocabulary', 'eval_vocabulary'),
