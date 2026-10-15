@@ -92,14 +92,13 @@ class PageOperator(pimm.ControlSystem):
         yield from self._script(clock)
 
 
-def wait(condition: Callable[[], Any], clock: pimm.Clock, seconds: float = 5.0) -> Iterator[pimm.Command]:
-    """Yield until ``condition`` holds or ``seconds`` pass on ``clock``, and return whether it held."""
+def wait(condition: Callable[[], Any], what: str, clock: pimm.Clock, seconds: float = 30.0) -> Iterator[pimm.Command]:
+    """Yield until ``condition`` holds. Raise when ``seconds`` pass on ``clock`` first."""
     deadline = clock.now() + seconds
     while not condition():
         if clock.now() > deadline:
-            return False
+            raise AssertionError(f'timed out waiting for {what}')
         yield pimm.Sleep(0.02)
-    return True
 
 
 def run_attended(
