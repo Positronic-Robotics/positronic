@@ -48,8 +48,7 @@ class Rollout:
     output_path: Path | None
 
 
-# TODO: A device ready error and a failed `prepare` join `EpisodeNotStarted` after the platform `EpisodeDriver` retries
-#  it. Until then they reach the caller as they are.
+# TODO: Raise `EpisodeNotStarted` for a device ready error and a failed `prepare` too.
 class EpisodeNotStarted(RuntimeError):
     """The policy run failed before the episode started: no policy step ran, and nothing was recorded."""
 
