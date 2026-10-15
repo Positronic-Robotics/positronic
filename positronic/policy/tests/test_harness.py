@@ -1254,7 +1254,9 @@ def test_a_run_that_waits_before_its_first_yield_starts_its_time_limit_and_recor
     assert answer.result() == {eval_keys.TERMINATED: False}
 
 
-def test_an_error_before_the_first_yield_emits_no_episode_span(episode_harness, tmp_path):
+def test_an_error_before_the_first_yield_exports_no_episode_span_and_leaves_no_span_without_its_parent(
+    episode_harness, tmp_path
+):
     h = episode_harness
 
     class FailsToGetReady(Policy):
@@ -1263,7 +1265,9 @@ def test_an_error_before_the_first_yield_emits_no_episode_span(episode_harness, 
             yield
 
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-not-started'):
-        failed = h.caller(Rollout(Task('move', None), FailsToGetReady(), None))
+        failed = h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), FailsToGetReady(), None))
+        next(h.loop)
+        next(h.prepare[RESET].incoming()).set_result(None)
         next(h.loop)
         with pytest.raises(EpisodeNotStarted, match='the teleoperator cancelled'):
             failed.result()
@@ -1275,6 +1279,11 @@ def test_an_error_before_the_first_yield_emits_no_episode_span(episode_harness, 
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     (episode,) = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert episode.attrs[telemetry_keys.ATTR_EPISODE_INDEX] == 0
+    (not_started,) = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE_NOT_STARTED]
+    resets = [s for s in spans if s.name == telemetry_keys.SPAN_RESET]
+    assert {reset.parent_id for reset in resets} == {not_started.span_id, episode.span_id}
+    span_ids = {s.span_id for s in spans}
+    assert all(s.parent_id is None or s.parent_id in span_ids for s in spans)
 
 
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):

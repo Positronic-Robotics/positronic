@@ -79,13 +79,16 @@ class _EpisodeTelemetry:
     def step(self) -> None:
         self._steps += 1
 
-    def discard(self) -> None:
-        """Drop the open episode span without exporting it."""
+    def not_started(self) -> None:
+        """Export the open span as an episode that did not start. Its children keep their parent in the sidecar."""
         if self._span is None:
             return
+        self._span.update_name(telemetry_keys.SPAN_EPISODE_NOT_STARTED)
+        self._span.end()
         telemetry.pop_anchor(self._span)
         self._span = None
         self._index -= 1
+        telemetry.force_flush()
 
     def end(self, virtual_now: float, *, partial: bool = False) -> None:
         """Export the episode, including incomplete episodes interrupted by an error or shutdown."""
@@ -129,8 +132,8 @@ class Harness(pimm.ControlSystem):
     the episode. The caller decides whether that error ends the run. Between episodes, manual commands pass through.
     Before each episode the harness asks every device to be ready, then prepares what the task names. A device
     that answers ready with an error fails the episode before it starts. An error of the policy run before its first
-    yield is an ``EpisodeNotStarted``, and it emits no episode span. A ``pimm.SignalError`` on an observation fails
-    the episode before the policy reads that value. Between episodes the harness repairs a device in error
+    yield is an ``EpisodeNotStarted``, and its span is not an episode span. A ``pimm.SignalError`` on an observation
+    fails the episode before the policy reads that value. Between episodes the harness repairs a device in error
     (``_ready_devices_in_error``).
     """
 
@@ -474,7 +477,7 @@ class Harness(pimm.ControlSystem):
             try:
                 policy_run = runtime.start(rollout.policy)
             except Exception as exc:
-                self._telemetry.discard()
+                self._telemetry.not_started()
                 raise EpisodeNotStarted(f'{type(exc).__name__}: {exc}') from exc
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
