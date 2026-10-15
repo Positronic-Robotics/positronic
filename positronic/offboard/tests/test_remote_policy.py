@@ -515,11 +515,11 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
 
     def script(base, clock):
         assert (yield from wait(lambda: read_status(base), clock, seconds=60))
-        for verdict in (Outcome.SUCCESS, Outcome.FAIL):
+        for judgement in (Outcome.SUCCESS, Outcome.FAIL):
             calls = model.call_count
             assert post(base, '/episode/start') == 200
             assert (yield from wait(lambda calls=calls: model.call_count > calls, clock))
-            assert post(base, '/episode/end', JudgementBody(judgement=verdict)) == 200
+            assert post(base, '/episode/end', JudgementBody(judgement=judgement)) == 200
 
             def finished():
                 status = read_status(base)

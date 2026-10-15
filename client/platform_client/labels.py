@@ -555,7 +555,7 @@ MOLMO_LABELER = LabelerRef('molmo')
 def molmo_label(episode: Path) -> Label | None:
     """MolmoSpaces' labeler: a trial ends with the outcome that `counted_outcome` gives, at the end of its signals.
 
-    An episode that `counted_outcome` leaves unscored, or that an operator discarded, has no label.
+    An episode that `counted_outcome` leaves unscored, or that a judge discarded, has no label.
     """
     trial = _recorded_sim_trial(episode, TASK)
     if trial is None:

@@ -150,7 +150,7 @@ def _attended(outcome: Outcome | None, items: int | None, **statics: object) -> 
         'checkpoint': 'test',
         'model': 'test',
         'variant': '',
-        'eval.object': 'cup',
+        eval_keys.OBJECT: 'cup',
         eval_keys.DURATION: 10.0,
         **statics,
     }
@@ -263,9 +263,21 @@ def test_a_row_with_no_scored_episode_shows_no_rate_and_no_uph_rather_than_a_zer
 
     row = group.group_fn([bare])
 
-    assert (row['count'], row['success_rate'], row['UPH']) == (0, None, None)
+    assert (row['success_rate'], row['UPH']) == (None, None)
     assert group.format_table['success_rate'].default == '-'
     assert group.format_table['UPH'].default == '-'
+
+
+def test_a_stacking_row_counts_every_run_and_shows_the_signal_without_a_verdict():
+    signal = DummySignal([0, 10_000_000_000], [0.5, 0.8], timelines=(HARNESS_WORLD,))
+    sim = {'stacking_success': signal, 'checkpoint': 'test', 'model': 'test', 'max_stacking_success': 0.8}
+    unscored = EpisodeContainer({**sim, 'success': None, 'success_time': None, 'units': None})
+    failed = EpisodeContainer({**sim, OUTCOME: Outcome.FAIL, 'success': False, 'success_time': None, 'units': 0})
+
+    row = analysis.stacking_checkpoint_table.instantiate().group_fn([unscored, failed])
+
+    assert (row['count'], row['scored'], row['failures'], row['success_rate']) == (2, 1, 1, 0)
+    assert row['avg_max_success'] == pytest.approx(0.8)
 
 
 def test_a_discarded_episode_with_item_counts_shows_no_units_no_rate_and_no_uph():

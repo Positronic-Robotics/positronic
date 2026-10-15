@@ -283,6 +283,26 @@ def test_a_judgement_pressed_while_a_policy_end_is_answered_waits_again_when_its
     assert recordings.written == [(UID, Outcome.SUCCESS)]
 
 
+def test_after_a_failed_discard_write_at_the_time_limit_only_a_discard_applies():
+    """A Success or a Fail would put a verdict over ``eval.terminated = False``, and the timeout would not count."""
+    recordings = _FailingOnce()
+    station = _station(recordings=recordings)
+    station.start(now=1.0)
+    station.end(Outcome.DISCARDED)
+    station.close(TIMED_OUT, now=2.0)
+    assert station.view(now=3.0).phase is Phase.JUDGEMENT_PENDING
+
+    for judgement in (Outcome.SUCCESS, Outcome.FAIL):
+        with pytest.raises(Refused, match='ran out of time, so only Discard applies'):
+            station.end(judgement)
+    assert recordings.written == []
+    station.end(Outcome.DISCARDED)
+
+    view = station.view(now=4.0)
+    assert (view.phase, view.episodes[0].outcome) == (Phase.READY, Outcome.DISCARDED)
+    assert recordings.written == [(UID, Outcome.DISCARDED)]
+
+
 def test_a_judgement_pressed_while_a_policy_end_is_answered_closes_the_episode():
     recordings = _Recordings()
     station = _station(recordings=recordings)

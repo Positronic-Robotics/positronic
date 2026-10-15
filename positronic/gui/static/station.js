@@ -150,7 +150,7 @@ function showRefusal(error) {
 }
 
 // The last instruction request in the queue. Each waits for the one before it, so the console applies the edits and
-// the reset in the order the operator made them, and Start waits for all of them. It never rejects.
+// the reset in the order the judge made them, and Start waits for all of them. It never rejects.
 let instructionQueue = Promise.resolve();
 
 function postInstruction(text) {
@@ -286,9 +286,16 @@ function renderButtons() {
 function renderFailure(status) {
   const last = status.episodes[status.episodes.length - 1];
   const failed = status.phase === PHASE.ready && last !== undefined && last.outcome === OUTCOME.error;
-  $('failure').hidden = !failed;
-  if (!failed) return;
-  $('failure-head').textContent = `Episode ${last.number} failed. Start runs the next episode.`;
+  // A judgement whose write failed: the episode waits for the judgement again.
+  const unwritten = status.phase === PHASE.judgementPending && Boolean(last.error);
+  $('failure').hidden = !(failed || unwritten);
+  if (failed) {
+    $('failure-head').textContent = `Episode ${last.number} failed. Start runs the next episode.`;
+  } else if (unwritten) {
+    $('failure-head').textContent = `The judgement of episode ${last.number} is not in the recording. Judge it again.`;
+  } else {
+    return;
+  }
   $('failure-text').textContent = last.error ?? '';
 }
 

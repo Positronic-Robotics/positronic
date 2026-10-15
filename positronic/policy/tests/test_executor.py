@@ -8,9 +8,8 @@ from typing import cast
 import pytest
 
 from positronic import telemetry, telemetry_keys
-from positronic.eval.keys import PolicyEnd
 from positronic.policy import executor as module
-from positronic.policy.base import NotAnswered, Policy, Step
+from positronic.policy.base import NotAnswered, Policy, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitResult, WaitStatus, _UnchargedAnswer
 
 

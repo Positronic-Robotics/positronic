@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 import rerun as rr
 from av.container import InputContainer
+from eval_vocabulary.outcome import OUTCOME
 
 from positronic import keys
 from positronic.dataset import Dataset, Time
@@ -28,6 +29,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datase
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import EpisodeTransform, Identity
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.eval.keys import OBJECT
 from positronic.server import export, positronic_server
 from positronic.server.dataset_utils import ReplayLayout
 from positronic.server.export import (
@@ -56,8 +58,6 @@ from positronic.server.positronic_server import (
     download_link,
 )
 
-OUTCOME = 'eval.outcome'
-OBJECT = 'eval.object'
 ATTEMPT = 'attempt'
 HIDDEN_KEY = 'checkpoint_path'
 HIDDEN_VALUE = 's3://internal/checkpoints/step_1000'

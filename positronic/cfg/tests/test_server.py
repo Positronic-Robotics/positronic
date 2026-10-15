@@ -162,12 +162,12 @@ def test_a_rung_below_the_target_does_not_count_as_reaching_it():
 
 
 def test_the_eval_table_shows_every_fact_that_the_count_reads_and_an_absent_fact_as_blank():
-    """A sim run records the env's report in `eval.success`, a console records the verdict in `eval.outcome`, and the
-    harness records the policy end in `eval.policy_end`. The plain table cannot derive the counted outcome."""
+    """The plain table cannot derive the counted outcome, so it shows each fact that `counted_outcome` reads."""
     table = cfg_server.eval_table.instantiate()
+    facts = (eval_keys.SUCCESS, OUTCOME, eval_keys.ENDED_BY, eval_keys.POLICY_END, eval_keys.ENV_ENDS_ON_SUCCESS)
 
-    assert {eval_keys.SUCCESS, OUTCOME, eval_keys.POLICY_END, eval_keys.TERMINATED} <= set(table)
-    assert [table[key].default for key in (eval_keys.SUCCESS, OUTCOME, eval_keys.POLICY_END)] == [None, None, None]
+    assert {*facts, eval_keys.TERMINATED} <= set(table)
+    assert [table[key].default for key in facts] == [None] * len(facts)
 
 
 def test_an_episode_the_operator_discarded_is_listed_and_left_out_of_the_rate():

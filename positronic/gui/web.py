@@ -162,7 +162,7 @@ class StationConsole(pimm.ControlSystem):
                 self._push_frames(feeds, clock)
                 self._drive_episode(station, tasks, clock)
                 if station.run_ended:
-                    logger.info('The operator ended the run')
+                    logger.info('The judge ended the run')
                     return
                 yield limiter.wait()
         finally:
@@ -192,7 +192,7 @@ class StationConsole(pimm.ControlSystem):
         if self._episode is None or not self._episode.done():
             return
         episode, self._episode = self._episode, None
-        try:  # rules-allow: swallowed-error — the page shows the error, and the operator decides whether to retry
+        try:  # rules-allow: swallowed-error — the page shows the error, and the judge decides whether to retry
             end = episode.result()
         except Exception as exc:
             logger.exception('Episode failed')

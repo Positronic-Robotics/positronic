@@ -36,6 +36,7 @@ _GUARDED = {
     libero_keys.CONTROL_MODE,
     libero_keys.SETTLE_STEPS,
     eval_keys.TASK,
+    eval_keys.OBJECT,
     robolab_keys.INSTRUCTION_TYPE,
     *molmo_keys.BENCHMARK_DIMENSIONS,
     molmo_keys.EPISODE_INDEX,

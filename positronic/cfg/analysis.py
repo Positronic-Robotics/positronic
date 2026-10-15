@@ -25,11 +25,12 @@ from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
+from positronic.server.rollouts import outcome_label
 
 
 def task_code(ep: Episode) -> str:
-    if 'eval.object' in ep:
-        return ep['eval.object']
+    if eval_keys.OBJECT in ep:
+        return ep[eval_keys.OBJECT]
     match ep[keys.TASK]:
         case tasks.TOWELS_TASK:
             return 'Towels'
@@ -144,7 +145,7 @@ def uph(ep: Episode) -> float | None:
 ########################
 
 # What a table shows for an episode that nobody scored. It is not a failure.
-UNSCORED = 'Unscored'
+UNSCORED = outcome_label(Outcome.UNSCORED)
 
 
 def unified_success_bool(ep: Episode) -> bool | None:
@@ -444,6 +445,7 @@ def stacking_checkpoint_table():
     """Grouped table by checkpoint with UPH and MTBF metrics."""
 
     def group_fn(episodes: list[Episode]):
+        # The signal metric counts every episode. The rest count only the episodes with a counted outcome.
         scored = scored_episodes(episodes)
         count = len(scored)
         total_duration = sum(_effective_duration('success_time', ep) for ep in scored)
@@ -467,13 +469,14 @@ def stacking_checkpoint_table():
         avg_success_time = np.mean(success_times) if success_times else None
 
         # Average max stacking success
-        max_successes = [ep['max_stacking_success'] for ep in scored if ep['max_stacking_success'] is not None]
+        max_successes = [ep['max_stacking_success'] for ep in episodes if ep['max_stacking_success'] is not None]
         avg_max_success = np.mean(max_successes) if max_successes else None
 
         result = {
             'model': episodes[0]['model'],
             'checkpoint': episodes[0]['checkpoint'],
-            'count': count,
+            'count': len(episodes),
+            'scored': count,
             'UPH': uph_value,
             'success_rate': success_rate,
             'MTBF': mtbf_value,
@@ -487,6 +490,7 @@ def stacking_checkpoint_table():
         'model': C(label='Model'),
         'checkpoint': C(label='Checkpoint'),
         'count': C(label='Runs', format='%d'),
+        'scored': C(label='Scored', format='%d'),
         'UPH': C(label='UPH', format='%.1f', default='-'),
         'success_rate': C(label='Success', format='%.1f%%', default='-'),
         'MTBF': C(label='MTBF', format='%.1f sec', default='-'),
@@ -673,7 +677,7 @@ phail_inference = base_cfg.transform.override(
                 remove=[
                     'robot_commands.reset',
                     'robot_command.reset',
-                    'eval.object',
+                    eval_keys.OBJECT,
                     f'{policy_keys.POLICY_META}.{offboard_keys.PORT}',
                     f'{policy_keys.POLICY_META}.{offboard_keys.HOST}',
                     f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_ID}',
@@ -686,7 +690,7 @@ phail_inference = base_cfg.transform.override(
             # NOTE: _phail_derives reads inference.policy.server.type from the original episode,
             # before Identity(remove=...) strips it. Group applies all transforms to the same input.
             _phail_derives,
-            Derive(**{'eval.object': _phail_task_label}),
+            Derive(meta=None, **{eval_keys.OBJECT: _phail_task_label}),
         ),
         internal.REAL_ROBOT_TRANSFORM,
     ],
@@ -708,7 +712,7 @@ _PHAIL_BASELINE = {
     'status': FromValue('Pass'),
     'variant': FromValue(''),
     'equipment': FromValue('DROID'),
-    'eval.object': _phail_task_label,
+    eval_keys.OBJECT: _phail_task_label,
     OUTCOME: FromValue(Outcome.SUCCESS),
     'completion': FromValue(100.0),
     'started': started,
@@ -807,7 +811,7 @@ def _prod_predicate(ep):
 
 
 def _trained_objects_predicate(ep):
-    return ep.get('eval.object') in TRAINED_OBJECTS
+    return ep.get(eval_keys.OBJECT) in TRAINED_OBJECTS
 
 
 # AUDIT-CORRECTED EPISODES — manual edits to static.json on both private and
@@ -842,7 +846,7 @@ phail_teleop_release = base_cfg.transform.override(
             Derive(**{
                 'model': FromValue('teleop'),
                 'variant': FromValue(''),
-                'eval.object': task_code,
+                eval_keys.OBJECT: task_code,
                 OUTCOME: FromValue(Outcome.SUCCESS),
                 SUCCESSFUL_ITEMS: lambda ep: ep['item_count'],
                 TOTAL_ITEMS: lambda ep: ep['item_count'],
@@ -860,7 +864,7 @@ phail_human_release = base_cfg.transform.override(
             Derive(**{
                 'model': FromValue('human'),
                 'variant': FromValue(''),
-                'eval.object': task_code,
+                eval_keys.OBJECT: task_code,
                 OUTCOME: FromValue(Outcome.SUCCESS),
                 SUCCESSFUL_ITEMS: FromValue(8),
                 TOTAL_ITEMS: FromValue(8),
@@ -877,7 +881,7 @@ def phail_episodes_table():
         '__index__': C(label='#', format='%d'),
         'model': C(label='Model', filter=True),
         'variant': C(label='Variant', filter=True),
-        'eval.object': C(label='Task', filter=True),
+        eval_keys.OBJECT: C(label='Task', filter=True),
         'equipment': C(label='Equipment', filter=True, display=False),
         'started': C(label='Started', format='%Y-%m-%d %H:%M'),
         'units': C(label='Units', align='right'),
@@ -898,7 +902,7 @@ def phail_leaderboard():
         # Per-object aggregation: compute UPH and completion per object type, then average equally.
         by_object: dict[str, list[Episode]] = defaultdict(list)
         for ep in scored:
-            by_object[ep['eval.object']].append(ep)
+            by_object[ep[eval_keys.OBJECT]].append(ep)
 
         object_uphs = []
         object_completions = []
@@ -935,7 +939,7 @@ def phail_leaderboard():
         group_keys=('model', 'variant'),
         group_fn=group_fn,
         format_table=format_table,
-        group_filter_keys={'equipment': 'Equipment', 'eval.object': 'Task'},
+        group_filter_keys={'equipment': 'Equipment', eval_keys.OBJECT: 'Task'},
         default_sort=SortConfig(column='UPH'),
     )
 

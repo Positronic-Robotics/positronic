@@ -1,4 +1,4 @@
-"""What a station console holds about its run: the trial the next Start sends, the operator's instruction
+"""What a station console holds about its run: the trial the next Start sends, the judge's instruction
 override, and each episode so far."""
 
 import logging
@@ -50,12 +50,12 @@ class Phase(StrEnum):
     ENDING = 'ending'
     # The episode ended with no outcome, as when the policy ends it. The judge gives it before the next Start.
     JUDGEMENT_PENDING = 'judgement_pending'
-    # The operator ended the run. The console stops, and that stops the World.
+    # The judge ended the run. The console stops, and that stops the World.
     RUN_ENDED = 'run_ended'
 
 
 class Episode(BaseModel):
-    """One attempt. The operator's Starts number the attempts from 1."""
+    """One attempt. The judge's Starts number the attempts from 1."""
 
     number: int
     instruction: str
@@ -105,8 +105,8 @@ class Station:
         self._episodes: list[Episode] = []
         # The judgement that ends the open episode, from its press until the harness answers.
         self._ending_with: Judgement | None = None
-        # The recording of the episode that waits for a judgement. ``None`` when that episode recorded nothing.
-        self._pending_uid: str | None = None
+        # The harness's answer to the episode that waits for a judgement. ``None`` while no episode waits.
+        self._pending: EpisodeEnd | None = None
         self._run_ended = False
         # Starts at the wall clock in microseconds, so a restarted console starts above the one before it.
         self._generation = time.time_ns() // 1000
@@ -169,8 +169,13 @@ class Station:
                 self._ending_with = judgement
                 self._generation += 1
                 return terminal_payload(judgement)
+            assert self._pending is not None, 'an episode that waits for a judgement keeps its answer'
+            if outcome_of(self._pending.terminal) is Outcome.OUT_OF_TIME and judgement is not Outcome.DISCARDED:
+                raise Refused('the episode ran out of time, so only Discard applies')
             self._generation += 1
-            self._judge(self._pending_uid, judgement)
+            self._judge(self._pending, judgement)
+            if self._awaits_judgement():
+                raise Refused(f'the judgement is not in the recording: {self._episodes[-1].error}')
             return None
 
     def close(self, end: EpisodeEnd, now: float) -> None:
@@ -188,28 +193,25 @@ class Station:
             if answered is not None and not (answered is Outcome.OUT_OF_TIME and pressed is Outcome.DISCARDED):
                 episode.outcome = answered
             elif pressed is None:
-                self._pending_uid = end.uid
+                self._pending = end
             else:
-                # rules-allow: swallowed-error — the episode keeps waiting for a judgement, and its row shows the error
-                try:
-                    self._judge(end.uid, pressed)
-                except Refused as exc:
-                    logger.error(f'Episode {episode.number} waits for a judgement again: {exc}')
+                self._judge(end, pressed)
 
-    def _judge(self, uid: str | None, judgement: Judgement) -> None:
-        """Close the open episode with ``judgement``, and write it into the recording ``uid``.
+    def _judge(self, end: EpisodeEnd, judgement: Judgement) -> None:
+        """Write ``judgement`` into the recording of ``end``, and close the open episode with it.
 
-        When the write fails, the episode keeps waiting for a judgement, its row shows the error, and this raises
-        ``Refused``.
+        When the write fails, the episode keeps waiting for a judgement, and its row shows the error.
         """
         episode = self._episodes[-1]
-        if uid is not None:
+        if end.uid is not None:
+            # The episode waits for the judgement again, so a failed write loses nothing.
             try:
-                self._record(uid, judgement)
+                self._record(end.uid, judgement)
             except (OSError, ValueError) as exc:
-                self._pending_uid, episode.error = uid, f'{type(exc).__name__}: {exc}'
-                raise Refused(f'the judgement is not in the recording: {episode.error}') from exc
-        episode.outcome, episode.error, self._pending_uid = judgement, None, None
+                self._pending, episode.error = end, f'{type(exc).__name__}: {exc}'
+                logger.error(f'Episode {episode.number} waits for a judgement again: {episode.error}')
+                return
+        episode.outcome, episode.error, self._pending = judgement, None, None
 
     def fail(self, error: str, now: float) -> None:
         """Close the open episode, which the harness failed with ``error``."""

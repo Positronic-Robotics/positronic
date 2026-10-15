@@ -12,8 +12,8 @@ dependencies = [
     "pydantic>=2.11",
     "httpx>=0.27",
     "typing-extensions>=4.12.2",
-    # The names an episode records, which `labels` reads. It has no dependencies, and the root pins it
-    # exactly at the same version.
+    # The names an episode records, its edit log and the rule that counts it, which `labels` reads. It has no
+    # dependencies, and the root pins it exactly at the same version.
     "positronic-eval-vocabulary==0.4.0",
     # `labels` reads the time of each sample from an episode's signal files.
     "pyarrow",

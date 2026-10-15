@@ -27,6 +27,7 @@ from collections import defaultdict
 import configuronic as cfn
 import numpy as np
 import pos3
+from eval_vocabulary.outcome import OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS
 
 from pimm.logging import init_logging
 from pimm.time import RECEIVED_WORLD
@@ -45,7 +46,7 @@ DEST_ROOT = 's3://positronic-public/phail'
 # Same cache path as PUBLIC (local_name='positronic-public') but with credentials for writing.
 PUBLIC_WRITE = dataclasses.replace(PUBLIC, public=False)
 
-REQUIRED_FIELDS = ['model', 'eval.object', 'eval.successful_items', 'eval.total_items']
+REQUIRED_FIELDS = ['model', eval_keys.OBJECT, SUCCESSFUL_ITEMS, TOTAL_ITEMS]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -116,7 +117,7 @@ def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
     uph_by_model: dict[str, list[float]] = defaultdict(list)
     for i, ep in enumerate(dataset):
         model = ep.get('model', '')
-        items = ep.get('eval.successful_items', 0)
+        items = ep.get(SUCCESSFUL_ITEMS, 0)
         duration = _duration(ep)
         if items and duration > 0:
             uph_by_model[model].append(items / (duration / 3600))
@@ -125,9 +126,9 @@ def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
             if field not in ep:
                 issues.append(f'  [{i}] {model}: missing required field {field!r}')
 
-        outcome = ep.get('eval.outcome', '')
-        successful = ep.get('eval.successful_items', 0)
-        total = ep.get('eval.total_items', 0)
+        outcome = ep.get(OUTCOME, '')
+        successful = ep.get(SUCCESSFUL_ITEMS, 0)
+        total = ep.get(TOTAL_ITEMS, 0)
         if outcome == 'Success' and successful != total:
             issues.append(f'  [{i}] {model}: Success but {successful}/{total}')
         if total == 0:
@@ -143,7 +144,7 @@ def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
         for i, ep in enumerate(dataset):
             if ep.get('model', '') != model:
                 continue
-            ep_items = ep.get('eval.successful_items', 0)
+            ep_items = ep.get(SUCCESSFUL_ITEMS, 0)
             ep_duration = _duration(ep)
             if ep_items and ep_duration > 0:
                 uph = ep_items / (ep_duration / 3600)

@@ -52,6 +52,8 @@ TRIAL_COUNT = 'eval.trial_count'
 # The id of the task a trial runs, as the benchmark names it. The episode records it; positronic never reads
 # inside it.
 TASK = BENCHMARK_TASK
+# The object that a pick-and-place trial moves, as its task names it. Analysis groups the trials by it.
+OBJECT = 'eval.object'
 
 # The chunk schedule's waypoint counters, keyed f'{SCHEDULE}.{DROPPED}' under ``policy.keys.POLICY_META``.
 # ``DROPPED`` counts a due waypoint that a later waypoint replaced.

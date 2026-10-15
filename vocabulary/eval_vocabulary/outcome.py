@@ -1,4 +1,4 @@
-"""The outcome an operator gives an episode, recorded as `eval.outcome`, and the outcome a reader counts.
+"""The outcome a judge gives an episode, recorded as `eval.outcome`, and the outcome a reader counts.
 
 An episode on disk carries the value it was scored with, so a member is append-only and a value
 never changes.
@@ -19,7 +19,7 @@ from eval_vocabulary.episode import (
     PolicyEnd,
 )
 
-# The statics that the operator gives an attended episode: the verdict and the item counts. The
+# The statics that the judge gives an attended episode: the verdict and the item counts. The
 # harness writes the rest.
 OUTCOME = 'eval.outcome'
 SUCCESSFUL_ITEMS = 'eval.successful_items'
@@ -31,20 +31,21 @@ class Outcome(StrEnum):
 
     SUCCESS = 'Success'
     FAIL = 'Fail'
-    # What an episode the harness ended on its budget carries.
+    # The verdict for an episode that ran out of time. A console writes it. The harness records a timeout as
+    # `eval.terminated = False`, which `counted_outcome` counts as this.
     OUT_OF_TIME = 'Ran out of time'
     SAFETY = 'Safety'
     SYSTEM = 'System'
     # What an episode nobody scored carries. A reader reads an absent outcome as this too.
     UNSCORED = 'UNSCORED'
-    # What the operator's Discard writes: the attempt is not scored at all.
+    # What the judge's Discard writes: the attempt is not scored at all.
     DISCARDED = 'Discarded'
 
     # A member reads as its wire value inside a container's repr, not as its enum name.
     __repr__ = str.__repr__
 
 
-# The verdicts the operator gives, in the order the console's radio lists them.
+# The verdicts the judge gives, in the order the console's radio lists them.
 VERDICTS: tuple[Outcome, ...] = (Outcome.SUCCESS, Outcome.FAIL, Outcome.OUT_OF_TIME, Outcome.SAFETY, Outcome.SYSTEM)
 
 # What an episode carrying no `eval.outcome` at all means. One name, so a reader that defaults and a

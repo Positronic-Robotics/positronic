@@ -1,6 +1,6 @@
 """Edit logs over immutable recordings.
 
-Episodes are never modified after recording. Post-hoc facts — operator verdicts, analysis scores — are *edits*:
+Episodes are never modified after recording. Post-hoc facts — judges' verdicts, analysis scores — are *edits*:
 declarative records appended to an `edits.jsonl` file in the episode's own directory and applied as a view on read.
 `EditedDataset` is that view and the handle that amends it: it reads the logs and applies the edits, and its methods
 append new ones.

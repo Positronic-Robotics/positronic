@@ -34,9 +34,7 @@ def eval_table():
     """The episode table for an eval run: only what every eval writes, nothing task-specific.
 
     The columns are the recorded facts that ``counted_outcome`` counts an episode from, and a blank cell is a fact that
-    the episode does not record. ``eval.success`` is the env's report. ``eval.outcome`` is the verdict that a console
-    wrote. ``eval.policy_end`` is what the policy said when it ended the episode. ``eval.terminated`` separates a task
-    the policy failed from one whose budget ran out.
+    the episode does not record. A plain table derives no column, so it cannot show the counted outcome itself.
     """
     return {
         '__index__': C(label='#', format='%d'),
@@ -50,7 +48,9 @@ def eval_table():
             ),
         ),
         OUTCOME: C(label='Verdict', renderer=OUTCOME_BADGE, filter=True, align='center'),
+        eval_keys.ENDED_BY: C(label='Ended by'),
         eval_keys.POLICY_END: C(label='Policy end'),
+        eval_keys.ENV_ENDS_ON_SUCCESS: C(label='Ends on success'),
         eval_keys.TERMINATED: C(label='Ended', default=False),
     }
 
@@ -229,7 +229,7 @@ def rollouts_episodes_table():
 @cfn.config()
 def rollouts_by_model():
     def group_fn(episodes: list[Episode]):
-        # An episode the operator discarded or never scored measures nothing, so it is listed and
+        # An episode the judge discarded or never scored measures nothing, so it is listed and
         # counted and stays out of the rate.
         scored = [ep for ep in episodes if is_scored(ep[DERIVED_OUTCOME])]
         successes = sum(1 for ep in scored if ep[DERIVED_OUTCOME] == Outcome.SUCCESS)
