@@ -14,6 +14,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
+from positronic.policy import PolicyEnd
 from positronic.policy import keys as policy_keys
 from positronic.policy.processors import PauseOnUnavailable
 from positronic.policy.sequential import Sequential
@@ -56,10 +57,10 @@ class Camera(pimm.ControlSystem):
 
 
 @pytest.mark.timeout(30)
-@pytest.mark.parametrize('ending', ['done', 'give_up'])
+@pytest.mark.parametrize('ending,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP)])
 @pytest.mark.parametrize('charge', [False, True])
 @pytest.mark.parametrize('distance', [0.01, 0.2])
-def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_path, ending, charge, distance):
+def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_path, ending, end, charge, distance):
     states = []
 
     def request(endpoint, runner, model, messages, tools):
@@ -126,11 +127,10 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
     assert not list(tmp_path.rglob('*.jsonl'))
     for index, episode in enumerate(dataset):
         assert isinstance(episode, Episode)
-        assert episode[eval_keys.TERMINATED] is False
-        assert eval_keys.ENDED_BY not in episode
+        assert episode[eval_keys.TERMINATED] is True
+        assert episode[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+        assert episode[eval_keys.POLICY_END] == end
         assert eval_keys.SUCCESS not in episode
-        first, last = episode.bounds(RECEIVED_WORLD)
-        assert (last - first) / 1e9 == pytest.approx(task.timeout_sec, abs=0.1)
         assert episode[f'{policy_keys.POLICY_META}.{policy_keys.STOP_REASON}'] == ending
         assert episode[f'{policy_keys.POLICY_META}.{policy_keys.HINDSIGHT}'] == 'Small move observed.'
         transcript = episode.static[f'{policy_keys.POLICY_META}.{policy_keys.TRANSCRIPT}']
@@ -148,6 +148,10 @@ def test_move_then_idle_records_until_timeout_across_episodes(monkeypatch, tmp_p
         assert [e['tools'][0]['name'] for e in responses] == ['move_to', ending]
         assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
         assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]
+        # The run returns at the decision after the move, long before the time limit.
+        move_sec = next(e['duration_s'] for e in transcript if e['event'] == 'accepted')
+        first, last = episode.bounds(RECEIVED_WORLD)
+        assert move_sec <= (last - first) / 1e9 <= move_sec + 0.1
         target_x = before['position_m'][0] + min(distance, Motion().max_translation)
         assert after['position_m'][0] == pytest.approx(target_x, abs=1e-7)
         assert after['previous_target']['x'] == pytest.approx(target_x)
