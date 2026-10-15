@@ -469,7 +469,11 @@ COMPLETED = {TASK: CUP, ENDED_BY: ENDED_BY_POLICY, POLICY_END: PolicyEnd.COMPLET
 def test_a_verdict_that_only_the_edit_log_holds_gives_the_label(tmp_path: Path):
     """A console writes the verdict that it takes after a policy end into the edit log of the closed recording."""
     judged, other = _episodes(tmp_path, COMPLETED, COMPLETED)
-    _write_edits(judged, (EditOp.SET_STATIC, {OUTCOME: CountedOutcome.FAIL}), (EditOp.SET_STATIC, {OUTCOME: 'Success'}))
+    _write_edits(
+        judged,
+        (EditOp.SET_STATIC, {OUTCOME: CountedOutcome.FAIL}),
+        (EditOp.SET_STATIC, {OUTCOME: CountedOutcome.SUCCESS}),
+    )
     _write_edits(other, (EditOp.SET_STATIC, {OUTCOME: CountedOutcome.SUCCESS}), uid='another episode')
     for episode in (judged, other):
         _write_timed_signal(episode, 'grip', [0, 1_000_000_000])

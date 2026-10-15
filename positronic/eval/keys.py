@@ -54,6 +54,9 @@ TRIAL_COUNT = 'eval.trial_count'
 TASK = BENCHMARK_TASK
 # The object that a pick-and-place trial moves, as its task names it. Analysis groups the trials by it.
 OBJECT = 'eval.object'
+# The side of a pick-and-place trial's tote and of its external camera, as the trial records them.
+TOTE_PLACEMENT = 'eval.tote_placement'
+EXTERNAL_CAMERA = 'eval.external_camera'
 
 # The chunk schedule's waypoint counters, keyed f'{SCHEDULE}.{DROPPED}' under ``policy.keys.POLICY_META``.
 # ``DROPPED`` counts a due waypoint that a later waypoint replaced.

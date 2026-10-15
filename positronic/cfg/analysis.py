@@ -154,6 +154,12 @@ def unified_success_bool(ep: Episode) -> bool | None:
     return outcome == Outcome.SUCCESS if is_scored(outcome) else None
 
 
+def success_units(episode: Episode) -> int | None:
+    """1 for an episode that ``counted_outcome`` counts as a success, 0 for a failure, ``None`` when it is unscored."""
+    success = unified_success_bool(episode)
+    return None if success is None else int(success)
+
+
 def unified_units_display(ep: Episode) -> str:
     units = success_units(ep)
     if units is None:
@@ -161,6 +167,47 @@ def unified_units_display(ep: Episode) -> str:
     if SUCCESSFUL_ITEMS in ep:
         return f'{ep[SUCCESSFUL_ITEMS]}/{ep[TOTAL_ITEMS]}'
     return str(units)
+
+
+def success_time(episode: Episode, score_threshold: float = 0.95) -> float | None:
+    """Return the time (seconds from episode start) when success was achieved (held score_threshold for 0.25s)."""
+    if 'stacking_success' not in episode:
+        return None
+    success_signal = episode['stacking_success']
+    if len(success_signal) == 0:
+        return None
+
+    threshold_ns = int(0.25 * 1e9)  # 0.25 seconds in nanoseconds
+    in_success = False
+    success_start_ts = None
+    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
+    timeline = next(
+        (name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in success_signal.timelines), RECORDED_TIME
+    )
+
+    for value, timestamps in success_signal:
+        timestamp = timestamps[timeline]
+        if value >= score_threshold:
+            if not in_success:
+                in_success = True
+                success_start_ts = timestamp
+            elif timestamp - success_start_ts >= threshold_ns:
+                return (timestamp - episode.bounds(timeline).start) / 1e9
+        else:
+            in_success = False
+            success_start_ts = None
+
+    return None
+
+
+def uph_sim(episode: Episode) -> float | None:
+    """Units per hour based on success_time (not full episode duration)."""
+    if not unified_success_bool(episode):
+        return None
+    t = success_time(episode)
+    if t is None:
+        return None
+    return 1 / (t / 3600)
 
 
 def unified_uph(ep: Episode) -> float | None:
@@ -304,37 +351,6 @@ def max_stacking_success(episode: Episode) -> float | None:
     return max(v for v, _ in success_signal)
 
 
-def success_time(episode: Episode, score_threshold: float = 0.95) -> float | None:
-    """Return the time (seconds from episode start) when success was achieved (held score_threshold for 0.25s)."""
-    if 'stacking_success' not in episode:
-        return None
-    success_signal = episode['stacking_success']
-    if len(success_signal) == 0:
-        return None
-
-    threshold_ns = int(0.25 * 1e9)  # 0.25 seconds in nanoseconds
-    in_success = False
-    success_start_ts = None
-    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-    timeline = next(
-        (name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in success_signal.timelines), RECORDED_TIME
-    )
-
-    for value, timestamps in success_signal:
-        timestamp = timestamps[timeline]
-        if value >= score_threshold:
-            if not in_success:
-                in_success = True
-                success_start_ts = timestamp
-            elif timestamp - success_start_ts >= threshold_ns:
-                return (timestamp - episode.bounds(timeline).start) / 1e9
-        else:
-            in_success = False
-            success_start_ts = None
-
-    return None
-
-
 def box_distance_progress(episode: Episode) -> float | None:
     if 'box_distance' not in episode:
         return None
@@ -361,22 +377,6 @@ def ee_pose_movement(episode: Episode) -> float | None:
         result += np.linalg.norm(translation - prev_translation).item()
         prev_translation = translation
     return result
-
-
-def success_units(episode: Episode) -> int | None:
-    """1 for an episode that ``counted_outcome`` counts as a success, 0 for a failure, ``None`` when it is unscored."""
-    success = unified_success_bool(episode)
-    return None if success is None else int(success)
-
-
-def uph_sim(episode: Episode) -> float | None:
-    """Units per hour based on success_time (not full episode duration)."""
-    if not unified_success_bool(episode):
-        return None
-    t = success_time(episode)
-    if t is None:
-        return None
-    return 1 / (t / 3600)
 
 
 stacking_episodes = base_cfg.transform.override(

@@ -187,6 +187,18 @@ def test_a_discard_pressed_before_the_time_limit_answer_wins_and_is_written():
     assert recordings.written == [(UID, Outcome.DISCARDED)]
 
 
+def test_the_view_lists_the_judgements_that_the_station_takes():
+    station = _station()
+    every = [Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED]
+    assert station.view(now=0.0).judgements == []
+    station.start(now=1.0)
+    assert station.view(now=1.5).judgements == every
+    station.close(POLICY_END, now=2.0)
+    assert station.view(now=2.5).judgements == every
+    station.end(Outcome.FAIL)
+    assert station.view(now=3.0).judgements == []
+
+
 def test_a_success_pressed_before_the_time_limit_answer_still_ran_out_of_time():
     recordings = _Recordings()
     station = _station(recordings=recordings)
@@ -292,6 +304,7 @@ def test_after_a_failed_discard_write_at_the_time_limit_only_a_discard_applies()
     station.close(TIMED_OUT, now=2.0)
     assert station.view(now=3.0).phase is Phase.JUDGEMENT_PENDING
 
+    assert station.view(now=3.0).judgements == [Outcome.DISCARDED]
     for judgement in (Outcome.SUCCESS, Outcome.FAIL):
         with pytest.raises(Refused, match='ran out of time, so only Discard applies'):
             station.end(judgement)

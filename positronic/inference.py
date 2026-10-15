@@ -150,7 +150,7 @@ def _internal_main():
     })
 
 
-@cfn.config(fields=[eval_keys.OBJECT, 'eval.external_camera', 'eval.tote_placement'])
+@cfn.config(fields=[eval_keys.OBJECT, eval_keys.EXTERNAL_CAMERA, eval_keys.TOTE_PLACEMENT])
 def stats(output_dir: str, fields: list[str]):
     dataset = load_all_datasets(pos3.sync(output_dir))
     counts = Counter()

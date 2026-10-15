@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from eval_vocabulary.outcome import OUTCOME, Outcome
 from pydantic import BaseModel
@@ -27,6 +27,7 @@ class Unrecorded(StrEnum):
 
 # What the judge gives an episode: the verdict success or fail, or a discard, which leaves the episode unscored.
 Judgement = Literal[Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED]
+JUDGEMENTS: tuple[Judgement, ...] = get_args(Judgement)
 # How an episode ended. ``OUT_OF_TIME`` is what the page shows for ``eval.terminated = False``. Nothing writes it.
 Ending = Judgement | Literal[Outcome.OUT_OF_TIME] | Unrecorded
 
@@ -77,6 +78,8 @@ class RunView(BaseModel):
     override: str | None
     # The first episode that sent the override in force. ``None`` until an episode sends it.
     override_since: int | None
+    # The judgements that the station takes now. Empty while no episode is open.
+    judgements: list[Judgement]
     episodes: list[Episode]
     # Rises with each change to the run, so the page drops an answer older than one it has drawn.
     generation: int
@@ -165,13 +168,13 @@ class Station:
         with self._lock:
             if not self._is_open():
                 raise Refused('no episode is running')
+            if judgement not in self._judgements():
+                raise Refused('the episode ran out of time, so only Discard applies')
             if not self._awaits_judgement():
                 self._ending_with = judgement
                 self._generation += 1
                 return terminal_payload(judgement)
             assert self._pending is not None, 'an episode that waits for a judgement keeps its answer'
-            if outcome_of(self._pending.terminal) is Outcome.OUT_OF_TIME and judgement is not Outcome.DISCARDED:
-                raise Refused('the episode ran out of time, so only Discard applies')
             self._generation += 1
             self._judge(self._pending, judgement)
             if self._awaits_judgement():
@@ -243,6 +246,14 @@ class Station:
             return Phase.ENDING
         return Phase.RUNNING if self._is_open() else Phase.READY
 
+    def _judgements(self) -> list[Judgement]:
+        if not self._is_open():
+            return []
+        # A Discard whose write failed after the time limit: a verdict would sit over the timeout.
+        if self._pending is not None and outcome_of(self._pending.terminal) is Outcome.OUT_OF_TIME:
+            return [Outcome.DISCARDED]
+        return list(JUDGEMENTS)
+
     def view(self, now: float) -> RunView:
         with self._lock:
             return RunView(
@@ -250,6 +261,7 @@ class Station:
                 configured=self._trial.instruction,
                 override=self._override,
                 override_since=self._override_since,
+                judgements=self._judgements(),
                 episodes=[episode.model_copy() for episode in self._episodes],
                 generation=self._generation,
                 now=now,

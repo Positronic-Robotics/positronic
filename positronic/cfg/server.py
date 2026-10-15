@@ -105,9 +105,7 @@ finetune_ds = ds.transform.override(
 ft_eval_ds = ds.transform.override(
     base=ds.transform.override(
         base=finetune_ds,
-        transforms=[
-            Group(Identity(remove=['units']), Rename(**{'eval.successful_items': 'units', 'eval.total_items': 'units'}))
-        ],
+        transforms=[Group(Identity(remove=['units']), Rename(**{SUCCESSFUL_ITEMS: 'units', TOTAL_ITEMS: 'units'}))],
     ),
     transforms=[
         ds.group.override(

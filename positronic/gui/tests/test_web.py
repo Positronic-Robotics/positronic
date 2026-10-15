@@ -102,7 +102,14 @@ def test_the_status_is_the_json_the_page_reads(console):
     status['run'].pop('now')
     assert isinstance(status['run'].pop('generation'), int)
     assert status == {
-        'run': {'phase': 'ready', 'configured': CONFIGURED, 'override': None, 'override_since': None, 'episodes': []},
+        'run': {
+            'phase': 'ready',
+            'configured': CONFIGURED,
+            'override': None,
+            'override_since': None,
+            'judgements': [],
+            'episodes': [],
+        },
         'cameras': [{'name': CAMERA, 'label': 'exterior 2', 'live': True, 'fps': 0.0, 'width': 640, 'height': 360}],
         'policy': 'remote',
         'host': '127.0.0.1',
@@ -432,6 +439,12 @@ def test_the_page_reads_every_status_field_the_server_sends():
     reader = _script_part(r'^function readStatus\(answer\) \{(.*?)^\}$', re.MULTILINE | re.DOTALL)
     read = set(re.findall(r'\b(?:answer|run|e|c)\.(\w+)', reader))
     assert read == {field for model in (Status, RunView, Episode, CameraView) for field in model.model_fields}
+
+
+def test_the_page_enables_only_the_judgement_buttons_that_the_station_takes():
+    buttons = _script_part(r'^function renderButtons\(\) \{(.*?)^\}$', re.MULTILINE | re.DOTALL)
+    assert 'current.judgements' in buttons
+    assert 'judgements.includes(judgement)' in buttons
 
 
 def test_the_page_calls_the_routes_the_server_serves(console):

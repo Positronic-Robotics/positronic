@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 import rerun as rr
 from av.container import InputContainer
-from eval_vocabulary.outcome import OUTCOME
+from eval_vocabulary.outcome import OUTCOME, Outcome
 
 from positronic import keys
 from positronic.dataset import Dataset, Time
@@ -122,7 +122,7 @@ def dataset(tmp_path):
         *(
             {
                 keys.TASK: 'Put the banana on the plate',
-                OUTCOME: 'Success' if index == 0 else 'Failure',
+                OUTCOME: Outcome.SUCCESS if index == 0 else Outcome.FAIL,
                 OBJECT: object_name,
                 ATTEMPT: index + 1,
                 'notes': 'n' * 2000,
@@ -182,7 +182,7 @@ def test_a_filtered_group_file_holds_only_that_filter_s_episodes(dataset, tmp_pa
     block = next(entry for entry in index if entry['params'] == {OBJECT: 'Wooden block'})
     table = json.loads((out / 'api/groups/outcomes' / block['file']).read_text())
     outcome = [column['key'] for column in table['columns']].index(OUTCOME)
-    assert [row[1][outcome] for row in table['episodes']] == ['Failure']
+    assert [row[1][outcome] for row in table['episodes']] == [Outcome.FAIL]
 
 
 def test_a_build_id_moves_the_recordings_and_the_downloads_under_it(dataset, tmp_path):
@@ -754,7 +754,7 @@ def test_a_filter_on_a_number_reaches_the_episodes_that_carry_it(dataset, tmp_pa
     second = next(entry for entry in index if entry['params'] == {ATTEMPT: '2'})
     table = json.loads((out / 'api/groups/attempts' / second['file']).read_text())
     outcome = [column['key'] for column in table['columns']].index(OUTCOME)
-    assert [row[1][outcome] for row in table['episodes']] == ['Failure']
+    assert [row[1][outcome] for row in table['episodes']] == [Outcome.FAIL]
 
 
 def test_an_export_leaves_the_app_state_as_it_found_it(dataset, tmp_path):

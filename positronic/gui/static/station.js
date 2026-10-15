@@ -43,6 +43,7 @@ function readStatus(answer) {
     configured: run.configured,
     override: run.override,
     overrideSince: run.override_since,
+    judgements: run.judgements,
     generation: run.generation,
     now: run.now,
     episodes: run.episodes.map((e) => ({
@@ -279,7 +280,8 @@ function renderButtons() {
   const phase = current ? current.phase : null;
   const idle = !offline && !busy;
   $('start').disabled = !(idle && phase === PHASE.ready);
-  for (const [button] of judgementButtons) button.disabled = !(idle && isOpen(phase));
+  const judgements = current ? current.judgements : [];
+  for (const [button, judgement] of judgementButtons) button.disabled = !(idle && judgements.includes(judgement));
   $('end-run').disabled = !idle || phase === null || phase === PHASE.runEnded;
 }
 
