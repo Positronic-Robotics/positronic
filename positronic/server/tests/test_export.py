@@ -408,6 +408,8 @@ STAGED_TABLE = {
     **TABLE,
     '__duration__': ColumnConfig(label='Duration', format='%.3f sec'),
     STAGE: ColumnConfig(label='Stage', filter=True),
+    # A column whose value is a download in the `dataset` fixture.
+    'notes': ColumnConfig(label='Notes'),
 }
 
 
@@ -422,12 +424,14 @@ STAGED_GROUPS = {
         group_fn=lambda episodes: {
             'count': len(episodes),
             'seconds': sum(_seconds(episode) for episode in episodes),
+            'first': min(episode.bounds((RECORDED_TIME,)).start[RECORDED_TIME] for episode in episodes),
             STAGE: max(episode[STAGE] for episode in episodes),
         },
         format_table={
             OUTCOME: ColumnConfig(label='Outcome'),
             'count': ColumnConfig(label='Episodes', format='%d'),
             'seconds': ColumnConfig(label='Seconds', format='%.3f'),
+            'first': ColumnConfig(label='First', format='%d'),
             STAGE: ColumnConfig(label='Stage'),
         },
         group_filter_keys={OBJECT: 'Object', STAGE: 'Stage'},
@@ -488,8 +492,13 @@ def test_a_table_holds_no_download_of_an_episode(dataset, tmp_path):
 
 @pytest.mark.parametrize(
     ('read', 'refusal'),
-    [(lambda episode: episode.signals, 'keeps no signal'), (lambda episode: episode['notes'], 'keeps no download')],
-    ids=['signal', 'download'],
+    [
+        (lambda episode: episode.signals, 'keeps no signal'),
+        (lambda episode: episode['notes'], 'keeps no download'),
+        (lambda episode: episode.get('notes'), 'keeps no download'),
+        (lambda episode: 'notes' in episode, 'keeps no download'),
+    ],
+    ids=['signal', 'download', 'download-by-get', 'download-by-in'],
 )
 def test_a_group_function_that_reads_a_signal_or_a_download_stops_the_export(dataset, tmp_path, read, refusal):
     group = GroupTableConfig(
@@ -497,7 +506,7 @@ def test_a_group_function_that_reads_a_signal_or_a_download_stops_the_export(dat
         group_fn=lambda episodes: {'count': len([read(episode) for episode in episodes])},
         format_table=GROUPS['outcomes'].format_table,
     )
-    with pytest.raises((TypeError, KeyError), match=refusal):
+    with pytest.raises(TypeError, match=refusal):
         an_export(dataset, tmp_path / 'out', group_tables={'outcomes': group})
 
 
@@ -509,7 +518,7 @@ def test_each_episode_is_a_step_of_its_own_files_and_the_last_step_holds_the_res
     settings = {'ep_table_cfg': TABLE, 'group_tables': GROUPS, 'max_resolution': 64, 'full_dataset': dataset}
     steps = list(export_static(shown(dataset), tmp_path / 'out', assets=False, **settings))
 
-    assert [step.episode for step in steps] == [0, 1, None]
+    assert [step.episode_index for step in steps] == [0, 1, None]
     for index, step in enumerate(steps[:-1]):
         assert all(_episode_paths(index).fullmatch(str(file.path)) for file in step.files)
     assert not any(_episode_paths(index).fullmatch(str(file.path)) for index in (0, 1) for file in steps[-1].files)
@@ -532,8 +541,8 @@ def test_a_caller_that_deletes_each_episode_and_its_files_at_its_step_publishes_
         for file in step.files:
             (host / file.path).parent.mkdir(parents=True, exist_ok=True)
             shutil.move(out / file.path, host / file.path)
-        if step.episode is not None:
-            shutil.rmtree(directories[step.episode])
+        if step.episode_index is not None:
+            shutil.rmtree(directories[step.episode_index])
 
     published = {str(PurePosixPath(path.relative_to(host))) for path in host.rglob('*') if path.is_file()}
     assert published == {str(PurePosixPath(path.relative_to(kept))) for path in kept.rglob('*') if path.is_file()}

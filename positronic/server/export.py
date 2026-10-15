@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from multiprocessing.pool import ThreadPool
 from pathlib import Path, PurePosixPath
-from typing import Any, cast, overload
+from typing import Any, cast
 from urllib.parse import quote
 
 import configuronic as cfn
@@ -31,6 +31,7 @@ import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic.dataset import Dataset, Episode, Signal, Time, TimeBounds
 from positronic.dataset.episode import META_UID
+from positronic.dataset.time import validate_timelines
 from positronic.server.dataset_utils import DEFAULT_MAX_HZ, DEFAULT_MAX_RESOLUTION, ReplayLayout, get_dataset_root
 from positronic.server.positronic_server import (
     API_FILE_SUFFIX,
@@ -89,8 +90,8 @@ def _available_cpus() -> int:
     return os.cpu_count() or 2
 
 
-# A recording's build holds about two cores, so this many at once fill the machine; it is also the count of
-# episodes an export reads at once.
+# A recording's build holds about two cores, so this many builds use every core. It is also the count of episodes
+# an export reads at once.
 DEFAULT_WORKERS = max(1, _available_cpus() // 2)
 # Windows reports no path limit; its `MAX_PATH` counts UTF-16 units, the end mark included, unless a machine opts
 # into long paths.
@@ -418,17 +419,26 @@ def _closing_plans(
 
 class _TableEpisode(Episode):
     """What a table reads of one episode, kept after the export reads the episode no more: the static values a page
-    shows inline, the meta, and the bounds of each timeline. A read of anything else raises."""
+    shows inline, the downloads at the episode table's `columns`, the meta, and the bounds of each signal. A read of
+    anything else raises. The columns hold every group and filter key, as `configure_tables` requires."""
 
-    def __init__(self, static: dict[str, Any], meta: dict[str, Any], bounds: dict[str, TimeBounds[int]]):
-        self._static = {key: value for key, value in static.items() if not holds_download(value)}
+    def __init__(self, episode: Episode, columns: frozenset[str]):
+        static = episode.static
+        self._static = {key: value for key, value in static.items() if key in columns or not holds_download(value)}
         self._downloads = frozenset(static) - frozenset(self._static)
-        self._meta = meta
-        self._bounds = bounds
+        self._meta = dict(episode.meta)
+        # A plain `Time` per bound: a bound read from a time index can hold the whole index.
+        self._signal_bounds = [
+            TimeBounds(
+                Time(**{n: bound.start[n] for n in bound.start}), Time(**{n: bound.finish[n] for n in bound.finish})
+            )
+            for bound in (signal.bounds(signal.timelines) for signal in episode.signals.values())
+        ]
 
     def __getitem__(self, name: str) -> Any:
+        # Not a `KeyError`: `Mapping.get` and `in` would read the download as absent.
         if name in self._downloads:
-            raise KeyError(f'{name!r} holds a download, and a table episode keeps no download')
+            raise TypeError(f'{name!r} holds a download, and a table episode keeps no download')
         return self._static[name]
 
     def __iter__(self) -> Iterator[str]:
@@ -443,7 +453,7 @@ class _TableEpisode(Episode):
 
     @property
     def signals(self) -> dict[str, Signal[Any]]:
-        raise TypeError('a table episode keeps no signal; it holds the bounds of each timeline')
+        raise TypeError('a table episode keeps no signal; it holds the bounds of each signal')
 
     @property
     def time(self):
@@ -451,20 +461,15 @@ class _TableEpisode(Episode):
 
     @property
     def timelines(self) -> tuple[str, ...]:
-        return tuple(self._bounds)
+        return tuple(dict.fromkeys(name for bound in self._signal_bounds for name in bound.start.timelines))
 
-    @overload
-    def bounds(self, timelines: str) -> TimeBounds[int]: ...
-
-    @overload
-    def bounds(self, timelines: tuple[str, ...]) -> TimeBounds[Time]: ...
-
-    def bounds(self, timelines: str | tuple[str, ...]) -> TimeBounds[int] | TimeBounds[Time]:
-        if not isinstance(timelines, str):
-            raise TypeError(f'a table episode holds the bounds of one timeline at a time, got {timelines!r}')
-        if timelines not in self._bounds:
-            raise ValueError('Episode has no signals on the requested timelines')
-        return self._bounds[timelines]
+    def _signal_bounds_on(self, timelines: tuple[str, ...]) -> list[TimeBounds[Time]]:
+        validate_timelines(timelines)
+        return [
+            TimeBounds(bound.start[timelines], bound.finish[timelines])
+            for bound in self._signal_bounds
+            if set(timelines).issubset(bound.start.timelines)
+        ]
 
 
 class _TableDataset(Dataset):
@@ -504,26 +509,24 @@ def _check_full_episode(full_episode: Episode, shown_episode: Episode, index: in
             )
 
 
-def _read_episode(shown: Dataset, full: Dataset, index: int) -> tuple[_EpisodeLinks, _TableEpisode]:
+def _read_episode(
+    shown: Dataset, full: Dataset, index: int, columns: frozenset[str]
+) -> tuple[_EpisodeLinks, _TableEpisode]:
     """The links the page of episode `index` carries, and what a table reads of it; `full` is checked against
     `shown` where the two differ."""
     episode = cast(Episode, shown[index])
     if full is not shown:
         _check_full_episode(cast(Episode, full[index]), episode, index)
-    static, meta = episode.static, episode.meta
-    links = _EpisodeLinks(index, episode_rrd_link(index), [download_link(index, f) for f in download_paths(static)])
-    table_episode = _TableEpisode(
-        static, {key: meta[key] for key in meta}, {timeline: episode.bounds(timeline) for timeline in episode.timelines}
-    )
-    return links, table_episode
+    downloads = [download_link(index, path) for path in download_paths(episode.static)]
+    return _EpisodeLinks(index, episode_rrd_link(index), downloads), _TableEpisode(episode, columns)
 
 
 def _planned_episode(
-    out: _Output, client: TestClient, shown: Dataset, full: Dataset, index: int, build_id: str
+    out: _Output, client: TestClient, shown: Dataset, full: Dataset, index: int, build_id: str, columns: frozenset[str]
 ) -> tuple[list[_Planned], _TableEpisode]:
     """The plans to write the page, the recording and the downloads of episode `index`, each path planned, and
-    what a table reads of the episode."""
-    links, table_episode = _read_episode(shown, full, index)
+    what a table with the episode table's `columns` reads of the episode."""
+    links, table_episode = _read_episode(shown, full, index, columns)
     plans = [*_large_file_plans(client, full, links, build_id), _episode_page(client, shown, links, build_id)]
     out.plan(planned.path for planned in plans)
     return plans, table_episode
@@ -594,10 +597,10 @@ def _build_recordings(reads: Dataset, indexes: range, workers: int) -> None:
 
 @dataclass(frozen=True)
 class ExportStep:
-    """The files one step of an export wrote: those of the episode at `episode`, or, at the last step, where
-    `episode` is None, the pages, the tables and the assets that read every episode."""
+    """The files one step of an export wrote: those of the episode at `episode_index`, or, at the last step, where
+    `episode_index` is None, the pages, the tables and the assets that read every episode."""
 
-    episode: int | None
+    episode_index: int | None
     files: list[ExportedFile]
 
 
@@ -628,18 +631,17 @@ def export_static(
     of its own under `scratch_dir`, or the system's temporary directory when None. Then it yields one step per
     episode, with the episode's page, recording and downloads. After that step the export does not read the
     episode again, so a caller may delete the episode and the step's files. The tables keep, for each episode, the
-    static values a page shows inline, the meta and the bounds of each timeline. The last step holds the pages,
-    the tables and the assets that read every episode. A problem in an episode stops the export before it writes
-    the files of that episode.
+    static values a page shows inline, the downloads at the columns of `ep_table_cfg`, the meta and the bounds of
+    each signal. The last step holds the pages, the tables and the assets that read every episode. A problem in an
+    episode stops the export before it writes the files of that episode.
 
-    The pages and the tables read `dataset`. The recordings and the downloads read `full_dataset`
-    when given, which holds the same episodes in the same order; the recording builder reads an
-    episode's robot model out of its static values. `assets` writes the app's own scripts, styles
-    and viewer under `asset_dir`, a directory under `static/` the pages request at the host root, so it goes
-    with the root base href only; an export under a prefix shares the host's copy. A host that serves several
-    exports names a directory per set of assets, so an export never overwrites the assets another export's
-    pages read. An export holds the app's state from its first step to its last, so a second export in the
-    process waits for it; one into the same directory is then refused, as the directory holds the first.
+    - The pages and the tables read `dataset`. The recordings and the downloads read `full_dataset` when given. It
+      holds the same episodes in the same order, and each episode's static values hold its robot model.
+    - `assets` writes the app's scripts, styles and viewer under `asset_dir`, a directory under `static/` at the
+      host root, so it takes the root base href. An export under a prefix shares the host's copy. A host that
+      serves several exports names a directory per set of assets.
+    - An export holds the app's state from its first step to its last. A second export in the process waits for
+      it, and an export into the same directory is then refused.
 
     The export holds no episode between two reads; a dataset that caches its episodes holds them all open.
     """
@@ -659,6 +661,7 @@ def export_static(
     if len(full) != len(dataset):
         raise ValueError(f'full_dataset holds {len(full)} episodes and dataset holds {len(dataset)}')
     tables = _TableDataset()
+    columns = frozenset(ep_table_cfg or {})
     with app_state_restored(), tempfile.TemporaryDirectory(dir=scratch_dir) as scratch:
         # Under the lock, so a second export into the directory of a running one finds it full.
         if out.directory.exists() and any(out.directory.iterdir()):
@@ -691,7 +694,7 @@ def export_static(
             window = range(start, min(start + workers, len(dataset)))
             plans_by_episode: list[list[_Planned]] = []
             for index in window:
-                plans, table_episode = _planned_episode(out, client, dataset, full, index, build_id)
+                plans, table_episode = _planned_episode(out, client, dataset, full, index, build_id, columns)
                 _add_filter_values(sets_by_group, group_tables or {}, table_episode)
                 tables.append(table_episode)
                 plans_by_episode.append(plans)
