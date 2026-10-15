@@ -294,6 +294,15 @@ class Endpoint(Cascade, Generic[Credential]):
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
     image_credential: Credential | None = None
+    # The most sessions the platform holds open to a remote policy at once. None leaves the count to the platform.
+    max_concurrent_sessions: int | None = Field(default=None, ge=1)
+
+    @model_serializer(mode='wrap')
+    def _without_an_unstated_session_limit(self, handler: SerializerFunctionWrapHandler):
+        serialized: dict[str, object] = handler(self)
+        if self.max_concurrent_sessions is None:
+            serialized.pop('max_concurrent_sessions', None)
+        return serialized
 
     @model_validator(mode='before')
     @classmethod
@@ -356,6 +365,22 @@ class Endpoint(Cascade, Generic[Credential]):
             raise ValueError(
                 f'endpoint {self.name!r} states image_credential and names no image; a credential opens the '
                 'image the entry that states it names'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _a_session_limit_bounds_a_remote_address(self) -> Self:
+        if self.max_concurrent_sessions is None:
+            return self
+        if self.kind is not EndpointKind.remote:
+            raise ValueError(
+                f'{slug_of(self.kind)} endpoint {self.name!r} states max_concurrent_sessions, which only a remote '
+                'endpoint carries: the platform serves this policy and opens its sessions'
+            )
+        if self.address is None:
+            raise ValueError(
+                f'endpoint {self.name!r} states max_concurrent_sessions and names no address: state it on the plan '
+                'endpoint this label names'
             )
         return self
 

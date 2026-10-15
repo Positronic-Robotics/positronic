@@ -279,6 +279,49 @@ def test_a_remote_endpoint_names_no_bring_up():
         Endpoint(name='baseline', wire=Wire.websocket, image=PolicyImage('org/policy:v1'))
 
 
+def test_a_remote_endpoint_states_the_most_sessions_the_platform_opens_to_it():
+    entry = Endpoint.model_validate(remote('baseline', max_concurrent_sessions=1))
+    assert entry.max_concurrent_sessions == 1
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+    assert Endpoint.model_validate(BASELINE).max_concurrent_sessions is None
+
+
+@pytest.mark.parametrize('limit', [0, -1])
+def test_a_session_limit_below_one_is_refused(limit: int):
+    with pytest.raises(ValidationError, match='greater than or equal to 1'):
+        Endpoint.model_validate(remote('baseline', max_concurrent_sessions=limit))
+
+
+def test_a_served_or_an_image_endpoint_states_no_session_limit():
+    with pytest.raises(ValidationError, match='which only a remote endpoint carries'):
+        Endpoint(name='candidate', kind=EndpointKind.served, spec='pi05', wire=Wire.grpc, max_concurrent_sessions=1)
+    with pytest.raises(ValidationError, match='which only a remote endpoint carries'):
+        Endpoint.model_validate({
+            'name': 'policy',
+            'kind': 'image',
+            'image': 'org/p:v1',
+            'wire': 'websocket',
+            'max_concurrent_sessions': 1,
+        })
+
+
+def test_a_label_states_no_session_limit_of_its_own():
+    with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
+        a_plan(tasks=[{'task_id': SPOONS, 'endpoints': [{'name': 'baseline', 'max_concurrent_sessions': 1}]}])
+
+
+def test_a_task_entry_that_names_its_address_states_a_session_limit():
+    plan = a_plan(tasks=[{'task_id': SPOONS, 'endpoints': [remote('solo', max_concurrent_sessions=2)]}])
+    assert plan.task_endpoints(plan.tasks[0])[0].max_concurrent_sessions == 2
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_an_endpoint_without_a_session_limit_omits_it_from_its_dump(mode: str):
+    assert 'max_concurrent_sessions' not in Endpoint.model_validate(BASELINE).model_dump(mode=mode)
+    stated = Endpoint.model_validate(remote('baseline', max_concurrent_sessions=3)).model_dump(mode=mode)
+    assert stated['max_concurrent_sessions'] == 3
+
+
 def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():
     entry = Endpoint(
         name='policy', kind=EndpointKind.image, wire=Wire.websocket, image=PolicyImage('org/policy@sha256:abc')
