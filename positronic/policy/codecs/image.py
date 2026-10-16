@@ -1,9 +1,11 @@
 import collections.abc as cabc
 import os
 from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
 from functools import partial
 from typing import Any
 
+import cv2
 import numpy as np
 from PIL import Image as PilImage
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, JpegEncoding, encode_images, encode_jpeg
@@ -57,12 +59,27 @@ class EncodeImages(Codec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
-def _scaled(image: np.ndarray, width: int, height: int) -> np.ndarray:
+class Resample(Enum):
+    """The filter that `RestrictImageSize` scales a frame with.
+
+    * `BILINEAR` is the antialiased bilinear filter of Pillow. The vendor codecs resize with it, so a bound at
+      the model's own size gives the same pixels as training.
+    * `AREA` is `cv2.INTER_AREA`. It is faster, but its pixels are not the pixels of `BILINEAR`. Use it only
+      when the model resizes the bounded frames again.
+    """
+
+    BILINEAR = 'bilinear'
+    AREA = 'area'
+
+
+def _scaled(image: np.ndarray, width: int, height: int, resample: Resample) -> np.ndarray:
     h, w = image.shape[:2]
     scale = min(1.0, width / w, height / h)
     tw, th = int(w * scale), int(h * scale)
     if (tw, th) == (w, h):
         return image
+    if resample is Resample.AREA:
+        return cv2.resize(np.ascontiguousarray(image), (tw, th), interpolation=cv2.INTER_AREA)
     return np.array(PilImage.fromarray(image).resize((tw, th), resample=PilImage.Resampling.BILINEAR))
 
 
@@ -70,18 +87,28 @@ class RestrictImageSize(Codec):
     """Bound image dimensions while preserving aspect ratio.
 
     Images larger than ``width`` x ``height`` are scaled down to fit it, keeping aspect ratio; anything
-    already within it passes through untouched.
+    already within it passes through untouched. ``resample`` selects the filter (see `Resample`).
+
+    A `BILINEAR` codec declares version 1, whose arguments are only the bounds, so a rig that predates
+    ``resample`` still reads it. Any other filter declares ``RESAMPLE_VERSION``.
     """
 
     WIRE_NAME = 'restrict_image_size'
+    RESAMPLE_VERSION = 2
 
     # Below this a stack scales quicker in one thread than a pool costs to raise.
     _PARALLEL_FROM = 4
     _MAX_WORKERS = 8
 
-    def __init__(self, width: int = 640, height: int = 640):
+    def __init__(self, width: int = 640, height: int = 640, resample: Resample = Resample.BILINEAR):
         self._width = width
         self._height = height
+        self._resample = resample
+
+    @classmethod
+    def from_resample_spec(cls, width: int, height: int, resample: str) -> 'RestrictImageSize':
+        """The codec of a ``RESAMPLE_VERSION`` spec, whose ``resample`` is a `Resample` value."""
+        return cls(width, height, Resample(resample))
 
     def encode(self, data):
         return {key: self._restrict(value) for key, value in data.items()}
@@ -92,7 +119,7 @@ class RestrictImageSize(Codec):
             # A TemporalStack emits a (T, H, W, 3) stack, so bound each frame rather than the stack's first axis.
             if value.ndim == 4:
                 return np.stack(self._scaled_frames(value))
-            return _scaled(value, self._width, self._height)
+            return _scaled(value, self._width, self._height, self._resample)
         if isinstance(value, cabc.Mapping):
             return {k: self._restrict(v) for k, v in value.items()}
         if isinstance(value, list | tuple):
@@ -117,9 +144,9 @@ class RestrictImageSize(Codec):
         return max(1, min(frames, self._MAX_WORKERS, self._usable_cpus()))
 
     def _scaled_frames(self, stack: np.ndarray) -> list[np.ndarray]:
-        """Every frame of one stack, scaled. Pillow drops the GIL for a resize and the frames are
+        """Every frame of one stack, scaled. Pillow and OpenCV drop the GIL for a resize and the frames are
         independent, so more than one may run at a time."""
-        scale = partial(_scaled, width=self._width, height=self._height)
+        scale = partial(_scaled, width=self._width, height=self._height, resample=self._resample)
         workers = self._workers(len(stack))
         if workers == 1:
             return [scale(frame) for frame in stack]
@@ -137,4 +164,7 @@ class RestrictImageSize(Codec):
         )
 
     def to_spec(self):
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'width': self._width, 'height': self._height}}
+        args: dict[str, Any] = {'width': self._width, 'height': self._height}
+        if self._resample is Resample.BILINEAR:
+            return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+        return {NAME: self.WIRE_NAME, VERSION: self.RESAMPLE_VERSION, ARGS: {**args, 'resample': self._resample.value}}

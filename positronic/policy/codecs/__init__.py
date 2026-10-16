@@ -12,7 +12,7 @@ from .action import (
 from .base import Codec
 from .geometry import ChangeEEFrame, ConvertPose
 from .gripper import BinarizeGripInference, BinarizeGripTraining, FlipGrip
-from .image import EncodeImages, RestrictImageSize
+from .image import EncodeImages, Resample, RestrictImageSize
 from .metadata import (
     ACTION,
     GR00T_MODALITY,
