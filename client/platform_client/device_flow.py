@@ -189,10 +189,14 @@ class DeviceFlow:
         slow_down_step_s = 5.0
         interval = authorization.interval
         deadline = self._monotonic() + authorization.expires_in
+        last_failure: _TransientFailure | None = None
         while True:
             # RFC 8628 §3.3: the device waits the interval before each poll, the first one included.
             # A poll that starts at once is answered `slow_down`, which spends the code's lifetime.
             if self._monotonic() + interval > deadline:
+                if last_failure is not None:
+                    # The wait the provider asked for outlives the code, which the user may have approved.
+                    raise ProviderFailed(f'{last_failure}, and the device code expires first') from last_failure
                 raise DeviceFlowError('the device code was not authorized in time')
             self._sleep(interval)
             try:
@@ -205,11 +209,13 @@ class DeviceFlow:
                     },
                 )
             except _TransientFailure as exc:
+                last_failure = exc
                 # RFC 8628 §3.5: a poll that timed out slows the rate and tries again, and WorkOS names a
                 # 429 and a 5xx transient as well. The code may already be authorized, and the deadline
                 # above ends the flow.
                 interval = max(interval + slow_down_step_s, exc.retry_after_s or 0.0)
                 continue
+            last_failure = None
             error = payload.get(_ERROR_FIELD)
             outcome = self._outcome_of(error)
             if outcome is PollOutcome.GRANTED:
@@ -302,6 +308,7 @@ def sign_in_flow(platform: PlatformClient, http: httpx.Client, client_ids: Clien
         if exc.http_status != httpx.codes.NOT_FOUND:
             raise
         # rules-allow: swallowed-error — a gateway older than `auth.config` answers 404, and it takes GitHub only
+        # TODO: drop this path once every platform serves `auth.config`, before GitHub sign-in goes away.
         return DeviceFlow(GITHUB, client_ids.github, http)
     if config.workos is not None:
         client_id = config.workos.client_id if client_ids.workos is None else client_ids.workos
@@ -309,6 +316,13 @@ def sign_in_flow(platform: PlatformClient, http: httpx.Client, client_ids: Clien
     if config.github_registration:
         return DeviceFlow(GITHUB, client_ids.github, http)
     raise NoSignIn(f'the platform at {platform.base_url} takes no sign-in that this client can run')
+
+
+def may_have_minted_a_key(exc: httpx.HTTPError) -> bool:
+    """Whether a failed request reached `users.register`, which may have minted a key whose answer is lost."""
+    if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout):
+        return False
+    return exc.request.url.path.endswith(routes.USERS_REGISTER)
 
 
 def register_with_device_flow(
@@ -404,7 +418,7 @@ def run_registration(
             # gateway. httpx names the cause and not the host, which is the half a reader needs.
             raise SystemExit(f'the platform at {base_url} is unreachable: {exc}') from exc
         except httpx.HTTPError as exc:
-            if not exc.request.url.path.endswith(routes.USERS_REGISTER):
+            if not may_have_minted_a_key(exc):
                 raise SystemExit(f'the platform at {base_url} did not answer: {exc}') from exc
             # The request may have reached the gateway and minted the key before the answer was lost.
             raise SystemExit(

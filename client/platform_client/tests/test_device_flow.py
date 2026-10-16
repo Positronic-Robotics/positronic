@@ -472,6 +472,28 @@ def test_a_rate_limited_poll_waits_at_least_what_workos_asks():
     assert sleep.seconds == [5.0, 30.0]
 
 
+def test_a_rate_limit_that_outlives_the_code_is_the_providers_failure():
+    """The user may have approved the code; what ended the flow is the wait WorkOS asked for."""
+    limited = httpx.Response(429, headers={'retry-after': '3600'})
+    workos = _workos(polls=[limited])
+    flow, sleep = _flow(workos)
+
+    with pytest.raises(ProviderFailed, match='asks for 3600 s, and the device code expires first'):
+        flow.poll_for_token(_authorization(expires_in=300.0))
+
+    assert sleep.seconds == [5.0]
+
+
+def test_a_rate_limit_followed_by_a_pending_answer_expires_as_unauthorized():
+    workos = _workos(polls=[httpx.Response(429), *[{'error': 'authorization_pending'}] * 10])
+    flow, _ = _flow(workos)
+
+    with pytest.raises(DeviceFlowError, match='not authorized in time') as raised:
+        flow.poll_for_token(_authorization(expires_in=30.0))
+
+    assert not isinstance(raised.value, ProviderFailed)
+
+
 @pytest.mark.parametrize('retry_after', [None, 'Wed, 21 Oct 2026 07:28:00 GMT', '-1', 'nan', '\u00b2', '\u0663'])
 def test_a_rate_limited_poll_without_a_whole_number_of_seconds_takes_the_step(retry_after: str | None):
     # A digit outside ASCII passes `str.isdigit`, and `float` refuses it.
@@ -963,6 +985,25 @@ def test_an_answer_lost_from_a_platform_under_a_path_prefix_names_rotate_as_the_
             device_flow.main()
 
     assert isinstance(raised.value.code, str) and '--rotate' in raised.value.code
+
+
+@pytest.mark.parametrize(
+    ('error', 'path', 'minted'),
+    [
+        (httpx.ReadTimeout, routes.USERS_REGISTER, True),
+        (httpx.DecodingError, routes.USERS_REGISTER, True),
+        (httpx.TooManyRedirects, f'/prefix{routes.USERS_REGISTER}', True),
+        (httpx.ConnectError, routes.USERS_REGISTER, False),
+        (httpx.ConnectTimeout, routes.USERS_REGISTER, False),
+        (httpx.ReadTimeout, routes.AUTH_CONFIG, False),
+    ],
+)
+def test_only_a_registration_that_left_the_machine_may_have_minted_a_key(
+    error: type[httpx.RequestError], path: str, minted: bool
+):
+    exc = error('lost', request=httpx.Request('POST', f'https://gateway.example{path}'))
+
+    assert device_flow.may_have_minted_a_key(exc) is minted
 
 
 def test_a_refused_gateway_ends_the_command_rather_than_raising():

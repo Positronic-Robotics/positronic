@@ -174,9 +174,9 @@ class PlatformClient:
         """Create-or-return a user, KEEPING any key it returns — the next call is authenticated.
 
         A key comes back only on a first registration or a `rotate`; a repeat registration answers
-        `existing` with none, and the client goes on holding whatever it already had. The default
-        `timeout` waits out the slowest provider check; a caller that knows the provider passes its
-        `register_timeout`.
+        `existing` with none, and the client goes on holding whatever it already had. `timeout` replaces
+        the client's own timeout for this call: the default waits out the slowest provider check, and a
+        caller that knows the provider passes its `register_timeout`.
         """
         response = self._post(routes.USERS_REGISTER, request, RegisterResponse, auth=Auth.NONE, timeout=timeout)
         if response.api_key is not None:

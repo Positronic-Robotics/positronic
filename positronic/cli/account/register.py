@@ -6,7 +6,6 @@ from contextlib import contextmanager
 
 import configuronic as cfn
 import httpx
-from platform_client import routes
 from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, write_config
 from platform_client.device_flow import (
@@ -14,6 +13,7 @@ from platform_client.device_flow import (
     DeviceFlowError,
     NoSignIn,
     ProviderFailed,
+    may_have_minted_a_key,
     register_with_device_flow,
     require_allowed_platform_url,
     sign_in_flow,
@@ -47,10 +47,8 @@ def _naming_rotate_when_the_answer_is_lost() -> Iterator[None]:
     """A registration whose answer is lost may have minted the key, so its failure names `--rotate`."""
     try:
         yield
-    except (httpx.ConnectError, httpx.ConnectTimeout):
-        raise  # no request reached the gateway, so no key was minted
-    except httpx.TransportError as exc:
-        if not exc.request.url.path.endswith(routes.USERS_REGISTER):
+    except httpx.HTTPError as exc:
+        if not may_have_minted_a_key(exc):
             raise
         raise CommandFailed(
             f'{exc.request.url} did not answer the registration: {exc!r}. A key may have been minted; '
