@@ -431,3 +431,13 @@ def test_another_receive_failure_during_the_ready_wait_raises_after_the_wait_end
     with pytest.raises(ValueError, match='binary'):
         _race(service, _Peer(ValueError('A session message must be a binary WebSocket frame')))
     assert service.phase is Phase.IDLE
+
+
+def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        _drive(run, 0.2)
+        stored = service._display[session.IMAGE]
+        before = stored.copy()
+        service.view()
+        np.testing.assert_array_equal(stored, before)

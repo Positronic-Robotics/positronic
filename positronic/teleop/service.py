@@ -49,8 +49,8 @@ from .session import (
 
 logger = logging.getLogger(__name__)
 
-# The index of each button in the values that the headset page sends for a controller: the xr-standard gamepad
-# layout, which `BUTTON` names in the WebXR pages.
+# The index of each button in the values that the headset page sends for a controller, in the xr-standard gamepad
+# layout.
 _TRIGGER, _STICK, _A, _B = 0, 3, 4, 5
 
 
@@ -245,7 +245,8 @@ class TeleopService:
     def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
         """``image``, or a black image, with ``lines`` of text at its top."""
         blank = (480, 640, 3)
-        view = np.zeros(blank, dtype=np.uint8) if image is None else np.ascontiguousarray(image, dtype=np.uint8)
+        # A copy: the text goes on the view, not on the image that the display state holds.
+        view = np.zeros(blank, dtype=np.uint8) if image is None else np.array(image, dtype=np.uint8, order='C')
         for row, line in enumerate(lines):
             origin = (10, 30 + 30 * row)
             cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
