@@ -50,6 +50,37 @@ fail() {
   exit 1
 }
 
+# Print the public key of $ssh_key as `<type> <key>`, with no comment. The ssh in `create` cannot ask for a
+# passphrase, so the key must be readable without one, or be in the agent.
+public_key() {
+  if key=$(ssh-keygen -y -P "" -f "$ssh_key" 2>/dev/null); then
+    key=$(cut -d' ' -f1,2 <<<"$key")
+    # ssh offers the key in <key>.pub when the file exists, so a stale file makes the server refuse it.
+    if [ -f "$ssh_key.pub" ] && [ "$(cut -d' ' -f1,2 "$ssh_key.pub")" != "$key" ]; then
+      echo "$ssh_key.pub is not the public key of $ssh_key. Make it again with:" >&2
+      echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
+      return 1
+    fi
+    echo "$key"
+    return
+  fi
+  if [ ! -f "$ssh_key" ] && [ ! -f "$ssh_key.pub" ]; then
+    echo "No key at $ssh_key. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
+    return 1
+  fi
+  if [ ! -f "$ssh_key.pub" ]; then
+    echo "No public key at $ssh_key.pub. Make it with:" >&2
+    echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
+    return 1
+  fi
+  blob=$(cut -d' ' -f2 "$ssh_key.pub")
+  if [ -z "$blob" ] || ! ssh-add -L 2>/dev/null | cut -d' ' -f2 | grep -qxF "$blob"; then
+    echo "ssh cannot use $ssh_key without a passphrase. Run: ssh-add $(printf %q "$ssh_key")" >&2
+    return 1
+  fi
+  cut -d' ' -f1,2 "$ssh_key.pub"
+}
+
 # Create the VM with the public key $1. When Nebius does not start the VM, delete it and stop.
 create_vm() {
   subnet="${NEBIUS_SUBNET_ID:-}"
@@ -85,37 +116,6 @@ runcmd:
     nebius compute instance delete --id "$id" >/dev/null || fail "Nebius could not delete the stopped VM."
   fi
   exit 1
-}
-
-# Print the public key of $ssh_key as `<type> <key>`, with no comment. The ssh in `create` cannot ask for a
-# passphrase, so the key must be readable without one, or be in the agent.
-public_key() {
-  if key=$(ssh-keygen -y -P "" -f "$ssh_key" 2>/dev/null); then
-    key=$(cut -d' ' -f1,2 <<<"$key")
-    # ssh offers the key in <key>.pub when the file exists, so a stale file makes the server refuse it.
-    if [ -f "$ssh_key.pub" ] && [ "$(cut -d' ' -f1,2 "$ssh_key.pub")" != "$key" ]; then
-      echo "$ssh_key.pub is not the public key of $ssh_key. Make it again with:" >&2
-      echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
-      return 1
-    fi
-    echo "$key"
-    return
-  fi
-  if [ ! -f "$ssh_key" ] && [ ! -f "$ssh_key.pub" ]; then
-    echo "No key at $ssh_key. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
-    return 1
-  fi
-  if [ ! -f "$ssh_key.pub" ]; then
-    echo "No public key at $ssh_key.pub. Make it with:" >&2
-    echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
-    return 1
-  fi
-  blob=$(cut -d' ' -f2 "$ssh_key.pub")
-  if [ -z "$blob" ] || ! ssh-add -L 2>/dev/null | cut -d' ' -f2 | grep -qxF "$blob"; then
-    echo "ssh cannot use $ssh_key without a passphrase. Run: ssh-add $(printf %q "$ssh_key")" >&2
-    return 1
-  fi
-  cut -d' ' -f1,2 "$ssh_key.pub"
 }
 
 # Print the public address of the VM, or nothing. The jsonpath fails on a field that is not there, so it
