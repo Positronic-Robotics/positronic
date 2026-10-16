@@ -10,13 +10,16 @@ from platform_client import routes
 from platform_client.billing import CREDIT_SCALE, Tariff
 from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
+from platform_client.enums import ErrorCode
 from platform_client.ids import ApiKey
 from pydantic import ValidationError
 
 from positronic.cli.account import commands
 from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.credits import account, buy, get_purchase, list_purchases
+from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.account.register import register
+from positronic.cli.conftest import refusal
 
 
 def test_register_saves_the_minted_key_in_the_record(platform, run_command, capsys):
@@ -200,9 +203,10 @@ def test_buy_explains_how_to_quote_numeric_text_before_http(field, platform, run
 
 
 def test_purchase_explains_how_to_quote_numeric_text_before_http(platform, run_command):
-    with pytest.raises(SystemExit, match='quote'):
+    with pytest.raises(CommandFailed, match='quote') as exit_info:
         run_command(get_purchase, id=20261005)
     assert platform.seen is None
+    assert exit_info.value.fault is Fault.USAGE
 
 
 @pytest.mark.parametrize('argument', ['1_000', '0x1F', '1e3', '20261005'])
@@ -295,10 +299,27 @@ def test_a_named_org_is_used_without_fetching_memberships(platform, run_command)
 def test_credit_commands_require_an_org_without_a_sole_membership(command, args, me, platform, run_command):
     platform.answer(me)
 
-    with pytest.raises(SystemExit, match='--org'):
+    with pytest.raises(CommandFailed, match='--org') as exit_info:
         run_command(command, **args)
 
     assert platform.paths == [routes.USERS_ME]
+    assert exit_info.value.fault is Fault.USAGE
+
+
+@pytest.mark.parametrize(
+    ('command', 'args'),
+    [(account, {'org': 'acme'}), (get_purchase, {'id': 'opaque-purchase'}), (list_purchases, {'org': 'acme'})],
+    ids=['account', 'get-purchase', 'list-purchases'],
+)
+def test_a_credit_read_under_json_prints_the_refusal_envelope(command, args, platform, run_command, capsys):
+    envelope = refusal(ErrorCode.forbidden, 'not a member')
+    platform.answer(envelope, status=403)
+
+    with pytest.raises(SystemExit) as exit_info:
+        run_command(command, json=True, **args)
+
+    assert json.loads(capsys.readouterr().out) == envelope
+    assert exit_info.value.code == Fault.CALLER
 
 
 def test_a_purchase_for_no_org_is_never_created(platform, run_command):

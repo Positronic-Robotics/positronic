@@ -11,6 +11,7 @@ from platform_client.errors import EVALS_DETAIL, QUOTA_DETAIL, TASKS_DETAIL
 from platform_client.ids import SubmissionId
 from platform_client.responses import QUOTA_SUBMISSIONS_DAY, QuotaLimit
 
+from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.conftest import ID, KEY, runs_of_four
 from positronic.cli.eval.run import run
 
@@ -52,10 +53,11 @@ def test_an_image_rejected_at_the_door_fails_the_command(platform, run_command, 
     # Terminal at the door and charged: a zero exit would let a script read it as a run that happened.
     platform.answer({'submission_id': ID, 'status': 'errored', 'reason_code': 'image_unpullable'})
 
-    with pytest.raises(SystemExit, match='rejected: image_unpullable'):
+    with pytest.raises(CommandFailed, match='rejected: image_unpullable') as exit_info:
         run_command(run, eval='fake.smoke', policy_image='org/p:v1')
 
     assert f'submission {ID} (errored)' in capsys.readouterr().out
+    assert exit_info.value.fault is Fault.CALLER
 
 
 def test_a_replay_of_a_cancelled_submission_fails_the_command(platform, run_command):

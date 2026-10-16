@@ -312,6 +312,22 @@ uv run positronic eval catalog
 
 `positronic/cli/examples/` runs the whole flow end to end.
 
+A command that fails exits with a status that tells whose fault the failure is:
+
+| Status | Fault | Cases |
+|---|---|---|
+| 1 | the caller | the platform refused the request with a 4xx, no API key or a bad key, a quota used up, a run rejected at the door |
+| 2 | usage | the arguments are wrong before any call: an id that is not hexadecimal, a plan file that does not parse |
+| 3 | the platform | a 5xx, an `internal_error` or `upstream_unavailable` code, no answer, a timeout, an answer the client cannot read |
+
+The read commands take `--json`: `eval status`, `eval list`, `eval catalog`, and `account credits account`,
+`get-purchase` and `list-purchases`. They print the data as JSON on stdout. `eval list --json` prints every
+page as one page, with `next` null. A refusal by the platform prints its error envelope as JSON on stdout. Any
+other failure prints its message on stderr. The exit status is the same with and without `--json`.
+
+An argument that a command does not declare, or a required argument that is missing, stops with a traceback
+and status 1. `--help` lists the arguments of a command.
+
 ## Configuration
 
 Calls go to `https://platform.positronic.ro` with nothing set. The environment carries the rest:
