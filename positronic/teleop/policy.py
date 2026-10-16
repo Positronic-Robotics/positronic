@@ -4,17 +4,17 @@ from contextlib import closing
 from typing import Any
 
 import numpy as np
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
 from positronic_wire import registry
 from positronic_wire.wire import ConnectRefused, SessionAddress
 
 from positronic import geom, keys
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Runtime, Step
+from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun, Runtime, Step
 
 from .clutch import OperatorPosition, Tracker
-from .session import ATTEMPT_STARTED, CONTROL, IMAGE, TASK, Event, Frame, TeleopSession
+from .session import ATTEMPT_STARTED, CONTROL, TASK, Event, Frame, TeleopSession
 
 # A frame answer wakes the run. This is the latest time at which the run asks for its next step without one.
 _IDLE_NS = 1_000_000_000
@@ -55,7 +55,8 @@ class TeleopPolicy(Policy):
         wire: str,
         address: SessionAddress,
         operator_position: OperatorPosition = OperatorPosition.FRONT,
-        camera: str | None = keys.EXTERIOR_IMAGE,
+        cameras: tuple[str, ...] | None = None,
+        image_fps: float = 15.0,
         open_timeout: float = 10.0,
         ready_timeout: float = 130.0,
         frame_timeout: float = 5.0,
@@ -65,7 +66,8 @@ class TeleopPolicy(Policy):
         self._wire = wire
         self._address = address
         self._operator_position = operator_position
-        self._camera = camera
+        self._cameras = cameras
+        self._image_period_ns = round(1e9 / image_fps)
         self._open_timeout = open_timeout
         self._ready_timeout = ready_timeout
         self._frame_timeout = frame_timeout
@@ -85,12 +87,20 @@ class TeleopPolicy(Policy):
     def run(self, runtime: Runtime) -> PolicyRun:
         connection = registry.client_wire(self._wire).dial(self._address, None, self._open_timeout)
         self._probed = True
-        with closing(TeleopSession(connection, self._ready_timeout, self._frame_timeout)) as session:
+        with closing(
+            TeleopSession(connection, self._ready_timeout, self._frame_timeout, self._jpeg_quality)
+        ) as session:
             # Before the first `yield`, so the wait is outside the recording and the time limit. It blocks the control
             # thread of the World, so the ready timeout bounds it.
             session.ready()
             obs = yield
             return (yield from self._control(runtime, session, obs))
+
+    def _camera_names(self, obs: Mapping[str, Any]) -> tuple[str, ...]:
+        """The cameras that the run sends: ``cameras``, or every image of ``Obs``, in its order."""
+        if self._cameras is not None:
+            return self._cameras
+        return tuple(name for name in obs if name.startswith(keys.IMAGE_PREFIX))
 
     @staticmethod
     def _robot_pose(obs: Mapping[str, Any]) -> geom.Transform3D:
@@ -105,16 +115,24 @@ class TeleopPolicy(Policy):
 
         clock = _MovingClock(self._still_clock_timeout)
 
+        images_due_ns = runtime.time_ns
+
         def display(obs: Mapping[str, Any]) -> dict[str, Any]:
-            shown = {TASK: obs[keys.TASK], CONTROL: tracker.on, ATTEMPT_STARTED: attempt_started}
-            if self._camera is not None:
-                shown[IMAGE] = encode_jpeg(np.asarray(obs[self._camera]), self._jpeg_quality)
-            return shown
+            return {TASK: obs[keys.TASK], CONTROL: tracker.on, ATTEMPT_STARTED: attempt_started}
+
+        def frame_request(obs: Mapping[str, Any]) -> Answer[Frame]:
+            """The next frame request, with copies of the camera images when they are due. The worker encodes them."""
+            nonlocal images_due_ns
+            images = None
+            if runtime.time_ns >= images_due_ns:
+                images = {name: np.array(obs[name]) for name in self._camera_names(obs)}
+                images_due_ns = runtime.time_ns + self._image_period_ns
+            return runtime.submit(session.frame, display(obs), images)
 
         # A stay command, so that every command signal starts at the episode start. It asks for the pose that the arm
         # has, so the arm does not move.
         stay = {keys.ROBOT_COMMAND: CartesianPosition(self._robot_pose(obs)), keys.TARGET_GRIP: float(obs[keys.GRIP])}
-        pending = runtime.submit(session.frame, display(obs))
+        pending = frame_request(obs)
         obs = yield Step(stay, runtime.time_ns + _IDLE_NS)
         while True:
             clock.check(runtime.time_ns)
@@ -142,5 +160,5 @@ class TeleopPolicy(Policy):
             commands = {}
             if tracker.on and target is not None:
                 commands = {keys.ROBOT_COMMAND: CartesianPosition(target), keys.TARGET_GRIP: frame.grip}
-            pending = runtime.submit(session.frame, display(obs))
+            pending = frame_request(obs)
             obs = yield Step(commands, runtime.time_ns + _IDLE_NS)

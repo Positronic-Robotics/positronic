@@ -4,6 +4,7 @@ import contextlib
 import ctypes
 import functools
 import heapq
+import importlib
 import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
@@ -19,6 +20,7 @@ from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.context import BaseContext
+from multiprocessing.managers import SyncManager
 from multiprocessing.synchronize import Event as EventClass
 from multiprocessing.synchronize import Lock as LockClass
 from queue import Empty, Full, Queue
@@ -1185,7 +1187,12 @@ class World:
     def _manager(self):
         """A spawn-context manager, so queues and values behave synchronously even within a single process."""
         # It runs as a process of its own, so a world that opens no mp pipe never starts one.
-        return self._mp_ctx.Manager()
+        manager = SyncManager(ctx=self._mp_ctx)
+        # The manager serves each connection on a thread of its own, and it unpickles each message there. If pimm is not
+        # imported yet, two first messages import `pimm` and `pimm.shared_memory` at once, and CPython can raise
+        # `_DeadlockError` between a package and its submodule. So the manager imports pimm before it serves.
+        manager.start(importlib.import_module, (__package__,))
+        return manager
 
     def mp_pipes(
         self,

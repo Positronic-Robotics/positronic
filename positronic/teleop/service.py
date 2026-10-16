@@ -15,7 +15,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import cv2
 import numpy as np
@@ -32,7 +32,7 @@ from .session import (
     DISPLAY,
     EVENTS,
     GRIP,
-    IMAGE,
+    IMAGES,
     KIND,
     MESSAGE,
     POSE,
@@ -140,6 +140,7 @@ class TrialState:
     task: str
     control: bool
     attempt_started: bool
+    cameras: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -160,7 +161,13 @@ class TeleopService:
     """
 
     def __init__(
-        self, uds: Path, ready_limit: float, silence_limit: float, hold_sec: float, press_threshold: float = 0.6
+        self,
+        uds: Path,
+        ready_limit: float,
+        silence_limit: float,
+        hold_sec: float,
+        press_threshold: float = 0.6,
+        headset_camera: str | None = None,
     ):
         self._uds = uds
         self._ready_limit = ready_limit
@@ -175,6 +182,10 @@ class TeleopService:
         # Whether the service emitted Start task in this trial. `_display` can show it later.
         self._attempt_started = False
         self._display: dict[str, Any] = {}
+        # The last camera images of the run, by name, in the order that the policy sends them.
+        self._images: dict[str, np.ndarray] = {}
+        # The camera that the headset shows. ``None`` is the first camera of the run.
+        self._headset_camera = headset_camera
         self._open = False
         # A wait ends at once when its session ended, or when the service stops.
         self._session_ended = False
@@ -254,15 +265,27 @@ class TeleopService:
         with self._changed:
             phase, display = self._phase, self._display
             return TrialState(
-                phase, str(display.get(TASK, '')), bool(display.get(CONTROL)), bool(display.get(ATTEMPT_STARTED))
+                phase,
+                str(display.get(TASK, '')),
+                bool(display.get(CONTROL)),
+                bool(display.get(ATTEMPT_STARTED)),
+                tuple(self._images),
             )
 
-    def answer_ready(self, reply: Literal[Reply.READY, Reply.CANCELLED]) -> None:
-        """Ready or Cancel from the window on the station screen, as the buttons of the headset give them."""
+    def camera_image(self, name: str) -> np.ndarray:
+        """The last image of camera ``name``. Raise ``KeyError`` for a camera that the run does not send."""
+        with self._changed:
+            return self._images[name]
+
+    def cancel_ready_wait(self) -> None:
+        """Cancel the trial that waits for Ready, from the window on the station screen.
+
+        Ready comes only from the headset or the phone, because it confirms that the person holds the controller.
+        """
         with self._changed:
             if self._phase is not Phase.READY_WAIT or self._ready is not None:
                 raise NotWaiting('no trial waits for Ready')
-            self._ready = reply
+            self._ready = Reply.CANCELLED
             self._changed.notify_all()
 
     @staticmethod
@@ -281,6 +304,7 @@ class TeleopService:
         """The image for the headset: the camera image of the run, with the state of the trial."""
         with self._changed:
             phase, display = self._phase, dict(self._display)
+            image = self._headset_image()
         match phase:
             case Phase.IDLE:
                 return self._view(None, ['Waiting for a trial'])
@@ -290,12 +314,18 @@ class TeleopService:
                 return self._view(None, ['The trial ended', 'Give the verdict on the console'])
         control = 'Control on (A: off)' if display.get(CONTROL) else 'Control off (A: on)'
         task = 'Hold B: Complete. Hold the stick: Give up' if display.get(ATTEMPT_STARTED) else 'B: Start task'
-        return self._view(display.get(IMAGE), [str(display.get(TASK, '')), control, task])
+        return self._view(image, [str(display.get(TASK, '')), control, task])
+
+    def _headset_image(self) -> np.ndarray | None:
+        if self._headset_camera is not None:
+            return self._images.get(self._headset_camera)
+        return next(iter(self._images.values()), None)
 
     def _await_ready(self) -> dict[str, Any]:
         deadline = time.monotonic() + self._ready_limit
         with self._changed:
             self._phase, self._ready, self._events, self._display = Phase.READY_WAIT, None, [], {}
+            self._images = {}
             self._attempt_started = False
             while self._ready is None:
                 left = deadline - time.monotonic()
@@ -312,6 +342,7 @@ class TeleopService:
     def _next_frame(self, display: dict[str, Any]) -> dict[str, Any]:
         deadline = time.monotonic() + self._silence_limit
         with self._changed:
+            self._images = display.pop(IMAGES, self._images)
             self._display = display
             seen = self._sample.number
             while (
@@ -342,8 +373,7 @@ class TeleopService:
             await self._serve(connection)
         finally:
             with self._changed:
-                if self._phase is not Phase.ENDED:
-                    self._phase, self._display = Phase.IDLE, {}
+                self._phase, self._display, self._images = Phase.IDLE, {}, {}
             self._open = False
 
     async def _serve(self, connection: server_wire.ServerConnection) -> None:

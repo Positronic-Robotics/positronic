@@ -18,7 +18,7 @@ import pimm
 import positronic.cfg.policy as policy_cfg
 from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import unset
-from positronic.cli.account.gateway import refusing_bad_input
+from positronic.cli.account.gateway import CommandFailed, Fault, refusing_bad_input
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
 from positronic.eval import Embodiment, Eval, Task
@@ -28,6 +28,11 @@ from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, E
 from positronic.utils.git import get_package_git_state
 
 logger = logging.getLogger(__name__)
+
+
+def _is_on_the_path_to(failed: str | None, directory: Path) -> bool:
+    """Whether a failure names `directory`, a directory above it, or a file in it."""
+    return failed is not None and (Path(failed).is_relative_to(directory) or directory.is_relative_to(failed))
 
 
 def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
@@ -44,7 +49,13 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
         os.environ.pop(ENV_TELEMETRY_DIR, None)
         return None
     local_dir = pos3.sync(str(output_dir), sync_on_error=True)
-    utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
+    try:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
+    except OSError as exc:
+        if not _is_on_the_path_to(exc.filename, local_dir):
+            raise
+        raise CommandFailed(f'--output_dir={output_dir}: {exc.filename}: {exc.strerror}', Fault.USAGE) from exc
     # `pos3.sync` mirrors the whole local directory, so a sidecar written inside it uploads with the episodes.
     # Pointed anywhere else the spans stay on the box that ran, and somebody copies them off by hand.
     os.environ[ENV_TELEMETRY_DIR] = str(local_dir / telemetry.TELEMETRY_SUBDIR)
@@ -144,14 +155,15 @@ def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path |
     sidecars under, or one carrying a real embodiment. Everything under the bound tracer enters the report,
     so a real eval's episodes, wall time and machine samples would silently corrupt it."""
     if output_dir is None:
-        raise ValueError('--timing needs --output_dir: the telemetry sidecars are written under it')
+        raise CommandFailed('--timing needs --output_dir: the telemetry sidecars are written under it', Fault.USAGE)
     real = sum(not embodiment.simulated for embodiment in embodiments)
     if real:
-        raise ValueError(
+        raise CommandFailed(
             f'eval timing needs an all-simulated sweep, got {real} real '
             'embodiment(s): a real eval would run inside the same bound tracer and pass span, so its '
             'episodes, wall time and machine samples would silently corrupt the report. Run real '
-            'embodiments in a separate untimed invocation.'
+            'embodiments in a separate untimed invocation.',
+            Fault.USAGE,
         )
 
 
@@ -233,7 +245,7 @@ def _refuse(inapplicable: dict[str, object], where: str) -> None:
     """
     asked = sorted(flag for flag, value in inapplicable.items() if given(value))
     if asked:
-        raise SystemExit(f'a {where} run has no {", ".join(asked)}')
+        raise CommandFailed(f'a {where} run has no {", ".join(asked)}', Fault.USAGE)
 
 
 # The policy flag chooses where the eval runs.
@@ -272,7 +284,7 @@ def _public_eval_config(name: str) -> cfn.Config:
     try:
         definition = public_eval(EvalRef(name))
     except (ValueError, LookupError) as e:
-        raise SystemExit(f'--eval={name!r}: {e}. --policy-image runs an eval on the platform') from None
+        raise CommandFailed(f'--eval={name!r}: {e}. --policy-image runs an eval on the platform', Fault.USAGE) from None
     _warn_on_revision_mismatch(definition.positronic_revision)
     overrides = {f'eval.{arg}': value for arg, value in definition.args.items()}
     return _eval_at.override(eval=definition.config).override_data(**overrides)
@@ -336,7 +348,9 @@ def run(
     the id without parsing what was printed. A local run's result is the dataset it wrote.
     """
     if policy is not None and policy_image is not None:
-        raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
+        raise CommandFailed(
+            '--policy runs the eval here and --policy-image runs it on the platform; pass one', Fault.USAGE
+        )
     # A switch stated at what every place already does asks for nothing, so it normalises to unstated.
     # Only a switch does: `--alias=False` stays a value, and is refused like `--alias=''`.
     local_only = {
@@ -366,13 +380,15 @@ def run(
             'local',
         )
         if policy is None:
-            raise SystemExit(_NO_POLICY_NAMED)
+            raise CommandFailed(_NO_POLICY_NAMED, Fault.USAGE)
         if isinstance(eval, str):
             chosen: Eval = _public_eval_config(eval).instantiate()
         elif isinstance(eval, Eval):
             chosen = eval
         else:
-            raise SystemExit(f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval')
+            raise CommandFailed(
+                f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval', Fault.USAGE
+            )
         chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge_inference_time))
         main(policy=policy, evals=[chosen], output_dir=output_dir, timing=timing)
         return None
@@ -381,8 +397,9 @@ def run(
         # The platform owns its own trial sweep, its own output and its own telemetry.
         _refuse({**local_only, '--from-file': from_file}, 'platform')
         if not isinstance(eval, str):
-            raise SystemExit(
-                'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer'
+            raise CommandFailed(
+                'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer',
+                Fault.USAGE,
             )
         return submit(
             eval,
@@ -401,4 +418,4 @@ def run(
         _refuse({**local_only, **platform_only}, 'rig')
         return file_plan(read_plan(source, transaction_key, alias, org), platform_url)
 
-    raise SystemExit(_NO_POLICY_NAMED)
+    raise CommandFailed(_NO_POLICY_NAMED, Fault.USAGE)

@@ -6,13 +6,14 @@ The policy sends one request and waits for its answer. The first request is ``re
 
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from positronic_model_server.serialization import deserialise, serialise
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, deserialise, encode_jpeg, serialise
 from positronic_wire.wire import ClientConnection
 
 from positronic import geom
@@ -58,8 +59,9 @@ MESSAGE = 'message'
 TASK = 'task'
 CONTROL = 'control'
 ATTEMPT_STARTED = 'attempt_started'
-# One camera image from `Obs`, JPEG-encoded, for the headset. It is absent when the policy shows no camera.
-IMAGE = 'image'
+# Camera images from `Obs`, JPEG-encoded, by camera name. A frame request carries them at most at the image rate of the
+# policy, and the service keeps the last ones it got. It is absent from the other requests.
+IMAGES = 'images'
 
 
 def default_socket_path() -> Path:
@@ -91,10 +93,17 @@ class Frame:
 class TeleopSession:
     """The policy's end of one session with the teleop service."""
 
-    def __init__(self, connection: ClientConnection, ready_timeout: float, frame_timeout: float):
+    def __init__(
+        self,
+        connection: ClientConnection,
+        ready_timeout: float,
+        frame_timeout: float,
+        jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+    ):
         self._connection = connection
         self._ready_timeout = ready_timeout
         self._frame_timeout = frame_timeout
+        self._jpeg_quality = jpeg_quality
 
     def _ask(self, message: dict[str, Any], reply: Reply, timeout: float) -> dict[str, Any]:
         self._connection.send(serialise(message))
@@ -116,7 +125,13 @@ class TeleopSession:
         except TimeoutError as timeout:
             raise TimeoutError(f'the teleoperator was not ready within {self._ready_timeout} s') from timeout
 
-    def frame(self, display: dict[str, Any]) -> Frame:
+    def frame(self, display: dict[str, Any], images: Mapping[str, np.ndarray] | None = None) -> Frame:
+        """Send ``display``, with ``images`` JPEG-encoded when given, and answer with the next frame."""
+        if images is not None:
+            display = {
+                **display,
+                IMAGES: {name: encode_jpeg(image, self._jpeg_quality) for name, image in images.items()},
+            }
         answer = self._ask({KIND: Request.FRAME, DISPLAY: display}, Reply.FRAME, self._frame_timeout)
         pose = answer.get(POSE)
         return Frame(

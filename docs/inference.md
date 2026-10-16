@@ -113,8 +113,6 @@ Something has to say when an episode starts and when it finishes.
 
 Browser mode requires a serializable policy. `RemotePolicy` is supported.
 
-A person can also be the policy: [Teleoperation](teleop.md) runs a human trial in VR through the same eval.
-
 Anything richer — a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the policy definition the episode runs and names where it records. The answer carries the episode's terminal payload or the error that failed it, and the driver decides whether that error ends the run. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
 
 **A device that gives no data fails only its episode.** A device driver emits a `pimm.SignalError` on its observation signal while the device gives no data, for example after a camera drops off the USB bus. The harness reads that value before the policy does. It discards the episode, records nothing, and answers the ask with that `SignalError`. The harness does not run the task again. The driver decides what follows, as it does for any failed episode: `positronic eval run` runs the task once more. The device driver keeps the error until the harness asks the device to be ready. A device driver that stops emitting without a `SignalError` leaves the policy on the last value it sent. While its emergency stop is pressed, the Franka arm emits `Release the emergency stop button`.

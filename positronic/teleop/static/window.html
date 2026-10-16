@@ -9,27 +9,28 @@
     #task { font-size: 20px; margin-bottom: 16px; }
     button { font-size: 22px; padding: 12px 28px; margin-right: 12px; }
     #error { color: #f88; min-height: 1.5em; }
-    img { display: block; margin-top: 16px; max-width: 100%; }
+    #cameras { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-top: 16px; }
+    figure { margin: 0; }
+    figure img { display: block; width: 100%; }
+    figcaption { font-size: 14px; opacity: 0.8; margin-top: 4px; }
   </style>
 </head>
 <body>
   <div id="state">Waiting for a trial</div>
   <div id="task"></div>
-  <button id="ready" disabled>Ready</button>
   <button id="cancel" disabled>Cancel</button>
   <div id="error"></div>
-  <img id="view" alt="What the headset shows">
+  <div id="cameras"></div>
   <script>
     const ROUTES = {
       status: '/status',
-      ready: '/ready',
       cancel: '/cancel',
-      view: '/view.jpg',
+      camera: (name) => `/camera/${encodeURIComponent(name)}.jpg`,
     };
     const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
     const STATE = {
       [PHASE.idle]: 'Waiting for a trial',
-      [PHASE.readyWait]: 'Human trial: put on the headset, then press Ready',
+      [PHASE.readyWait]: 'Human trial: put on the headset, then press Ready on the headset or the phone',
       [PHASE.running]: 'Trial running',
       [PHASE.ended]: 'The trial ended: give the verdict on the console',
     };
@@ -53,7 +54,6 @@
       document.getElementById('state').textContent = STATE[status.phase];
       document.getElementById('task').textContent = status.task;
       const waiting = status.phase === PHASE.readyWait;
-      document.getElementById('ready').disabled = !waiting;
       document.getElementById('cancel').disabled = !waiting;
       if (waiting && shownPhase !== PHASE.readyWait) {
         document.title = 'Human trial';
@@ -64,10 +64,33 @@
       shownPhase = status.phase;
     }
 
+    // One tile for each camera of the run, with its name, as the camera list of the status gives them.
+    let shownCameras = '';
+    function showCameras(cameras) {
+      const grid = document.getElementById('cameras');
+      if (cameras.join('\n') !== shownCameras) {
+        grid.replaceChildren(...cameras.map((name) => {
+          const figure = document.createElement('figure');
+          const image = document.createElement('img');
+          image.alt = name;
+          image.dataset.camera = name;
+          const caption = document.createElement('figcaption');
+          caption.textContent = name;
+          figure.append(image, caption);
+          return figure;
+        }));
+        shownCameras = cameras.join('\n');
+      }
+      for (const image of grid.querySelectorAll('img')) {
+        image.src = ROUTES.camera(image.dataset.camera) + '?t=' + Date.now();
+      }
+    }
+
     async function poll() {
       try {
-        render(await (await fetch(ROUTES.status)).json());
-        document.getElementById('view').src = ROUTES.view + '?t=' + Date.now();
+        const status = await (await fetch(ROUTES.status)).json();
+        render(status);
+        showCameras(status.cameras);
       } catch (e) {
         document.getElementById('error').textContent = 'The teleop service does not answer';
         errorPhase = 'unreachable';
@@ -75,7 +98,6 @@
       setTimeout(poll, 200);
     }
 
-    document.getElementById('ready').onclick = () => post(ROUTES.ready);
     document.getElementById('cancel').onclick = () => post(ROUTES.cancel);
     poll();
   </script>
