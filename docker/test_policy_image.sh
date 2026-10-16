@@ -21,7 +21,6 @@ if [ "${1:-}" = --gpu ]; then
   shift
 fi
 image="${1:?usage: $0 [--gpu] <image>}"
-network=policy-test
 # The policy contract, as positronic names it: `policy_container.POLICY_PORT` and `AUTH_TOKEN_ENV`,
 # `positronic_model_server.protocol.AUTH_HEADER` and `bearer`, and `positronic_wire.wire.KEEPALIVE_PATH` and
 # `ALIVE_SECONDS`.
@@ -45,16 +44,20 @@ if docker info -f '{{json .SecurityOptions}}' | grep -q 'name=rootless'; then
   echo "This Docker is rootless, and the host cannot reach the container. Run the test with the system Docker." >&2
   exit 1
 fi
-docker network inspect "$network" >/dev/null 2>&1 || docker network create --internal "$network" >/dev/null
-if [ "$(docker network inspect -f '{{.Internal}}' "$network")" != true ]; then
-  echo "The Docker network $network has egress. Remove it with: docker network rm $network" >&2
-  exit 1
-fi
-cid=$(docker run -d --pull=always --network "$network" --cap-drop ALL --security-opt no-new-privileges \
-  "${gpu_flags[@]}" -e "$token_env=$token" "$image")
+# A network of this test alone: a container on a shared network could get files from the other containers on it.
+network="policy-test-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+cid=""
 body=$(mktemp)
 curl_errors=$(mktemp)
-trap 'docker rm -f "$cid" >/dev/null; rm -f "$body" "$curl_errors"' EXIT
+cleanup() {
+  rm -f "$body" "$curl_errors"
+  [ -z "$cid" ] || docker rm -f "$cid" >/dev/null
+  docker network rm "$network" >/dev/null
+}
+docker network create --internal "$network" >/dev/null
+trap cleanup EXIT
+cid=$(docker run -d --pull=always --network "$network" --cap-drop ALL --security-opt no-new-privileges \
+  "${gpu_flags[@]}" -e "$token_env=$token" "$image")
 ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$cid")
 
 # A socket that listens on port $2 of 127.0.0.1 or ::1, in /proc/net/tcp of the container $1. The platform cannot
