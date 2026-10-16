@@ -373,8 +373,7 @@ class TeleopService:
             await self._serve(connection)
         finally:
             with self._changed:
-                if self._phase is not Phase.ENDED:
-                    self._phase, self._display, self._images = Phase.IDLE, {}, {}
+                self._phase, self._display, self._images = Phase.IDLE, {}, {}
             self._open = False
 
     async def _serve(self, connection: server_wire.ServerConnection) -> None:

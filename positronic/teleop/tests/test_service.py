@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import socket
 import threading
 import time
 import types
@@ -11,9 +12,10 @@ import numpy as np
 import pos3
 import pytest
 from positronic_model_server import server_wire
-from positronic_model_server.serialization import deserialise, serialise
+from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
 from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, PeerDisconnected, UnixSocketAddress
+from websockets.sync.client import unix_connect
 
 import pimm
 import positronic.cfg.simulator
@@ -154,6 +156,13 @@ def _until_phase(service: TeleopService, phase: Phase) -> None:
         time.sleep(0.005)
 
 
+def _until_cleared(service: TeleopService) -> None:
+    """Wait until the session ends, and check that the service shows no trial."""
+    _until_phase(service, Phase.IDLE)
+    state = service.state()
+    assert (state.task, state.control, state.attempt_started, state.cameras) == ('', False, False, ())
+
+
 def _press_ready_when_asked(service: TeleopService, headset: _Headset, **buttons: float) -> threading.Thread:
     def press() -> None:
         _until_phase(service, Phase.READY_WAIT)
@@ -213,7 +222,7 @@ def test_a_teleoperator_readies_takes_control_starts_and_completes_a_trial(servi
         headset.buttons = _buttons(b=1.0)
         _, end = _drive(run, 2.0)
         assert end is PolicyEnd.COMPLETE
-        assert service.phase is Phase.ENDED
+        _until_cleared(service)
 
 
 def test_a_hold_of_b_before_the_start_task_press_does_not_complete(service, socket_path, runtime):
@@ -490,3 +499,50 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
     next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     [(_, state)] = sent.emitted
     assert state == {'phase': Phase.IDLE, 'control': False, 'attempt_started': False}
+
+
+@pytest.mark.parametrize('ending', ['give_up', 'time_limit'])
+def test_every_end_of_a_session_leaves_no_trial_in_the_service(service, socket_path, runtime, ending):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        _drive(run, 0.2)
+        assert service.state().task == OBS[keys.TASK] and service.state().cameras == (keys.EXTERIOR_IMAGE,)
+        if ending == 'give_up':
+            headset.buttons = _buttons(stick=1.0)
+            assert _drive(run, 2.0)[1] is PolicyEnd.GIVE_UP
+        else:
+            run.close()  # The harness closes the run at the time limit and at the done of the env.
+        _until_cleared(service)
+
+
+def test_a_dropped_connection_leaves_no_trial_in_the_service(service, socket_path):
+    """The client process exits with no close of the session."""
+    with unix_connect(str(socket_path), f'ws://localhost{SESSION_PATH}') as websocket:
+        websocket.send(serialise({session.KIND: session.Request.READY}))
+        _until_phase(service, Phase.READY_WAIT)
+        service.take_sample(HAND, _buttons(b=1.0))
+        assert deserialise(websocket.recv(5)) == {session.KIND: session.Reply.READY}
+        display = {
+            session.TASK: OBS[keys.TASK],
+            session.IMAGES: {keys.EXTERIOR_IMAGE: encode_jpeg(OBS[keys.EXTERIOR_IMAGE])},
+        }
+        websocket.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: display}))
+        websocket.recv(5)
+        assert service.state().task == OBS[keys.TASK]
+        websocket.socket.shutdown(socket.SHUT_RDWR)
+        websocket.socket.close()
+    _until_cleared(service)
+
+
+def test_the_next_session_of_a_run_starts_a_new_trial_after_the_last_one_ended(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        first = _readied_run(service, headset, runtime, socket_path)
+        _drive(first, 0.2)
+        headset.buttons = _buttons(stick=1.0)
+        assert _drive(first, 2.0)[1] is PolicyEnd.GIVE_UP
+        headset.buttons = _buttons()
+        _until_cleared(service)
+        second = _readied_run(service, headset, runtime, socket_path)
+        assert service.phase is Phase.RUNNING
+        second.close()
+        _until_cleared(service)

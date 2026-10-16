@@ -151,3 +151,30 @@ def test_a_policy_that_leaves_mid_trial_leaves_no_old_task_in_the_window(window,
         'attempt_started': False,
         'cameras': [],
     }
+
+
+def test_the_window_shows_no_trial_after_the_last_session_ends_with_complete(window, service, waiting):
+    _ready_from_the_headset(service, waiting)
+    pressed, released = [0.0] * 6, [0.0] * 6
+    pressed[service_module._B] = 1.0
+    service.take_sample(None, released)
+    service.take_sample(None, pressed)
+    service.take_sample(None, released)
+    service.take_sample(None, pressed)
+    time.sleep(0.3)
+    service.take_sample(None, pressed)
+    waiting.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: {session.TASK: 'pick up the cube'}}))
+    assert session.Event.COMPLETE in deserialise(waiting.recv(5))[session.EVENTS]
+    assert window.get('/status').json()['phase'] == 'ended'
+    waiting.close()
+    deadline = time.monotonic() + 5
+    while service.phase is not Phase.IDLE:
+        assert time.monotonic() < deadline, 'the session never ended'
+        time.sleep(0.005)
+    assert window.get('/status').json() == {
+        'phase': 'idle',
+        'task': '',
+        'control': False,
+        'attempt_started': False,
+        'cameras': [],
+    }
