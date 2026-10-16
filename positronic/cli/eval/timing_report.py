@@ -22,6 +22,7 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
+from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.telemetry import (
     GPU_INDEX,
     GPU_MEM_USED_B,
@@ -283,10 +284,11 @@ def _dmon_column_indices(names: list[str], log_path: Path) -> tuple[int, int, in
     skipped and the policy box would report no peak VRAM at all, as if none had been asked for.
     """
     if _DMON_FB not in names:
-        raise ValueError(
+        raise CommandFailed(
             f'{log_path}: nvidia-smi dmon log has an `{_DMON_UTIL}` column but no `{_DMON_FB}` (framebuffer) '
             f'column, so peak VRAM cannot be read and every sample would be dropped. Re-collect it with '
-            f'`nvidia-smi dmon -s um` (u=utilisation, m=memory), which emits the `{_DMON_FB}` column.'
+            f'`nvidia-smi dmon -s um` (u=utilisation, m=memory), which emits the `{_DMON_FB}` column.',
+            Fault.USAGE,
         )
     device_idx = names.index(_DMON_DEVICE) if _DMON_DEVICE in names else None
     return names.index(_DMON_UTIL), names.index(_DMON_FB), device_idx
@@ -580,9 +582,10 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
                 window.value,
             )
     if not windows:
-        raise ValueError(
+        raise CommandFailed(
             f'the recorded telemetry holds {len(spans)} span(s) but no closed `{SPAN_EVAL_PASS}` span and no '
-            f'`{SPAN_EPISODE}` span, so there is nothing to reduce (killed before its first episode finished?)'
+            f'`{SPAN_EPISODE}` span, so there is nothing to reduce (killed before its first episode finished?)',
+            Fault.USAGE,
         )
     wall = float(sum(end - start for start, end in windows.values())) / 1e9
     # A failed pass still reduces — its partial window, episodes and samples are real recorded data — but
@@ -728,12 +731,14 @@ def timing_report(run_dir: str, gpu_policy_log: str | None):
     root = Path(pos3.download(run_dir)) if '://' in run_dir else Path(run_dir).expanduser()
     telemetry_dir = root / TELEMETRY_SUBDIR
     if not telemetry_dir.is_dir():
-        raise ValueError(
-            f'no telemetry directory at {telemetry_dir}: not a run directory, or recorded without --timing'
+        raise CommandFailed(
+            f'no telemetry directory at {telemetry_dir}: not a run directory, or recorded without --timing', Fault.USAGE
         )
     spans = _read_spans_dir(telemetry_dir)
     if not spans:
-        raise ValueError(f'{telemetry_dir} carries no spans (a run killed before its sidecars were flushed?)')
+        raise CommandFailed(
+            f'{telemetry_dir} carries no spans (a run killed before its sidecars were flushed?)', Fault.USAGE
+        )
 
     policy_gpu = _parse_dmon(Path(gpu_policy_log).expanduser()) if gpu_policy_log is not None else None
     report = _build_report(spans, _read_stats_dir(telemetry_dir), policy_gpu)

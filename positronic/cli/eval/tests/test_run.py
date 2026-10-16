@@ -41,8 +41,9 @@ def _eval(simulated: bool) -> Eval:
 def test_timed_sweep_rejects_real_embodiment(tmp_path):
     """``--timing`` with a real embodiment anywhere in the sweep fails up front: everything under the bound
     tracer enters the report, so a real eval's spans and wall time would silently corrupt it."""
-    with pytest.raises(ValueError, match='all-simulated'):
+    with pytest.raises(CommandFailed, match='all-simulated') as exc:
         main(policy=object(), evals=[_eval(True), _eval(False)], output_dir=tmp_path, timing=True)
+    assert exc.value.fault is Fault.USAGE
 
 
 class _IdlePolicy(Policy):
@@ -362,8 +363,9 @@ def test_a_real_droid_trial_homes_the_arm_with_no_control_law():
 
 def test_timed_sweep_needs_an_output_dir():
     """There is nowhere to write the sidecars without one, so the sweep is rejected before it spends anything."""
-    with pytest.raises(ValueError, match='output_dir'):
+    with pytest.raises(CommandFailed, match='output_dir') as exc:
         main(policy=object(), evals=[_eval(True)], timing=True)
+    assert exc.value.fault is Fault.USAGE
 
 
 def test_failed_pass_exported_and_stamped(tmp_path):

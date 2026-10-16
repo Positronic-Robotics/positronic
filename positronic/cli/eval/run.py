@@ -144,14 +144,15 @@ def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path |
     sidecars under, or one carrying a real embodiment. Everything under the bound tracer enters the report,
     so a real eval's episodes, wall time and machine samples would silently corrupt it."""
     if output_dir is None:
-        raise ValueError('--timing needs --output_dir: the telemetry sidecars are written under it')
+        raise CommandFailed('--timing needs --output_dir: the telemetry sidecars are written under it', Fault.USAGE)
     real = sum(not embodiment.simulated for embodiment in embodiments)
     if real:
-        raise ValueError(
+        raise CommandFailed(
             f'eval timing needs an all-simulated sweep, got {real} real '
             'embodiment(s): a real eval would run inside the same bound tracer and pass span, so its '
             'episodes, wall time and machine samples would silently corrupt the report. Run real '
-            'embodiments in a separate untimed invocation.'
+            'embodiments in a separate untimed invocation.',
+            Fault.USAGE,
         )
 
 
