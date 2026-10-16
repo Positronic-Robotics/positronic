@@ -196,7 +196,10 @@ class TeleopService:
         Any account that can write to the directory of the socket can bind the socket first, and get the sessions.
         """
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        mode = directory.stat()
+        # `lstat`, so a symlink that another account put there does not pass as the directory it points to.
+        mode = os.lstat(directory)
+        if not stat.S_ISDIR(mode.st_mode):
+            raise PermissionError(f'{directory} must be a directory, not a link or a file')
         if mode.st_uid != os.getuid() or stat.S_IMODE(mode.st_mode) & 0o077:
             raise PermissionError(f'{directory} must belong to this user, with no access for others (mode 700)')
 
@@ -387,7 +390,8 @@ class TeleopService:
         answer = asyncio.ensure_future(wait)
         peer = asyncio.ensure_future(connection.receive())
         await asyncio.wait({answer, peer}, return_when=asyncio.FIRST_COMPLETED)
-        if answer.done():
+        # A receive that completed holds a message or a disconnect, which a cancel cannot give back.
+        if not peer.done():
             peer.cancel()
             return answer.result()
         self._end_session()
