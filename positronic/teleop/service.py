@@ -128,6 +128,10 @@ class Phase(StrEnum):
     ENDED = 'ended'
 
 
+class NotWaiting(Exception):
+    """No trial waits for Ready."""
+
+
 @dataclass(frozen=True)
 class TrialState:
     """What the window on the station screen shows."""
@@ -272,6 +276,17 @@ class TeleopService:
         """The last image of camera ``name``. Raise ``KeyError`` for a camera that the run does not send."""
         with self._changed:
             return self._images[name]
+
+    def cancel_ready_wait(self) -> None:
+        """Cancel the trial that waits for Ready, from the window on the station screen.
+
+        Ready comes only from the headset or the phone, because it confirms that the person holds the controller.
+        """
+        with self._changed:
+            if self._phase is not Phase.READY_WAIT or self._ready is not None:
+                raise NotWaiting('no trial waits for Ready')
+            self._ready = Reply.CANCELLED
+            self._changed.notify_all()
 
     @staticmethod
     def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
