@@ -31,9 +31,6 @@ keepalive_path=/api/v1/keepalive
 alive_key=alive_seconds
 token=test
 auth_value="Bearer $token"
-# The keepalive answer as `positronic_wire.websocket` reads it: a JSON object whose $alive_key is an integer or
-# null. A 200 with any other body fails the run on the platform.
-keepalive_answer="^[[:space:]]*\\{.*\"$alive_key\"[[:space:]]*:[[:space:]]*(null|-?[0-9]+)[[:space:]]*[,}]"
 
 if [ "$(uname -s)" != Linux ] || [ "$(docker version -f '{{.Server.Arch}}')" != amd64 ]; then
   echo "Run this test with Docker on an amd64 Linux machine. Docker on another machine emulates or hides it." >&2
@@ -49,13 +46,15 @@ network="policy-test-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 cid=""
 body=$(mktemp)
 curl_errors=$(mktemp)
+# Remove the files $1 and $2, the container $4 when there is one, and the network $3.
 cleanup() {
-  rm -f "$body" "$curl_errors"
-  [ -z "$cid" ] || docker rm -f "$cid" >/dev/null
-  docker network rm "$network" >/dev/null
+  local container=$4
+  rm -f "$1" "$2"
+  [ -z "$container" ] || docker rm -f "$container" >/dev/null
+  docker network rm "$3" >/dev/null
 }
 docker network create --internal "$network" >/dev/null
-trap cleanup EXIT
+trap 'cleanup "$body" "$curl_errors" "$network" "$cid"' EXIT
 cid=$(docker run -d --pull=always --network "$network" --cap-drop ALL --security-opt no-new-privileges \
   "${gpu_flags[@]}" -e "$token_env=$token" "$image")
 ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$cid")
@@ -70,6 +69,9 @@ loopback_only() {
       '$4 == "0A" && ($2 == v4 || $2 == v6) {found = 1} END {exit !found}'
 }
 
+# The keepalive answer as `positronic_wire.websocket` reads it: a JSON object whose $alive_key is an integer or
+# null. A 200 with any other body fails the run on the platform.
+keepalive_answer="^[[:space:]]*\\{.*\"$alive_key\"[[:space:]]*:[[:space:]]*(null|-?[0-9]+)[[:space:]]*[,}]"
 start=$SECONDS
 passed=false
 waiting_on=""
