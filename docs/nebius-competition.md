@@ -149,6 +149,8 @@ than on a GPU. Then it prints one of these lines, and the end of the log:
 - `the server answered HTTP <code>`: the server runs, but it refused the request. A `401` means that the
   server does not accept the token in `AUTH_TOKEN`. On the platform, this fails the run with
   `policy_setup_crash`.
+- `the server answered 200 without {"alive_seconds": ...}`: the keepalive route must answer a JSON object
+  whose `alive_seconds` is an integer or `null`. On the platform, any other answer fails the run.
 - `the server listens only on 127.0.0.1`: the platform connects from outside the container, so the run
   fails with `policy_setup_crash`. Make the server listen on `0.0.0.0`.
 - `no answer in 900 s`: the server hung. Read the log for the step where it stopped.

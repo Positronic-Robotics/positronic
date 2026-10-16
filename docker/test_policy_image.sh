@@ -3,18 +3,20 @@
 #
 # Usage
 #   bash docker/test_policy_image.sh <image>          # with no GPU, for up to 900 s
-#   bash docker/test_policy_image.sh --gpu <image>    # with all GPUs, for up to 600 s
+#   bash docker/test_policy_image.sh --gpu <image>    # with GPU 0, for up to 600 s
 #
 # The container gets the token `test` in AUTH_TOKEN, no capabilities, and a Docker network with no egress.
 # Every 5 s, the script sends POST /api/v1/keepalive to port 8000 from outside the container, as the
-# platform does. It prints one result line and the end of the log, and exits with 0 only on an HTTP 200.
+# platform does. It prints one result line and the end of the log, and exits with 0 only when the server
+# answers 200 with the keepalive answer.
 # Needs Docker on amd64 Linux, and curl.
 set -euo pipefail
 
 gpu_flags=()
 limit=900
 if [ "${1:-}" = --gpu ]; then
-  gpu_flags=(--gpus all)
+  # The platform gives the image one GPU, so a model that spreads over more GPUs must fail here too.
+  gpu_flags=(--gpus device=0)
   limit=600
   shift
 fi
@@ -27,6 +29,9 @@ token_env=AUTH_TOKEN
 auth_header=Authorization
 keepalive_path=/api/v1/keepalive
 token=test
+# The keepalive answer as `positronic_wire.websocket` reads it: a JSON object whose `alive_seconds` is an
+# integer or null. A 200 with any other body fails the run on the platform.
+keepalive_answer='^[[:space:]]*\{.*"alive_seconds"[[:space:]]*:[[:space:]]*(null|-?[0-9]+)[[:space:]]*[,}]'
 
 if [ "$(uname -s)" != Linux ] || [ "$(docker version -f '{{.Server.Arch}}')" != amd64 ]; then
   echo "Run this test with Docker on an amd64 Linux machine. Docker on another machine emulates or hides it." >&2
@@ -55,8 +60,7 @@ loopback_only() {
 }
 
 start=$SECONDS
-code=000
-status=1
+passed=false
 while :; do
   if [ "$(docker inspect -f '{{.State.Running}}' "$cid")" != true ]; then
     result="the server exited"
@@ -80,8 +84,12 @@ while :; do
   elif [ "$status" != 0 ]; then
     result="curl failed: $(cat "$curl_errors")"
     break
-  elif [ "$code" = 200 ]; then
+  elif [ "$code" = 200 ] && tr -d '\n' <"$body" | grep -Eq "$keepalive_answer"; then
     result="the server answered: $(cat "$body")"
+    passed=true
+    break
+  elif [ "$code" = 200 ]; then
+    result="the server answered 200 without {\"alive_seconds\": <an integer or null>}: $(head -c 200 "$body")"
     break
   else
     result="the server answered HTTP $code"
@@ -91,4 +99,4 @@ done
 echo "$result, after $((SECONDS - start)) s"
 echo "--- the last 30 lines of the log ---"
 docker logs --tail 30 "$cid" 2>&1
-[ "$status" = 0 ] && [ "$code" = 200 ]
+[ "$passed" = true ]
