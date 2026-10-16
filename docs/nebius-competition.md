@@ -199,10 +199,45 @@ Before submissions close, choose your final entry, as the
 Ask your questions on the [Positronic Discord](https://discord.gg/PXvBy4NBgv). The commands above call
 the platform's [HTTP API](https://platform.positronic.ro/docs), and your own tools can call it too.
 
-## Train on Nebius
+## Use Nebius
 
-To train on Nebius, sign up for Nebius Builder with the email address of the GitHub account that you
-register with.
+Sign up for Nebius Builder with the email address of the GitHub account that you register with. On
+Nebius, you can train your policy, and build and test your image.
+
+### Build and test on a Nebius VM
+
+[`docker/nebius_vm.sh`](https://github.com/Positronic-Robotics/positronic/blob/main/docker/nebius_vm.sh)
+creates a Nebius virtual machine for the build and the tests, and deletes it. The VM has 32 GB of memory,
+a 200 GB disk, one NVIDIA L40S GPU with 48 GB of GPU memory, Docker with GPU access, and uv.
+
+Before you start:
+
+- Install the [Nebius CLI](https://docs.nebius.com/cli/install), and run `nebius profile create`. The
+  script creates the VM in the project of the profile.
+- If you have no SSH key, make one with `ssh-keygen -t ed25519`.
+
+```bash
+git clone https://github.com/Positronic-Robotics/positronic
+bash positronic/docker/nebius_vm.sh create
+```
+
+When the VM is ready, the command prints `ssh ubuntu@<address>`. Connect to the VM, and do the steps of
+this guide on it. Run your coding agent on the VM too.
+
+When you finish, delete the VM. Nebius charges for the VM until you delete it, also when it does nothing.
+
+```bash
+bash positronic/docker/nebius_vm.sh delete
+```
+
+- [Nebius prices](https://nebius.com/prices) give the cost of each VM type.
+- For a VM with no GPU, set `NEBIUS_PLATFORM=cpu-d3 NEBIUS_PRESET=8vcpu-32gb`. The header of the script
+  gives all the settings.
+- If Nebius has no free L40S, the command stops with `NotEnoughResources`, and it deletes the VM. Try
+  again later, or set `NEBIUS_PLATFORM` and `NEBIUS_PRESET` to another GPU type.
+- `nebius compute platform list` shows the VM types and presets in your region.
+- If Nebius refuses the VM because of a [quota](https://docs.nebius.com/overview/quotas), ask Nebius
+  for a larger quota.
 
 ---
 
@@ -363,42 +398,6 @@ this command adds them. The command needs [jq](https://jqlang.org/download/).
 docker buildx imagetools inspect --raw docker.io/<you>/<image>:v1 \
   | jq '([.layers[].size] | add) + .config.size'
 ```
-
-## Build and test on a Nebius VM
-
-[`docker/nebius_vm.sh`](https://github.com/Positronic-Robotics/positronic/blob/main/docker/nebius_vm.sh)
-creates a Nebius virtual machine for the build and the tests, and deletes it. The VM has 32 GB of memory,
-a 200 GB disk, one NVIDIA L40S GPU with 48 GB of GPU memory, Docker with GPU access, and uv.
-
-Before you start:
-
-- Sign up for Nebius, as [Train on Nebius](#train-on-nebius) says.
-- Install the [Nebius CLI](https://docs.nebius.com/cli/install), and run `nebius profile create`. The
-  script creates the VM in the project of the profile.
-- If you have no SSH key, make one with `ssh-keygen -t ed25519`.
-
-```bash
-git clone https://github.com/Positronic-Robotics/positronic
-bash positronic/docker/nebius_vm.sh create
-```
-
-When the VM is ready, the command prints `ssh ubuntu@<address>`. Connect to the VM, and do the steps of
-this guide on it. Run your coding agent on the VM too.
-
-When you finish, delete the VM. Nebius charges for the VM until you delete it, also when it does nothing.
-
-```bash
-bash positronic/docker/nebius_vm.sh delete
-```
-
-- [Nebius prices](https://nebius.com/prices) give the cost of each VM type.
-- For a VM with no GPU, set `NEBIUS_PLATFORM=cpu-d3 NEBIUS_PRESET=8vcpu-32gb`. The header of the script
-  gives all the settings.
-- If Nebius has no free L40S, the command stops with `NotEnoughResources`, and it deletes the VM. Try
-  again later, or set `NEBIUS_PLATFORM` and `NEBIUS_PRESET` to another GPU type.
-- `nebius compute platform list` shows the VM types and presets in your region.
-- If Nebius refuses the VM because of a [quota](https://docs.nebius.com/overview/quotas), ask Nebius
-  for a larger quota.
 
 ## Submissions per day
 
