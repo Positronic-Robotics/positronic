@@ -322,6 +322,7 @@ positronic = [
   "gui/static/**",
   "server/static/**",
   "server/templates/**",
+  "teleop/static/**",
   # The launcher needs these dependency constraints in installed distributions too.
   "simulator/molmo_spaces/molmo_constraints.txt",
 ]
