@@ -186,6 +186,8 @@ class PolicyServer:
                 held = decoded
                 await conn.send(serialise({legacy_protocol.CONTEXT: len(held), protocol.TIMING: timing.report()}))
                 continue
+            # Only a push keeps the frames it decodes; a request's frames live in its observation alone.
+            decoded = {}
             raw_obs = request[protocol.OBSERVATION]
             try:
                 # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would

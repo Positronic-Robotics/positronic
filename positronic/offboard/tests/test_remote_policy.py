@@ -1,10 +1,12 @@
 import dataclasses
+import gc
 import http.server
 import json
 import logging
 import pathlib
 import threading
 import time
+import weakref
 from collections.abc import Mapping
 from contextlib import suppress
 from unittest.mock import MagicMock, patch
@@ -995,6 +997,61 @@ def test_a_context_push_records_its_span_and_a_request_counts_its_references(ser
         s.attrs.get(telemetry_keys.ATTR_WIRE_REFERENCED) for s in spans if s.name == telemetry_keys.SPAN_WIRE_SEND
     ]
     assert referenced == [None, 2]
+
+
+def test_a_stack_inside_a_mapping_or_a_list_is_pushed_and_sent_as_digests(served, monkeypatch):
+    address, model, _ = served(model=ImageModel(), local=CONTEXT_STACK)
+    session = InferenceClient(registry.client_wire('websocket'), address).new_session()
+    messages = _record_messages(monkeypatch)
+    nested = {'video': {'camera': [_solid([1, 2])]}, 'image': _solid([3, 4])}
+    full = {'video': {'camera': [_solid([1, 2, 5])]}, 'image': _solid([3, 4, 6])}
+    try:
+        frames = push_context(session, nested, jpeg_quality=90)
+        assert set(frames) == {('video', 'camera', 0), ('image',)}
+        round_trip(session, full, True, 90, frames)
+    finally:
+        session.close()
+    assert [kind for kind, _ in messages] == ['context', 'request']
+    (obs,) = model.observations
+    np.testing.assert_allclose(obs['video']['camera'][0], _solid([1, 2, 5]), atol=4)
+    np.testing.assert_allclose(obs['image'], _solid([3, 4, 6]), atol=4)
+
+
+class FrameWatchModel(ImageModel):
+    """Checks, while it runs, that the server no longer holds the frames it decoded for the request alone."""
+
+    def __init__(self):
+        super().__init__()
+        self.request_frames: list[weakref.ref] = []
+        self.held_while_running: list[bool] = []
+
+    def __call__(self, obs: Obs, *, session_id: str):
+        gc.collect()
+        self.held_while_running.append(any(ref() is not None for ref in self.request_frames))
+        return super().__call__(obs, session_id=session_id)
+
+
+def test_the_server_keeps_no_frame_a_request_decoded_while_the_model_runs(served, monkeypatch):
+    model = FrameWatchModel()
+    address, _, _ = served(model=model, local=CONTEXT_STACK)
+    decode = server_module.deserialise_with_frames
+
+    def watching(message, held, decoded):
+        request = decode(message, held, decoded)
+        if protocol.OBSERVATION in request:
+            model.request_frames += [weakref.ref(frame) for frame in decoded.values()]
+        return request
+
+    monkeypatch.setattr(server_module, 'deserialise_with_frames', watching)
+    session = InferenceClient(registry.client_wire('websocket'), address).new_session()
+    try:
+        frames = push_context(session, {'image': _solid([1, 2])}, jpeg_quality=90)
+        round_trip(session, {'image': _solid([1, 2, 3])}, True, 90, frames)
+    finally:
+        session.close()
+    # The request decoded one new frame; the observation holds it as part of its stack, not as that frame.
+    assert len(model.request_frames) == 1
+    assert model.held_while_running == [False]
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():

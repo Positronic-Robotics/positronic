@@ -34,6 +34,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     Answer,
     Commands,
+    Infer,
     Obs,
     Policy,
     PolicyRun,
@@ -192,7 +193,7 @@ class ChunkedSchedule(Policy):
         self._record_stats = record_stats
         self._context_lead_sec = context_lead_sec
 
-    def run(self, runtime: Runtime, infer: Callable[..., Sequence[Commands]]) -> PolicyRun:
+    def run(self, runtime: Runtime, infer: Infer) -> PolicyRun:
         period_sec = 1 / self._fps
         lead_ns = None if self._context_lead_sec is None else round(self._context_lead_sec * 1e9)
         answer: Answer[Sequence[Commands]] | None = None
