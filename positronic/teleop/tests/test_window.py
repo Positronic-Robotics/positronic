@@ -15,7 +15,7 @@ from positronic import keys
 from positronic.teleop import service as service_module
 from positronic.teleop import session
 from positronic.teleop.service import Phase, TeleopService
-from positronic.teleop.window import Window, window_app
+from positronic.teleop.window import Window, WindowStatus, window_app
 from positronic.tests.testing_inference import free_port
 
 
@@ -99,8 +99,11 @@ def test_the_window_lists_and_serves_each_camera_of_the_run(window, service, wai
     assert window.get('/camera/image.nowhere.jpg').status_code == 404
 
 
-def test_the_page_offers_cancel(window):
-    assert 'id="cancel"' in window.get('/').text
+def test_the_page_offers_cancel_and_reads_each_status_field_by_its_name(window):
+    page = window.get('/').text
+    assert 'id="cancel"' in page
+    for field in ('phase', 'task', 'cameras'):
+        assert field in WindowStatus.model_fields and f"{field}: '{field}'" in page
 
 
 def test_the_window_serves_on_its_port_while_open(service):
