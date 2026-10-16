@@ -24,7 +24,7 @@ disk_gib="${NEBIUS_DISK_GIB:-200}"
 ssh_key="${NEBIUS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 # The ssh command to print. Plain ssh finds only a key at a default path.
 ssh_cmd=ssh
-[ -z "${NEBIUS_SSH_KEY:-}" ] || ssh_cmd="ssh -i $(printf %q "$ssh_key")"
+[ -z "${NEBIUS_SSH_KEY:-}" ] || ssh_cmd="ssh -i $(printf %q "$ssh_key") -o IdentitiesOnly=yes"
 # The delete command to print. It must name the same VM.
 delete_cmd="bash $(printf %q "$0") delete"
 [ -z "${NEBIUS_VM_NAME:-}" ] || delete_cmd="NEBIUS_VM_NAME=$(printf %q "$name") $delete_cmd"
@@ -116,9 +116,14 @@ create() {
     [ "$SECONDS" -lt "$deadline" ] || { echo "The VM got no public address in 900 s." >&2; exit 1; }
     sleep 10
   done
+  # Nebius gives an address to a new VM after it frees it. A known_hosts line for the address is from another VM.
+  if [ -f "$HOME/.ssh/known_hosts" ]; then
+    ssh-keygen -R "$ip" >/dev/null 2>&1
+  fi
   # ssh exits with 255 when it cannot connect, and `timeout` on the VM exits with 124. Any other failure comes
   # from cloud-init. The `timeout` runs on the VM, because macOS has no `timeout`.
-  ssh_opts=(-i "$ssh_key" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+  ssh_opts=(-i "$ssh_key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
+    -o StrictHostKeyChecking=accept-new)
   while :; do
     status=0
     ssh "${ssh_opts[@]}" "ubuntu@$ip" timeout $((deadline > SECONDS ? deadline - SECONDS : 1)) \
@@ -146,12 +151,7 @@ delete() {
     echo "No VM has the name $name."
     return
   fi
-  ip=$(vm_address)
   nebius compute instance delete --id "$id" >/dev/null
-  # Nebius gives the address to other VMs later, and each new VM has a new host key.
-  if [ -n "$ip" ] && [ -f "$HOME/.ssh/known_hosts" ]; then
-    ssh-keygen -R "$ip" >/dev/null 2>&1
-  fi
   echo "Deleted the VM $name and its disk."
 }
 
