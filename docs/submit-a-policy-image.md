@@ -305,7 +305,8 @@ prints `the server answered HTTP <code>`, and a `401` means that it does not acc
 
 The probe exits with code 3 when the port is closed or the server does not answer in 5 s, and the
 loop then waits quietly. Any other failure stops the loop at once and shows its error: an error from
-`docker exec`, for example no Python at `/positronic/.venv/bin/python`, or a Python traceback.
+`docker exec`, for example no Python at `/positronic/.venv/bin/python`, or a Python traceback. The
+GR00T N1.7 image has its Python at `/opt/gr00t-venv/bin/python`.
 
 In a correct image, the server pins its checkpoint and starts the model process. The openpi and
 MolmoAct2 recipes then load the model on the CPU and serve. The GR00T recipe stops on the missing GPU
