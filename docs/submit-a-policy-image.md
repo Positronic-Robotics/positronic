@@ -353,9 +353,8 @@ Action binds port 8000 after about 140 s, and GR00T loads in about 151 s. `no an
 means a hung server, or one too slow for the provisioning deadline, which it shares with VM boot
 and the pull.
 
-The platform gives the image one GPU with 40 GB of memory. Run this test on a machine with one GPU.
-If the GPU has more than 40 GB, start `nvidia-smi --query-gpu=memory.used --format=csv -l 1` in a
-second terminal before the test. Make sure that the largest value stays below 40 GB.
+The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
+sure that your model uses less.
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
