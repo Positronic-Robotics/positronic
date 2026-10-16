@@ -1,21 +1,21 @@
 """`positronic account register` — the account this platform knows you by."""
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import configuronic as cfn
 import httpx
+from platform_client import routes
 from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, write_config
 from platform_client.device_flow import (
-    DEFAULT_GITHUB_CLIENT_ID,
-    GITHUB_CLIENT_ID_ENV,
-    WORKOS_CLIENT_ID_ENV,
+    ClientIds,
     DeviceFlowError,
     NoSignIn,
     ProviderFailed,
     register_with_device_flow,
     require_allowed_platform_url,
-    require_client_ids,
     sign_in_flow,
 )
 from platform_client.identity_providers import REQUEST_TIMEOUT
@@ -29,19 +29,34 @@ def _register_by_sign_in(
     client: PlatformClient, *, alias: str | None, rotate: bool, plaintext_http: bool
 ) -> RegisterResponse:
     """Sign in through the device flow the platform names, and register with the token it yields."""
-    github_client_id = os.environ.get(GITHUB_CLIENT_ID_ENV, DEFAULT_GITHUB_CLIENT_ID)
-    workos_client_id = os.environ.get(WORKOS_CLIENT_ID_ENV)
     with refusing_bad_input():
-        require_client_ids(github_client_id, workos_client_id)
+        client_ids = ClientIds.resolve(os.environ)
         require_allowed_platform_url(client.base_url, plaintext_http=plaintext_http, flag='--plaintext_http')
     try:
         with httpx.Client(timeout=REQUEST_TIMEOUT) as http:
-            flow = sign_in_flow(client, http, github_client_id=github_client_id, workos_client_id=workos_client_id)
+            flow = sign_in_flow(client, http, client_ids)
             return register_with_device_flow(client, flow, alias=alias, rotate=rotate)
     except DeviceFlowError as exc:
         # A provider that fails and a platform that takes no sign-in are no fault of the caller.
         fault = Fault.PLATFORM if isinstance(exc, ProviderFailed | NoSignIn) else Fault.CALLER
         raise CommandFailed(str(exc), fault) from exc
+
+
+@contextmanager
+def _naming_rotate_when_the_answer_is_lost() -> Iterator[None]:
+    """A registration whose answer is lost may have minted the key, so its failure names `--rotate`."""
+    try:
+        yield
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        raise  # no request reached the gateway, so no key was minted
+    except httpx.TransportError as exc:
+        if not exc.request.url.path.endswith(routes.USERS_REGISTER):
+            raise
+        raise CommandFailed(
+            f'{exc.request.url} did not answer the registration: {exc!r}. A key may have been minted; '
+            'run `positronic account register --rotate` to mint another.',
+            Fault.PLATFORM,
+        ) from exc
 
 
 @cfn.config()
@@ -55,14 +70,16 @@ def register(
     `plaintext_http` lets the sign-in token reach an http platform that is not loopback.
     """
     # configuronic literal-evaluates a CLI value, so `--alias=5` arrives as an int. The sign-in runs before
-    # the request model sees the alias, so this refusal comes first.
+    # the request model sees these values, so these refusals come first.
     if alias is not None and not isinstance(alias, str):
         raise CommandFailed(f'alias is text; quote one that reads as a number: \'"{alias}"\'', Fault.USAGE)
+    if not isinstance(rotate, bool):
+        raise CommandFailed(f'rotate is True or False, not {rotate!r}', Fault.USAGE)
     credential = os.environ.get(CREDENTIAL_ENV)
     # A key is minted once and cannot be fetched again, so the destination is named before the
     # platform mints one: a config directory that cannot be resolved would otherwise cost the key.
     directory = config_dir(os.environ)
-    with gateway(platform_url, key_required=False) as client:
+    with gateway(platform_url, key_required=False) as client, _naming_rotate_when_the_answer_is_lost():
         if credential:
             response = client.register(RegisterRequest(credential=credential, alias=alias, rotate=rotate))
         else:

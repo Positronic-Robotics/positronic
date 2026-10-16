@@ -22,6 +22,7 @@ from platform_client.device_flow import (
     DEVICE_GRANT_TYPE,
     GITHUB_CLIENT_ID_ENV,
     WORKOS_CLIENT_ID_ENV,
+    ClientIds,
     DeviceAuthorization,
     DeviceFlow,
     DeviceFlowError,
@@ -471,9 +472,10 @@ def test_a_rate_limited_poll_waits_at_least_what_workos_asks():
     assert sleep.seconds == [5.0, 30.0]
 
 
-@pytest.mark.parametrize('retry_after', [None, 'Wed, 21 Oct 2026 07:28:00 GMT', '-1', 'nan'])
+@pytest.mark.parametrize('retry_after', [None, 'Wed, 21 Oct 2026 07:28:00 GMT', '-1', 'nan', '\u00b2', '\u0663'])
 def test_a_rate_limited_poll_without_a_whole_number_of_seconds_takes_the_step(retry_after: str | None):
-    headers = {} if retry_after is None else {'retry-after': retry_after}
+    # A digit outside ASCII passes `str.isdigit`, and `float` refuses it.
+    headers: dict[bytes, bytes] = {} if retry_after is None else {b'retry-after': retry_after.encode()}
     workos = _workos(polls=[httpx.Response(429, headers=headers), WORKOS_GRANTED])
     flow, sleep = _flow(workos)
 
@@ -572,7 +574,7 @@ def test_the_registration_asks_the_gateway_to_rotate_when_told_to():
 def _picked(config: dict[str, object] | httpx.Response, *, workos_client_id: str | None = None) -> DeviceFlow:
     gateway = ScriptedGateway(config=config)
     with PlatformClient(client=gateway.client()) as platform, httpx.Client() as http:
-        flow = sign_in_flow(platform, http, github_client_id=CLIENT_ID, workos_client_id=workos_client_id)
+        flow = sign_in_flow(platform, http, ClientIds(github=CLIENT_ID, workos=workos_client_id))
     assert gateway.requests[0].url.path == routes.AUTH_CONFIG
     assert 'authorization' not in gateway.requests[0].headers
     return flow
@@ -637,12 +639,10 @@ class Picked:
     workos_client_ids: list[str | None] = field(default_factory=list)
     rotations: list[bool] = field(default_factory=list)
 
-    def sign_in_flow(
-        self, platform: PlatformClient, http: httpx.Client, *, github_client_id: str, workos_client_id: str | None
-    ) -> DeviceFlow:
-        self.github_client_ids.append(github_client_id)
-        self.workos_client_ids.append(workos_client_id)
-        return self.flow or DeviceFlow(GITHUB, github_client_id, http)
+    def sign_in_flow(self, platform: PlatformClient, http: httpx.Client, client_ids: ClientIds) -> DeviceFlow:
+        self.github_client_ids.append(client_ids.github)
+        self.workos_client_ids.append(client_ids.workos)
+        return self.flow or DeviceFlow(GITHUB, client_ids.github, http)
 
     def register(
         self, platform: PlatformClient, flow: DeviceFlow, *, alias: str | None = None, rotate: bool = False
@@ -798,9 +798,7 @@ def test_run_registration_gates_the_url_itself():
         patch.setattr(httpx, 'Client', record)
 
         with pytest.raises(SystemExit) as raised:
-            device_flow.run_registration(
-                'http://gateway.example', github_client_id='x', workos_client_id=None, alias=None, rotate=False
-            )
+            device_flow.run_registration('http://gateway.example', client_ids=ClientIds(), alias=None, rotate=False)
 
     assert 'in the clear' in str(raised.value)
     assert reached == []
@@ -943,6 +941,23 @@ def test_an_answer_lost_after_the_request_names_rotate_as_the_recovery():
         patch.setattr(device_flow, 'sign_in_flow', Picked().sign_in_flow)
         patch.setattr(device_flow, 'register_with_device_flow', drop)
         patch.setattr(sys, 'argv', ['platform-register', '--client-id=x', '--platform-url=https://gateway.example'])
+
+        with pytest.raises(SystemExit) as raised:
+            device_flow.main()
+
+    assert isinstance(raised.value.code, str) and '--rotate' in raised.value.code
+
+
+def test_an_answer_lost_from_a_platform_under_a_path_prefix_names_rotate_as_the_recovery():
+    def drop(*_args: object, **_kwargs: object) -> RegisterResponse:
+        lost = httpx.Request('POST', f'https://gateway.example/prefix{routes.USERS_REGISTER}')
+        raise httpx.ReadError('connection reset', request=lost)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(device_flow, 'sign_in_flow', Picked().sign_in_flow)
+        patch.setattr(device_flow, 'register_with_device_flow', drop)
+        argv = ['platform-register', '--client-id=x', '--platform-url=https://gateway.example/prefix']
+        patch.setattr(sys, 'argv', argv)
 
         with pytest.raises(SystemExit) as raised:
             device_flow.main()

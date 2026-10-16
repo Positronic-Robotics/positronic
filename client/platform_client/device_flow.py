@@ -229,7 +229,7 @@ class DeviceFlow:
     def _retry_after_s(response: httpx.Response) -> float | None:
         """The wait a 429 names in whole seconds, or None. The HTTP-date form is left to the default step."""
         value = response.headers.get('retry-after', '')
-        return float(value) if value.isdigit() else None
+        return float(value) if value.isascii() and value.isdigit() else None
 
     def _post_form(self, url: str, data: Mapping[str, str]) -> Mapping[str, object]:
         """POST a form and read the JSON answer, an OAuth error included.
@@ -269,25 +269,45 @@ class DeviceFlow:
         return payload
 
 
-def sign_in_flow(
-    platform: PlatformClient, http: httpx.Client, *, github_client_id: str, workos_client_id: str | None
-) -> DeviceFlow:
-    """The device flow of the provider the platform's `auth.config` names.
+@dataclass(frozen=True)
+class ClientIds:
+    """The clients a sign-in runs through. `workos` replaces the WorkOS client the platform names; None takes it."""
 
-    `workos_client_id` replaces the client id the platform names for WorkOS; None takes the platform's.
-    """
+    github: str = DEFAULT_GITHUB_CLIENT_ID
+    workos: str | None = None
+
+    def __post_init__(self) -> None:
+        # A provider answers an empty id with an error that names nothing, so an empty override stops here.
+        if not self.github:
+            raise ValueError(f'--client-id or {GITHUB_CLIENT_ID_ENV} is empty. Unset it to use the default.')
+        if self.workos == '':
+            raise ValueError(
+                f'--workos-client-id or {WORKOS_CLIENT_ID_ENV} is empty. Unset it to use the one the platform names.'
+            )
+
+    @classmethod
+    def resolve(cls, environ: Mapping[str, str], *, github: str | None = None, workos: str | None = None) -> ClientIds:
+        """Each id from its flag, else from its environment variable, else the default."""
+        return cls(
+            github=environ.get(GITHUB_CLIENT_ID_ENV, DEFAULT_GITHUB_CLIENT_ID) if github is None else github,
+            workos=environ.get(WORKOS_CLIENT_ID_ENV) if workos is None else workos,
+        )
+
+
+def sign_in_flow(platform: PlatformClient, http: httpx.Client, client_ids: ClientIds) -> DeviceFlow:
+    """The device flow of the provider the platform's `auth.config` names."""
     try:
         config = platform.auth_config()
     except PlatformError as exc:
         if exc.http_status != httpx.codes.NOT_FOUND:
             raise
         # rules-allow: swallowed-error — a gateway older than `auth.config` answers 404, and it takes GitHub only
-        return DeviceFlow(GITHUB, github_client_id, http)
+        return DeviceFlow(GITHUB, client_ids.github, http)
     if config.workos is not None:
-        client_id = config.workos.client_id if workos_client_id is None else workos_client_id
+        client_id = config.workos.client_id if client_ids.workos is None else client_ids.workos
         return DeviceFlow(WORKOS, client_id, http)
     if config.github_registration:
-        return DeviceFlow(GITHUB, github_client_id, http)
+        return DeviceFlow(GITHUB, client_ids.github, http)
     raise NoSignIn(f'the platform at {platform.base_url} takes no sign-in that this client can run')
 
 
@@ -345,27 +365,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         '--client-id',
-        default=os.environ.get(GITHUB_CLIENT_ID_ENV, DEFAULT_GITHUB_CLIENT_ID),
+        default=None,
         help=f'the GitHub OAuth app to register through, else {GITHUB_CLIENT_ID_ENV}, else the platform app',
     )
     parser.add_argument(
         '--workos-client-id',
-        default=os.environ.get(WORKOS_CLIENT_ID_ENV),
+        default=None,
         help=f'the WorkOS client to register through, else {WORKOS_CLIENT_ID_ENV}, else the one the platform names',
     )
-
-
-def require_client_ids(github_client_id: str, workos_client_id: str | None) -> None:
-    """Refuse, with a `ValueError`, an override set to the empty string rather than unset.
-
-    A provider answers an empty id with an error that names nothing, so an empty override stops here.
-    """
-    if not github_client_id:
-        raise ValueError(f'--client-id or {GITHUB_CLIENT_ID_ENV} is empty. Unset it to use the default.')
-    if workos_client_id == '':
-        raise ValueError(
-            f'--workos-client-id or {WORKOS_CLIENT_ID_ENV} is empty. Unset it to use the one the platform names.'
-        )
 
 
 def allowed_platform_url(platform_url: str | None, *, plaintext_http: bool) -> str:
@@ -380,36 +387,24 @@ def allowed_platform_url(platform_url: str | None, *, plaintext_http: bool) -> s
 
 
 def run_registration(
-    platform_url: str | None,
-    *,
-    github_client_id: str,
-    workos_client_id: str | None,
-    alias: str | None,
-    rotate: bool,
-    plaintext_http: bool = False,
+    platform_url: str | None, *, client_ids: ClientIds, alias: str | None, rotate: bool, plaintext_http: bool = False
 ) -> RegisterResponse:
     """Register through the device flow the platform names, or a `SystemExit` with one line saying what stopped it.
 
     This resolves the platform itself, so no caller can reach the transport with a URL the gate
     would refuse: the token goes to the link `plaintext_http` names, or to none.
     """
-    try:
-        require_client_ids(github_client_id, workos_client_id)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
     base_url = allowed_platform_url(platform_url, plaintext_http=plaintext_http)
     with httpx.Client(timeout=REQUEST_TIMEOUT) as provider_http, PlatformClient(base_url) as platform:
         try:
-            flow = sign_in_flow(
-                platform, provider_http, github_client_id=github_client_id, workos_client_id=workos_client_id
-            )
+            flow = sign_in_flow(platform, provider_http, client_ids)
             return register_with_device_flow(platform, flow, alias=alias, rotate=rotate)
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             # The provider half wraps its own transport failures, so one arriving here dialled the
             # gateway. httpx names the cause and not the host, which is the half a reader needs.
             raise SystemExit(f'the platform at {base_url} is unreachable: {exc}') from exc
         except httpx.HTTPError as exc:
-            if exc.request.url.path != routes.USERS_REGISTER:
+            if not exc.request.url.path.endswith(routes.USERS_REGISTER):
                 raise SystemExit(f'the platform at {base_url} did not answer: {exc}') from exc
             # The request may have reached the gateway and minted the key before the answer was lost.
             raise SystemExit(
@@ -430,10 +425,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_arguments(parser)
     args = parser.parse_args()
+    try:
+        client_ids = ClientIds.resolve(os.environ, github=args.client_id, workos=args.workos_client_id)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     response = run_registration(
         args.platform_url,
-        github_client_id=args.client_id,
-        workos_client_id=args.workos_client_id,
+        client_ids=client_ids,
         alias=args.alias,
         rotate=args.rotate,
         plaintext_http=args.plaintext_http,

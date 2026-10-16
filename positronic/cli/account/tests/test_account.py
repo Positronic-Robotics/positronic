@@ -31,7 +31,7 @@ from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.credits import account, buy, get_purchase, list_purchases
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.account.register import register
-from positronic.cli.conftest import USER, WHEN, refusal
+from positronic.cli.conftest import BASE, USER, WHEN, refusal
 
 CREATED = RegisterResponse(
     user_id=USER, artifact_location='s3://b/users/a0/', api_key=ApiKey('pk_new'), key_status=KeyStatus.created
@@ -236,15 +236,37 @@ def test_a_platform_that_takes_no_sign_in_this_client_runs_is_the_platforms_faul
 
 
 @pytest.mark.parametrize('credential', ['token', None], ids=['with a credential', 'signing in'])
-def test_an_alias_that_is_no_text_is_a_refusal_naming_the_field(platform, run_command, monkeypatch, credential):
+@pytest.mark.parametrize(('field', 'value'), [('alias', 5), ('rotate', 'maybe')])
+def test_a_value_of_the_wrong_kind_is_a_refusal_naming_the_field(
+    platform, run_command, monkeypatch, credential, field, value
+):
     # configuronic literal-evaluates a CLI value, so `--alias=5` arrives as an int. A sign-in would spend
     # the user's trip to the browser before the request model saw it, so the command refuses first.
     if credential is None:
         monkeypatch.delenv(gateway_module.CREDENTIAL_ENV)
     with pytest.raises(CommandFailed) as raised:
-        run_command(register, alias=5, plaintext_http=True)
-    assert 'alias' in str(raised.value) and raised.value.fault is Fault.USAGE
+        run_command(register, plaintext_http=True, **{field: value})
+    assert field in str(raised.value) and raised.value.fault is Fault.USAGE
     assert platform.seen is None
+
+
+def test_a_registration_whose_answer_is_lost_names_rotate_as_the_recovery(platform, run_command):
+    """The gateway may have minted the key before the answer was lost, so a plain retry finds no key."""
+    platform.no_answer = httpx.ReadTimeout('no answer', request=httpx.Request('POST', f'{BASE}{routes.USERS_REGISTER}'))
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register)
+
+    assert '--rotate' in str(raised.value) and raised.value.fault is Fault.PLATFORM
+
+
+def test_an_auth_config_lost_in_transit_does_not_name_rotate(platform, workos, run_command):
+    platform.no_answer = httpx.ReadTimeout('no answer', request=httpx.Request('GET', f'{BASE}{routes.AUTH_CONFIG}'))
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register, plaintext_http=True)
+
+    assert '--rotate' not in str(raised.value) and raised.value.fault is Fault.PLATFORM
 
 
 def test_register_says_no_key_came_back_for_an_existing_registration(platform, run_command, capsys):
