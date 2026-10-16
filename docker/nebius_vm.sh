@@ -66,6 +66,7 @@ runcmd:
   # A label that only this run knows. After a failed create, it shows that the VM is from this run.
   run_label=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
   echo "Creating the VM $name: $platform $preset, $disk_gib GiB disk, subnet $subnet."
+  echo "If you stop this command, delete the VM with: $delete_cmd"
   if nebius compute instance create --parent-id "$project" --name "$name" --labels "nebius-vm-run=$run_label" \
     --resources-platform "$platform" --resources-preset "$preset" \
     --boot-disk-attach-mode read_write --boot-disk-managed-disk-name "$name-boot" \
