@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Teleop</title>
+  <style>
+    body { font-family: sans-serif; background: #111; color: #eee; margin: 24px; }
+    #state { font-size: 28px; margin-bottom: 8px; }
+    #task { font-size: 20px; margin-bottom: 16px; }
+    button { font-size: 22px; padding: 12px 28px; margin-right: 12px; }
+    #error { color: #f88; min-height: 1.5em; }
+    img { display: block; margin-top: 16px; max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div id="state">Waiting for a trial</div>
+  <div id="task"></div>
+  <button id="ready" disabled>Ready</button>
+  <button id="cancel" disabled>Cancel</button>
+  <div id="error"></div>
+  <img id="view" alt="What the headset shows">
+  <script>
+    const ROUTES = {
+      status: '/status',
+      ready: '/ready',
+      cancel: '/cancel',
+      view: '/view.jpg',
+    };
+    const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
+    const STATE = {
+      [PHASE.idle]: 'Waiting for a trial',
+      [PHASE.readyWait]: 'Human trial: put on the headset, then press Ready',
+      [PHASE.running]: 'Trial running',
+      [PHASE.ended]: 'The trial ended: give the verdict on the console',
+    };
+    let shownPhase = null;
+    // The phase in which the last error came, or 'unreachable'. The error stays until a poll shows another phase.
+    let errorPhase = null;
+
+    async function post(path) {
+      const answer = await fetch(path, { method: 'POST' });
+      document.getElementById('error').textContent = answer.ok ? '' : (await answer.json()).detail;
+      errorPhase = answer.ok ? null : shownPhase;
+      render(answer.ok ? await answer.json() : null);
+    }
+
+    function render(status) {
+      if (status === null) return;
+      if (errorPhase !== null && status.phase !== errorPhase) {
+        document.getElementById('error').textContent = '';
+        errorPhase = null;
+      }
+      document.getElementById('state').textContent = STATE[status.phase];
+      document.getElementById('task').textContent = status.task;
+      const waiting = status.phase === PHASE.readyWait;
+      document.getElementById('ready').disabled = !waiting;
+      document.getElementById('cancel').disabled = !waiting;
+      if (waiting && shownPhase !== PHASE.readyWait) {
+        document.title = 'Human trial';
+        window.focus();
+      } else if (!waiting) {
+        document.title = 'Teleop';
+      }
+      shownPhase = status.phase;
+    }
+
+    async function poll() {
+      try {
+        render(await (await fetch(ROUTES.status)).json());
+        document.getElementById('view').src = ROUTES.view + '?t=' + Date.now();
+      } catch (e) {
+        document.getElementById('error').textContent = 'The teleop service does not answer';
+        errorPhase = 'unreachable';
+      }
+      setTimeout(poll, 200);
+    }
+
+    document.getElementById('ready').onclick = () => post(ROUTES.ready);
+    document.getElementById('cancel').onclick = () => post(ROUTES.cancel);
+    poll();
+  </script>
+</body>
+</html>
