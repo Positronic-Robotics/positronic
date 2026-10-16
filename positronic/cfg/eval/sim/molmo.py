@@ -95,8 +95,9 @@ bench_v2 = benchmarks.override(suite='molmospaces-bench-v2')
 pick_v1 = bench_v1.override(task_config='FrankaPickDroidMiniBench')
 first_episode = pick_v1.override(episodes=0)
 
-# Demonstrations by a person on every episode of the pick mini benchmark: two minutes for each episode, not the
-# benchmark horizon.
+# Demonstrations by a person on the pick mini benchmark: two minutes for each episode, not the benchmark horizon. It
+# runs the episodes that the eval selects with no `episodes`, so it leaves out each episode that hides the start
+# grasp site from the right shoulder camera.
 pick_mini_collect = bench_v2.override(
     scene_dataset='procthor-10k',
     task_config='FrankaPickDroidMiniBench',

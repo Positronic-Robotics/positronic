@@ -107,6 +107,5 @@ After collection: **Review** data in server → **Curate** by removing failures 
 - [Training Workflow](training-workflow.md) – Converting and training
 - [Codecs Guide](../positronic/policy/codecs/README.md) – Format projection
 - [Inference Guide](inference.md) – Policy deployment
-- [Teleoperation Guide](teleop.md) – A human trial in VR through an eval
 - [Dataset Library](../positronic/dataset/README.md) – Raw storage
 - [Drivers](../positronic/drivers/) – Hardware integration
