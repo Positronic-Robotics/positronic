@@ -1,12 +1,15 @@
+import asyncio
 import os
 import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pos3
 import pytest
+from positronic_model_server import server_wire
 from positronic_model_server.serialization import deserialise, serialise
 from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, PeerDisconnected, UnixSocketAddress
@@ -392,3 +395,39 @@ def test_a_hold_of_b_after_start_task_completes_before_the_policy_hears_of_the_s
         assert frame[session.EVENTS] == [session.Event.START_TASK, session.Event.COMPLETE]
     finally:
         connection.close()
+
+
+class _Peer:
+    """The service's end of a session, whose receive gives ``outcome``: a message, or a raised error."""
+
+    def __init__(self, outcome: bytes | Exception):
+        self._outcome = outcome
+
+    async def receive(self) -> bytes:
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+def _race(service: TeleopService, peer: _Peer):
+    wait = asyncio.to_thread(service._await_ready)
+    return asyncio.run(service._answer_unless_the_peer_speaks(cast(server_wire.ServerConnection, peer), wait))
+
+
+def test_a_disconnect_during_the_ready_wait_ends_the_wait_and_the_session(socket_path):
+    service = TeleopService(socket_path, 60.0, 0.1, HOLD_SEC)
+    assert _race(service, _Peer(PeerDisconnected('gone'))) is None
+    assert service.phase is Phase.IDLE
+
+
+def test_a_message_during_the_ready_wait_is_logged_and_ends_the_session(socket_path, caplog):
+    service = TeleopService(socket_path, 60.0, 0.1, HOLD_SEC)
+    assert _race(service, _Peer(b'too early')) is None
+    assert 'sent a message while it waited' in caplog.text
+
+
+def test_another_receive_failure_during_the_ready_wait_raises_after_the_wait_ends(socket_path):
+    service = TeleopService(socket_path, 60.0, 0.1, HOLD_SEC)
+    with pytest.raises(ValueError, match='binary'):
+        _race(service, _Peer(ValueError('A session message must be a binary WebSocket frame')))
+    assert service.phase is Phase.IDLE

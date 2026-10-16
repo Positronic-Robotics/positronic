@@ -163,7 +163,7 @@ class TeleopService:
         self._phase = Phase.IDLE
         self._ready: Reply | None = None
         self._events: list[Event] = []
-        # Whether the trial emitted Start task. The policy learns it only at its next frame request.
+        # Whether the service emitted Start task in this trial. `_display` can show it later.
         self._attempt_started = False
         self._display: dict[str, Any] = {}
         self._open = False
@@ -318,7 +318,7 @@ class TeleopService:
         finally:
             with self._changed:
                 if self._phase is not Phase.ENDED:
-                    self._phase = Phase.IDLE
+                    self._phase, self._display = Phase.IDLE, {}
             self._open = False
 
     async def _serve(self, connection: server_wire.ServerConnection) -> None:
@@ -342,7 +342,7 @@ class TeleopService:
         """The answer of ``wait``, or ``None`` when the policy disconnects or sends again first.
 
         The policy sends nothing while it waits for an answer, so a message then is a protocol error, and the session
-        ends.
+        ends. Any other failure of the receive raises, after ``wait`` ends.
         """
         answer = asyncio.ensure_future(wait)
         peer = asyncio.ensure_future(connection.receive())
@@ -350,9 +350,13 @@ class TeleopService:
         if answer.done():
             peer.cancel()
             return answer.result()
-        peer.exception()
         self._end_session()
         await answer
+        try:
+            peer.result()
+        except PeerDisconnected:
+            return None
+        logger.error('The policy sent a message while it waited for an answer, so its session ends')
         return None
 
 
