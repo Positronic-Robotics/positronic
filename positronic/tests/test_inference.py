@@ -352,10 +352,10 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
         def script(clock):
             answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
             done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
-            assert (yield from wait(lambda: policy.observations, clock))
+            yield from wait(lambda: policy.observations, 'an observation', clock)
             if retry:
                 done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
-            assert (yield from wait(answers[0].done, clock))
+            yield from wait(answers[0].done, 'the answer', clock)
 
         drive_scheduler(world.start([harness, *embodiment.control_systems, PageOperator(script)]))
     assert policy.observations
@@ -375,14 +375,14 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
-        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, 'the console to answer', clock, seconds=60.0)
         for number, verdict in verdicts:
             post(base, '/episode/start')
-            yield from wait((tmp_path / f'episode-{number}').exists, clock)
+            yield from wait((tmp_path / f'episode-{number}').exists, f'episode {number} to open', clock)
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
             post(base, '/episode/end', EndBody(verdict=verdict))
-            yield from wait(lambda: _phase(base) is Phase.READY, clock)
+            yield from wait(lambda: _phase(base) is Phase.READY, 'the console to be ready', clock)
         statuses.append(read_status(base))
 
     run_attended(_MarkingPolicy(tmp_path), script)
@@ -402,16 +402,16 @@ def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp
     verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
-        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, 'the console to answer', clock, seconds=60.0)
         for number, verdict in verdicts:
             post(base, '/episode/start')
-            yield from wait((tmp_path / f'episode-{number}').exists, clock, seconds=10.0)
+            yield from wait((tmp_path / f'episode-{number}').exists, f'episode {number} to open', clock)
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
             post(base, '/episode/end', EndBody(verdict=verdict))
             yield pimm.Sleep(0.2)
             assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
-            yield from wait(lambda: _phase(base) is Phase.READY, clock, seconds=10.0)
+            yield from wait(lambda: _phase(base) is Phase.READY, 'the console to be ready', clock)
         statuses.append(read_status(base))
 
     run_attended(_MarkingPolicy(tmp_path), script, move_s=1.0)
@@ -432,14 +432,14 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
         return status is not None and bool(status.run.episodes) and status.run.episodes[-1].outcome is not None
 
     def script(base: str, clock: pimm.Clock):
-        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, 'the console to answer', clock, seconds=60.0)
         presses.append(post(base, '/episode/start'))
-        yield from wait(lambda: ended(base), clock)
+        yield from wait(lambda: ended(base), 'the episode to end', clock)
         statuses.append(read_status(base))
         presses.append(post(base, '/episode/start'))
-        yield from wait((tmp_path / 'episode-1').exists, clock)
+        yield from wait((tmp_path / 'episode-1').exists, 'episode 1 to open', clock)
         presses.append(post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
-        yield from wait(lambda: _phase(base) is Phase.READY, clock)
+        yield from wait(lambda: _phase(base) is Phase.READY, 'the console to be ready', clock)
         statuses.append(read_status(base))
 
     run_attended(_MarkingPolicy(tmp_path), script, arm_failures=1)
