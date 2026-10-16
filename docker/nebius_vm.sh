@@ -14,17 +14,17 @@
 #   NEBIUS_PLATFORM  default gpu-l40s-a; cpu-d3 gives a VM with no GPU
 #   NEBIUS_PRESET    default 1gpu-8vcpu-32gb; 8vcpu-32gb on cpu-d3
 #   NEBIUS_DISK_GIB  size of the boot disk, default 200
-#   NEBIUS_SSH_KEY   public key, default ~/.ssh/id_ed25519.pub
+#   NEBIUS_SSH_KEY   private key, default ~/.ssh/id_ed25519; the VM gets the public key at <key>.pub
 set -euo pipefail
 
 name="${NEBIUS_VM_NAME:-policy-image-vm}"
 platform="${NEBIUS_PLATFORM:-gpu-l40s-a}"
 preset="${NEBIUS_PRESET:-1gpu-8vcpu-32gb}"
 disk_gib="${NEBIUS_DISK_GIB:-200}"
-ssh_key="${NEBIUS_SSH_KEY:-$HOME/.ssh/id_ed25519.pub}"
+ssh_key="${NEBIUS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 # The ssh command to print. Plain ssh finds only a key at a default path.
 ssh_cmd=ssh
-[ -z "${NEBIUS_SSH_KEY:-}" ] || ssh_cmd="ssh -i ${ssh_key%.pub}"
+[ -z "${NEBIUS_SSH_KEY:-}" ] || ssh_cmd="ssh -i $ssh_key"
 # The delete command to print. It must name the same VM.
 delete_cmd="bash $0 delete"
 [ -z "${NEBIUS_VM_NAME:-}" ] || delete_cmd="NEBIUS_VM_NAME=$name $delete_cmd"
@@ -48,8 +48,8 @@ vm_address() {
 }
 
 create() {
-  if [ ! -f "$ssh_key" ]; then
-    echo "No public key at $ssh_key. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
+  if [ ! -f "$ssh_key.pub" ]; then
+    echo "No public key at $ssh_key.pub. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
     exit 1
   fi
   state=$(vm_field '{.status.state}')
@@ -63,10 +63,10 @@ create() {
     # The image has the user `ubuntu` already, and cloud-init does not change the groups of a user that exists.
     user_data="#cloud-config
 ssh_authorized_keys:
-  - \"$(cat "$ssh_key")\"
+  - \"$(cat "$ssh_key.pub")\"
 runcmd:
   - [usermod, -aG, docker, ubuntu]
-  - [su, -l, ubuntu, -c, 'curl -LsSf https://astral.sh/uv/install.sh | sh']"
+  - [su, -l, ubuntu, -c, 'curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/install.sh && sh /tmp/uv-install.sh']"
     # A label that only this run knows. After a failed create, it shows that the VM is from this run.
     run_label=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
     echo "Creating the VM $name: $platform $preset, $disk_gib GiB disk."
@@ -97,7 +97,7 @@ runcmd:
   done
   # ssh exits with 255 when it cannot connect, and `timeout` on the VM exits with 124. Any other failure comes
   # from cloud-init. The `timeout` runs on the VM, because macOS has no `timeout`.
-  ssh_opts=(-i "${ssh_key%.pub}" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+  ssh_opts=(-i "$ssh_key" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
   while :; do
     status=0
     ssh "${ssh_opts[@]}" "ubuntu@$ip" timeout $((deadline > SECONDS ? deadline - SECONDS : 1)) \
