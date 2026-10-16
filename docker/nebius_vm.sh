@@ -27,7 +27,8 @@ ssh_key="${NEBIUS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 ssh_cmd=ssh
 [ -z "${NEBIUS_SSH_KEY:-}" ] || ssh_cmd="ssh -i $(printf %q "$ssh_key") -o IdentitiesOnly=yes"
 # The delete command to print. It must name the same VM.
-delete_cmd="bash $(printf %q "$0") delete"
+script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+delete_cmd="bash $(printf %q "$script") delete"
 [ -z "${NEBIUS_VM_NAME:-}" ] || delete_cmd="NEBIUS_VM_NAME=$(printf %q "$name") $delete_cmd"
 
 project=$(nebius config get parent-id)
@@ -40,43 +41,6 @@ vm_field() {
     2>"$errors"; then
     grep -q 'code = NotFound' "$errors" || { cat "$errors" >&2; return 1; }
   fi
-}
-
-# Print the public address of the VM, or nothing. The jsonpath fails on a field that is not there, so it
-# reads the whole object.
-vm_address() {
-  vm_field '{.status.network_interfaces[0].public_ip_address}' | sed -n 's/.*"address": *"\([0-9.]*\)\/.*/\1/p'
-}
-
-# Print the public key of $ssh_key as `<type> <key>`, with no comment. The ssh in `create` cannot ask for a
-# passphrase, so the key must be readable without one, or be in the agent.
-public_key() {
-  if key=$(ssh-keygen -y -P "" -f "$ssh_key" 2>/dev/null); then
-    key=$(cut -d' ' -f1,2 <<<"$key")
-    # ssh offers the key in <key>.pub when the file exists, so a stale file makes the server refuse it.
-    if [ -f "$ssh_key.pub" ] && [ "$(cut -d' ' -f1,2 "$ssh_key.pub")" != "$key" ]; then
-      echo "$ssh_key.pub is not the public key of $ssh_key. Make it again with:" >&2
-      echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
-      return 1
-    fi
-    echo "$key"
-    return
-  fi
-  if [ ! -f "$ssh_key" ] && [ ! -f "$ssh_key.pub" ]; then
-    echo "No key at $ssh_key. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
-    return 1
-  fi
-  if [ ! -f "$ssh_key.pub" ]; then
-    echo "No public key at $ssh_key.pub. Make it with:" >&2
-    echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
-    return 1
-  fi
-  blob=$(cut -d' ' -f2 "$ssh_key.pub")
-  if [ -z "$blob" ] || ! ssh-add -L 2>/dev/null | cut -d' ' -f2 | grep -qxF "$blob"; then
-    echo "ssh cannot use $ssh_key without a passphrase. Run: ssh-add $(printf %q "$ssh_key")" >&2
-    return 1
-  fi
-  cut -d' ' -f1,2 "$ssh_key.pub"
 }
 
 # Show the error $1 for a VM that exists, and the command that deletes it. Then stop.
@@ -120,6 +84,43 @@ runcmd:
     nebius compute instance delete --id "$id" >/dev/null || fail "Nebius could not delete the stopped VM."
   fi
   exit 1
+}
+
+# Print the public key of $ssh_key as `<type> <key>`, with no comment. The ssh in `create` cannot ask for a
+# passphrase, so the key must be readable without one, or be in the agent.
+public_key() {
+  if key=$(ssh-keygen -y -P "" -f "$ssh_key" 2>/dev/null); then
+    key=$(cut -d' ' -f1,2 <<<"$key")
+    # ssh offers the key in <key>.pub when the file exists, so a stale file makes the server refuse it.
+    if [ -f "$ssh_key.pub" ] && [ "$(cut -d' ' -f1,2 "$ssh_key.pub")" != "$key" ]; then
+      echo "$ssh_key.pub is not the public key of $ssh_key. Make it again with:" >&2
+      echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
+      return 1
+    fi
+    echo "$key"
+    return
+  fi
+  if [ ! -f "$ssh_key" ] && [ ! -f "$ssh_key.pub" ]; then
+    echo "No key at $ssh_key. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
+    return 1
+  fi
+  if [ ! -f "$ssh_key.pub" ]; then
+    echo "No public key at $ssh_key.pub. Make it with:" >&2
+    echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
+    return 1
+  fi
+  blob=$(cut -d' ' -f2 "$ssh_key.pub")
+  if [ -z "$blob" ] || ! ssh-add -L 2>/dev/null | cut -d' ' -f2 | grep -qxF "$blob"; then
+    echo "ssh cannot use $ssh_key without a passphrase. Run: ssh-add $(printf %q "$ssh_key")" >&2
+    return 1
+  fi
+  cut -d' ' -f1,2 "$ssh_key.pub"
+}
+
+# Print the public address of the VM, or nothing. The jsonpath fails on a field that is not there, so it
+# reads the whole object.
+vm_address() {
+  vm_field '{.status.network_interfaces[0].public_ip_address}' | sed -n 's/.*"address": *"\([0-9.]*\)\/.*/\1/p'
 }
 
 create() {
