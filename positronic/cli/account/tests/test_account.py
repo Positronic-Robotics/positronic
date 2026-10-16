@@ -406,6 +406,7 @@ def test_personal_purchase_history_refuses_invalid_limit_before_http(platform, r
 @pytest.mark.parametrize('command', [account, list_purchases])
 def test_personal_credit_commands_hide_values_from_malformed_profile(command, platform, run_command):
     private_value = 'private-response-marker'
+    # rules-allow: unchecked-field-name — the fixture sends bad wire data on purpose: the name is the wire contract
     platform.answer({**ME.model_dump(mode='json'), 'user_id': private_value})
     with pytest.raises(SystemExit) as raised:
         run_command(command)
@@ -419,11 +420,13 @@ def test_personal_credit_commands_hide_values_from_malformed_profile(command, pl
 @pytest.mark.parametrize('command', [get_purchase, list_purchases])
 def test_purchase_commands_hide_values_from_malformed_response(command, platform, run_command):
     private_value = 'private-response-marker'
+    # rules-allow: unchecked-field-name — the fixture sends bad wire data on purpose: the name is the wire contract
     malformed = {**PURCHASE.model_dump(mode='json'), 'initiated_by': private_value}
     if command is get_purchase:
         platform.answer(malformed)
         args = {'id': 'opaque-purchase'}
     else:
+        # rules-allow: unchecked-field-name — the fixture sends bad wire data on purpose: the name is the wire contract
         platform.answer({'purchases': [malformed], 'next': None})
         args = {'org': 'acme'}
     with pytest.raises(SystemExit) as raised:
@@ -435,6 +438,7 @@ def test_purchase_commands_hide_values_from_malformed_response(command, platform
 
 
 def test_purchase_history_refuses_an_answer_without_continuation(platform, run_command):
+    # rules-allow: unchecked-field-name — the fixture sends bad wire data on purpose: the name is the wire contract
     platform.answer({'purchases': []})
     with pytest.raises(SystemExit, match='cannot read: missing'):
         run_command(list_purchases, org='acme')
@@ -443,6 +447,7 @@ def test_purchase_history_refuses_an_answer_without_continuation(platform, run_c
 def test_billing_response_hides_extra_field_names(platform, run_command):
     private_key = 'private-response-key-marker'
     leaking = {**PACKAGE.model_dump(mode='json'), private_key: 'private-value'}
+    # rules-allow: unchecked-field-name — the fixture sends bad wire data on purpose: the name is the wire contract
     platform.answer({**ACCOUNT.model_dump(mode='json'), 'packages': [leaking]})
     with pytest.raises(SystemExit) as raised:
         run_command(account, org='acme')

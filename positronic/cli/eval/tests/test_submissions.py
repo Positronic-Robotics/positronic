@@ -109,6 +109,7 @@ def test_list_reads_every_page(platform, run_command, capsys):
 
 
 def test_a_response_the_client_cannot_read_is_a_refusal_without_the_body(platform, run_command):
+    # rules-allow: unchecked-field-name — the fixture sends bad wire data on purpose: the name is the wire contract
     platform.answer_by_route({routes.SUBMISSIONS_LIST: ({'submissions': 'not a list', 'secret': 'x'}, 200)})
     with pytest.raises(CommandFailed, match='cannot read: list_type') as caught:
         run_command(list_submissions)
