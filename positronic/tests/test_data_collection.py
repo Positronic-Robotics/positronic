@@ -396,6 +396,7 @@ def test_the_phone_page_for_teleop_opens_in_its_teleop_mode():
         page = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
         assert page.status_code == 200 and "get('mode') === 'teleop'" in page.text
         assert 'id="phase"' in page.text and "STATE_ROUTE = '/state'" in page.text and 'btn--control-on' in page.text
+        assert 'PHASES_THAT_OPEN_THE_GRIP = [PHASE.readyWait, PHASE.ended]' in page.text and 'setGrip(0.0)' in page.text
 
 
 def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):

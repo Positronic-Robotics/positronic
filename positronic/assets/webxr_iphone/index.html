@@ -140,6 +140,7 @@
         window.addEventListener('touchend', end);
 
         setGrip(0.0);
+        return setGrip;
       }
 
       // The state of the trial, as the teleop service gives it at `STATE_ROUTE`.
@@ -158,12 +159,18 @@
         }
       }
 
-      function showTeleopState(configs, applyVisual) {
+      // A new trial and the end of a trial open the gripper, so a closed slider does not close it at the next Control.
+      const PHASES_THAT_OPEN_THE_GRIP = [PHASE.readyWait, PHASE.ended];
+
+      function showTeleopState(configs, applyVisual, setGrip) {
         const phaseEl = document.getElementById('phase');
         phaseEl.hidden = false;
+        let shownPhase = null;
         const show = async () => {
           try {
             const state = await (await fetch(STATE_ROUTE)).json();
+            if (state.phase !== shownPhase && PHASES_THAT_OPEN_THE_GRIP.includes(state.phase)) setGrip(0.0);
+            shownPhase = state.phase;
             phaseEl.textContent = phaseText(state);
             configs.track.el.classList.toggle('btn--control-on', state.control === true);
             configs.track.el.classList.toggle('btn--control-off', state.control !== true);
@@ -177,7 +184,7 @@
         show();
       }
 
-      function setupButtons() {
+      function setupButtons(setGrip) {
         const configs = {
           reset: {
             idx: BUTTON.stick,
@@ -311,7 +318,7 @@
           el.addEventListener('touchcancel', () => release(name, true));
         }
 
-        if (TELEOP) showTeleopState(configs, applyVisual);
+        if (TELEOP) showTeleopState(configs, applyVisual, setGrip);
 
         window.addEventListener('touchend', () => releaseAll(true));
         window.addEventListener('touchcancel', () => releaseAll(true));
@@ -336,8 +343,7 @@
       // Boot using shared core
       websocket = initWebSocket();
       startXRApp({ websocket, onInit, onFrame });
-      setupSlider();
-      setupButtons();
+      setupButtons(setupSlider());
     </script>
   </body>
   </html>
