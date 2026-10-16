@@ -10,14 +10,13 @@ import os
 import stat
 import threading
 import time
-from collections.abc import Coroutine, Iterator, Sequence
+from collections.abc import Coroutine, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-import configuronic as cfn
 import cv2
 import numpy as np
 from positronic_model_server import server_wire
@@ -25,10 +24,7 @@ from positronic_model_server.serialization import deserialise, serialise
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
 from positronic_wire.wire import PeerDisconnected
 
-import pimm
-import positronic.cfg.webxr
 from positronic import geom
-from positronic.drivers.webxr import RIGHT, WebXR
 
 from .session import (
     ATTEMPT_STARTED,
@@ -44,7 +40,6 @@ from .session import (
     Event,
     Reply,
     Request,
-    default_socket_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,13 +119,27 @@ class ButtonMap:
         return float(buttons[_TRIGGER])
 
 
-class Phase(Enum):
+class Phase(StrEnum):
     """Where the service is in a trial."""
 
-    IDLE = auto()
-    READY_WAIT = auto()
-    RUNNING = auto()
-    ENDED = auto()
+    IDLE = 'idle'
+    READY_WAIT = 'ready_wait'
+    RUNNING = 'running'
+    ENDED = 'ended'
+
+
+class NotWaiting(Exception):
+    """No trial waits for Ready."""
+
+
+@dataclass(frozen=True)
+class TrialState:
+    """What the window on the station screen shows."""
+
+    phase: Phase
+    task: str
+    control: bool
+    attempt_started: bool
 
 
 @dataclass(frozen=True)
@@ -240,6 +249,21 @@ class TeleopService:
     def phase(self) -> Phase:
         with self._changed:
             return self._phase
+
+    def state(self) -> TrialState:
+        with self._changed:
+            phase, display = self._phase, self._display
+            return TrialState(
+                phase, str(display.get(TASK, '')), bool(display.get(CONTROL)), bool(display.get(ATTEMPT_STARTED))
+            )
+
+    def answer_ready(self, reply: Literal[Reply.READY, Reply.CANCELLED]) -> None:
+        """Ready or Cancel from the window on the station screen, as the buttons of the headset give them."""
+        with self._changed:
+            if self._phase is not Phase.READY_WAIT or self._ready is not None:
+                raise NotWaiting('no trial waits for Ready')
+            self._ready = reply
+            self._changed.notify_all()
 
     @staticmethod
     def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
@@ -354,46 +378,3 @@ class TeleopService:
         self._end_session()
         await answer
         return None
-
-
-class _Headset(pimm.ControlSystem):
-    """Pass the samples of the headset to the service, and the view of the service to the headset."""
-
-    def __init__(self, service: TeleopService, view_fps: float = 30.0):
-        self._service = service
-        self._view_period_sec = 1 / view_fps
-        self.controller_positions = pimm.ControlSystemReceiver(self)
-        self.buttons = pimm.ControlSystemReceiver(self)
-        self.view = pimm.ControlSystemEmitter(self)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        while not should_stop.value:
-            positions = pimm.read_updated(self.controller_positions)
-            if positions is not None:
-                buttons = self.buttons.read()
-                right = None if buttons is None else buttons.data[RIGHT]
-                self._service.take_sample(positions.data[RIGHT], right)
-            self.view.emit(self._service.view())
-            yield pimm.Sleep(self._view_period_sec)
-
-
-@cfn.config(webxr=positronic.cfg.webxr.oculus, socket=str(default_socket_path()), ready_limit=120.0)
-def serve(
-    webxr: WebXR,
-    socket: str,
-    ready_limit: float,
-    silence_limit: float = 0.5,
-    hold_sec: float = 1.0,
-    press_threshold: float = 0.6,
-    view_fps: float = 30.0,
-):
-    """Run the teleop service until Ctrl-C. Open the WebXR page in the headset."""
-    # TODO: Set the ready limit and the silence limit for a rig.
-    service = TeleopService(Path(socket), ready_limit, silence_limit, hold_sec, press_threshold)
-    headset = _Headset(service, view_fps)
-    with service, pimm.World() as world:
-        world.connect(webxr.controller_positions, headset.controller_positions)
-        world.connect(webxr.buttons, headset.buttons)
-        world.connect(headset.view, webxr.frame)
-        logger.info('The teleop service serves on %s', socket)
-        world.run(headset, [webxr])
