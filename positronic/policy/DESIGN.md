@@ -160,14 +160,6 @@ One algorithm may drive several robots at once.
 - Whoever starts a run is responsible for closing it and the resources it owns.
   Submitted work must finish before those resources close. Closure happens
   between resumptions, never while the run is processing an input.
-- A run may block before its first yield to get ready, for example to wait
-  for a person. The framework starts the run after it prepares the rig and
-  before the time limit and the recording start, so that time is in neither.
-- The block stops every control system in the process of the framework, and a
-  stop of the world waits for it. So the run must limit its own wait.
-- An exception before the first yield fails the episode as any other failure
-  does, and nothing records it. A `done` that arrives before the episode
-  starts ends nothing.
 
 For readers familiar with [PyTorch modules](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html),
 the composition idea is similar: a component can call other components as part

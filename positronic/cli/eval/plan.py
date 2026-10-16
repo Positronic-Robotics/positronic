@@ -9,7 +9,7 @@ from platform_client.ids import OrgSlug
 from platform_client.responses import SubmissionCreateResponse
 from pydantic import ValidationError
 
-from positronic.cli.account.gateway import gateway, one_line
+from positronic.cli.account.gateway import CommandFailed, Fault, gateway, one_line
 
 # The plan fields the command line states beside a plan file.
 TRANSACTION_KEY_FIELD = 'transaction_key'
@@ -82,9 +82,9 @@ def read_plan(
     try:
         payload = yaml.load(path.read_bytes(), Loader=_OneValuePerKey)  # noqa: S506 — a SafeLoader subclass
     except OSError as exc:
-        raise SystemExit(f'{path}: {exc.strerror}') from exc
+        raise CommandFailed(f'{path}: {exc.strerror}', Fault.USAGE) from exc
     except yaml.YAMLError as exc:
-        raise SystemExit(f'{path}: {_refusal(exc)}') from exc
+        raise CommandFailed(f'{path}: {_refusal(exc)}', Fault.USAGE) from exc
     # Unvalidated here: `EvalPlan` validates it with the rest of the plan, inside the refusal below.
     request_type = PrivateEval.model_construct(org=OrgSlug(org)).model_dump() if org is not None else None
     stated_fields = ((TRANSACTION_KEY_FIELD, transaction_key), (ALIAS_FIELD, alias), (REQUEST_TYPE_FIELD, request_type))
@@ -93,12 +93,12 @@ def read_plan(
             continue
         if field in payload:
             flag = 'org' if field == REQUEST_TYPE_FIELD else field.replace('_', '-')
-            raise SystemExit(f'{path} carries {field}; drop --{flag}')
+            raise CommandFailed(f'{path} carries {field}; drop --{flag}', Fault.USAGE)
         payload = {**payload, field: stated}
     try:
         return plan_with_passwords_read(EvalPlan[RegistryCredentialFile].model_validate(payload))
     except ValidationError as exc:
-        raise SystemExit(f'{path}: {one_line(exc)}') from exc
+        raise CommandFailed(f'{path}: {one_line(exc)}', Fault.USAGE) from exc
 
 
 def given(value: object) -> bool:
@@ -126,5 +126,5 @@ def plan_source(eval: object, from_file: str | None) -> Path | None:
     if from_file is None:
         return None
     if eval is not None:
-        raise SystemExit(f'--from-file={from_file} carries the whole plan; drop --eval')
+        raise CommandFailed(f'--from-file={from_file} carries the whole plan; drop --eval', Fault.USAGE)
     return Path(from_file)
