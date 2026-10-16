@@ -56,6 +56,7 @@ loopback_only() {
 
 start=$SECONDS
 code=000
+status=1
 while :; do
   if [ "$(docker inspect -f '{{.State.Running}}' "$cid")" != true ]; then
     result="the server exited"
@@ -69,23 +70,25 @@ while :; do
   status=0
   code=$(curl -sS --noproxy '*' -o "$body" -w '%{http_code}' -m 5 -X POST -H "$auth_header: Bearer $token" \
     "http://$ip:$port$keepalive_path" 2>"$curl_errors") || status=$?
-  if [ "$status" != 0 ] && [ "$status" != 7 ] && [ "$status" != 28 ] && [ "$status" != 52 ] && [ "$status" != 56 ]; then
+  # These waits ignore the HTTP code, as a server can send its headers and then stop.
+  if [ "$status" = 7 ] || [ "$status" = 28 ] || [ "$status" = 52 ] || [ "$status" = 56 ]; then
+    if loopback_only; then
+      result="the server listens only on 127.0.0.1, and the platform connects from outside the container"
+      break
+    fi
+    sleep 5
+  elif [ "$status" != 0 ]; then
     result="curl failed: $(cat "$curl_errors")"
     break
-  fi
-  if [ "$code" = 200 ]; then
+  elif [ "$code" = 200 ]; then
     result="the server answered: $(cat "$body")"
     break
-  elif [ "$code" != 000 ]; then
+  else
     result="the server answered HTTP $code"
     break
-  elif loopback_only; then
-    result="the server listens only on 127.0.0.1, and the platform connects from outside the container"
-    break
   fi
-  sleep 5
 done
 echo "$result, after $((SECONDS - start)) s"
 echo "--- the last 30 lines of the log ---"
 docker logs --tail 30 "$cid" 2>&1
-[ "$code" = 200 ]
+[ "$status" = 0 ] && [ "$code" = 200 ]
