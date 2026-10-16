@@ -1130,6 +1130,38 @@ def test_every_device_is_asked_to_be_ready_before_each_episode_and_before_its_pr
         assert answer.result() == {eval_keys.TERMINATED: False}
 
 
+@pytest.mark.parametrize('arrives', ['with the ask', 'during prepare', 'before the first yield'])
+def test_a_done_before_the_episode_starts_is_dropped_and_the_episode_runs_to_its_own_end(episode_harness, arrives):
+    h = episode_harness
+
+    class PressedWhileItGetsReady(Policy):
+        def run(self, runtime):
+            if arrives == 'before the first yield':
+                h.done.emit({eval_keys.SUCCESS: True})
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 1_000_000)
+
+    h.observation.emit(1)
+    task = Task('move', 0.01, prepare_args={RESET: 'home'})
+    answer = h.caller(Rollout(task, PressedWhileItGetsReady(), h.output_path))
+    if arrives == 'with the ask':
+        h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    if arrives == 'during prepare':
+        h.done.emit({eval_keys.SUCCESS: True})
+    next(h.prepare[RESET].incoming()).set_result(None)
+    next(h.loop)
+    assert not answer.done()
+    h.world.clock.advance_to_ns(10_000_000)
+    next(h.loop)
+    next(h.loop)
+    next(h.prepare[RESET].incoming()).set_result(None)  # the move back
+    next(h.loop)
+    assert answer.result() == {eval_keys.TERMINATED: False}
+    assert h.dataset.episodes[0].closed
+
+
 @pytest.mark.parametrize('error', [pimm.SignalError('camera lost'), RuntimeError('the arm holds a fault')])
 def test_a_device_that_answers_ready_with_an_error_fails_the_ask_and_is_asked_again(ready_harness, error):
     h = ready_harness
