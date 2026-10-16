@@ -22,13 +22,14 @@ if [ "${1:-}" = --gpu ]; then
 fi
 image="${1:?usage: $0 [--gpu] <image>}"
 # The policy contract, as positronic names it: `policy_container.POLICY_PORT` and `AUTH_TOKEN_ENV`,
-# `positronic_model_server.protocol.AUTH_HEADER` and `bearer`, and `positronic_wire.wire.KEEPALIVE_PATH` and
-# `ALIVE_SECONDS`.
+# `positronic_model_server.protocol.AUTH_HEADER` and `bearer`, `positronic_wire.wire.KEEPALIVE_PATH` and
+# `ALIVE_SECONDS`, and `positronic_wire.websocket` `_MAX_KEEPALIVE_BODY_BYTES`.
 port=8000
 token_env=AUTH_TOKEN
 auth_header=Authorization
 keepalive_path=/api/v1/keepalive
 alive_key=alive_seconds
+max_answer_bytes=16384
 token=test
 auth_value="Bearer $token"
 
@@ -75,39 +76,36 @@ loopback_only() {
       '$4 == "0A" && ($2 == v4 || $2 == v6) {found = 1} END {exit !found}'
 }
 
-# Succeed when the file $1 holds the keepalive answer as `positronic_wire.websocket` reads it: a JSON object
-# whose $alive_key is an integer or null. A 200 with any other body fails the run on the platform.
+# Succeed when the first $3 bytes of the file $1 hold the keepalive answer as `positronic_wire.websocket` reads
+# it: a JSON object whose key $2 is an integer or null. A 200 with any other body fails the run on the platform.
 keepalive_answer() {
   python3 -c 'import json, sys
 try:
-    with open(sys.argv[1]) as f:
-        alive = json.load(f)[sys.argv[2]]
+    with open(sys.argv[1], "rb") as f:
+        alive = json.loads(f.read(int(sys.argv[3])))[sys.argv[2]]
 except (ValueError, LookupError, TypeError, RecursionError):
     sys.exit(1)
-sys.exit(0 if alive is None or type(alive) is int else 1)' "$1" "$alive_key"
+sys.exit(0 if alive is None or type(alive) is int else 1)' "$1" "$2" "$3"
 }
 
-# Call the keepalive route at the address $1 once, with the files $2 for the body and $3 for curl's errors.
-# Print `silent` for no answer, `cold <code>` for a server that is not ready, `pass <answer>`, or `fail <reason>`.
+# POST once to the URL $1 with the header $2, with the files $3 for the body and $4 for curl's errors. Print
+# `silent` for no answer, `cold <code>` for a server that is not ready, `ok` for a 200, or `fail <reason>`.
 probe() {
-  local status=0 code
-  code=$(curl -sS --noproxy '*' -o "$2" -w '%{http_code}' -m 5 -X POST -H "$auth_header: $auth_value" \
-    "http://$1:$port$keepalive_path" 2>"$3") || status=$?
+  local status=0 code body=$3 errors=$4
+  code=$(curl -sS --noproxy '*' -o "$body" -w '%{http_code}' -m 5 -X POST -H "$2" "$1" 2>"$errors") || status=$?
   # curl exits with 7 on a closed port, 28 on no answer in 5 s, and 52 or 56 on a dropped connection. These
   # ignore the HTTP code, as a server can send its headers and then stop.
   if [ "$status" = 7 ] || [ "$status" = 28 ] || [ "$status" = 52 ] || [ "$status" = 56 ]; then
     echo silent
   elif [ "$status" != 0 ]; then
-    echo "fail curl failed: $(cat "$3")"
+    echo "fail curl failed: $(cat "$errors")"
   elif [ "$code" = 429 ] || [ "$code" -ge 500 ]; then
     # The platform reads these as a server that is not ready yet, and asks again until its deadline.
     echo "cold $code"
   elif [ "$code" != 200 ]; then
     echo "fail the server answered HTTP $code"
-  elif keepalive_answer "$2"; then
-    echo "pass $(cat "$2")"
   else
-    echo "fail the server answered 200 without {\"$alive_key\": <an integer or null>}: $(head -c 200 "$2")"
+    echo ok
   fi
 }
 
@@ -123,11 +121,15 @@ while :; do
     result="no answer in $limit s$waiting_on"
     break
   fi
-  outcome=$(probe "$ip" "$body" "$curl_errors")
+  outcome=$(probe "http://$ip:$port$keepalive_path" "$auth_header: $auth_value" "$body" "$curl_errors")
   case $outcome in
-    pass*)
-      result="the server answered: ${outcome#pass }"
-      passed=true
+    ok)
+      if keepalive_answer "$body" "$alive_key" "$max_answer_bytes"; then
+        result="the server answered: $(cat "$body")"
+        passed=true
+      else
+        result="the server answered 200 without {\"$alive_key\": <an integer or null>}: $(head -c 200 "$body")"
+      fi
       break ;;
     fail*)
       result=${outcome#fail }
