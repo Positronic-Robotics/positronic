@@ -70,3 +70,6 @@ WRIST_LEFT_IMAGE = f'{IMAGE_PREFIX}wrist_left'
 WRIST_RIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_right'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
+# The cameras that a person teleoperates with in the MuJoCo Franka scene, beside the wrist and the exterior cameras.
+WRIST_UPRIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_upright'
+HANDCAM_RIGHT_IMAGE = f'{IMAGE_PREFIX}handcam_right'

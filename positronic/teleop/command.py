@@ -3,6 +3,7 @@
 import logging
 import webbrowser
 from collections.abc import Iterator
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import configuronic as cfn
@@ -11,11 +12,20 @@ import pimm
 import positronic.cfg.webxr
 from positronic.drivers.webxr import RIGHT, WebXR
 
-from .service import TeleopService
+from .service import Phase, TeleopService
 from .session import default_socket_path
 from .window import Window, window_app
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PageState:
+    """The state of the trial that the phone page shows. Its field names are the fields of the JSON object."""
+
+    phase: Phase
+    control: bool
+    attempt_started: bool
 
 
 class _Headset(pimm.ControlSystem):
@@ -27,7 +37,7 @@ class _Headset(pimm.ControlSystem):
         self.controller_positions = pimm.ControlSystemReceiver(self)
         self.buttons = pimm.ControlSystemReceiver(self)
         self.view = pimm.ControlSystemEmitter(self)
-        # The state of the trial for the phone page, which polls it from the WebXR server.
+        # The state of the trial, as a `PageState` mapping.
         self.page_state = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
@@ -39,11 +49,7 @@ class _Headset(pimm.ControlSystem):
                 self._service.take_sample(positions.data[RIGHT], right)
             self.view.emit(self._service.view())
             state = self._service.state()
-            self.page_state.emit({
-                'phase': state.phase,
-                'control': state.control,
-                'attempt_started': state.attempt_started,
-            })
+            self.page_state.emit(asdict(PageState(state.phase, state.control, state.attempt_started)))
             yield pimm.Sleep(self._view_period_sec)
 
 

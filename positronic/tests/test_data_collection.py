@@ -25,7 +25,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import webxr
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.webxr import WebXR
+from positronic.drivers.webxr import Frontend, WebXR
 from positronic.geom import Rotation, Transform3D
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -358,7 +358,7 @@ def test_the_headset_video_skips_a_lost_camera_and_resumes_on_its_next_frame(wor
 
 
 @contextlib.contextmanager
-def _served_webxr(frontend: str = 'oculus', webxr: WebXR | None = None) -> Iterator[str]:
+def _served_webxr(frontend: Frontend = Frontend.OCULUS, webxr: WebXR | None = None) -> Iterator[str]:
     """A ``WebXR`` server of ``frontend`` on a free port, or ``webxr`` when given, and its base URL once it answers."""
     if webxr is None:
         webxr = WebXR(port=free_port(), frontend=frontend, use_https=False)
@@ -390,7 +390,7 @@ def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeyp
 
 
 def test_the_phone_page_for_teleop_opens_in_its_teleop_mode():
-    with _served_webxr('iphone_teleop') as base:
+    with _served_webxr(Frontend.IPHONE_TELEOP) as base:
         bare = httpx.get(base + '/', timeout=1.0)
         assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.PHONE_TELEOP_QUERY}'
         page = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
@@ -411,7 +411,7 @@ def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
 
 
 def test_the_page_state_is_empty_until_something_sends_one(world):
-    served = WebXR(port=free_port(), frontend='iphone_teleop', use_https=False)
+    served = WebXR(port=free_port(), frontend=Frontend.IPHONE_TELEOP, use_https=False)
     emitter, receiver = world.local_pipe()
     served.page_state._bind(receiver)
     with _served_webxr(webxr=served) as base:
@@ -425,7 +425,7 @@ def test_the_page_state_is_empty_until_something_sends_one(world):
 
 
 def test_the_phone_page_for_data_collection_keeps_its_own_mode():
-    with _served_webxr('iphone') as base:
+    with _served_webxr(Frontend.IPHONE) as base:
         assert httpx.get(base + '/', timeout=1.0).status_code == 200
 
 

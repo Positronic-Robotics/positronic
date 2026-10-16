@@ -53,8 +53,8 @@ stack_cubes_collect = stack_cubes.override(
     camera_dict={
         keys.WRIST_IMAGE: 'handcam_left_ph',
         keys.EXTERIOR_IMAGE: 'back_view_ph',
-        'image.handcam_right': 'handcam_right_ph',
-        'image.wrist_upright': 'wrist_cam_upright_ph',
+        keys.HANDCAM_RIGHT_IMAGE: 'handcam_right_ph',
+        keys.WRIST_UPRIGHT_IMAGE: 'wrist_cam_upright_ph',
     },
     timeout=120,
     trial_count=20,

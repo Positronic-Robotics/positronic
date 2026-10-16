@@ -7,6 +7,7 @@ import tempfile
 import threading
 import traceback
 from collections.abc import Iterator
+from enum import StrEnum
 
 import numpy as np
 import turbojpeg
@@ -98,7 +99,16 @@ def encode_frame(encoder: turbojpeg.TurboJPEG, image: np.ndarray, quality: int) 
     return base64.b64encode(buffer).decode('utf-8')
 
 
-# The query that shows the phone page with the labels of ``positronic teleop``. The page reads it.
+class Frontend(StrEnum):
+    """The page that ``WebXR`` serves."""
+
+    OCULUS = 'oculus'
+    IPHONE = 'iphone'
+    # The phone page with the labels of ``positronic teleop``.
+    IPHONE_TELEOP = 'iphone_teleop'
+
+
+# The query that shows the phone page with the labels of ``positronic teleop``.
 PHONE_TELEOP_QUERY = 'mode=teleop'
 
 
@@ -130,7 +140,7 @@ class WebXR(pimm.ControlSystem):
     Parameters
     - port: TCP port to bind.
     - ssl_keyfile, ssl_certfile: TLS files if `use_https=True`.
-    - frontend: "oculus", "iphone", or "iphone_teleop": the phone page with the labels of ``positronic teleop``.
+    - frontend: the page to serve, a ``Frontend``.
     - use_https: enable HTTPS; set False for iPhone dev.
     - jpeg_quality: the JPEG quality of the video stream.
     """
@@ -140,7 +150,7 @@ class WebXR(pimm.ControlSystem):
         port: int,
         ssl_keyfile: str = 'key.pem',
         ssl_certfile: str = 'cert.pem',
-        frontend: str = 'oculus',
+        frontend: Frontend = Frontend.OCULUS,
         use_https: bool = True,
         sensitivity: float = 1.0,
         jpeg_quality: int = 50,
@@ -148,8 +158,8 @@ class WebXR(pimm.ControlSystem):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
-        assert frontend in ('oculus', 'iphone', 'iphone_teleop'), f'Unknown frontend: {frontend}'
-        self.frontend = frontend
+        # A command line override gives the value of the member.
+        self.frontend = Frontend(frontend)
         self.use_https = use_https
         self.server_thread = None
         self.frame = pimm.ControlSystemReceiver(self)
@@ -173,9 +183,9 @@ class WebXR(pimm.ControlSystem):
 
         @app.get('/')
         async def root(request: Request):
-            if self.frontend == 'oculus':
+            if self.frontend is Frontend.OCULUS:
                 return FileResponse(utils.package_assets_path('assets/webxr/index.html'))
-            if self.frontend == 'iphone_teleop' and request.url.query != PHONE_TELEOP_QUERY:
+            if self.frontend is Frontend.IPHONE_TELEOP and request.url.query != PHONE_TELEOP_QUERY:
                 return RedirectResponse(f'/?{PHONE_TELEOP_QUERY}')
             return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
 
@@ -196,7 +206,7 @@ class WebXR(pimm.ControlSystem):
         async def webxr_core():
             return FileResponse(utils.package_assets_path('assets/webxr/core.js'))
 
-        if self.frontend == 'oculus':
+        if self.frontend is Frontend.OCULUS:
 
             @app.get('/video-player.js')
             async def video_player():
@@ -285,7 +295,7 @@ class WebXR(pimm.ControlSystem):
 
         primary_host = utils.resolve_host_ip()
         url = _build_access_url(primary_host, self.port, self.use_https)
-        if self.frontend == 'iphone_teleop':
+        if self.frontend is Frontend.IPHONE_TELEOP:
             url += f'?{PHONE_TELEOP_QUERY}'
         banner = '=' * 80
         print(banner)

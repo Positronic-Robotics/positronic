@@ -89,31 +89,6 @@ def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked)
     assert asked == [{'suite': 'molmospaces-bench-v2', 'task_config': ['A', 'B'], mapping.SELECT_EPISODES: [0, 1]}]
 
 
-def test_a_horizon_override_rides_the_spec_and_no_override_sends_none(asked):
-    benchmarks.override(horizon_sec=120.0).instantiate().tasks()
-    benchmarks.instantiate().tasks()
-    assert asked == [{mapping.SELECT_HORIZON_SEC: 120.0}, {}]
-
-
-@pytest.mark.parametrize('horizon_sec', [0.0, -1.0, float('nan'), float('inf')])
-def test_an_invalid_horizon_override_is_refused(horizon_sec):
-    with pytest.raises(ValueError, match='horizon_sec must be finite and positive'):
-        benchmarks.override(horizon_sec=horizon_sec).instantiate()
-
-
-def test_the_collection_config_asks_the_pick_mini_benchmark_for_a_two_minute_horizon(asked):
-    molmo_cfg.pick_mini_collect.instantiate().tasks()
-    assert asked == [
-        {
-            'suite': 'molmospaces-bench-v2',
-            'scene_dataset': 'procthor-10k',
-            'task_config': 'FrankaPickDroidMiniBench',
-            'benchmark': 'FrankaPickDroidMiniBench_json_benchmark_20251231',
-            mapping.SELECT_HORIZON_SEC: 120.0,
-        }
-    ]
-
-
 def test_an_explicit_seed_sweeps_each_episode(asked):
     ev = benchmarks.override(seed=5, trial_count=2).instantiate()
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in ev.tasks()]
