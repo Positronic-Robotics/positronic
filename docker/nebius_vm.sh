@@ -66,12 +66,24 @@ public_key() {
     echo "No key at $ssh_key. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
     return 1
   fi
-  blob=$(cut -d' ' -f2 "$ssh_key.pub" 2>/dev/null) || blob=""
+  if [ ! -f "$ssh_key.pub" ]; then
+    echo "No public key at $ssh_key.pub. Make it with:" >&2
+    echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
+    return 1
+  fi
+  blob=$(cut -d' ' -f2 "$ssh_key.pub")
   if [ -z "$blob" ] || ! ssh-add -L 2>/dev/null | cut -d' ' -f2 | grep -qxF "$blob"; then
     echo "ssh cannot use $ssh_key without a passphrase. Run: ssh-add $(printf %q "$ssh_key")" >&2
     return 1
   fi
   cut -d' ' -f1,2 "$ssh_key.pub"
+}
+
+# Show the error $1 for a VM that exists, and the command that deletes it. Then stop.
+fail() {
+  echo "$1" >&2
+  echo "The VM costs money until you delete it. Delete it with: $delete_cmd" >&2
+  exit 1
 }
 
 # Create the VM with the public key $1. When Nebius does not start the VM, delete it and stop.
@@ -126,15 +138,14 @@ create() {
 
   deadline=$((SECONDS + 900))
   until ip=$(vm_address) && [ -n "$ip" ]; do
-    [ "$SECONDS" -lt "$deadline" ] || { echo "The VM got no public address in 900 s." >&2; exit 1; }
+    [ "$SECONDS" -lt "$deadline" ] || fail "The VM got no public address in 900 s."
     sleep 10
   done
   # Nebius gives an address to a new VM after it frees it. For a VM that this run created, a known_hosts line for
   # the address is from another VM.
   if [ "$created" = true ] && [ -f "$HOME/.ssh/known_hosts" ] && ! ssh-keygen -R "$ip" >/dev/null 2>"$errors"; then
     cat "$errors" >&2
-    echo "ssh-keygen could not remove $ip from ~/.ssh/known_hosts. Delete the VM with: $delete_cmd" >&2
-    exit 1
+    fail "ssh-keygen could not remove $ip from ~/.ssh/known_hosts."
   fi
   # ssh exits with 255 when it cannot connect, and `timeout` on the VM exits with 124. Any other failure comes
   # from cloud-init. The `timeout` runs on the VM, because macOS has no `timeout`.
@@ -145,15 +156,13 @@ create() {
     ssh "${ssh_opts[@]}" "ubuntu@$ip" timeout $((deadline > SECONDS ? deadline - SECONDS : 1)) \
       cloud-init status --wait >/dev/null 2>"$errors" || status=$?
     [ "$status" = 255 ] || break
-    [ "$SECONDS" -lt "$deadline" ] || { cat "$errors" >&2; echo "No ssh to $ip in 900 s." >&2; exit 1; }
+    [ "$SECONDS" -lt "$deadline" ] || { cat "$errors" >&2; fail "No ssh to $ip in 900 s."; }
     sleep 10
   done
   if [ "$status" = 124 ]; then
-    echo "The VM setup did not finish in 900 s." >&2
-    exit 1
+    fail "The VM setup did not finish in 900 s."
   elif [ "$status" != 0 ]; then
-    echo "The VM setup failed. Read the log with: $ssh_cmd ubuntu@$ip sudo cat /var/log/cloud-init-output.log" >&2
-    exit 1
+    fail "The VM setup failed. Read the log with: $ssh_cmd ubuntu@$ip sudo cat /var/log/cloud-init-output.log"
   fi
   echo "The VM is ready. Connect to it with:"
   echo "  $ssh_cmd ubuntu@$ip"
