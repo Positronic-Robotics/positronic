@@ -24,10 +24,10 @@ disk_gib="${NEBIUS_DISK_GIB:-200}"
 ssh_key="${NEBIUS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 # The ssh command to print. Plain ssh finds only a key at a default path.
 ssh_cmd=ssh
-[ -z "${NEBIUS_SSH_KEY:-}" ] || ssh_cmd="ssh -i $ssh_key"
+[ -z "${NEBIUS_SSH_KEY:-}" ] || ssh_cmd="ssh -i $(printf %q "$ssh_key")"
 # The delete command to print. It must name the same VM.
-delete_cmd="bash $0 delete"
-[ -z "${NEBIUS_VM_NAME:-}" ] || delete_cmd="NEBIUS_VM_NAME=$name $delete_cmd"
+delete_cmd="bash $(printf %q "$0") delete"
+[ -z "${NEBIUS_VM_NAME:-}" ] || delete_cmd="NEBIUS_VM_NAME=$(printf %q "$name") $delete_cmd"
 
 project=$(nebius config get parent-id)
 errors=$(mktemp)
@@ -47,9 +47,48 @@ vm_address() {
   vm_field '{.status.network_interfaces[0].public_ip_address}' | sed -n 's/.*"address": *"\([0-9.]*\)\/.*/\1/p'
 }
 
+# Create the VM. When Nebius does not start it, delete it and stop.
+create_vm() {
+  subnet=$(nebius vpc subnet list --parent-id "$project" --format jsonpath='{.items[0].metadata.id}')
+  # The image has the user `ubuntu` already, and cloud-init does not change the groups of a user that exists.
+  user_data="#cloud-config
+ssh_authorized_keys:
+  - \"$(cat "$ssh_key.pub")\"
+runcmd:
+  - [usermod, -aG, docker, ubuntu]
+  - [su, -l, ubuntu, -c, 'curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/install.sh && sh /tmp/uv-install.sh']"
+  # A label that only this run knows. After a failed create, it shows that the VM is from this run.
+  run_label=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+  echo "Creating the VM $name: $platform $preset, $disk_gib GiB disk."
+  if nebius compute instance create --parent-id "$project" --name "$name" --labels "nebius-vm-run=$run_label" \
+    --resources-platform "$platform" --resources-preset "$preset" \
+    --boot-disk-attach-mode read_write --boot-disk-managed-disk-name "$name-boot" \
+    --boot-disk-managed-disk-source-image-family-image-family ubuntu24.04-cuda12 \
+    --boot-disk-managed-disk-size-gibibytes "$disk_gib" --boot-disk-managed-disk-type network_ssd \
+    --network-interfaces "[{\"name\":\"eth0\",\"subnet_id\":\"$subnet\",\"ip_address\":{},\"public_ip_address\":{}}]" \
+    --cloud-init-user-data "$user_data" >/dev/null; then
+    return
+  fi
+  # A VM that Nebius did not start stays in the project, stopped. A VM with the name but not the label is from
+  # another run.
+  metadata=$(vm_field '{.metadata}')
+  if grep -q "$run_label" <<<"$metadata"; then
+    echo "Nebius did not start the VM. Deleting what it created." >&2
+    id=$(sed -n 's/.*"id":"\(computeinstance-[a-z0-9]*\)".*/\1/p' <<<"$metadata")
+    nebius compute instance delete --id "$id" >/dev/null
+  fi
+  exit 1
+}
+
 create() {
   if [ ! -f "$ssh_key.pub" ]; then
     echo "No public key at $ssh_key.pub. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
+    exit 1
+  fi
+  # The ssh below cannot ask for a passphrase. Check the key before the VM costs money.
+  if ! ssh-keygen -y -P "" -f "$ssh_key" >/dev/null 2>&1 &&
+    ! ssh-add -L 2>/dev/null | grep -qF "$(cut -d' ' -f2 "$ssh_key.pub")"; then
+    echo "ssh cannot use $ssh_key without a passphrase. Run: ssh-add $(printf %q "$ssh_key")" >&2
     exit 1
   fi
   state=$(vm_field '{.status.state}')
@@ -59,35 +98,7 @@ create() {
   elif [ -n "$state" ]; then
     echo "The VM $name exists. Waiting for it."
   else
-    subnet=$(nebius vpc subnet list --parent-id "$project" --format jsonpath='{.items[0].metadata.id}')
-    # The image has the user `ubuntu` already, and cloud-init does not change the groups of a user that exists.
-    user_data="#cloud-config
-ssh_authorized_keys:
-  - \"$(cat "$ssh_key.pub")\"
-runcmd:
-  - [usermod, -aG, docker, ubuntu]
-  - [su, -l, ubuntu, -c, 'curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/install.sh && sh /tmp/uv-install.sh']"
-    # A label that only this run knows. After a failed create, it shows that the VM is from this run.
-    run_label=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
-    echo "Creating the VM $name: $platform $preset, $disk_gib GiB disk."
-    nebius compute instance create --parent-id "$project" --name "$name" --labels "nebius-vm-run=$run_label" \
-      --resources-platform "$platform" --resources-preset "$preset" \
-      --boot-disk-attach-mode read_write --boot-disk-managed-disk-name "$name-boot" \
-      --boot-disk-managed-disk-source-image-family-image-family ubuntu24.04-cuda12 \
-      --boot-disk-managed-disk-size-gibibytes "$disk_gib" --boot-disk-managed-disk-type network_ssd \
-      --network-interfaces \
-        "[{\"name\":\"eth0\",\"subnet_id\":\"$subnet\",\"ip_address\":{},\"public_ip_address\":{}}]" \
-      --cloud-init-user-data "$user_data" >/dev/null || {
-      # A VM that Nebius did not start stays in the project, stopped. A VM with the name but not the label is
-      # from another run.
-      metadata=$(vm_field '{.metadata}')
-      if grep -q "$run_label" <<<"$metadata"; then
-        echo "Nebius did not start the VM. Deleting what it created." >&2
-        id=$(sed -n 's/.*"id":"\(computeinstance-[a-z0-9]*\)".*/\1/p' <<<"$metadata")
-        nebius compute instance delete --id "$id" >/dev/null
-      fi
-      exit 1
-    }
+    create_vm
   fi
 
   deadline=$((SECONDS + 900))
