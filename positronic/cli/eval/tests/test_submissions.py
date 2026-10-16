@@ -9,16 +9,19 @@ import json
 import httpx
 import pytest
 from platform_client import routes
+from platform_client.catalog import EvalListResponse, EvalSummary, TaskListResponse, TaskSummary
 from platform_client.enums import ErrorCode
 from platform_client.ids import SubmissionId
 from platform_client.responses import SubmissionListResponse, SubmissionView
+from platform_client.tasks import TaskRef
+from positronic_evals.evals import EvalRef
 from pydantic import TypeAdapter
 
 from positronic.cli import _internal_main
 from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.conftest import AT, BASE, ID, refusal
-from positronic.cli.eval.submissions import cancel, catalog, list_submissions, status
+from positronic.cli.eval.submissions import CatalogView, cancel, catalog, list_submissions, status
 
 PENDING = {'id': ID, 'status': 'pending', 'received_at': AT, 'queued_at': AT, 'queue_position': 3}
 
@@ -94,51 +97,49 @@ def test_a_response_the_client_cannot_read_is_a_refusal_without_the_body(platfor
     assert caught.value.fault is Fault.PLATFORM
 
 
-EVAL = {'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': ['a'], 'composable': True}
-TASK = {'id': 'eight-spoons-into-grey-tote', 'embodiment': 'franka', 'task': 'spoons'}
-NO_GRANT = ({'error': {'code': 'forbidden', 'message': 'no customer grant'}}, 403)
+EVAL = EvalSummary(id=EvalRef('fake.smoke'), embodiment='franka', tasks=['a'], composable=True)
+TASK = TaskSummary(id=TaskRef('eight-spoons-into-grey-tote'), embodiment='franka', task='spoons')
+EVALS_ANSWER = (EvalListResponse(evals=[EVAL]).model_dump(mode='json'), 200)
+TASKS_ANSWER = (TaskListResponse(tasks=[TASK]).model_dump(mode='json'), 200)
+NO_GRANT = (refusal(ErrorCode.forbidden, 'no customer grant'), 403)
 
 
 def test_catalog_prints_the_evals_where_the_key_has_no_grant_for_the_tasks(platform, run_command, capsys):
-    platform.answer_by_route({routes.CATALOG_EVALS: ({'evals': [EVAL]}, 200), routes.CATALOG_TASKS: NO_GRANT})
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: NO_GRANT})
 
     run_command(catalog)
 
     out, err = capsys.readouterr()
-    assert '"id": "fake.smoke"' in out
+    assert EvalListResponse.model_validate_json(out).evals == [EVAL]
     assert err.strip() == 'tasks: forbidden: no customer grant'
 
 
 def test_catalog_prints_what_the_key_may_name(platform, run_command, capsys):
-    platform.answer({'evals': [EVAL], 'tasks': [TASK]})
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: TASKS_ANSWER})
 
     run_command(catalog)
 
     assert platform.request.url.path == routes.CATALOG_TASKS
     out = capsys.readouterr().out
-    assert '"id": "fake.smoke"' in out
-    assert '"id": "eight-spoons-into-grey-tote"' in out
+    assert EVAL.id in out
+    assert TASK.id in out
 
 
 def test_catalog_json_prints_the_evals_and_the_tasks_as_one_value(platform, run_command, capsys):
-    platform.answer({'evals': [EVAL], 'tasks': [TASK]})
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: TASKS_ANSWER})
 
     run_command(catalog, json=True)
 
-    printed = json.loads(capsys.readouterr().out)
-    assert [entry['id'] for entry in printed['evals']] == [EVAL['id']]
-    assert [entry['id'] for entry in printed['tasks']] == [TASK['id']]
+    assert CatalogView.model_validate_json(capsys.readouterr().out) == CatalogView(evals=[EVAL], tasks=[TASK])
 
 
 def test_catalog_json_prints_null_tasks_where_the_key_has_no_grant_for_them(platform, run_command, capsys):
-    platform.answer_by_route({routes.CATALOG_EVALS: ({'evals': [EVAL]}, 200), routes.CATALOG_TASKS: NO_GRANT})
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: NO_GRANT})
 
     run_command(catalog, json=True)
 
     out, err = capsys.readouterr()
-    printed = json.loads(out)
-    assert [entry['id'] for entry in printed['evals']] == [EVAL['id']]
-    assert printed['tasks'] is None
+    assert CatalogView.model_validate_json(out) == CatalogView(evals=[EVAL], tasks=None)
     assert err.strip() == 'tasks: forbidden: no customer grant'
 
 
