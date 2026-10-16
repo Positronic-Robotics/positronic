@@ -15,14 +15,6 @@ from pydantic import SecretStr
 
 from positronic.cli.account.gateway import CommandFailed, Fault, gateway, refusing_bad_input
 
-# The reasons that `ReasonCode` lists as the platform's faults. A replay can return a run that ended for one.
-_PLATFORM_FAULT_REASONS = frozenset({
-    ReasonCode.internal_error,
-    ReasonCode.quota_exceeded,
-    ReasonCode.provision_wedged,
-    ReasonCode.runner_unresponsive,
-})
-
 
 def _credential(username: str | None, password_file: object | None) -> RegistryCredential | None:
     """The credential that opens a private registry, from the two flags that state it."""
@@ -40,6 +32,15 @@ def _credential(username: str | None, password_file: object | None) -> RegistryC
     except ValueError as exc:
         raise CommandFailed(f'--registry-password-file names no readable password: {exc}', Fault.USAGE) from exc
     return RegistryCredential(username=username, password=SecretStr(password))
+
+
+# The reasons that `ReasonCode` lists as the platform's faults. A replay can return a run that ended for one.
+_PLATFORM_FAULT_REASONS = frozenset({
+    ReasonCode.internal_error,
+    ReasonCode.quota_exceeded,
+    ReasonCode.provision_wedged,
+    ReasonCode.runner_unresponsive,
+})
 
 
 def submit(
