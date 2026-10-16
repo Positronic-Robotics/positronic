@@ -131,8 +131,10 @@ create() {
   done
   # Nebius gives an address to a new VM after it frees it. For a VM that this run created, a known_hosts line for
   # the address is from another VM.
-  if [ "$created" = true ] && [ -f "$HOME/.ssh/known_hosts" ]; then
-    ssh-keygen -R "$ip" >/dev/null 2>&1
+  if [ "$created" = true ] && [ -f "$HOME/.ssh/known_hosts" ] && ! ssh-keygen -R "$ip" >/dev/null 2>"$errors"; then
+    cat "$errors" >&2
+    echo "ssh-keygen could not remove $ip from ~/.ssh/known_hosts. Delete the VM with: $delete_cmd" >&2
+    exit 1
   fi
   # ssh exits with 255 when it cannot connect, and `timeout` on the VM exits with 124. Any other failure comes
   # from cloud-init. The `timeout` runs on the VM, because macOS has no `timeout`.
