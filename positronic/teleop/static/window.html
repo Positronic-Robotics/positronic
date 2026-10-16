@@ -18,21 +18,19 @@
 <body>
   <div id="state">Waiting for a trial</div>
   <div id="task"></div>
-  <button id="ready" disabled>Ready</button>
   <button id="cancel" disabled>Cancel</button>
   <div id="error"></div>
   <div id="cameras"></div>
   <script>
     const ROUTES = {
       status: '/status',
-      ready: '/ready',
       cancel: '/cancel',
       camera: (name) => `/camera/${encodeURIComponent(name)}.jpg`,
     };
     const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
     const STATE = {
       [PHASE.idle]: 'Waiting for a trial',
-      [PHASE.readyWait]: 'Human trial: put on the headset, then press Ready',
+      [PHASE.readyWait]: 'Human trial: put on the headset, then press Ready on the headset or the phone',
       [PHASE.running]: 'Trial running',
       [PHASE.ended]: 'The trial ended: give the verdict on the console',
     };
@@ -56,7 +54,6 @@
       document.getElementById('state').textContent = STATE[status.phase];
       document.getElementById('task').textContent = status.task;
       const waiting = status.phase === PHASE.readyWait;
-      document.getElementById('ready').disabled = !waiting;
       document.getElementById('cancel').disabled = !waiting;
       if (waiting && shownPhase !== PHASE.readyWait) {
         document.title = 'Human trial';
@@ -101,7 +98,6 @@
       setTimeout(poll, 200);
     }
 
-    document.getElementById('ready').onclick = () => post(ROUTES.ready);
     document.getElementById('cancel').onclick = () => post(ROUTES.cancel);
     poll();
   </script>

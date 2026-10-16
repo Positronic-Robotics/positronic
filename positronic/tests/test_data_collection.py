@@ -1,6 +1,8 @@
 import base64
+import collections
 import contextlib
 import io
+import socket
 import time
 import types
 from collections.abc import Callable, Iterator, Sequence
@@ -10,11 +12,12 @@ from typing import cast
 import httpx
 import numpy as np
 import PIL.Image
+import psutil
 import pytest
 import turbojpeg
 
 import pimm
-from positronic import data_collection, keys, wire
+from positronic import data_collection, keys, utils, wire
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -355,10 +358,11 @@ def test_the_headset_video_skips_a_lost_camera_and_resumes_on_its_next_frame(wor
 
 
 @contextlib.contextmanager
-def _served_webxr(frontend: str = 'oculus') -> Iterator[str]:
-    """A ``WebXR`` server of ``frontend`` on a free port, and its base URL once it answers."""
-    port = free_port()
-    webxr = WebXR(port=port, frontend=frontend, use_https=False)
+def _served_webxr(frontend: str = 'oculus', webxr: WebXR | None = None) -> Iterator[str]:
+    """A ``WebXR`` server of ``frontend`` on a free port, or ``webxr`` when given, and its base URL once it answers."""
+    if webxr is None:
+        webxr = WebXR(port=free_port(), frontend=frontend, use_https=False)
+    port = webxr.port
     stop = types.SimpleNamespace(value=False)
     run = webxr.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, None))
     next(run)
@@ -391,6 +395,32 @@ def test_the_phone_page_for_teleop_opens_in_its_teleop_mode():
         assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.PHONE_TELEOP_QUERY}'
         page = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
         assert page.status_code == 200 and "get('mode') === 'teleop'" in page.text
+        assert 'id="phase"' in page.text and "STATE_ROUTE = '/state'" in page.text and 'btn--control-on' in page.text
+
+
+def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
+    address = collections.namedtuple('address', 'family address')
+    interfaces = {
+        'lo0': [address(socket.AF_INET, '127.0.0.1')],
+        'en0': [address(socket.AF_INET6, 'fe80::1'), address(socket.AF_INET, '10.0.0.5')],
+        'utun3': [address(socket.AF_INET, '100.64.0.2')],
+    }
+    monkeypatch.setattr(psutil, 'net_if_addrs', lambda: interfaces)
+    assert utils.interface_ipv4_addresses() == [('en0', '10.0.0.5'), ('utun3', '100.64.0.2')]
+
+
+def test_the_page_state_is_empty_until_something_sends_one(world):
+    served = WebXR(port=free_port(), frontend='iphone_teleop', use_https=False)
+    emitter, receiver = world.local_pipe()
+    served.page_state._bind(receiver)
+    with _served_webxr(webxr=served) as base:
+        assert httpx.get(base + '/state', timeout=1.0).json() == {}
+        emitter.emit({'phase': 'running', 'control': True, 'attempt_started': False})
+        assert httpx.get(base + '/state', timeout=1.0).json() == {
+            'phase': 'running',
+            'control': True,
+            'attempt_started': False,
+        }
 
 
 def test_the_phone_page_for_data_collection_keeps_its_own_mode():

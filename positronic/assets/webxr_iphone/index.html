@@ -38,6 +38,9 @@
       .slider__handle { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 48px; height: 48px; background: #fff; border-radius: 50%; box-shadow: 0 4px 12px rgba(0,0,0,0.35); }
       .value { min-width: 54px; text-align: right; font-variant-numeric: tabular-nums; }
       .hint { font-size: 12px; opacity: 0.9; margin-top: 6px; }
+      .phase { font-weight: 700; margin-top: 12px; }
+      .btn--control-on { background: #06d6a0; color: #111; }
+      .btn--control-off { background: #6c757d; color: #fff; }
     </style>
   </head>
   <body>
@@ -59,6 +62,7 @@
           <div class="slider__handle" id="sliderHandle" style="left: 0%;"></div>
         </div>
         <div class="hint">Slider has extra padding near 0 and 1 for easier reach</div>
+        <div class="phase" id="phase" hidden></div>
         <div class="row" style="margin-top: 12px;">
           <div class="buttons">
             <button class="btn btn--toggle btn--track btn--track-off" id="btnA" title="Tracking disabled" aria-label="Tracking off">
@@ -138,6 +142,41 @@
         setGrip(0.0);
       }
 
+      // The state of the trial, as the teleop service gives it at `STATE_ROUTE`.
+      const STATE_ROUTE = '/state';
+      const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
+
+      function phaseText(state) {
+        switch (state.phase) {
+          case PHASE.readyWait: return 'Human trial: tap Ready';
+          case PHASE.running:
+            return state.attempt_started
+              ? 'Task running: hold Ready/Start for Complete'
+              : 'Trial running: tap Start task when you begin';
+          case PHASE.ended: return 'Trial ended';
+          default: return 'Waiting for a trial';
+        }
+      }
+
+      function showTeleopState(configs, applyVisual) {
+        const phaseEl = document.getElementById('phase');
+        phaseEl.hidden = false;
+        const show = async () => {
+          try {
+            const state = await (await fetch(STATE_ROUTE)).json();
+            phaseEl.textContent = phaseText(state);
+            configs.track.el.classList.toggle('btn--control-on', state.control === true);
+            configs.track.el.classList.toggle('btn--control-off', state.control !== true);
+            configs.reset.baseLabel = state.phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
+            applyVisual('reset');
+          } catch (e) {
+            phaseEl.textContent = 'The teleop service does not answer';
+          }
+          setTimeout(show, 250);
+        };
+        show();
+      }
+
       function setupButtons() {
         const configs = {
           reset: {
@@ -182,7 +221,10 @@
           });
           teleop(configs.track, 'Control', 'tap: on / off');
           teleop(configs.record, 'Ready / Start task', 'hold: Complete');
-          teleop(configs.reset, 'Cancel', 'hold: Give up');
+          teleop(configs.reset, 'Cancel', '');
+          // The service gives the colour of Control, so a press does not change it.
+          configs.track.classes = null;
+          configs.track.el.classList.remove('btn--track', 'btn--track-off');
         }
 
         const state = {
@@ -268,6 +310,8 @@
           el.addEventListener('touchend', () => release(name, true));
           el.addEventListener('touchcancel', () => release(name, true));
         }
+
+        if (TELEOP) showTeleopState(configs, applyVisual);
 
         window.addEventListener('touchend', () => releaseAll(true));
         window.addEventListener('touchcancel', () => releaseAll(true));

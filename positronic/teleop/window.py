@@ -1,6 +1,7 @@
 """The window of the teleop service on the station screen: a page that a browser on the station shows.
 
-It tells the station that a trial is human, takes Ready and Cancel, and shows what the headset shows.
+It tells the station that a trial is human, takes Cancel, and shows the cameras of the run. Ready comes only from the
+headset or the phone.
 """
 
 import threading
@@ -17,7 +18,6 @@ from pydantic import BaseModel
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .service import NotWaiting, Phase, TeleopService
-from .session import Reply
 
 STATIC_DIR = Path(__file__).resolve().parent / 'static'
 _HOST = '127.0.0.1'
@@ -39,7 +39,7 @@ def window_app(service: TeleopService) -> FastAPI:
 
     @app.middleware('http')
     async def refuse_foreign_origins(request: Request, call_next):
-        """A page on another site cannot ready or cancel a trial. A browser sends ``Origin`` with each cross-site
+        """A page on another site cannot cancel a trial. A browser sends ``Origin`` with each cross-site
         POST, and a client that sends none passes."""
         origin = request.headers.get('origin')
         if request.method != 'GET' and origin is not None and urlparse(origin).netloc != request.url.netloc:
@@ -68,14 +68,9 @@ def window_app(service: TeleopService) -> FastAPI:
     async def get_status() -> WindowStatus:
         return status()
 
-    @app.post('/ready')
-    async def ready() -> WindowStatus:
-        service.answer_ready(Reply.READY)
-        return status()
-
     @app.post('/cancel')
     async def cancel() -> WindowStatus:
-        service.answer_ready(Reply.CANCELLED)
+        service.cancel_ready_wait()
         return status()
 
     @app.get('/camera/{name}.jpg')

@@ -12,7 +12,7 @@ import numpy as np
 import turbojpeg
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 import pimm
 from positronic import geom, utils
@@ -153,6 +153,9 @@ class WebXR(pimm.ControlSystem):
         self.use_https = use_https
         self.server_thread = None
         self.frame = pimm.ControlSystemReceiver(self)
+        # A JSON object that the page polls at ``/state``, such as the state of a trial. It is empty while nothing
+        # sends one.
+        self.page_state = pimm.ControlSystemReceiver(self)
         self.controller_positions = pimm.ControlSystemEmitter(self)
         self.buttons = pimm.ControlSystemEmitter(self)
         self.sensitivity = sensitivity
@@ -175,6 +178,11 @@ class WebXR(pimm.ControlSystem):
             if self.frontend == 'iphone_teleop' and request.url.query != PHONE_TELEOP_QUERY:
                 return RedirectResponse(f'/?{PHONE_TELEOP_QUERY}')
             return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
+
+        @app.get('/state')
+        async def page_state():
+            message = self.page_state.read()
+            return JSONResponse({} if message is None else message.data)
 
         @app.get('/three.min.js')
         async def three_min():
@@ -282,6 +290,8 @@ class WebXR(pimm.ControlSystem):
         banner = '=' * 80
         print(banner)
         print(f' >>> WEBXR interface available at: {url} <<<')
+        addresses = ', '.join(f'{name} {address}' for name, address in utils.interface_ipv4_addresses())
+        print(f'     The addresses of this machine: {addresses or "none"}. Use the one that the phone can reach.')
         print(banner)
 
         while not should_stop.value:

@@ -15,7 +15,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import cv2
 import numpy as np
@@ -277,12 +277,15 @@ class TeleopService:
         with self._changed:
             return self._images[name]
 
-    def answer_ready(self, reply: Literal[Reply.READY, Reply.CANCELLED]) -> None:
-        """Ready or Cancel from the window on the station screen, as the buttons of the headset give them."""
+    def cancel_ready_wait(self) -> None:
+        """Cancel the trial that waits for Ready, from the window on the station screen.
+
+        Ready comes only from the headset or the phone, because it confirms that the person holds the controller.
+        """
         with self._changed:
             if self._phase is not Phase.READY_WAIT or self._ready is not None:
                 raise NotWaiting('no trial waits for Ready')
-            self._ready = reply
+            self._ready = Reply.CANCELLED
             self._changed.notify_all()
 
     @staticmethod

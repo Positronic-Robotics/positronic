@@ -3,6 +3,7 @@ import os
 import re
 import threading
 import time
+import types
 from pathlib import Path
 from typing import cast
 
@@ -14,7 +15,9 @@ from positronic_model_server.serialization import deserialise, serialise
 from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, PeerDisconnected, UnixSocketAddress
 
+import pimm
 import positronic.cfg.simulator
+from pimm.world import SystemClock
 from positronic import geom, keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
@@ -23,9 +26,10 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step
 from positronic.policy.executor import Executor
-from positronic.teleop import TeleopPolicy, session
+from positronic.teleop import TeleopPolicy, command, session
 from positronic.teleop import service as service_module
 from positronic.teleop.service import ButtonMap, Phase, TeleopService
+from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 from positronic.utils import package_assets_path
 
 HAND = geom.Transform3D(np.array([0.1, 0.2, 1.0]), geom.Rotation.identity)
@@ -472,3 +476,17 @@ def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, hea
             assert service.state().cameras == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
         finally:
             teleop.close()
+
+
+def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
+    service = TeleopService(socket_path, 1.0, 0.05, HOLD_SEC)
+    bridge = command._Headset(service)
+    sent, views = RecordingEmitter[dict](), RecordingEmitter[np.ndarray]()
+    bridge.page_state._bind(sent, clock=SystemClock())
+    bridge.view._bind(views, clock=SystemClock())
+    bridge.controller_positions._bind(ManualCommandReceiver())
+    bridge.buttons._bind(ManualCommandReceiver())
+    stop = types.SimpleNamespace(value=False)
+    next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
+    [(_, state)] = sent.emitted
+    assert state == {'phase': Phase.IDLE, 'control': False, 'attempt_started': False}
