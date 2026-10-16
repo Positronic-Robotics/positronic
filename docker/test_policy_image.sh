@@ -9,7 +9,7 @@
 # Every 5 s, the script sends POST /api/v1/keepalive to port 8000 from outside the container, as the
 # platform does. It prints one result line and the end of the log, and exits with 0 only when the server
 # answers 200 with the keepalive answer.
-# Needs Docker on amd64 Linux, and curl.
+# Needs Docker on amd64 Linux, curl and python3.
 set -euo pipefail
 
 gpu_flags=()
@@ -32,13 +32,19 @@ alive_key=alive_seconds
 token=test
 auth_value="Bearer $token"
 
+for tool in curl python3; do
+  command -v "$tool" >/dev/null || { echo "This test needs $tool." >&2; exit 1; }
+done
 if [ "$(uname -s)" != Linux ] || [ "$(docker version -f '{{.Server.Arch}}')" != amd64 ]; then
   echo "Run this test with Docker on an amd64 Linux machine. Docker on another machine emulates or hides it." >&2
   exit 1
 fi
-# Rootless Docker keeps the container's address inside its own namespace, and an internal network publishes no port.
-if docker info -f '{{json .SecurityOptions}}' | grep -q 'name=rootless'; then
-  echo "This Docker is rootless, and the host cannot reach the container. Run the test with the system Docker." >&2
+# The script calls the container's address on its network. Rootless Docker keeps that address in its own
+# namespace, Docker Desktop keeps it in a VM, and an internal network publishes no port.
+if docker info -f '{{json .SecurityOptions}}' | grep -q 'name=rootless' ||
+  [ "$(docker info -f '{{.OperatingSystem}}')" = 'Docker Desktop' ]; then
+  echo "This Docker is rootless or Docker Desktop, and the host cannot reach the container." >&2
+  echo "Run the test with the system Docker Engine." >&2
   exit 1
 fi
 # A network of this test alone: a container on a shared network could get files from the other containers on it.
@@ -69,9 +75,42 @@ loopback_only() {
       '$4 == "0A" && ($2 == v4 || $2 == v6) {found = 1} END {exit !found}'
 }
 
-# The keepalive answer as `positronic_wire.websocket` reads it: a JSON object whose $alive_key is an integer or
-# null. A 200 with any other body fails the run on the platform.
-keepalive_answer="^[[:space:]]*\\{.*\"$alive_key\"[[:space:]]*:[[:space:]]*(null|-?[0-9]+)[[:space:]]*[,}]"
+# Succeed when the file $1 holds the keepalive answer as `positronic_wire.websocket` reads it: a JSON object
+# whose $alive_key is an integer or null. A 200 with any other body fails the run on the platform.
+keepalive_answer() {
+  python3 -c 'import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        alive = json.load(f)[sys.argv[2]]
+except (ValueError, LookupError, TypeError, RecursionError):
+    sys.exit(1)
+sys.exit(0 if alive is None or type(alive) is int else 1)' "$1" "$alive_key"
+}
+
+# Call the keepalive route at the address $1 once, with the files $2 for the body and $3 for curl's errors.
+# Print `silent` for no answer, `cold <code>` for a server that is not ready, `pass <answer>`, or `fail <reason>`.
+probe() {
+  local status=0 code
+  code=$(curl -sS --noproxy '*' -o "$2" -w '%{http_code}' -m 5 -X POST -H "$auth_header: $auth_value" \
+    "http://$1:$port$keepalive_path" 2>"$3") || status=$?
+  # curl exits with 7 on a closed port, 28 on no answer in 5 s, and 52 or 56 on a dropped connection. These
+  # ignore the HTTP code, as a server can send its headers and then stop.
+  if [ "$status" = 7 ] || [ "$status" = 28 ] || [ "$status" = 52 ] || [ "$status" = 56 ]; then
+    echo silent
+  elif [ "$status" != 0 ]; then
+    echo "fail curl failed: $(cat "$3")"
+  elif [ "$code" = 429 ] || [ "$code" -ge 500 ]; then
+    # The platform reads these as a server that is not ready yet, and asks again until its deadline.
+    echo "cold $code"
+  elif [ "$code" != 200 ]; then
+    echo "fail the server answered HTTP $code"
+  elif keepalive_answer "$2"; then
+    echo "pass $(cat "$2")"
+  else
+    echo "fail the server answered 200 without {\"$alive_key\": <an integer or null>}: $(head -c 200 "$2")"
+  fi
+}
+
 start=$SECONDS
 passed=false
 waiting_on=""
@@ -84,35 +123,24 @@ while :; do
     result="no answer in $limit s$waiting_on"
     break
   fi
-  # curl exits with 7 on a closed port, 28 on no answer in 5 s, and 52 or 56 on a dropped connection.
-  status=0
-  code=$(curl -sS --noproxy '*' -o "$body" -w '%{http_code}' -m 5 -X POST -H "$auth_header: $auth_value" \
-    "http://$ip:$port$keepalive_path" 2>"$curl_errors") || status=$?
-  # These waits ignore the HTTP code, as a server can send its headers and then stop.
-  if [ "$status" = 7 ] || [ "$status" = 28 ] || [ "$status" = 52 ] || [ "$status" = 56 ]; then
-    if loopback_only "$cid" "$port"; then
-      result="the server listens only on 127.0.0.1, and the platform connects from outside the container"
-      break
-    fi
-    sleep 5
-  elif [ "$status" != 0 ]; then
-    result="curl failed: $(cat "$curl_errors")"
-    break
-  elif [ "$code" = 200 ] && tr -d '\n' <"$body" | grep -Eq "$keepalive_answer"; then
-    result="the server answered: $(cat "$body")"
-    passed=true
-    break
-  elif [ "$code" = 429 ] || [ "$code" -ge 500 ]; then
-    # The platform reads these as a server that is not ready yet, and asks again until its deadline.
-    waiting_on=", the last answer was HTTP $code"
-    sleep 5
-  elif [ "$code" = 200 ]; then
-    result="the server answered 200 without {\"$alive_key\": <an integer or null>}: $(head -c 200 "$body")"
-    break
-  else
-    result="the server answered HTTP $code"
-    break
-  fi
+  outcome=$(probe "$ip" "$body" "$curl_errors")
+  case $outcome in
+    pass*)
+      result="the server answered: ${outcome#pass }"
+      passed=true
+      break ;;
+    fail*)
+      result=${outcome#fail }
+      break ;;
+    cold*)
+      waiting_on=", the last answer was HTTP ${outcome#cold }" ;;
+    silent)
+      if loopback_only "$cid" "$port"; then
+        result="the server listens only on 127.0.0.1, and the platform connects from outside the container"
+        break
+      fi ;;
+  esac
+  sleep 5
 done
 echo "$result, after $((SECONDS - start)) s"
 echo "--- the last 30 lines of the log ---"
