@@ -42,6 +42,7 @@ from positronic.policy.processors import (
     ConstantDuration,
     DelayEstimate,
     DurationEstimate,
+    DurationEstimateRun,
     PauseOnUnavailable,
     PrefixSampling,
     RTCSchedule,
@@ -594,15 +595,16 @@ def test_delay_based_leads_use_completed_calls(execution, monkeypatch, lead, cal
 
 
 class PeakDuration(DurationEstimate):
-    def __init__(self):
-        self._peak = 0.0
+    class _Run(DurationEstimateRun):
+        def __init__(self):
+            self._peak = 0.0
 
-    def push(self, delay_sec):
-        self._peak = max(self._peak, delay_sec)
-        return self._peak
+        def update(self, delay_sec):
+            self._peak = max(self._peak, delay_sec)
+            return self._peak
 
-    def fresh(self):
-        return type(self)()
+    def run(self):
+        return self._Run()
 
     def to_spec(self):
         raise NotImplementedError('Local estimator has no wire format')
@@ -615,7 +617,7 @@ def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, esti
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
     estimate = estimate_factory()
-    estimate.push(0.4)
+    estimate.run().update(0.4)
     schedule = (
         RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=estimate)
         if rtc
@@ -899,9 +901,18 @@ def test_delay_estimates_refuse_a_negative_cap(duration):
     ],
 )
 def test_delay_estimates_read_the_last_delays_and_cap_them(prefix_duration, expected):
-    prefix_duration.push(0.9)
-    prefix_duration.push(0.1)
-    assert prefix_duration.push(0.3) == pytest.approx(expected)
+    estimate = prefix_duration.run()
+    estimate.update(0.9)
+    estimate.update(0.1)
+    assert estimate.update(0.3) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize('strategy', [DelayEstimate.mean(last=2), DelayEstimate.max(last=2), PeakDuration()])
+def test_duration_estimate_runs_keep_independent_histories(strategy):
+    first, second = strategy.run(), strategy.run()
+    assert first.update(0.3) == pytest.approx(0.3)
+    assert second.update(0.1) == pytest.approx(0.1)
+    assert first.update(0.3) == pytest.approx(0.3)
 
 
 @pytest.mark.parametrize('seconds', [-0.1, float('nan'), float('inf')])
@@ -911,9 +922,9 @@ def test_constant_durations_refuse_invalid_seconds(seconds):
 
 
 def test_constant_durations_ignore_delay_history():
-    duration = ConstantDuration(0.7)
+    duration = ConstantDuration(0.7).run()
     for delay in (0.1, 0.2, 0.9):
-        assert duration.push(delay) == 0.7
+        assert duration.update(delay) == 0.7
 
 
 def test_rtc_accepts_a_constant_duration(execution, monkeypatch):
@@ -964,12 +975,12 @@ def test_serialized_inference_leads_preserve_the_request_deadline(execution, mon
 @pytest.mark.parametrize('estimate', [ConstantDuration(0.25), DelayEstimate.mean(last=2), DelayEstimate.max(last=2)])
 def test_estimator_specs_roundtrip_configuration_without_history(estimate):
     declared = json.loads(json.dumps(estimate.to_spec(), allow_nan=False))
-    estimate.push(0.4)
+    estimate.run().update(0.4)
     assert estimate.to_spec() == declared
     restored = DurationEstimate.from_spec(declared)
     assert type(restored) is type(estimate)
     assert restored.to_spec() == declared
-    assert restored.push(0.1) == pytest.approx(0.25 if isinstance(estimate, ConstantDuration) else 0.1)
+    assert restored.run().update(0.1) == pytest.approx(0.25 if isinstance(estimate, ConstantDuration) else 0.1)
 
 
 def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answer(execution, monkeypatch):

@@ -93,19 +93,20 @@ class PauseOnUnavailable(Policy):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
-class DurationEstimate(ABC):
-    """Consume completed inference delays and estimate a duration in seconds.
-
-    Each schedule run uses a fresh estimator with independent delay history.
-    """
+class DurationEstimateRun(ABC):
+    """One episode's inference-delay history and duration estimates."""
 
     @abstractmethod
-    def push(self, delay_sec: float) -> float:
+    def update(self, delay_sec: float) -> float:
         """Record a delay from submission to reading the answer, and return the updated estimate."""
 
+
+class DurationEstimate(ABC):
+    """A reusable strategy for estimating durations from completed inference delays."""
+
     @abstractmethod
-    def fresh(self) -> Self:
-        """Return an estimator with the same configuration and no observed delays."""
+    def run(self) -> DurationEstimateRun:
+        """Create an estimator with independent delay history for one episode."""
 
     @abstractmethod
     def to_spec(self) -> float | dict[str, Any]:
@@ -125,16 +126,20 @@ class DurationEstimate(ABC):
 class ConstantDuration(DurationEstimate):
     """A fixed duration, independent of inference delays."""
 
+    class _Run(DurationEstimateRun):
+        def __init__(self, strategy: 'ConstantDuration') -> None:
+            self._strategy = strategy
+
+        def update(self, delay_sec: float) -> float:
+            return self._strategy._seconds
+
     def __init__(self, seconds: float = 0.0) -> None:
         if not isfinite(seconds) or seconds < 0:
             raise ValueError('seconds must be finite and not negative')
         self._seconds = seconds
 
-    def push(self, delay_sec: float) -> float:
-        return self._seconds
-
-    def fresh(self) -> Self:
-        return type(self)(self._seconds)
+    def run(self) -> DurationEstimateRun:
+        return self._Run(self)
 
     def to_spec(self) -> float:
         return self._seconds
@@ -151,31 +156,31 @@ class DelayEstimate(DurationEstimate):
     LAST_ARG = 'last'
     MAX_SEC_ARG = 'max_sec'
 
+    class _Run(DurationEstimateRun):
+        def __init__(self, strategy: 'DelayEstimate') -> None:
+            self._strategy = strategy
+            self._delays: deque[float] = deque(maxlen=strategy._last)
+
+        def update(self, delay_sec: float) -> float:
+            self._delays.append(delay_sec)
+            strategy = self._strategy
+            value = fmean(self._delays) if strategy._statistic is strategy.Statistic.MEAN else max(self._delays)
+            return min(value, strategy._max_sec)
+
     def __init__(self, statistic: Statistic, last: int, max_sec: float) -> None:
         if last < 1:
             raise ValueError('last must be at least 1')
         if not isfinite(max_sec) or max_sec < 0:
             raise ValueError('max_sec must be finite and not negative')
         self._statistic = statistic
+        self._last = last
         self._max_sec = max_sec
-        self._delays: deque[float] = deque(maxlen=last)
 
-    def push(self, delay_sec: float) -> float:
-        self._delays.append(delay_sec)
-        value = fmean(self._delays) if self._statistic is self.Statistic.MEAN else max(self._delays)
-        return min(value, self._max_sec)
-
-    def fresh(self) -> Self:
-        last = self._delays.maxlen
-        assert last is not None
-        return type(self)(self._statistic, last, self._max_sec)
+    def run(self) -> DurationEstimateRun:
+        return self._Run(self)
 
     def to_spec(self) -> dict[str, Any]:
-        return {
-            self.STATISTIC_ARG: self._statistic.value,
-            self.LAST_ARG: self._delays.maxlen,
-            self.MAX_SEC_ARG: self._max_sec,
-        }
+        return {self.STATISTIC_ARG: self._statistic.value, self.LAST_ARG: self._last, self.MAX_SEC_ARG: self._max_sec}
 
     @classmethod
     def mean(cls, last: int = 5, max_sec: float = 0.4) -> 'DelayEstimate':
@@ -335,7 +340,7 @@ class ChunkedSchedule(Policy):
         end_ns = 0
         call_ns = 0
         called_at_ns = 0
-        lead = self._inference_lead.fresh()
+        lead = self._inference_lead.run()
         stats = self._Stats(runtime) if self._record_stats else None
         obs = yield
         try:
@@ -346,7 +351,7 @@ class ChunkedSchedule(Policy):
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
-                    lead_sec = lead.push((now_ns - called_at_ns) / 1e9)
+                    lead_sec = lead.update((now_ns - called_at_ns) / 1e9)
                     start_ns = max(now_ns, end_ns)
                     waypoints, end_ns = self._plan_chunk(chunk, start_ns)
                     call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
@@ -538,7 +543,7 @@ class RTCSchedule(Policy):
         self._prefix_sampling = prefix_sampling
 
     def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
-        duration = self._prefix_duration.fresh()
+        duration = self._prefix_duration.run()
         prefix_sec = 0.0
         answer: Answer[Sequence[Commands]] | None = None
         called_at_ns = 0
@@ -549,7 +554,7 @@ class RTCSchedule(Policy):
             while True:
                 now_ns = runtime.time_ns
                 if answer is not None and answer.done():
-                    prefix_sec = duration.push((now_ns - called_at_ns) / 1e9)
+                    prefix_sec = duration.update((now_ns - called_at_ns) / 1e9)
                     # The first chunk counts from its answer: the robot did not move while it waited.
                     start_ns = now_ns if chunk is None else called_at_ns
                     chunk = _TimedChunk(answer.result(), start_ns, self._fps, now_ns)
