@@ -91,6 +91,13 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
     return tmp_key, tmp_cert
 
 
+def encode_frame(encoder: turbojpeg.TurboJPEG, image: np.ndarray) -> str:
+    """An RGB ``image`` as base64 JPEG, as the video stream sends it."""
+    buffer = encoder.encode(image, quality=50, pixel_format=turbojpeg.TJPF_RGB)
+    assert isinstance(buffer, bytes), 'TurboJPEG returns the JPEG bytes when it is given no destination'
+    return base64.b64encode(buffer).decode('utf-8')
+
+
 def _build_access_url(host: str, port: int, use_https: bool) -> str:
     scheme = 'https' if use_https else 'http'
     return f'{scheme}://{host}:{port}/'
@@ -181,10 +188,6 @@ class WebXR(pimm.ControlSystem):
 
     def _add_video_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
         """``/video``: each new frame as base64 JPEG."""
-
-        def encode_frame(encoder: turbojpeg.TurboJPEG, image):
-            buffer = encoder.encode(image, quality=50)
-            return base64.b64encode(buffer).decode('utf-8')
 
         @app.websocket('/video')
         async def video_stream(websocket: WebSocket):
