@@ -125,6 +125,34 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
     ]
 
 
+def test_a_horizon_override_rides_from_the_record_to_the_reset_token():
+    adapter = _adapter()
+    record = {
+        **_BENCH._asdict(),
+        mapping.TASK_NAME: 'put the banana in the bowl',
+        mapping.TOKEN_EPISODE_INDEX: 3,
+        mapping.TASK_HORIZON_SEC: 120.0,
+        mapping.TASK_HORIZON_OVERRIDE_SEC: 120.0,
+    }
+    [params] = adapter.task_params([record])
+    assert params[molmo_keys.TASK_HORIZON] == params[molmo_keys.TASK_HORIZON_OVERRIDE] == 120.0
+    assert adapter.reset_token(params)[mapping.TOKEN_HORIZON_SEC] == 120.0
+
+
+def test_no_horizon_override_keeps_the_record_and_the_token_free_of_one():
+    adapter = _adapter()
+    record = {
+        **_BENCH._asdict(),
+        mapping.TASK_NAME: 'put the banana in the bowl',
+        mapping.TOKEN_EPISODE_INDEX: 3,
+        mapping.TASK_HORIZON_SEC: 30.0,
+        mapping.TASK_HORIZON_OVERRIDE_SEC: None,
+    }
+    [params] = adapter.task_params([record])
+    assert molmo_keys.TASK_HORIZON_OVERRIDE not in params
+    assert mapping.TOKEN_HORIZON_SEC not in adapter.reset_token(params)
+
+
 def test_reset_token_carries_benchmark_episode_and_seed():
     adapter = _adapter()
     expected = {**_BENCH._asdict(), mapping.TOKEN_EPISODE_INDEX: 3, mapping.TOKEN_SEED: 7}
