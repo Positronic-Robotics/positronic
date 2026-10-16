@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 import configuronic as cfn
 import pytest
 from platform_client import routes
-from platform_client.enums import OnExhausted, QuotaSubject
+from platform_client.enums import OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
 from platform_client.errors import EVALS_DETAIL, QUOTA_DETAIL, TASKS_DETAIL
 from platform_client.ids import SubmissionId
-from platform_client.responses import QUOTA_SUBMISSIONS_DAY, QuotaLimit
+from platform_client.responses import QUOTA_SUBMISSIONS_DAY, QuotaLimit, SubmissionCreateResponse
 
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.conftest import ID, KEY, runs_of_four
@@ -67,6 +67,30 @@ def test_a_replay_of_a_cancelled_submission_fails_the_command(platform, run_comm
 
     with pytest.raises(SystemExit, match='rejected: cancelled'):
         run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
+
+
+@pytest.mark.parametrize(
+    ('reason', 'fault'),
+    [
+        (ReasonCode.internal_error, Fault.PLATFORM),
+        (ReasonCode.quota_exceeded, Fault.PLATFORM),
+        (ReasonCode.provision_wedged, Fault.PLATFORM),
+        (ReasonCode.runner_unresponsive, Fault.PLATFORM),
+        (ReasonCode.policy_oom, Fault.CALLER),
+        (ReasonCode.wall_clock_exceeded, Fault.CALLER),
+    ],
+    ids=lambda value: value.name,
+)
+def test_a_replay_of_a_failed_submission_exits_with_the_fault_of_its_reason(platform, run_command, reason, fault):
+    original = SubmissionCreateResponse(
+        submission_id=SubmissionId.parse(ID), status=SubmissionStatus.errored, reason_code=reason
+    )
+    platform.answer(original.model_dump(mode='json'))
+
+    with pytest.raises(CommandFailed, match=f'rejected: {reason.name}') as exit_info:
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
+
+    assert exit_info.value.fault is fault
 
 
 def test_a_replay_of_a_finished_submission_succeeds(platform, run_command, capsys):

@@ -5,7 +5,7 @@ Not a command of its own: running an eval is one act, and where it runs is an ar
 
 from pathlib import Path
 
-from platform_client.enums import NO_RESULT_STATUSES
+from platform_client.enums import NO_RESULT_STATUSES, ReasonCode
 from platform_client.eval_plan import RegistryCredential, Sample, password_from_file, plan_of_image
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.policy_images import PolicyImage
@@ -14,6 +14,14 @@ from positronic_evals.evals import EvalRef
 from pydantic import SecretStr
 
 from positronic.cli.account.gateway import CommandFailed, Fault, gateway, refusing_bad_input
+
+# The reasons that `ReasonCode` lists as the platform's faults. A replay can return a run that ended for one.
+_PLATFORM_FAULT_REASONS = frozenset({
+    ReasonCode.internal_error,
+    ReasonCode.quota_exceeded,
+    ReasonCode.provision_wedged,
+    ReasonCode.runner_unresponsive,
+})
 
 
 def _credential(username: str | None, password_file: object | None) -> RegistryCredential | None:
@@ -75,5 +83,6 @@ def submit(
     # These terminal statuses can never carry a result, so the submission fails rather than returns.
     if submission.status in NO_RESULT_STATUSES:
         reason = submission.reason_code.name if submission.reason_code is not None else submission.status.name
-        raise CommandFailed(f'rejected: {reason}', Fault.CALLER)
+        fault = Fault.PLATFORM if submission.reason_code in _PLATFORM_FAULT_REASONS else Fault.CALLER
+        raise CommandFailed(f'rejected: {reason}', fault)
     return submission
