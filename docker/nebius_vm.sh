@@ -52,7 +52,14 @@ vm_address() {
 # passphrase, so the key must be readable without one, or be in the agent.
 public_key() {
   if key=$(ssh-keygen -y -P "" -f "$ssh_key" 2>/dev/null); then
-    cut -d' ' -f1,2 <<<"$key"
+    key=$(cut -d' ' -f1,2 <<<"$key")
+    # ssh offers the key in <key>.pub when the file exists, so a stale file makes the server refuse it.
+    if [ -f "$ssh_key.pub" ] && [ "$(cut -d' ' -f1,2 "$ssh_key.pub")" != "$key" ]; then
+      echo "$ssh_key.pub is not the public key of $ssh_key. Make it again with:" >&2
+      echo "  ssh-keygen -y -f $(printf %q "$ssh_key") > $(printf %q "$ssh_key.pub")" >&2
+      return 1
+    fi
+    echo "$key"
     return
   fi
   if [ ! -f "$ssh_key" ] && [ ! -f "$ssh_key.pub" ]; then
