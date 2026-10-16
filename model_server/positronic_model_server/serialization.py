@@ -71,7 +71,10 @@ class JpegEncoding:
 
 @dataclass(frozen=True)
 class EncodedFrame:
-    """One frame and the JPEG bytes ``encode_jpeg`` made of it at ``quality``."""
+    """One frame and the JPEG bytes ``encode_jpeg`` made of it at ``quality``.
+
+    ``pixels`` is a read-only copy, so the bytes stay valid for it when the caller changes its own array.
+    """
 
     pixels: np.ndarray
     jpeg: bytes
@@ -120,7 +123,13 @@ def encoded_frames(image: np.ndarray, marker: cabc.Mapping[bytes, Any], quality:
     """Each frame of ``image`` with its JPEG bytes in ``marker``, the ``encode_jpeg`` result of ``image`` at
     ``quality``."""
     frames = image.reshape((-1, *image.shape[-3:]))
-    return [EncodedFrame(frame, jpeg, quality) for frame, jpeg in zip(frames, marker[_FRAMES], strict=True)]
+    return [EncodedFrame(_snapshot(frame), jpeg, quality) for frame, jpeg in zip(frames, marker[_FRAMES], strict=True)]
+
+
+def _snapshot(frame: np.ndarray) -> np.ndarray:
+    copy = frame.copy()
+    copy.flags.writeable = False
+    return copy
 
 
 def frame_digest(data: bytes) -> bytes:
