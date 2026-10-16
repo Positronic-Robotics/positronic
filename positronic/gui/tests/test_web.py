@@ -15,6 +15,7 @@ from positronic.gui.station import Episode, Outcome, Phase, RunView, Station, te
 from positronic.gui.web import STATIC_DIR, CameraFeed, CameraView, EndBody, InstructionBody, StationConsole, Status
 from positronic.policy import Policy, PolicyEnd
 from positronic.policy import keys as policy_keys
+from positronic.policy.harness import EpisodeEnd
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 CONFIGURED = 'put the cup in the tote'
@@ -222,7 +223,7 @@ def test_a_camera_that_gives_data_again_updates_its_tile():
     feed.stream.close()
 
 
-class _Failed(pimm.calls.Answer[dict[str, Any]]):
+class _Failed(pimm.calls.Answer[EpisodeEnd]):
     """An episode answer that the harness failed with ``error``."""
 
     def __init__(self, error: Exception):
@@ -231,7 +232,7 @@ class _Failed(pimm.calls.Answer[dict[str, Any]]):
     def done(self) -> bool:
         return True
 
-    def result(self) -> dict[str, Any]:
+    def result(self) -> EpisodeEnd:
         raise self._error
 
 

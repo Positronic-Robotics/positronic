@@ -364,7 +364,7 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
         if retry
         else {eval_keys.TERMINATED: False}
     )
-    assert [answer.result() for answer in answers] == [expected]
+    assert [answer.result().terminal for answer in answers] == [expected]
 
 
 @pytest.mark.timeout(120.0)

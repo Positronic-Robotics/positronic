@@ -48,6 +48,15 @@ class Rollout:
     output_path: Path | None
 
 
+@dataclass(frozen=True)
+class EpisodeEnd:
+    """The harness's answer to a rollout: the terminal payload the episode recorded in its statics, and the uid of
+    its recording. ``uid`` is ``None`` when the episode recorded nothing."""
+
+    terminal: dict[str, Any]
+    uid: str | None
+
+
 class _EpisodeTelemetry:
     """Parent reset, inference, and recorder spans to one episode; count its steps and virtual duration."""
 
@@ -112,8 +121,8 @@ class Harness(pimm.ControlSystem):
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline, a truthy ``done`` signal, or the return of
     the policy run. A ``done`` or a return after the deadline counts as a timeout. When a ``done`` and a return come
-    in one iteration, the ``done`` ends the episode. Its answer carries the terminal payload, or the error that failed
-    the episode. The caller decides whether that error ends the run. Between episodes, manual commands pass through.
+    in one iteration, the ``done`` ends the episode. Its answer is an ``EpisodeEnd``, or the error that failed the
+    episode. The caller decides whether that error ends the run. Between episodes, manual commands pass through.
     Before each episode the harness asks every device to be ready, then prepares what the task names. A device
     that answers ready with an error fails the episode before it starts. A ``pimm.SignalError`` on an
     observation fails the episode before the policy reads that value. Between episodes the harness repairs a
@@ -153,7 +162,7 @@ class Harness(pimm.ControlSystem):
         self.ready = pimm.calls.CallerDict[None, None](self, names=embodiment.ready_handlers)
         self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
 
-        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict[str, Any]](self)
+        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, EpisodeEnd](self)
         self.manual_command = pimm.ControlSystemReceiver(self)
         self.deadline_ns = pimm.ControlSystemEmitter[int | None](self)
         self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
@@ -443,7 +452,7 @@ class Harness(pimm.ControlSystem):
 
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
-    ) -> pimm.Run[dict[str, Any] | None]:
+    ) -> pimm.Run[EpisodeEnd | None]:
         """Prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
         task = rollout.task
         self._telemetry.begin(task.meta)
@@ -456,6 +465,7 @@ class Harness(pimm.ControlSystem):
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
         policy_run = None
+        uid = None
         try:
             policy_run = runtime.start(rollout.policy)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
@@ -465,6 +475,7 @@ class Harness(pimm.ControlSystem):
                 with self._recording(rollout.output_path):
                     payload = yield from self._rollout(should_stop, task, runtime, policy_run, deadline_ns)
                     if self._writer is not None:
+                        uid = self._writer.uid
                         for name, value in (self._build_episode_meta(rollout, runtime) | (payload or {})).items():
                             self._writer.set_static(name, value)
             finally:
@@ -488,7 +499,7 @@ class Harness(pimm.ControlSystem):
                 yield from self._prepare(should_stop, back_args)
             except Exception as exc:
                 logging.error(f'The rig failed to go back after the episode: {exc}')
-        return payload
+        return EpisodeEnd(payload, uid) if payload is not None else None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> pimm.Run[None]:
         for emitter in self.commands.values():
@@ -502,20 +513,20 @@ class Harness(pimm.ControlSystem):
                 # An idle done signal must not terminate the next episode.
                 pimm.read_updated(self.done)
                 if call is not None:
-                    payload = None
+                    end = None
                     failure: BaseException = pimm.calls.HandlerStopped()
                     # rules-allow: swallowed-error — the answer carries the error; the caller decides if the run ends
                     try:
                         yield from self._ready_devices(should_stop)
-                        payload = yield from self._run_episode(clock, should_stop, call.request)
+                        end = yield from self._run_episode(clock, should_stop, call.request)
                     except Exception as exc:
                         failure = exc
                     finally:
                         self._telemetry.end(clock.now(), partial=True)
-                        if payload is None:
+                        if end is None:
                             call.set_exception(failure)
-                    if payload is not None:
-                        call.set_result(payload)
+                    if end is not None:
+                        call.set_result(end)
                 elif manual is not None:
                     for name, value in manual.items():
                         self.commands[name].emit(value)

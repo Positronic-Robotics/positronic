@@ -17,8 +17,10 @@ from typing import Annotated, ClassVar, Literal, NamedTuple, NewType, Self
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from eval_vocabulary import episode as vocabulary
 from eval_vocabulary.episode import (
     BENCHMARK_TASK,
+    EDITS_FILE,
     ENDED_BY,
     ENDED_BY_OPERATOR,
     LEGACY_TIME_COLUMN,
@@ -35,6 +37,7 @@ from eval_vocabulary.episode import (
     TIMESTAMP_COLUMN_PREFIX,
     UID,
     VALUE_COLUMN,
+    EditOp,
 )
 from eval_vocabulary.outcome import Outcome as CountedOutcome
 from eval_vocabulary.outcome import counted_outcome
@@ -363,9 +366,66 @@ def _read_object(path: Path) -> dict[str, object] | None:
     return loaded
 
 
+def _edits(log_path: Path, uid: str) -> list[tuple[EditOp, dict[str, object]]] | None:
+    """The edits that the log at `log_path` makes to the episode `uid`, in order, or None when a record does not parse.
+
+    A `DROP` or an `UNDROP` carries no statics.
+    """
+    try:
+        lines = log_path.read_text(encoding='utf-8').splitlines()
+    except UnicodeDecodeError:
+        log.error('%s is not UTF-8 text; this episode has no label', log_path)
+        return None
+    edits: list[tuple[EditOp, dict[str, object]]] = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            record = None
+        match record:
+            case {
+                vocabulary.EDIT_OP: EditOp.SET_STATIC,
+                vocabulary.EDIT_FORMAT: vocabulary.EDIT_FORMAT_VERSION,
+                vocabulary.EDIT_EPISODE: str(episode),
+                vocabulary.EDIT_DATA: dict(data),
+            }:
+                edit = (EditOp.SET_STATIC, data)
+            case {
+                vocabulary.EDIT_OP: (EditOp.DROP | EditOp.UNDROP) as op,
+                vocabulary.EDIT_FORMAT: vocabulary.EDIT_FORMAT_VERSION,
+                vocabulary.EDIT_EPISODE: str(episode),
+            }:
+                edit = (EditOp(op), {})
+            case _:
+                # One damaged upload leaves the other episodes labelled, so this is logged, not raised.
+                log.error('%s holds a record that is not an edit, %r; this episode has no label', log_path, line)
+                return None
+        if episode == uid:
+            edits.append(edit)
+    return edits
+
+
 def read_static(episode: Path) -> dict[str, object] | None:
-    """The statics that `episode` recorded, or None when it recorded none or they do not parse."""
-    return _read_object(episode / STATIC_FILE)
+    """The statics that `episode` recorded, with the edits of its own edit log over them.
+
+    None when it recorded none, when they or the log do not parse, or when the log drops the episode. The edit logs
+    of the dataset directories above the episode do not apply.
+    """
+    static = _read_object(episode / STATIC_FILE)
+    log_path = episode / EDITS_FILE
+    if static is None or not log_path.is_file():
+        return static
+    uid = recorded_uid(episode)
+    edits = _edits(log_path, uid) if uid is not None else None
+    if edits is None:
+        return None
+    dropped = False
+    for op, data in edits:
+        if op is EditOp.SET_STATIC:
+            static |= data
+        else:
+            dropped = op is EditOp.DROP
+    return None if dropped else static
 
 
 def recorded_uid(episode: Path) -> str | None:
@@ -477,8 +537,8 @@ class _SimTrial(NamedTuple):
 def _recorded_sim_trial(episode: Path, task_key: str) -> _SimTrial | None:
     """The trial that `episode` records, with its task under `task_key`.
 
-    None when an operator ended the trial, when the episode gives no outcome that a label states, or when it records no
-    id or no world time.
+    None when an operator ended the trial, when the episode gives no outcome that a label states, when its edit log
+    drops it, or when it records no id or no world time.
     """
     static = read_static(episode)
     if static is None or static.get(ENDED_BY) == ENDED_BY_OPERATOR:

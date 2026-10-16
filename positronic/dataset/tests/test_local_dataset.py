@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from positronic_evals.labels import read_static
 
 from positronic.dataset import Episode, edits
 from positronic.dataset.episode import META_UID
@@ -498,6 +499,24 @@ def test_edit_is_written_to_the_episodes_own_directory(tmp_path):
     assert [json.loads(line)['op'] for line in second.read_text(encoding='utf-8').splitlines()] == ['drop']
     assert not (root / edits.EDITS_FILE).exists()
     assert not (root / '000000000000' / edits.EDITS_FILE).exists()
+
+
+def test_a_labeler_reads_the_edit_log_as_the_dataset_view_applies_it(tmp_path):
+    """`positronic_evals.labels` cannot import this package, so it reads the log that `EditedDataset` writes itself."""
+    root = tmp_path / 'ds'
+    ds = build_dataset_with_signal(root, [0, 1, 2])
+    edited, dropped, undropped = (episode.meta['uid'] for episode in ds)
+    log = load_dataset(root).set_static(edited, {'verdict': 'fail', 'notes': 'kept'}).drop(dropped).drop(undropped)
+    log.set_static(edited, {'verdict': 'success'}).undrop(undropped)
+
+    view = {episode.meta['uid']: episode.static for episode in load_dataset(root)}
+    read = {
+        uid: read_static(root / '000000000000' / f'{index:012d}')
+        for index, uid in enumerate((edited, dropped, undropped))
+    }
+
+    assert read == {**view, dropped: None}
+    assert view[edited] == {'id': 0, 'verdict': 'success', 'notes': 'kept'}
 
 
 def test_episode_log_applies_after_the_dataset_log(tmp_path):

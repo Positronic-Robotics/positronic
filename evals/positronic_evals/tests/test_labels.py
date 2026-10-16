@@ -17,8 +17,10 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from eval_vocabulary import episode as vocabulary
 from eval_vocabulary.episode import (
     BENCHMARK_TASK,
+    EDITS_FILE,
     ENDED_BY,
     ENDED_BY_OPERATOR,
     ENDED_BY_POLICY,
@@ -36,6 +38,7 @@ from eval_vocabulary.episode import (
     TIMESTAMP_COLUMN_PREFIX,
     UID,
     VALUE_COLUMN,
+    EditOp,
     PolicyEnd,
 )
 from eval_vocabulary.outcome import OUTCOME
@@ -441,6 +444,60 @@ def test_a_trial_that_the_policy_gave_up_fails_at_its_end(tmp_path: Path):
 
 
 COMPLETED = {TASK: CUP, ENDED_BY: ENDED_BY_POLICY, POLICY_END: PolicyEnd.COMPLETE, TERMINATED: True}
+
+
+def _write_edits(episode: Path, *edits: tuple[EditOp, dict[str, object] | None], uid: str = UID_OF_EPISODE) -> None:
+    """The edit log of `episode`, as `EditedDataset` writes it: one record for each edit, for the episode `uid`."""
+    records = [
+        {
+            vocabulary.EDIT_OP: op,
+            vocabulary.EDIT_FORMAT: vocabulary.EDIT_FORMAT_VERSION,
+            vocabulary.EDIT_EPISODE: uid,
+            **({vocabulary.EDIT_DATA: data} if data is not None else {}),
+        }
+        for op, data in edits
+    ]
+    (episode / EDITS_FILE).write_text(''.join(json.dumps(record) + '\n' for record in records))
+
+
+def test_a_verdict_that_only_the_edit_log_holds_gives_the_label(tmp_path: Path):
+    """A verdict that an edit gives after the recording closed is only in the edit log."""
+    judged, other = _episodes(tmp_path, COMPLETED, COMPLETED)
+    _write_edits(
+        judged,
+        (EditOp.SET_STATIC, {OUTCOME: CountedOutcome.FAIL}),
+        (EditOp.SET_STATIC, {OUTCOME: CountedOutcome.SUCCESS}),
+    )
+    _write_edits(other, (EditOp.SET_STATIC, {OUTCOME: CountedOutcome.SUCCESS}), uid='another episode')
+    for episode in (judged, other):
+        _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
+    assert molmo_label(judged) == _label(Success(seconds=1.0), seconds_to_end=1.0, annotator=MOLMO_LABELER)
+    assert molmo_label(other) is None
+
+
+def test_an_episode_that_its_edit_log_drops_has_no_label_until_an_undrop(tmp_path: Path):
+    dropped, undropped = _episodes(tmp_path, {TASK: CUP, SUCCESS: True}, {TASK: CUP, SUCCESS: True})
+    _write_edits(dropped, (EditOp.DROP, None))
+    _write_edits(undropped, (EditOp.DROP, None), (EditOp.UNDROP, None))
+    for episode in (dropped, undropped):
+        _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
+    assert molmo_label(dropped) is None
+    assert molmo_label(undropped) == _label(Success(seconds=1.0), seconds_to_end=1.0, annotator=MOLMO_LABELER)
+
+
+@pytest.mark.parametrize('log', ['{ truncated', '{"op": "trim", "v": 1, "ep": "x"}', b'\xff'])
+def test_an_edit_log_that_does_not_parse_leaves_the_episode_without_a_label_and_is_logged(
+    tmp_path: Path, log: str | bytes, caplog: pytest.LogCaptureFixture
+):
+    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True})
+    _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
+    if isinstance(log, bytes):
+        (episode / EDITS_FILE).write_bytes(log)
+    else:
+        (episode / EDITS_FILE).write_text(log + '\n')
+    with caplog.at_level(logging.ERROR, logger=labels.__name__):
+        assert molmo_label(episode) is None
+    assert EDITS_FILE in caplog.records[0].getMessage()
 
 
 def test_the_end_is_the_span_of_all_signals_on_the_world_clock(tmp_path: Path):

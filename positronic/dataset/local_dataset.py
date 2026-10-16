@@ -246,6 +246,10 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._aborted = True
 
     @property
+    def uid(self) -> str:
+        return self._meta[META_UID]
+
+    @property
     def meta(self) -> dict:
         """Metadata for the episode, known at the time of request."""
         return self._meta.copy()

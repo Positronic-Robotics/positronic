@@ -1,6 +1,6 @@
 """Edit logs over immutable recordings.
 
-Episodes are never modified after recording. Post-hoc facts — operator verdicts, analysis scores — are *edits*:
+Episodes are never modified after recording. Post-hoc facts — judges' verdicts, analysis scores — are *edits*:
 declarative records appended to an `edits.jsonl` file in the episode's own directory and applied as a view on read.
 `EditedDataset` is that view and the handle that amends it: it reads the logs and applies the edits, and its methods
 append new ones.
@@ -24,11 +24,12 @@ from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from eval_vocabulary import episode as vocabulary
+from eval_vocabulary.episode import EDITS_FILE, EditOp
+
 from .dataset import Dataset, FilterDataset
 from .episode import META_PATH, META_UID, Episode, _is_valid_static_value, _static_decode_hook, _StaticEncoder
 from .signal import Signal
-
-EDITS_FILE = 'edits.jsonl'
 
 # One edit log's records by episode uid, each uid's in log order.
 _Log = dict[str, list[dict[str, Any]]]
@@ -46,16 +47,25 @@ def _read_log(edits_path: Path) -> _Log:
             except json.JSONDecodeError as e:
                 raise ValueError(f'Corrupt edit record at {edits_path}:{line_no}') from e
             match record:
-                case {'op': 'set_static', 'v': 1, 'ep': str(), 'data': dict(data)}:
+                case {
+                    vocabulary.EDIT_OP: EditOp.SET_STATIC,
+                    vocabulary.EDIT_FORMAT: vocabulary.EDIT_FORMAT_VERSION,
+                    vocabulary.EDIT_EPISODE: str(),
+                    vocabulary.EDIT_DATA: dict(data),
+                }:
                     if not _is_valid_static_value(data):
                         raise ValueError(
                             f'Invalid static values in edit record at {edits_path}:{line_no}: {line.strip()}'
                         )
-                case {'op': 'drop' | 'undrop', 'v': 1, 'ep': str()}:
+                case {
+                    vocabulary.EDIT_OP: EditOp.DROP | EditOp.UNDROP,
+                    vocabulary.EDIT_FORMAT: vocabulary.EDIT_FORMAT_VERSION,
+                    vocabulary.EDIT_EPISODE: str(),
+                }:
                     pass
                 case _:
                     raise ValueError(f'Unsupported edit record at {edits_path}:{line_no}: {line.strip()}')
-            records.setdefault(record['ep'], []).append(record)
+            records.setdefault(record[vocabulary.EDIT_EPISODE], []).append(record)
     return records
 
 
@@ -64,10 +74,10 @@ def _apply_records(records: Iterable[dict[str, Any]]) -> tuple[dict[str, Any], b
     statics: dict[str, Any] = {}
     dropped = False
     for record in records:
-        if record['op'] == 'set_static':
-            statics.update(record['data'])
+        if record[vocabulary.EDIT_OP] == EditOp.SET_STATIC:
+            statics.update(record[vocabulary.EDIT_DATA])
         else:
-            dropped = record['op'] == 'drop'
+            dropped = record[vocabulary.EDIT_OP] == EditOp.DROP
     return statics, dropped
 
 
@@ -201,23 +211,29 @@ class EditedDataset(Dataset):
         _validate_uid(uid)
         if not (isinstance(data, dict) and _is_valid_static_value(data)):
             raise ValueError(f'Edit data must be a mapping of static items to JSON-serializable values\n{data=!r}')
-        return self._append('set_static', uid, data=data)
+        return self._append(EditOp.SET_STATIC, uid, {vocabulary.EDIT_DATA: data})
 
     def drop(self, uid: str) -> 'EditedDataset':
         """Append a `drop` edit removing the episode from the view; the recording stays on disk."""
         _validate_uid(uid)
-        return self._append('drop', uid)
+        return self._append(EditOp.DROP, uid)
 
     def undrop(self, uid: str) -> 'EditedDataset':
         """Append an `undrop` edit restoring a previously dropped episode to the view."""
         _validate_uid(uid)
-        return self._append('undrop', uid)
+        return self._append(EditOp.UNDROP, uid)
 
-    def _append(self, op: str, uid: str, **fields: Any) -> 'EditedDataset':
+    def _append(self, op: EditOp, uid: str, fields: dict[str, Any] | None = None) -> 'EditedDataset':
         directories = self._episode_dirs.get(uid)
         if not directories:
             raise ValueError(f'No episode with uid {uid!r} and a directory for its edit log')
-        line = json.dumps({'op': op, 'v': 1, 'ep': uid, **fields}, cls=_StaticEncoder) + '\n'
+        record = {
+            vocabulary.EDIT_OP: op,
+            vocabulary.EDIT_FORMAT: vocabulary.EDIT_FORMAT_VERSION,
+            vocabulary.EDIT_EPISODE: uid,
+            **(fields or {}),
+        }
+        line = json.dumps(record, cls=_StaticEncoder) + '\n'
         for directory in sorted(directories):
             with (directory / EDITS_FILE).open('a', encoding='utf-8') as f:
                 f.write(line)

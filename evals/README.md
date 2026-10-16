@@ -65,6 +65,8 @@ the last, on the world clock. That time can exceed the trial by up to one contro
 outcome from `eval_vocabulary.outcome.counted_outcome`, so it and every other reader count one
 recording the same way. `Success`, `Ran out of time` and `Safety` give `success`, `out_of_time` and
 `safety`. `Fail` and `System` give `fail`. An episode that is `UNSCORED` or `Discarded` has no label.
+Both labelers read the statics with the edits of the episode's own edit log over them, so a verdict
+that an edit gave after the recording closed counts. An episode that the log drops has no label.
 
 The RoboLab labeler reads the end of a trial in the same way. Its task is the task id that RoboLab
 names, and not the instruction. It also reads the `subtask` signal, which RoboLab records at each
