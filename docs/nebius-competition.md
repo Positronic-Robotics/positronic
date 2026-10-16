@@ -12,7 +12,6 @@ Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
 ## Before you start
 
 - A machine to build and test on: Linux on amd64, with enough memory and free disk space for your model.
-  For the π0.5 DROID example image, use 32 GB of memory and 100 GB of free disk space.
   [What the example images use](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#what-the-example-images-use)
   gives values for each example image. Some images also need a GPU.
   - No such machine? [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) creates one with one
