@@ -69,13 +69,14 @@ loopback_only() {
 
 start=$SECONDS
 passed=false
+waiting_on=""
 while :; do
   if [ "$(docker inspect -f '{{.State.Running}}' "$cid")" != true ]; then
     result="the server exited"
     break
   fi
   if [ $((SECONDS - start)) -ge "$limit" ]; then
-    result="no answer in $limit s"
+    result="no answer in $limit s$waiting_on"
     break
   fi
   # curl exits with 7 on a closed port, 28 on no answer in 5 s, and 52 or 56 on a dropped connection.
@@ -96,6 +97,10 @@ while :; do
     result="the server answered: $(cat "$body")"
     passed=true
     break
+  elif [ "$code" = 429 ] || [ "$code" -ge 500 ]; then
+    # The platform reads these as a server that is not ready yet, and asks again until its deadline.
+    waiting_on=", the last answer was HTTP $code"
+    sleep 5
   elif [ "$code" = 200 ]; then
     result="the server answered 200 without {\"$alive_key\": <an integer or null>}: $(head -c 200 "$body")"
     break
