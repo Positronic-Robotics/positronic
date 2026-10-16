@@ -37,6 +37,7 @@ from positronic.telemetry_keys import (
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
+    SPAN_EPISODE_NOT_STARTED,
     SPAN_EVAL_PASS,
     SPAN_MATERIALIZE,
     SPAN_POLICY_INFER,
@@ -213,6 +214,25 @@ def test_orphan_episode_from_killed_run_excluded(tmp_path):
     assert report.episodes == 1
     assert report.window is WallWindow.W_PASS
     assert report.real_time_factor == pytest.approx(0.20)  # 20 virtual-s / 100 wall-s; the orphan's 15 don't count
+    assert report.wall_split.between_episodes == pytest.approx(0.60)
+
+
+def test_an_episode_that_did_not_start_is_not_counted_and_its_reset_is_time_between_episodes(tmp_path):
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
+            _span(SPAN_EPISODE_NOT_STARTED, 0, 20, 'failed', 'pass0'),
+            _span(SPAN_RESET, 0, 10, 'failed-reset', 'failed'),
+            _span(SPAN_EPISODE, 50, 90, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+            _span(SPAN_RESET, 50, 55, 'reset0', 'ep0'),
+        ],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+    assert report.episodes == 1
+    assert report.wall_split.reset == pytest.approx(0.05)
     assert report.wall_split.between_episodes == pytest.approx(0.60)
 
 

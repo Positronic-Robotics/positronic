@@ -12,6 +12,7 @@ invocations. `World.connect` binds a caller to a handler wherever the two run.
 - `incoming()` yields calls one at a time as it is advanced; each call is yielded once, and one it has not
   reached is yielded by a later `incoming()`.
 - Each `Call` is answered once, with `set_result` or `set_exception`; answering again raises in the handler.
+- `Call.time` holds the timestamps of the ask, as a signal message holds those of its emission.
 - A handler whose control system ends answers what it never reached with `HandlerStopped`. A call made
   after it has ended is not answered at all, so a caller waiting on an answer must also watch
   `should_stop`.
@@ -34,11 +35,13 @@ from .core import (
     ControlSystem,
     ControlSystemEmitter,
     ControlSystemReceiver,
+    Message,
     NoValueException,
     PortDict,
     SignalEmitter,
     SignalReceiver,
 )
+from .time import Time
 
 Req = TypeVar('Req')
 Res = TypeVar('Res')
@@ -51,6 +54,11 @@ class Call(ABC, Generic[Req, Res]):
     @property
     @abstractmethod
     def request(self) -> Req: ...
+
+    @property
+    @abstractmethod
+    def time(self) -> Time:
+        """The timestamps of the ask."""
 
     @abstractmethod
     def set_result(self, value: Res) -> None: ...
@@ -132,21 +140,26 @@ class _Failure:
     exc: BaseException
 
 
-def _drain(receiver: SignalReceiver[T]) -> Iterator[T]:
+def _drain(receiver: SignalReceiver[T]) -> Iterator[Message[T]]:
     """Every message queued on `receiver`, oldest first."""
     while (msg := receiver.read()) is not None and msg.updated:
-        yield msg.data
+        yield msg
 
 
 class _ControlSystemCall(Call[Req, Res]):
-    def __init__(self, request: _Request[Req], replies: SignalEmitter[_Result[Res] | _Failure]):
-        self._request = request
+    def __init__(self, request: Message[_Request[Req]], replies: SignalEmitter[_Result[Res] | _Failure]):
+        self._request = request.data
+        self._time = request.time
         self._replies = replies
         self._answered = False
 
     @property
     def request(self) -> Req:
         return self._request.data
+
+    @property
+    def time(self) -> Time:
+        return self._time
 
     def set_result(self, value: Res) -> None:
         self._answer(_Result(self._request.id, value))
@@ -240,7 +253,8 @@ class ControlSystemCaller(Caller[Req, Res]):
         return answer
 
     def _deliver_replies(self) -> None:
-        for reply in _drain(self.replies):
+        for message in _drain(self.replies):
+            reply = message.data
             self._pending.pop(reply.id)._reply = reply
 
 

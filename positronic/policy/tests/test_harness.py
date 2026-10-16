@@ -38,7 +38,7 @@ from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
+from positronic.policy.harness import POLL_PERIOD_SEC, EpisodeNotStarted, Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -550,7 +550,7 @@ def test_a_failed_episode_closes_the_generator_answers_its_call_and_the_next_cal
                 closed.append(True)
 
     h.observation.emit(1)
-    error = ValueError
+    error = EpisodeNotStarted if failure == 'startup' else ValueError
     if failure == 'conversion':
         error = pimm.NoValueException
         h.serializer.side_effect = error('conversion failed')
@@ -1229,6 +1229,89 @@ def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_pat
     else:
         flush = next(s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO)
         assert flush.parent_id == episode.span_id
+
+
+def test_a_run_that_waits_before_its_first_yield_starts_its_time_limit_and_recording_after_the_wait(episode_harness):
+    h = episode_harness
+    during_the_wait = []
+
+    class WaitsToGetReady(Policy):
+        def run(self, runtime):
+            h.world.clock.advance_to_ns(500_000_000)
+            during_the_wait.append((list(h.deadlines.values), len(h.dataset.episodes)))
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 100_000_000)
+
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('move', 0.01), WaitsToGetReady(), h.output_path))
+    next(h.loop)
+    assert during_the_wait == [([], 0)]
+    assert [deadline for _, deadline in h.deadlines.values] == [510_000_000]
+    assert len(h.dataset.episodes) == 1
+    h.world.clock.advance_to_ns(520_000_000)
+    next(h.loop)
+    assert answer.result() == {eval_keys.TERMINATED: False}
+
+
+@pytest.mark.parametrize('arrives', ['with the ask', 'during prepare', 'before the first yield'])
+def test_a_done_before_the_episode_starts_keeps_it_from_starting(episode_harness, arrives):
+    h = episode_harness
+
+    class PressedWhileItGetsReady(Policy):
+        def run(self, runtime):
+            if arrives == 'before the first yield':
+                h.done.emit({eval_keys.SUCCESS: True})
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 100_000_000)
+
+    h.observation.emit(1)
+    answer = h.caller(
+        Rollout(Task('move', None, prepare_args={RESET: 'home'}), PressedWhileItGetsReady(), h.output_path)
+    )
+    if arrives == 'with the ask':
+        h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    if arrives == 'during prepare':
+        h.done.emit({eval_keys.SUCCESS: True})
+    next(h.prepare[RESET].incoming()).set_result(None)
+    next(h.loop)
+    with pytest.raises(EpisodeNotStarted, match='a done signal arrived before the episode started'):
+        answer.result()
+    assert h.deadlines.values == [] and h.dataset.episodes == []
+
+
+def test_an_error_before_the_first_yield_exports_no_episode_span_and_leaves_no_span_without_its_parent(
+    episode_harness, tmp_path
+):
+    h = episode_harness
+
+    class FailsToGetReady(Policy):
+        def run(self, runtime):
+            raise RuntimeError('the teleoperator cancelled')
+            yield
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-not-started'):
+        failed = h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), FailsToGetReady(), None))
+        next(h.loop)
+        next(h.prepare[RESET].incoming()).set_result(None)
+        next(h.loop)
+        with pytest.raises(EpisodeNotStarted, match='the teleoperator cancelled'):
+            failed.result()
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), Hold(), None))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    (episode,) = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_INDEX] == 0
+    (not_started,) = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE_NOT_STARTED]
+    resets = [s for s in spans if s.name == telemetry_keys.SPAN_RESET]
+    assert {reset.parent_id for reset in resets} == {not_started.span_id, episode.span_id}
+    span_ids = {s.span_id for s in spans}
+    assert all(s.parent_id is None or s.parent_id in span_ids for s in spans)
 
 
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):

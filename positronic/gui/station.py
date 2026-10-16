@@ -94,6 +94,10 @@ class Station:
     def __init__(self, next_task: Callable[[], Task]):
         self._next_task = next_task
         self._trial = self._draw()
+        # The trial of the open episode, before the override.
+        self._open_trial: Task | None = None
+        # The trial drawn before an episode that did not start. It runs after that episode's trial.
+        self._drawn_next: Task | None = None
         self._override: str | None = None
         self._override_since: int | None = None
         self._episodes: list[Episode] = []
@@ -130,7 +134,12 @@ class Station:
                 raise Refused('the run has ended')
             if self._is_open():
                 raise Refused('an episode is already running')
-            trial, self._trial = self._trial, self._draw()
+            trial = self._trial
+            if self._drawn_next is not None:
+                self._trial, self._drawn_next = self._drawn_next, None
+            else:
+                self._trial = self._draw()
+            self._open_trial = trial
             number = len(self._episodes) + 1
             override = self._override
             if override is not None:
@@ -156,10 +165,21 @@ class Station:
     def close(self, outcome: Outcome, now: float, error: str | None = None) -> None:
         """Record how the open episode ended."""
         with self._lock:
-            episode = self._episodes[-1]
-            episode.ended_at, episode.outcome, episode.error = now, outcome, error
-            self._ending = False
-            self._generation += 1
+            self._close(outcome, now, error)
+
+    def not_started(self, now: float, error: str) -> None:
+        """Record that the open episode failed before it started, and keep its trial for the next Start."""
+        with self._lock:
+            assert self._open_trial is not None, 'an episode is open'
+            self._trial, self._drawn_next = self._open_trial, self._trial
+            self._close(Outcome.ERROR, now, error)
+
+    def _close(self, outcome: Outcome, now: float, error: str | None) -> None:
+        episode = self._episodes[-1]
+        episode.ended_at, episode.outcome, episode.error = now, outcome, error
+        self._open_trial = None
+        self._ending = False
+        self._generation += 1
 
     def end_run(self) -> None:
         """End the run. An open episode must end first."""

@@ -101,6 +101,43 @@ def test_a_failed_episode_keeps_its_error_and_the_next_start_opens_the_next_epis
     assert station.start(now=4.0).meta[eval_keys.TRIAL_INDEX] == 1
 
 
+def test_an_episode_that_did_not_start_keeps_its_trial_for_the_next_start():
+    station = Station(_trials())
+    station.set_override(OVERRIDE)
+    station.start(now=1.0)
+    station.not_started(now=2.0, error='RuntimeError: the teleoperator cancelled')
+    view = station.view(now=3.0)
+    assert view.phase is Phase.READY
+    assert view.configured == CONFIGURED
+    assert view.episodes[0].outcome is Outcome.ERROR
+    assert view.episodes[0].error == 'RuntimeError: the teleoperator cancelled'
+    again = station.start(now=4.0)
+    assert again.meta['draw'] == 0
+    assert again.instruction == OVERRIDE
+
+
+def test_a_retry_of_a_trial_that_did_not_start_draws_nothing_and_keeps_the_drawn_trial_next():
+    draws = iter([Task(instruction_source=f'trial {n}', timeout_sec=None) for n in range(3)])
+    station = Station(lambda: next(draws))
+    assert station.start(now=1.0).instruction == 'trial 0'
+    station.not_started(now=2.0, error='RuntimeError: the teleoperator cancelled')
+    assert station.view(now=3.0).configured == 'trial 0'
+    assert station.start(now=4.0).instruction == 'trial 0'
+    station.close(Outcome.PASS, now=5.0)
+    assert station.view(now=6.0).configured == 'trial 1'
+    assert station.start(now=7.0).instruction == 'trial 1'
+
+
+def test_a_finish_before_the_episode_starts_leaves_the_station_ready_with_the_same_trial():
+    station = Station(_trials())
+    assert station.start(now=1.0).meta['draw'] == 0
+    station.end(Outcome.PASS)
+    assert station.view(now=2.0).phase is Phase.ENDING
+    station.not_started(now=3.0, error='a done signal arrived before the episode started')
+    assert station.view(now=4.0).phase is Phase.READY
+    assert station.start(now=5.0).meta['draw'] == 0
+
+
 def test_the_run_ends_only_after_the_open_episode_and_then_takes_no_start():
     station = Station(_trials())
     station.start(now=1.0)
