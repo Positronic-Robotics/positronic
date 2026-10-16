@@ -50,12 +50,10 @@ _CLIENT_ID_FIELD = 'client_id'
 _DEVICE_CODE_FIELD = 'device_code'
 _ERROR_FIELD = 'error'
 _INTERVAL_FIELD = 'interval'
+_SCOPE_FIELD = 'scope'
 
 DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_EXPIRES_IN_S = 900.0
-
-# How much a `slow_down` answer or a transient failure raises the poll interval (RFC 8628 §3.5).
-SLOW_DOWN_STEP_S = 5.0
 
 
 class DeviceFlowError(Exception):
@@ -67,7 +65,7 @@ class ProviderFailed(DeviceFlowError):
 
 
 class _TransientFailure(ProviderFailed):
-    """One request timed out, or the provider answered 429 or 5xx. `poll_for_token` waits and retries it."""
+    """One request timed out, or the provider answered 429 or 5xx."""
 
     def __init__(self, message: str, retry_after_s: float | None = None) -> None:
         super().__init__(message)
@@ -149,7 +147,7 @@ class DeviceFlow:
         """Step one: ask the provider for a device code, and for the short code the user types."""
         form = {_CLIENT_ID_FIELD: self.client_id}
         if self.provider.scope is not None:
-            form['scope'] = self.provider.scope
+            form[_SCOPE_FIELD] = self.provider.scope
         payload = self._post_form(self.provider.device_authorization_url, form)
         error = payload.get(_ERROR_FIELD)
         if error is not None:
@@ -187,6 +185,8 @@ class DeviceFlow:
             PollOutcome.DENIED: 'the user refused the authorization',
             PollOutcome.EXPIRED: 'the device code expired before it was authorized',
         }
+        # How much a `slow_down` answer or a transient failure raises the poll interval (RFC 8628 §3.5).
+        slow_down_step_s = 5.0
         interval = authorization.interval
         deadline = self._monotonic() + authorization.expires_in
         while True:
@@ -208,7 +208,7 @@ class DeviceFlow:
                 # RFC 8628 §3.5: a poll that timed out slows the rate and tries again, and WorkOS names a
                 # 429 and a 5xx transient as well. The code may already be authorized, and the deadline
                 # above ends the flow.
-                interval = max(interval + SLOW_DOWN_STEP_S, exc.retry_after_s or 0.0)
+                interval = max(interval + slow_down_step_s, exc.retry_after_s or 0.0)
                 continue
             error = payload.get(_ERROR_FIELD)
             outcome = self._outcome_of(error)
@@ -218,7 +218,7 @@ class DeviceFlow:
                 # GitHub repeats the original interval in this answer, so the step raises the rate;
                 # taking the value alone would poll on at the rate the provider just refused.
                 interval = max(
-                    interval + SLOW_DOWN_STEP_S, self._optional_duration_s(payload, _INTERVAL_FIELD, interval)
+                    interval + slow_down_step_s, self._optional_duration_s(payload, _INTERVAL_FIELD, interval)
                 )
             elif outcome is not PollOutcome.PENDING:
                 raise DeviceFlowError(

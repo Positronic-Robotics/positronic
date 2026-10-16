@@ -64,7 +64,7 @@ MINTED_KEY = 'pk_live_secret'
 
 
 @dataclass
-class ScriptedGitHub:
+class ScriptedProvider:
     """One scripted answer per token poll, taken in order, plus the device-code endpoint.
 
     An answer that is an `httpx.Response` goes out as it is. A body with an `error` field goes out with
@@ -120,10 +120,10 @@ class RecordedSleep:
         return self.now
 
 
-def _flow(github: ScriptedGitHub) -> tuple[DeviceFlow, RecordedSleep]:
-    sleep = RecordedSleep(github.events)
-    http = httpx.Client(transport=httpx.MockTransport(github.handle))
-    return DeviceFlow(github.provider, CLIENT_ID, http, monotonic=sleep.monotonic, sleep=sleep), sleep
+def _flow(scripted: ScriptedProvider) -> tuple[DeviceFlow, RecordedSleep]:
+    sleep = RecordedSleep(scripted.events)
+    http = httpx.Client(transport=httpx.MockTransport(scripted.handle))
+    return DeviceFlow(scripted.provider, CLIENT_ID, http, monotonic=sleep.monotonic, sleep=sleep), sleep
 
 
 def _authorization(*, interval: float = 5.0, expires_in: float = 900.0) -> DeviceAuthorization:
@@ -140,7 +140,7 @@ def _authorization(*, interval: float = 5.0, expires_in: float = 900.0) -> Devic
 
 
 def test_the_device_code_request_asks_for_identity_scope_only():
-    github = ScriptedGitHub()
+    github = ScriptedProvider()
     flow, _ = _flow(github)
 
     authorization = flow.start_device_authorization()
@@ -153,7 +153,7 @@ def test_the_device_code_request_asks_for_identity_scope_only():
 
 
 def test_a_device_code_answer_without_an_interval_polls_at_the_default_rate():
-    github = ScriptedGitHub(device={k: v for k, v in DEVICE_ANSWER.items() if k not in ('interval', 'expires_in')})
+    github = ScriptedProvider(device={k: v for k, v in DEVICE_ANSWER.items() if k not in ('interval', 'expires_in')})
     flow, _ = _flow(github)
 
     authorization = flow.start_device_authorization()
@@ -163,7 +163,7 @@ def test_a_device_code_answer_without_an_interval_polls_at_the_default_rate():
 
 def test_an_unreadable_interval_is_a_bad_answer_rather_than_the_default():
     """An absent field takes the default; a present one GitHub cannot have meant is a bad answer."""
-    flow, _ = _flow(ScriptedGitHub(device=dict(DEVICE_ANSWER) | {'interval': 'five'}))
+    flow, _ = _flow(ScriptedProvider(device=dict(DEVICE_ANSWER) | {'interval': 'five'}))
 
     with pytest.raises(DeviceFlowError, match='unreadable interval'):
         flow.start_device_authorization()
@@ -171,7 +171,7 @@ def test_an_unreadable_interval_is_a_bad_answer_rather_than_the_default():
 
 def test_a_boolean_interval_is_a_bad_answer():
     """`bool` is an `int`, so the plain numeric test would take `True` as a one-second interval."""
-    flow, _ = _flow(ScriptedGitHub(device=dict(DEVICE_ANSWER) | {'interval': True}))
+    flow, _ = _flow(ScriptedProvider(device=dict(DEVICE_ANSWER) | {'interval': True}))
 
     with pytest.raises(DeviceFlowError, match='unreadable interval'):
         flow.start_device_authorization()
@@ -198,13 +198,13 @@ def test_a_timing_field_that_is_no_length_of_time_is_a_bad_answer(field: str, va
 @pytest.mark.parametrize('value', [5, 5.0, 0.5, 3600, 24 * 60 * 60])
 def test_a_positive_interval_is_taken_as_github_sent_it(value: float):
     """The guard above refuses nothing GitHub can have meant, whole seconds or a fraction of one."""
-    flow, _ = _flow(ScriptedGitHub(device=dict(DEVICE_ANSWER) | {'interval': value}))
+    flow, _ = _flow(ScriptedProvider(device=dict(DEVICE_ANSWER) | {'interval': value}))
 
     assert flow.start_device_authorization().interval == float(value)
 
 
 def test_a_refused_device_code_request_names_what_github_answered():
-    github = ScriptedGitHub(device={'error': 'incorrect_client_credentials'})
+    github = ScriptedProvider(device={'error': 'incorrect_client_credentials'})
     flow, _ = _flow(github)
 
     with pytest.raises(DeviceFlowError, match='incorrect_client_credentials'):
@@ -212,7 +212,7 @@ def test_a_refused_device_code_request_names_what_github_answered():
 
 
 def test_a_device_code_answer_missing_a_field_is_unreadable():
-    github = ScriptedGitHub(device={k: v for k, v in DEVICE_ANSWER.items() if k != 'user_code'})
+    github = ScriptedProvider(device={k: v for k, v in DEVICE_ANSWER.items() if k != 'user_code'})
     flow, _ = _flow(github)
 
     with pytest.raises(DeviceFlowError, match='user_code'):
@@ -223,7 +223,7 @@ def test_a_device_code_answer_missing_a_field_is_unreadable():
 
 
 def test_an_authorized_device_code_yields_the_access_token():
-    github = ScriptedGitHub(polls=[dict(GRANTED)])
+    github = ScriptedProvider(polls=[dict(GRANTED)])
     flow, sleep = _flow(github)
 
     assert flow.poll_for_token(_authorization()) == TOKEN
@@ -232,7 +232,7 @@ def test_an_authorized_device_code_yields_the_access_token():
 
 def test_the_first_poll_waits_the_interval_github_asked_for():
     """RFC 8628 §3.3. A poll that starts at once is answered `slow_down`, which costs the code."""
-    github = ScriptedGitHub(polls=[dict(GRANTED)])
+    github = ScriptedProvider(polls=[dict(GRANTED)])
     flow, _ = _flow(github)
 
     flow.poll_for_token(_authorization(interval=7.0))
@@ -241,7 +241,7 @@ def test_the_first_poll_waits_the_interval_github_asked_for():
 
 
 def test_the_token_request_names_the_device_grant_and_the_client():
-    github = ScriptedGitHub(polls=[dict(GRANTED)])
+    github = ScriptedProvider(polls=[dict(GRANTED)])
     flow, _ = _flow(github)
 
     flow.poll_for_token(_authorization())
@@ -255,7 +255,7 @@ def test_the_token_request_names_the_device_grant_and_the_client():
 
 def test_a_pending_authorization_is_polled_until_the_user_finishes():
     pending = {'error': 'authorization_pending'}
-    github = ScriptedGitHub(polls=[dict(pending), dict(pending), dict(GRANTED)])
+    github = ScriptedProvider(polls=[dict(pending), dict(pending), dict(GRANTED)])
     flow, sleep = _flow(github)
 
     assert flow.poll_for_token(_authorization()) == TOKEN
@@ -264,7 +264,7 @@ def test_a_pending_authorization_is_polled_until_the_user_finishes():
 
 def test_slow_down_raises_the_interval_every_time_it_arrives():
     slow = {'error': 'slow_down', 'interval': 5}
-    github = ScriptedGitHub(polls=[slow, slow, dict(GRANTED)])
+    github = ScriptedProvider(polls=[slow, slow, dict(GRANTED)])
     flow, sleep = _flow(github)
 
     flow.poll_for_token(_authorization())
@@ -273,7 +273,7 @@ def test_slow_down_raises_the_interval_every_time_it_arrives():
 
 
 def test_an_expired_device_code_leaves_the_user_unauthorized():
-    github = ScriptedGitHub(polls=[{'error': 'expired_token'}])
+    github = ScriptedProvider(polls=[{'error': 'expired_token'}])
     flow, _ = _flow(github)
 
     with pytest.raises(DeviceFlowError, match='expired'):
@@ -281,7 +281,7 @@ def test_an_expired_device_code_leaves_the_user_unauthorized():
 
 
 def test_a_refused_authorization_leaves_the_user_unauthorized():
-    github = ScriptedGitHub(polls=[{'error': 'authorization_pending'}, {'error': 'access_denied'}])
+    github = ScriptedProvider(polls=[{'error': 'authorization_pending'}, {'error': 'access_denied'}])
     flow, _ = _flow(github)
 
     with pytest.raises(DeviceFlowError, match='refused the authorization'):
@@ -290,7 +290,7 @@ def test_a_refused_authorization_leaves_the_user_unauthorized():
 
 def test_the_poll_stops_when_the_device_code_expires():
     """GitHub sets the lifetime, and a user who never authorizes runs it out."""
-    github = ScriptedGitHub(polls=[{'error': 'authorization_pending'} for _ in range(100)])
+    github = ScriptedProvider(polls=[{'error': 'authorization_pending'} for _ in range(100)])
     flow, sleep = _flow(github)
 
     with pytest.raises(DeviceFlowError, match='not authorized in time'):
@@ -301,7 +301,7 @@ def test_the_poll_stops_when_the_device_code_expires():
 
 def test_an_unreadable_device_code_names_what_github_answered():
     """An error that is neither a refusal nor an expiry says GitHub could not read the request."""
-    github = ScriptedGitHub(polls=[{'error': 'unsupported_grant_type'}])
+    github = ScriptedProvider(polls=[{'error': 'unsupported_grant_type'}])
     flow, _ = _flow(github)
 
     with pytest.raises(DeviceFlowError, match='unsupported_grant_type'):
@@ -309,7 +309,7 @@ def test_an_unreadable_device_code_names_what_github_answered():
 
 
 def test_a_github_outage_is_reported_as_unavailable():
-    github = ScriptedGitHub(status=503)
+    github = ScriptedProvider(status=503)
     flow, _ = _flow(github)
 
     with pytest.raises(ProviderFailed, match='GitHub is unavailable: HTTP 503'):
@@ -318,7 +318,7 @@ def test_a_github_outage_is_reported_as_unavailable():
 
 def test_a_poll_that_meets_a_server_error_is_retried_at_a_slower_rate():
     """The user may already have approved the code, so one failed poll does not cost a new sign-in."""
-    github = ScriptedGitHub(polls=[httpx.Response(502, text='bad gateway'), dict(GRANTED)])
+    github = ScriptedProvider(polls=[httpx.Response(502, text='bad gateway'), dict(GRANTED)])
     flow, sleep = _flow(github)
 
     assert flow.poll_for_token(_authorization()) == TOKEN
@@ -377,8 +377,8 @@ WORKOS_GRANTED: dict[str, object] = {
 }
 
 
-def _workos(**kwargs: Any) -> ScriptedGitHub:
-    return ScriptedGitHub(provider=WORKOS, error_status=400, **kwargs)
+def _workos(**kwargs: Any) -> ScriptedProvider:
+    return ScriptedProvider(provider=WORKOS, error_status=400, **kwargs)
 
 
 def test_the_workos_device_code_request_names_the_client_and_no_scope():
@@ -541,7 +541,7 @@ WORKOS_SETTINGS = {'client_id': 'client_from_the_gateway', 'authkit_domain': 'au
 
 
 def test_the_registration_carries_the_access_token_as_the_credential():
-    github = ScriptedGitHub(polls=[dict(GRANTED)])
+    github = ScriptedProvider(polls=[dict(GRANTED)])
     flow, _ = _flow(github)
     gateway = ScriptedGateway()
 
@@ -556,7 +556,7 @@ def test_the_registration_carries_the_access_token_as_the_credential():
 
 def test_the_registration_asks_the_gateway_to_rotate_when_told_to():
     """The account exists and this machine no longer holds its key, so a fresh one is minted."""
-    github = ScriptedGitHub(polls=[dict(GRANTED)])
+    github = ScriptedProvider(polls=[dict(GRANTED)])
     flow, _ = _flow(github)
     gateway = ScriptedGateway()
 
@@ -847,7 +847,7 @@ def _main_against(gateway: ScriptedGateway, flow: DeviceFlow | None = None) -> S
 
 def test_a_success_that_is_no_registration_exits_with_one_line():
     """A 2xx from a proxy page or another gateway version ends the command without a traceback."""
-    flow, _ = _flow(ScriptedGitHub(polls=[dict(GRANTED)]))  # built before the patch, so GitHub keeps its transport
+    flow, _ = _flow(ScriptedProvider(polls=[dict(GRANTED)]))  # built before the patch, so GitHub keeps its transport
 
     exited = _main_against(ScriptedGateway(body={'unexpected': 'page'}), flow)
 
@@ -887,7 +887,7 @@ def test_an_auth_config_lost_in_transit_does_not_name_rotate():
 
 def test_the_user_is_shown_the_code_on_stderr_before_the_poll_starts(capsys):
     """Only the short code has to reach the user while the flow runs, and it leaves stdout to the answer."""
-    github = ScriptedGitHub(polls=[dict(GRANTED)])
+    github = ScriptedProvider(polls=[dict(GRANTED)])
     flow, _ = _flow(github)
 
     with PlatformClient(client=ScriptedGateway().client()) as platform:
@@ -900,7 +900,7 @@ def test_the_user_is_shown_the_code_on_stderr_before_the_poll_starts(capsys):
 
 def test_the_registration_keeps_the_key_the_gateway_minted():
     """The flow leaves the client authenticated, so a caller registering in Python reads on."""
-    github = ScriptedGitHub(polls=[dict(GRANTED)])
+    github = ScriptedProvider(polls=[dict(GRANTED)])
     flow, _ = _flow(github)
 
     with PlatformClient(client=ScriptedGateway().client()) as platform:
@@ -910,10 +910,12 @@ def test_the_registration_keeps_the_key_the_gateway_minted():
 
 @pytest.mark.parametrize(
     ('scripted', 'provider_requests'),
-    [(ScriptedGitHub(polls=[dict(GRANTED)]), 2), (_workos(polls=[dict(WORKOS_GRANTED)]), 3)],
+    [(ScriptedProvider(polls=[dict(GRANTED)]), 2), (_workos(polls=[dict(WORKOS_GRANTED)]), 3)],
     ids=['GitHub', 'WorkOS'],
 )
-def test_the_registration_waits_out_the_gateways_own_provider_budget(scripted: ScriptedGitHub, provider_requests: int):
+def test_the_registration_waits_out_the_gateways_own_provider_budget(
+    scripted: ScriptedProvider, provider_requests: int
+):
     """The gateway sends the provider these requests inside `users.register`, then does one of its own."""
     gateway = ScriptedGateway()
     flow, _ = _flow(scripted)
