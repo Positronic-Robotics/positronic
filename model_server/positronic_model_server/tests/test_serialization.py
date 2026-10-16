@@ -146,6 +146,19 @@ def test_encoded_frames_pair_each_frame_with_its_jpeg_bytes_and_quality():
     np.testing.assert_array_equal(encoded[1].pixels, stack[1])
 
 
+def test_a_cached_frame_keeps_its_pixels_when_the_source_array_changes():
+    stack = _frames(2)
+    encoded = _encoded(stack)
+    original = stack.copy()
+    stack[:] = 0
+    np.testing.assert_array_equal(encoded[0].pixels, original[0])
+    assert not encoded[0].pixels.flags.writeable
+    # The changed frames no longer match the cache, so they are encoded again and not sent as the old bytes.
+    again = _jpegs(stack, encoded)
+    assert again == _jpegs(stack)
+    assert all(new is not old.jpeg for new, old in zip(again, encoded, strict=True))
+
+
 def test_a_frame_encoded_at_another_quality_is_encoded_again():
     stack = _frames(2)
     encoded = _encoded(stack, quality=60)
