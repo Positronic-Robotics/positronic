@@ -1,8 +1,9 @@
 import base64
+import contextlib
 import io
 import time
 import types
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -353,27 +354,48 @@ def test_the_headset_video_skips_a_lost_camera_and_resumes_on_its_next_frame(wor
     assert second is not None and second.data == 'frame 2'
 
 
-@pytest.mark.parametrize('route', ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js'])
-def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeypatch, route):
-    monkeypatch.chdir(tmp_path)
+@contextlib.contextmanager
+def _served_webxr(frontend: str = 'oculus') -> Iterator[str]:
+    """A ``WebXR`` server of ``frontend`` on a free port, and its base URL once it answers."""
     port = free_port()
-    webxr = WebXR(port=port, use_https=False)
+    webxr = WebXR(port=port, frontend=frontend, use_https=False)
     stop = types.SimpleNamespace(value=False)
     run = webxr.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, None))
     next(run)
+    base = f'http://127.0.0.1:{port}'
     try:
         deadline = time.monotonic() + 10
         while True:
             try:
-                response = httpx.get(f'http://127.0.0.1:{port}{route}', timeout=1.0)
+                httpx.get(base + '/core.js', timeout=1.0)
                 break
             except httpx.TransportError:
                 assert time.monotonic() < deadline, 'the headset page never answered'
                 time.sleep(0.05)
-        assert response.status_code == 200
+        yield base
     finally:
         stop.value = True
         list(run)
+
+
+@pytest.mark.parametrize('route', ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js'])
+def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeypatch, route):
+    monkeypatch.chdir(tmp_path)
+    with _served_webxr() as base:
+        assert httpx.get(base + route, timeout=1.0).status_code == 200
+
+
+def test_the_phone_page_for_teleop_opens_in_its_teleop_mode():
+    with _served_webxr('iphone_teleop') as base:
+        bare = httpx.get(base + '/', timeout=1.0)
+        assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.PHONE_TELEOP_QUERY}'
+        page = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
+        assert page.status_code == 200 and "get('mode') === 'teleop'" in page.text
+
+
+def test_the_phone_page_for_data_collection_keeps_its_own_mode():
+    with _served_webxr('iphone') as base:
+        assert httpx.get(base + '/', timeout=1.0).status_code == 200
 
 
 def test_the_headset_video_keeps_the_colors_of_an_rgb_frame():

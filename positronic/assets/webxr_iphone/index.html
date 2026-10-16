@@ -85,6 +85,9 @@
 
       // The xr-standard gamepad layout of `buttons`.
       const BUTTON = { trigger: 0, stick: 3, a: 4, b: 5 };
+      // `?mode=teleop` labels the buttons for `positronic teleop`. Every button then sends its value only while it is
+      // touched, and the service reads taps and holds from that.
+      const TELEOP = new URLSearchParams(window.location.search).get('mode') === 'teleop';
       const buttons = new Array(8).fill(0.0);
 
       // Gripper slider state
@@ -168,6 +171,19 @@
             classes: { off: 'btn--record-off', on: 'btn--record-on' }
           }
         };
+
+        if (TELEOP) {
+          const teleop = (cfg, label, status) => Object.assign(cfg, {
+            type: 'momentary',
+            baseLabel: label,
+            labels: { off: status, on: status },
+            aria: { off: label, on: label },
+            titles: { off: `${label} (${status})`, on: `${label} (${status})` },
+          });
+          teleop(configs.track, 'Control', 'tap: on / off');
+          teleop(configs.record, 'Ready / Start task', 'hold: Complete');
+          teleop(configs.reset, 'Cancel', 'hold: Give up');
+        }
 
         const state = {
           reset: { pressed: false },

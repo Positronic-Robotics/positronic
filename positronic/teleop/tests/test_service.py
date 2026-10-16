@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -23,6 +24,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step
 from positronic.policy.executor import Executor
 from positronic.teleop import TeleopPolicy, session
+from positronic.teleop import service as service_module
 from positronic.teleop.service import ButtonMap, Phase, TeleopService
 from positronic.utils import package_assets_path
 
@@ -78,6 +80,16 @@ class TestButtonMap:
         buttons = ButtonMap(HOLD_SEC, press_threshold=0.9)
         assert buttons.events(_buttons(a=0.8), 0, False) == []
         assert buttons.events(_buttons(a=0.95), 10, False) == [session.Event.CLUTCH]
+
+    def test_the_indices_match_the_buttons_that_the_phone_page_names(self):
+        page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
+        [layout] = re.findall(r'const BUTTON = \{ trigger: (\d+), stick: (\d+), a: (\d+), b: (\d+) \};', page)
+        assert tuple(map(int, layout)) == (
+            service_module._TRIGGER,
+            service_module._STICK,
+            service_module._A,
+            service_module._B,
+        )
 
     def test_the_trigger_is_the_grip(self):
         assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7

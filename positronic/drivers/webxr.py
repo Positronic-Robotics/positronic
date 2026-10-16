@@ -11,8 +11,8 @@ from collections.abc import Iterator
 import numpy as np
 import turbojpeg
 import uvicorn
-from fastapi import FastAPI, WebSocket
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.responses import FileResponse, RedirectResponse
 
 import pimm
 from positronic import geom, utils
@@ -98,6 +98,10 @@ def encode_frame(encoder: turbojpeg.TurboJPEG, image: np.ndarray, quality: int) 
     return base64.b64encode(buffer).decode('utf-8')
 
 
+# The query that shows the phone page with the labels of ``positronic teleop``. The page reads it.
+PHONE_TELEOP_QUERY = 'mode=teleop'
+
+
 def _build_access_url(host: str, port: int, use_https: bool) -> str:
     scheme = 'https' if use_https else 'http'
     return f'{scheme}://{host}:{port}/'
@@ -126,7 +130,7 @@ class WebXR(pimm.ControlSystem):
     Parameters
     - port: TCP port to bind.
     - ssl_keyfile, ssl_certfile: TLS files if `use_https=True`.
-    - frontend: "oculus" or "iphone" (single-frontend mode).
+    - frontend: "oculus", "iphone", or "iphone_teleop": the phone page with the labels of ``positronic teleop``.
     - use_https: enable HTTPS; set False for iPhone dev.
     - jpeg_quality: the JPEG quality of the video stream.
     """
@@ -144,7 +148,7 @@ class WebXR(pimm.ControlSystem):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
-        assert frontend in ('oculus', 'iphone'), f'Unknown frontend: {frontend}'
+        assert frontend in ('oculus', 'iphone', 'iphone_teleop'), f'Unknown frontend: {frontend}'
         self.frontend = frontend
         self.use_https = use_https
         self.server_thread = None
@@ -165,11 +169,12 @@ class WebXR(pimm.ControlSystem):
         """The page and its scripts, from the package assets."""
 
         @app.get('/')
-        async def root():
+        async def root(request: Request):
             if self.frontend == 'oculus':
                 return FileResponse(utils.package_assets_path('assets/webxr/index.html'))
-            else:
-                return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
+            if self.frontend == 'iphone_teleop' and request.url.query != PHONE_TELEOP_QUERY:
+                return RedirectResponse(f'/?{PHONE_TELEOP_QUERY}')
+            return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
 
         @app.get('/three.min.js')
         async def three_min():
@@ -272,6 +277,8 @@ class WebXR(pimm.ControlSystem):
 
         primary_host = utils.resolve_host_ip()
         url = _build_access_url(primary_host, self.port, self.use_https)
+        if self.frontend == 'iphone_teleop':
+            url += f'?{PHONE_TELEOP_QUERY}'
         banner = '=' * 80
         print(banner)
         print(f' >>> WEBXR interface available at: {url} <<<')
