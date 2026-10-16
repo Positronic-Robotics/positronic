@@ -69,6 +69,14 @@ class JpegEncoding:
         return at(value, self.path)
 
 
+@dataclass(frozen=True)
+class EncodedFrame:
+    """One frame and the JPEG bytes ``encode_jpeg`` made of it."""
+
+    pixels: np.ndarray
+    jpeg: bytes
+
+
 def encode_images(value: Any, encodings: cabc.Sequence[JpegEncoding]) -> Any:
     """Encode only the explicitly selected images, in observations or model results."""
     for encoding in encodings:
@@ -77,14 +85,14 @@ def encode_images(value: Any, encodings: cabc.Sequence[JpegEncoding]) -> Any:
 
 
 def encode_jpeg(
-    image: np.ndarray, quality: int = DEFAULT_JPEG_QUALITY, encoded: cabc.Sequence[tuple[np.ndarray, bytes]] = ()
+    image: np.ndarray, quality: int = DEFAULT_JPEG_QUALITY, encoded: cabc.Sequence[EncodedFrame] = ()
 ) -> dict[bytes, Any]:
     """JPEG-encode RGB images shaped ``(..., H, W, 3)``, casting pixels to uint8.
 
     Nonempty 3D/4D inputs use the v1/v2 marker. Extra leading dimensions and empty batches carry
     their full shape. JPEG changes pixels; ordinary arrays passed to ``serialise`` stay lossless.
-    ``encoded`` holds frames and their JPEG bytes from an earlier call. Each leading frame equal to
-    the frame of the same index in ``encoded`` uses those bytes and is not encoded again.
+    ``encoded`` holds frames of an earlier call. Each leading frame equal to the frame of the same index
+    in ``encoded`` uses its JPEG bytes and is not encoded again.
     """
     if image.ndim < 3 or image.shape[-1] != 3 or min(image.shape[-3:-1]) < 1:
         raise ValueError('JPEG images must have shape (..., H, W, 3) with positive height and width')
@@ -93,9 +101,11 @@ def encode_jpeg(
     frames = image.reshape((-1, *image.shape[-3:]))
     bufs = []
     for index, frame in enumerate(frames):
-        if index < len(encoded) and np.array_equal(encoded[index][0], frame):
-            bufs.append(encoded[index][1])
-            continue
+        if index < len(encoded):
+            earlier = encoded[index]
+            if np.array_equal(earlier.pixels, frame):
+                bufs.append(earlier.jpeg)
+                continue
         encoded = ()  # Only the leading frames use earlier bytes.
         buf = io.BytesIO()
         PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(buf, format='JPEG', quality=quality)
@@ -105,9 +115,10 @@ def encode_jpeg(
     return {_JPEG: True, _FRAMES: bufs, _NDIM: int(image.ndim)}
 
 
-def jpeg_frames(marker: cabc.Mapping[bytes, Any]) -> list[bytes]:
-    """The JPEG bytes of each frame of a marker from ``encode_jpeg``."""
-    return list(marker[_FRAMES])
+def encoded_frames(image: np.ndarray, marker: cabc.Mapping[bytes, Any]) -> list[EncodedFrame]:
+    """Each frame of ``image`` with its JPEG bytes in ``marker``, the ``encode_jpeg`` result of ``image``."""
+    frames = image.reshape((-1, *image.shape[-3:]))
+    return [EncodedFrame(frame, jpeg) for frame, jpeg in zip(frames, marker[_FRAMES], strict=True)]
 
 
 def frame_digest(data: bytes) -> bytes:

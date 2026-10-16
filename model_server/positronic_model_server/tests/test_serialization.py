@@ -119,17 +119,26 @@ def _frames(count: int, seed: int = 0) -> np.ndarray:
     return np.random.default_rng(seed).integers(0, 256, (count, 16, 24, 3), dtype=np.uint8)
 
 
+def _jpegs(image: np.ndarray, encoded=()) -> list[bytes]:
+    marker = serialization.encode_jpeg(image, encoded=encoded)
+    return [frame.jpeg for frame in serialization.encoded_frames(image, marker)]
+
+
 def test_equal_leading_frames_reuse_their_jpeg_bytes():
     earlier = _frames(3)
-    marker = serialization.encode_jpeg(earlier)
-    encoded = list(zip(earlier, serialization.jpeg_frames(marker), strict=True))
-    later = np.concatenate([earlier[:2], _frames(1, seed=1)])
-    reused = serialization.jpeg_frames(serialization.encode_jpeg(later, encoded=encoded))
-    assert reused[0] is encoded[0][1] and reused[1] is encoded[1][1] and reused[2] != encoded[2][1]
+    encoded = serialization.encoded_frames(earlier, serialization.encode_jpeg(earlier))
+    reused = _jpegs(np.concatenate([earlier[:2], _frames(1, seed=1)]), encoded)
+    assert reused[0] is encoded[0].jpeg and reused[1] is encoded[1].jpeg and reused[2] != encoded[2].jpeg
     # A frame after the first one that differs is encoded again, even when it equals an earlier frame.
-    shifted_stack = np.concatenate([_frames(1, seed=2), earlier[1:]])
-    shifted = serialization.jpeg_frames(serialization.encode_jpeg(shifted_stack, encoded=encoded))
-    assert shifted[1] is not encoded[1][1] and shifted[1] == encoded[1][1]
+    shifted = _jpegs(np.concatenate([_frames(1, seed=2), earlier[1:]]), encoded)
+    assert shifted[1] is not encoded[1].jpeg and shifted[1] == encoded[1].jpeg
+
+
+def test_encoded_frames_pair_each_frame_with_its_jpeg_bytes():
+    stack = _frames(2)
+    encoded = serialization.encoded_frames(stack, serialization.encode_jpeg(stack))
+    assert [frame.pixels.shape for frame in encoded] == [(16, 24, 3)] * 2
+    np.testing.assert_array_equal(encoded[1].pixels, stack[1])
 
 
 def test_a_held_frame_travels_as_its_digest_and_decodes_from_the_held_frames():
@@ -153,9 +162,7 @@ def test_a_held_frame_travels_as_its_digest_and_decodes_from_the_held_frames():
 
 def test_the_last_frame_of_a_stack_and_a_single_image_travel_in_full():
     stack = _frames(2)
-    every_frame = {
-        serialization.frame_digest(data) for data in serialization.jpeg_frames(serialization.encode_jpeg(stack))
-    }
+    every_frame = {serialization.frame_digest(data) for data in _jpegs(stack)}
     _, stack_count = serialization.reference_frames(serialization.encode_jpeg(stack), every_frame)
     single = serialization.encode_jpeg(stack[0])
     _, single_count = serialization.reference_frames(single, serialization.frame_digests(single))

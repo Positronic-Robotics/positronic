@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import ProtocolVersion
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg, jpeg_frames
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, EncodedFrame, encode_jpeg, encoded_frames
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
@@ -22,23 +22,38 @@ from .base import Policy, PolicyRun, Processor, Runtime
 from .compatibility import from_v1_spec
 from .spec import from_spec
 
-# The frames of a context push and their JPEG bytes, by observation key.
-EncodedFrames = cabc.Mapping[str, cabc.Sequence[tuple[np.ndarray, bytes]]]
+# Where a value sits in an observation: its key, then the mapping keys and list indices below it.
+ValuePath = tuple[str | int, ...]
+# The frames of a context push, by the path of their stack.
+EncodedFrames = cabc.Mapping[ValuePath, cabc.Sequence[EncodedFrame]]
 
 
 def _is_image(value: Any) -> bool:
     return isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
 
 
-def _prepare_value(value: Any, jpeg_quality: int, encoded: cabc.Sequence[tuple[np.ndarray, bytes]] = ()) -> Any:
+def _image_stacks(value: Any, path: ValuePath) -> cabc.Iterator[tuple[ValuePath, np.ndarray]]:
+    """Every ``(T, H, W, 3)`` stack in ``value``, at any depth of mappings and lists, with its path."""
+    if _is_image(value):
+        if value.ndim == 4:
+            yield path, value
+    elif isinstance(value, cabc.Mapping):
+        for key, item in value.items():
+            yield from _image_stacks(item, (*path, key))
+    elif isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            yield from _image_stacks(item, (*path, index))
+
+
+def _prepare_value(value: Any, jpeg_quality: int, path: ValuePath, encoded: EncodedFrames) -> Any:
     # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
     if _is_image(value):
         # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's message cap.
-        return encode_jpeg(value, jpeg_quality, encoded)
+        return encode_jpeg(value, jpeg_quality, encoded.get(path, ()))
     if isinstance(value, cabc.Mapping):
-        return {k: _prepare_value(v, jpeg_quality) for k, v in value.items()}
+        return {k: _prepare_value(v, jpeg_quality, (*path, k), encoded) for k, v in value.items()}
     if isinstance(value, list | tuple):
-        return type(value)(_prepare_value(v, jpeg_quality) for v in value)
+        return type(value)(_prepare_value(v, jpeg_quality, (*path, i), encoded) for i, v in enumerate(value))
     return value
 
 
@@ -48,11 +63,11 @@ def prepare_obs(
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     encoded: EncodedFrames | None = None,
 ) -> dict[str, Any]:
-    """``obs`` as it goes on the wire. A stack at a key of ``encoded`` uses its JPEG bytes; see ``encode_jpeg``."""
+    """``obs`` as it goes on the wire. A stack at a path of ``encoded`` uses its JPEG bytes; see ``encode_jpeg``."""
     if not compress_images:
         return dict(obs)
     encoded = encoded or {}
-    return {key: _prepare_value(value, jpeg_quality, encoded.get(key, ())) for key, value in obs.items()}
+    return {key: _prepare_value(value, jpeg_quality, (key,), encoded) for key, value in obs.items()}
 
 
 def round_trip(
@@ -78,14 +93,30 @@ def round_trip(
 
 def push_context(session: InferenceSession, obs: cabc.Mapping[str, Any], jpeg_quality: int) -> EncodedFrames:
     """Send the image stacks of ``obs`` as a context push, timed as the ``policy.context`` span, and return the
-    pushed frames with their JPEG bytes. An ``obs`` without a stack sends nothing and returns none."""
+    pushed frames by the path of their stack. A stack inside a mapping or a list goes in the push under its own
+    key, inside the same containers. An ``obs`` without a stack sends nothing and returns none."""
     with telemetry.span(telemetry_keys.SPAN_POLICY_CONTEXT):
-        stacks = {key: value for key, value in obs.items() if _is_image(value) and value.ndim == 4}
+        stacks = dict(_image_stacks(obs, ()))
         if not stacks:
             return {}
-        images = {key: encode_jpeg(stack, jpeg_quality) for key, stack in stacks.items()}
-        session.push_context(images)
-        return {key: list(zip(stacks[key], jpeg_frames(marker), strict=True)) for key, marker in images.items()}
+        markers = {path: encode_jpeg(stack, jpeg_quality) for path, stack in stacks.items()}
+        session.push_context(_nest(markers))
+        return {path: encoded_frames(stacks[path], marker) for path, marker in markers.items()}
+
+
+def _nest(values: cabc.Mapping[ValuePath, Any]) -> dict[str, Any]:
+    """The values in nested mappings, one level per path element, each element as a string key.
+
+    The server reads only the frames of a push, so a list index can stand as a key. A string key keeps msgpack's
+    strict map keys.
+    """
+    nested: dict[str, Any] = {}
+    for path, value in values.items():
+        node = nested
+        for part in path[:-1]:
+            node = node.setdefault(str(part), {})
+        node[str(path[-1])] = value
+    return nested
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:
@@ -195,10 +226,10 @@ class RemotePolicy(Policy):
             compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
                 server_meta.get(policy_keys.COMPRESS_IMAGES)
             )
-            context_push = compress_images and (
+            supports_context_push = compress_images and (
                 server_meta.get(policy_keys.CONTEXT_PUSH) == legacy_protocol.CONTEXT_PUSH_VERSION
             )
-            # The frames of the last context push and their JPEG bytes, by observation key.
+            # The frames of the last context push, by the path of their stack.
             pushed: EncodedFrames = {}
 
             def infer(
@@ -208,7 +239,7 @@ class RemotePolicy(Policy):
                 with connection_lock:
                     if not context_only:
                         return round_trip(session, obs, compress_images, self._jpeg_quality, pushed)
-                    if context_push:
+                    if supports_context_push:
                         pushed = {}
                         pushed = push_context(session, obs, self._jpeg_quality)
                     return None

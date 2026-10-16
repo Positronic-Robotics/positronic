@@ -81,7 +81,10 @@ class RemoteStubPolicy(StubPolicy):
             served_timing={},
         )
         return ChunkedSchedule(fps=10).run(
-            runtime, lambda obs: cast(list[dict[str, Any]], round_trip(session, obs, compress_images=False))
+            runtime,
+            lambda obs, *, context_only=False: cast(
+                list[dict[str, Any]], round_trip(session, obs, compress_images=False)
+            ),
         )
 
 
@@ -1343,7 +1346,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
 
     class Move(Policy):
         def run(self, runtime):
-            def infer(obs):
+            def infer(obs, *, context_only=False):
                 observations.append(obs)
                 return [{MOTOR: 1}, {MOTOR: 2}]
 

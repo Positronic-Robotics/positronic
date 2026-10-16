@@ -37,6 +37,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     Answer,
     Commands,
+    Infer,
     Obs,
     Policy,
     PolicyRun,
@@ -357,7 +358,7 @@ class ChunkedSchedule(Policy):
         ]
         return waypoints, start_ns + round(duration_sec * 1e9)
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
+    def run(self, runtime: Runtime, infer: Infer) -> PolicyRun:
         answer: Answer[Sequence[Commands]] | None = None
         lead_ns = None if self._context_lead_sec is None else round(self._context_lead_sec * 1e9)
         push: Answer[Any] | None = None
