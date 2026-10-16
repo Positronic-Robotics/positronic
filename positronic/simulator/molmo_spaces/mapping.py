@@ -95,10 +95,16 @@ def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[
 
 TOKEN_EPISODE_INDEX = 'episode_index'
 TOKEN_SEED = 'seed'
+# The horizon in seconds that replaces the horizon of the benchmark, or None.
+TOKEN_HORIZON_SEC = 'horizon_sec'
 
 SELECT_EPISODES = 'episodes'
+# The horizon in seconds that replaces the horizon of each selected benchmark.
+SELECT_HORIZON_SEC = 'horizon_sec'
 TASK_NAME = 'name'
 TASK_HORIZON_SEC = 'task_horizon_sec'
+# The horizon override of a task in seconds, or None when the benchmark sets the horizon.
+TASK_HORIZON_OVERRIDE_SEC = 'task_horizon_override_sec'
 
 META_TASK = 'task'
 META_HOUSE_INDEX = 'house_index'

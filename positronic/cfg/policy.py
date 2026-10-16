@@ -52,6 +52,9 @@ teleop_collect = teleop.override(
     cameras=(keys.EXTERIOR_IMAGE, keys.WRIST_UPRIGHT_IMAGE, keys.HANDCAM_RIGHT_IMAGE, keys.WRIST_IMAGE)
 )
 
+# A person on MolmoSpaces: a slow machine can hold the sim clock for seconds between two frames.
+teleop_molmo = teleop.override(still_clock_timeout=10.0)
+
 
 @cfn.config()
 def bearer_headers():
