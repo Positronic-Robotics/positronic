@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from bisect import insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
 from statistics import fmean
@@ -221,6 +222,12 @@ class ChunkedSchedule(Policy):
     RECORD_STATS_ARG = 'record_stats'
     INFERENCE_LEAD_ARG = 'inference_lead'
 
+    @dataclass(frozen=True)
+    class _Waypoint:
+        commands: Commands
+        due_ns: int
+        starts_chunk: bool
+
     class _Stats:
         """How the schedule played its waypoints.
 
@@ -236,12 +243,15 @@ class ChunkedSchedule(Policy):
             self._gap_max_ns = 0
             self._last_emit_ns: int | None = None
 
-        def count_round(self, planned: int | None, due_ns: int | None, now_ns: int, queued: int) -> None:
+        def count_round(
+            self, planned: int | None, due_ns: int | None, now_ns: int, queued: int, *, starts_chunk: bool
+        ) -> None:
             """Count the ``planned`` waypoints of a new chunk and the one emitted at ``now_ns``, if any."""
             if planned is None and due_ns is None:
                 return
             if planned is not None:
                 self._scheduled += planned
+            if starts_chunk:
                 self._last_emit_ns = None
             if due_ns is not None:
                 insort(self._sorted_late_ns, now_ns - due_ns)
@@ -295,10 +305,21 @@ class ChunkedSchedule(Policy):
             raise ValueError('inference_lead must return a finite, nonnegative duration')
         return end_ns - round(min(lead_sec * 1e9, end_ns - start_ns))
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
+    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[list[_Waypoint], int]:
         period_sec = 1 / self._fps
+        duration_sec = len(chunk) * period_sec
+        if self._horizon_sec is not None:
+            duration_sec = min(duration_sec, self._horizon_sec)
+        waypoints = [
+            self._Waypoint(waypoint, start_ns + round(i * period_sec * 1e9), starts_chunk=i == 0)
+            for i, waypoint in enumerate(chunk)
+            if i * period_sec < duration_sec
+        ]
+        return waypoints, start_ns + round(duration_sec * 1e9)
+
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         answer: Answer[Sequence[Commands]] | None = None
-        trajectory: deque[tuple[Commands, int]] = deque()
+        trajectory: deque[ChunkedSchedule._Waypoint] = deque()
         end_ns = 0
         call_ns = 0
         called_at_ns = 0
@@ -315,28 +336,23 @@ class ChunkedSchedule(Policy):
                     chunk, answer = answer.result(), None
                     lead_sec = lead.push((now_ns - called_at_ns) / 1e9)
                     start_ns = max(now_ns, end_ns)
-                    duration_sec = len(chunk) * period_sec
-                    if self._horizon_sec is not None:
-                        duration_sec = min(duration_sec, self._horizon_sec)
-                    end_ns = start_ns + round(duration_sec * 1e9)
-                    waypoints = [
-                        (waypoint, start_ns + round(i * period_sec * 1e9))
-                        for i, waypoint in enumerate(chunk)
-                        if i * period_sec < duration_sec
-                    ]
-                    call_ns = self._next_call_ns(start_ns, end_ns, lead_sec)
+                    waypoints, end_ns = self._plan_chunk(chunk, start_ns)
+                    call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
                     # An answer that arrives before the chunk ends waits behind the commands that are still due.
                     trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
                     planned = len(waypoints)
 
                 commands: dict[str, Any] = {}
                 due_ns = None
-                while trajectory and trajectory[0][1] <= now_ns:
-                    waypoint, due_ns = trajectory.popleft()
-                    commands.update(waypoint)
+                starts_chunk = False
+                while trajectory and trajectory[0].due_ns <= now_ns:
+                    waypoint = trajectory.popleft()
+                    due_ns = waypoint.due_ns
+                    starts_chunk |= waypoint.starts_chunk
+                    commands.update(waypoint.commands)
                 if stats is not None:
-                    stats.count_round(planned, due_ns, now_ns, queued=len(trajectory))
-                resume_at_ns = min(trajectory[0][1], call_ns) if trajectory else call_ns
+                    stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
+                resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
         finally:

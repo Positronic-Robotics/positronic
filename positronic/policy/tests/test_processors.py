@@ -460,6 +460,57 @@ def test_an_early_answer_keeps_a_late_final_waypoint_and_observes_the_previous_o
     assert seen == ['--', 'a1']
     assert [command for command in rig.executed if command != '--'] == ['a0', 'a1', 'a2', 'b0', 'b1', 'b2']
     assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 0
+    assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.GAP_MAX_MS}'] == 150.0
+
+
+@pytest.mark.parametrize('first_new_ms, new_index', [(500, 0), (650, 1)])
+def test_prefetched_chunk_resets_gap_when_execution_crosses_its_boundary(execution, first_new_ms, new_index):
+    runtime, clock = execution
+    calls = []
+
+    def infer(obs):
+        calls.append(runtime.time_ns)
+        return [{MOTOR: (len(calls), i)} for i in range(5)]
+
+    run = runtime.start(ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.2)), infer)
+    try:
+        for index in range(5):
+            clock.advance_to_ns(index * PERIOD_NS)
+            assert run.send({}).commands == {MOTOR: (1, index)}
+        clock.advance_to_ns(first_new_ms * 1_000_000)
+        assert run.send({}).commands == {MOTOR: (2, new_index)}
+    finally:
+        run.close()
+    assert calls == [0, 300_000_000]
+    metadata = runtime.metadata_snapshot()
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.GAP_MAX_MS}'] == 100.0
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.SCHEDULED}'] == 10
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.EMITTED}'] == 6
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == new_index
+
+
+def test_answer_between_emits_keeps_the_old_chunk_gap_history(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.15)), Mock())
+    try:
+        run.send({})
+        clock.advance_to_ns(100_000_000)
+        model.answer('a', length=3)
+        assert run.send({}).commands == {MOTOR: 'a0'}
+        clock.advance_to_ns(200_000_000)
+        assert run.send({}).commands == {MOTOR: 'a1'}
+        clock.advance_to_ns(250_000_000)
+        assert run.send({}).commands == {}
+        clock.advance_to_ns(260_000_000)
+        model.answer('b', length=3)
+        assert run.send({}).commands == {}
+        clock.advance_to_ns(350_000_000)
+        assert run.send({}).commands == {MOTOR: 'a2'}
+    finally:
+        run.close()
+    assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.GAP_MAX_MS}'] == 150.0
 
 
 def test_an_early_answer_keeps_every_remaining_action_and_wakes_between_waypoints(execution, monkeypatch):
@@ -586,6 +637,37 @@ def test_an_empty_chunk_resumes_inference_without_using_the_lead_as_a_delay(exec
         assert [time for time, _ in model.calls] == [0, PERIOD_NS]
     finally:
         run.close()
+
+
+def test_an_early_empty_answer_retries_while_the_old_chunk_keeps_running(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.25)), Mock())
+    try:
+        run.send({})
+        clock.advance_to_ns(100_000_000)
+        model.answer('a', length=5)
+        assert run.send({}).commands == {MOTOR: 'a0'}
+        for tick in (2, 3):
+            clock.advance_to_ns(tick * PERIOD_NS)
+            assert run.send({}).commands == {MOTOR: f'a{tick - 1}'}
+        clock.advance_to_ns(350_000_000)
+        run.send({})
+        clock.advance_to_ns(360_000_000)
+        model.answer('empty', length=0)
+        assert run.send({}) == Step({}, 360_000_000)
+        run.send({})
+        clock.advance_to_ns(370_000_000)
+        model.answer('b', length=5)
+        assert run.send({}) == Step({}, 400_000_000)
+        for now, action in ((400, 'a3'), (500, 'a4'), (600, 'b0')):
+            clock.advance_to_ns(now * 1_000_000)
+            assert run.send({}).commands == {MOTOR: action}
+    finally:
+        run.close()
+    assert [time for time, _ in model.calls] == [0, 350_000_000, 360_000_000]
+    assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 0
 
 
 def test_lead_and_handoff_use_the_horizon_truncated_end(execution):
