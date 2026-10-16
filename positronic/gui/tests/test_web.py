@@ -330,6 +330,7 @@ def test_the_console_answers_its_loopback_names(console):
         ('192.168.1.20', None, ['192.168.1.20'], ['attacker.example', 'localhost']),
         ('0.0.0.0', None, ['attacker.example', 'station.lab'], []),
         ('0.0.0.0', ['station.lab'], ['station.lab'], ['attacker.example']),
+        ('::1', None, ['localhost'], ['attacker.example']),
     ],
 )
 def test_the_console_answers_the_names_of_its_bind_or_the_names_it_is_given(host, allowed_hosts, answered, refused):
@@ -342,3 +343,9 @@ def test_the_console_answers_the_names_of_its_bind_or_the_names_it_is_given(host
     finally:
         console.should_stop.push(True)
         console.feed.stream.close()
+
+
+@pytest.mark.parametrize(('host', 'allowed_hosts'), [('fd00::20', None), ('127.0.0.1', ['::1'])])
+def test_an_ipv6_address_that_the_host_check_cannot_read_is_refused(host, allowed_hosts):
+    with pytest.raises(ValueError, match='IPv6'):
+        StationConsole(_trial, _Policy(), None, host=host, port=0, allowed_hosts=allowed_hosts)

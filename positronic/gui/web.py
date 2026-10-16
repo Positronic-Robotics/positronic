@@ -118,7 +118,20 @@ def _allowed_hosts_of(host: str) -> list[str]:
     if host in _EVERY_INTERFACE:
         logger.warning('The console on %r answers any host name. Name the hosts with --allowed_hosts.', host)
         return ['*']
+    if host == '::1':
+        return ['localhost']
     return [host]
+
+
+def _check_allowed_hosts(allowed_hosts: Sequence[str]) -> None:
+    """Refuse an IPv6 address among ``allowed_hosts``.
+
+    ``TrustedHostMiddleware`` reads the name before the first ``:`` of ``Host``. So a bracketed IPv6 address there,
+    such as ``[::1]:8080``, never matches, and the console would refuse every request.
+    """
+    literals = [name for name in allowed_hosts if ':' in name]
+    if literals:
+        raise ValueError(f'the console cannot check the IPv6 addresses {literals} in Host; name the hosts instead')
 
 
 class StationConsole(pimm.ControlSystem):
@@ -148,6 +161,7 @@ class StationConsole(pimm.ControlSystem):
         self._host = host
         self._port = port
         self._allowed_hosts = list(allowed_hosts) if allowed_hosts is not None else _allowed_hosts_of(host)
+        _check_allowed_hosts(self._allowed_hosts)
         self.cameras = pimm.ReceiverDict(self)
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
