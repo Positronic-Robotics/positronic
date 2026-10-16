@@ -14,6 +14,7 @@ Describe a local stack without creating episode state::
     step = episode.send(obs)
 """
 
+import logging
 from bisect import insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -43,6 +44,8 @@ from positronic.policy.base import (
     Step,
 )
 from positronic.policy.keys import ACTION_FPS
+
+logger = logging.getLogger(__name__)
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -101,6 +104,15 @@ class ChunkedSchedule(Policy):
     At most one call is pending, and another starts when the current chunk's duration ends.
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
+
+    With ``context_lead_sec``, the schedule makes a context push ``context_lead_sec`` before the current chunk
+    ends. It calls ``infer(context, context_only=True)``, which returns ``None``. ``context`` holds the frames
+    of the next request that exist already: for each offset of the ``TemporalStack`` around this schedule whose
+    time, counted from the chunk's end, has passed. The next request samples these offsets at the same times, so
+    it holds the same frames, and samples the other offsets from its own time, so its newest frames are fresh.
+    The push needs a ``TemporalStack`` directly around this schedule, and an ``infer`` that takes
+    ``context_only``, such as ``RemotePolicy``. Without a stack, or with no offset that has passed, there is no
+    push and the request is as without ``context_lead_sec``.
     """
 
     WIRE_NAME = 'chunked_schedule'
@@ -108,6 +120,7 @@ class ChunkedSchedule(Policy):
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
     RECORD_STATS_ARG = 'record_stats'
+    CONTEXT_LEAD_SEC_ARG = 'context_lead_sec'
 
     class _Stats:
         """How the schedule played its waypoints.
@@ -161,28 +174,57 @@ class ChunkedSchedule(Policy):
             high = min(low + 1, len(values) - 1)
             return values[low] + (values[high] - values[low]) * (position - low)
 
-    def __init__(self, fps: float, horizon_sec: float | None = None, record_stats: bool = True) -> None:
+    def __init__(
+        self,
+        fps: float,
+        horizon_sec: float | None = None,
+        record_stats: bool = True,
+        context_lead_sec: float | None = None,
+    ) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
         if horizon_sec is not None and (not isfinite(horizon_sec) or horizon_sec <= 0):
             raise ValueError('horizon_sec must be finite and positive')
+        if context_lead_sec is not None and (not isfinite(context_lead_sec) or context_lead_sec <= 0):
+            raise ValueError('context_lead_sec must be finite and positive')
         self._fps = fps
         self._horizon_sec = horizon_sec
         self._record_stats = record_stats
+        self._context_lead_sec = context_lead_sec
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
+    def run(self, runtime: Runtime, infer: Callable[..., Sequence[Commands]]) -> PolicyRun:
         period_sec = 1 / self._fps
+        lead_ns = None if self._context_lead_sec is None else round(self._context_lead_sec * 1e9)
         answer: Answer[Sequence[Commands]] | None = None
+        push: Answer[Any] | None = None
+        # Whether the current chunk had its push, and the anchor and settled times of its context.
+        pushed = True
+        context_times: tuple[float, float] | None = None
         trajectory: deque[tuple[Commands, int]] = deque()
         end_ns = 0
         stats = self._Stats(runtime) if self._record_stats else None
         obs = yield
+        if lead_ns is not None and not isinstance(obs, _StackedObs):
+            logger.warning('ChunkedSchedule makes no context push: no TemporalStack is directly around it')
+            lead_ns = None
         try:
             while True:
                 now_ns = runtime.time_ns
                 planned = None
+                if push is not None and push.done():
+                    push, done = None, push
+                    done.result()  # A failed push fails the episode, as a failed call does.
+                if lead_ns is not None and not pushed and answer is None and end_ns - lead_ns <= now_ns < end_ns:
+                    pushed = True
+                    times = (end_ns / 1e9, now_ns / 1e9)
+                    context = obs.settled(*times) if isinstance(obs, _StackedObs) else None
+                    if context is not None:
+                        push = runtime.submit(infer, context, context_only=True)
+                        context_times = times
                 if answer is None and now_ns >= end_ns:
-                    answer = runtime.submit(infer, obs)
+                    if context_times is not None and isinstance(obs, _StackedObs):
+                        obs = obs.anchored(*context_times)
+                    answer, context_times = runtime.submit(infer, obs), None
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
                     duration_sec = len(chunk) * period_sec
@@ -195,6 +237,7 @@ class ChunkedSchedule(Policy):
                         if i * period_sec < duration_sec
                     )
                     planned = len(trajectory)
+                    pushed = False
 
                 commands: dict[str, Any] = {}
                 due_ns = None
@@ -204,11 +247,15 @@ class ChunkedSchedule(Policy):
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory))
                 resume_at_ns = trajectory[0][1] if trajectory else end_ns
+                if lead_ns is not None and not pushed and now_ns < end_ns - lead_ns:
+                    resume_at_ns = min(resume_at_ns, end_ns - lead_ns)
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
         finally:
             if answer is not None:
                 answer.cancel()
+            if push is not None:
+                push.cancel()
 
     def meta(self) -> dict[str, Any]:
         meta = {ACTION_FPS: self._fps}
@@ -222,6 +269,8 @@ class ChunkedSchedule(Policy):
             args[self.HORIZON_SEC_ARG] = self._horizon_sec
         if not self._record_stats:
             args[self.RECORD_STATS_ARG] = False
+        if self._context_lead_sec is not None:
+            args[self.CONTEXT_LEAD_SEC_ARG] = self._context_lead_sec
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
@@ -434,12 +483,51 @@ class RTCSchedule(Policy):
         return {ACTION_FPS: self._fps}
 
 
-class _StackedObs(Mapping[str, Any]):
-    """``obs`` with each buffered key replaced by its stack, built on the first read of that key."""
+class _Window:
+    """The entries a ``_StackBuffer`` held at one tick, and the offsets it samples them at."""
 
-    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]]):
+    def __init__(self, buffer: '_StackBuffer', now: float):
+        self.buffer = buffer
+        self._times = np.array([t for t, _ in buffer._entries])
+        self._values = [values for _, values in buffer._entries]
+        self._offsets_sec = buffer._offsets_sec
+        self._pad_start = buffer._pad_start
+        self._now = now
+
+    def pick(
+        self, anchor: float | None = None, settled: float | None = None, *, settled_only: bool = False
+    ) -> list[dict[str, np.ndarray]]:
+        """For each offset, the latest entry at or before its time.
+
+        An offset is settled when ``anchor`` plus the offset is at or before ``settled``: its time is ``anchor`` plus
+        the offset. Every other offset is timed from now, or is left out with ``settled_only``.
+        """
+        targets = []
+        for offset in self._offsets_sec:
+            if anchor is not None and settled is not None and anchor + offset <= settled:
+                targets.append(anchor + offset)
+            elif not settled_only:
+                targets.append(self._now + offset)
+        if not self._pad_start:
+            targets = [t for t in targets if t >= self._times[0]]
+        return [self._values[self._at_or_before(t)] for t in targets]
+
+    def _at_or_before(self, target: float) -> int:
+        """Index of the latest entry at or before ``target``; clamps to the oldest when none precedes it."""
+        return max(int(np.searchsorted(self._times, target, side='right')) - 1, 0)
+
+
+class _StackedObs(Mapping[str, Any]):
+    """``obs`` with each buffered key replaced by its stack, built on the first read of that key.
+
+    ``settled`` and ``anchored`` sample the same window again, with the settled offsets timed from an anchor; see
+    ``_Window.pick``.
+    """
+
+    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]], window: _Window):
         self._obs = obs
         self._picked = picked
+        self._window = window
         self._stacks: dict[str, np.ndarray] = {}
 
     def __getitem__(self, key: str) -> Any:
@@ -455,6 +543,22 @@ class _StackedObs(Mapping[str, Any]):
     def __len__(self) -> int:
         return len(self._obs)
 
+    def settled(self, anchor: float, settled: float) -> '_StackedObs | None':
+        """The observation with stacks of the settled offsets only, or ``None`` when no offset is settled.
+
+        The buffer keeps the entries these stacks hold until ``anchored``.
+        """
+        picked = self._window.pick(anchor, settled, settled_only=True)
+        if not picked:
+            return None
+        self._window.buffer.pin(anchor + min(self._window.buffer.offsets_sec))
+        return _StackedObs(self._obs, picked, self._window)
+
+    def anchored(self, anchor: float, settled: float) -> '_StackedObs':
+        """The observation with the settled offsets timed from ``anchor``, and the others from now."""
+        self._window.buffer.unpin()
+        return _StackedObs(self._obs, self._window.pick(anchor, settled), self._window)
+
 
 class _StackBuffer:
     """Time-ordered history of ``(timestamp, values)`` entries, capped to the sampled window.
@@ -469,33 +573,46 @@ class _StackBuffer:
     to ``len(offsets_sec)`` as history accumulates).
     """
 
+    # A pin that falls this far behind the oldest offset is dropped, so a stack that is not called for a long time
+    # does not keep every entry since the pin.
+    PIN_MAX_SEC = 1.0
+
     def __init__(self, offsets_sec: tuple[float, ...], pad_start: bool = True):
         self._offsets_sec = offsets_sec
         self._pad_start = pad_start
         self._entries: deque[tuple[float, dict[str, np.ndarray]]] = deque()
+        self._pinned: float | None = None
+
+    @property
+    def offsets_sec(self) -> tuple[float, ...]:
+        return self._offsets_sec
 
     def reset(self):
         self._entries.clear()
+        self._pinned = None
+
+    def pin(self, time: float):
+        """Keep the entry at or before ``time``, and every later one, until ``unpin``."""
+        self._pinned = time
+
+    def unpin(self):
+        self._pinned = None
 
     def append(self, now: float, values: dict[str, np.ndarray]):
         if self._entries and all(np.array_equal(self._entries[-1][1][k], v) for k, v in values.items()):
             return
         self._entries.append((now, {k: np.array(v) for k, v in values.items()}))
         cutoff = now + min(self._offsets_sec)
+        if self._pinned is not None and cutoff - self._pinned > self.PIN_MAX_SEC:
+            self._pinned = None
+        if self._pinned is not None:
+            cutoff = min(cutoff, self._pinned)
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
             self._entries.popleft()
 
-    def sample(self, now: float, obs: Obs) -> Obs:
-        times = np.array([t for t, _ in self._entries])
-        targets = [now + off for off in self._offsets_sec]
-        if not self._pad_start:
-            targets = [t for t in targets if t >= times[0]]
-        return _StackedObs(dict(obs), [self._entries[self._at_or_before(times, t)][1] for t in targets])
-
-    @staticmethod
-    def _at_or_before(times: np.ndarray, target: float) -> int:
-        """Index of the latest entry at or before ``target``; clamps to the oldest when none precedes it."""
-        return max(int(np.searchsorted(times, target, side='right')) - 1, 0)
+    def sample(self, now: float, obs: Obs) -> _StackedObs:
+        window = _Window(self, now)
+        return _StackedObs(dict(obs), window.pick(), window)
 
 
 OutputT = TypeVar('OutputT')
