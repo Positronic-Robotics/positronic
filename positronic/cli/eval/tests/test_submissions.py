@@ -10,6 +10,7 @@ import httpx
 import pytest
 from platform_client import routes
 from platform_client.catalog import EvalListResponse, EvalSummary, TaskListResponse, TaskSummary
+from platform_client.client import PlatformClient
 from platform_client.enums import ErrorCode
 from platform_client.ids import SubmissionId
 from platform_client.responses import SubmissionListResponse, SubmissionView
@@ -280,6 +281,27 @@ def test_positronic_exits_with_the_fault_as_its_status(platform, monkeypatch, ca
 
     assert exit_info.value.code == fault
     assert printed in capsys.readouterr().err
+
+
+UNPARSEABLE_URL = 'http://gateway:bad'
+
+
+@pytest.mark.parametrize('named_in', ['argument', 'environment'])
+def test_a_platform_url_that_does_not_parse_exits_with_the_usage_status(platform, monkeypatch, capsys, named_in):
+    # The real client parses the URL before any call, so the stub transport stays out of it.
+    monkeypatch.setattr(gateway_module, 'PlatformClient', PlatformClient)
+    argv = ['positronic', 'eval', 'status', f'--id={ID}']
+    if named_in == 'argument':
+        argv.append(f'--platform_url={UNPARSEABLE_URL}')
+    else:
+        monkeypatch.setenv(gateway_module.API_URL_ENV, UNPARSEABLE_URL)
+    monkeypatch.setattr('sys.argv', argv)
+
+    with pytest.raises(SystemExit) as exit_info:
+        _internal_main()
+
+    assert exit_info.value.code == Fault.USAGE
+    assert UNPARSEABLE_URL in capsys.readouterr().err
 
 
 def test_status_json_prints_the_view_the_platform_answered(platform, run_command, capsys):

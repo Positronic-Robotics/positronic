@@ -77,12 +77,16 @@ def resolve_api_key(api_key: ApiKey | None = None) -> ApiKey | None:
 
 
 def require_absolute_url(url: str | httpx.URL, source: str) -> None:
-    """Refuse a base URL that names no host, naming the value and what it has to be.
+    """Refuse a base URL that does not parse or names no host, naming the value and what it has to be.
 
     Every endpoint sends a path relative to the client's base URL, so one that names no host — empty,
     or a bare path — resolves against nothing and the request never leaves for a platform.
     """
-    if httpx.URL(url).is_absolute_url:
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL as exc:
+        raise ValueError(f'{source} is {str(url)!r}, which does not parse as a URL: {exc}') from exc
+    if parsed.is_absolute_url:
         return
     raise ValueError(
         f'{source} is {str(url)!r}, which names no host: give an absolute URL, scheme and host, naming the platform'
