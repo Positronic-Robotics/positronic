@@ -1,6 +1,5 @@
 import asyncio
 import os
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -82,13 +81,6 @@ class TestButtonMap:
 
     def test_the_trigger_is_the_grip(self):
         assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
-
-
-@pytest.fixture
-def socket_path():
-    # A Unix socket path has a short length limit, so it does not go under the long pytest directory.
-    with tempfile.TemporaryDirectory(prefix='teleop-') as directory:
-        yield Path(directory) / 'teleop.sock'
 
 
 @pytest.fixture
