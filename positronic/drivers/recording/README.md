@@ -19,8 +19,6 @@ Key ideas
 - Every message coordinate is saved: emission, first delivery, and optional producer timelines.
   Training joins, export, and analysis use `harness.world`, then `received.world`, then legacy `recorded`
   (`eval_vocabulary.timeline.recording_timeline`).
-  TODO: Remove the `received.world` fallback when teleoperation becomes a Harness policy and
-  `data_collection.py` is removed.
   Playback uses `harness.world` when present and otherwise `recorded`.
   Replay of data collection recordings requires an explicit `received.world` timeline.
   Pass `--timeline=received.world` to `positronic/replay_record.py` for these recordings.
