@@ -52,6 +52,7 @@ from positronic.policy.processors import (
     PrefixSampling,
     RTCSchedule,
     TemporalStack,
+    _StackBuffer,
 )
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Deprecation, Version
@@ -337,6 +338,137 @@ def test_empty_chunks_request_an_immediate_retry(execution):
         assert run.send({}) == Step({}, now)
     assert requests == [0, 0]
     run.close()
+
+
+def _context_schedule(runtime, calls, offsets, lead_sec=0.25, *, stacked=True):
+    """A 10-action chunk at 10 fps under ``TemporalStack``; ``calls`` records each call's time, kind and frames."""
+
+    def infer(obs, *, context_only=False):
+        frames = np.asarray(obs[POSITION])[:, 0].tolist() if stacked else None
+        calls.append((runtime.time_ns // 1_000_000, context_only, frames))
+        return None if context_only else [{MOTOR: i} for i in range(10)]
+
+    schedule = ChunkedSchedule(fps=10, context_lead_sec=lead_sec)
+    return runtime.start(Sequential(TemporalStack((POSITION,), offsets), schedule) if stacked else schedule, infer)
+
+
+# Every 50 ms, plus a frame at 601 ms that only a request timed from its own late tick would pick for 0.6 s.
+CONTEXT_TICKS_MS = [*range(0, 601, 50), 601, *range(650, 951, 50), 1003]
+
+
+def _drive(run, clock, ticks_ms=CONTEXT_TICKS_MS):
+    steps = {}
+    for ms in ticks_ms:
+        clock.advance_to_ns(ms * 1_000_000)
+        steps[ms] = run.send({POSITION: np.array([ms])})
+    return steps
+
+
+def test_a_context_push_sends_the_settled_frames_and_the_request_repeats_them(execution):
+    runtime, clock = execution
+    calls = []
+    run = _context_schedule(runtime, calls, (-0.4, -0.3, -0.2, -0.1, 0.0))
+    try:
+        steps = _drive(run, clock)
+    finally:
+        run.close()
+    # The push comes 0.25 s before the chunk ends at 1 s, and holds the offsets whose time counted from 1 s has
+    # passed: 0.6 s and 0.7 s. The request repeats them, and times the others from its own tick at 1.003 s.
+    assert calls == [(0, False, [0, 0, 0, 0, 0]), (750, True, [600, 700]), (1003, False, [600, 700, 800, 900, 1003])]
+    assert steps[700].resume_at_ns == 750_000_000
+
+
+def test_a_context_push_waits_for_a_settled_offset(execution):
+    runtime, clock = execution
+    calls = []
+    run = _context_schedule(runtime, calls, (-0.1, 0.0))
+    try:
+        _drive(run, clock)
+    finally:
+        run.close()
+    # 0.9 s has not passed 0.25 s before the end, so there is no push, and the request is timed from its own tick.
+    assert calls == [(0, False, [0, 0]), (1003, False, [900, 1003])]
+
+
+def test_a_schedule_without_a_temporal_stack_makes_no_push_and_says_so(execution, caplog):
+    runtime, clock = execution
+    calls = []
+    run = _context_schedule(runtime, calls, (), stacked=False)
+    try:
+        _drive(run, clock)
+    finally:
+        run.close()
+    assert [(ms, context_only) for ms, context_only, _ in calls] == [(0, False), (1003, False)]
+    assert 'no context push' in caplog.text
+
+
+def test_a_failed_push_fails_the_episode(execution):
+    runtime, clock = execution
+
+    def infer(obs, *, context_only=False):
+        if context_only:
+            raise RuntimeError('push failed')
+        return [{MOTOR: i} for i in range(10)]
+
+    run = runtime.start(
+        Sequential(TemporalStack((POSITION,), (-0.4, 0.0)), ChunkedSchedule(fps=10, context_lead_sec=0.25)), infer
+    )
+    try:
+        with pytest.raises(RuntimeError, match='push failed'):
+            _drive(run, clock)
+    finally:
+        run.close()
+
+
+def test_an_unavailable_arm_stops_at_once_while_a_push_is_pending(execution, monkeypatch):
+    runtime, clock = execution
+    pending = Future()
+    submitted = []
+
+    def submit(function, *args, **kwargs):
+        submitted.append(kwargs.get('context_only', False))
+        if kwargs.get('context_only'):
+            return _UnchargedAnswer(pending)
+        done = Future()
+        done.set_result([{MOTOR: i} for i in range(10)])
+        return _UnchargedAnswer(done)
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+    stack = Sequential(
+        PauseOnUnavailable(), TemporalStack((POSITION,), (-0.4, 0.0)), ChunkedSchedule(fps=10, context_lead_sec=0.25)
+    )
+    run = runtime.start(stack, Mock())
+    available = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE}
+    try:
+        run.send({**available, POSITION: np.array([0])})
+        clock.advance_to_ns(750_000_000)
+        run.send({**available, POSITION: np.array([750])})
+        assert submitted == [False, True]
+        clock.advance_to_ns(800_000_000)
+        faulted = {keys.ROBOT_STATUS: RobotStatus.ERROR, POSITION: np.array([800])}
+        assert run.send(faulted) == Step({}, 801_000_000)
+        pending.set_result(None)
+        clock.advance_to_ns(1_000_000_000)
+        assert run.send({**available, POSITION: np.array([1000])}).commands == {MOTOR: 0}
+        assert submitted == [False, True, False]
+    finally:
+        run.close()
+
+
+def test_a_pin_keeps_its_entries_until_it_falls_a_second_behind():
+    buffer = _StackBuffer((-0.1, 0.0))
+    buffer.pin(0.0)
+    for tick in range(30):
+        buffer.append(tick * 0.05, {POSITION: np.array([tick])})
+        if tick == 22:  # At 1.1 s the window starts at 1.0 s, one second after the pin.
+            assert buffer._entries[0][0] == 0.0
+    assert [round(t, 2) for t, _ in buffer._entries] == [1.35, 1.4, 1.45]
+
+
+@pytest.mark.parametrize('lead_sec', [0.0, -0.1, float('inf')])
+def test_a_context_lead_must_be_finite_and_positive(lead_sec):
+    with pytest.raises(ValueError, match='context_lead_sec'):
+        ChunkedSchedule(fps=10, context_lead_sec=lead_sec)
 
 
 PERIOD_NS = 100_000_000
@@ -1191,10 +1323,15 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48, Resample.AREA)),
         ChunkedSchedule(fps=10, record_stats=False),
+        Sequential(TemporalStack(('v',), (-0.4, 0.0)), ChunkedSchedule(fps=15, context_lead_sec=0.3)),
     ],
 )
 def test_stack_specs_round_trip(definition):
     assert spec.from_spec(definition.to_spec()).to_spec() == definition.to_spec()
+
+
+def test_a_schedule_without_a_context_lead_declares_none():
+    assert ChunkedSchedule.CONTEXT_LEAD_SEC_ARG not in ChunkedSchedule(fps=10).to_spec()['args']
 
 
 @pytest.mark.parametrize(

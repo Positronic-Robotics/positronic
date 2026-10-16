@@ -216,6 +216,18 @@ def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned(
     assert end.value.value is PolicyEnd.GIVE_UP
 
 
+class _HalvingCodec(Codec):
+    def encode(self, data):
+        return {name: value // 2 for name, value in data.items()}
+
+
+def test_a_wrapped_call_passes_a_context_push_on_with_the_encoded_input_and_answers_none():
+    calls = []
+    wrapped = _HalvingCodec().wrap(lambda obs, **kwargs: calls.append((obs, kwargs)) or [{'value': 1}])
+    assert wrapped({'image': 8}, context_only=True) is None
+    assert calls == [({'image': 4}, {'context_only': True})]
+
+
 class TestCodecComposition:
     """Codec composition preserves metadata and frame declarations."""
 
