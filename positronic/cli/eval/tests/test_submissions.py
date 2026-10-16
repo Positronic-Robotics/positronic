@@ -228,6 +228,19 @@ def test_a_failure_without_an_envelope_is_the_platforms_fault(platform, run_comm
     assert exit_info.value.fault is Fault.PLATFORM
 
 
+@pytest.mark.parametrize('as_json', [False, True], ids=['text', 'json'])
+def test_a_failure_without_an_envelope_prints_no_body_and_no_envelope(platform, run_command, capsys, as_json):
+    # A proxy's whole page is not a detail of a platform refusal, and no platform envelope exists to print.
+    platform.answer('<html>502 Bad Gateway</html>', status=502)
+
+    with pytest.raises(CommandFailed) as exit_info:
+        run_command(status, id=ID, json=as_json)
+
+    assert str(exit_info.value) == 'internal_error: unparseable error response (HTTP 502)'
+    assert exit_info.value.fault is Fault.PLATFORM
+    assert capsys.readouterr().out == ''
+
+
 @pytest.mark.parametrize(
     'no_answer', [httpx.ConnectError('connection refused'), httpx.ReadTimeout('timed out')], ids=['refused', 'timeout']
 )

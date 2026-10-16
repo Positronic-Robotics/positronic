@@ -86,7 +86,8 @@ def gateway(
 
     One client, one platform: the key comes from the environment, then from the record `register`
     saved. `register` sends no key, so a registration naming its platform reads no record.
-    `refusal_as_json` prints a refusal's error envelope on stdout in place of the text on stderr.
+    `refusal_as_json` prints a refusal's error envelope on stdout in place of the text on stderr. A response
+    with no envelope prints its code and message on stderr in both modes.
     """
     record = record_if_needed(os.environ, platform_url, key_required=key_required)
     key = api_key_from(os.environ, record) if key_required else None
@@ -100,6 +101,9 @@ def gateway(
             yield client
         except PlatformError as exc:
             fault = _fault_of(exc)
+            if exc.synthesized_envelope:
+                # A proxy answered in its own shape: there is no envelope to print, and its body stays out.
+                raise CommandFailed(f'{exc.code.name}: {exc.message}', fault) from exc
             if refusal_as_json:
                 print(exc.envelope.model_dump_json(indent=2))
                 raise SystemExit(fault) from exc

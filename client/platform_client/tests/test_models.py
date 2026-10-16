@@ -714,6 +714,7 @@ def test_the_error_exception_exposes_the_envelope_and_the_reason_code():
     assert err.message == 'image not pullable'
     assert err.reason_code is ReasonCode.image_unpullable
     assert err.http_status == 400
+    assert not err.synthesized_envelope
 
 
 def test_an_unparseable_error_body_still_raises_the_same_exception():
@@ -721,6 +722,7 @@ def test_an_unparseable_error_body_still_raises_the_same_exception():
     assert err.code is ErrorCode.internal_error
     assert err.http_status == 502
     assert err.details['body'] == '<html>bad gateway</html>'
+    assert err.synthesized_envelope
 
 
 def test_a_reason_code_this_client_cannot_read_is_invalid_rather_than_absent():

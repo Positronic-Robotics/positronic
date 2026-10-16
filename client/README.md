@@ -440,7 +440,8 @@ Ids are 64-bit ints in Python and bare lowercase hex on the wire; closed sets ar
 as slugs. A non-2xx response raises `PlatformError`, which carries the parsed error envelope: `code`
 for a program, `message` for a human, `reason_code` where a terminal caller fault has one, `quota`
 where a 429 names the rule that refused the request, and `evals` where the eval asked for is not one
-of them.
+of them. A response with no envelope, such as a proxy's HTML page, still raises `PlatformError`: the
+client builds an `internal_error` envelope around the raw body and sets `synthesized_envelope`.
 
 `submissions.get` answers one model per status. A finished run reads its score off `scores` and its
 outputs off `artifacts`. A failed run reads `reason_code` and `reason`, and `artifacts` links the

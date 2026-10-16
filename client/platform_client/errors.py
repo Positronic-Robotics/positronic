@@ -37,12 +37,17 @@ class ErrorEnvelope(BaseModel):
 
 
 class PlatformError(Exception):
-    """A non-2xx response from the platform, carrying the parsed envelope."""
+    """A non-2xx response from the platform, carrying the parsed envelope.
 
-    def __init__(self, envelope: ErrorEnvelope, *, http_status: int) -> None:
+    `synthesized_envelope` is true where the response held no envelope, and the client built one around
+    the raw body. The platform sent none of its fields.
+    """
+
+    def __init__(self, envelope: ErrorEnvelope, *, http_status: int, synthesized_envelope: bool = False) -> None:
         super().__init__(f'{envelope.error.code.name}: {envelope.error.message}')
         self.envelope = envelope
         self.http_status = http_status
+        self.synthesized_envelope = synthesized_envelope
 
     @property
     def code(self) -> ErrorCode:
@@ -127,4 +132,5 @@ class PlatformError(Exception):
                     details={'body': payload},
                 )
             )
+            return cls(envelope, http_status=http_status, synthesized_envelope=True)
         return cls(envelope, http_status=http_status)
