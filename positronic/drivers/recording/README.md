@@ -17,7 +17,8 @@ Key ideas
 - Recording is best effort, and this is a deliberate trade rather than an oversight. Each input arrives over a one-slot `pimm` signal where a new value overwrites one still unread, so a recorder that stalls for longer than the gap between two samples loses the older one — commands exactly as much as camera frames or arm state. An episode is what the recorder managed to observe, not a guaranteed-complete log of what happened; treat a missing sample as possible in any analysis that counts them.
 - A separate `command` channel controls episode lifecycle.
 - Every message coordinate is saved: emission, first delivery, and optional producer timelines.
-  Training joins, export, and analysis use `harness.world`, then `received.world`, then legacy `recorded`.
+  Training joins, export, and analysis use `harness.world`, then `received.world`, then legacy `recorded`
+  (`eval_vocabulary.timeline.recording_timeline`).
   TODO: Remove the `received.world` fallback when teleoperation becomes a Harness policy and
   `data_collection.py` is removed.
   Playback uses `harness.world` when present and otherwise `recorded`.

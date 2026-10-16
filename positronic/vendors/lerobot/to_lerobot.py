@@ -22,16 +22,14 @@ import numpy as np
 import pos3
 import torch
 import tqdm
+from eval_vocabulary.timeline import recording_timeline
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from pimm.logging import init_logging
-from pimm.time import RECEIVED_WORLD
 from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.dataset.time import Time
-from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy.codecs import ACTION, LEROBOT_FEATURES
 
 
@@ -65,9 +63,7 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         episode = self.dataset[idx]
-        timelines = episode.timelines
-        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+        timeline = recording_timeline(episode.timelines)
         start, finish = episode.bounds(timeline)
         timestamps = [Time(**{timeline: ts}) for ts in np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)]
         return episode.time[timestamps]
