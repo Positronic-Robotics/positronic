@@ -120,10 +120,10 @@ def _holds_within(condition, seconds: float) -> bool:
     return True
 
 
-def _started(runtime: Executor, service: _Service):
+def _started(runtime: Executor, service: _Service, **policy_args):
     """A run of a fresh policy that the teleoperator readied, after its stay command."""
     service.replies.put({session.KIND: session.Reply.READY})
-    run = runtime.start(TeleopPolicy(WIRE, ADDRESS, OperatorPosition.FRONT))
+    run = runtime.start(TeleopPolicy(WIRE, ADDRESS, OperatorPosition.FRONT, **policy_args))
     stay = run.send(OBS)
     assert stay is not None
     assert _holds_within(lambda: len(service.requests) == 2, seconds=2.0), 'the run sent no frame request'
@@ -305,14 +305,21 @@ def test_a_policy_with_no_camera_sends_no_image(runtime, service):
     assert session.IMAGE not in service.requests[1][session.DISPLAY]
 
 
-def test_an_episode_clock_that_stands_still_fails_the_run(service):
+@pytest.mark.parametrize(('limit', 'fails'), [(0.1, True), (30.0, False)])
+def test_an_episode_clock_that_stands_still_for_the_limit_fails_the_run(service, limit, fails):
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
     try:
-        run, _ = _started(runtime, service)
-        with pytest.raises(RuntimeError, match='stands still'):
-            deadline = time.monotonic() + 3
-            while time.monotonic() < deadline:
+        run, _ = _started(runtime, service, still_clock_timeout=limit)
+        deadline = time.monotonic() + 0.5
+        failure = None
+        while time.monotonic() < deadline and failure is None:
+            try:
                 run.send(OBS)
-                time.sleep(0.01)
+            except RuntimeError as raised:
+                failure = raised
+            time.sleep(0.01)
+        assert (failure is not None) is fails
+        if failure is not None:
+            assert 'stands still' in str(failure)
     finally:
         runtime.close()
