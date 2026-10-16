@@ -93,12 +93,12 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     episode = ds[0]
     assert episode.static[eval_keys.TERMINATED] is False
     assert episode.static[eval_keys.TRIAL_INDEX] == 0
-    assert episode.static[eval_keys.SEED] == 100
+    assert all(eval_keys.SEED not in ds[i].static for i in range(2))
     assert episode.static[eval_keys.UNIVERSE] == 'sim'
     assert episode.static[eval_keys.EMBODIMENT] == 'mujoco.franka'
     assert episode.static[eval_keys.TIMEOUT] == 0.4
-    # The post-loader scene description rides robot_meta into static: with eval.seed it makes
-    # the episode self-contained for downstream scoring and faithful replay.
+    # The post-loader scene description rides robot_meta into static, so the episode is self-contained
+    # for downstream scoring and faithful replay.
     assert episode.static[SCENE_XML].startswith('<mujoco')
     signals = episode.signals
     assert keys.TARGET_EE_POSE in signals

@@ -41,11 +41,13 @@ UNIVERSE = 'eval.universe'
 EMBODIMENT = 'eval.embodiment'
 TIMEOUT = 'eval.timeout'
 
-# A trial's place in its eval's sweep, stamped into every trial's params and recorded in its episode's
-# statics. ``SEED`` also rides an env's reset token, where absent means the env draws its own.
-SEED = 'eval.seed'
+# A trial's place in its eval's sweep, recorded in its episode's statics.
 TRIAL_INDEX = 'eval.trial_index'
 TRIAL_COUNT = 'eval.trial_count'
+# The seed a trial's scene is drawn from. It rides the scene prepare and an env's reset token, where absent means
+# the env draws its own. No episode records it. An eval that pins a seed gives each trial's seed with
+# ``TRIAL_INDEX``, and an eval that pins none draws each one at random.
+SEED = 'eval.seed'
 
 # The id of the task a trial runs, as the benchmark names it. The episode records it; positronic never reads
 # inside it.

@@ -79,7 +79,6 @@ def read_episode(output: Path, seed: int) -> Episode:
         raise ValueError(f'{output}: expected one completed episode, found {len(dataset)}')
     episode = next(iter(dataset))
     expected = {
-        eval_keys.SEED: seed,
         eval_keys.TIMEOUT: EPISODE_SECONDS,
         eval_keys.CHARGE_INFERENCE_TIME: False,
         eval_keys.TERMINATED: False,

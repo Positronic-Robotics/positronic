@@ -22,12 +22,18 @@ def spec(**selection) -> dict[str, Any]:
 
 def number_trials(trials: list[tuple[Task, dict]]) -> list[Task]:
     """One trial per ``(task, params)`` pair: its scene prepare is asked with the params, and its episode records
-    them beside the trial's place in the sweep."""
+    them beside the trial's place in the sweep, all but the seed."""
     return [
         replace(
             task,
             prepare_args={**task.prepare_args, eval_keys.SCENE: params},
-            meta={**task.meta, **params, eval_keys.TRIAL_INDEX: i, eval_keys.TRIAL_COUNT: len(trials)},
+            meta={
+                **task.meta,
+                # The seed belongs to the eval definition, not to the episode.
+                **{name: value for name, value in params.items() if name != eval_keys.SEED},
+                eval_keys.TRIAL_INDEX: i,
+                eval_keys.TRIAL_COUNT: len(trials),
+            },
         )
         for i, (task, params) in enumerate(trials)
     ]
