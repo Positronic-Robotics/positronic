@@ -66,13 +66,13 @@ public_key() {
   cut -d' ' -f1,2 "$ssh_key.pub"
 }
 
-# Create the VM. When Nebius does not start it, delete it and stop.
+# Create the VM with the public key $1. When Nebius does not start the VM, delete it and stop.
 create_vm() {
   subnet=$(nebius vpc subnet list --parent-id "$project" --format jsonpath='{.items[0].metadata.id}')
   # The image has the user `ubuntu` already, and cloud-init does not change the groups of a user that exists.
   user_data="#cloud-config
 ssh_authorized_keys:
-  - \"$pub_key\"
+  - \"$1\"
 runcmd:
   - [usermod, -aG, docker, ubuntu]
   - [su, -l, ubuntu, -c, 'curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/install.sh && sh /tmp/uv-install.sh']"
@@ -101,6 +101,7 @@ runcmd:
 
 create() {
   pub_key=$(public_key) || exit 1
+  created=false
   state=$(vm_field '{.status.state}')
   if [ -n "$state" ] && [ "$state" != RUNNING ] && [ "$state" != STARTING ] && [ "$state" != CREATING ]; then
     echo "The VM $name exists, and its state is $state. Delete it with: $delete_cmd" >&2
@@ -108,7 +109,8 @@ create() {
   elif [ -n "$state" ]; then
     echo "The VM $name exists. Waiting for it."
   else
-    create_vm
+    create_vm "$pub_key"
+    created=true
   fi
 
   deadline=$((SECONDS + 900))
@@ -116,8 +118,9 @@ create() {
     [ "$SECONDS" -lt "$deadline" ] || { echo "The VM got no public address in 900 s." >&2; exit 1; }
     sleep 10
   done
-  # Nebius gives an address to a new VM after it frees it. A known_hosts line for the address is from another VM.
-  if [ -f "$HOME/.ssh/known_hosts" ]; then
+  # Nebius gives an address to a new VM after it frees it. For a VM that this run created, a known_hosts line for
+  # the address is from another VM.
+  if [ "$created" = true ] && [ -f "$HOME/.ssh/known_hosts" ]; then
     ssh-keygen -R "$ip" >/dev/null 2>&1
   fi
   # ssh exits with 255 when it cannot connect, and `timeout` on the VM exits with 124. Any other failure comes
