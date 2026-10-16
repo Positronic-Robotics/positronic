@@ -2,7 +2,9 @@ import json
 
 import pytest
 
+from positronic import keys
 from positronic.cfg import policy as policy_cfg
+from positronic.cfg.eval.sim.positronic import stack_cubes_collect
 from positronic.cfg.policy import file_headers
 
 SECRET = 'ak-do-not-print-me'
@@ -57,3 +59,10 @@ def test_a_remote_policy_config_carries_an_address_its_network_flags_reach(name)
 
     address = overridden.kwargs['address'].instantiate()
     assert (address.host, address.port) == ('gpu-host', 443)
+
+
+def test_the_collection_eval_records_every_camera_that_the_teleop_collection_policy_shows():
+    recorded = stack_cubes_collect.kwargs['camera_dict']
+    shown = policy_cfg.teleop_collect.kwargs['cameras']
+    assert set(shown) <= set(recorded)
+    assert {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE} <= set(recorded)
