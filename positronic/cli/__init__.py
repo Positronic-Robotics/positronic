@@ -4,7 +4,7 @@ import pos3
 from pimm.logging import init_logging
 from positronic.cli.account import commands as account_commands
 from positronic.cli.eval import commands as eval_commands
-from positronic.teleop.command import serve as teleop
+from positronic.teleop.service import serve as teleop
 
 
 @pos3.with_mirror()
