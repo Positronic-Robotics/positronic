@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
 import pytest
@@ -635,6 +636,13 @@ def test_a_base_url_that_names_no_host_is_refused_however_it_arrives(monkeypatch
     monkeypatch.setenv(API_URL_ENV, base_url)
     with pytest.raises(ValueError, match='absolute URL'):
         PlatformClient()
+
+
+@pytest.mark.parametrize('base_url', ['http://gateway:bad', 'http://[::1'])
+def test_a_base_url_that_does_not_parse_is_refused_naming_it(monkeypatch, base_url: str):
+    monkeypatch.delenv(API_URL_ENV, raising=False)
+    with pytest.raises(ValueError, match=re.escape(base_url)):
+        PlatformClient(base_url)
 
 
 def test_closing_leaves_a_caller_supplied_client_open():

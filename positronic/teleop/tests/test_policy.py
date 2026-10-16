@@ -179,8 +179,8 @@ def test_the_first_step_holds_the_robot_where_it_is(runtime, service):
     np.testing.assert_allclose(command.pose.as_vector('quat'), OBS[keys.EE_POSE])
     assert stay.commands[keys.TARGET_GRIP] == OBS[keys.GRIP]
     request = service.requests[1]
-    image = request[session.DISPLAY].pop(session.IMAGE)
-    assert image.shape == OBS[keys.EXTERIOR_IMAGE].shape
+    images = request[session.DISPLAY].pop(session.IMAGES)
+    assert {name: image.shape for name, image in images.items()} == {keys.EXTERIOR_IMAGE: (48, 64, 3)}
     assert request == {
         session.KIND: session.Request.FRAME,
         session.DISPLAY: {session.TASK: OBS[keys.TASK], session.CONTROL: False, session.ATTEMPT_STARTED: False},
@@ -297,12 +297,45 @@ def test_meta_after_a_run_does_not_probe(monkeypatch):
     assert wire.probes == 0
 
 
-def test_a_policy_with_no_camera_sends_no_image(runtime, service):
+def _sent_cameras(runtime, service, obs, **policy_args) -> list[str]:
+    """The cameras of the first frame request of a readied run, in the order that the request holds them."""
     service.replies.put({session.KIND: session.Reply.READY})
-    run = runtime.start(TeleopPolicy(WIRE, ADDRESS, camera=None))
-    run.send({key: value for key, value in OBS.items() if key != keys.EXTERIOR_IMAGE})
+    run = runtime.start(TeleopPolicy(WIRE, ADDRESS, **policy_args))
+    run.send(obs)
     assert _holds_within(lambda: len(service.requests) == 2, seconds=2.0)
-    assert session.IMAGE not in service.requests[1][session.DISPLAY]
+    return list(service.requests[1][session.DISPLAY][session.IMAGES])
+
+
+MORE_CAMERAS = {
+    **OBS,
+    keys.WRIST_IMAGE: np.zeros((24, 32, 3), dtype=np.uint8),
+    'image.handcam_right': OBS[keys.EXTERIOR_IMAGE],
+}
+
+
+def test_the_run_sends_every_camera_of_obs_by_default(runtime, service):
+    assert _sent_cameras(runtime, service, MORE_CAMERAS) == [
+        keys.EXTERIOR_IMAGE,
+        keys.WRIST_IMAGE,
+        'image.handcam_right',
+    ]
+
+
+def test_the_run_sends_the_cameras_that_it_names_in_their_order(runtime, service):
+    cameras = ('image.handcam_right', keys.WRIST_IMAGE)
+    assert _sent_cameras(runtime, service, MORE_CAMERAS, cameras=cameras) == list(cameras)
+
+
+def test_a_policy_with_no_camera_sends_no_image(runtime, service):
+    assert _sent_cameras(runtime, service, OBS, cameras=()) == []
+
+
+def test_the_run_sends_images_at_most_at_its_image_rate(runtime, service):
+    run, _ = _started(runtime, service, image_fps=1.0)
+    _answer(run, service, _frame())
+    _answer(run, service, _frame())
+    assert session.IMAGES in service.requests[1][session.DISPLAY]
+    assert all(session.IMAGES not in request[session.DISPLAY] for request in service.requests[2:])
 
 
 @pytest.mark.parametrize(('limit', 'fails'), [(0.1, True), (30.0, False)])

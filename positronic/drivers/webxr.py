@@ -30,14 +30,10 @@ _LOG_CONFIG = {
 }
 
 
-# The names of the controllers in the positions and the buttons that ``WebXR`` emits.
-LEFT, RIGHT = 'left', 'right'
-
-
 def _parse_controller_data(data: dict):
-    controller_positions = {LEFT: None, RIGHT: None}
-    buttons_dict = {LEFT: None, RIGHT: None}
-    for side in [RIGHT, LEFT]:
+    controller_positions = {'left': None, 'right': None}
+    buttons_dict = {'left': None, 'right': None}
+    for side in ['right', 'left']:
         if data['controllers'][side] is not None:
             translation = np.array(data['controllers'][side]['position'], dtype=np.float64)
             rotation = np.array(data['controllers'][side]['orientation'], dtype=np.float64)
@@ -91,13 +87,6 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
     return tmp_key, tmp_cert
 
 
-def encode_frame(encoder: turbojpeg.TurboJPEG, image: np.ndarray, quality: int) -> str:
-    """An RGB ``image`` as base64 JPEG, as the video stream sends it."""
-    buffer = encoder.encode(image, quality=quality, pixel_format=turbojpeg.TJPF_RGB)
-    assert isinstance(buffer, bytes), 'TurboJPEG returns the JPEG bytes when it is given no destination'
-    return base64.b64encode(buffer).decode('utf-8')
-
-
 def _build_access_url(host: str, port: int, use_https: bool) -> str:
     scheme = 'https' if use_https else 'http'
     return f'{scheme}://{host}:{port}/'
@@ -128,7 +117,6 @@ class WebXR(pimm.ControlSystem):
     - ssl_keyfile, ssl_certfile: TLS files if `use_https=True`.
     - frontend: "oculus" or "iphone" (single-frontend mode).
     - use_https: enable HTTPS; set False for iPhone dev.
-    - jpeg_quality: the JPEG quality of the video stream.
     """
 
     def __init__(
@@ -139,7 +127,6 @@ class WebXR(pimm.ControlSystem):
         frontend: str = 'oculus',
         use_https: bool = True,
         sensitivity: float = 1.0,
-        jpeg_quality: int = 50,
     ):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
@@ -152,7 +139,6 @@ class WebXR(pimm.ControlSystem):
         self.controller_positions = pimm.ControlSystemEmitter(self)
         self.buttons = pimm.ControlSystemEmitter(self)
         self.sensitivity = sensitivity
-        self.jpeg_quality = jpeg_quality
 
     def _next_frame(self, last_sent_time: pimm.Time | None) -> pimm.Message | None:
         """The frame the video stream sends next. ``None`` while no new frame arrived or the camera is lost."""
@@ -161,44 +147,44 @@ class WebXR(pimm.ControlSystem):
             return None
         return msg
 
-    def _add_page_routes(self, app: FastAPI) -> None:
-        """The page and its scripts, from the package assets."""
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+        app = FastAPI()
+        jpeg_encoder = turbojpeg.TurboJPEG()
+
+        def encode_frame(image):
+            buffer = jpeg_encoder.encode(image, quality=50)
+            return base64.b64encode(buffer).decode('utf-8')
 
         @app.get('/')
         async def root():
             if self.frontend == 'oculus':
-                return FileResponse(utils.package_assets_path('assets/webxr/index.html'))
+                return FileResponse('positronic/assets/webxr/index.html')
             else:
-                return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
+                return FileResponse('positronic/assets/webxr_iphone/index.html')
 
         @app.get('/three.min.js')
         async def three_min():
-            return FileResponse(utils.package_assets_path('assets/webxr/three.min.js'))
+            return FileResponse('positronic/assets/webxr/three.min.js')
 
         @app.get('/webxr-button.js')
         async def webxr_button():
-            return FileResponse(utils.package_assets_path('assets/webxr/webxr-button.js'))
+            return FileResponse('positronic/assets/webxr/webxr-button.js')
 
         @app.get('/core.js')
         async def webxr_core():
-            return FileResponse(utils.package_assets_path('assets/webxr/core.js'))
+            return FileResponse('positronic/assets/webxr/core.js')
 
         if self.frontend == 'oculus':
 
             @app.get('/video-player.js')
             async def video_player():
-                return FileResponse(utils.package_assets_path('assets/webxr/video-player.js'))
-
-    def _add_video_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
-        """``/video``: each new frame as base64 JPEG."""
+                return FileResponse('positronic/assets/webxr/video-player.js')
 
         @app.websocket('/video')
         async def video_stream(websocket: WebSocket):
             await websocket.accept()
             logger.info('Video WebSocket connection accepted')
             try:
-                # The video needs libturbojpeg, and the page does not. So the encoder loads only here.
-                jpeg_encoder = turbojpeg.TurboJPEG()
                 fps = pimm.utils.RateCounter('Video Stream')
                 last_sent_time = None
                 while not should_stop.value:
@@ -208,7 +194,7 @@ class WebXR(pimm.ControlSystem):
                     if msg is None:
                         continue
                     last_sent_time = msg.time
-                    base64_frame = encode_frame(jpeg_encoder, msg.data, self.jpeg_quality)
+                    base64_frame = encode_frame(msg.data)
                     await websocket.send_text(base64_frame)
                     fps.tick()
             except Exception as e:
@@ -216,9 +202,6 @@ class WebXR(pimm.ControlSystem):
                 logger.error(traceback.format_exc())
             finally:
                 logger.info('Video WebSocket connection closed')
-
-    def _add_controller_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
-        """``/ws``: the controller stream from the page."""
 
         @app.websocket('/ws')
         async def websocket_endpoint(websocket: WebSocket):
@@ -237,9 +220,9 @@ class WebXR(pimm.ControlSystem):
                             if transform is not None:
                                 controller_positions[side].translation *= self.sensitivity
 
-                        if controller_positions[LEFT] is not None or controller_positions[RIGHT] is not None:
+                        if controller_positions['left'] is not None or controller_positions['right'] is not None:
                             self.controller_positions.emit(controller_positions)
-                        if buttons[LEFT] is not None or buttons[RIGHT] is not None:
+                        if buttons['left'] is not None or buttons['right'] is not None:
                             self.buttons.emit(buttons)
                         fps.tick()
                     except TimeoutError:
@@ -251,7 +234,6 @@ class WebXR(pimm.ControlSystem):
             except Exception as e:
                 logger.error(f'WebSocket error: {e}')
 
-    def _server(self, app: FastAPI) -> uvicorn.Server:
         ssl_kwargs = {}
         if self.use_https:
             keyfile, certfile = _get_or_create_ssl_files(
@@ -259,14 +241,7 @@ class WebXR(pimm.ControlSystem):
             )
             ssl_kwargs = {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
         config = uvicorn.Config(app, host='0.0.0.0', port=self.port, log_config=_LOG_CONFIG, **ssl_kwargs)
-        return uvicorn.Server(config)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        app = FastAPI()
-        self._add_page_routes(app)
-        self._add_video_route(app, should_stop)
-        self._add_controller_route(app, should_stop)
-        server = self._server(app)
+        server = uvicorn.Server(config)
         self.server_thread = threading.Thread(target=server.run, daemon=True)
         self.server_thread.start()
 

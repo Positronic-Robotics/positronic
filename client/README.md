@@ -312,6 +312,23 @@ uv run positronic eval catalog
 
 `positronic/cli/examples/` runs the whole flow end to end.
 
+A command that fails exits with a status that tells whose fault the failure is:
+
+| Status | Fault | Cases |
+|---|---|---|
+| 1 | the caller | the platform refused the request with a 4xx, no API key or a bad key, a quota used up, a run rejected at the door |
+| 2 | usage | the arguments are wrong before any call: an id that is not hexadecimal, a plan file that does not parse |
+| 3 | the platform | a 5xx, an `internal_error` or `upstream_unavailable` code, no answer, a timeout, an answer the client cannot read, a replayed run that ended for a platform reason |
+
+The read commands take `--json`: `eval status`, `eval list`, `eval catalog`, and `account credits account`,
+`get-purchase` and `list-purchases`. They print the data as JSON on stdout. `eval list --json` prints every
+page as one page, with `next` null. `eval catalog --json` prints the evals and the tasks as one object, with
+`tasks` null where the key may compose no plan. A refusal by the platform prints its error envelope as JSON on
+stdout. Any other failure prints its message on stderr. The exit status is the same with and without `--json`.
+
+An argument that a command does not declare, or a required argument that is missing, stops with a traceback
+and status 1. `--help` lists the arguments of a command.
+
 ## Configuration
 
 Calls go to `https://platform.positronic.ro` with nothing set. The environment carries the rest:
@@ -423,7 +440,10 @@ Ids are 64-bit ints in Python and bare lowercase hex on the wire; closed sets ar
 as slugs. A non-2xx response raises `PlatformError`, which carries the parsed error envelope: `code`
 for a program, `message` for a human, `reason_code` where a terminal caller fault has one, `quota`
 where a 429 names the rule that refused the request, and `evals` where the eval asked for is not one
-of them.
+of them. A response with no envelope, such as a proxy's HTML page, still raises `PlatformError`: the
+client builds an `internal_error` envelope around the raw body and sets `synthesized_envelope`.
+`ReasonCode.is_platform_fault` says whether a reason is the platform's fault, which refunds the quota,
+or the caller's, which charges it.
 
 `submissions.get` answers one model per status. A finished run reads its score off `scores` and its
 outputs off `artifacts`. A failed run reads `reason_code` and `reason`, and `artifacts` links the

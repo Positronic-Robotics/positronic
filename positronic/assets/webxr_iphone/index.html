@@ -83,8 +83,7 @@
 
       let websocket = null;
 
-      // The xr-standard gamepad layout of `buttons`.
-      const BUTTON = { trigger: 0, stick: 3, a: 4, b: 5 };
+      // Buttons array: indices used: 0 (trigger/gripper), 3 (stick/reset), 4 (A), 5 (B)
       const buttons = new Array(8).fill(0.0);
 
       // Gripper slider state
@@ -101,7 +100,7 @@
 
         function setGrip(val) {
           gripValue = clamp(val, 0.0, 1.0);
-          buttons[BUTTON.trigger] = gripValue;
+          buttons[0] = gripValue; // right_trigger
           const pct = gripValue * 100;
           handle.style.left = `${pct}%`;
           fill.style.width = `${pct}%`;
@@ -138,7 +137,7 @@
       function setupButtons() {
         const configs = {
           reset: {
-            idx: BUTTON.stick,
+            idx: 3,
             el: document.getElementById('btnReset'),
             type: 'momentary',
             baseLabel: 'Reset',
@@ -148,7 +147,7 @@
             classes: { off: 'btn--reset-off', on: 'btn--reset-on' }
           },
           track: {
-            idx: BUTTON.a,
+            idx: 4,
             el: document.getElementById('btnA'),
             type: 'toggle',
             baseLabel: 'Tracking',
@@ -158,7 +157,7 @@
             classes: { off: 'btn--track-off', on: 'btn--track-on' }
           },
           record: {
-            idx: BUTTON.b,
+            idx: 5,
             el: document.getElementById('btnB'),
             type: 'toggle',
             baseLabel: 'Recording',

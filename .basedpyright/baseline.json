@@ -1676,6 +1676,14 @@
                 }
             },
             {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 36,
+                    "endColumn": 42,
+                    "lineCount": 1
+                }
+            },
+            {
                 "code": "reportAttributeAccessIssue",
                 "range": {
                     "startColumn": 59,
