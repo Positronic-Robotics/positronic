@@ -11,9 +11,18 @@ import pytest
 from platform_client import routes
 from platform_client.catalog import EvalListResponse, EvalSummary, TaskListResponse, TaskSummary
 from platform_client.client import PlatformClient
-from platform_client.enums import ErrorCode
+from platform_client.enums import ErrorCode, SubmissionStatus
 from platform_client.ids import SubmissionId
-from platform_client.responses import SubmissionListResponse, SubmissionView
+from platform_client.requests import CancelRequest
+from platform_client.responses import (
+    BlockedSubmissionView,
+    CancelResponse,
+    EpisodeCounts,
+    PendingSubmissionView,
+    SubmissionListResponse,
+    SubmissionListRow,
+    SubmissionView,
+)
 from platform_client.tasks import TaskRef
 from positronic_evals.evals import EvalRef
 from pydantic import TypeAdapter
@@ -21,10 +30,10 @@ from pydantic import TypeAdapter
 from positronic.cli import _internal_main
 from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.gateway import CommandFailed, Fault
-from positronic.cli.conftest import AT, BASE, ID, refusal
+from positronic.cli.conftest import BASE, ID, SUBMISSION, USER, WHEN, refusal
 from positronic.cli.eval.submissions import CatalogView, cancel, catalog, list_submissions, status
 
-PENDING = {'id': ID, 'status': 'pending', 'received_at': AT, 'queued_at': AT, 'queue_position': 3}
+PENDING = PendingSubmissionView(id=SUBMISSION, received_at=WHEN, queued_at=WHEN, queue_position=3)
 
 
 def test_status_prints_the_fields_of_the_variant_it_got(platform, run_command, capsys):
@@ -41,12 +50,18 @@ def test_status_prints_the_fields_of_the_variant_it_got(platform, run_command, c
     assert [line for line in out[1:] if line.startswith(('  id:', '  status:'))] == []
 
 
-NO_SUBMISSION = ({'error': {'code': 'not_found', 'message': 'no such submission'}}, 404)
-ROW = {'id': ID, 'user_id': 'a0', 'status': 'running', 'received_at': AT}
+NO_SUBMISSION = (refusal(ErrorCode.not_found, 'no such submission'), 404)
+
+
+def _row(id: str = ID, **fields) -> SubmissionListRow:
+    """One running row of `submissions.list`, with `fields` added."""
+    return SubmissionListRow(
+        id=SubmissionId.parse(id), user_id=USER, status=SubmissionStatus.running, received_at=WHEN, **fields
+    )
 
 
 def test_status_prints_what_a_blocked_run_waits_on(platform, run_command, capsys):
-    platform.answer({'id': ID, 'status': 'blocked', 'reason': 'the rig is not ready'})
+    platform.answer(BlockedSubmissionView(id=SUBMISSION, reason='the rig is not ready'))
 
     run_command(status, id=ID)
 
@@ -57,12 +72,14 @@ def test_status_prints_what_a_blocked_run_waits_on(platform, run_command, capsys
 
 def test_list_prints_one_labelled_line_per_run(platform, run_command, capsys):
     # One row of each kind: the platform-run row and the rig row that carries a count.
-    platform.answer({
-        'submissions': [
-            {**ROW, 'alias': 'demo', 'eval': 'fake.smoke'},
-            {**ROW, 'id': '1a', 'episodes': {'total': 20, 'done': 0, 'outstanding': 20}},
-        ]
-    })
+    platform.answer(
+        SubmissionListResponse(
+            submissions=[
+                _row(alias='demo', eval=EvalRef('fake.smoke')),
+                _row('1a', episodes=EpisodeCounts(total=20, done=0, outstanding=20)),
+            ]
+        )
+    )
 
     run_command(list_submissions)
 
@@ -74,11 +91,12 @@ def test_list_prints_one_labelled_line_per_run(platform, run_command, capsys):
     ]
 
 
+FIRST_PAGE = SubmissionListResponse(submissions=[_row('1a')], next=SubmissionId.parse('1a'))
+LAST_PAGE = SubmissionListResponse(submissions=[_row('2b')])
+
+
 def test_list_reads_every_page(platform, run_command, capsys):
-    platform.answer_in_turn(
-        routes.SUBMISSIONS_LIST,
-        [({'submissions': [{**ROW, 'id': '1a'}], 'next': '1a'}, 200), ({'submissions': [{**ROW, 'id': '2b'}]}, 200)],
-    )
+    platform.answer_in_turn(routes.SUBMISSIONS_LIST, [(FIRST_PAGE, 200), (LAST_PAGE, 200)])
 
     run_command(list_submissions)
 
@@ -100,8 +118,8 @@ def test_a_response_the_client_cannot_read_is_a_refusal_without_the_body(platfor
 
 EVAL = EvalSummary(id=EvalRef('fake.smoke'), embodiment='franka', tasks=['a'], composable=True)
 TASK = TaskSummary(id=TaskRef('eight-spoons-into-grey-tote'), embodiment='franka', task='spoons')
-EVALS_ANSWER = (EvalListResponse(evals=[EVAL]).model_dump(mode='json'), 200)
-TASKS_ANSWER = (TaskListResponse(tasks=[TASK]).model_dump(mode='json'), 200)
+EVALS_ANSWER = (EvalListResponse(evals=[EVAL]), 200)
+TASKS_ANSWER = (TaskListResponse(tasks=[TASK]), 200)
 NO_GRANT = (refusal(ErrorCode.forbidden, 'no customer grant'), 403)
 
 
@@ -145,12 +163,12 @@ def test_catalog_json_prints_null_tasks_where_the_key_has_no_grant_for_them(plat
 
 
 def test_cancel_reports_whether_the_quota_came_back(platform, run_command, capsys):
-    platform.answer({'status': 'cancelled', 'refunded': True})
+    platform.answer(CancelResponse(status=SubmissionStatus.cancelled, refunded=True))
 
     run_command(cancel, id=ID)
 
     assert platform.request.url.path == routes.SUBMISSIONS_CANCEL
-    assert platform.body == {'id': ID}
+    assert CancelRequest.model_validate(platform.body) == CancelRequest(id=SUBMISSION)
     assert 'cancelled, quota refunded' in capsys.readouterr().out
 
 
@@ -162,7 +180,7 @@ def test_cancel_reports_a_run_the_platform_does_not_hold(platform, run_command):
 
 
 def test_a_refusal_that_is_not_a_missing_record_is_not_read_as_the_other_kind(platform, run_command):
-    platform.answer({'error': {'code': 'forbidden', 'message': 'no grant'}}, status=403)
+    platform.answer(refusal(ErrorCode.forbidden, 'no grant'), status=403)
 
     with pytest.raises(SystemExit, match='forbidden'):
         run_command(status, id=ID)
@@ -179,7 +197,7 @@ def test_an_id_that_is_not_hexadecimal_is_refused(platform, run_command):
 
 
 def test_a_refusal_by_the_platform_exits_with_its_message(platform, run_command):
-    platform.answer({'error': {'code': 'quota_exceeded', 'message': 'no submissions left today'}}, status=429)
+    platform.answer(refusal(ErrorCode.quota_exceeded, 'no submissions left today'), status=429)
 
     with pytest.raises(SystemExit) as exit_info:
         run_command(list_submissions)
@@ -309,15 +327,11 @@ def test_status_json_prints_the_view_the_platform_answered(platform, run_command
 
     run_command(status, id=ID, json=True)
 
-    view = TypeAdapter(SubmissionView)
-    assert view.validate_json(capsys.readouterr().out) == view.validate_python(PENDING)
+    assert TypeAdapter(SubmissionView).validate_json(capsys.readouterr().out) == PENDING
 
 
 def test_list_json_prints_every_page_as_one(platform, run_command, capsys):
-    platform.answer_in_turn(
-        routes.SUBMISSIONS_LIST,
-        [({'submissions': [{**ROW, 'id': '1a'}], 'next': '1a'}, 200), ({'submissions': [{**ROW, 'id': '2b'}]}, 200)],
-    )
+    platform.answer_in_turn(routes.SUBMISSIONS_LIST, [(FIRST_PAGE, 200), (LAST_PAGE, 200)])
 
     run_command(list_submissions, json=True)
 
@@ -348,7 +362,7 @@ def test_a_refusal_under_json_prints_its_envelope(platform, run_command, capsys,
 def test_an_unconfigured_url_leaves_the_client_on_its_default_platform(platform, run_command, monkeypatch):
     # A user should never have to know a URL: with nothing set, the client reaches the platform.
     monkeypatch.delenv(gateway_module.API_URL_ENV)
-    platform.answer({'submissions': []})
+    platform.answer(SubmissionListResponse())
 
     run_command(list_submissions)
 
@@ -356,7 +370,7 @@ def test_an_unconfigured_url_leaves_the_client_on_its_default_platform(platform,
 
 
 def test_the_platform_url_argument_overrides_the_environment(platform, run_command):
-    platform.answer({'submissions': []})
+    platform.answer(SubmissionListResponse())
 
     run_command(list_submissions, platform_url='http://other.test')
 

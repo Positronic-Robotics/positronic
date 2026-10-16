@@ -6,18 +6,23 @@ from datetime import UTC, datetime
 import configuronic as cfn
 import pytest
 from platform_client import routes
-from platform_client.enums import OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
+from platform_client.enums import ErrorCode, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
 from platform_client.errors import EVALS_DETAIL, QUOTA_DETAIL, TASKS_DETAIL
 from platform_client.ids import SubmissionId
 from platform_client.responses import QUOTA_SUBMISSIONS_DAY, QuotaLimit, SubmissionCreateResponse
 
 from positronic.cli.account.gateway import CommandFailed, Fault
-from positronic.cli.conftest import ID, KEY, runs_of_four
+from positronic.cli.conftest import ID, KEY, SUBMISSION, refusal, runs_of_four
 from positronic.cli.eval.run import run
 
 
+def _created(status: SubmissionStatus, **fields) -> SubmissionCreateResponse:
+    """What `submissions.create` answers for the submission `ID`."""
+    return SubmissionCreateResponse(submission_id=SUBMISSION, status=status, **fields)
+
+
 def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, capsys):
-    platform.answer({'submission_id': ID, 'status': 'pending', 'policy_image_digest': 'sha256:abc'})
+    platform.answer(_created(SubmissionStatus.pending, policy_image_digest='sha256:abc'))
 
     created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
 
@@ -40,7 +45,7 @@ def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, cap
 
 def test_an_eval_is_a_name_beside_a_file_of_that_name(platform, run_command, tmp_path, monkeypatch):
     # `--eval` reads as a name wherever the command runs, so a file of that name beside it changes nothing.
-    platform.answer({'submission_id': ID, 'status': 'pending'})
+    platform.answer(_created(SubmissionStatus.pending))
     (tmp_path / 'fake.smoke').write_text('tasks: []\n')
     monkeypatch.chdir(tmp_path)
 
@@ -51,7 +56,7 @@ def test_an_eval_is_a_name_beside_a_file_of_that_name(platform, run_command, tmp
 
 def test_an_image_rejected_at_the_door_fails_the_command(platform, run_command, capsys):
     # Terminal at the door and charged: a zero exit would let a script read it as a run that happened.
-    platform.answer({'submission_id': ID, 'status': 'errored', 'reason_code': 'image_unpullable'})
+    platform.answer(_created(SubmissionStatus.errored, reason_code=ReasonCode.image_unpullable))
 
     with pytest.raises(CommandFailed, match='rejected: image_unpullable') as exit_info:
         run_command(run, eval='fake.smoke', policy_image='org/p:v1')
@@ -63,7 +68,7 @@ def test_an_image_rejected_at_the_door_fails_the_command(platform, run_command, 
 def test_a_replay_of_a_cancelled_submission_fails_the_command(platform, run_command):
     # An idempotent replay returns the original, which may since have been cancelled. It will never
     # produce a result, so it exits like any other terminal-without-a-result.
-    platform.answer({'submission_id': ID, 'status': 'cancelled'})
+    platform.answer(_created(SubmissionStatus.cancelled))
 
     with pytest.raises(SystemExit, match='rejected: cancelled'):
         run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
@@ -82,10 +87,7 @@ def test_a_replay_of_a_cancelled_submission_fails_the_command(platform, run_comm
     ids=lambda value: value.name,
 )
 def test_a_replay_of_a_failed_submission_exits_with_the_fault_of_its_reason(platform, run_command, reason, fault):
-    original = SubmissionCreateResponse(
-        submission_id=SubmissionId.parse(ID), status=SubmissionStatus.errored, reason_code=reason
-    )
-    platform.answer(original.model_dump(mode='json'))
+    platform.answer(_created(SubmissionStatus.errored, reason_code=reason))
 
     with pytest.raises(CommandFailed, match=f'rejected: {reason.name}') as exit_info:
         run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
@@ -95,7 +97,7 @@ def test_a_replay_of_a_failed_submission_exits_with_the_fault_of_its_reason(plat
 
 def test_a_replay_of_a_finished_submission_succeeds(platform, run_command, capsys):
     # The boundary of the rule above: terminal is not the test, a missing result is.
-    platform.answer({'submission_id': ID, 'status': 'finished'})
+    platform.answer(_created(SubmissionStatus.finished))
 
     run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
 
@@ -104,16 +106,8 @@ def test_a_replay_of_a_finished_submission_succeeds(platform, run_command, capsy
 
 def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(platform, run_command):
     # The set lives on the server, so the refusal is where a caller learns the real names.
-    platform.answer(
-        {
-            'error': {
-                'code': 'not_found',
-                'message': "unknown eval 'fake.smokey'",
-                'details': {EVALS_DETAIL: ['fake.smoke', 'robolab.public_subset']},
-            }
-        },
-        status=404,
-    )
+    offered = {EVALS_DETAIL: ['fake.smoke', 'robolab.public_subset']}
+    platform.answer(refusal(ErrorCode.not_found, "unknown eval 'fake.smokey'", **offered), status=404)
 
     with pytest.raises(SystemExit) as exit_info:
         run_command(run, eval='fake.smokey', policy_image='org/p:v1')
@@ -124,10 +118,10 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
 @pytest.mark.parametrize(
     ('status', 'code', 'details', 'printed'),
     [
-        (400, 'bad_request', {TASKS_DETAIL: ['marker-in-mug']}, f'  {TASKS_DETAIL}: ["marker-in-mug"]'),
+        (400, ErrorCode.bad_request, {TASKS_DETAIL: ['marker-in-mug']}, f'  {TASKS_DETAIL}: ["marker-in-mug"]'),
         (
             429,
-            'quota_exceeded',
+            ErrorCode.quota_exceeded,
             {
                 QUOTA_DETAIL: QuotaLimit(
                     key=QUOTA_SUBMISSIONS_DAY,
@@ -146,7 +140,7 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
         ),
         (
             422,
-            'bad_request',
+            ErrorCode.bad_request,
             {'fields': [{'type': 'missing', 'loc': ['body', 'eval'], 'msg': 'Field required'}]},
             '"eval"',
         ),
@@ -155,17 +149,17 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
 )
 def test_a_refusal_prints_the_details_the_platform_sent(platform, run_command, status, code, details, printed):
     # The details name the next step, so a refusal that drops them leaves the caller to guess it.
-    platform.answer({'error': {'code': code, 'message': 'refused', 'details': details}}, status=status)
+    platform.answer(refusal(code, 'refused', **details), status=status)
 
     with pytest.raises(SystemExit) as exit_info:
         run_command(run, eval='fake.smoke', policy_image='org/p:v1')
 
-    assert str(exit_info.value).startswith(f'{code}: refused\n')
+    assert str(exit_info.value).startswith(f'{code.name}: refused\n')
     assert printed in str(exit_info.value)
 
 
 def test_a_refusal_with_no_details_is_one_line(platform, run_command):
-    platform.answer({'error': {'code': 'unauthorized', 'message': 'invalid api key', 'details': {}}}, status=401)
+    platform.answer(refusal(ErrorCode.unauthorized, 'invalid api key'), status=401)
 
     with pytest.raises(SystemExit) as exit_info:
         run_command(run, eval='fake.smoke', policy_image='org/p:v1')
@@ -205,7 +199,7 @@ def test_a_local_run_refuses_what_only_a_platform_run_can_mean(platform, run_com
 
 
 def test_the_sample_flags_state_the_sample_the_platform_draws(platform, run_command):
-    platform.answer({'submission_id': ID, 'status': 'pending'})
+    platform.answer(_created(SubmissionStatus.pending))
 
     run_command(run, eval='fake.smoke', policy_image='org/p:v1', sample_percent=10, sample_seed=7)
 
@@ -243,7 +237,7 @@ def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_com
 def test_a_platform_run_takes_a_local_switch_stated_at_what_it_already_does(platform, run_command, already_so: dict):
     # A switch reads the same whether it was left at its default or stated there, and either way asks
     # for what the platform already does, so it refuses neither.
-    platform.answer({'submission_id': ID, 'status': 'pending'})
+    platform.answer(_created(SubmissionStatus.pending))
 
     created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', **already_so)
 
@@ -251,7 +245,7 @@ def test_a_platform_run_takes_a_local_switch_stated_at_what_it_already_does(plat
 
 
 def test_the_eval_group_walks_to_run(platform, capsys, monkeypatch):
-    platform.answer({'submission_id': ID, 'status': 'pending'})
+    platform.answer(_created(SubmissionStatus.pending))
     argv = ['positronic', 'eval', 'run', '--eval=fake.smoke', '--policy-image=org/p:v1']
     monkeypatch.setattr(sys, 'argv', argv)
 
@@ -269,7 +263,7 @@ def a_password_file(tmp_path, password: str = 'the-registry-password\n'):
 
 def test_a_private_image_sends_the_credential_the_registry_asks_for(platform, run_command, tmp_path):
     # The caller names the file, and the password itself first appears in the request.
-    platform.answer({'submission_id': ID, 'status': 'pending'})
+    platform.answer(_created(SubmissionStatus.pending))
     password_file = a_password_file(tmp_path)
 
     run_command(
@@ -287,7 +281,7 @@ def test_a_private_image_sends_the_credential_the_registry_asks_for(platform, ru
 
 
 def test_a_public_image_sends_no_credential(platform, run_command):
-    platform.answer({'submission_id': ID, 'status': 'pending'})
+    platform.answer(_created(SubmissionStatus.pending))
 
     run_command(run, eval='fake.smoke', policy_image='org/p:v1')
 
