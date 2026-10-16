@@ -1,6 +1,7 @@
-"""The command ``positronic teleop``: the teleop service and the WebXR page of the headset."""
+"""The command ``positronic teleop``: the teleop service, the WebXR page of the headset, and the window."""
 
 import logging
+import webbrowser
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ from positronic.drivers.webxr import RIGHT, WebXR
 
 from .service import Phase, TeleopService
 from .session import default_socket_path
+from .window import Window, window_app
 
 logger = logging.getLogger(__name__)
 
@@ -51,25 +53,29 @@ class _Headset(pimm.ControlSystem):
             yield pimm.Sleep(self._view_period_sec)
 
 
-@cfn.config(webxr=positronic.cfg.webxr.oculus, socket=str(default_socket_path()), ready_limit=120.0)
+@cfn.config(webxr=positronic.cfg.webxr.oculus, socket=str(default_socket_path()), ready_limit=120.0, window_port=5006)
 def serve(
     webxr: WebXR,
     socket: str,
     ready_limit: float,
+    window_port: int,
     silence_limit: float = 0.5,
     hold_sec: float = 1.0,
     press_threshold: float = 0.6,
     view_fps: float = 30.0,
     headset_camera: str | None = None,
+    open_window: bool = True,
 ):
-    """Run the teleop service until Ctrl-C. Open the WebXR page in the headset."""
+    """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen."""
     # TODO: Set the ready limit and the silence limit for a rig.
     service = TeleopService(Path(socket), ready_limit, silence_limit, hold_sec, press_threshold, headset_camera)
     headset = _Headset(service, view_fps)
-    with service, pimm.World() as world:
+    with service, Window(window_app(service), window_port) as window, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)
         world.connect(headset.view, webxr.frame)
         world.connect(headset.page_state, webxr.page_state)
-        logger.info('The teleop service serves on %s', socket)
+        logger.info('The teleop service serves on %s. Its window is %s', socket, window.url)
+        if open_window:
+            webbrowser.open(window.url)
         world.run(headset, [webxr])
