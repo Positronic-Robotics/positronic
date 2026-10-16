@@ -29,7 +29,7 @@ def number_trials(trials: list[tuple[Task, dict]]) -> list[Task]:
             prepare_args={**task.prepare_args, eval_keys.SCENE: params},
             meta={
                 **task.meta,
-                # The seed belongs to the eval definition, not to the episode.
+                # The eval definition owns the seed.
                 **{name: value for name, value in params.items() if name != eval_keys.SEED},
                 eval_keys.TRIAL_INDEX: i,
                 eval_keys.TRIAL_COUNT: len(trials),

@@ -45,8 +45,7 @@ TIMEOUT = 'eval.timeout'
 TRIAL_INDEX = 'eval.trial_index'
 TRIAL_COUNT = 'eval.trial_count'
 # The seed a trial's scene is drawn from. It rides the scene prepare and an env's reset token, where absent means
-# the env draws its own. No episode records it. An eval that pins a seed gives each trial's seed with
-# ``TRIAL_INDEX``, and an eval that pins none draws each one at random.
+# the env draws its own. No episode records it.
 SEED = 'eval.seed'
 
 # The id of the task a trial runs, as the benchmark names it. The episode records it; positronic never reads
