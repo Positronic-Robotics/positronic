@@ -27,6 +27,7 @@ from positronic.policy.codecs import (
     EncodeImages,
     FlipGrip,
     Metadata,
+    Resample,
     RestrictImageSize,
 )
 from positronic.policy.codecs.action import (
@@ -1188,6 +1189,7 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48, Resample.AREA)),
         ChunkedSchedule(fps=10, record_stats=False),
     ],
 )
@@ -1241,9 +1243,7 @@ def test_wire_names_match_the_registered_components():
     assert set(instances) == set(registered)
     for name, instance in instances.items():
         assert instance.to_spec()['name'] == name
-        factory = registered[name][instance.WIRE_VERSION].implementation
-        assert factory is not None
-        assert isinstance(factory(**instance.to_spec().get('args', {})), type(instance))
+        assert type(spec.from_spec(instance.to_spec())) is type(instance)
         assert instance.to_spec()['version'] == instance.WIRE_VERSION
         assert spec.from_spec({**instance.to_spec(), VERSION: LATEST}).to_spec() == instance.to_spec()
 

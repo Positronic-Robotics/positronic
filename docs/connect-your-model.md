@@ -224,6 +224,7 @@ cadence and the execution horizon. Add a server codec with `codec=your_codec` if
 the model takes encoded inputs and returns model-native outputs. Client codecs
 belong in `local`, where they can mix with processors. For example,
 `RestrictImageSize(224, 224)` before the remote call limits upload volume.
+If the model resizes the frames again, `RestrictImageSize(resample=Resample.AREA)` scales them faster.
 The client JPEG-encodes each frame before it sends it. Set `compress_images=False` on the
 deployment to receive raw frames.
 The client sets the JPEG quality with `--policy.jpeg_quality`, 90 by default.
