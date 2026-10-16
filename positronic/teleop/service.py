@@ -126,30 +126,6 @@ class Phase(Enum):
     ENDED = auto()
 
 
-_VIEW_SHAPE = (480, 640, 3)
-
-
-def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
-    """``image``, or a black image, with ``lines`` of text at its top."""
-    view = np.zeros(_VIEW_SHAPE, dtype=np.uint8) if image is None else np.ascontiguousarray(image, dtype=np.uint8)
-    for row, line in enumerate(lines):
-        origin = (10, 30 + 30 * row)
-        cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
-        cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
-    return view
-
-
-def _check_private_directory(directory: Path) -> None:
-    """Create ``directory`` for this user only, or check that it is private to this user.
-
-    Any account that can write to the directory of the socket can bind the socket first, and get the sessions.
-    """
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    mode = directory.stat()
-    if mode.st_uid != os.getuid() or stat.S_IMODE(mode.st_mode) & 0o077:
-        raise PermissionError(f'{directory} must belong to this user, with no access for others (mode 700)')
-
-
 class NotWaiting(Exception):
     """No trial waits for Ready."""
 
@@ -200,8 +176,19 @@ class TeleopService:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
 
+    @staticmethod
+    def _check_private_directory(directory: Path) -> None:
+        """Create ``directory`` for this user only, or check that it is private to this user.
+
+        Any account that can write to the directory of the socket can bind the socket first, and get the sessions.
+        """
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        mode = directory.stat()
+        if mode.st_uid != os.getuid() or stat.S_IMODE(mode.st_mode) & 0o077:
+            raise PermissionError(f'{directory} must belong to this user, with no access for others (mode 700)')
+
     def __enter__(self) -> 'TeleopService':
-        _check_private_directory(self._uds.parent)
+        self._check_private_directory(self._uds.parent)
         started: Future[None] = Future()
 
         async def serve() -> None:
@@ -270,20 +257,31 @@ class TeleopService:
             self._ready = reply
             self._changed.notify_all()
 
+    @staticmethod
+    def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
+        """``image``, or a black image, with ``lines`` of text at its top."""
+        blank = (480, 640, 3)
+        view = np.zeros(blank, dtype=np.uint8) if image is None else np.ascontiguousarray(image, dtype=np.uint8)
+        for row, line in enumerate(lines):
+            origin = (10, 30 + 30 * row)
+            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
+            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+        return view
+
     def view(self) -> np.ndarray:
         """The image for the headset: the camera image of the run, with the state of the trial."""
         with self._changed:
             phase, display = self._phase, dict(self._display)
         match phase:
             case Phase.IDLE:
-                return _view(None, ['Waiting for a trial'])
+                return self._view(None, ['Waiting for a trial'])
             case Phase.READY_WAIT:
-                return _view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'])
+                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'])
             case Phase.ENDED:
-                return _view(None, ['The trial ended', 'Give the verdict on the console'])
+                return self._view(None, ['The trial ended', 'Give the verdict on the console'])
         control = 'Control on (A: off)' if display.get(CONTROL) else 'Control off (A: on)'
         task = 'Hold B: Complete. Hold the stick: Give up' if display.get(ATTEMPT_STARTED) else 'B: Start task'
-        return _view(display.get(IMAGE), [str(display.get(TASK, '')), control, task])
+        return self._view(display.get(IMAGE), [str(display.get(TASK, '')), control, task])
 
     def _await_ready(self) -> dict[str, Any]:
         deadline = time.monotonic() + self._ready_limit

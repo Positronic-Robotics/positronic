@@ -20,19 +20,14 @@ from .session import ATTEMPT_STARTED, CONTROL, IMAGE, TASK, Event, Frame, Teleop
 _IDLE_NS = 1_000_000_000
 
 
-def _robot_pose(obs: Mapping[str, Any]) -> geom.Transform3D:
-    return geom.Transform3D.from_vector(np.asarray(obs[keys.EE_POSE], dtype=float), geom.Rotation.Representation.QUAT)
-
-
 # HACK: The run reads wall time, so it learns whether its clock is simulated. A person needs the episode clock to run
 #  with the wall clock, as a charged sim clock does.
 # TODO: Let a policy state that it needs a charged clock, and let `eval run` refuse an uncharged run for it.
 class _MovingClock:
-    """Raise when the episode clock stands still for ``STILL_LIMIT_NS`` of wall time."""
+    """Raise when the episode clock stands still for ``still_limit_sec`` of wall time."""
 
-    STILL_LIMIT_NS = 1_000_000_000
-
-    def __init__(self):
+    def __init__(self, still_limit_sec: float):
+        self._still_limit_ns = round(still_limit_sec * 1e9)
         self._time_ns: int | None = None
         self._still_since_ns = time.monotonic_ns()
 
@@ -40,7 +35,7 @@ class _MovingClock:
         now_ns = time.monotonic_ns()
         if time_ns != self._time_ns:
             self._time_ns, self._still_since_ns = time_ns, now_ns
-        elif now_ns - self._still_since_ns > self.STILL_LIMIT_NS:
+        elif now_ns - self._still_since_ns > self._still_limit_ns:
             raise RuntimeError(
                 'the episode clock stands still while a person waits: run the sim with charged inference time'
             )
@@ -64,6 +59,7 @@ class TeleopPolicy(Policy):
         open_timeout: float = 10.0,
         ready_timeout: float = 130.0,
         frame_timeout: float = 5.0,
+        still_clock_timeout: float = 1.0,
     ):
         self._wire = wire
         self._address = address
@@ -72,6 +68,7 @@ class TeleopPolicy(Policy):
         self._open_timeout = open_timeout
         self._ready_timeout = ready_timeout
         self._frame_timeout = frame_timeout
+        self._still_clock_timeout = still_clock_timeout
         self._probed = False
 
     def meta(self) -> dict[str, Any]:
@@ -93,12 +90,18 @@ class TeleopPolicy(Policy):
             obs = yield
             return (yield from self._control(runtime, session, obs))
 
+    @staticmethod
+    def _robot_pose(obs: Mapping[str, Any]) -> geom.Transform3D:
+        return geom.Transform3D.from_vector(
+            np.asarray(obs[keys.EE_POSE], dtype=float), geom.Rotation.Representation.QUAT
+        )
+
     def _control(self, runtime: Runtime, session: TeleopSession, obs: Obs) -> Generator[Step, Obs, PolicyEnd]:
         """Hold the robot, then move it with the hand while control is on, until the teleoperator ends the run."""
         tracker = Tracker(self._operator_position.value)
         attempt_started = False
 
-        clock = _MovingClock()
+        clock = _MovingClock(self._still_clock_timeout)
 
         def display(obs: Mapping[str, Any]) -> dict[str, Any]:
             shown = {TASK: obs[keys.TASK], CONTROL: tracker.on, ATTEMPT_STARTED: attempt_started}
@@ -108,7 +111,7 @@ class TeleopPolicy(Policy):
 
         # A stay command, so that every command signal starts at the episode start. It asks for the pose that the arm
         # has, so the arm does not move.
-        stay = {keys.ROBOT_COMMAND: CartesianPosition(_robot_pose(obs)), keys.TARGET_GRIP: float(obs[keys.GRIP])}
+        stay = {keys.ROBOT_COMMAND: CartesianPosition(self._robot_pose(obs)), keys.TARGET_GRIP: float(obs[keys.GRIP])}
         pending = runtime.submit(session.frame, display(obs))
         obs = yield Step(stay, runtime.time_ns + _IDLE_NS)
         while True:
@@ -123,7 +126,7 @@ class TeleopPolicy(Policy):
                     case Event.CLUTCH if tracker.on:
                         tracker.turn_off()
                     case Event.CLUTCH if frame.pose is not None:
-                        tracker.turn_on(_robot_pose(obs))
+                        tracker.turn_on(self._robot_pose(obs))
                         target = tracker.update(frame.pose)
                     case Event.START_TASK if not attempt_started:
                         runtime.set_metadata(policy_keys.ATTEMPT_START_NS, runtime.time_ns)
