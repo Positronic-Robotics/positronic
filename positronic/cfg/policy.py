@@ -46,6 +46,9 @@ teleop = cfn.Config(
     TeleopPolicy, wire='websocket_unix', address=socket_address.override(uds=str(default_socket_path()))
 )
 
+# The views of `cfg.eval.sim.positronic.stack_cubes_collect` that a person teleoperates with, the most useful first.
+teleop_collect = teleop.override(cameras=('image.agent_view', 'image.top_view', 'image.handcam_right'))
+
 
 @cfn.config()
 def bearer_headers():
