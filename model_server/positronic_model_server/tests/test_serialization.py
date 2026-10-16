@@ -113,3 +113,58 @@ def test_invalid_image_shape_is_rejected(shape):
 def test_invalid_quality_is_rejected(quality):
     with pytest.raises(ValueError, match='JPEG quality'):
         serialization.encode_jpeg(np.zeros((8, 12, 3), dtype=np.uint8), quality)
+
+
+def _frames(count: int, seed: int = 0) -> np.ndarray:
+    return np.random.default_rng(seed).integers(0, 256, (count, 16, 24, 3), dtype=np.uint8)
+
+
+def test_equal_leading_frames_reuse_their_jpeg_bytes():
+    earlier = _frames(3)
+    marker = serialization.encode_jpeg(earlier)
+    encoded = list(zip(earlier, serialization.jpeg_frames(marker), strict=True))
+    later = np.concatenate([earlier[:2], _frames(1, seed=1)])
+    reused = serialization.jpeg_frames(serialization.encode_jpeg(later, encoded=encoded))
+    assert reused[0] is encoded[0][1] and reused[1] is encoded[1][1] and reused[2] != encoded[2][1]
+    # A frame after the first one that differs is encoded again, even when it equals an earlier frame.
+    shifted_stack = np.concatenate([_frames(1, seed=2), earlier[1:]])
+    shifted = serialization.jpeg_frames(serialization.encode_jpeg(shifted_stack, encoded=encoded))
+    assert shifted[1] is not encoded[1][1] and shifted[1] == encoded[1][1]
+
+
+def test_a_held_frame_travels_as_its_digest_and_decodes_from_the_held_frames():
+    stack = _frames(3)
+    held: dict[bytes, np.ndarray] = {}
+    pushed = serialization.serialise({'pushed': serialization.encode_jpeg(stack[:2])})
+    full = msgpack.unpackb(pushed, object_hook=lambda obj: serialization.unpack(obj, {}, held))['pushed']
+    marker = serialization.encode_jpeg(stack)
+    digests = serialization.frame_digests(serialization.encode_jpeg(stack[:2]))
+    referenced, count = serialization.reference_frames({'image': marker}, digests)
+    assert count == 2
+    assert len(serialization.serialise(referenced)) < len(serialization.serialise({'image': marker}))
+    restored = msgpack.unpackb(
+        serialization.serialise(referenced), object_hook=lambda obj: serialization.unpack(obj, held, {})
+    )['image']
+    np.testing.assert_array_equal(restored[:2], full)
+    np.testing.assert_array_equal(
+        restored, serialization.deserialise(serialization.serialise({'image': marker}))['image']
+    )
+
+
+def test_the_last_frame_of_a_stack_and_a_single_image_travel_in_full():
+    stack = _frames(2)
+    every_frame = {
+        serialization.frame_digest(data) for data in serialization.jpeg_frames(serialization.encode_jpeg(stack))
+    }
+    _, stack_count = serialization.reference_frames(serialization.encode_jpeg(stack), every_frame)
+    single = serialization.encode_jpeg(stack[0])
+    _, single_count = serialization.reference_frames(single, serialization.frame_digests(single))
+    assert (stack_count, single_count) == (1, 0)
+
+
+def test_a_digest_the_decoder_does_not_hold_is_an_unknown_frame():
+    stack = _frames(2)
+    marker = serialization.encode_jpeg(stack)
+    referenced, _ = serialization.reference_frames(marker, serialization.frame_digests(marker))
+    with pytest.raises(serialization.UnknownFrame):
+        serialization.deserialise(serialization.serialise(referenced))
