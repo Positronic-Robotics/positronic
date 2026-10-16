@@ -38,6 +38,9 @@
       .slider__handle { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 48px; height: 48px; background: #fff; border-radius: 50%; box-shadow: 0 4px 12px rgba(0,0,0,0.35); }
       .value { min-width: 54px; text-align: right; font-variant-numeric: tabular-nums; }
       .hint { font-size: 12px; opacity: 0.9; margin-top: 6px; }
+      .phase { font-weight: 700; margin-top: 12px; }
+      .btn--control-on { background: #06d6a0; color: #111; }
+      .btn--control-off { background: #6c757d; color: #fff; }
     </style>
   </head>
   <body>
@@ -59,6 +62,7 @@
           <div class="slider__handle" id="sliderHandle" style="left: 0%;"></div>
         </div>
         <div class="hint">Slider has extra padding near 0 and 1 for easier reach</div>
+        <div class="phase" id="phase" hidden></div>
         <div class="row" style="margin-top: 12px;">
           <div class="buttons">
             <button class="btn btn--toggle btn--track btn--track-off" id="btnA" title="Tracking disabled" aria-label="Tracking off">
@@ -83,7 +87,11 @@
 
       let websocket = null;
 
-      // Buttons array: indices used: 0 (trigger/gripper), 3 (stick/reset), 4 (A), 5 (B)
+      // The xr-standard gamepad layout of `buttons`.
+      const BUTTON = { trigger: 0, stick: 3, a: 4, b: 5 };
+      // `?mode=teleop` labels the buttons for `positronic teleop`. Every button then sends its value only while it is
+      // touched.
+      const TELEOP = new URLSearchParams(window.location.search).get('mode') === 'teleop';
       const buttons = new Array(8).fill(0.0);
 
       // Gripper slider state
@@ -100,7 +108,7 @@
 
         function setGrip(val) {
           gripValue = clamp(val, 0.0, 1.0);
-          buttons[0] = gripValue; // right_trigger
+          buttons[BUTTON.trigger] = gripValue;
           const pct = gripValue * 100;
           handle.style.left = `${pct}%`;
           fill.style.width = `${pct}%`;
@@ -132,12 +140,58 @@
         window.addEventListener('touchend', end);
 
         setGrip(0.0);
+        return setGrip;
       }
 
-      function setupButtons() {
+      // The state of the trial, as the teleop service gives it at `STATE_ROUTE`.
+      const STATE_ROUTE = '/state';
+      // The fields of the state object, as the server names them.
+      const STATE_FIELD = { phase: 'phase', control: 'control', attemptStarted: 'attempt_started' };
+      const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
+
+      function phaseText(state) {
+        switch (state[STATE_FIELD.phase]) {
+          case PHASE.readyWait: return 'Human trial: tap Ready';
+          case PHASE.running:
+            return state[STATE_FIELD.attemptStarted]
+              ? 'Task running: hold Ready/Start for Complete'
+              : 'Trial running: tap Start task when you begin';
+          case PHASE.ended: return 'Trial ended';
+          default: return 'Waiting for a trial';
+        }
+      }
+
+      // A new trial and the end of a trial open the gripper, so a closed slider does not close it at the next Control.
+      const PHASES_THAT_OPEN_THE_GRIP = [PHASE.readyWait, PHASE.ended];
+
+      function showTeleopState(configs, applyVisual, setGrip) {
+        const phaseEl = document.getElementById('phase');
+        phaseEl.hidden = false;
+        let shownPhase = null;
+        const show = async () => {
+          try {
+            const state = await (await fetch(STATE_ROUTE)).json();
+            const phase = state[STATE_FIELD.phase];
+            if (phase !== shownPhase && PHASES_THAT_OPEN_THE_GRIP.includes(phase)) setGrip(0.0);
+            shownPhase = phase;
+            phaseEl.textContent = phaseText(state);
+            const control = state[STATE_FIELD.control] === true;
+            configs.track.el.classList.toggle('btn--control-on', control);
+            configs.track.el.classList.toggle('btn--control-off', !control);
+            configs.reset.baseLabel = phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
+            applyVisual('reset');
+          } catch (e) {
+            phaseEl.textContent = 'The teleop service does not answer';
+          }
+          setTimeout(show, 250);
+        };
+        show();
+      }
+
+      function setupButtons(setGrip) {
         const configs = {
           reset: {
-            idx: 3,
+            idx: BUTTON.stick,
             el: document.getElementById('btnReset'),
             type: 'momentary',
             baseLabel: 'Reset',
@@ -147,7 +201,7 @@
             classes: { off: 'btn--reset-off', on: 'btn--reset-on' }
           },
           track: {
-            idx: 4,
+            idx: BUTTON.a,
             el: document.getElementById('btnA'),
             type: 'toggle',
             baseLabel: 'Tracking',
@@ -157,7 +211,7 @@
             classes: { off: 'btn--track-off', on: 'btn--track-on' }
           },
           record: {
-            idx: 5,
+            idx: BUTTON.b,
             el: document.getElementById('btnB'),
             type: 'toggle',
             baseLabel: 'Recording',
@@ -167,6 +221,22 @@
             classes: { off: 'btn--record-off', on: 'btn--record-on' }
           }
         };
+
+        if (TELEOP) {
+          const teleop = (cfg, label, status) => Object.assign(cfg, {
+            type: 'momentary',
+            baseLabel: label,
+            labels: { off: status, on: status },
+            aria: { off: label, on: label },
+            titles: { off: `${label} (${status})`, on: `${label} (${status})` },
+          });
+          teleop(configs.track, 'Control', 'tap: on / off');
+          teleop(configs.record, 'Ready / Start task', 'hold: Complete');
+          teleop(configs.reset, 'Cancel', '');
+          // The service gives the colour of Control, so a press does not change it.
+          configs.track.classes = null;
+          configs.track.el.classList.remove('btn--track', 'btn--track-off');
+        }
 
         const state = {
           reset: { pressed: false },
@@ -252,6 +322,8 @@
           el.addEventListener('touchcancel', () => release(name, true));
         }
 
+        if (TELEOP) showTeleopState(configs, applyVisual, setGrip);
+
         window.addEventListener('touchend', () => releaseAll(true));
         window.addEventListener('touchcancel', () => releaseAll(true));
       }
@@ -275,8 +347,7 @@
       // Boot using shared core
       websocket = initWebSocket();
       startXRApp({ websocket, onInit, onFrame });
-      setupSlider();
-      setupButtons();
+      setupButtons(setupSlider());
     </script>
   </body>
   </html>
