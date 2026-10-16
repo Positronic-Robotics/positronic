@@ -1,8 +1,11 @@
 import json
+import re
 
 import pos3
 import pytest
 
+from positronic.cli import _internal_main
+from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.eval.timing_report import (
     WallWindow,
     _build_report,
@@ -294,9 +297,10 @@ def test_telemetry_with_neither_a_pass_nor_an_episode_names_what_is_missing(tmp_
     telemetry_dir.mkdir()
     _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_RESET, 0, 5, 'reset0')])
 
-    with pytest.raises(ValueError, match=f'no closed `{SPAN_EVAL_PASS}` span and no `{SPAN_EPISODE}` span') as exc:
+    with pytest.raises(CommandFailed, match=f'no closed `{SPAN_EVAL_PASS}` span and no `{SPAN_EPISODE}` span') as exc:
         _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
     assert '--timing' not in str(exc.value)
+    assert exc.value.fault is Fault.USAGE
 
 
 def test_render_names_the_episode_window_it_reduced_over(tmp_path):
@@ -680,8 +684,9 @@ def test_parse_dmon_reads_each_metric_on_its_own(tmp_path):
 def test_parse_dmon_fails_loudly_without_fb(tmp_path):
     log = tmp_path / 'dmon.log'
     log.write_text('# gpu    sm\n#  Idx     %\n    0    50\n')
-    with pytest.raises(ValueError, match='fb'):
+    with pytest.raises(CommandFailed, match='fb') as exc:
         _parse_dmon(log)
+    assert exc.value.fault is Fault.USAGE
 
 
 def test_a_tilde_run_dir_and_dmon_log_resolve_against_home(tmp_path, monkeypatch):
@@ -712,16 +717,87 @@ def test_a_remote_run_dir_reaches_pos3_verbatim(tmp_path, monkeypatch):
 
 
 def test_a_run_dir_holding_no_telemetry_directory_names_it(tmp_path):
-    with pytest.raises(ValueError, match='no telemetry directory') as excinfo:
+    with pytest.raises(CommandFailed, match='no telemetry directory') as excinfo:
         timing_report(run_dir=str(tmp_path))
     assert str(tmp_path / TELEMETRY_SUBDIR) in str(excinfo.value)
+    assert excinfo.value.fault is Fault.USAGE
 
 
 def test_a_telemetry_directory_holding_no_spans_is_not_reported_as_untimed(tmp_path):
     """The sidecar directory exists, so the run was timed — what is missing is its flushed spans."""
     (tmp_path / TELEMETRY_SUBDIR).mkdir()
-    with pytest.raises(ValueError, match='carries no spans'):
+    with pytest.raises(CommandFailed, match='carries no spans') as exc:
         timing_report(run_dir=str(tmp_path))
+    assert exc.value.fault is Fault.USAGE
+
+
+def test_positronic_exits_with_the_usage_status_for_a_directory_that_is_no_run(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr('sys.argv', ['positronic', 'eval', 'timing-report', f'--run_dir={tmp_path}'])
+
+    with pytest.raises(SystemExit) as exit_info:
+        _internal_main()
+
+    assert exit_info.value.code == Fault.USAGE
+    assert 'no telemetry directory' in capsys.readouterr().err
+
+
+def test_positronic_exits_with_the_usage_status_for_a_gpu_log_it_cannot_read(tmp_path, monkeypatch, capsys):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    missing = tmp_path / 'dmon.log'
+    monkeypatch.setattr(
+        'sys.argv', ['positronic', 'eval', 'timing-report', f'--run_dir={tmp_path}', f'--gpu_policy_log={missing}']
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        _internal_main()
+
+    assert exit_info.value.code == Fault.USAGE
+    assert str(missing) in capsys.readouterr().err
+
+
+def test_a_gpu_log_that_is_not_text_is_a_usage_fault_naming_it(tmp_path):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    log = tmp_path / 'dmon.log'
+    log.write_bytes(b'# gpu sm fb\n\xff\xfe\n')
+
+    with pytest.raises(CommandFailed, match=re.escape(str(log))) as exc:
+        timing_report(run_dir=str(tmp_path), gpu_policy_log=str(log))
+
+    assert exc.value.fault is Fault.USAGE
+
+
+@pytest.mark.parametrize('suffix', [SPANS_SUFFIX, STATS_SUFFIX], ids=['spans', 'stats'])
+def test_a_sidecar_it_cannot_open_is_a_usage_fault_naming_it(tmp_path, suffix):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    unreadable = tmp_path / TELEMETRY_SUBDIR / f'unreadable{suffix}'
+    unreadable.mkdir()
+
+    with pytest.raises(CommandFailed, match=re.escape(str(unreadable))) as exc:
+        timing_report(run_dir=str(tmp_path))
+
+    assert exc.value.fault is Fault.USAGE
+
+
+@pytest.mark.parametrize('argument', ['run_dir', 'gpu_policy_log'])
+def test_a_home_directory_this_machine_does_not_have_is_a_usage_fault_naming_it(tmp_path, argument):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    paths = {'run_dir': str(tmp_path), 'gpu_policy_log': None, argument: '~no-such-user-on-this-box/x'}
+
+    with pytest.raises(CommandFailed, match='~no-such-user-on-this-box/x') as exc:
+        timing_report(**paths)
+
+    assert exc.value.fault is Fault.USAGE
+
+
+def test_a_summary_it_cannot_write_is_a_usage_fault_naming_it(tmp_path):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    summary = tmp_path / 'timing_summary.json'
+    summary.mkdir()
+
+    with pytest.raises(CommandFailed, match=re.escape(str(summary))) as exc:
+        timing_report(run_dir=str(tmp_path))
+
+    assert exc.value.fault is Fault.USAGE
 
 
 def _waypoint_fixture(telemetry_dir):

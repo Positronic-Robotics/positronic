@@ -4,16 +4,40 @@ The gateway plumbing every command shares — the key, the URL, a refusal — is
 commands that require a key.
 """
 
+import json
+
+import httpx
 import pytest
 from platform_client import routes
+from platform_client.catalog import EvalListResponse, EvalSummary, TaskListResponse, TaskSummary
+from platform_client.client import PlatformClient
+from platform_client.enums import ErrorCode, SubmissionStatus
+from platform_client.ids import SubmissionId
+from platform_client.requests import CancelRequest
+from platform_client.responses import (
+    BlockedSubmissionView,
+    CancelResponse,
+    EpisodeCounts,
+    PendingSubmissionView,
+    SubmissionListResponse,
+    SubmissionListRow,
+    SubmissionView,
+)
+from platform_client.tasks import TaskRef
+from positronic_evals.evals import EvalRef
+from pydantic import TypeAdapter
 
+from positronic.cli import _internal_main
 from positronic.cli.account import gateway as gateway_module
-from positronic.cli.conftest import AT, ID
-from positronic.cli.eval.submissions import cancel, catalog, list_submissions, status
+from positronic.cli.account.gateway import CommandFailed, Fault
+from positronic.cli.conftest import BASE, ID, SUBMISSION, USER, WHEN, refusal
+from positronic.cli.eval.submissions import CatalogView, cancel, catalog, list_submissions, status
+
+PENDING = PendingSubmissionView(id=SUBMISSION, received_at=WHEN, queued_at=WHEN, queue_position=3)
 
 
 def test_status_prints_the_fields_of_the_variant_it_got(platform, run_command, capsys):
-    platform.answer({'id': ID, 'status': 'pending', 'received_at': AT, 'queued_at': AT, 'queue_position': 3})
+    platform.answer(PENDING)
 
     run_command(status, id=ID)
 
@@ -26,12 +50,18 @@ def test_status_prints_the_fields_of_the_variant_it_got(platform, run_command, c
     assert [line for line in out[1:] if line.startswith(('  id:', '  status:'))] == []
 
 
-NO_SUBMISSION = ({'error': {'code': 'not_found', 'message': 'no such submission'}}, 404)
-ROW = {'id': ID, 'user_id': 'a0', 'status': 'running', 'received_at': AT}
+NO_SUBMISSION = (refusal(ErrorCode.not_found, 'no such submission'), 404)
+
+
+def _row(id: str = ID, **fields) -> SubmissionListRow:
+    """One running row of `submissions.list`, with `fields` added."""
+    return SubmissionListRow(
+        id=SubmissionId.parse(id), user_id=USER, status=SubmissionStatus.running, received_at=WHEN, **fields
+    )
 
 
 def test_status_prints_what_a_blocked_run_waits_on(platform, run_command, capsys):
-    platform.answer({'id': ID, 'status': 'blocked', 'reason': 'the rig is not ready'})
+    platform.answer(BlockedSubmissionView(id=SUBMISSION, reason='the rig is not ready'))
 
     run_command(status, id=ID)
 
@@ -42,12 +72,14 @@ def test_status_prints_what_a_blocked_run_waits_on(platform, run_command, capsys
 
 def test_list_prints_one_labelled_line_per_run(platform, run_command, capsys):
     # One row of each kind: the platform-run row and the rig row that carries a count.
-    platform.answer({
-        'submissions': [
-            {**ROW, 'alias': 'demo', 'eval': 'fake.smoke'},
-            {**ROW, 'id': '1a', 'episodes': {'total': 20, 'done': 0, 'outstanding': 20}},
-        ]
-    })
+    platform.answer(
+        SubmissionListResponse(
+            submissions=[
+                _row(alias='demo', eval=EvalRef('fake.smoke')),
+                _row('1a', episodes=EpisodeCounts(total=20, done=0, outstanding=20)),
+            ]
+        )
+    )
 
     run_command(list_submissions)
 
@@ -59,11 +91,12 @@ def test_list_prints_one_labelled_line_per_run(platform, run_command, capsys):
     ]
 
 
+FIRST_PAGE = SubmissionListResponse(submissions=[_row('1a')], next=SubmissionId.parse('1a'))
+LAST_PAGE = SubmissionListResponse(submissions=[_row('2b')])
+
+
 def test_list_reads_every_page(platform, run_command, capsys):
-    platform.answer_in_turn(
-        routes.SUBMISSIONS_LIST,
-        [({'submissions': [{**ROW, 'id': '1a'}], 'next': '1a'}, 200), ({'submissions': [{**ROW, 'id': '2b'}]}, 200)],
-    )
+    platform.answer_in_turn(routes.SUBMISSIONS_LIST, [(FIRST_PAGE, 200), (LAST_PAGE, 200)])
 
     run_command(list_submissions)
 
@@ -76,49 +109,67 @@ def test_list_reads_every_page(platform, run_command, capsys):
 
 
 def test_a_response_the_client_cannot_read_is_a_refusal_without_the_body(platform, run_command):
+    # rules-allow: unchecked-field-name — the fixture sends bad wire data on purpose: the name is the wire contract
     platform.answer_by_route({routes.SUBMISSIONS_LIST: ({'submissions': 'not a list', 'secret': 'x'}, 200)})
-    with pytest.raises(SystemExit, match='cannot read: list_type') as caught:
+    with pytest.raises(CommandFailed, match='cannot read: list_type') as caught:
         run_command(list_submissions)
     assert 'secret' not in str(caught.value)
+    assert caught.value.fault is Fault.PLATFORM
+
+
+EVAL = EvalSummary(id=EvalRef('fake.smoke'), embodiment='franka', tasks=['a'], composable=True)
+TASK = TaskSummary(id=TaskRef('eight-spoons-into-grey-tote'), embodiment='franka', task='spoons')
+EVALS_ANSWER = (EvalListResponse(evals=[EVAL]), 200)
+TASKS_ANSWER = (TaskListResponse(tasks=[TASK]), 200)
+NO_GRANT = (refusal(ErrorCode.forbidden, 'no customer grant'), 403)
 
 
 def test_catalog_prints_the_evals_where_the_key_has_no_grant_for_the_tasks(platform, run_command, capsys):
-    platform.answer_by_route({
-        routes.CATALOG_EVALS: (
-            {'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': ['a'], 'composable': True}]},
-            200,
-        ),
-        routes.CATALOG_TASKS: ({'error': {'code': 'forbidden', 'message': 'no customer grant'}}, 403),
-    })
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: NO_GRANT})
 
     run_command(catalog)
 
     out, err = capsys.readouterr()
-    assert '"id": "fake.smoke"' in out
+    assert EvalListResponse.model_validate_json(out).evals == [EVAL]
     assert err.strip() == 'tasks: forbidden: no customer grant'
 
 
 def test_catalog_prints_what_the_key_may_name(platform, run_command, capsys):
-    platform.answer({
-        'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': ['a'], 'composable': True}],
-        'tasks': [{'id': 'eight-spoons-into-grey-tote', 'embodiment': 'franka', 'task': 'spoons'}],
-    })
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: TASKS_ANSWER})
 
     run_command(catalog)
 
     assert platform.request.url.path == routes.CATALOG_TASKS
     out = capsys.readouterr().out
-    assert '"id": "fake.smoke"' in out
-    assert '"id": "eight-spoons-into-grey-tote"' in out
+    assert EVAL.id in out
+    assert TASK.id in out
+
+
+def test_catalog_json_prints_the_evals_and_the_tasks_as_one_value(platform, run_command, capsys):
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: TASKS_ANSWER})
+
+    run_command(catalog, json=True)
+
+    assert CatalogView.model_validate_json(capsys.readouterr().out) == CatalogView(evals=[EVAL], tasks=[TASK])
+
+
+def test_catalog_json_prints_null_tasks_where_the_key_has_no_grant_for_them(platform, run_command, capsys):
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: NO_GRANT})
+
+    run_command(catalog, json=True)
+
+    out, err = capsys.readouterr()
+    assert CatalogView.model_validate_json(out) == CatalogView(evals=[EVAL], tasks=None)
+    assert err.strip() == 'tasks: forbidden: no customer grant'
 
 
 def test_cancel_reports_whether_the_quota_came_back(platform, run_command, capsys):
-    platform.answer({'status': 'cancelled', 'refunded': True})
+    platform.answer(CancelResponse(status=SubmissionStatus.cancelled, refunded=True))
 
     run_command(cancel, id=ID)
 
     assert platform.request.url.path == routes.SUBMISSIONS_CANCEL
-    assert platform.body == {'id': ID}
+    assert CancelRequest.model_validate(platform.body) == CancelRequest(id=SUBMISSION)
     assert 'cancelled, quota refunded' in capsys.readouterr().out
 
 
@@ -130,7 +181,7 @@ def test_cancel_reports_a_run_the_platform_does_not_hold(platform, run_command):
 
 
 def test_a_refusal_that_is_not_a_missing_record_is_not_read_as_the_other_kind(platform, run_command):
-    platform.answer({'error': {'code': 'forbidden', 'message': 'no grant'}}, status=403)
+    platform.answer(refusal(ErrorCode.forbidden, 'no grant'), status=403)
 
     with pytest.raises(SystemExit, match='forbidden'):
         run_command(status, id=ID)
@@ -147,7 +198,7 @@ def test_an_id_that_is_not_hexadecimal_is_refused(platform, run_command):
 
 
 def test_a_refusal_by_the_platform_exits_with_its_message(platform, run_command):
-    platform.answer({'error': {'code': 'quota_exceeded', 'message': 'no submissions left today'}}, status=429)
+    platform.answer(refusal(ErrorCode.quota_exceeded, 'no submissions left today'), status=429)
 
     with pytest.raises(SystemExit) as exit_info:
         run_command(list_submissions)
@@ -158,14 +209,161 @@ def test_a_refusal_by_the_platform_exits_with_its_message(platform, run_command)
 def test_a_command_needing_a_key_names_the_variable_that_holds_it(platform, run_command, monkeypatch):
     monkeypatch.delenv(gateway_module.API_KEY_ENV)
 
-    with pytest.raises(SystemExit, match=gateway_module.API_KEY_ENV):
+    with pytest.raises(CommandFailed, match=gateway_module.API_KEY_ENV) as exit_info:
         run_command(list_submissions)
+
+    assert exit_info.value.fault is Fault.CALLER
+
+
+@pytest.mark.parametrize(
+    ('status_code', 'code', 'fault'),
+    [
+        (400, ErrorCode.bad_request, Fault.CALLER),
+        (401, ErrorCode.unauthorized, Fault.CALLER),
+        (404, ErrorCode.not_found, Fault.CALLER),
+        (429, ErrorCode.quota_exceeded, Fault.CALLER),
+        (500, ErrorCode.internal_error, Fault.PLATFORM),
+        (503, ErrorCode.upstream_unavailable, Fault.PLATFORM),
+        # Each half decides alone: a 5xx with a caller's code, and a 4xx with the platform's own.
+        (503, ErrorCode.bad_request, Fault.PLATFORM),
+        (409, ErrorCode.internal_error, Fault.PLATFORM),
+    ],
+)
+def test_a_refusal_exits_with_the_fault_its_status_and_code_name(platform, run_command, status_code, code, fault):
+    platform.answer(refusal(code), status=status_code)
+
+    with pytest.raises(CommandFailed) as exit_info:
+        run_command(status, id=ID)
+
+    assert exit_info.value.fault is fault
+
+
+def test_a_failure_without_an_envelope_is_the_platforms_fault(platform, run_command):
+    # A proxy in front of the platform answers in its own shape.
+    platform.answer('<html>502 Bad Gateway</html>', status=502)
+
+    with pytest.raises(CommandFailed) as exit_info:
+        run_command(status, id=ID)
+
+    assert exit_info.value.fault is Fault.PLATFORM
+
+
+@pytest.mark.parametrize('as_json', [False, True], ids=['text', 'json'])
+def test_a_failure_without_an_envelope_prints_no_body_and_no_envelope(platform, run_command, capsys, as_json):
+    # A proxy's whole page is not a detail of a platform refusal, and no platform envelope exists to print.
+    platform.answer('<html>502 Bad Gateway</html>', status=502)
+
+    with pytest.raises(CommandFailed) as exit_info:
+        run_command(status, id=ID, json=as_json)
+
+    assert str(exit_info.value) == 'internal_error: unparseable error response (HTTP 502)'
+    assert exit_info.value.fault is Fault.PLATFORM
+    assert capsys.readouterr().out == ''
+
+
+@pytest.mark.parametrize(
+    'no_answer', [httpx.ConnectError('connection refused'), httpx.ReadTimeout('timed out')], ids=['refused', 'timeout']
+)
+def test_a_platform_that_does_not_answer_is_the_platforms_fault(platform, run_command, no_answer):
+    platform.no_answer = no_answer
+
+    with pytest.raises(CommandFailed, match=f'{BASE} did not answer') as exit_info:
+        run_command(status, id=ID)
+
+    assert exit_info.value.fault is Fault.PLATFORM
+
+
+def test_an_argument_refused_before_any_call_is_a_usage_fault(platform, run_command):
+    with pytest.raises(CommandFailed) as exit_info:
+        run_command(status, id='zz')
+
+    assert exit_info.value.fault is Fault.USAGE
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize(
+    ('argv', 'answer', 'fault', 'printed'),
+    [
+        (['--id=zz'], None, Fault.USAGE, 'not an id'),
+        ([f'--id={ID}'], NO_SUBMISSION, Fault.CALLER, 'no such submission'),
+        ([f'--id={ID}'], (refusal(ErrorCode.internal_error, 'boom'), 500), Fault.PLATFORM, 'boom'),
+    ],
+    ids=['usage', 'caller', 'platform'],
+)
+def test_positronic_exits_with_the_fault_as_its_status(platform, monkeypatch, capsys, argv, answer, fault, printed):
+    if answer is not None:
+        platform.answer(answer[0], status=answer[1])
+    monkeypatch.setattr('sys.argv', ['positronic', 'eval', 'status', *argv])
+
+    with pytest.raises(SystemExit) as exit_info:
+        _internal_main()
+
+    assert exit_info.value.code == fault
+    assert printed in capsys.readouterr().err
+
+
+UNPARSEABLE_URL = 'http://gateway:bad'
+
+
+@pytest.mark.parametrize('named_in', ['argument', 'environment'])
+def test_a_platform_url_that_does_not_parse_exits_with_the_usage_status(platform, monkeypatch, capsys, named_in):
+    # The real client parses the URL before any call, so the stub transport stays out of it.
+    monkeypatch.setattr(gateway_module, 'PlatformClient', PlatformClient)
+    argv = ['positronic', 'eval', 'status', f'--id={ID}']
+    if named_in == 'argument':
+        argv.append(f'--platform_url={UNPARSEABLE_URL}')
+    else:
+        monkeypatch.setenv(gateway_module.API_URL_ENV, UNPARSEABLE_URL)
+    monkeypatch.setattr('sys.argv', argv)
+
+    with pytest.raises(SystemExit) as exit_info:
+        _internal_main()
+
+    assert exit_info.value.code == Fault.USAGE
+    assert UNPARSEABLE_URL in capsys.readouterr().err
+
+
+def test_status_json_prints_the_view_the_platform_answered(platform, run_command, capsys):
+    platform.answer(PENDING)
+
+    run_command(status, id=ID, json=True)
+
+    assert TypeAdapter(SubmissionView).validate_json(capsys.readouterr().out) == PENDING
+
+
+def test_list_json_prints_every_page_as_one(platform, run_command, capsys):
+    platform.answer_in_turn(routes.SUBMISSIONS_LIST, [(FIRST_PAGE, 200), (LAST_PAGE, 200)])
+
+    run_command(list_submissions, json=True)
+
+    page = SubmissionListResponse.model_validate_json(capsys.readouterr().out)
+    assert [row.id for row in page.submissions] == [SubmissionId.parse('1a'), SubmissionId.parse('2b')]
+    assert page.next is None
+
+
+@pytest.mark.parametrize(
+    ('command', 'args'),
+    [(status, {'id': ID}), (list_submissions, {}), (catalog, {})],
+    ids=['status', 'list', 'catalog'],
+)
+@pytest.mark.parametrize(('status_code', 'fault'), [(404, Fault.CALLER), (503, Fault.PLATFORM)])
+def test_a_refusal_under_json_prints_its_envelope(platform, run_command, capsys, command, args, status_code, fault):
+    envelope = refusal(ErrorCode.not_found, eval='none')
+    platform.answer(envelope, status=status_code)
+
+    with pytest.raises(SystemExit) as exit_info:
+        run_command(command, json=True, **args)
+
+    out, err = capsys.readouterr()
+    assert json.loads(out) == envelope
+    assert err == ''
+    assert exit_info.value.code == fault
 
 
 def test_an_unconfigured_url_leaves_the_client_on_its_default_platform(platform, run_command, monkeypatch):
     # A user should never have to know a URL: with nothing set, the client reaches the platform.
     monkeypatch.delenv(gateway_module.API_URL_ENV)
-    platform.answer({'submissions': []})
+    platform.answer(SubmissionListResponse())
 
     run_command(list_submissions)
 
@@ -173,7 +371,7 @@ def test_an_unconfigured_url_leaves_the_client_on_its_default_platform(platform,
 
 
 def test_the_platform_url_argument_overrides_the_environment(platform, run_command):
-    platform.answer({'submissions': []})
+    platform.answer(SubmissionListResponse())
 
     run_command(list_submissions, platform_url='http://other.test')
 
