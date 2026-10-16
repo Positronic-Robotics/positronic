@@ -82,6 +82,19 @@ def test_a_config_directory_that_cannot_be_named_stops_before_a_key_is_minted(pl
     assert platform.seen is None
 
 
+def test_a_config_directory_under_a_home_this_machine_does_not_have_names_the_variable(
+    platform, run_command, monkeypatch
+):
+    monkeypatch.setenv(config_module.CONFIG_DIR_ENV, '~no-such-user-on-this-box/config')
+
+    with pytest.raises(SystemExit) as exit_info:
+        run_command(register, platform_url='http://other.test')
+
+    assert config_module.CONFIG_DIR_ENV in str(exit_info.value)
+    assert '~no-such-user-on-this-box/config' in str(exit_info.value)
+    assert platform.seen is None
+
+
 def test_a_registration_naming_its_platform_reads_no_key_and_no_record(platform, run_command, monkeypatch):
     # A blank key variable and a file that is no record each end a command that needs a key; a
     # registration needs none, and names its platform, so neither is read.

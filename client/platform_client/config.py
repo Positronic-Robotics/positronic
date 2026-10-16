@@ -64,7 +64,13 @@ def config_dir(env: Mapping[str, str]) -> Path:
     named = env.get(CONFIG_DIR_ENV)
     if named is not None and not named.strip():
         raise SystemExit(f'{CONFIG_DIR_ENV} is set to an empty value: name a directory, or unset it')
-    return Path(named or DEFAULT_CONFIG_DIR).expanduser()
+    directory = Path(named or DEFAULT_CONFIG_DIR)
+    try:
+        return directory.expanduser()
+    except RuntimeError as exc:  # `~name` for a user this machine does not have
+        raise SystemExit(
+            f'the config directory {directory} is under no home directory on this machine: set {CONFIG_DIR_ENV}'
+        ) from exc
 
 
 def read_config(directory: Path) -> Config | None:
