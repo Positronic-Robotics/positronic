@@ -47,7 +47,9 @@ teleop = cfn.Config(
 )
 
 # The views of `cfg.eval.sim.positronic.stack_cubes_collect` that a person teleoperates with, the most useful first.
-teleop_collect = teleop.override(cameras=('image.agent_view', 'image.top_view', 'image.handcam_right'))
+teleop_collect = teleop.override(
+    cameras=('image.exterior', 'image.wrist_upright', 'image.handcam_right', 'image.wrist')
+)
 
 
 @cfn.config()
