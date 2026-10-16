@@ -14,7 +14,7 @@
 #   NEBIUS_PLATFORM  default gpu-l40s-a; cpu-d3 gives a VM with no GPU
 #   NEBIUS_PRESET    default 1gpu-8vcpu-32gb; 8vcpu-32gb on cpu-d3
 #   NEBIUS_DISK_GIB  size of the boot disk, default 200
-#   NEBIUS_SSH_KEY   private key, default ~/.ssh/id_ed25519; the VM gets the public key at <key>.pub
+#   NEBIUS_SSH_KEY   private key, default ~/.ssh/id_ed25519. A key with a passphrase must be in ssh-agent.
 set -euo pipefail
 
 name="${NEBIUS_VM_NAME:-policy-image-vm}"
@@ -47,13 +47,32 @@ vm_address() {
   vm_field '{.status.network_interfaces[0].public_ip_address}' | sed -n 's/.*"address": *"\([0-9.]*\)\/.*/\1/p'
 }
 
+# Print the public key of $ssh_key as `<type> <key>`, with no comment. The ssh in `create` cannot ask for a
+# passphrase, so the key must be readable without one, or be in the agent.
+public_key() {
+  if key=$(ssh-keygen -y -P "" -f "$ssh_key" 2>/dev/null); then
+    cut -d' ' -f1,2 <<<"$key"
+    return
+  fi
+  if [ ! -f "$ssh_key" ] && [ ! -f "$ssh_key.pub" ]; then
+    echo "No key at $ssh_key. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
+    return 1
+  fi
+  blob=$(cut -d' ' -f2 "$ssh_key.pub" 2>/dev/null) || blob=""
+  if [ -z "$blob" ] || ! ssh-add -L 2>/dev/null | cut -d' ' -f2 | grep -qxF "$blob"; then
+    echo "ssh cannot use $ssh_key without a passphrase. Run: ssh-add $(printf %q "$ssh_key")" >&2
+    return 1
+  fi
+  cut -d' ' -f1,2 "$ssh_key.pub"
+}
+
 # Create the VM. When Nebius does not start it, delete it and stop.
 create_vm() {
   subnet=$(nebius vpc subnet list --parent-id "$project" --format jsonpath='{.items[0].metadata.id}')
   # The image has the user `ubuntu` already, and cloud-init does not change the groups of a user that exists.
   user_data="#cloud-config
 ssh_authorized_keys:
-  - \"$(cat "$ssh_key.pub")\"
+  - \"$pub_key\"
 runcmd:
   - [usermod, -aG, docker, ubuntu]
   - [su, -l, ubuntu, -c, 'curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/install.sh && sh /tmp/uv-install.sh']"
@@ -81,16 +100,7 @@ runcmd:
 }
 
 create() {
-  if [ ! -f "$ssh_key.pub" ]; then
-    echo "No public key at $ssh_key.pub. Run ssh-keygen -t ed25519, or set NEBIUS_SSH_KEY." >&2
-    exit 1
-  fi
-  # The ssh below cannot ask for a passphrase. Check the key before the VM costs money.
-  if ! ssh-keygen -y -P "" -f "$ssh_key" >/dev/null 2>&1 &&
-    ! ssh-add -L 2>/dev/null | grep -qF "$(cut -d' ' -f2 "$ssh_key.pub")"; then
-    echo "ssh cannot use $ssh_key without a passphrase. Run: ssh-add $(printf %q "$ssh_key")" >&2
-    exit 1
-  fi
+  pub_key=$(public_key) || exit 1
   state=$(vm_field '{.status.state}')
   if [ -n "$state" ] && [ "$state" != RUNNING ] && [ "$state" != STARTING ] && [ "$state" != CREATING ]; then
     echo "The VM $name exists, and its state is $state. Delete it with: $delete_cmd" >&2
