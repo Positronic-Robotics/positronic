@@ -108,18 +108,17 @@ class DurationEstimate(ABC):
     def run(self) -> DurationEstimateRun:
         """Create an estimator with independent delay history for one episode."""
 
-    @abstractmethod
     def to_spec(self) -> float | dict[str, Any]:
         """Serialize configuration without the observed delays."""
+        raise NotImplementedError(f'{type(self).__name__} has no wire spec')
 
     @staticmethod
     def from_spec(spec: float | Mapping[str, Any]) -> 'DurationEstimate':
         if isinstance(spec, Mapping):
-            return DelayEstimate(
-                DelayEstimate.Statistic(spec[DelayEstimate.STATISTIC_ARG]),
-                spec[DelayEstimate.LAST_ARG],
-                spec[DelayEstimate.MAX_SEC_ARG],
-            )
+            return DelayEstimate(**{
+                **spec,
+                DelayEstimate.STATISTIC_ARG: DelayEstimate.Statistic(spec[DelayEstimate.STATISTIC_ARG]),
+            })
         return ConstantDuration(spec)
 
 

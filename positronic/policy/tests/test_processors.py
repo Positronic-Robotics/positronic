@@ -606,9 +606,6 @@ class PeakDuration(DurationEstimate):
     def run(self):
         return self._Run()
 
-    def to_spec(self):
-        raise NotImplementedError('Local estimator has no wire format')
-
 
 @pytest.mark.parametrize('estimate_factory', [DelayEstimate.mean, PeakDuration])
 @pytest.mark.parametrize('rtc', [False, True])
@@ -981,6 +978,18 @@ def test_estimator_specs_roundtrip_configuration_without_history(estimate):
     assert type(restored) is type(estimate)
     assert restored.to_spec() == declared
     assert restored.run().update(0.1) == pytest.approx(0.25 if isinstance(estimate, ConstantDuration) else 0.1)
+
+
+def test_duration_specs_reject_unknown_fields():
+    declared = {**DelayEstimate.mean().to_spec(), 'unexpected': 0.2}
+    with pytest.raises(TypeError, match='unexpected'):
+        DurationEstimate.from_spec(declared)
+
+
+def test_local_duration_strategies_refuse_wire_serialization():
+    schedule = ChunkedSchedule(fps=10, inference_lead=PeakDuration())
+    with pytest.raises(NotImplementedError, match='PeakDuration has no wire spec'):
+        schedule.to_spec()
 
 
 def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answer(execution, monkeypatch):
