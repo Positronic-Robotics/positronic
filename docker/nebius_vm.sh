@@ -14,6 +14,7 @@
 #   NEBIUS_PLATFORM  default gpu-l40s-a; cpu-d3 gives a VM with no GPU
 #   NEBIUS_PRESET    default 1gpu-8vcpu-32gb; 8vcpu-32gb on cpu-d3
 #   NEBIUS_DISK_GIB  size of the boot disk, default 200
+#   NEBIUS_SUBNET_ID subnet of the VM, default the first subnet of the project
 #   NEBIUS_SSH_KEY   private key, default ~/.ssh/id_ed25519. A key with a passphrase must be in ssh-agent.
 set -euo pipefail
 
@@ -68,7 +69,10 @@ public_key() {
 
 # Create the VM with the public key $1. When Nebius does not start the VM, delete it and stop.
 create_vm() {
-  subnet=$(nebius vpc subnet list --parent-id "$project" --format jsonpath='{.items[0].metadata.id}')
+  subnet="${NEBIUS_SUBNET_ID:-}"
+  if [ -z "$subnet" ]; then
+    subnet=$(nebius vpc subnet list --parent-id "$project" --format jsonpath='{.items[0].metadata.id}')
+  fi
   # The image has the user `ubuntu` already, and cloud-init does not change the groups of a user that exists.
   user_data="#cloud-config
 ssh_authorized_keys:
@@ -78,7 +82,7 @@ runcmd:
   - [su, -l, ubuntu, -c, 'curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/install.sh && sh /tmp/uv-install.sh']"
   # A label that only this run knows. After a failed create, it shows that the VM is from this run.
   run_label=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
-  echo "Creating the VM $name: $platform $preset, $disk_gib GiB disk."
+  echo "Creating the VM $name: $platform $preset, $disk_gib GiB disk, subnet $subnet."
   if nebius compute instance create --parent-id "$project" --name "$name" --labels "nebius-vm-run=$run_label" \
     --resources-platform "$platform" --resources-preset "$preset" \
     --boot-disk-attach-mode read_write --boot-disk-managed-disk-name "$name-boot" \
@@ -126,7 +130,7 @@ create() {
   # ssh exits with 255 when it cannot connect, and `timeout` on the VM exits with 124. Any other failure comes
   # from cloud-init. The `timeout` runs on the VM, because macOS has no `timeout`.
   ssh_opts=(-i "$ssh_key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
-    -o StrictHostKeyChecking=accept-new)
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=accept-new)
   while :; do
     status=0
     ssh "${ssh_opts[@]}" "ubuntu@$ip" timeout $((deadline > SECONDS ? deadline - SECONDS : 1)) \
