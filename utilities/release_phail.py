@@ -27,15 +27,13 @@ from collections import defaultdict
 import configuronic as cfn
 import numpy as np
 import pos3
+from eval_vocabulary.timeline import recording_timeline
 
 from pimm.logging import init_logging
-from pimm.time import RECEIVED_WORLD
 from positronic.cfg import analysis as analysis_cfg
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.utilities.migrate_remote import migrate_dataset
-from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.recording import HARNESS_WORLD
 from positronic.eval import keys as eval_keys
 from positronic.utils import PUBLIC
 from positronic.utils.checkpoints import get_latest_checkpoint
@@ -101,9 +99,7 @@ def _check_dest_empty(dest: str, profile=None):
 def _duration(ep: Episode) -> float:
     if duration := ep.get(eval_keys.DURATION):
         return duration
-    timelines = ep.timelines
-    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    timeline = recording_timeline(ep.timelines)
     first, last = ep.bounds(timeline)
     return (last - first) / 1e9
 

@@ -21,6 +21,7 @@ import rerun as rr
 import rerun.blueprint as rrb
 import rerun_bindings
 from av.video.stream import VideoStream
+from eval_vocabulary.timeline import RECORDING_TIMELINE_ORDER
 from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
 from rerun.urdf import UrdfTree
 
@@ -485,9 +486,7 @@ def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Vertical:
 
 # In preference order for playback and rate limiting. Unrecognized timelines retain integer units.
 _DURATION_TIMELINES = (
-    HARNESS_WORLD,
-    RECEIVED_WORLD,
-    RECORDED_TIME,
+    *RECORDING_TIMELINE_ORDER,
     EMITTED_WORLD,
     HARNESS_WALL,
     RECEIVED_WALL,

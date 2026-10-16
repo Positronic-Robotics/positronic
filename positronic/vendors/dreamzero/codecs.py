@@ -5,17 +5,15 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
+from eval_vocabulary.timeline import recording_timeline
 from PIL import Image as PilImage
 
-from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.cfg import codecs, layers
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
-from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
 from positronic.policy.codecs import (
@@ -178,9 +176,7 @@ class DreamZeroActionCodec(Codec):
 
     def _encode_action(self, episode: Episode):
         joints, grip = episode[self._tgt_joints_key], episode[self._tgt_grip_key]
-        timelines = joints.timelines + grip.timelines
-        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+        timeline = recording_timeline(joints.timelines + grip.timelines)
         return transforms.concat(joints, grip, timelines=(timeline,), dtype=np.float32)
 
     def _decode_single(self, data: dict) -> dict:
