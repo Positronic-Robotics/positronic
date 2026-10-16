@@ -31,12 +31,18 @@ auth_header=Authorization
 keepalive_path=/api/v1/keepalive
 alive_key=alive_seconds
 token=test
+auth_value="Bearer $token"
 # The keepalive answer as `positronic_wire.websocket` reads it: a JSON object whose $alive_key is an integer or
 # null. A 200 with any other body fails the run on the platform.
 keepalive_answer="^[[:space:]]*\\{.*\"$alive_key\"[[:space:]]*:[[:space:]]*(null|-?[0-9]+)[[:space:]]*[,}]"
 
 if [ "$(uname -s)" != Linux ] || [ "$(docker version -f '{{.Server.Arch}}')" != amd64 ]; then
   echo "Run this test with Docker on an amd64 Linux machine. Docker on another machine emulates or hides it." >&2
+  exit 1
+fi
+# Rootless Docker keeps the container's address inside its own namespace, and an internal network publishes no port.
+if docker info -f '{{json .SecurityOptions}}' | grep -q 'name=rootless'; then
+  echo "This Docker is rootless, and the host cannot reach the container. Run the test with the system Docker." >&2
   exit 1
 fi
 docker network inspect "$network" >/dev/null 2>&1 || docker network create --internal "$network" >/dev/null
@@ -74,7 +80,7 @@ while :; do
   fi
   # curl exits with 7 on a closed port, 28 on no answer in 5 s, and 52 or 56 on a dropped connection.
   status=0
-  code=$(curl -sS --noproxy '*' -o "$body" -w '%{http_code}' -m 5 -X POST -H "$auth_header: Bearer $token" \
+  code=$(curl -sS --noproxy '*' -o "$body" -w '%{http_code}' -m 5 -X POST -H "$auth_header: $auth_value" \
     "http://$ip:$port$keepalive_path" 2>"$curl_errors") || status=$?
   # These waits ignore the HTTP code, as a server can send its headers and then stop.
   if [ "$status" = 7 ] || [ "$status" = 28 ] || [ "$status" = 52 ] || [ "$status" = 56 ]; then
