@@ -67,8 +67,10 @@ ssh_authorized_keys:
 runcmd:
   - [usermod, -aG, docker, ubuntu]
   - [su, -l, ubuntu, -c, 'curl -LsSf https://astral.sh/uv/install.sh | sh']"
+    # A label that only this run knows. After a failed create, it shows that the VM is from this run.
+    run_label=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
     echo "Creating the VM $name: $platform $preset, $disk_gib GiB disk."
-    nebius compute instance create --parent-id "$project" --name "$name" \
+    nebius compute instance create --parent-id "$project" --name "$name" --labels "nebius-vm-run=$run_label" \
       --resources-platform "$platform" --resources-preset "$preset" \
       --boot-disk-attach-mode read_write --boot-disk-managed-disk-name "$name-boot" \
       --boot-disk-managed-disk-source-image-family-image-family ubuntu24.04-cuda12 \
@@ -76,9 +78,14 @@ runcmd:
       --network-interfaces \
         "[{\"name\":\"eth0\",\"subnet_id\":\"$subnet\",\"ip_address\":{},\"public_ip_address\":{}}]" \
       --cloud-init-user-data "$user_data" >/dev/null || {
-      # A VM that Nebius did not start stays in the project, stopped.
-      echo "Nebius did not start the VM. Deleting what it created." >&2
-      delete >&2
+      # A VM that Nebius did not start stays in the project, stopped. A VM with the name but not the label is
+      # from another run.
+      metadata=$(vm_field '{.metadata}')
+      if grep -q "$run_label" <<<"$metadata"; then
+        echo "Nebius did not start the VM. Deleting what it created." >&2
+        id=$(sed -n 's/.*"id":"\(computeinstance-[a-z0-9]*\)".*/\1/p' <<<"$metadata")
+        nebius compute instance delete --id "$id" >/dev/null
+      fi
       exit 1
     }
   fi
@@ -88,16 +95,21 @@ runcmd:
     [ "$SECONDS" -lt "$deadline" ] || { echo "The VM got no public address in 900 s." >&2; exit 1; }
     sleep 10
   done
-  # ssh exits with 255 when it cannot connect. Any other failure comes from cloud-init.
+  # ssh exits with 255 when it cannot connect, and `timeout` on the VM exits with 124. Any other failure comes
+  # from cloud-init. The `timeout` runs on the VM, because macOS has no `timeout`.
   ssh_opts=(-i "${ssh_key%.pub}" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
   while :; do
     status=0
-    ssh "${ssh_opts[@]}" "ubuntu@$ip" cloud-init status --wait >/dev/null 2>"$errors" || status=$?
+    ssh "${ssh_opts[@]}" "ubuntu@$ip" timeout $((deadline > SECONDS ? deadline - SECONDS : 1)) \
+      cloud-init status --wait >/dev/null 2>"$errors" || status=$?
     [ "$status" = 255 ] || break
     [ "$SECONDS" -lt "$deadline" ] || { cat "$errors" >&2; echo "No ssh to $ip in 900 s." >&2; exit 1; }
     sleep 10
   done
-  if [ "$status" != 0 ]; then
+  if [ "$status" = 124 ]; then
+    echo "The VM setup did not finish in 900 s." >&2
+    exit 1
+  elif [ "$status" != 0 ]; then
     echo "The VM setup failed. Read the log with: $ssh_cmd ubuntu@$ip sudo cat /var/log/cloud-init-output.log" >&2
     exit 1
   fi
