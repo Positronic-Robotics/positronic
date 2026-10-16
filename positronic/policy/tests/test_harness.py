@@ -1254,7 +1254,7 @@ def test_a_run_that_waits_before_its_first_yield_starts_its_time_limit_and_recor
     assert answer.result() == {eval_keys.TERMINATED: False}
 
 
-@pytest.mark.parametrize('arrives', ['during prepare', 'before the first yield'])
+@pytest.mark.parametrize('arrives', ['with the ask', 'during prepare', 'before the first yield'])
 def test_a_done_before_the_episode_starts_keeps_it_from_starting(episode_harness, arrives):
     h = episode_harness
 
@@ -1270,6 +1270,8 @@ def test_a_done_before_the_episode_starts_keeps_it_from_starting(episode_harness
     answer = h.caller(
         Rollout(Task('move', None, prepare_args={RESET: 'home'}), PressedWhileItGetsReady(), h.output_path)
     )
+    if arrives == 'with the ask':
+        h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
     if arrives == 'during prepare':
         h.done.emit({eval_keys.SUCCESS: True})

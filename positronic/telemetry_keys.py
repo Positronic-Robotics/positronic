@@ -21,7 +21,7 @@ from positronic.simulator.env_server.telemetry import SPAN_ENV_STEP as SPAN_ENV_
 
 SPAN_EVAL_PASS = 'eval.pass'
 SPAN_EPISODE = 'episode'
-# An episode span renamed when its policy run fails before its first yield. The report counts no such span.
+# An episode span renamed when the episode does not start.
 SPAN_EPISODE_NOT_STARTED = 'episode.not_started'
 SPAN_RESET = 'reset'
 SPAN_MATERIALIZE = 'materialize'

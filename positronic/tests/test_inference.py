@@ -361,12 +361,12 @@ def _phase(base: str) -> Phase | None:
     return status.run.phase if status else None
 
 
-@pytest.mark.parametrize('retry', [False, True])
-def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(retry):
+def test_a_verdict_sent_with_the_ask_keeps_the_episode_from_starting_and_the_next_ask_runs():
     policy = _IdlePolicy()
     embodiment = make_embodiment(simulated=True)
     harness = Harness(embodiment)
     answers = []
+    verdict = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True}
     with pimm.World(virtual_time=True) as world:
         caller = world.pair(harness.perform_task)
         done = world.pair(harness.done)
@@ -374,20 +374,17 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
 
         def script(clock):
             answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
-            done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
-            assert (yield from wait(lambda: policy.observations, clock))
-            if retry:
-                done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
+            done.emit(verdict)
             assert (yield from wait(answers[0].done, clock))
+            answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
+            assert (yield from wait(lambda: policy.observations, clock))
+            done.emit(verdict)
+            assert (yield from wait(answers[1].done, clock))
 
         drive_scheduler(world.start([harness, *embodiment.control_systems, PageOperator(script)]))
-    assert policy.observations
-    expected = (
-        {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
-        if retry
-        else {eval_keys.TERMINATED: False}
-    )
-    assert [answer.result() for answer in answers] == [expected]
+    with pytest.raises(EpisodeNotStarted, match='a done signal arrived before the episode started'):
+        answers[0].result()
+    assert answers[1].result() == {**verdict, eval_keys.TERMINATED: True}
 
 
 @pytest.mark.timeout(120.0)

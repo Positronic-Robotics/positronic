@@ -48,8 +48,8 @@ class KeyboardOperator(KeyboardControl):
         self._output_path = output_path
         self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
         # The trial of the last ask, and the trial that the next press runs again.
-        self._asked: Task | None = None
-        self._again: Task | None = None
+        self._asked_task: Task | None = None
+        self._retry_task: Task | None = None
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
@@ -60,7 +60,7 @@ class KeyboardOperator(KeyboardControl):
                 logger.info(f'Episode ended: {self._pending.result()}')
             except EpisodeNotStarted as e:
                 logger.error(f'Episode did not start, so [s] runs the same trial again: {e}')
-                self._again = self._asked
+                self._retry_task = self._asked_task
             except Exception as e:
                 logger.error(f'Episode failed: {e}')
             self._pending = None
@@ -69,8 +69,8 @@ class KeyboardOperator(KeyboardControl):
                 logger.warning('An episode is already running: press [p] to stop it')
             case 's':
                 try:
-                    task = self._again if self._again is not None else self._next_task()
-                    self._asked, self._again = task, None
+                    task = self._retry_task if self._retry_task is not None else self._next_task()
+                    self._asked_task, self._retry_task = task, None
                     self._pending = self.perform_task(Rollout(task, self._policy, self._output_path))
                 except Exception as e:  # rules-allow: swallowed-error — the operator is who this failure is for
                     logger.error(f'Episode failed to open: {e}')
