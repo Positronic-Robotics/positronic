@@ -163,6 +163,8 @@ class TeleopService:
         self._phase = Phase.IDLE
         self._ready: Reply | None = None
         self._events: list[Event] = []
+        # Whether the trial emitted Start task. The policy learns it only at its next frame request.
+        self._attempt_started = False
         self._display: dict[str, Any] = {}
         self._open = False
         # A wait ends at once when its session ended, or when the service stops.
@@ -227,7 +229,9 @@ class TeleopService:
             elif self._phase is Phase.READY_WAIT and self._ready is None:
                 self._ready = self._buttons.ready_reply(buttons, now_ns)
             elif self._phase is Phase.RUNNING:
-                self._events += self._buttons.events(buttons, now_ns, bool(self._display.get(ATTEMPT_STARTED)))
+                events = self._buttons.events(buttons, now_ns, self._attempt_started)
+                self._attempt_started = self._attempt_started or Event.START_TASK in events
+                self._events += events
             else:
                 self._buttons.observe(buttons, now_ns)
             self._changed.notify_all()
@@ -267,6 +271,7 @@ class TeleopService:
         deadline = time.monotonic() + self._ready_limit
         with self._changed:
             self._phase, self._ready, self._events, self._display = Phase.READY_WAIT, None, [], {}
+            self._attempt_started = False
             while self._ready is None:
                 left = deadline - time.monotonic()
                 if self._waits_must_end():

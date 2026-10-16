@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pos3
 import pytest
-from positronic_model_server.serialization import serialise
+from positronic_model_server.serialization import deserialise, serialise
 from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, PeerDisconnected, UnixSocketAddress
 
@@ -372,3 +372,23 @@ def test_a_socket_directory_that_others_can_open_is_refused(tmp_path):
 def test_the_default_socket_with_no_runtime_directory_is_in_a_directory_of_the_user(monkeypatch):
     monkeypatch.delenv('XDG_RUNTIME_DIR', raising=False)
     assert session.default_socket_path().parent.name == f'positronic-{os.getuid()}'
+
+
+def test_a_hold_of_b_after_start_task_completes_before_the_policy_hears_of_the_start(service, socket_path):
+    connection = registry.client_wire('websocket_unix').dial(UnixSocketAddress(socket_path, SESSION_PATH, ''), None, 5)
+    try:
+        connection.send(serialise({session.KIND: session.Request.READY}))
+        _until_phase(service, Phase.READY_WAIT)
+        service.take_sample(HAND, _buttons(b=1.0))
+        service.take_sample(HAND, _buttons())
+        assert deserialise(connection.recv(5)) == {session.KIND: session.Reply.READY}
+        service.take_sample(HAND, _buttons(b=1.0))
+        service.take_sample(HAND, _buttons())
+        service.take_sample(HAND, _buttons(b=1.0))
+        time.sleep(HOLD_SEC + 0.05)
+        service.take_sample(HAND, _buttons(b=1.0))
+        connection.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: {}}))
+        frame = deserialise(connection.recv(5))
+        assert frame[session.EVENTS] == [session.Event.START_TASK, session.Event.COMPLETE]
+    finally:
+        connection.close()
