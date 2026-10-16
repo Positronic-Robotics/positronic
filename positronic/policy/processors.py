@@ -96,12 +96,16 @@ class PauseOnUnavailable(Policy):
 class DurationEstimate(ABC):
     """Consume completed inference delays and estimate a duration in seconds.
 
-    Specs contain configuration only. Each schedule run loads a fresh estimator from its spec.
+    Each schedule run uses a fresh estimator with independent delay history.
     """
 
     @abstractmethod
     def push(self, delay_sec: float) -> float:
         """Record a delay from submission to reading the answer, and return the updated estimate."""
+
+    @abstractmethod
+    def fresh(self) -> Self:
+        """Return an estimator with the same configuration and no observed delays."""
 
     @abstractmethod
     def to_spec(self) -> float | dict[str, Any]:
@@ -128,6 +132,9 @@ class ConstantDuration(DurationEstimate):
 
     def push(self, delay_sec: float) -> float:
         return self._seconds
+
+    def fresh(self) -> Self:
+        return type(self)(self._seconds)
 
     def to_spec(self) -> float:
         return self._seconds
@@ -157,6 +164,11 @@ class DelayEstimate(DurationEstimate):
         self._delays.append(delay_sec)
         value = fmean(self._delays) if self._statistic is self.Statistic.MEAN else max(self._delays)
         return min(value, self._max_sec)
+
+    def fresh(self) -> Self:
+        last = self._delays.maxlen
+        assert last is not None
+        return type(self)(self._statistic, last, self._max_sec)
 
     def to_spec(self) -> dict[str, Any]:
         return {
@@ -323,7 +335,7 @@ class ChunkedSchedule(Policy):
         end_ns = 0
         call_ns = 0
         called_at_ns = 0
-        lead = DurationEstimate.from_spec(self._inference_lead.to_spec())
+        lead = self._inference_lead.fresh()
         stats = self._Stats(runtime) if self._record_stats else None
         obs = yield
         try:
@@ -526,7 +538,7 @@ class RTCSchedule(Policy):
         self._prefix_sampling = prefix_sampling
 
     def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
-        duration = DurationEstimate.from_spec(self._prefix_duration.to_spec())
+        duration = self._prefix_duration.fresh()
         prefix_sec = 0.0
         answer: Answer[Sequence[Commands]] | None = None
         called_at_ns = 0

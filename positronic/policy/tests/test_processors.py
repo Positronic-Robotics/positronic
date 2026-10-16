@@ -593,12 +593,29 @@ def test_delay_based_leads_use_completed_calls(execution, monkeypatch, lead, cal
         run.close()
 
 
+class PeakDuration(DurationEstimate):
+    def __init__(self):
+        self._peak = 0.0
+
+    def push(self, delay_sec):
+        self._peak = max(self._peak, delay_sec)
+        return self._peak
+
+    def fresh(self):
+        return type(self)()
+
+    def to_spec(self):
+        raise NotImplementedError('Local estimator has no wire format')
+
+
+@pytest.mark.parametrize('estimate_factory', [DelayEstimate.mean, PeakDuration])
 @pytest.mark.parametrize('rtc', [False, True])
-def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc):
+def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, estimate_factory):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    estimate = DelayEstimate.mean(last=5)
+    estimate = estimate_factory()
+    estimate.push(0.4)
     schedule = (
         RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=estimate)
         if rtc
