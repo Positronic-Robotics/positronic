@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import Any
 
 import configuronic as cfn
 import pos3
@@ -23,7 +22,7 @@ from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
 from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy
-from positronic.policy.harness import Harness, Rollout
+from positronic.policy.harness import EpisodeEnd, Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.utils.git import get_package_git_state
 
@@ -86,7 +85,7 @@ class TaskDriver(pimm.ControlSystem):
         self._tasks = tasks
         self._policy = policy
         self._output_path = output_path
-        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, EpisodeEnd](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():

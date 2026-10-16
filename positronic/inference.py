@@ -24,7 +24,7 @@ from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.web import StationConsole
 from positronic.policy import Policy
-from positronic.policy.harness import Harness, Rollout
+from positronic.policy.harness import EpisodeEnd, Harness, Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
@@ -45,8 +45,8 @@ class KeyboardOperator(KeyboardControl):
         self._next_task = next_task
         self._policy = policy
         self._output_path = output_path
-        self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
-        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self._pending: pimm.calls.Answer[EpisodeEnd] | None = None
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, EpisodeEnd](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def _each_round(self, key: str | None) -> None:

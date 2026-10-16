@@ -8,9 +8,11 @@ console that wrote them, the viewer that colours them, a report that counts them
 has no robot installed at all.
 
 An episode keeps its statics in one file and its id in another. A labeler reads from them how the
-trial ended, who ended it, the task and the id. It reads how long the trial ran from the times in the
+trial ended, who ended it, the task and the id. An edit log, a third file, holds the edits that came
+after the recording, for example the verdict of a judge. A
+labeler applies those edits over the statics. It reads how long the trial ran from the times in the
 signal files. The RoboLab labeler also reads the subtasks that the trial completed from the `subtask`
-signal. `eval_vocabulary.episode` names the files, the keys and that signal. `eval_vocabulary.timeline`
+signal. `eval_vocabulary.episode` names the files, the keys, the edit records and that signal. `eval_vocabulary.timeline`
 names the timelines whose columns hold those times.
 
 This distribution defines those words once. It depends on nothing, so any of those

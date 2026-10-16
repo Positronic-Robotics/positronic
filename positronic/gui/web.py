@@ -30,7 +30,7 @@ from positronic.gui.station import Outcome, Refused, RunView, Station, Verdict, 
 from positronic.gui.video_stream import VideoStream, codec_string
 from positronic.policy import Policy
 from positronic.policy import keys as policy_keys
-from positronic.policy.harness import Rollout
+from positronic.policy.harness import EpisodeEnd, Rollout
 
 logger = logging.getLogger(__name__)
 
@@ -121,10 +121,10 @@ class StationConsole(pimm.ControlSystem):
         self._host = host
         self._port = port
         self.cameras = pimm.ReceiverDict(self)
-        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, EpisodeEnd](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
         # The open episode's answer.
-        self._episode: pimm.calls.Answer[dict[str, Any]] | None = None
+        self._episode: pimm.calls.Answer[EpisodeEnd] | None = None
 
     @staticmethod
     def _raise_if_stopped(server_thread: threading.Thread) -> None:
@@ -186,12 +186,12 @@ class StationConsole(pimm.ControlSystem):
             return
         episode, self._episode = self._episode, None
         try:  # rules-allow: swallowed-error — the page shows the error, and the operator decides whether to retry
-            result = episode.result()
+            end = episode.result()
         except Exception as exc:
             logger.exception('Episode failed')
             station.close(Outcome.ERROR, clock.now(), error=''.join(traceback.format_exception_only(exc)).strip())
         else:
-            station.close(outcome_of(result), clock.now())
+            station.close(outcome_of(end.terminal), clock.now())
 
     def build_app(
         self,
