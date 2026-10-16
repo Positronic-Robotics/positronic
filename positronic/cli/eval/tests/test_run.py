@@ -2,6 +2,7 @@ import importlib
 import inspect
 import logging
 import os
+import re
 import sys
 from contextlib import contextmanager
 from functools import partial
@@ -437,6 +438,29 @@ def test_a_run_that_records_nothing_leaves_no_telemetry_directory(tmp_path, monk
 
     assert prepare_output_dir(None) is None
     assert ENV_TELEMETRY_DIR not in os.environ
+
+
+def test_an_output_dir_it_cannot_create_is_a_usage_fault_naming_it(tmp_path):
+    (tmp_path / 'a-file').write_text('')
+    output_dir = tmp_path / 'a-file' / 'episodes'
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False), scoped_env_var(ENV_TELEMETRY_DIR):
+        with pytest.raises(CommandFailed, match=re.escape(str(output_dir))) as exc:
+            prepare_output_dir(output_dir)
+
+    assert exc.value.fault is Fault.USAGE
+
+
+def test_a_failure_outside_the_output_dir_is_not_reported_as_one(tmp_path, monkeypatch):
+    # Recording the run reads files of its own, such as `uv.lock`; a failure there is a defect, not a bad argument.
+    def unreadable_lockfile(*_args, **_kwargs):
+        raise PermissionError(13, 'Permission denied', str(tmp_path / 'elsewhere' / 'uv.lock'))
+
+    monkeypatch.setattr('positronic.utils.save_run_metadata', unreadable_lockfile)
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False), scoped_env_var(ENV_TELEMETRY_DIR):
+        with pytest.raises(PermissionError):
+            prepare_output_dir(tmp_path / 'episodes')
 
 
 def test_a_recorded_run_leaves_no_telemetry_directory_behind(tmp_path, monkeypatch):

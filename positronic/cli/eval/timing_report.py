@@ -206,8 +206,8 @@ def _dur_s(span: SpanRec) -> float:
 
 
 @contextmanager
-def _refusing_unreadable(path: Path) -> Iterator[None]:
-    """Report a file or directory under a path the user named, which the command cannot read, as a usage fault."""
+def _refusing_inaccessible(path: Path) -> Iterator[None]:
+    """Report a path the user named, which the command cannot read or write, as a usage fault naming it."""
     try:
         yield
     except OSError as exc:
@@ -228,7 +228,7 @@ def _read_spans_dir(telemetry_dir: Path) -> list[SpanRec]:
     """Every span across all per-process ``*.spans.jsonl`` files under the telemetry dir."""
     spans: list[SpanRec] = []
     for path in sorted(telemetry_dir.glob(f'*{SPANS_SUFFIX}')):
-        with _refusing_unreadable(path):
+        with _refusing_inaccessible(path):
             spans.extend(read_spans(path))
     return spans
 
@@ -236,7 +236,7 @@ def _read_spans_dir(telemetry_dir: Path) -> list[SpanRec]:
 def _read_stats_dir(telemetry_dir: Path) -> list[dict]:
     samples: list[dict] = []
     for path in sorted(telemetry_dir.glob(f'*{STATS_SUFFIX}')):
-        with _refusing_unreadable(path):
+        with _refusing_inaccessible(path):
             samples.extend(read_stats(path))
     return samples
 
@@ -337,7 +337,7 @@ def _dmon_readings(log_path: Path) -> Iterator[tuple[str, float | None, float | 
     sm_idx: int | None = None
     fb_idx: int | None = None
     gpu_idx: int | None = None
-    with _refusing_unreadable(log_path):
+    with _refusing_inaccessible(log_path):
         text = log_path.read_text()
     for line in text.splitlines():
         stripped = line.strip()
@@ -754,7 +754,7 @@ def timing_report(run_dir: str, gpu_policy_log: str | None):
     """
     root = Path(pos3.download(run_dir)) if '://' in run_dir else _local_path(run_dir)
     telemetry_dir = root / TELEMETRY_SUBDIR
-    with _refusing_unreadable(telemetry_dir):
+    with _refusing_inaccessible(telemetry_dir):
         is_run_dir = telemetry_dir.is_dir()
     if not is_run_dir:
         raise CommandFailed(
@@ -769,7 +769,8 @@ def timing_report(run_dir: str, gpu_policy_log: str | None):
     policy_gpu = _parse_dmon(_local_path(gpu_policy_log)) if gpu_policy_log is not None else None
     report = _build_report(spans, _read_stats_dir(telemetry_dir), policy_gpu)
     summary_path = root / 'timing_summary.json'
-    summary_path.write_text(json.dumps(asdict(report), indent=2))
+    with _refusing_inaccessible(summary_path):
+        summary_path.write_text(json.dumps(asdict(report), indent=2))
     if '://' in run_dir:
         # A remote input was only downloaded, so the write above lands in the local cache. pos3 rejects an
         # upload inside a registered download prefix, so push the summary to a sibling key next to the run dir.

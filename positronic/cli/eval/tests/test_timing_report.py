@@ -789,6 +789,17 @@ def test_a_home_directory_this_machine_does_not_have_is_a_usage_fault_naming_it(
     assert exc.value.fault is Fault.USAGE
 
 
+def test_a_summary_it_cannot_write_is_a_usage_fault_naming_it(tmp_path):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    summary = tmp_path / 'timing_summary.json'
+    summary.mkdir()
+
+    with pytest.raises(CommandFailed, match=re.escape(str(summary))) as exc:
+        timing_report(run_dir=str(tmp_path))
+
+    assert exc.value.fault is Fault.USAGE
+
+
 def _waypoint_fixture(telemetry_dir):
     """One pass, two episodes carrying waypoint accounts that differ in every field, so a sum, a share, an
     emission-weighted mean and a maximum are each told apart from the others."""

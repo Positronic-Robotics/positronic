@@ -30,6 +30,11 @@ from positronic.utils.git import get_package_git_state
 logger = logging.getLogger(__name__)
 
 
+def _is_on_the_path_to(failed: str | None, directory: Path) -> bool:
+    """Whether a failure names `directory`, a directory above it, or a file in it."""
+    return failed is not None and (Path(failed).is_relative_to(directory) or directory.is_relative_to(failed))
+
+
 def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     """Resolve where a run records: sync the directory, snapshot the sources into it, and point the telemetry
     sidecars at it.
@@ -44,7 +49,13 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
         os.environ.pop(ENV_TELEMETRY_DIR, None)
         return None
     local_dir = pos3.sync(str(output_dir), sync_on_error=True)
-    utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
+    try:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
+    except OSError as exc:
+        if not _is_on_the_path_to(exc.filename, local_dir):
+            raise
+        raise CommandFailed(f'--output_dir={output_dir}: {exc.filename}: {exc.strerror}', Fault.USAGE) from exc
     # `pos3.sync` mirrors the whole local directory, so a sidecar written inside it uploads with the episodes.
     # Pointed anywhere else the spans stay on the box that ran, and somebody copies them off by hand.
     os.environ[ENV_TELEMETRY_DIR] = str(local_dir / telemetry.TELEMETRY_SUBDIR)
