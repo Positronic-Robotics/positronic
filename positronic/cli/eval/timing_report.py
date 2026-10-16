@@ -13,6 +13,7 @@ import json
 import logging
 from collections import defaultdict
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path
@@ -204,18 +205,39 @@ def _dur_s(span: SpanRec) -> float:
     return (span.end_ns - span.start_ns) / 1e9
 
 
+@contextmanager
+def _refusing_unreadable(path: Path) -> Iterator[None]:
+    """Report a file or directory under a path the user named, which the command cannot read, as a usage fault."""
+    try:
+        yield
+    except OSError as exc:
+        raise CommandFailed(f'{path}: {exc.strerror or exc}', Fault.USAGE) from exc
+    except UnicodeDecodeError as exc:
+        raise CommandFailed(f'{path}: not text: {exc.reason}', Fault.USAGE) from exc
+
+
+def _local_path(named: str) -> Path:
+    """The path the user named, with `~` expanded. A `~name` for a user this machine does not have is a usage fault."""
+    try:
+        return Path(named).expanduser()
+    except RuntimeError as exc:
+        raise CommandFailed(f'{named}: names no home directory on this machine', Fault.USAGE) from exc
+
+
 def _read_spans_dir(telemetry_dir: Path) -> list[SpanRec]:
     """Every span across all per-process ``*.spans.jsonl`` files under the telemetry dir."""
     spans: list[SpanRec] = []
     for path in sorted(telemetry_dir.glob(f'*{SPANS_SUFFIX}')):
-        spans.extend(read_spans(path))
+        with _refusing_unreadable(path):
+            spans.extend(read_spans(path))
     return spans
 
 
 def _read_stats_dir(telemetry_dir: Path) -> list[dict]:
     samples: list[dict] = []
     for path in sorted(telemetry_dir.glob(f'*{STATS_SUFFIX}')):
-        samples.extend(read_stats(path))
+        with _refusing_unreadable(path):
+            samples.extend(read_stats(path))
     return samples
 
 
@@ -315,7 +337,9 @@ def _dmon_readings(log_path: Path) -> Iterator[tuple[str, float | None, float | 
     sm_idx: int | None = None
     fb_idx: int | None = None
     gpu_idx: int | None = None
-    for line in log_path.read_text().splitlines():
+    with _refusing_unreadable(log_path):
+        text = log_path.read_text()
+    for line in text.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
@@ -728,9 +752,11 @@ def timing_report(run_dir: str, gpu_policy_log: str | None):
     for an ``s3://`` input to the sibling key ``<run_dir>.timing_summary.json`` (pos3 forbids uploading inside
     the downloaded prefix) — and prints the report.
     """
-    root = Path(pos3.download(run_dir)) if '://' in run_dir else Path(run_dir).expanduser()
+    root = Path(pos3.download(run_dir)) if '://' in run_dir else _local_path(run_dir)
     telemetry_dir = root / TELEMETRY_SUBDIR
-    if not telemetry_dir.is_dir():
+    with _refusing_unreadable(telemetry_dir):
+        is_run_dir = telemetry_dir.is_dir()
+    if not is_run_dir:
         raise CommandFailed(
             f'no telemetry directory at {telemetry_dir}: not a run directory, or recorded without --timing', Fault.USAGE
         )
@@ -740,7 +766,7 @@ def timing_report(run_dir: str, gpu_policy_log: str | None):
             f'{telemetry_dir} carries no spans (a run killed before its sidecars were flushed?)', Fault.USAGE
         )
 
-    policy_gpu = _parse_dmon(Path(gpu_policy_log).expanduser()) if gpu_policy_log is not None else None
+    policy_gpu = _parse_dmon(_local_path(gpu_policy_log)) if gpu_policy_log is not None else None
     report = _build_report(spans, _read_stats_dir(telemetry_dir), policy_gpu)
     summary_path = root / 'timing_summary.json'
     summary_path.write_text(json.dumps(asdict(report), indent=2))

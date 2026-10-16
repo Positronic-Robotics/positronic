@@ -1,4 +1,5 @@
 import json
+import re
 
 import pos3
 import pytest
@@ -738,6 +739,54 @@ def test_positronic_exits_with_the_usage_status_for_a_directory_that_is_no_run(t
 
     assert exit_info.value.code == Fault.USAGE
     assert 'no telemetry directory' in capsys.readouterr().err
+
+
+def test_positronic_exits_with_the_usage_status_for_a_gpu_log_it_cannot_read(tmp_path, monkeypatch, capsys):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    missing = tmp_path / 'dmon.log'
+    monkeypatch.setattr(
+        'sys.argv', ['positronic', 'eval', 'timing-report', f'--run_dir={tmp_path}', f'--gpu_policy_log={missing}']
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        _internal_main()
+
+    assert exit_info.value.code == Fault.USAGE
+    assert str(missing) in capsys.readouterr().err
+
+
+def test_a_gpu_log_that_is_not_text_is_a_usage_fault_naming_it(tmp_path):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    log = tmp_path / 'dmon.log'
+    log.write_bytes(b'# gpu sm fb\n\xff\xfe\n')
+
+    with pytest.raises(CommandFailed, match=re.escape(str(log))) as exc:
+        timing_report(run_dir=str(tmp_path), gpu_policy_log=str(log))
+
+    assert exc.value.fault is Fault.USAGE
+
+
+@pytest.mark.parametrize('suffix', [SPANS_SUFFIX, STATS_SUFFIX], ids=['spans', 'stats'])
+def test_a_sidecar_it_cannot_open_is_a_usage_fault_naming_it(tmp_path, suffix):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    unreadable = tmp_path / TELEMETRY_SUBDIR / f'unreadable{suffix}'
+    unreadable.mkdir()
+
+    with pytest.raises(CommandFailed, match=re.escape(str(unreadable))) as exc:
+        timing_report(run_dir=str(tmp_path))
+
+    assert exc.value.fault is Fault.USAGE
+
+
+@pytest.mark.parametrize('argument', ['run_dir', 'gpu_policy_log'])
+def test_a_home_directory_this_machine_does_not_have_is_a_usage_fault_naming_it(tmp_path, argument):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    paths = {'run_dir': str(tmp_path), 'gpu_policy_log': None, argument: '~no-such-user-on-this-box/x'}
+
+    with pytest.raises(CommandFailed, match='~no-such-user-on-this-box/x') as exc:
+        timing_report(**paths)
+
+    assert exc.value.fault is Fault.USAGE
 
 
 def _waypoint_fixture(telemetry_dir):
