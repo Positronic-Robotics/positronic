@@ -30,6 +30,8 @@ SPAN_RECORD_IO = 'record.io'
 SPAN_POLICY_SUBMIT = 'policy.submit'
 SPAN_POLICY_ENCODE = 'policy.encode'
 SPAN_POLICY_PREPARE = 'policy.prepare'
+# A context push: the JPEG encode of the frames and their round trip to the server.
+SPAN_POLICY_CONTEXT = 'policy.context'
 SPAN_WIRE_SEND = 'wire.send'
 SPAN_WIRE_RECV = 'wire.recv'
 
@@ -46,6 +48,8 @@ ATTR_SERVED_PREFIX = 'served.'
 # Which codec a `policy.encode` span timed, and how many bytes the observation took on the wire.
 ATTR_CODEC = 'codec'
 ATTR_WIRE_BYTES = 'wire.bytes'
+# How many frames a request sent as digests of frames that a context push sent before it.
+ATTR_WIRE_REFERENCED = 'wire.referenced'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.

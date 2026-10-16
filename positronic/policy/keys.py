@@ -14,6 +14,8 @@ ACTION_FPS = 'action_fps'
 JPEG_QUALITY = 'jpeg_quality'
 # Metadata understood by the legacy offboard client and server.
 COMPRESS_IMAGES = 'compress_images'
+# The context-push version the server takes, when it takes one; see ``positronic.offboard.protocol.CONTEXT``.
+CONTEXT_PUSH = 'context_push'
 POSITRONIC_VERSION = 'positronic_version'
 # The name of the endpoint that served the episode.
 LABEL = 'label'
