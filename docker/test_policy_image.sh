@@ -20,24 +20,38 @@ if [ "${1:-}" = --gpu ]; then
 fi
 image="${1:?usage: $0 [--gpu] <image>}"
 network=policy-test
+# The policy contract, as positronic names it: `policy_container.POLICY_PORT` and `AUTH_TOKEN_ENV`,
+# `positronic_model_server.protocol.AUTH_HEADER` and `bearer`, and `positronic_wire.wire.KEEPALIVE_PATH`.
+port=8000
+token_env=AUTH_TOKEN
+auth_header=Authorization
+keepalive_path=/api/v1/keepalive
+token=test
 
 if [ "$(uname -s)" != Linux ] || [ "$(docker version -f '{{.Server.Arch}}')" != amd64 ]; then
   echo "Run this test with Docker on an amd64 Linux machine. Docker on another machine emulates or hides it." >&2
   exit 1
 fi
 docker network inspect "$network" >/dev/null 2>&1 || docker network create --internal "$network" >/dev/null
+if [ "$(docker network inspect -f '{{.Internal}}' "$network")" != true ]; then
+  echo "The Docker network $network has egress. Remove it with: docker network rm $network" >&2
+  exit 1
+fi
 cid=$(docker run -d --pull=always --network "$network" --cap-drop ALL --security-opt no-new-privileges \
-  "${gpu_flags[@]}" -e AUTH_TOKEN=test "$image")
+  "${gpu_flags[@]}" -e "$token_env=$token" "$image")
 body=$(mktemp)
-trap 'docker rm -f "$cid" >/dev/null; rm -f "$body"' EXIT
+curl_errors=$(mktemp)
+trap 'docker rm -f "$cid" >/dev/null; rm -f "$body" "$curl_errors"' EXIT
 ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$cid")
 
-# A socket that listens on port 8000 (1F40) of 127.0.0.1 or ::1, in /proc/net/tcp of the container. The platform
-# cannot reach it. An image with no `cat` gives no answer, and the test then waits as for any closed port.
+# A socket that listens on $port of 127.0.0.1 or ::1, in /proc/net/tcp of the container. The platform cannot
+# reach it. An image with no `cat` gives no answer, and the test then waits as for any closed port.
 loopback_only() {
+  local hex
+  hex=$(printf '%04X' "$port")
   docker exec "$cid" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null |
-    awk '$4 == "0A" && ($2 == "0100007F:1F40" || $2 == "00000000000000000000000001000000:1F40") {found = 1}
-         END {exit !found}'
+    awk -v v4="0100007F:$hex" -v v6="00000000000000000000000001000000:$hex" \
+      '$4 == "0A" && ($2 == v4 || $2 == v6) {found = 1} END {exit !found}'
 }
 
 start=$SECONDS
@@ -51,8 +65,14 @@ while :; do
     result="no answer in $limit s"
     break
   fi
-  code=$(curl -s -o "$body" -w '%{http_code}' -m 5 -X POST -H 'Authorization: Bearer test' \
-    "http://$ip:8000/api/v1/keepalive") || code=000
+  # curl exits with 7 on a closed port, 28 on no answer in 5 s, and 52 or 56 on a dropped connection.
+  status=0
+  code=$(curl -sS --noproxy '*' -o "$body" -w '%{http_code}' -m 5 -X POST -H "$auth_header: Bearer $token" \
+    "http://$ip:$port$keepalive_path" 2>"$curl_errors") || status=$?
+  if [ "$status" != 0 ] && [ "$status" != 7 ] && [ "$status" != 28 ] && [ "$status" != 52 ] && [ "$status" != 56 ]; then
+    result="curl failed: $(cat "$curl_errors")"
+    break
+  fi
   if [ "$code" = 200 ]; then
     result="the server answered: $(cat "$body")"
     break
