@@ -323,8 +323,9 @@ fi
 - The loop calls the route every 5 s, for up to 600 s. A slow model binds port 8000 late: FLUX 3 Action
   binds it after about 140 s.
 - The route answers `{"alive_seconds": ...}` when the model has loaded and warmed.
-- The platform gives the image 40 GB of GPU memory. On a larger GPU, use `nvidia-smi` to make sure that
-  your model uses less.
+- The platform gives the image one GPU with 40 GB of memory. Run this test on a machine with one GPU.
+  If the GPU has more than 40 GB, start `nvidia-smi --query-gpu=memory.used --format=csv -l 1` in a
+  second terminal before the test. Make sure that the largest value stays below 40 GB.
 - `the server exited` means that the server crashed. The log shows why.
 - `the server answered HTTP <code>` means that the server refused the request. A `401` means that it does
   not accept the token in `AUTH_TOKEN`.

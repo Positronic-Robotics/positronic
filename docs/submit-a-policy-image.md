@@ -63,7 +63,8 @@ Other models:
 
 ### What the example images use
 
-Approximate values, from one run of each image. The platform gives each image 40 GB of GPU memory.
+Approximate values, from one run of each image in October 2026. A later build of an image can use
+different values. The platform gives each image 40 GB of GPU memory.
 
 | Image | Disk | Memory, test without a GPU | GPU memory |
 |---|---|---|---|
@@ -352,8 +353,9 @@ Action binds port 8000 after about 140 s, and GR00T loads in about 151 s. `no an
 means a hung server, or one too slow for the provisioning deadline, which it shares with VM boot
 and the pull.
 
-The platform gives the image 40 GB of GPU memory. On a larger GPU, use `nvidia-smi` to make sure that
-your model uses less.
+The platform gives the image one GPU with 40 GB of memory. Run this test on a machine with one GPU.
+If the GPU has more than 40 GB, start `nvidia-smi --query-gpu=memory.used --format=csv -l 1` in a
+second terminal before the test. Make sure that the largest value stays below 40 GB.
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
