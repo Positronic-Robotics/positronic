@@ -265,48 +265,21 @@ holds each value below. The platform runs every image under them.
 
 Run it with the network denied, and wait for its server. This reproduces the platform's own
 conditions and needs no GPU. It needs an amd64 machine: on an ARM machine, such as a Mac with Apple
-silicon, Docker emulates amd64, and the model does not load in the time limit. The test prints
-`Docker runs on '<arch>'` and does not start there.
+silicon, Docker emulates amd64, and the model does not load in the time limit. The script does not
+start the test there.
 
 ```bash
-probe='import sys, urllib.error, urllib.request as u
-try:
-    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
-          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
-except urllib.error.HTTPError as e:
-    print("the server answered HTTP", e.code)
-except OSError as e:
-    reason = e.reason if isinstance(e, urllib.error.URLError) else e
-    if not isinstance(reason, (ConnectionError, TimeoutError)):
-        raise
-    sys.exit(3)'
-arch=$(docker version -f '{{.Server.Arch}}')
-if [ "$arch" != amd64 ]; then
-  echo "Docker runs on '$arch'. Run this test on an amd64 machine."
-elif cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
-  deadline=$((SECONDS + 900))
-  while :; do
-    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
-    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
-    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
-    [ $? = 3 ] || break
-    sleep 5
-  done
-  docker logs --tail 30 "$cid"
-  docker rm -f "$cid"
-fi
+bash docker/test_policy_image.sh docker.io/<you>/<image>:v1
 ```
 
-The loop calls the keepalive route every 5 s, for up to 900 s, because a model loads more slowly
-on a CPU. A ready server prints `{"alive_seconds": ...}`. A server that stops prints
-`the server exited`, and a hung one prints `no answer in 900 s`. A server that refuses the request
-prints `the server answered HTTP <code>`, and a `401` means that it does not accept the token in
-`AUTH_TOKEN`. The log follows each of them.
-
-The probe exits with code 3 when the port is closed or the server does not answer in 5 s, and the
-loop then waits quietly. Any other failure stops the loop at once and shows its error: an error from
-`docker exec`, for example no Python at `/positronic/.venv/bin/python`, or a Python traceback. The
-GR00T N1.7 image has its Python at `/opt/gr00t-venv/bin/python`.
+[`docker/test_policy_image.sh`](../docker/test_policy_image.sh) starts the image on a Docker network with
+no egress, with no capabilities, and with the token `test` in `AUTH_TOKEN`. Every 5 s, it calls the
+keepalive route from outside the container, as the platform does. It waits up to 900 s, because a model
+loads more slowly on a CPU. A ready server prints `the server answered: {"alive_seconds": ...}`. A server
+that stops prints `the server exited`, and a hung one prints `no answer in 900 s`. A server that refuses
+the request prints `the server answered HTTP <code>`, and a `401` means that it does not accept the token
+in `AUTH_TOKEN`. A server that listens only on `127.0.0.1` cannot answer the platform, and the script says
+so. The log follows each of them.
 
 In a correct image, the server pins its checkpoint and starts the model process. The openpi and
 MolmoAct2 recipes then load the model on the CPU and serve. The GR00T recipe stops on the missing GPU
@@ -319,44 +292,15 @@ albumentations prints a `UserWarning` about fetching its version; ignore it. Mol
 `A new version of the following files was downloaded` when `transformers` copies the model's code
 into its module cache; no download occurs.
 
-On a machine with a GPU, serve it with the network denied, and wait until the keepalive route
-answers from inside the container with the token:
+On a machine with a GPU, add `--gpu`:
 
 ```bash
-docker network create --internal noegress
-probe='import sys, urllib.error, urllib.request as u
-try:
-    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
-          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
-except urllib.error.HTTPError as e:
-    print("the server answered HTTP", e.code)
-except OSError as e:
-    reason = e.reason if isinstance(e, urllib.error.URLError) else e
-    if not isinstance(reason, (ConnectionError, TimeoutError)):
-        raise
-    sys.exit(3)'
-arch=$(docker version -f '{{.Server.Arch}}')
-if [ "$arch" != amd64 ]; then
-  echo "Docker runs on '$arch'. Run this test on an amd64 machine."
-elif cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
-  deadline=$((SECONDS + 600))
-  while :; do
-    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
-    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
-    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
-    [ $? = 3 ] || break
-    sleep 5
-  done
-  docker logs --tail 30 "$cid"
-  docker rm -f "$cid"
-fi
+bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
-The route answers `{"alive_seconds": ...}` with the token once the model has loaded and warmed.
-A server that checks the token answers `401` without it. The loop waits up to 600 s: FLUX 3
-Action binds port 8000 after about 140 s, and GR00T loads in about 151 s. `no answer in 600 s`
-means a hung server, or one too slow for the provisioning deadline, which it shares with VM boot
-and the pull.
+The script then waits up to 600 s: FLUX 3 Action binds port 8000 after about 140 s, and GR00T loads in
+about 151 s. `no answer in 600 s` means a hung server, or one too slow for the provisioning deadline,
+which it shares with VM boot and the pull.
 
 The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
 sure that your model uses less.
