@@ -244,8 +244,7 @@ world.connect(policy.reset, robot.reset)
 ```
 
 `incoming()` hands out calls one at a time; a call may be answered right away or kept and answered
-on a later tick, and one the handler has not reached waits for the next `incoming()`. No call and no reply is dropped, whether the two systems share a process or not. A call's `time`
-holds the timestamps of the ask, so a handler can order it against the messages of a signal. An
+on a later tick, and one the handler has not reached waits for the next `incoming()`. No call and no reply is dropped, whether the two systems share a process or not. An
 `Answer` is completed only by the handler and never waits for it: a caller polls `done()` between
 sleeps, and `result()` on an unanswered call raises. The full contract is the docstring of
 [`pimm/calls.py`](calls.py).

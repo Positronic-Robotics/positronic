@@ -8,7 +8,6 @@ from typing import Generic, TypeVar
 
 from ..calls import Call, ControlSystemCaller, ControlSystemHandler
 from ..core import Clock, ControlSystem, Sleep
-from ..time import EMITTED_WALL, SystemClock, Time
 from ..world import World
 
 Req = TypeVar('Req')
@@ -53,7 +52,6 @@ class FakeCall(Call[Req, Res], Generic[Req, Res]):
 
     def __init__(self, request: Req):
         self._request = request
-        self._time = Time(**{EMITTED_WALL: SystemClock().now_ns()})
         self.answered = False
         self.result: Res | None = None
         self.exception: BaseException | None = None
@@ -61,10 +59,6 @@ class FakeCall(Call[Req, Res], Generic[Req, Res]):
     @property
     def request(self) -> Req:
         return self._request
-
-    @property
-    def time(self) -> Time:
-        return self._time
 
     def set_result(self, value: Res) -> None:
         self.answered, self.result = True, value

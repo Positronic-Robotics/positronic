@@ -28,7 +28,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyRun, Runtime, Step
-from positronic.policy.harness import EpisodeNotStarted, Rollout
+from positronic.policy.harness import Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 
@@ -167,11 +167,10 @@ def _tasks(count: int) -> list[Task]:
 
 
 @pytest.mark.timeout(3.0)
-@pytest.mark.parametrize('failure', [pimm.SignalError('camera lost'), EpisodeNotStarted('the teleoperator cancelled')])
-def test_a_signal_error_or_an_episode_that_did_not_start_runs_its_task_again(failure):
-    """Each task gets its own count: a failure on the second task after one on the first ends nothing."""
+def test_a_signal_error_runs_its_task_again():
+    """Each task gets its own count: a signal error on the second task after one on the first ends nothing."""
     tasks = _tasks(2)
-    episodes = _ScriptedEpisodes([failure, {}, failure, {}])
+    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), {}, pimm.SignalError('camera lost'), {}])
     _drive(tasks, episodes)
 
     assert episodes.asked == [tasks[0], tasks[0], tasks[1], tasks[1]]

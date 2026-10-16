@@ -36,7 +36,7 @@ from positronic.gui.web import EndBody, InstructionBody, StationConsole, Status
 from positronic.inference import KeyboardOperator, real, web
 from positronic.policy import Policy
 from positronic.policy.base import Step
-from positronic.policy.harness import EpisodeNotStarted, Harness, Rollout
+from positronic.policy.harness import Harness, Rollout
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 from positronic.tests.testing_inference import (
     ARM_STOPPED_SHORT,
@@ -134,29 +134,6 @@ def test_a_task_failure_is_reported_without_stopping_the_operator(monkeypatch, c
         with caplog.at_level(logging.ERROR):
             drive_scheduler(world.start([operator, scripted_driver((refuse, 0.1), (None, 0.1))]))
     assert 'endpoint down' in caplog.text
-
-
-def test_the_next_press_after_an_episode_that_did_not_start_runs_the_same_trial(monkeypatch):
-    drawn = iter([Task(instruction_source=f'trial {n}', timeout_sec=None) for n in range(2)])
-    presses = iter(['s', *[None] * 9, 's'])
-    monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
-    operator = KeyboardOperator(lambda: next(drawn), _IdlePolicy(), None)
-    with pimm.World(virtual_time=True) as world:
-        harness = world.pair(operator.perform_task)
-        received = []
-
-        def not_started():
-            for call in harness.incoming():
-                received.append(call.request.task.instruction)
-                call.set_exception(EpisodeNotStarted('RuntimeError: the teleoperator cancelled'))
-
-        def hold_the_ask():
-            received.extend(call.request.task.instruction for call in harness.incoming())
-
-        steps = [(not_started, 0.05), *[(hold_the_ask, 0.02)] * 10]
-        drive_scheduler(world.start([operator, scripted_driver(*steps)]))
-
-    assert received == ['trial 0', 'trial 0']
 
 
 def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog):
@@ -361,12 +338,12 @@ def _phase(base: str) -> Phase | None:
     return status.run.phase if status else None
 
 
-def test_a_verdict_sent_with_the_ask_keeps_the_episode_from_starting_and_the_next_ask_runs():
+@pytest.mark.parametrize('retry', [False, True])
+def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(retry):
     policy = _IdlePolicy()
     embodiment = make_embodiment(simulated=True)
     harness = Harness(embodiment)
     answers = []
-    verdict = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True}
     with pimm.World(virtual_time=True) as world:
         caller = world.pair(harness.perform_task)
         done = world.pair(harness.done)
@@ -374,17 +351,20 @@ def test_a_verdict_sent_with_the_ask_keeps_the_episode_from_starting_and_the_nex
 
         def script(clock):
             answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
-            done.emit(verdict)
-            assert (yield from wait(answers[0].done, clock))
-            answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
-            assert (yield from wait(lambda: policy.observations, clock))
-            done.emit(verdict)
-            assert (yield from wait(answers[1].done, clock))
+            done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
+            yield from wait(lambda: policy.observations, 'an observation', clock)
+            if retry:
+                done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
+            yield from wait(answers[0].done, 'the answer', clock)
 
         drive_scheduler(world.start([harness, *embodiment.control_systems, PageOperator(script)]))
-    with pytest.raises(EpisodeNotStarted, match='a done signal arrived before the episode started'):
-        answers[0].result()
-    assert answers[1].result() == {**verdict, eval_keys.TERMINATED: True}
+    assert policy.observations
+    expected = (
+        {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+        if retry
+        else {eval_keys.TERMINATED: False}
+    )
+    assert [answer.result() for answer in answers] == [expected]
 
 
 @pytest.mark.timeout(120.0)
@@ -395,14 +375,14 @@ def test_a_verdict_ends_its_own_trial_and_not_the_next(tmp_path):
     verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
-        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, 'the console to answer', clock, seconds=60.0)
         for number, verdict in verdicts:
             post(base, '/episode/start')
-            yield from wait((tmp_path / f'episode-{number}').exists, clock)
+            yield from wait((tmp_path / f'episode-{number}').exists, f'episode {number} to open', clock)
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
             post(base, '/episode/end', EndBody(verdict=verdict))
-            yield from wait(lambda: _phase(base) is Phase.READY, clock)
+            yield from wait(lambda: _phase(base) is Phase.READY, 'the console to be ready', clock)
         statuses.append(read_status(base))
 
     run_attended(_MarkingPolicy(tmp_path), script)
@@ -422,16 +402,16 @@ def test_repeated_verdicts_during_a_slow_move_back_do_not_end_the_next_trial(tmp
     verdicts: list[tuple[int, Verdict]] = [(1, Outcome.PASS), (2, Outcome.FAIL)]
 
     def script(base: str, clock: pimm.Clock):
-        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, 'the console to answer', clock, seconds=60.0)
         for number, verdict in verdicts:
             post(base, '/episode/start')
-            yield from wait((tmp_path / f'episode-{number}').exists, clock, seconds=10.0)
+            yield from wait((tmp_path / f'episode-{number}').exists, f'episode {number} to open', clock)
             yield pimm.Sleep(0.5)
             phases.append(_phase(base))
             post(base, '/episode/end', EndBody(verdict=verdict))
             yield pimm.Sleep(0.2)
             assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
-            yield from wait(lambda: _phase(base) is Phase.READY, clock, seconds=10.0)
+            yield from wait(lambda: _phase(base) is Phase.READY, 'the console to be ready', clock)
         statuses.append(read_status(base))
 
     run_attended(_MarkingPolicy(tmp_path), script, move_s=1.0)
@@ -452,14 +432,14 @@ def test_a_home_that_stops_short_shows_its_error_and_the_next_start_runs(tmp_pat
         return status is not None and bool(status.run.episodes) and status.run.episodes[-1].outcome is not None
 
     def script(base: str, clock: pimm.Clock):
-        yield from wait(lambda: read_status(base) is not None, clock, seconds=60.0)
+        yield from wait(lambda: read_status(base) is not None, 'the console to answer', clock, seconds=60.0)
         presses.append(post(base, '/episode/start'))
-        yield from wait(lambda: ended(base), clock)
+        yield from wait(lambda: ended(base), 'the episode to end', clock)
         statuses.append(read_status(base))
         presses.append(post(base, '/episode/start'))
-        yield from wait((tmp_path / 'episode-1').exists, clock)
+        yield from wait((tmp_path / 'episode-1').exists, 'episode 1 to open', clock)
         presses.append(post(base, '/episode/end', EndBody(verdict=Outcome.PASS)))
-        yield from wait(lambda: _phase(base) is Phase.READY, clock)
+        yield from wait(lambda: _phase(base) is Phase.READY, 'the console to be ready', clock)
         statuses.append(read_status(base))
 
     run_attended(_MarkingPolicy(tmp_path), script, arm_failures=1)
