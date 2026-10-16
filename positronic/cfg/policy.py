@@ -7,6 +7,7 @@ from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
+from positronic import keys
 from positronic.policy import RemotePolicy
 from positronic.teleop import TeleopPolicy
 from positronic.teleop.session import default_socket_path
@@ -44,6 +45,11 @@ remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
 
 teleop = cfn.Config(
     TeleopPolicy, wire='websocket_unix', address=socket_address.override(uds=str(default_socket_path()))
+)
+
+# The views of `cfg.eval.sim.positronic.stack_cubes_collect` that a person teleoperates with, the most useful first.
+teleop_collect = teleop.override(
+    cameras=(keys.EXTERIOR_IMAGE, 'image.wrist_upright', 'image.handcam_right', keys.WRIST_IMAGE)
 )
 
 
