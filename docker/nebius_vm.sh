@@ -117,7 +117,7 @@ runcmd:
   if grep -q "$run_label" <<<"$metadata"; then
     echo "Nebius did not start the VM. Deleting what it created." >&2
     id=$(sed -n 's/.*"id":"\(computeinstance-[a-z0-9]*\)".*/\1/p' <<<"$metadata")
-    nebius compute instance delete --id "$id" >/dev/null
+    nebius compute instance delete --id "$id" >/dev/null || fail "Nebius could not delete the stopped VM."
   fi
   exit 1
 }
