@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping
 from functools import partial
-from typing import Any, ClassVar, Generic, ParamSpec
+from typing import Any, ClassVar, Generic, ParamSpec, Self
 
 from attr import dataclass
 from eval_vocabulary.episode import PolicyEnd
@@ -155,6 +155,11 @@ class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
     def to_spec(self) -> dict[str, Any]:
         """A versioned component declaration with plain-data arguments."""
         raise NotImplementedError(f'{type(self).__name__} has no wire spec')
+
+    @classmethod
+    def from_spec_args(cls, **args: Any) -> Self:
+        """Build a component from its wire-spec arguments."""
+        return cls(**args)
 
 
 Policy = Processor[Obs, Step, PolicyEnd]

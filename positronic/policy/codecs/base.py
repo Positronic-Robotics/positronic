@@ -1,5 +1,5 @@
 import collections.abc as cabc
-from typing import Any, ClassVar, final, overload
+from typing import Any, ClassVar, Self, final, overload
 
 import numpy as np
 from positronic_model_server.spec import PAR, SEQ
@@ -94,6 +94,11 @@ class Codec:
 
     def to_spec(self) -> dict[str, Any]:
         raise NotImplementedError(f'{type(self).__name__} has no wire spec')
+
+    @classmethod
+    def from_spec_args(cls, **args: Any) -> Self:
+        """Build a codec from its wire-spec arguments."""
+        return cls(**args)
 
     @final
     def __or__(self, other) -> Any:

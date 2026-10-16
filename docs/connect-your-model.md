@@ -67,7 +67,7 @@ Two consequences shape the API:
 
 **The server usually returns an ordered action chunk.** A model predicts a short stretch of upcoming motion at once. The client policy decides when to request the next chunk and how to combine predictions with commands already being executed.
 
-**The client scheduler decides when each action runs.** `ChunkedSchedule` uses its configured FPS to space commands, starting when it reads the completed prediction, or when the previous chunk ends if that is later. It asks for the next prediction before the current chunk ends, by the time the last prediction took, but not before the chunk's last command is due. The model returns ordered actions without timestamps and does not need to account for network or compute delay.
+**The client scheduler decides when each action runs.** `ChunkedSchedule` spaces commands at its configured FPS and finishes each chunk before starting the next. By default it requests the next prediction when the current chunk ends. The model returns ordered actions without timestamps and does not need to account for network or compute delay.
 
 ```mermaid
 sequenceDiagram
@@ -81,7 +81,16 @@ sequenceDiagram
     S-->>C: next action chunk
 ```
 
-How the client fills the delay and merges successive predictions is a swappable choice. The default runs each trajectory to its last command, then asks for the next. More advanced strategies — temporal ensembling ([Zhao et al. 2023](https://arxiv.org/abs/2304.13705)) and real-time chunking ([Black et al. 2025](https://arxiv.org/abs/2506.07339)) — overlap and blend predictions to stay smooth under latency. They all talk to the same server; only the client logic changes.
+To overlap inference with execution, set `inference_lead`. This requests the next prediction early while the current chunk finishes:
+
+```python
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration
+
+# Request 250 ms before each chunk ends.
+ChunkedSchedule(fps=15, inference_lead=ConstantDuration(0.25))
+```
+
+How the client fills the delay and merges successive predictions is a swappable choice. More advanced strategies — temporal ensembling ([Zhao et al. 2023](https://arxiv.org/abs/2304.13705)) and real-time chunking ([Black et al. 2025](https://arxiv.org/abs/2506.07339)) — blend or replace predictions to stay smooth under latency. They all talk to the same server; only the client logic changes.
 
 ## The pieces
 
