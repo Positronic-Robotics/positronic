@@ -71,10 +71,11 @@ class JpegEncoding:
 
 @dataclass(frozen=True)
 class EncodedFrame:
-    """One frame and the JPEG bytes ``encode_jpeg`` made of it."""
+    """One frame and the JPEG bytes ``encode_jpeg`` made of it at ``quality``."""
 
     pixels: np.ndarray
     jpeg: bytes
+    quality: int
 
 
 def encode_images(value: Any, encodings: cabc.Sequence[JpegEncoding]) -> Any:
@@ -92,7 +93,7 @@ def encode_jpeg(
     Nonempty 3D/4D inputs use the v1/v2 marker. Extra leading dimensions and empty batches carry
     their full shape. JPEG changes pixels; ordinary arrays passed to ``serialise`` stay lossless.
     ``encoded`` holds frames of an earlier call. Each leading frame equal to the frame of the same index
-    in ``encoded`` uses its JPEG bytes and is not encoded again.
+    in ``encoded``, and encoded at the same quality, uses its JPEG bytes and is not encoded again.
     """
     if image.ndim < 3 or image.shape[-1] != 3 or min(image.shape[-3:-1]) < 1:
         raise ValueError('JPEG images must have shape (..., H, W, 3) with positive height and width')
@@ -103,7 +104,7 @@ def encode_jpeg(
     for index, frame in enumerate(frames):
         if index < len(encoded):
             earlier = encoded[index]
-            if np.array_equal(earlier.pixels, frame):
+            if earlier.quality == quality and np.array_equal(earlier.pixels, frame):
                 bufs.append(earlier.jpeg)
                 continue
         encoded = ()  # Only the leading frames use earlier bytes.
@@ -115,10 +116,11 @@ def encode_jpeg(
     return {_JPEG: True, _FRAMES: bufs, _NDIM: int(image.ndim)}
 
 
-def encoded_frames(image: np.ndarray, marker: cabc.Mapping[bytes, Any]) -> list[EncodedFrame]:
-    """Each frame of ``image`` with its JPEG bytes in ``marker``, the ``encode_jpeg`` result of ``image``."""
+def encoded_frames(image: np.ndarray, marker: cabc.Mapping[bytes, Any], quality: int) -> list[EncodedFrame]:
+    """Each frame of ``image`` with its JPEG bytes in ``marker``, the ``encode_jpeg`` result of ``image`` at
+    ``quality``."""
     frames = image.reshape((-1, *image.shape[-3:]))
-    return [EncodedFrame(frame, jpeg) for frame, jpeg in zip(frames, marker[_FRAMES], strict=True)]
+    return [EncodedFrame(frame, jpeg, quality) for frame, jpeg in zip(frames, marker[_FRAMES], strict=True)]
 
 
 def frame_digest(data: bytes) -> bytes:

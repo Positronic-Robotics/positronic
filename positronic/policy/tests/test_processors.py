@@ -1330,8 +1330,24 @@ def test_stack_specs_round_trip(definition):
     assert spec.from_spec(definition.to_spec()).to_spec() == definition.to_spec()
 
 
-def test_a_schedule_without_a_context_lead_declares_none():
-    assert ChunkedSchedule.CONTEXT_LEAD_SEC_ARG not in ChunkedSchedule(fps=10).to_spec()['args']
+def test_a_schedule_without_a_context_lead_keeps_version_2():
+    description = ChunkedSchedule(fps=10).to_spec()
+    assert description['version'] == ChunkedSchedule.WIRE_VERSION == 2
+    assert ChunkedSchedule.CONTEXT_LEAD_SEC_ARG not in description['args']
+
+
+def test_a_context_lead_declares_the_context_push_version():
+    description = ChunkedSchedule(fps=10, context_lead_sec=0.3).to_spec()
+    assert description['version'] == ChunkedSchedule.CONTEXT_PUSH_VERSION
+    assert description['args'] == {'fps': 10, 'context_lead_sec': 0.3}
+    rebuilt = spec.from_spec(description)
+    assert isinstance(rebuilt, ChunkedSchedule) and rebuilt.to_spec() == description
+
+
+def test_a_rig_that_predates_the_push_refuses_a_context_lead_by_its_version(monkeypatch):
+    monkeypatch.setitem(spec.COMPONENTS, ChunkedSchedule.WIRE_NAME, {2: Version(ChunkedSchedule)})
+    with pytest.raises(ValueError, match='supported versions: \\[2\\]'):
+        spec.from_spec(ChunkedSchedule(fps=10, context_lead_sec=0.3).to_spec())
 
 
 @pytest.mark.parametrize(

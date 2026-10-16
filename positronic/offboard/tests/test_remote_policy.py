@@ -1062,6 +1062,28 @@ def test_the_server_keeps_no_frame_a_request_decoded_while_the_model_runs(served
     assert model.held_while_running == [False]
 
 
+def test_the_server_keeps_no_decoded_push_stack_while_it_waits_for_the_request(served, monkeypatch):
+    address, _, _ = served(model=ImageModel(), local=CONTEXT_STACK)
+    decode = server_module.deserialise_with_frames
+    stacks: list[weakref.ref] = []
+
+    def watching(message, held, decoded):
+        request = decode(message, held, decoded)
+        if legacy_protocol.CONTEXT in request:
+            stacks.append(weakref.ref(request[legacy_protocol.CONTEXT]['image']))
+        return request
+
+    monkeypatch.setattr(server_module, 'deserialise_with_frames', watching)
+    session = InferenceClient(registry.client_wire('websocket'), address).new_session()
+    try:
+        push_context(session, {'image': _solid([1, 2])}, jpeg_quality=90)
+        # The server answered the push and now waits for the next message; only the held frames stay.
+        gc.collect()
+        assert len(stacks) == 1 and stacks[0]() is None
+    finally:
+        session.close()
+
+
 def test_pipeline_rejects_frame_conversion_on_both_sides():
     local = Sequential(ChangeEEFrame(Transform3D.identity), ChunkedSchedule(fps=10))
     with pytest.raises(ValueError, match='Only one side'):

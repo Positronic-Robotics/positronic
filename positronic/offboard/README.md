@@ -304,7 +304,7 @@ ends. A schedule that declares `context_lead_sec` sends them early, so that the 
 uploads only the newer frames:
 
 ```json
-{"name": "chunked_schedule", "version": 2, "args": {"fps": 15.0, "context_lead_sec": 0.5}}
+{"name": "chunked_schedule", "version": 3, "args": {"fps": 15.0, "context_lead_sec": 0.5}}
 ```
 
 1. `context_lead_sec` before the chunk ends, `ChunkedSchedule` takes each offset of the stack whose time,
@@ -329,7 +329,7 @@ A server that does not hold a frame of a request answers `{"reference_miss": tru
 client then sends the request again in full, once. A second miss is an error. A new session holds no frames.
 
 When no offset has passed `context_lead_sec` before the chunk ends, there is no push, and the request is the
-same as without `context_lead_sec`. A server without `context_push` gets no push. The push needs a
+same as without `context_lead_sec`. A schedule with `context_lead_sec` declares version 3, so a rig that predates the push refuses it by its version. A schedule without the lead stays at version 2. A server without `context_push` gets no push. The push needs a
 `TemporalStack` directly around the schedule; `RTCSchedule` makes no push. Only `PolicyServer` (protocol v2)
 takes a push. A lead between the time that the frames of the push take to upload and the time that the oldest
 offsets have passed gives the most overlap.

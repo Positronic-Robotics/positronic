@@ -32,19 +32,6 @@ def _is_image(value: Any) -> bool:
     return isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
 
 
-def _image_stacks(value: Any, path: ValuePath) -> cabc.Iterator[tuple[ValuePath, np.ndarray]]:
-    """Every ``(T, H, W, 3)`` stack in ``value``, at any depth of mappings and lists, with its path."""
-    if _is_image(value):
-        if value.ndim == 4:
-            yield path, value
-    elif isinstance(value, cabc.Mapping):
-        for key, item in value.items():
-            yield from _image_stacks(item, (*path, key))
-    elif isinstance(value, list | tuple):
-        for index, item in enumerate(value):
-            yield from _image_stacks(item, (*path, index))
-
-
 def _prepare_value(value: Any, jpeg_quality: int, path: ValuePath, encoded: EncodedFrames) -> Any:
     # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
     if _is_image(value):
@@ -91,17 +78,17 @@ def round_trip(
             telemetry.set_attrs(span, **served)
 
 
-def push_context(session: InferenceSession, obs: cabc.Mapping[str, Any], jpeg_quality: int) -> EncodedFrames:
-    """Send the image stacks of ``obs`` as a context push, timed as the ``policy.context`` span, and return the
-    pushed frames by the path of their stack. A stack inside a mapping or a list goes in the push under its own
-    key, inside the same containers. An ``obs`` without a stack sends nothing and returns none."""
-    with telemetry.span(telemetry_keys.SPAN_POLICY_CONTEXT):
-        stacks = dict(_image_stacks(obs, ()))
-        if not stacks:
-            return {}
-        markers = {path: encode_jpeg(stack, jpeg_quality) for path, stack in stacks.items()}
-        session.push_context(_nest(markers))
-        return {path: encoded_frames(stacks[path], marker) for path, marker in markers.items()}
+def _image_stacks(value: Any, path: ValuePath) -> cabc.Iterator[tuple[ValuePath, np.ndarray]]:
+    """Every ``(T, H, W, 3)`` stack in ``value``, at any depth of mappings and lists, with its path."""
+    if _is_image(value):
+        if value.ndim == 4:
+            yield path, value
+    elif isinstance(value, cabc.Mapping):
+        for key, item in value.items():
+            yield from _image_stacks(item, (*path, key))
+    elif isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            yield from _image_stacks(item, (*path, index))
 
 
 def _nest(values: cabc.Mapping[ValuePath, Any]) -> dict[str, Any]:
@@ -117,6 +104,19 @@ def _nest(values: cabc.Mapping[ValuePath, Any]) -> dict[str, Any]:
             node = node.setdefault(str(part), {})
         node[str(path[-1])] = value
     return nested
+
+
+def push_context(session: InferenceSession, obs: cabc.Mapping[str, Any], jpeg_quality: int) -> EncodedFrames:
+    """Send the image stacks of ``obs`` as a context push, timed as the ``policy.context`` span, and return the
+    pushed frames by the path of their stack. A stack inside a mapping or a list goes in the push under its own
+    key, inside the same containers. An ``obs`` without a stack sends nothing and returns none."""
+    with telemetry.span(telemetry_keys.SPAN_POLICY_CONTEXT):
+        stacks = dict(_image_stacks(obs, ()))
+        if not stacks:
+            return {}
+        markers = {path: encode_jpeg(stack, jpeg_quality) for path, stack in stacks.items()}
+        session.push_context(_nest(markers))
+        return {path: encoded_frames(stacks[path], marker, jpeg_quality) for path, marker in markers.items()}
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:

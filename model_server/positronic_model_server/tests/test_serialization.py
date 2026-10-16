@@ -119,14 +119,18 @@ def _frames(count: int, seed: int = 0) -> np.ndarray:
     return np.random.default_rng(seed).integers(0, 256, (count, 16, 24, 3), dtype=np.uint8)
 
 
-def _jpegs(image: np.ndarray, encoded=()) -> list[bytes]:
-    marker = serialization.encode_jpeg(image, encoded=encoded)
-    return [frame.jpeg for frame in serialization.encoded_frames(image, marker)]
+def _jpegs(image: np.ndarray, encoded=(), quality: int = serialization.DEFAULT_JPEG_QUALITY) -> list[bytes]:
+    marker = serialization.encode_jpeg(image, quality, encoded=encoded)
+    return [frame.jpeg for frame in serialization.encoded_frames(image, marker, quality)]
+
+
+def _encoded(image: np.ndarray, quality: int = serialization.DEFAULT_JPEG_QUALITY) -> list:
+    return serialization.encoded_frames(image, serialization.encode_jpeg(image, quality), quality)
 
 
 def test_equal_leading_frames_reuse_their_jpeg_bytes():
     earlier = _frames(3)
-    encoded = serialization.encoded_frames(earlier, serialization.encode_jpeg(earlier))
+    encoded = _encoded(earlier)
     reused = _jpegs(np.concatenate([earlier[:2], _frames(1, seed=1)]), encoded)
     assert reused[0] is encoded[0].jpeg and reused[1] is encoded[1].jpeg and reused[2] != encoded[2].jpeg
     # A frame after the first one that differs is encoded again, even when it equals an earlier frame.
@@ -134,11 +138,20 @@ def test_equal_leading_frames_reuse_their_jpeg_bytes():
     assert shifted[1] is not encoded[1].jpeg and shifted[1] == encoded[1].jpeg
 
 
-def test_encoded_frames_pair_each_frame_with_its_jpeg_bytes():
+def test_encoded_frames_pair_each_frame_with_its_jpeg_bytes_and_quality():
     stack = _frames(2)
-    encoded = serialization.encoded_frames(stack, serialization.encode_jpeg(stack))
+    encoded = _encoded(stack, quality=60)
     assert [frame.pixels.shape for frame in encoded] == [(16, 24, 3)] * 2
+    assert {frame.quality for frame in encoded} == {60}
     np.testing.assert_array_equal(encoded[1].pixels, stack[1])
+
+
+def test_a_frame_encoded_at_another_quality_is_encoded_again():
+    stack = _frames(2)
+    encoded = _encoded(stack, quality=60)
+    again = _jpegs(stack, encoded, quality=90)
+    assert again == _jpegs(stack, quality=90)
+    assert all(new is not old.jpeg for new, old in zip(again, encoded, strict=True))
 
 
 def test_a_held_frame_travels_as_its_digest_and_decodes_from_the_held_frames():
