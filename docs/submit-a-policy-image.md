@@ -66,7 +66,7 @@ Other models:
 Approximate values, from one run of each image in October 2026. A later build of an image can use
 different values. The platform gives each image 40 GB of GPU memory.
 
-| Image | Disk | Memory, test without a GPU | GPU memory |
+| Image | Disk, pulled image | Memory, test without a GPU | GPU memory |
 |---|---|---|---|
 | `positro/pi05-droid` | 50 GB | 20 GB | 10 GB |
 | `positro/gr00t-n17-droid` | 40 GB | needs a GPU | 10 GB |
