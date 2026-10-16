@@ -11,8 +11,8 @@ public boards and the eval each one ranks, and stops. A name the platform does n
 and the refusal names the evals on offer.
 
 The key comes from POSITRONIC_PLATFORM_API_KEY, which `platform-register` prints. With no key, the
-script registers with the GitHub token in POSITRONIC_PLATFORM_CREDENTIAL, which the platform's own
-OAuth app must have minted.
+script registers with the token in POSITRONIC_PLATFORM_CREDENTIAL, which the platform's identity
+provider must have minted for the platform's own client.
 
 Every call goes through `PlatformClient`, so each response is a typed model rather than a dict. The
 same flow from the command line is `positronic account register`, `positronic eval run` and

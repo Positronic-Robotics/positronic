@@ -281,6 +281,24 @@ class RegisterResponse(BaseModel):
         return self
 
 
+class WorkOSSettings(BaseModel):
+    """The WorkOS client a CLI signs in through, and the AuthKit domain that serves its sign-in pages."""
+
+    client_id: str
+    authkit_domain: str
+
+
+class AuthConfig(BaseModel):
+    """`auth.config`: the sign-ins the platform takes. The gateway declares this type; this is a copy of it.
+
+    `workos` is set when the platform takes a WorkOS sign-in. `github_registration` says whether
+    `users.register` takes a GitHub token.
+    """
+
+    github_registration: bool
+    workos: WorkOSSettings | None
+
+
 class MeResponse(BaseModel):
     """`users.me`. `client` is the client a grant lets the caller file rig plans for, unset without one."""
 

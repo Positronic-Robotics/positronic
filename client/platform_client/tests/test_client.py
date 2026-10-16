@@ -41,12 +41,14 @@ from platform_client.eval_plan import (
     credential_from_file,
     plan_of_image,
 )
+from platform_client.identity_providers import LONGEST_REGISTER_TIMEOUT, WORKOS
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
     ArtifactListResponse,
+    AuthConfig,
     BoardListResponse,
     CancelResponse,
     MeResponse,
@@ -186,6 +188,39 @@ def test_register_posts_the_body_unauthenticated_and_parses_the_response():
     assert gateway.request().method == 'POST'
     assert 'authorization' not in gateway.request().headers
     assert gateway.body() == {'credential': 'token', 'alias': 'demo', 'rotate': False}
+
+
+def test_register_waits_out_the_slowest_provider_check_unless_told_the_provider():
+    """The gateway checks the credential with its provider inside the call; the client default of 30 s is shorter."""
+    body = {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'}
+    gateway = Gateway(200, body)
+    client = make_client(gateway, api_key=None)
+
+    client.register(RegisterRequest(credential='token'))
+    assert gateway.request().extensions['timeout'] == LONGEST_REGISTER_TIMEOUT.as_dict()
+
+    client.register(RegisterRequest(credential='token'), timeout=WORKOS.register_timeout)
+    assert gateway.request().extensions['timeout'] == WORKOS.register_timeout.as_dict()
+
+
+def test_auth_config_reads_the_sign_ins_without_a_key():
+    config = {'github_registration': False, 'workos': {'client_id': 'client_01', 'authkit_domain': 'a.authkit.app'}}
+    gateway = Gateway(200, config)
+
+    answer = make_client(gateway).auth_config()
+
+    assert isinstance(answer, AuthConfig)
+    assert answer.workos is not None and answer.workos.client_id == 'client_01'
+    assert gateway.request().url.path == routes.AUTH_CONFIG
+    assert gateway.request().method == 'GET'
+    assert 'authorization' not in gateway.request().headers
+
+
+@pytest.mark.parametrize(('url', 'trusts_env'), [('http://127.0.0.1:8080', False), ('https://gateway.example', True)])
+def test_a_plain_http_platform_ignores_an_environment_proxy(url: str, trusts_env: bool):
+    """`HTTP_PROXY` with no matching `NO_PROXY` would carry a plain-http key or token off the machine."""
+    with PlatformClient(url) as client:
+        assert client._client.trust_env is trusts_env
 
 
 def test_register_sends_no_key_even_when_the_client_holds_one():
@@ -663,6 +698,7 @@ def test_every_endpoint_has_exactly_one_method():
         if name != 'API_PREFIX' and isinstance(value, str) and value.startswith(routes.API_PREFIX)
     }
     methods = {
+        'auth_config',
         'register',
         'me',
         'create_submission',

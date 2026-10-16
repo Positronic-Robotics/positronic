@@ -73,6 +73,7 @@ from platform_client.responses import (
     ArtifactEntry,
     ArtifactListResponse,
     ArtifactRefs,
+    AuthConfig,
     BaselineMark,
     BlockedSubmissionView,
     BoardListResponse,
@@ -102,6 +103,7 @@ from platform_client.responses import (
     SubmissionListResponse,
     SubmissionListRow,
     SubmissionView,
+    WorkOSSettings,
 )
 from platform_client.tasks import TaskRef
 from positronic_evals import scoring
@@ -822,6 +824,31 @@ def test_identity_ignores_a_personal_org_field_from_an_older_platform():
     me = MeResponse.model_validate(answer)
     assert me.organizations == []
     assert 'personal_org' not in me.model_dump()
+
+
+def test_auth_config_has_the_fields_the_gateway_declares():
+    """The gateway declares `auth.config` and pins the same names on its side; this copy cannot import it."""
+    assert set(AuthConfig.model_fields) == {'github_registration', 'workos'}
+    assert set(WorkOSSettings.model_fields) == {'client_id', 'authkit_domain'}
+
+
+@pytest.mark.parametrize(
+    'body',
+    [
+        '{"github_registration": false, "workos": {"client_id": "client_01", "authkit_domain": "a.authkit.app"}}',
+        '{"github_registration": true, "workos": null}',
+        '{"github_registration": false, "workos": null}',
+    ],
+    ids=['WorkOS', 'GitHub', 'dev'],
+)
+def test_auth_config_reads_every_answer_the_gateway_gives(body: str):
+    assert AuthConfig.model_validate_json(body).model_dump_json() == body.replace(' ', '')
+
+
+def test_auth_config_needs_both_fields():
+    """`workos` is null rather than absent when the platform takes no WorkOS sign-in."""
+    with pytest.raises(ValidationError, match='workos'):
+        AuthConfig.model_validate_json('{"github_registration": true}')
 
 
 def test_identity_from_an_older_platform_has_an_independent_empty_list():
