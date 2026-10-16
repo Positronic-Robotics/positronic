@@ -81,6 +81,19 @@ class ReasonCode(IntEnum):
     provision_wedged = 11
     runner_unresponsive = 12
 
+    @property
+    def is_platform_fault(self) -> bool:
+        """Whether the platform or its provider caused the failure. `INVALID`, an unread reason, is not."""
+        return self in _PLATFORM_FAULT_REASONS
+
+
+_PLATFORM_FAULT_REASONS = frozenset({
+    ReasonCode.internal_error,
+    ReasonCode.quota_exceeded,
+    ReasonCode.provision_wedged,
+    ReasonCode.runner_unresponsive,
+})
+
 
 @unique
 class SubmissionStatus(IntEnum):

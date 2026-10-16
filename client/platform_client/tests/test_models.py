@@ -701,6 +701,29 @@ def test_a_view_round_trips_back_to_its_own_variant():
     assert SUBMISSION_VIEWS.validate_python(SUBMISSION_VIEWS.dump_python(view, mode='json')) == view
 
 
+def test_every_reason_code_is_on_one_side_of_the_fault_split():
+    # A new member fails the first assertion until it is put on one side.
+    caller = {
+        ReasonCode.INVALID,
+        ReasonCode.image_unpullable,
+        ReasonCode.image_too_large,
+        ReasonCode.invalid_flags,
+        ReasonCode.policy_setup_crash,
+        ReasonCode.policy_inference_crash,
+        ReasonCode.policy_oom,
+        ReasonCode.latency_budget_exceeded,
+        ReasonCode.wall_clock_exceeded,
+    }
+    platform = {
+        ReasonCode.internal_error,
+        ReasonCode.quota_exceeded,
+        ReasonCode.provision_wedged,
+        ReasonCode.runner_unresponsive,
+    }
+    assert caller | platform == set(ReasonCode)
+    assert {reason for reason in ReasonCode if reason.is_platform_fault} == platform
+
+
 def test_the_error_exception_exposes_the_envelope_and_the_reason_code():
     payload = {
         'error': {
@@ -714,6 +737,7 @@ def test_the_error_exception_exposes_the_envelope_and_the_reason_code():
     assert err.message == 'image not pullable'
     assert err.reason_code is ReasonCode.image_unpullable
     assert err.http_status == 400
+    assert not err.synthesized_envelope
 
 
 def test_an_unparseable_error_body_still_raises_the_same_exception():
@@ -721,6 +745,7 @@ def test_an_unparseable_error_body_still_raises_the_same_exception():
     assert err.code is ErrorCode.internal_error
     assert err.http_status == 502
     assert err.details['body'] == '<html>bad gateway</html>'
+    assert err.synthesized_envelope
 
 
 def test_a_reason_code_this_client_cannot_read_is_invalid_rather_than_absent():
