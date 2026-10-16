@@ -49,11 +49,12 @@ def serve(
     hold_sec: float = 1.0,
     press_threshold: float = 0.6,
     view_fps: float = 30.0,
+    headset_camera: str | None = None,
     open_window: bool = True,
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen."""
     # TODO: Set the ready limit and the silence limit for a rig.
-    service = TeleopService(Path(socket), ready_limit, silence_limit, hold_sec, press_threshold)
+    service = TeleopService(Path(socket), ready_limit, silence_limit, hold_sec, press_threshold, headset_camera)
     headset = _Headset(service, view_fps)
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)

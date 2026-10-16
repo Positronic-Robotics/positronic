@@ -28,6 +28,7 @@ class WindowStatus(BaseModel):
     task: str
     control: bool
     attempt_started: bool
+    cameras: list[str]
 
 
 def window_app(service: TeleopService) -> FastAPI:
@@ -52,7 +53,11 @@ def window_app(service: TeleopService) -> FastAPI:
     def status() -> WindowStatus:
         state = service.state()
         return WindowStatus(
-            phase=state.phase, task=state.task, control=state.control, attempt_started=state.attempt_started
+            phase=state.phase,
+            task=state.task,
+            control=state.control,
+            attempt_started=state.attempt_started,
+            cameras=list(state.cameras),
         )
 
     @app.get('/')
@@ -73,9 +78,13 @@ def window_app(service: TeleopService) -> FastAPI:
         service.answer_ready(Reply.CANCELLED)
         return status()
 
-    @app.get('/view.jpg')
-    async def view() -> Response:
-        encoded, jpeg = cv2.imencode('.jpg', cv2.cvtColor(service.view(), cv2.COLOR_RGB2BGR))
+    @app.get('/camera/{name}.jpg')
+    async def camera(name: str) -> Response:
+        try:
+            image = service.camera_image(name)
+        except KeyError:
+            raise HTTPException(404, f'the run sends no camera {name}') from None
+        encoded, jpeg = cv2.imencode('.jpg', cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
         assert encoded, 'OpenCV encodes an RGB image as JPEG'
         return Response(jpeg.tobytes(), media_type='image/jpeg', headers={'cache-control': 'no-store'})
 

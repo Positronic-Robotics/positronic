@@ -294,7 +294,11 @@ def test_a_person_completes_a_trial_on_mujoco_franka(service, socket_path, tmp_p
         mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
         loaders=positronic.cfg.simulator.stack_cubes_loaders(),
         camera_fps=10,
-        camera_dict={keys.EXTERIOR_IMAGE: 'back_view_ph'},
+        camera_dict={
+            keys.EXTERIOR_IMAGE: 'back_view_ph',
+            keys.WRIST_IMAGE: 'handcam_left_ph',
+            'image.handcam_right': 'handcam_right_ph',
+        },
         instruction='Pick up the green cube.',
         timeout=60,
     )
@@ -441,7 +445,30 @@ def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, sock
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
         _drive(run, 0.2)
-        stored = service._display[session.IMAGE]
+        stored = service.camera_image(keys.EXTERIOR_IMAGE)
         before = stored.copy()
         service.view()
         np.testing.assert_array_equal(stored, before)
+
+
+@pytest.mark.parametrize('headset_camera', [None, keys.EXTERIOR_IMAGE])
+def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, headset_camera):
+    images = {
+        keys.WRIST_IMAGE: np.full((24, 32, 3), 50, np.uint8),
+        keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 200, np.uint8),
+    }
+    with TeleopService(socket_path, 5.0, 0.05, HOLD_SEC, headset_camera=headset_camera) as service:
+        address = UnixSocketAddress(socket_path, SESSION_PATH, '')
+        teleop = session.TeleopSession(registry.client_wire('websocket_unix').dial(address, None, 5), 5.0, 5.0)
+        try:
+            ready = threading.Thread(target=teleop.ready)
+            ready.start()
+            _until_phase(service, Phase.READY_WAIT)
+            service.take_sample(HAND, _buttons(b=1.0))
+            ready.join(5)
+            teleop.frame({session.TASK: 'pick up the cube'}, images)
+            shown = keys.WRIST_IMAGE if headset_camera is None else headset_camera
+            assert service.view().shape == images[shown].shape
+            assert service.state().cameras == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+        finally:
+            teleop.close()

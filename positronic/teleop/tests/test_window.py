@@ -7,10 +7,11 @@ import numpy as np
 import PIL.Image
 import pytest
 from fastapi.testclient import TestClient
-from positronic_model_server.serialization import deserialise, serialise
+from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
 from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, UnixSocketAddress
 
+from positronic import keys
 from positronic.teleop import session
 from positronic.teleop.service import Phase, TeleopService
 from positronic.teleop.window import Window, window_app
@@ -40,7 +41,13 @@ def waiting(service, socket_path):
 
 
 def test_the_window_says_when_no_trial_waits(window):
-    assert window.get('/status').json() == {'phase': 'idle', 'task': '', 'control': False, 'attempt_started': False}
+    assert window.get('/status').json() == {
+        'phase': 'idle',
+        'task': '',
+        'control': False,
+        'attempt_started': False,
+        'cameras': [],
+    }
 
 
 def test_ready_from_the_window_answers_the_ready_request(window, waiting):
@@ -67,11 +74,22 @@ def test_a_page_on_another_site_cannot_ready_a_trial(window, waiting):
     assert window.get('/status').json()['phase'] == 'ready_wait'
 
 
-def test_the_window_shows_the_view_of_the_headset(window, service):
-    answer = window.get('/view.jpg')
-    assert answer.headers['content-type'] == 'image/jpeg'
-    shown = np.asarray(PIL.Image.open(io.BytesIO(answer.content)).convert('RGB'))
-    assert shown.shape == service.view().shape
+def test_the_window_lists_and_serves_each_camera_of_the_run(window, waiting):
+    window.post('/ready')
+    assert deserialise(waiting.recv(5)) == {session.KIND: session.Reply.READY}
+    images = {
+        keys.WRIST_IMAGE: np.full((24, 32, 3), 50, np.uint8),
+        keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 200, np.uint8),
+    }
+    encoded = {name: encode_jpeg(image) for name, image in images.items()}
+    waiting.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: {session.IMAGES: encoded}}))
+    waiting.recv(5)
+    assert window.get('/status').json()['cameras'] == [keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE]
+    for name, image in images.items():
+        answer = window.get(f'/camera/{name}.jpg')
+        assert answer.headers['content-type'] == 'image/jpeg'
+        assert np.asarray(PIL.Image.open(io.BytesIO(answer.content)).convert('RGB')).shape == image.shape
+    assert window.get('/camera/image.nowhere.jpg').status_code == 404
 
 
 def test_the_page_offers_ready_and_cancel(window):
@@ -121,4 +139,10 @@ def test_a_policy_that_leaves_mid_trial_leaves_no_old_task_in_the_window(window,
     while service.phase is not Phase.IDLE:
         assert time.monotonic() < deadline, 'the session never ended'
         time.sleep(0.005)
-    assert window.get('/status').json() == {'phase': 'idle', 'task': '', 'control': False, 'attempt_started': False}
+    assert window.get('/status').json() == {
+        'phase': 'idle',
+        'task': '',
+        'control': False,
+        'attempt_started': False,
+        'cameras': [],
+    }
