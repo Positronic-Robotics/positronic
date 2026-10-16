@@ -1243,7 +1243,7 @@ def test_wire_names_match_the_registered_components():
     assert set(instances) == set(registered)
     for name, instance in instances.items():
         assert instance.to_spec()['name'] == name
-        assert type(spec.from_spec(instance.to_spec())) is type(instance)
+        assert type(instance) is registered[name][instance.WIRE_VERSION].implementation
         assert instance.to_spec()['version'] == instance.WIRE_VERSION
         assert spec.from_spec({**instance.to_spec(), VERSION: LATEST}).to_spec() == instance.to_spec()
 

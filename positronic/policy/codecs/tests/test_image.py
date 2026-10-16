@@ -10,12 +10,6 @@ def _image(h, w):
     return np.zeros((h, w, 3), dtype=np.uint8)
 
 
-def _textured(h, w):
-    y, x = np.mgrid[0:h, 0:w]
-    image = np.stack([127 + 100 * np.sin(x / 7.0) * np.cos(y / 11.0), 255 * x / w, 255 * y / h], axis=-1)
-    return np.clip(image, 0, 255).astype(np.uint8)
-
-
 class TestRestrictImageSize:
     def test_bounds_every_image(self):
         result = RestrictImageSize(64, 48).encode({
@@ -90,29 +84,51 @@ class TestRestrictImageSize:
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
 
-    def test_a_bilinear_spec_has_no_resample_argument(self):
-        assert RestrictImageSize(64, 48).to_spec()['args'] == {'width': 64, 'height': 48}
+    def test_v1_keeps_its_published_argument_schema(self):
+        description = {'name': 'restrict_image_size', 'version': 1, 'args': {'width': 64, 'height': 48}}
+        assert RestrictImageSize(64, 48).to_spec() == description
+        restored = spec.from_spec(description)
+        assert isinstance(restored, RestrictImageSize)
+        assert restored.to_spec() == description
 
-    def test_area_survives_a_wire_round_trip(self):
-        rebuilt = spec.from_spec(RestrictImageSize(64, 48, resample=Resample.AREA).to_spec())
+    def test_a_v1_spec_without_bounds_takes_the_standard_bound(self):
+        restored = spec.from_spec({'name': 'restrict_image_size'})
+        assert isinstance(restored, RestrictImageSize)
+        assert restored.encode({'cam': _image(1080, 1920)})['cam'].shape == (360, 640, 3)
+
+    def test_area_declares_the_resample_version_and_survives_a_wire_round_trip(self):
+        description = RestrictImageSize(64, 48, resample=Resample.AREA).to_spec()
+        assert description['version'] == RestrictImageSize.RESAMPLE_VERSION
+        assert description['args'] == {'width': 64, 'height': 48, 'resample': 'area'}
+        rebuilt = spec.from_spec(description)
         assert isinstance(rebuilt, RestrictImageSize)
-        assert rebuilt.to_spec()['args']['resample'] == 'area'
+        assert rebuilt.to_spec() == description
 
     def test_an_unknown_resample_in_a_spec_is_refused(self):
-        description = {'name': RestrictImageSize.WIRE_NAME, 'args': {'width': 64, 'height': 48, 'resample': 'bicubic'}}
+        description = {
+            'name': RestrictImageSize.WIRE_NAME,
+            'version': RestrictImageSize.RESAMPLE_VERSION,
+            'args': {'width': 64, 'height': 48, 'resample': 'bicubic'},
+        }
         with pytest.raises(ValueError, match='bicubic'):
             spec.from_spec(description)
 
+    @staticmethod
+    def _textured(h, w):
+        y, x = np.mgrid[0:h, 0:w]
+        image = np.stack([127 + 100 * np.sin(x / 7.0) * np.cos(y / 11.0), 255 * x / w, 255 * y / h], axis=-1)
+        return np.clip(image, 0, 255).astype(np.uint8)
+
     @pytest.mark.parametrize('bound', [(320, 320), (160, 160), (64, 48)])
     def test_area_gives_the_bilinear_shape_and_near_pixels(self, bound):
-        image = _textured(480, 640)
+        image = self._textured(480, 640)
         bilinear = RestrictImageSize(*bound).encode({'cam': image})['cam']
         area = RestrictImageSize(*bound, resample=Resample.AREA).encode({'cam': image})['cam']
         assert area.shape == bilinear.shape and area.dtype == bilinear.dtype
         assert np.abs(area.astype(int) - bilinear.astype(int)).mean() < 2
 
     def test_area_scales_a_frame_that_is_not_contiguous(self):
-        image = _textured(480, 640)[:, ::-1]
+        image = self._textured(480, 640)[:, ::-1]
         codec = RestrictImageSize(64, 48, resample=Resample.AREA)
         expected = codec.encode({'cam': np.ascontiguousarray(image)})['cam']
         np.testing.assert_array_equal(codec.encode({'cam': image})['cam'], expected)

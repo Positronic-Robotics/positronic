@@ -63,7 +63,10 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
             UnpackActionChunk,
         )
     },
-    RestrictImageSize.WIRE_NAME: {RestrictImageSize.WIRE_VERSION: Version(RestrictImageSize.from_spec_args)},
+    RestrictImageSize.WIRE_NAME: {
+        RestrictImageSize.WIRE_VERSION: Version(RestrictImageSize),
+        RestrictImageSize.RESAMPLE_VERSION: Version(RestrictImageSize.from_resample_spec),
+    },
 }
 
 
