@@ -87,6 +87,9 @@
           videoPlayer.init(scene, camera);
         }
 
+        // The xr-standard gamepad layout of `buttons`. `positronic/teleop/service.py` reads these indices.
+        const BUTTON = { trigger: 0, stick: 3, a: 4, b: 5 };
+
         function onFrame({ session, frame, refSpace }) {
           // Gather controllers from input sources and update axes
           const controllers = { left: null, right: null };

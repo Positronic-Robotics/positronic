@@ -1,11 +1,11 @@
 import configuronic as cfn
 
 
-@cfn.config(port=5005, use_https=True, sensitivity=1.0)
-def webxr(port: int, frontend: str, use_https: bool, sensitivity: float):
+@cfn.config(port=5005, use_https=True, sensitivity=1.0, jpeg_quality=50)
+def webxr(port: int, frontend: str, use_https: bool, sensitivity: float, jpeg_quality: int):
     from positronic.drivers.webxr import WebXR
 
-    return WebXR(port=port, frontend=frontend, use_https=use_https, sensitivity=sensitivity)
+    return WebXR(port=port, frontend=frontend, use_https=use_https, sensitivity=sensitivity, jpeg_quality=jpeg_quality)
 
 
 oculus = webxr.override(frontend='oculus')
