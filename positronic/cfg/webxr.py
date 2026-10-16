@@ -15,3 +15,7 @@ iphone = webxr.override(frontend='iphone', use_https=False, sensitivity=2.0)
 
 # Android phones require https
 android = webxr.override(frontend='iphone', use_https=True, sensitivity=2.0)
+
+# The phone pages for `positronic teleop`: the same page, with momentary buttons that carry the teleop labels
+iphone_teleop = iphone.override(frontend='iphone_teleop')
+android_teleop = android.override(frontend='iphone_teleop')

@@ -513,18 +513,18 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
     statuses = []
 
     def script(base, clock):
-        assert (yield from wait(lambda: read_status(base), clock, seconds=60))
+        yield from wait(lambda: read_status(base), 'the console to answer', clock, seconds=60)
         for verdict in (Outcome.PASS, Outcome.FAIL):
             calls = model.call_count
             assert post(base, '/episode/start') == 200
-            assert (yield from wait(lambda calls=calls: model.call_count > calls, clock))
+            yield from wait(lambda calls=calls: model.call_count > calls, 'a model call', clock)
             assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
 
             def finished():
                 status = read_status(base)
                 return status is not None and status.run.phase is Phase.READY
 
-            assert (yield from wait(finished, clock))
+            yield from wait(finished, 'the episode to finish', clock)
         statuses.append(read_status(base))
 
     run_attended(policy, script)

@@ -1,7 +1,10 @@
 import asyncio
 import os
+import re
+import socket
 import threading
 import time
+import types
 from pathlib import Path
 from typing import cast
 
@@ -9,11 +12,14 @@ import numpy as np
 import pos3
 import pytest
 from positronic_model_server import server_wire
-from positronic_model_server.serialization import deserialise, serialise
+from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
 from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, PeerDisconnected, UnixSocketAddress
+from websockets.sync.client import unix_connect
 
+import pimm
 import positronic.cfg.simulator
+from pimm.world import SystemClock
 from positronic import geom, keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
@@ -22,8 +28,10 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step
 from positronic.policy.executor import Executor
-from positronic.teleop import TeleopPolicy, session
+from positronic.teleop import TeleopPolicy, command, session
+from positronic.teleop import service as service_module
 from positronic.teleop.service import ButtonMap, Phase, TeleopService
+from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 from positronic.utils import package_assets_path
 
 HAND = geom.Transform3D(np.array([0.1, 0.2, 1.0]), geom.Rotation.identity)
@@ -78,6 +86,16 @@ class TestButtonMap:
         buttons = ButtonMap(HOLD_SEC, press_threshold=0.9)
         assert buttons.events(_buttons(a=0.8), 0, False) == []
         assert buttons.events(_buttons(a=0.95), 10, False) == [session.Event.CLUTCH]
+
+    def test_the_indices_match_the_buttons_that_the_phone_page_names(self):
+        page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
+        [layout] = re.findall(r'const BUTTON = \{ trigger: (\d+), stick: (\d+), a: (\d+), b: (\d+) \};', page)
+        assert tuple(map(int, layout)) == (
+            service_module._TRIGGER,
+            service_module._STICK,
+            service_module._A,
+            service_module._B,
+        )
 
     def test_the_trigger_is_the_grip(self):
         assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
@@ -136,6 +154,13 @@ def _until_phase(service: TeleopService, phase: Phase) -> None:
     while service.phase is not phase:
         assert time.monotonic() < deadline, f'the service never reached {phase}'
         time.sleep(0.005)
+
+
+def _until_cleared(service: TeleopService) -> None:
+    """Wait until the session ends, and check that the service shows no trial."""
+    _until_phase(service, Phase.IDLE)
+    state = service.state()
+    assert (state.task, state.control, state.attempt_started, state.cameras) == ('', False, False, ())
 
 
 def _press_ready_when_asked(service: TeleopService, headset: _Headset, **buttons: float) -> threading.Thread:
@@ -197,7 +222,7 @@ def test_a_teleoperator_readies_takes_control_starts_and_completes_a_trial(servi
         headset.buttons = _buttons(b=1.0)
         _, end = _drive(run, 2.0)
         assert end is PolicyEnd.COMPLETE
-        assert service.phase is Phase.ENDED
+        _until_cleared(service)
 
 
 def test_a_hold_of_b_before_the_start_task_press_does_not_complete(service, socket_path, runtime):
@@ -282,7 +307,11 @@ def test_a_person_completes_a_trial_on_mujoco_franka(service, socket_path, tmp_p
         mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
         loaders=positronic.cfg.simulator.stack_cubes_loaders(),
         camera_fps=10,
-        camera_dict={keys.EXTERIOR_IMAGE: 'back_view_ph'},
+        camera_dict={
+            keys.EXTERIOR_IMAGE: 'back_view_ph',
+            keys.WRIST_IMAGE: 'handcam_left_ph',
+            'image.handcam_right': 'handcam_right_ph',
+        },
         instruction='Pick up the green cube.',
         timeout=60,
     )
@@ -429,7 +458,91 @@ def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, sock
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
         _drive(run, 0.2)
-        stored = service._display[session.IMAGE]
+        stored = service.camera_image(keys.EXTERIOR_IMAGE)
         before = stored.copy()
         service.view()
         np.testing.assert_array_equal(stored, before)
+
+
+@pytest.mark.parametrize('headset_camera', [None, keys.EXTERIOR_IMAGE])
+def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, headset_camera):
+    images = {
+        keys.WRIST_IMAGE: np.full((24, 32, 3), 50, np.uint8),
+        keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 200, np.uint8),
+    }
+    with TeleopService(socket_path, 5.0, 0.05, HOLD_SEC, headset_camera=headset_camera) as service:
+        address = UnixSocketAddress(socket_path, SESSION_PATH, '')
+        teleop = session.TeleopSession(registry.client_wire('websocket_unix').dial(address, None, 5), 5.0, 5.0)
+        try:
+            ready = threading.Thread(target=teleop.ready)
+            ready.start()
+            _until_phase(service, Phase.READY_WAIT)
+            service.take_sample(HAND, _buttons(b=1.0))
+            ready.join(5)
+            teleop.frame({session.TASK: 'pick up the cube'}, images)
+            shown = keys.WRIST_IMAGE if headset_camera is None else headset_camera
+            assert service.view().shape == images[shown].shape
+            assert service.state().cameras == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+        finally:
+            teleop.close()
+
+
+def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
+    service = TeleopService(socket_path, 1.0, 0.05, HOLD_SEC)
+    bridge = command._Headset(service)
+    sent, views = RecordingEmitter[dict](), RecordingEmitter[np.ndarray]()
+    bridge.page_state._bind(sent, clock=SystemClock())
+    bridge.view._bind(views, clock=SystemClock())
+    bridge.controller_positions._bind(ManualCommandReceiver())
+    bridge.buttons._bind(ManualCommandReceiver())
+    stop = types.SimpleNamespace(value=False)
+    next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
+    [(_, state)] = sent.emitted
+    assert state == {'phase': Phase.IDLE, 'control': False, 'attempt_started': False}
+
+
+@pytest.mark.parametrize('ending', ['give_up', 'time_limit'])
+def test_every_end_of_a_session_leaves_no_trial_in_the_service(service, socket_path, runtime, ending):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        _drive(run, 0.2)
+        assert service.state().task == OBS[keys.TASK] and service.state().cameras == (keys.EXTERIOR_IMAGE,)
+        if ending == 'give_up':
+            headset.buttons = _buttons(stick=1.0)
+            assert _drive(run, 2.0)[1] is PolicyEnd.GIVE_UP
+        else:
+            run.close()  # The harness closes the run at the time limit and at the done of the env.
+        _until_cleared(service)
+
+
+def test_a_dropped_connection_leaves_no_trial_in_the_service(service, socket_path):
+    """The client process exits with no close of the session."""
+    with unix_connect(str(socket_path), f'ws://localhost{SESSION_PATH}') as websocket:
+        websocket.send(serialise({session.KIND: session.Request.READY}))
+        _until_phase(service, Phase.READY_WAIT)
+        service.take_sample(HAND, _buttons(b=1.0))
+        assert deserialise(websocket.recv(5)) == {session.KIND: session.Reply.READY}
+        display = {
+            session.TASK: OBS[keys.TASK],
+            session.IMAGES: {keys.EXTERIOR_IMAGE: encode_jpeg(OBS[keys.EXTERIOR_IMAGE])},
+        }
+        websocket.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: display}))
+        websocket.recv(5)
+        assert service.state().task == OBS[keys.TASK]
+        websocket.socket.shutdown(socket.SHUT_RDWR)
+        websocket.socket.close()
+    _until_cleared(service)
+
+
+def test_the_next_session_of_a_run_starts_a_new_trial_after_the_last_one_ended(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        first = _readied_run(service, headset, runtime, socket_path)
+        _drive(first, 0.2)
+        headset.buttons = _buttons(stick=1.0)
+        assert _drive(first, 2.0)[1] is PolicyEnd.GIVE_UP
+        headset.buttons = _buttons()
+        _until_cleared(service)
+        second = _readied_run(service, headset, runtime, socket_path)
+        assert service.phase is Phase.RUNNING
+        second.close()
+        _until_cleared(service)

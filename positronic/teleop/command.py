@@ -1,7 +1,6 @@
-"""The command ``positronic teleop``: the teleop service, the WebXR page of the headset, and the window."""
+"""The command ``positronic teleop``: the teleop service and the WebXR page of the headset."""
 
 import logging
-import webbrowser
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -13,7 +12,6 @@ from positronic.drivers.webxr import RIGHT, WebXR
 
 from .service import TeleopService
 from .session import default_socket_path
-from .window import Window, window_app
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +25,8 @@ class _Headset(pimm.ControlSystem):
         self.controller_positions = pimm.ControlSystemReceiver(self)
         self.buttons = pimm.ControlSystemReceiver(self)
         self.view = pimm.ControlSystemEmitter(self)
+        # The state of the trial for the phone page, which polls it from the WebXR server.
+        self.page_state = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         while not should_stop.value:
@@ -36,30 +36,34 @@ class _Headset(pimm.ControlSystem):
                 right = None if buttons is None else buttons.data[RIGHT]
                 self._service.take_sample(positions.data[RIGHT], right)
             self.view.emit(self._service.view())
+            state = self._service.state()
+            self.page_state.emit({
+                'phase': state.phase,
+                'control': state.control,
+                'attempt_started': state.attempt_started,
+            })
             yield pimm.Sleep(self._view_period_sec)
 
 
-@cfn.config(webxr=positronic.cfg.webxr.oculus, socket=str(default_socket_path()), ready_limit=120.0, window_port=5006)
+@cfn.config(webxr=positronic.cfg.webxr.oculus, socket=str(default_socket_path()), ready_limit=120.0)
 def serve(
     webxr: WebXR,
     socket: str,
     ready_limit: float,
-    window_port: int,
     silence_limit: float = 0.5,
     hold_sec: float = 1.0,
     press_threshold: float = 0.6,
     view_fps: float = 30.0,
-    open_window: bool = True,
+    headset_camera: str | None = None,
 ):
-    """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen."""
+    """Run the teleop service until Ctrl-C. Open the WebXR page in the headset."""
     # TODO: Set the ready limit and the silence limit for a rig.
-    service = TeleopService(Path(socket), ready_limit, silence_limit, hold_sec, press_threshold)
+    service = TeleopService(Path(socket), ready_limit, silence_limit, hold_sec, press_threshold, headset_camera)
     headset = _Headset(service, view_fps)
-    with service, Window(window_app(service), window_port) as window, pimm.World() as world:
+    with service, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)
         world.connect(headset.view, webxr.frame)
-        logger.info('The teleop service serves on %s. Its window is %s', socket, window.url)
-        if open_window:
-            webbrowser.open(window.url)
+        world.connect(headset.page_state, webxr.page_state)
+        logger.info('The teleop service serves on %s', socket)
         world.run(headset, [webxr])

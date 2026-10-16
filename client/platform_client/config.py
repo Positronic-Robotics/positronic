@@ -13,7 +13,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated
 
-import httpx
 from platform_client.client import API_KEY_ENV, API_URL_ENV, require_absolute_url
 from platform_client.ids import ApiKey
 from platform_client.model_config import INPUT_MODEL_CONFIG
@@ -39,15 +38,8 @@ def checked_api_key(value: str) -> str:
 
 
 def checked_platform_url(value: str) -> str:
-    """The record's platform, or a `ValueError` that `read_config` reports as a malformed record.
-
-    The client parses this value, so a record holding `http://host:bad` would otherwise end the
-    command with an `httpx.InvalidURL` traceback naming no file.
-    """
-    try:
-        require_absolute_url(value, 'platform_url')
-    except httpx.InvalidURL as exc:
-        raise ValueError(f'platform_url does not parse as a URL: {exc}') from exc
+    """The record's platform, or a `ValueError` that `read_config` reports as a malformed record."""
+    require_absolute_url(value, 'platform_url')
     return value
 
 
@@ -64,7 +56,13 @@ def config_dir(env: Mapping[str, str]) -> Path:
     named = env.get(CONFIG_DIR_ENV)
     if named is not None and not named.strip():
         raise SystemExit(f'{CONFIG_DIR_ENV} is set to an empty value: name a directory, or unset it')
-    return Path(named or DEFAULT_CONFIG_DIR).expanduser()
+    directory = Path(named or DEFAULT_CONFIG_DIR)
+    try:
+        return directory.expanduser()
+    except RuntimeError as exc:  # `~name` for a user this machine does not have
+        raise SystemExit(
+            f'the config directory {directory} is under no home directory on this machine: set {CONFIG_DIR_ENV}'
+        ) from exc
 
 
 def read_config(directory: Path) -> Config | None:

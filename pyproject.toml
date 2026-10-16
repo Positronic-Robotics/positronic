@@ -42,7 +42,7 @@ dependencies = [
     # (.github/workflows/release.yaml). Pinned exactly, because that package guarantees no
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
-    "positronic-platform-client==0.35.0",
+    "positronic-platform-client==0.36.0",
     # The client side of every wire and the facts both ends share. A workspace member in a clone;
     # a released `positronic` resolves it from the index, so it is published first, and it is pinned
     # exactly for the same reason the client is (wire/README.md).
@@ -82,7 +82,7 @@ openpi = [
 ]
 hardware = [
     "feetech-servo-sdk", # for feetech motors
-    "positronic-franka>=0.7.1; sys_platform == 'linux'",
+    "positronic-franka>=0.8.0; sys_platform == 'linux'",
     # "kortex_api; sys_platform == 'linux'",  # Kinova: disabled, artifactory.kinovaapps.com is unreliable
     "linuxpy",  # For Linux video capture
     "placo",
@@ -322,7 +322,6 @@ positronic = [
   "gui/static/**",
   "server/static/**",
   "server/templates/**",
-  "teleop/static/**",
   # The launcher needs these dependency constraints in installed distributions too.
   "simulator/molmo_spaces/molmo_constraints.txt",
 ]
