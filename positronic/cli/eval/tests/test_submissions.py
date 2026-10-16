@@ -94,14 +94,13 @@ def test_a_response_the_client_cannot_read_is_a_refusal_without_the_body(platfor
     assert caught.value.fault is Fault.PLATFORM
 
 
+EVAL = {'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': ['a'], 'composable': True}
+TASK = {'id': 'eight-spoons-into-grey-tote', 'embodiment': 'franka', 'task': 'spoons'}
+NO_GRANT = ({'error': {'code': 'forbidden', 'message': 'no customer grant'}}, 403)
+
+
 def test_catalog_prints_the_evals_where_the_key_has_no_grant_for_the_tasks(platform, run_command, capsys):
-    platform.answer_by_route({
-        routes.CATALOG_EVALS: (
-            {'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': ['a'], 'composable': True}]},
-            200,
-        ),
-        routes.CATALOG_TASKS: ({'error': {'code': 'forbidden', 'message': 'no customer grant'}}, 403),
-    })
+    platform.answer_by_route({routes.CATALOG_EVALS: ({'evals': [EVAL]}, 200), routes.CATALOG_TASKS: NO_GRANT})
 
     run_command(catalog)
 
@@ -111,10 +110,7 @@ def test_catalog_prints_the_evals_where_the_key_has_no_grant_for_the_tasks(platf
 
 
 def test_catalog_prints_what_the_key_may_name(platform, run_command, capsys):
-    platform.answer({
-        'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': ['a'], 'composable': True}],
-        'tasks': [{'id': 'eight-spoons-into-grey-tote', 'embodiment': 'franka', 'task': 'spoons'}],
-    })
+    platform.answer({'evals': [EVAL], 'tasks': [TASK]})
 
     run_command(catalog)
 
@@ -122,6 +118,28 @@ def test_catalog_prints_what_the_key_may_name(platform, run_command, capsys):
     out = capsys.readouterr().out
     assert '"id": "fake.smoke"' in out
     assert '"id": "eight-spoons-into-grey-tote"' in out
+
+
+def test_catalog_json_prints_the_evals_and_the_tasks_as_one_value(platform, run_command, capsys):
+    platform.answer({'evals': [EVAL], 'tasks': [TASK]})
+
+    run_command(catalog, json=True)
+
+    printed = json.loads(capsys.readouterr().out)
+    assert [entry['id'] for entry in printed['evals']] == [EVAL['id']]
+    assert [entry['id'] for entry in printed['tasks']] == [TASK['id']]
+
+
+def test_catalog_json_prints_null_tasks_where_the_key_has_no_grant_for_them(platform, run_command, capsys):
+    platform.answer_by_route({routes.CATALOG_EVALS: ({'evals': [EVAL]}, 200), routes.CATALOG_TASKS: NO_GRANT})
+
+    run_command(catalog, json=True)
+
+    out, err = capsys.readouterr()
+    printed = json.loads(out)
+    assert [entry['id'] for entry in printed['evals']] == [EVAL['id']]
+    assert printed['tasks'] is None
+    assert err.strip() == 'tasks: forbidden: no customer grant'
 
 
 def test_cancel_reports_whether_the_quota_came_back(platform, run_command, capsys):

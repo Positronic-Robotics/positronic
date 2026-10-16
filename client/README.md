@@ -322,8 +322,9 @@ A command that fails exits with a status that tells whose fault the failure is:
 
 The read commands take `--json`: `eval status`, `eval list`, `eval catalog`, and `account credits account`,
 `get-purchase` and `list-purchases`. They print the data as JSON on stdout. `eval list --json` prints every
-page as one page, with `next` null. A refusal by the platform prints its error envelope as JSON on stdout. Any
-other failure prints its message on stderr. The exit status is the same with and without `--json`.
+page as one page, with `next` null. `eval catalog --json` prints the evals and the tasks as one object, with
+`tasks` null where the key may compose no plan. A refusal by the platform prints its error envelope as JSON on
+stdout. Any other failure prints its message on stderr. The exit status is the same with and without `--json`.
 
 An argument that a command does not declare, or a required argument that is missing, stops with a traceback
 and status 1. `--help` lists the arguments of a command.

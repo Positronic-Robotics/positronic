@@ -3,6 +3,7 @@
 import sys
 
 import configuronic as cfn
+from platform_client.catalog import EvalListResponse, TaskListResponse, TaskSummary
 from platform_client.client import PlatformClient
 from platform_client.enums import ErrorCode
 from platform_client.errors import PlatformError
@@ -68,22 +69,38 @@ def cancel(id: str, platform_url: str | None = None):
     print(f'{result.status.name}, quota {"refunded" if result.refunded else "charged"}')
 
 
+class CatalogView(EvalListResponse):
+    """What `catalog --json` prints: the evals, and the tasks, or null where the key may compose no plan."""
+
+    tasks: list[TaskSummary] | None
+
+
+def _tasks_or_none(client: PlatformClient) -> TaskListResponse | None:
+    """`catalog.tasks`, or None where the key has no customer grant. The refusal goes to stderr."""
+    try:
+        return client.catalog_tasks()
+    except PlatformError as exc:
+        if exc.code is not ErrorCode.forbidden:
+            raise
+        print(f'tasks: {exc.code.name}: {exc.message}', file=sys.stderr)
+        return None
+
+
 @cfn.config()
 def catalog(platform_url: str | None = None, json: bool = False):
     """Print what this key may name: the evals a plan names, and the tasks a plan composes.
 
     A key with no customer grant composes no plan, so `catalog.tasks` refuses it; the evals print, and
-    the refusal goes to stderr. Both print as JSON; `--json` prints a refusal of the evals as JSON too.
+    the refusal goes to stderr. Both print as JSON. `--json` prints them as one `CatalogView`, and a
+    refusal of the evals as JSON too.
     """
     with gateway(platform_url, refusal_as_json=json) as client:
         evals = client.catalog_evals()
-        try:
-            tasks = client.catalog_tasks().model_dump_json(indent=2)
-        except PlatformError as exc:
-            if exc.code is not ErrorCode.forbidden:
-                raise
-            tasks = None
-            print(f'tasks: {exc.code.name}: {exc.message}', file=sys.stderr)
+        tasks = _tasks_or_none(client)
+    if json:
+        view = CatalogView(evals=evals.evals, tasks=None if tasks is None else tasks.tasks)
+        print(view.model_dump_json(indent=2))
+        return
     print(evals.model_dump_json(indent=2))
     if tasks is not None:
-        print(tasks)
+        print(tasks.model_dump_json(indent=2))
