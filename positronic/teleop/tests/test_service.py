@@ -72,6 +72,11 @@ class TestButtonMap:
         assert buttons.events(_buttons(stick=1.0), 300_000_000, False) == [session.Event.GIVE_UP]
         assert buttons.events(_buttons(stick=1.0), 600_000_000, False) == []
 
+    def test_a_value_below_the_press_threshold_presses_nothing(self):
+        buttons = ButtonMap(HOLD_SEC, press_threshold=0.9)
+        assert buttons.events(_buttons(a=0.8), 0, False) == []
+        assert buttons.events(_buttons(a=0.95), 10, False) == [session.Event.CLUTCH]
+
     def test_the_trigger_is_the_grip(self):
         assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
 

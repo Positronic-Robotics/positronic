@@ -4,7 +4,7 @@ from contextlib import closing
 from typing import Any
 
 import numpy as np
-from positronic_model_server.serialization import encode_jpeg
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
 from positronic_wire import registry
 from positronic_wire.wire import ConnectRefused, SessionAddress
 
@@ -60,6 +60,7 @@ class TeleopPolicy(Policy):
         ready_timeout: float = 130.0,
         frame_timeout: float = 5.0,
         still_clock_timeout: float = 1.0,
+        jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     ):
         self._wire = wire
         self._address = address
@@ -69,6 +70,7 @@ class TeleopPolicy(Policy):
         self._ready_timeout = ready_timeout
         self._frame_timeout = frame_timeout
         self._still_clock_timeout = still_clock_timeout
+        self._jpeg_quality = jpeg_quality
         self._probed = False
 
     def meta(self) -> dict[str, Any]:
@@ -106,7 +108,7 @@ class TeleopPolicy(Policy):
         def display(obs: Mapping[str, Any]) -> dict[str, Any]:
             shown = {TASK: obs[keys.TASK], CONTROL: tracker.on, ATTEMPT_STARTED: attempt_started}
             if self._camera is not None:
-                shown[IMAGE] = encode_jpeg(np.asarray(obs[self._camera]))
+                shown[IMAGE] = encode_jpeg(np.asarray(obs[self._camera]), self._jpeg_quality)
             return shown
 
         # A stay command, so that every command signal starts at the episode start. It asks for the pose that the arm

@@ -383,7 +383,9 @@ def test_the_headset_video_keeps_the_colors_of_an_rgb_frame():
         pytest.skip(f'no libturbojpeg on this host: {missing}')
     red = np.zeros((16, 16, 3), dtype=np.uint8)
     red[..., 0] = 255
-    decoded = np.asarray(PIL.Image.open(io.BytesIO(base64.b64decode(webxr.encode_frame(encoder, red)))).convert('RGB'))
+    decoded = np.asarray(
+        PIL.Image.open(io.BytesIO(base64.b64decode(webxr.encode_frame(encoder, red, 50)))).convert('RGB')
+    )
     np.testing.assert_allclose(decoded.mean(axis=(0, 1)), [255, 0, 0], atol=8)
 
 

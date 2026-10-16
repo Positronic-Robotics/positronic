@@ -49,9 +49,9 @@ from .session import (
 
 logger = logging.getLogger(__name__)
 
-# The index of each button in the values that the headset page sends for a controller.
+# The index of each button in the values that the headset page sends for a controller: the xr-standard gamepad
+# layout, which `BUTTON` names in the WebXR pages.
 _TRIGGER, _STICK, _A, _B = 0, 3, 4, 5
-_PRESSED = 0.6
 
 
 class ButtonMap:
@@ -63,8 +63,10 @@ class ButtonMap:
     - The trigger: the grip.
     """
 
-    def __init__(self, hold_sec: float):
+    def __init__(self, hold_sec: float, press_threshold: float = 0.6):
         self._hold_ns = round(hold_sec * 1e9)
+        # A button whose value is at least this is down.
+        self._press_threshold = press_threshold
         # The time at which each button went down, while it is down.
         self._down_since: dict[int, int] = {}
         # The buttons whose press did something already, until they go up.
@@ -74,7 +76,7 @@ class ButtonMap:
         """Record the state of the buttons, and return the buttons that went down since the previous sample."""
         new_presses = set()
         for button in (_STICK, _A, _B):
-            if buttons[button] < _PRESSED:
+            if buttons[button] < self._press_threshold:
                 self._down_since.pop(button, None)
                 self._used.discard(button)
             elif button not in self._down_since:
@@ -148,11 +150,13 @@ class TeleopService:
     and answers an error after ``ready_limit``.
     """
 
-    def __init__(self, uds: Path, ready_limit: float, silence_limit: float, hold_sec: float):
+    def __init__(
+        self, uds: Path, ready_limit: float, silence_limit: float, hold_sec: float, press_threshold: float = 0.6
+    ):
         self._uds = uds
         self._ready_limit = ready_limit
         self._silence_limit = silence_limit
-        self._buttons = ButtonMap(hold_sec)
+        self._buttons = ButtonMap(hold_sec, press_threshold)
         self._wire = WebsocketWire(ServedUnixSocket(uds))
         self._changed = threading.Condition()
         self._sample = _Sample(0, None, None)
@@ -168,7 +172,7 @@ class TeleopService:
         self._thread: threading.Thread | None = None
 
     @staticmethod
-    def _check_private_directory(directory: Path) -> None:
+    def _prepare_private_directory(directory: Path) -> None:
         """Create ``directory`` for this user only, or check that it is private to this user.
 
         Any account that can write to the directory of the socket can bind the socket first, and get the sessions.
@@ -179,7 +183,7 @@ class TeleopService:
             raise PermissionError(f'{directory} must belong to this user, with no access for others (mode 700)')
 
     def __enter__(self) -> 'TeleopService':
-        self._check_private_directory(self._uds.parent)
+        self._prepare_private_directory(self._uds.parent)
         started: Future[None] = Future()
 
         async def serve() -> None:
@@ -320,14 +324,14 @@ class TeleopService:
                 return  # The policy closed its end of the session.
             match Request(request[KIND]):
                 case Request.READY:
-                    reply = await self._unless_disconnected(connection, asyncio.to_thread(self._await_ready))
+                    reply = await self._answer_unless_the_peer_speaks(connection, asyncio.to_thread(self._await_ready))
                 case Request.FRAME:
                     reply = await asyncio.to_thread(self._next_frame, request[DISPLAY])
             if reply is None:
                 return
             await connection.send(serialise(reply))
 
-    async def _unless_disconnected(
+    async def _answer_unless_the_peer_speaks(
         self, connection: server_wire.ServerConnection, wait: Coroutine[Any, Any, dict[str, Any]]
     ) -> dict[str, Any] | None:
         """The answer of ``wait``, or ``None`` when the policy disconnects or sends again first.
@@ -350,10 +354,9 @@ class TeleopService:
 class _Headset(pimm.ControlSystem):
     """Pass the samples of the headset to the service, and the view of the service to the headset."""
 
-    VIEW_PERIOD_SEC = 1 / 30
-
-    def __init__(self, service: TeleopService):
+    def __init__(self, service: TeleopService, view_fps: float = 30.0):
         self._service = service
+        self._view_period_sec = 1 / view_fps
         self.controller_positions = pimm.ControlSystemReceiver(self)
         self.buttons = pimm.ControlSystemReceiver(self)
         self.view = pimm.ControlSystemEmitter(self)
@@ -366,15 +369,23 @@ class _Headset(pimm.ControlSystem):
                 right = None if buttons is None else buttons.data[RIGHT]
                 self._service.take_sample(positions.data[RIGHT], right)
             self.view.emit(self._service.view())
-            yield pimm.Sleep(self.VIEW_PERIOD_SEC)
+            yield pimm.Sleep(self._view_period_sec)
 
 
 @cfn.config(webxr=positronic.cfg.webxr.oculus, socket=str(default_socket_path()), ready_limit=120.0)
-def serve(webxr: WebXR, socket: str, ready_limit: float, silence_limit: float = 0.5, hold_sec: float = 1.0):
+def serve(
+    webxr: WebXR,
+    socket: str,
+    ready_limit: float,
+    silence_limit: float = 0.5,
+    hold_sec: float = 1.0,
+    press_threshold: float = 0.6,
+    view_fps: float = 30.0,
+):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset."""
     # TODO: Set the ready limit and the silence limit for a rig.
-    service = TeleopService(Path(socket), ready_limit, silence_limit, hold_sec)
-    headset = _Headset(service)
+    service = TeleopService(Path(socket), ready_limit, silence_limit, hold_sec, press_threshold)
+    headset = _Headset(service, view_fps)
     with service, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)

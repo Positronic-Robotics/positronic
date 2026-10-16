@@ -64,7 +64,7 @@ IMAGE = 'image'
 
 def default_socket_path() -> Path:
     """The socket of the teleop service: in the runtime directory of the user, or in a directory of the user under
-    the temporary directory. The service makes that directory private to the user."""
+    the temporary directory."""
     runtime = os.environ.get('XDG_RUNTIME_DIR')
     if runtime:
         return Path(runtime) / 'positronic-teleop.sock'

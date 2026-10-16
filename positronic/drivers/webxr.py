@@ -91,9 +91,9 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
     return tmp_key, tmp_cert
 
 
-def encode_frame(encoder: turbojpeg.TurboJPEG, image: np.ndarray) -> str:
+def encode_frame(encoder: turbojpeg.TurboJPEG, image: np.ndarray, quality: int) -> str:
     """An RGB ``image`` as base64 JPEG, as the video stream sends it."""
-    buffer = encoder.encode(image, quality=50, pixel_format=turbojpeg.TJPF_RGB)
+    buffer = encoder.encode(image, quality=quality, pixel_format=turbojpeg.TJPF_RGB)
     assert isinstance(buffer, bytes), 'TurboJPEG returns the JPEG bytes when it is given no destination'
     return base64.b64encode(buffer).decode('utf-8')
 
@@ -128,6 +128,7 @@ class WebXR(pimm.ControlSystem):
     - ssl_keyfile, ssl_certfile: TLS files if `use_https=True`.
     - frontend: "oculus" or "iphone" (single-frontend mode).
     - use_https: enable HTTPS; set False for iPhone dev.
+    - jpeg_quality: the JPEG quality of the video stream.
     """
 
     def __init__(
@@ -138,6 +139,7 @@ class WebXR(pimm.ControlSystem):
         frontend: str = 'oculus',
         use_https: bool = True,
         sensitivity: float = 1.0,
+        jpeg_quality: int = 50,
     ):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
@@ -150,6 +152,7 @@ class WebXR(pimm.ControlSystem):
         self.controller_positions = pimm.ControlSystemEmitter(self)
         self.buttons = pimm.ControlSystemEmitter(self)
         self.sensitivity = sensitivity
+        self.jpeg_quality = jpeg_quality
 
     def _next_frame(self, last_sent_time: pimm.Time | None) -> pimm.Message | None:
         """The frame the video stream sends next. ``None`` while no new frame arrived or the camera is lost."""
@@ -205,7 +208,7 @@ class WebXR(pimm.ControlSystem):
                     if msg is None:
                         continue
                     last_sent_time = msg.time
-                    base64_frame = encode_frame(jpeg_encoder, msg.data)
+                    base64_frame = encode_frame(jpeg_encoder, msg.data, self.jpeg_quality)
                     await websocket.send_text(base64_frame)
                     fps.tick()
             except Exception as e:
