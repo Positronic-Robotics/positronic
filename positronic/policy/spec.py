@@ -35,29 +35,34 @@ from positronic.utils.versions import Version, resolve_version
 ComponentFactory = Callable[..., Processor | Codec]
 
 COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
-    component.WIRE_NAME: {component.WIRE_VERSION: Version(component)}
-    for component in (
-        ChunkedSchedule,
-        EncodeImages,
-        PauseOnUnavailable,
-        TemporalStack,
-        BinarizeGripTraining,
-        BinarizeGripInference,
-        FlipGrip,
-        Metadata,
-        RestrictImageSize,
-        ChangeEEFrame,
-        ConvertPose,
-        ObservationCodec,
-        PackObservationFields,
-        RenameObservationFields,
-        AbsolutePositionAction,
-        AbsoluteJointsAction,
-        JointDeltaAction,
-        JointPositionAction,
-        SetControlMode,
-        UnpackActionChunk,
-    )
+    **{
+        component.WIRE_NAME: {component.WIRE_VERSION: Version(component)}
+        for component in (
+            EncodeImages,
+            PauseOnUnavailable,
+            TemporalStack,
+            BinarizeGripTraining,
+            BinarizeGripInference,
+            FlipGrip,
+            Metadata,
+            RestrictImageSize,
+            ChangeEEFrame,
+            ConvertPose,
+            ObservationCodec,
+            PackObservationFields,
+            RenameObservationFields,
+            AbsolutePositionAction,
+            AbsoluteJointsAction,
+            JointDeltaAction,
+            JointPositionAction,
+            SetControlMode,
+            UnpackActionChunk,
+        )
+    },
+    ChunkedSchedule.WIRE_NAME: {
+        ChunkedSchedule.WIRE_VERSION: Version(ChunkedSchedule),
+        ChunkedSchedule.CONTEXT_PUSH_VERSION: Version(ChunkedSchedule.with_context_push),
+    },
 }
 
 

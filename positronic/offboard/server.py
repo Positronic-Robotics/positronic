@@ -183,7 +183,8 @@ class PolicyServer:
             if request.get(protocol.END_SESSION) is True:
                 return
             if legacy_protocol.CONTEXT in request:
-                held = decoded
+                # The held frames are all a push keeps: its decoded stacks would be a second copy of them.
+                held, request = decoded, None
                 await conn.send(serialise({legacy_protocol.CONTEXT: len(held), protocol.TIMING: timing.report()}))
                 continue
             # Only a push keeps the frames it decodes; a request's frames live in its observation alone.

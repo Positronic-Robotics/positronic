@@ -114,10 +114,14 @@ class ChunkedSchedule(Policy):
     The push needs a ``TemporalStack`` directly around this schedule, and an ``infer`` that takes
     ``context_only``, such as ``RemotePolicy``. Without a stack, or with no offset that has passed, there is no
     push and the request is as without ``context_lead_sec``.
+
+    A schedule without ``context_lead_sec`` declares version 2, whose arguments a rig that predates the push
+    still reads. A schedule with it declares ``CONTEXT_PUSH_VERSION``.
     """
 
     WIRE_NAME = 'chunked_schedule'
     WIRE_VERSION = 2
+    CONTEXT_PUSH_VERSION = 3
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
     RECORD_STATS_ARG = 'record_stats'
@@ -270,9 +274,17 @@ class ChunkedSchedule(Policy):
             args[self.HORIZON_SEC_ARG] = self._horizon_sec
         if not self._record_stats:
             args[self.RECORD_STATS_ARG] = False
-        if self._context_lead_sec is not None:
-            args[self.CONTEXT_LEAD_SEC_ARG] = self._context_lead_sec
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+        if self._context_lead_sec is None:
+            return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+        args[self.CONTEXT_LEAD_SEC_ARG] = self._context_lead_sec
+        return {NAME: self.WIRE_NAME, VERSION: self.CONTEXT_PUSH_VERSION, ARGS: args}
+
+    @classmethod
+    def with_context_push(
+        cls, fps: float, context_lead_sec: float, horizon_sec: float | None = None, record_stats: bool = True
+    ) -> 'ChunkedSchedule':
+        """The schedule of a ``CONTEXT_PUSH_VERSION`` spec, which names ``context_lead_sec``."""
+        return cls(fps, horizon_sec, record_stats, context_lead_sec)
 
 
 PrefixDuration = Callable[[Sequence[float]], float]
