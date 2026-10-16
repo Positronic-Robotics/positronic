@@ -23,6 +23,7 @@ from positronic.policy.codecs import (
     EncodeImages,
     FlipGrip,
     Metadata,
+    Resample,
     RestrictImageSize,
 )
 from positronic.policy.codecs.action import (
@@ -541,6 +542,7 @@ def test_prefix_durations_read_the_last_delays_and_cap_them(prefix_duration, exp
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48, Resample.AREA)),
         ChunkedSchedule(fps=10, record_stats=False),
     ],
 )
@@ -593,5 +595,5 @@ def test_wire_names_match_the_registered_components():
     assert set(instances) == set(registered)
     for name, instance in instances.items():
         assert instance.to_spec()['name'] == name
-        assert type(instance) is registered[name][instance.WIRE_VERSION].implementation
+        assert type(spec.from_spec(instance.to_spec())) is type(instance)
         assert instance.to_spec()['version'] == instance.WIRE_VERSION
