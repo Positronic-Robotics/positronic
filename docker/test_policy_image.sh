@@ -23,15 +23,17 @@ fi
 image="${1:?usage: $0 [--gpu] <image>}"
 network=policy-test
 # The policy contract, as positronic names it: `policy_container.POLICY_PORT` and `AUTH_TOKEN_ENV`,
-# `positronic_model_server.protocol.AUTH_HEADER` and `bearer`, and `positronic_wire.wire.KEEPALIVE_PATH`.
+# `positronic_model_server.protocol.AUTH_HEADER` and `bearer`, and `positronic_wire.wire.KEEPALIVE_PATH` and
+# `ALIVE_SECONDS`.
 port=8000
 token_env=AUTH_TOKEN
 auth_header=Authorization
 keepalive_path=/api/v1/keepalive
+alive_key=alive_seconds
 token=test
-# The keepalive answer as `positronic_wire.websocket` reads it: a JSON object whose `alive_seconds` is an
-# integer or null. A 200 with any other body fails the run on the platform.
-keepalive_answer='^[[:space:]]*\{.*"alive_seconds"[[:space:]]*:[[:space:]]*(null|-?[0-9]+)[[:space:]]*[,}]'
+# The keepalive answer as `positronic_wire.websocket` reads it: a JSON object whose $alive_key is an integer or
+# null. A 200 with any other body fails the run on the platform.
+keepalive_answer="^[[:space:]]*\\{.*\"$alive_key\"[[:space:]]*:[[:space:]]*(null|-?[0-9]+)[[:space:]]*[,}]"
 
 if [ "$(uname -s)" != Linux ] || [ "$(docker version -f '{{.Server.Arch}}')" != amd64 ]; then
   echo "Run this test with Docker on an amd64 Linux machine. Docker on another machine emulates or hides it." >&2
@@ -49,12 +51,12 @@ curl_errors=$(mktemp)
 trap 'docker rm -f "$cid" >/dev/null; rm -f "$body" "$curl_errors"' EXIT
 ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$cid")
 
-# A socket that listens on $port of 127.0.0.1 or ::1, in /proc/net/tcp of the container. The platform cannot
+# A socket that listens on port $2 of 127.0.0.1 or ::1, in /proc/net/tcp of the container $1. The platform cannot
 # reach it. An image with no `cat` gives no answer, and the test then waits as for any closed port.
 loopback_only() {
-  local hex
-  hex=$(printf '%04X' "$port")
-  docker exec "$cid" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null |
+  local container=$1 hex
+  hex=$(printf '%04X' "$2")
+  docker exec "$container" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null |
     awk -v v4="0100007F:$hex" -v v6="00000000000000000000000001000000:$hex" \
       '$4 == "0A" && ($2 == v4 || $2 == v6) {found = 1} END {exit !found}'
 }
@@ -76,7 +78,7 @@ while :; do
     "http://$ip:$port$keepalive_path" 2>"$curl_errors") || status=$?
   # These waits ignore the HTTP code, as a server can send its headers and then stop.
   if [ "$status" = 7 ] || [ "$status" = 28 ] || [ "$status" = 52 ] || [ "$status" = 56 ]; then
-    if loopback_only; then
+    if loopback_only "$cid" "$port"; then
       result="the server listens only on 127.0.0.1, and the platform connects from outside the container"
       break
     fi
@@ -89,7 +91,7 @@ while :; do
     passed=true
     break
   elif [ "$code" = 200 ]; then
-    result="the server answered 200 without {\"alive_seconds\": <an integer or null>}: $(head -c 200 "$body")"
+    result="the server answered 200 without {\"$alive_key\": <an integer or null>}: $(head -c 200 "$body")"
     break
   else
     result="the server answered HTTP $code"
