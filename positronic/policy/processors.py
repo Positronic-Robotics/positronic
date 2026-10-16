@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
 from statistics import fmean
+from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
@@ -167,8 +168,8 @@ class DelayEstimate(DurationEstimate):
             return min(value, strategy._max_sec)
 
     def __init__(self, statistic: Statistic, last: int, max_sec: float) -> None:
-        if last < 1:
-            raise ValueError('last must be at least 1')
+        if isinstance(last, bool) or not isinstance(last, int) or not 1 <= last <= maxsize:
+            raise ValueError(f'last must be an integer between 1 and {maxsize}')
         if not isfinite(max_sec) or max_sec < 0:
             raise ValueError('max_sec must be finite and not negative')
         self._statistic = statistic

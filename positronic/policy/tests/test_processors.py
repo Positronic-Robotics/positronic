@@ -2,6 +2,7 @@
 
 import json
 from concurrent.futures import Future
+from sys import maxsize
 from typing import cast
 from unittest.mock import Mock
 
@@ -983,6 +984,14 @@ def test_estimator_specs_roundtrip_configuration_without_history(estimate):
 def test_duration_specs_reject_unknown_fields():
     declared = {**DelayEstimate.mean().to_spec(), 'unexpected': 0.2}
     with pytest.raises(TypeError, match='unexpected'):
+        DurationEstimate.from_spec(declared)
+
+
+@pytest.mark.parametrize('last', [2.0, 2.5, True, False, 0, -1, '2', None, maxsize + 1])
+def test_duration_specs_reject_invalid_windows_before_starting_a_run(last):
+    declared = DelayEstimate.mean().to_spec()
+    declared[DelayEstimate.LAST_ARG] = last
+    with pytest.raises(ValueError, match='last must be an integer'):
         DurationEstimate.from_spec(declared)
 
 
