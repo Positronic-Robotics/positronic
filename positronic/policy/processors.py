@@ -101,9 +101,10 @@ class ChunkedSchedule(Policy):
     beyond the horizon.
 
     At most one call is pending. The next call starts the last call's delay before the current chunk's
-    duration ends, so that its answer is due when the chunk ends, but not before the chunk's final command
-    is due: the model always sees the robot after the final command went out. A delay longer than one
-    period therefore costs the robot the delay and not one period more, and a short delay costs nothing.
+    duration ends, so that its answer is due when the chunk ends, but not before every command of the chunk
+    went out: the call takes the observation of a round after the final command. A delay longer than one
+    period therefore costs the robot the delay and one poll, not one period more, and a short delay costs
+    nothing.
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
     """
@@ -118,8 +119,7 @@ class ChunkedSchedule(Policy):
         """How the schedule played its waypoints.
 
         A round sends the commands of every due waypoint, and on each channel the last one wins. The due
-        waypoints before the last one count as dropped, also when one of their channels went out. The due
-        waypoints that a new chunk replaces count as dropped too.
+        waypoints before the last one count as dropped, also when one of their channels went out.
         """
 
         def __init__(self, runtime: Runtime) -> None:
@@ -188,7 +188,7 @@ class ChunkedSchedule(Policy):
             while True:
                 now_ns = runtime.time_ns
                 planned = None
-                if answer is None and now_ns >= call_ns:
+                if answer is None and now_ns >= call_ns and not trajectory:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
@@ -204,8 +204,8 @@ class ChunkedSchedule(Policy):
                     ]
                     last_due_ns = waypoints[-1][1] if waypoints else start_ns
                     call_ns = max(last_due_ns, end_ns - (now_ns - called_at_ns))
-                    # An answer that arrives before the chunk ends waits behind the commands that are still due.
-                    trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
+                    # A call starts only on an empty trajectory, so no command of the earlier chunk is left.
+                    trajectory = deque(waypoints)
                     planned = len(waypoints)
 
                 commands: dict[str, Any] = {}
@@ -216,7 +216,8 @@ class ChunkedSchedule(Policy):
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory))
                 resume_at_ns = trajectory[0][1] if trajectory else call_ns
-                # Pending inference asks for the earliest allowed poll; action cadence is independent.
+                # Pending inference, and a call that is due, ask for the earliest allowed poll; action cadence is
+                # independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
         finally:
             if answer is not None:

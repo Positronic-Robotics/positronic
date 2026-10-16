@@ -256,19 +256,37 @@ def test_a_schedule_without_stats_writes_no_metadata(execution):
     assert runtime.metadata_snapshot() == {}
 
 
-def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
+def test_a_late_round_sends_the_last_due_waypoint_before_the_next_call(execution):
     runtime, clock = execution
     run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(5)])
     emitted = []
-    for now in (0, 600_000_000):
+    for now in (0, 600_000_000, 605_000_000):
         clock.advance_to_ns(now)
         emitted.append(run.send({}).commands[MOTOR])
     run.close()
-    assert emitted == [0, 0]
+    # The round at 600 ms finds four due waypoints: the last one goes out and the others count as dropped. The next
+    # call waits for the round after it, so the model sees the robot after that waypoint.
+    assert emitted == [0, 4, 0]
     prefix = eval_keys.SCHEDULE
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.SCHEDULED}'] == 10
-    assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.EMITTED}'] == 2
-    assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.DROPPED}'] == 4
+    assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.EMITTED}'] == 3
+    assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.DROPPED}'] == 3
+
+
+def test_a_late_final_waypoint_goes_out_and_counts_in_the_gap_before_the_next_chunk(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: f'{len(obs)}{i}'} for i in range(3)])
+    emitted = []
+    for now in (0, 100_000_000, 300_000_000, 305_000_000):
+        clock.advance_to_ns(now)
+        emitted.append(run.send({}).commands.get(MOTOR))
+    run.close()
+    # The final waypoint is due at 200 ms and its round comes at 300 ms, when the next call is due too. It goes out,
+    # and the next chunk starts on the round after it.
+    assert emitted == ['00', '01', '02', '00']
+    prefix = eval_keys.SCHEDULE
+    assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.DROPPED}'] == 0
+    assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.GAP_MAX_MS}'] == 200.0
 
 
 @pytest.mark.parametrize('late_ms', [[0], [0, 10], [0, 5, 30, 10, 20], list(range(0, 1000, 7))])
@@ -342,59 +360,95 @@ class SlowModel:
         self._pending = None
 
 
-def test_a_slow_answer_is_asked_for_when_the_last_waypoint_is_due(execution, monkeypatch):
+class Rig:
+    """Drives a schedule as ``Harness`` does: a round reads the observation, then sends the step's commands.
+
+    Each observation carries the last command the rig received, so a test can see what a call saw.
+    """
+
+    def __init__(self, runtime, clock, schedule):
+        self._clock = clock
+        self.run = runtime.start(schedule, Mock())
+        self.position = '--'
+        self.executed: list = []
+        self.wakes: list[int] = []
+
+    def tick(self, now_ns: int) -> Step:
+        self._clock.advance_to_ns(now_ns)
+        step = self.run.send({POSITION: self.position})
+        self.position = step.commands.get(MOTOR, self.position)
+        self.executed.append(step.commands.get(MOTOR, '--'))
+        self.wakes.append(step.resume_at_ns)
+        return step
+
+
+class ObservingModel(SlowModel):
+    """A ``SlowModel`` that records the last command each call saw."""
+
+    def __init__(self, runtime):
+        super().__init__(runtime)
+        self.seen: list = []
+
+    def submit(self, function, obs, prefix=()):
+        self.seen.append(obs[POSITION])
+        return super().submit(function, obs, prefix)
+
+
+def test_a_slow_answer_is_asked_for_once_the_last_waypoint_went_out(execution, monkeypatch):
     runtime, clock = execution
-    model = SlowModel(runtime)
+    model = ObservingModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    rig = Rig(runtime, clock, ChunkedSchedule(fps=10))
     answers = {2: 'a', 6: 'b', 10: 'c'}
-    executed = []
     try:
         for index in range(12):
             if index in answers:
                 model.answer(answers[index], length=3)
-            clock.advance_to_ns(index * PERIOD_NS)
-            executed.append(run.send({}).commands.get(MOTOR, '--'))
+            # A round follows each tick at the earliest poll, as the harness wakes at a call that is due.
+            rig.tick(index * PERIOD_NS)
+            if rig.wakes[-1] < (index + 1) * PERIOD_NS:
+                rig.tick(rig.wakes[-1])
     finally:
-        run.close()
-    # Each call takes two periods. The robot holds a chunk's last waypoint for the two periods, not three.
-    assert executed == ['--', '--', 'a0', 'a1', 'a2', '--', 'b0', 'b1', 'b2', '--', 'c0', 'c1']
-    assert [time_ns for time_ns, _ in model.calls] == [0, 4 * PERIOD_NS, 8 * PERIOD_NS]
+        rig.run.close()
+    # Each call takes about two periods. It starts on the round after the last waypoint went out, so the robot
+    # holds that waypoint for the two periods, not three.
+    assert [command for command in rig.executed if command != '--'] == ['a0', 'a1', 'a2', 'b0', 'b1', 'b2', 'c0', 'c1']
+    assert model.seen == ['--', 'a2', 'b2']
     assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 0
 
 
 def test_a_fast_answer_is_asked_for_its_delay_before_the_chunk_ends(execution, monkeypatch):
     runtime, clock = execution
-    model = SlowModel(runtime)
+    model = ObservingModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    rig = Rig(runtime, clock, ChunkedSchedule(fps=10))
     try:
-        run.send({})
-        clock.advance_to_ns(50_000_000)
+        rig.tick(0)
         model.answer('a', length=3)
-        assert run.send({}) == Step({MOTOR: 'a0'}, 150_000_000)
-        clock.advance_to_ns(250_000_000)
-        # The chunk ends at 350 ms and the last call took 50 ms, so the next call starts at 300 ms.
-        assert run.send({}) == Step({MOTOR: 'a2'}, 300_000_000)
-        clock.advance_to_ns(300_000_000)
-        run.send({})
-        clock.advance_to_ns(320_000_000)
+        clock.advance_to_ns(50_000_000)
+        assert rig.tick(50_000_000) == Step({MOTOR: 'a0'}, 150_000_000)
+        assert rig.tick(250_000_000) == Step({MOTOR: 'a2'}, 300_000_000)
+        # The chunk ends at 350 ms and the last call took 50 ms, so the next call starts at 300 ms, after a2 went
+        # out.
+        rig.tick(300_000_000)
         model.answer('b', length=3)
         # The answer is early: the last waypoint keeps its full period.
-        assert run.send({}) == Step({}, 350_000_000)
-        clock.advance_to_ns(350_000_000)
-        assert run.send({}) == Step({MOTOR: 'b0'}, 450_000_000)
+        assert rig.tick(320_000_000) == Step({}, 350_000_000)
+        assert rig.tick(350_000_000) == Step({MOTOR: 'b0'}, 450_000_000)
     finally:
-        run.close()
+        rig.run.close()
     assert [time_ns for time_ns, _ in model.calls] == [0, 300_000_000]
+    assert model.seen == ['--', 'a2']
 
 
-def test_an_answer_ready_at_the_call_keeps_the_waypoint_that_is_due(execution, monkeypatch):
+def test_the_call_after_a_late_final_waypoint_sees_that_waypoint(execution, monkeypatch):
     runtime, clock = execution
     first = Future()
     answers = iter([first, None])
+    seen = []
 
     def submit(function, obs):
+        seen.append(obs[POSITION])
         pending = next(answers)
         if pending is None:
             pending = Future()
@@ -402,19 +456,17 @@ def test_an_answer_ready_at_the_call_keeps_the_waypoint_that_is_due(execution, m
         return _UnchargedAnswer(pending)
 
     monkeypatch.setattr(runtime, 'submit', submit)
-    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    rig = Rig(runtime, clock, ChunkedSchedule(fps=10))
     try:
-        run.send({})
-        clock.advance_to_ns(2 * PERIOD_NS)
+        rig.tick(0)
         first.set_result([{MOTOR: f'a{i}'} for i in range(3)])
-        executed = []
-        for index in range(2, 7):
-            clock.advance_to_ns(index * PERIOD_NS)
-            executed.append(run.send({}).commands.get(MOTOR, '--'))
+        for index in range(2, 8):
+            rig.tick(index * PERIOD_NS)
     finally:
-        run.close()
-    # The second call starts at 400 ms, when a2 is due, and its answer is ready in the same round.
-    assert executed == ['a0', 'a1', 'a2', 'b0', 'b1']
+        rig.run.close()
+    # a2 is due at 400 ms, when the next call is due too. That call waits for the round after a2 went out.
+    assert seen == ['--', 'a2']
+    assert [command for command in rig.executed if command != '--'] == ['a0', 'a1', 'a2', 'b0', 'b1', 'b2']
     assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 0
 
 
