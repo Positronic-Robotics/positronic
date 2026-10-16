@@ -90,7 +90,7 @@
       // The xr-standard gamepad layout of `buttons`.
       const BUTTON = { trigger: 0, stick: 3, a: 4, b: 5 };
       // `?mode=teleop` labels the buttons for `positronic teleop`. Every button then sends its value only while it is
-      // touched, and the service reads taps and holds from that.
+      // touched.
       const TELEOP = new URLSearchParams(window.location.search).get('mode') === 'teleop';
       const buttons = new Array(8).fill(0.0);
 
@@ -145,13 +145,15 @@
 
       // The state of the trial, as the teleop service gives it at `STATE_ROUTE`.
       const STATE_ROUTE = '/state';
+      // The fields of the state object, as the server names them.
+      const STATE_FIELD = { phase: 'phase', control: 'control', attemptStarted: 'attempt_started' };
       const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
 
       function phaseText(state) {
-        switch (state.phase) {
+        switch (state[STATE_FIELD.phase]) {
           case PHASE.readyWait: return 'Human trial: tap Ready';
           case PHASE.running:
-            return state.attempt_started
+            return state[STATE_FIELD.attemptStarted]
               ? 'Task running: hold Ready/Start for Complete'
               : 'Trial running: tap Start task when you begin';
           case PHASE.ended: return 'Trial ended';
@@ -169,12 +171,14 @@
         const show = async () => {
           try {
             const state = await (await fetch(STATE_ROUTE)).json();
-            if (state.phase !== shownPhase && PHASES_THAT_OPEN_THE_GRIP.includes(state.phase)) setGrip(0.0);
-            shownPhase = state.phase;
+            const phase = state[STATE_FIELD.phase];
+            if (phase !== shownPhase && PHASES_THAT_OPEN_THE_GRIP.includes(phase)) setGrip(0.0);
+            shownPhase = phase;
             phaseEl.textContent = phaseText(state);
-            configs.track.el.classList.toggle('btn--control-on', state.control === true);
-            configs.track.el.classList.toggle('btn--control-off', state.control !== true);
-            configs.reset.baseLabel = state.phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
+            const control = state[STATE_FIELD.control] === true;
+            configs.track.el.classList.toggle('btn--control-on', control);
+            configs.track.el.classList.toggle('btn--control-off', !control);
+            configs.reset.baseLabel = phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
             applyVisual('reset');
           } catch (e) {
             phaseEl.textContent = 'The teleop service does not answer';

@@ -546,3 +546,23 @@ def test_the_next_session_of_a_run_starts_a_new_trial_after_the_last_one_ended(s
         assert service.phase is Phase.RUNNING
         second.close()
         _until_cleared(service)
+
+
+def test_a_symlink_in_place_of_the_socket_directory_is_refused(tmp_path):
+    own = tmp_path / 'own'
+    own.mkdir(mode=0o700)
+    link = tmp_path / 'link'
+    link.symlink_to(own)
+    with pytest.raises(PermissionError, match='not a link'):
+        with TeleopService(link / 'teleop.sock', 1.0, 0.1, HOLD_SEC):
+            pass
+
+
+def test_a_message_that_comes_with_the_answer_still_ends_the_session(socket_path):
+    service = TeleopService(socket_path, 60.0, 0.1, HOLD_SEC)
+
+    async def answered() -> dict:
+        return {session.KIND: session.Reply.READY}
+
+    connection = cast(server_wire.ServerConnection, _Peer(b'too early'))
+    assert asyncio.run(service._answer_unless_the_peer_speaks(connection, answered())) is None
