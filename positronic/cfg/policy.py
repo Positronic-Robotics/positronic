@@ -7,6 +7,7 @@ from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
+from positronic import keys
 from positronic.policy import RemotePolicy
 from positronic.teleop import TeleopPolicy
 from positronic.teleop.session import default_socket_path
@@ -48,8 +49,11 @@ teleop = cfn.Config(
 
 # The views of `cfg.eval.sim.positronic.stack_cubes_collect` that a person teleoperates with, the most useful first.
 teleop_collect = teleop.override(
-    cameras=('image.exterior', 'image.wrist_upright', 'image.handcam_right', 'image.wrist')
+    cameras=(keys.EXTERIOR_IMAGE, 'image.wrist_upright', 'image.handcam_right', keys.WRIST_IMAGE)
 )
+
+# A person on MolmoSpaces: a slow machine can hold the sim clock for seconds between two frames.
+teleop_molmo = teleop.override(still_clock_timeout=10.0)
 
 
 @cfn.config()
