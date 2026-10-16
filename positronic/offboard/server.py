@@ -15,10 +15,12 @@ from typing import Any
 from uuid import uuid4
 
 import configuronic as cfn
+import numpy as np
 from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_model_server import grpc_wire, protocol, server_wire, spec, websocket_wire
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import AUTH_HEADER, bearer
+from positronic_model_server.serialization import UnknownFrame
 from positronic_wire import wire
 
 from positronic import telemetry
@@ -27,7 +29,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 
-from .protocol import deserialise, serialise
+from .protocol import deserialise_with_frames, serialise
 
 logger = logging.getLogger(__name__)
 
@@ -160,18 +162,31 @@ class PolicyServer:
     async def _answer_observations(
         self, conn: server_wire.ServerConnection, infer: Callable[[Obs], Any], session_id: str
     ) -> None:
-        """Answer observations until the client ends this session or disconnects."""
+        """Answer observations and context pushes until the client ends this session or disconnects."""
+        # The frames of the session's last context push, by digest.
+        held: dict[bytes, np.ndarray] = {}
         while True:
             message = await conn.receive()
             self._last_activity = time.monotonic()
             timing = _ServedTiming()
+            decoded: dict[bytes, np.ndarray] = {}
             with timing.phase(protocol.TIMING_DECODE):
-                request = deserialise(message)
-                if request[protocol.SESSION_ID] != session_id:
-                    raise ValueError('The session ID does not belong to this connection')
-                if request.get(protocol.END_SESSION) is True:
-                    return
-                raw_obs = request[protocol.OBSERVATION]
+                try:
+                    request = deserialise_with_frames(message, held, decoded)
+                except UnknownFrame:
+                    request = None
+            if request is None:
+                await conn.send(serialise({legacy_protocol.REFERENCE_MISS: True, protocol.TIMING: timing.report()}))
+                continue
+            if request[protocol.SESSION_ID] != session_id:
+                raise ValueError('The session ID does not belong to this connection')
+            if request.get(protocol.END_SESSION) is True:
+                return
+            if legacy_protocol.CONTEXT in request:
+                held = decoded
+                await conn.send(serialise({legacy_protocol.CONTEXT: len(held), protocol.TIMING: timing.report()}))
+                continue
+            raw_obs = request[protocol.OBSERVATION]
             try:
                 # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
                 # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
@@ -215,6 +230,8 @@ class PolicyServer:
                 policy_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
+            if pipeline.compress_images:
+                meta[policy_keys.CONTEXT_PUSH] = legacy_protocol.CONTEXT_PUSH_VERSION
             infer = partial(model, session_id=session_id)
             infer = telemetry.traced(protocol.MODEL_CALL)(infer)
             if pipeline.codec is not None:
