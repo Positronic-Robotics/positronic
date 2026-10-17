@@ -6,8 +6,7 @@ Usage
   competition-enter --accept-terms  # the same, then enter your team and accept the terms it shows
 
 The key comes from POSITRONIC_PLATFORM_API_KEY, which `platform-register` prints. The entry asks for no
-terms. The platform refuses the first submission of a team until the team accepts them. The gateway refuses
-terms that are not current, and records the version it serves.
+terms. The platform refuses the first submission of a team until the team accepts them.
 """
 
 from __future__ import annotations
