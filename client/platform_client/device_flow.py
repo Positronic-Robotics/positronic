@@ -64,7 +64,7 @@ class ProviderFailed(DeviceFlowError):
 
 
 class _TransientFailure(ProviderFailed):
-    """One request timed out, or the provider answered 429 or 5xx."""
+    """One request failed in transport or timed out, or the provider answered 429 or 5xx."""
 
     def __init__(self, message: str, retry_after_s: float | None = None) -> None:
         super().__init__(message)
@@ -249,8 +249,10 @@ class DeviceFlow:
             )
         except httpx.TimeoutException as exc:
             raise _TransientFailure(f'{name} did not answer in time') from exc
+        except httpx.TransportError as exc:
+            raise _TransientFailure(f'{name} is unreachable') from exc
         except httpx.HTTPError as exc:
-            raise ProviderFailed(f'{name} is unreachable') from exc
+            raise ProviderFailed(f'{name} did not answer: {exc}') from exc
         status = response.status_code
         if status == httpx.codes.TOO_MANY_REQUESTS:
             retry_after_s = self._retry_after_s(response)

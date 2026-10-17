@@ -351,8 +351,39 @@ def test_an_unreachable_github_is_reported_as_unreachable():
     http = httpx.Client(transport=httpx.MockTransport(refuse))
     flow = DeviceFlow(GITHUB, CLIENT_ID, http, monotonic=lambda: 0.0, sleep=lambda _: None)
 
-    with pytest.raises(DeviceFlowError, match='unreachable'):
-        flow.poll_for_token(_authorization())
+    with pytest.raises(ProviderFailed, match='GitHub is unreachable'):
+        flow.start_device_authorization()
+
+
+@pytest.mark.parametrize('error', [httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError])
+def test_a_poll_that_loses_its_connection_is_retried_at_a_slower_rate(error: type[httpx.TransportError]):
+    """A short network drop costs the user no new sign-in: the code may already be approved."""
+    answers = iter([None, dict(GRANTED)])
+    slept: list[float] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        body = next(answers)
+        if body is None:
+            raise error('dropped', request=request)
+        return httpx.Response(200, json=body)
+
+    http = httpx.Client(transport=httpx.MockTransport(answer))
+    flow = DeviceFlow(GITHUB, CLIENT_ID, http, monotonic=lambda: 0.0, sleep=slept.append)
+
+    assert flow.poll_for_token(_authorization()) == TOKEN
+    assert slept == [5.0, 10.0]
+
+
+def test_a_provider_that_stays_unreachable_ends_the_poll_when_the_code_expires():
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError('connection refused', request=request)
+
+    sleep = RecordedSleep(events=[])
+    http = httpx.Client(transport=httpx.MockTransport(refuse))
+    flow = DeviceFlow(GITHUB, CLIENT_ID, http, monotonic=sleep.monotonic, sleep=sleep)
+
+    with pytest.raises(ProviderFailed, match='GitHub is unreachable, and the device code expires first'):
+        flow.poll_for_token(_authorization(expires_in=20.0))
 
 
 def test_an_answer_that_is_not_a_json_object_is_unreadable():
