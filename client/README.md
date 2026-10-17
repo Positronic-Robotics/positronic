@@ -45,10 +45,10 @@ flow of that provider:
 - WorkOS, when the platform names a WorkOS client. You sign in with the methods that the platform's
   WorkOS environment offers, such as Google, GitHub or an email code.
   `--workos-client-id` and `POSITRONIC_PLATFORM_WORKOS_CLIENT_ID` name another client instead.
-- GitHub, when the platform takes GitHub tokens and names no WorkOS client, or when the platform is
-  older than `auth.config`. The command uses the platform's own OAuth app, whose client id it carries
-  as its default. `--client-id` and `POSITRONIC_PLATFORM_GITHUB_CLIENT_ID` name another app instead.
-  The GitHub token carries the scopes `read:user` and `user:email`.
+- GitHub, when the platform takes GitHub tokens and names no WorkOS client. The command uses the
+  platform's own OAuth app, whose client id it carries as its default. `--client-id` and
+  `POSITRONIC_PLATFORM_GITHUB_CLIENT_ID` name another app instead. The GitHub token carries the scopes
+  `read:user` and `user:email`.
 
 The command keeps the access token in memory, sends it once to `users.register`, and keeps no other
 token. WorkOS also sends a refresh token, which the command drops. The platform reads the account
@@ -67,7 +67,7 @@ plain `http`. A client you pass in keeps its own proxy setting.
 first loses the key the platform minted. Pass `timeout=client.register_timeout()` to
 `PlatformClient.register`: `register_timeout()` reads `auth.config`, where the platform states its
 deadline for the WorkOS check, and covers the longest check the platform runs. Without `timeout`,
-`register` sends one request and waits the client's own timeout.
+`register` sends one request and waits 90 s.
 
 ## Credit accounts
 

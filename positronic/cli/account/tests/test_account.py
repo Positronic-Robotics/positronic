@@ -29,7 +29,7 @@ from pydantic import ValidationError
 from positronic.cli.account import commands
 from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.credits import account, buy, get_purchase, list_purchases
-from positronic.cli.account.gateway import CommandFailed, Fault
+from positronic.cli.account.gateway import CREDENTIAL_ENV, CommandFailed, Fault
 from positronic.cli.account.register import register
 from positronic.cli.conftest import BASE, USER, WHEN, refusal
 
@@ -248,6 +248,7 @@ def test_a_platform_that_takes_no_sign_in_this_client_runs_is_the_platforms_faul
         run_command(register, plaintext_http=True)
 
     assert 'takes no sign-in' in str(raised.value) and raised.value.fault is Fault.PLATFORM
+    assert CREDENTIAL_ENV in str(raised.value)
 
 
 @pytest.mark.parametrize('credential', ['token', None], ids=['with a credential', 'signing in'])

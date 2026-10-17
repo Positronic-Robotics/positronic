@@ -69,7 +69,7 @@ def test_authentication_spends_the_token_on_one_registration(walkthrough: dict[s
 
     def answer(request: httpx.Request) -> httpx.Response:
         if request.url.path == routes.AUTH_CONFIG:
-            return httpx.Response(404, json={'detail': 'Not Found'})
+            return httpx.Response(200, json={'github_registration': True, 'workos': None})
         sent.append(json.loads(request.content))
         body = {'user_id': 'a0', 'artifact_location': 's3://b/a0/', 'api_key': 'pk_new', 'key_status': key_status}
         return httpx.Response(200, json=body)

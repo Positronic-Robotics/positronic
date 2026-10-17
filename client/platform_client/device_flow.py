@@ -7,7 +7,7 @@ drops it.
 
 Usage
   platform-register --alias='<display name>'
-  platform-register --platform-url=http://127.0.0.1:8080
+  platform-register --platform-url=http://127.0.0.1:8080  # a local platform that names a sign-in
   platform-register --platform-url=http://staging.internal:8080 --plaintext-http  # a plain http link
   platform-register --rotate  # mint a new key for an account that is already registered
 """
