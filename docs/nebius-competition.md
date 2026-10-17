@@ -32,9 +32,9 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 1. Install the commands and register me. Ask me for a team name first.
    Show me the sign-in code and link, and wait while I approve it.
    Keep the API key in my environment. Never print it again.
-2. Enter me in the competition. Show me the terms link and what
-   becomes public, and ask whether I accept the terms for my team.
-   Never accept the terms without explicit human approval.
+2. Enter me in the competition. Show me what becomes public and
+   where to read how my data is used, and ask whether to enter.
+   Never enter without explicit human approval.
 3. Help me build a policy image, and push it to a container registry
    that I choose.
 4. Test the image with the network denied.
@@ -82,12 +82,13 @@ export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 ### Enter the competition
 
-Read the [terms](https://competition.phail.ai/terms). The command shows their link and their version,
-and what becomes public. With `--accept-terms`, you accept the terms for your team, and your team enters.
+The command shows what becomes public, and the link to the [terms](https://competition.phail.ai/terms).
+Their section "Your data" tells how the organizers use your data. With `--yes`, your team enters. The
+entry asks for no terms: your team accepts them with its first submission.
 
 ```bash
 competition-enter
-competition-enter --accept-terms
+competition-enter --yes
 ```
 
 - When you enter, the competition publishes your team name and the date you entered. When a run is
