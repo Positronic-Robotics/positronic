@@ -35,7 +35,7 @@ from platform_client.identity_providers import (
     REQUEST_TIMEOUT,
     WORKOS,
     IdentityProvider,
-    register_timeout,
+    workos_register_timeout,
 )
 from platform_client.requests import RegisterRequest
 from platform_client.responses import RegisterResponse
@@ -352,7 +352,7 @@ def sign_in_flow(platform: PlatformClient, http: httpx.Client, client_ids: Clien
     config = platform.auth_config()
     if config.workos is not None:
         client_id = config.workos.client_id if client_ids.workos is None else client_ids.workos
-        return SignIn(DeviceFlow(WORKOS, client_id, http), register_timeout(config.workos.register_deadline_s))
+        return SignIn(DeviceFlow(WORKOS, client_id, http), workos_register_timeout(config.workos))
     if config.github_registration:
         return SignIn(DeviceFlow(GITHUB, client_ids.github, http), GITHUB_REGISTER_TIMEOUT)
     raise NoSignIn(f'the platform at {platform.base_url} takes no sign-in that this client can run')

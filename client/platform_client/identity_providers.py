@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import httpx
-from platform_client.responses import AuthConfig
+from platform_client.responses import AuthConfig, WorkOSSettings
 
 # The scope the minted GitHub token carries: the profile and the verified email. It reads no repository
 # and writes nothing, so the platform holds no power over the account.
@@ -85,8 +85,13 @@ def register_timeout(deadline_s: float) -> httpx.Timeout:
 GITHUB_REGISTER_TIMEOUT = register_timeout(2 * MAX_REQUEST_STALL_S)
 
 
+def workos_register_timeout(settings: WorkOSSettings) -> httpx.Timeout:
+    """The bound on `users.register` for a WorkOS token, from the deadline the platform states."""
+    return register_timeout(settings.register_deadline_s)
+
+
 def longest_register_timeout(config: AuthConfig) -> httpx.Timeout:
     """The bound on `users.register` for a credential of any sign-in the platform takes."""
     if config.workos is None:
         return GITHUB_REGISTER_TIMEOUT
-    return max(GITHUB_REGISTER_TIMEOUT, register_timeout(config.workos.register_deadline_s), key=max_stall_s)
+    return max(GITHUB_REGISTER_TIMEOUT, workos_register_timeout(config.workos), key=max_stall_s)
