@@ -99,7 +99,10 @@ def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked)
 def test_a_horizon_override_rides_the_spec_and_no_override_sends_none(asked):
     benchmarks.override(horizon_sec=120.0).instantiate().tasks()
     benchmarks.instantiate().tasks()
-    assert asked == [{mapping.SELECT_HORIZON_SEC: 120.0}, {}]
+    assert asked == [
+        {mapping.SELECT_HORIZON_SEC: 120.0, mapping.WITH_RIGHT_SHOULDER: True},
+        {mapping.WITH_RIGHT_SHOULDER: True},
+    ]
 
 
 @pytest.mark.parametrize('horizon_sec', [0.0, -1.0, float('nan'), float('inf')])
@@ -117,6 +120,7 @@ def test_the_collection_config_asks_the_pick_mini_benchmark_for_a_two_minute_hor
             'task_config': 'FrankaPickDroidMiniBench',
             'benchmark': 'FrankaPickDroidMiniBench_json_benchmark_20251231',
             mapping.SELECT_HORIZON_SEC: 120.0,
+            mapping.WITH_RIGHT_SHOULDER: True,
         }
     ]
 
