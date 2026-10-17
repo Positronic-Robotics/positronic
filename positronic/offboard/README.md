@@ -200,10 +200,6 @@ The client selects the exact registered implementation; it never substitutes a n
 guesses from constructor arguments. Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
-`chunked_schedule` v3 defaults to `replan_on_error=True`: an arm's `ERROR` brings inference forward,
-and the fresh chunk replaces remaining commands on arrival. Set the argument to `false` to keep the
-regular deadlines. Version 2 keeps regular deadlines on errors and does not accept that argument.
-
 The client runs a protocol v1 server's stack on the current processors. `positronic.offboard.server`
 serves v2, including its optional server codec. `positronic_model_server.server` serves v3: the same
 session envelopes carry native model results without robot-command interpretation. Its full codec
