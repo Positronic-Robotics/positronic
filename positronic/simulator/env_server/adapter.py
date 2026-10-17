@@ -148,7 +148,7 @@ class WireCommandAdapter(EnvAdapter):
 
     def refused(self, channels: Collection[str], observations: dict[str, Any]) -> None:
         for name in channels:
-            # Re-sent, the command would be refused again, and the arm would read ERROR for as long as it is held.
+            # The env would refuse a re-sent command again, and the arm would read ERROR as long as it is held.
             self._held.pop(name, None)
             state: MujocoFrankaState = observations[
                 keys.arm_channel(keys.ROBOT_STATE, keys.channel_arm(name, keys.ROBOT_COMMAND))
