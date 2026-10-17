@@ -576,6 +576,16 @@ def test_a_rate_limit_followed_by_a_pending_answer_expires_as_unauthorized():
     assert not isinstance(raised.value, ProviderFailed)
 
 
+def test_a_rate_limit_slows_the_next_poll_only_as_long_as_workos_asked():
+    """`Retry-After` sets one wait; the polls after it run at the stepped interval, not at the long wait."""
+    limited = httpx.Response(429, headers={'retry-after': '30'})
+    workos = _workos(polls=[limited, {'error': 'authorization_pending'}, WORKOS_GRANTED])
+    flow, sleep = _flow(workos)
+
+    assert flow.poll_for_token(_authorization()) == WORKOS_TOKEN
+    assert sleep.seconds == [5.0, 30.0, 10.0]
+
+
 @pytest.mark.parametrize('retry_after', [None, 'Wed, 21 Oct 2026 07:28:00 GMT', '-1', 'nan', '\u00b2', '\u0663'])
 def test_a_rate_limited_poll_without_a_whole_number_of_seconds_takes_the_step(retry_after: str | None):
     # A digit outside ASCII passes `str.isdigit`, and `float` refuses it.

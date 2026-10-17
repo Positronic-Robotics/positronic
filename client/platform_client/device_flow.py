@@ -218,6 +218,8 @@ class DeviceFlow:
         # How much a `slow_down` answer or a transient failure raises the poll interval (RFC 8628 §3.5).
         slow_down_step_s = 5.0
         interval = authorization.interval
+        # The next wait: the interval, or once the longer wait a 429 asked for.
+        wait = interval
         deadline = self._monotonic() + authorization.expires_in
         last_failure: _TransientFailure | None = None
         # The first failed poll since the last answer that reached the provider. A later failure keeps it.
@@ -225,12 +227,12 @@ class DeviceFlow:
         while True:
             # RFC 8628 §3.3: the device waits the interval before each poll, the first one included.
             # A poll that starts at once is answered `slow_down`, which spends the code's lifetime.
-            if self._monotonic() + interval > deadline:
+            if self._monotonic() + wait > deadline:
                 if last_failure is not None:
                     # The wait the provider asked for outlives the code, which the user may have approved.
                     raise ProviderFailed(f'{last_failure}, and the device code expires first') from last_failure
                 raise DeviceFlowError('the device code was not authorized in time')
-            self._sleep(interval)
+            self._sleep(wait)
             try:
                 payload = self._poll(authorization)
             except _TransientFailure as exc:
@@ -240,7 +242,8 @@ class DeviceFlow:
                 # RFC 8628 §3.5: a poll that timed out slows the rate and tries again, and WorkOS names a
                 # 429 and a 5xx transient as well. The code may already be authorized, and the deadline
                 # above ends the flow.
-                interval = max(interval + slow_down_step_s, exc.retry_after_s or 0.0)
+                interval += slow_down_step_s
+                wait = max(interval, exc.retry_after_s or 0.0)
                 continue
             last_failure = None
             error = payload.get(_ERROR_FIELD)
@@ -256,6 +259,7 @@ class DeviceFlow:
             elif outcome is not PollOutcome.PENDING:
                 raise self._terminal_failure(outcome, error, reached_before)
             reached_before = None
+            wait = interval
 
     @staticmethod
     def _retry_after_s(response: httpx.Response) -> float | None:
