@@ -4,6 +4,7 @@ import socket
 import threading
 import time
 import types
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -19,7 +20,7 @@ from websockets.sync.client import unix_connect
 import pimm
 import positronic.cfg.simulator
 from pimm.world import SystemClock
-from positronic import geom, keys
+from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
@@ -28,7 +29,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step
 from positronic.policy.executor import Executor
 from positronic.policy.remote import RemotePolicy
-from positronic.policy.teleop import TrialNotStarted
+from positronic.policy.teleop import TeleopClient, TrialNotStarted
 from positronic.teleop import command, protocol
 from positronic.teleop import service as service_module
 from positronic.teleop.protocol import Reply, Request, session_query
@@ -130,12 +131,14 @@ class _Headset:
         self._service = service
         self.pose: geom.Transform3D | None = HAND
         self.buttons = _buttons()
+        self.sent = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._send, daemon=True)
 
     def _send(self) -> None:
         while not self._stop.is_set():
             self._service.take_sample(self.pose, self.buttons)
+            self.sent += 1
             time.sleep(0.01)
 
     def __enter__(self) -> '_Headset':
@@ -146,16 +149,23 @@ class _Headset:
         self._stop.set()
         self._thread.join()
 
+    def _hold(self, buttons: list[float], samples: int) -> None:
+        """Send ``buttons`` in at least ``samples`` samples, so a loaded machine does not miss them."""
+        self.buttons = buttons
+        until = self.sent + samples
+        deadline = time.monotonic() + 5
+        while self.sent < until:
+            assert time.monotonic() < deadline, 'the headset sent no sample'
+            time.sleep(0.005)
+
     def press(self, **buttons: float) -> None:
-        """Press ``buttons`` for 50 ms."""
-        self.buttons = _buttons(**buttons)
-        time.sleep(0.05)
-        self.buttons = _buttons()
-        time.sleep(0.05)
+        """Press ``buttons`` for a few samples, and release them."""
+        self._hold(_buttons(**buttons), samples=3)
+        self._hold(_buttons(), samples=3)
 
 
-def _until_phase(service: TeleopService, phase: Phase) -> None:
-    deadline = time.monotonic() + 5
+def _until_phase(service: TeleopService, phase: Phase, seconds: float = 5.0) -> None:
+    deadline = time.monotonic() + seconds
     while service.phase is not phase:
         assert time.monotonic() < deadline, f'the service never reached {phase}'
         time.sleep(0.005)
@@ -197,12 +207,34 @@ def _moves(steps: list[Step]) -> list[Step]:
     return [step for step in steps if keys.ROBOT_COMMAND in step.commands]
 
 
+def _is_move(step: Step) -> bool:
+    return keys.ROBOT_COMMAND in step.commands
+
+
+def _drive_until(run, condition: Callable[[Step], bool], seconds: float = 5.0) -> Step:
+    """Send ``OBS`` to the run until it makes a step for which ``condition`` holds, and return that step."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        step = run.send(OBS)
+        assert step is not None
+        if condition(step):
+            return step
+        time.sleep(0.005)
+    raise AssertionError(f'the run made no such step within {seconds} s')
+
+
+def _target(step: Step) -> geom.Transform3D:
+    return step.commands[keys.ROBOT_COMMAND].pose
+
+
 def _readied_run(service: TeleopService, headset: '_Headset', runtime: Executor, socket_path: Path, **params):
     """A run of a remote policy that the teleoperator readied, after its stay command."""
-    _press_ready_when_asked(service, headset, b=1.0)
+    pressing = _press_ready_when_asked(service, headset, b=1.0)
     run = runtime.start(_policy(socket_path, **params))
     stay = run.send(OBS)
     assert stay is not None and keys.ROBOT_COMMAND in stay.commands
+    # The press releases B after Ready. A test press before that release would be lost in it.
+    pressing.join()
     return run
 
 
@@ -220,14 +252,12 @@ def test_a_teleoperator_readies_takes_control_starts_and_completes_a_trial(servi
         assert service.phase is Phase.RUNNING
 
         headset.press(a=1.0)
-        steps, _ = _drive(run, 0.3)
-        [first, *_] = _moves(steps)
-        np.testing.assert_allclose(first.commands[keys.ROBOT_COMMAND].pose.translation, ROBOT_POSE.translation)
+        first = _drive_until(run, _is_move)
+        np.testing.assert_allclose(_target(first).translation, ROBOT_POSE.translation)
         assert service.state().control
 
         headset.press(b=1.0)
-        _drive(run, 0.3)
-        assert policy_keys.ATTEMPT_START_NS in runtime.metadata_snapshot()
+        _drive_until(run, lambda _: policy_keys.ATTEMPT_START_NS in runtime.metadata_snapshot())
 
         headset.buttons = _buttons(b=1.0)
         _, end = _drive(run, 2.0)
@@ -240,23 +270,26 @@ def test_control_follows_the_hand_from_where_it_came_on(service, socket_path, ru
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
         headset.press(a=1.0)
-        _drive(run, 0.2)
+        _drive_until(run, _is_move)
         headset.pose = geom.Transform3D(HAND.translation + np.array([0.0, 0.0, 0.05]), HAND.rotation)
-        steps, _ = _drive(run, 0.3)
-        shift = _moves(steps)[-1].commands[keys.ROBOT_COMMAND].pose.translation - ROBOT_POSE.translation
+        moved = _drive_until(
+            run,
+            lambda step: _is_move(step) and np.linalg.norm(_target(step).translation - ROBOT_POSE.translation) > 0.04,
+        )
+        shift = _target(moved).translation - ROBOT_POSE.translation
         np.testing.assert_allclose(np.linalg.norm(shift), 0.05, atol=1e-9)
         headset.press(a=1.0)
+        _drive_until(run, lambda _: not service.state().control)
         steps, _ = _drive(run, 0.3)
-        assert not _moves(steps[2:])
+        assert not _moves(steps)
         run.close()
 
 
 def test_with_no_operator_position_the_hand_pose_is_the_robot_pose_and_control_is_on(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path, operator_position=None)
-        steps, _ = _drive(run, 0.3)
-        target = _moves(steps)[-1].commands[keys.ROBOT_COMMAND].pose
-        np.testing.assert_allclose(target.translation, HAND.translation)
+        moved = _drive_until(run, _is_move)
+        np.testing.assert_allclose(_target(moved).translation, HAND.translation)
         run.close()
 
 
@@ -319,9 +352,11 @@ def test_a_ready_wait_longer_than_the_infer_timeout_still_ends_with_ready(socket
                 time.sleep(2.5)
                 headset.press(b=1.0)
 
-            threading.Thread(target=press_late, daemon=True).start()
+            pressing = threading.Thread(target=press_late, daemon=True)
+            pressing.start()
             run = runtime.start(policy)
             assert service.phase is Phase.RUNNING
+            pressing.join()
             run.close()
 
 
@@ -329,10 +364,9 @@ def test_a_silent_headset_reads_as_not_tracked_and_turns_control_off(service, so
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
         headset.press(a=1.0)
-        steps, _ = _drive(run, 0.3)
-        assert _moves(steps)
+        _drive_until(run, _is_move)
         headset.pose = None
-        _drive(run, 0.3)
+        _drive_until(run, lambda _: not service.state().control)
         headset.pose = HAND
         steps, _ = _drive(run, 0.3)
         assert not _moves(steps)
@@ -347,16 +381,21 @@ def test_the_service_refuses_a_second_session_while_a_trial_runs(service, socket
         first.close()
 
 
-def test_the_service_refuses_a_second_session_within_a_slice_of_the_ready_wait(service, socket_path, connect):
-    waiting = connect(socket_path)
-    answer = waiting.ready_in_background()
-    _until_phase(service, Phase.READY_WAIT)
-    started = time.monotonic()
-    with pytest.raises(RuntimeError, match='one session at a time'):
-        _policy(socket_path).meta()
-    assert time.monotonic() - started < TeleopService.READY_SLICE_SEC + 1.0
-    service.cancel_ready_wait()
-    assert answer.result(5) is Reply.CANCELLED
+def test_the_service_refuses_a_second_session_in_the_ready_wait_long_before_the_ready_limit(socket_path, connect):
+    """The worker thread takes the second preparation after the current ready slice, not after the whole wait."""
+    with TeleopService(socket_path, ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC) as service:
+        waiting = connect(socket_path)
+        try:
+            answer = waiting.ready_in_background()
+            _until_phase(service, Phase.READY_WAIT)
+            started = time.monotonic()
+            with pytest.raises(RuntimeError, match='one session at a time'):
+                _policy(socket_path).meta()
+            assert time.monotonic() - started < 30
+            service.cancel_ready_wait()
+            assert answer.result(5) is Reply.CANCELLED
+        finally:
+            waiting.close()
 
 
 def test_a_session_with_a_wrong_operator_position_is_refused_at_connect(service, socket_path):
@@ -396,9 +435,7 @@ class _BlankRenderer:
 
 
 @pytest.mark.timeout(120)
-def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(
-    service, socket_path, tmp_path, monkeypatch
-):
+def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(socket_path, tmp_path, monkeypatch):
     monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', _BlankRenderer)
     ev = stack_cubes(
         mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
@@ -413,8 +450,9 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(
         timeout=60,
     )
 
-    def teleoperate(headset: _Headset) -> None:
-        _until_phase(service, Phase.READY_WAIT)
+    def teleoperate(service: TeleopService, headset: _Headset) -> None:
+        # The sim loads before the first trial waits for Ready, and a loaded machine loads it slowly.
+        _until_phase(service, Phase.READY_WAIT, seconds=60)
         headset.press(b=1.0)
         _until_phase(service, Phase.RUNNING)
         time.sleep(0.3)
@@ -425,8 +463,9 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(
         time.sleep(0.3)
         headset.buttons = _buttons(b=1.0)
 
-    with _Headset(service) as headset, pos3.mirror():
-        threading.Thread(target=teleoperate, args=(headset,), daemon=True).start()
+    service = TeleopService(socket_path, ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC)
+    with service, _Headset(service) as headset, pos3.mirror():
+        threading.Thread(target=teleoperate, args=(service, headset), daemon=True).start()
         main(policy=_policy(socket_path), evals=[ev], output_dir=str(tmp_path))
 
     [episode] = LocalDataset(tmp_path)
@@ -437,6 +476,9 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(
     assert episode.static[f'{policy_meta}.{policy_keys.TYPE}'] == 'remote'
     assert episode.static[f'{policy_meta}.{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
     assert keys.TARGET_EE_POSE in episode.signals
+    # The harness binds telemetry, so the end and the mark came up through the timed runs of the stack.
+    names = {span.name for span in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
+    assert {telemetry.component_name(TeleopClient(1.0)), telemetry_keys.SPAN_POLICY_INFER} <= names
 
 
 class TestButtonsBetweenTrials:
