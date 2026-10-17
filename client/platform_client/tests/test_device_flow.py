@@ -1042,6 +1042,20 @@ def test_the_old_module_path_still_names_the_github_scope():
     assert github_device_flow.IDENTITY_SCOPE == GITHUB.scope
 
 
+@pytest.mark.parametrize(
+    'message', ['the access token was already used: sign in again', 'the WorkOS email address is not verified']
+)
+def test_a_registration_the_gateway_refuses_shows_its_message(message: str):
+    refused = httpx.Response(401, json={'error': {'code': 'unauthorized', 'message': message, 'details': {}}})
+    flow, _ = _flow(_workos(polls=[dict(WORKOS_GRANTED)]))
+    http = httpx.Client(base_url='https://gateway.example', transport=httpx.MockTransport(lambda _: refused))
+
+    with PlatformClient(client=http) as platform, pytest.raises(PlatformError) as raised:
+        register_with_device_flow(platform, flow)
+
+    assert message in str(raised.value)
+
+
 def test_a_refused_gateway_ends_the_command_rather_than_raising():
     """A dial the gateway refuses is a transport error, which no other layer here converts."""
 

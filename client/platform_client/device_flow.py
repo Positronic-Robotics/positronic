@@ -424,7 +424,8 @@ def run_registration(
             # The request may have reached the gateway and minted the key before the answer was lost.
             raise SystemExit(
                 f'the platform at {base_url} did not answer the registration: {exc}. '
-                'A key may have been minted; run again with --rotate.'
+                'A key may have been minted, and a WorkOS token registers once: run again with --rotate, '
+                'which signs in again.'
             ) from exc
         except (DeviceFlowError, PlatformError) as exc:
             raise SystemExit(str(exc)) from exc

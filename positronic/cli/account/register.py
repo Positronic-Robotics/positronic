@@ -51,8 +51,8 @@ def _naming_rotate_when_the_answer_is_lost() -> Iterator[None]:
         if not may_have_minted_a_key(exc):
             raise
         raise CommandFailed(
-            f'{exc.request.url} did not answer the registration: {exc!r}. A key may have been minted; '
-            'run `positronic account register --rotate` to mint another.',
+            f'{exc.request.url} did not answer the registration: {exc!r}. A key may have been minted, and a '
+            'WorkOS token registers once: sign in again with `positronic account register --rotate`.',
             Fault.PLATFORM,
         ) from exc
 
