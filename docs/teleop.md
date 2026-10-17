@@ -1,15 +1,26 @@
 # Teleoperation Guide
 
-`TeleopPolicy` lets a person control the robot. For the Harness it is an ordinary policy: a human trial runs through
-the same eval and records the same data as a model trial.
+A person controls the robot through the teleop service, `positronic teleop`. For the Harness the person is an
+ordinary `RemotePolicy`: `cfg.policy.teleop` dials the socket of the service, as a model policy dials a model server.
+A human trial runs through the same eval and records the same data as a model trial.
 
-The person works through the teleop service, `positronic teleop`. The service runs on the same machine as the run. It
-serves three things:
+The service runs on the same machine as the run. It serves three things:
 - the WebXR page for the phone or the headset, on port 5005;
 - a window on the laptop screen, on `http://127.0.0.1:5006/`;
-- one session for the policy, on a Unix socket.
+- one session at a time, as a model server on a Unix socket.
 
-The input of the person reaches only the policy. No model server gets it.
+Each session declares `TeleopClient` (`positronic.policy.teleop`) in its client stack. The service keeps the state of
+the trial and the clutch. Its replies carry only the target pose, the grip, Start task and the end. So the input of the
+person stays in the service. No model server gets it.
+
+The plain form of the policy works too:
+
+```bash
+--policy=@positronic.cfg.policy.remote --policy.wire=websocket_unix \
+  --policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=<the socket that the service names>
+```
+
+`cfg.policy.teleop` adds a short infer timeout (10 s) and a short connect deadline (30 s).
 
 ## Devices
 
@@ -55,8 +66,8 @@ A run records the union of two camera sets:
 Conversion for training picks its own keys from the recording.
 
 - The eval names the recorded cameras in its `camera_dict`.
-- `TeleopPolicy(cameras=...)` names the cameras that the person sees, in that order. With no `cameras`, the person sees
-  every image of the observation.
+- The session parameter `cameras` names the cameras that the person sees, in that order. With no `cameras`, the person
+  sees every image of the observation (see Session parameters).
 - The window shows the cameras of the policy in a grid, each with its name.
 - The headset video shows one camera: the first one, or the one that `positronic teleop --headset_camera=<name>`
   names. The phone page shows no video.
@@ -66,7 +77,7 @@ Conversion for training picks its own keys from the recording.
 1. In terminal 1, start the service. For an iPhone:
 
    ```bash
-   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop
+   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop --operator_position=BACK
    ```
 
 2. In terminal 2, start a run of 20 trials:
@@ -75,7 +86,6 @@ Conversion for training picks its own keys from the recording.
    uv run positronic eval run \
      --eval=@positronic.cfg.eval.sim.positronic.stack_cubes_collect --eval.seed=1 \
      --policy=@positronic.cfg.policy.teleop_collect \
-     --policy.operator_position=@positronic.teleop.clutch.OperatorPosition.BACK \
      --output_dir=~/datasets/stack_cubes_demos
    ```
 
@@ -118,15 +128,25 @@ uv run positronic eval run \
   the config selects.
 - `teleop_molmo` shows every camera of the observation. It lets the sim clock stand still for 10 s before it stops the
   run, because MolmoSpaces is slow on a laptop.
-- Add `--policy.operator_position=@positronic.teleop.clutch.OperatorPosition.BACK` if the arm moves the wrong way.
+- Start the service with `--operator_position=BACK` if the arm moves the wrong way.
 
 Start `positronic teleop` first, as in MuJoCo.
+
+## Session parameters
+
+The service CLI sets the defaults: `--operator_position` (`FRONT`, `BACK`, or `null` for UMI mode, where control is
+always on and the hand pose is the robot pose), `--cameras` (a JSON list, or none for every image), `--image_fps` and
+`--still_clock_timeout`. A run sets its own in the query of its address, each value a JSON literal, for example
+`--policy.address.query='operator_position="BACK"'`. `positronic.teleop.protocol.session_query` builds such a query:
+`teleop_collect` and `teleop_molmo` use it. The episode records the values in `inference.policy.server.effective_params`.
 
 ## What a trial records
 
 | Static | Value |
 |---|---|
-| `inference.policy.type` | `teleop` |
+| `inference.policy.type` | `remote` |
+| `inference.policy.server.type` | `teleop` |
+| `inference.policy.server.effective_params.*` | the session parameters, for example `operator_position` |
 | `inference.policy.attempt_start_ns` | the episode time of Start task, in ns. It is absent when the trial had no Start task. |
 | `eval.ended_by` | `policy`, when Complete or Give up ended the trial |
 | `eval.policy_end` | `complete` or `give_up` |
@@ -154,9 +174,11 @@ and vary how you come to the object.
 - The phone page shows no video. Watch the window on the laptop.
 - MolmoSpaces runs slowly and with jerks on a Mac. `teleop_molmo` allows for this, but the person feels it.
 - The policy waits for Ready before the episode starts, so the wait is outside the recording and the time limit. The
-  wait blocks the main group of the World. The service answers an error after 120 s, and the policy stops waiting after
-  130 s. A Ctrl-C during the wait takes effect after the answer.
-- The service serves one session at a time. Each trial opens a new session.
+  wait blocks the main group of the World. The client asks again each second. The service ends the wait after 120 s,
+  and the client stops after 130 s. A Ctrl-C during the wait takes effect after the next answer.
+- The service serves one session at a time, and refuses a second one. Each trial opens a new session. The `meta()` of
+  a run opens a short session too, so start no second run while a trial runs.
+- When the service is down, a trial fails after the connect deadline of the policy (30 s in `cfg.policy.teleop`).
 - With no `XDG_RUNTIME_DIR`, the socket is in `positronic-<uid>` under the temporary directory. The service makes that
   directory private to the user.
 
