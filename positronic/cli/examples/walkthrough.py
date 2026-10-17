@@ -45,7 +45,7 @@ def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None
     WorkOS token registers once, so one call is all a token allows.
     """
     request = RegisterRequest(credential=credential, alias=alias, rotate=True)
-    registration = client.register(request)
+    registration = client.register(request, timeout=client.register_timeout())
     print(f'   user {registration.user_id} ({registration.key_status.name})')
     assert client.api_key is not None, f'expected a key after {registration.key_status.name}'
 

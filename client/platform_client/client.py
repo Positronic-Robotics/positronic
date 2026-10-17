@@ -188,10 +188,9 @@ class PlatformClient:
 
         A key comes back only on a first registration or a `rotate`; a repeat registration answers
         `existing` with none, and the client goes on holding whatever it already had. Without `timeout`
-        it waits `register_timeout()`; a sign-in that already holds its own bound passes it.
+        it waits the client's own timeout, which can be shorter than the gateway's check: pass
+        `register_timeout()`, or the bound a sign-in holds.
         """
-        if timeout is None:
-            timeout = self.register_timeout()
         response = self._post(routes.USERS_REGISTER, request, RegisterResponse, auth=Auth.NONE, timeout=timeout)
         if response.api_key is not None:
             self.api_key = response.api_key

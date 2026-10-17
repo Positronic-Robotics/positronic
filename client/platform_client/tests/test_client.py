@@ -71,20 +71,14 @@ EPISODE_KEY = 'episodes/0000/meta.json'
 
 
 class Gateway:
-    """Records the request it was handed and answers a canned payload.
+    """Records the request it was handed and answers a canned payload."""
 
-    `auth_config`, when given, answers that route instead, so a registration can read it first.
-    """
-
-    def __init__(self, status: int, payload: object, *, auth_config: tuple[int, object] | None = None) -> None:
+    def __init__(self, status: int, payload: object) -> None:
         self.status = status
         self.payload = payload
-        self.auth_config = auth_config
         self.seen: httpx.Request | None = None
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        if self.auth_config is not None and request.url.path == routes.AUTH_CONFIG:
-            return httpx.Response(self.auth_config[0], json=self.auth_config[1])
         self.seen = request
         return httpx.Response(self.status, json=self.payload)
 
@@ -186,11 +180,7 @@ def test_the_client_refuses_a_payable_link_after_a_purchase_enters_review():
 
 
 def test_register_posts_the_body_unauthenticated_and_parses_the_response():
-    gateway = Gateway(
-        200,
-        {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'},
-        auth_config=OLDER_PLATFORM,
-    )
+    gateway = Gateway(200, {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'})
     client = make_client(gateway, api_key=None)
 
     response = client.register(RegisterRequest(credential='token', alias='demo'))
@@ -205,15 +195,16 @@ def test_register_posts_the_body_unauthenticated_and_parses_the_response():
     assert gateway.body() == {'credential': 'token', 'alias': 'demo', 'rotate': False}
 
 
-def test_register_without_a_timeout_waits_the_bound_auth_config_implies():
+def test_register_without_a_timeout_sends_one_request_on_the_clients_own_timeout():
+    """One method per endpoint: the caller reads the bound `auth.config` implies through `register_timeout()`."""
     body = {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'}
-    workos = {'client_id': 'c', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 200.0}
-    gateway = Gateway(200, body, auth_config=(200, {'github_registration': False, 'workos': workos}))
+    gateway = Gateway(200, body)
+    client = PlatformClient(client=httpx.Client(base_url=BASE, transport=httpx.MockTransport(gateway), timeout=30.0))
 
-    make_client(gateway, api_key=None).register(RegisterRequest(credential='token'))
+    client.register(RegisterRequest(credential='token'))
 
     assert gateway.request().url.path == routes.USERS_REGISTER
-    assert gateway.request().extensions['timeout'] == timeout_after_deadline(200.0).as_dict()
+    assert gateway.request().extensions['timeout'] == httpx.Timeout(30.0).as_dict()
 
 
 def test_an_older_platform_takes_github_tokens_only():
@@ -316,11 +307,7 @@ def test_a_plain_http_platform_ignores_an_environment_proxy(url: str, trusts_env
 
 
 def test_register_sends_no_key_even_when_the_client_holds_one():
-    gateway = Gateway(
-        200,
-        {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'},
-        auth_config=OLDER_PLATFORM,
-    )
+    gateway = Gateway(200, {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'})
     make_client(gateway).register(RegisterRequest(credential='token'))
     assert 'authorization' not in gateway.request().headers
 
@@ -329,7 +316,6 @@ def test_register_carries_back_a_minted_key():
     gateway = Gateway(
         200,
         {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'api_key': 'pk_live_new', 'key_status': 'created'},
-        auth_config=OLDER_PLATFORM,
     )
     response = make_client(gateway, api_key=None).register(RegisterRequest(credential='token'))
     assert response.api_key == 'pk_live_new'
@@ -340,9 +326,7 @@ def test_a_minted_key_that_is_blank_is_a_malformed_response():
     # The record refuses a blank key too, but a command builds that record after the request has
     # returned, where the refusal is a traceback out of a mint already spent. One owner, here.
     gateway = Gateway(
-        200,
-        {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'api_key': '  ', 'key_status': 'created'},
-        auth_config=OLDER_PLATFORM,
+        200, {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'api_key': '  ', 'key_status': 'created'}
     )
     with pytest.raises(ValidationError, match='no api_key came with it'):
         make_client(gateway, api_key=None).register(RegisterRequest(credential='token'))
@@ -352,7 +336,6 @@ def test_register_keeps_the_key_it_is_given_so_the_next_call_is_authenticated():
     gateway = Gateway(
         200,
         {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'api_key': 'pk_live_new', 'key_status': 'created'},
-        auth_config=OLDER_PLATFORM,
     )
     client = make_client(gateway, api_key=None)
 
@@ -364,11 +347,7 @@ def test_register_keeps_the_key_it_is_given_so_the_next_call_is_authenticated():
 def test_a_registration_that_carries_no_key_leaves_the_one_already_held():
     # A repeat registration answers `existing` with no key: the caller's working key is not a thing
     # to clear, and clearing it would break the very next authenticated call.
-    gateway = Gateway(
-        200,
-        {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'},
-        auth_config=OLDER_PLATFORM,
-    )
+    gateway = Gateway(200, {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'})
     client = make_client(gateway)
 
     client.register(RegisterRequest(credential='token'))

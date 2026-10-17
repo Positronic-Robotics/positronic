@@ -57,7 +57,7 @@ def _naming_rotate_when_the_answer_is_lost(*, credential_from_environment: bool)
             raise
         raise CommandFailed(
             f'{exc.request.url} did not answer the registration: {exc!r}. A key may have been minted, and a '
-            f'WorkOS token registers once: {fresh_token}.',
+            f'sign-in token may register only once: {fresh_token}.',
             Fault.PLATFORM,
         ) from exc
 
@@ -93,7 +93,7 @@ def register(
     ):
         if credential is not None:
             request = RegisterRequest(credential=credential, alias=alias, rotate=rotate)
-            response = client.register(request)
+            response = client.register(request, timeout=client.register_timeout())
         else:
             response = _register_by_sign_in(client, alias=alias, rotate=rotate, plaintext_http=plaintext_http)
         base_url = client.base_url

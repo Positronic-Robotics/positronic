@@ -64,9 +64,10 @@ from the environment only for an `https` platform, so such a proxy never carries
 plain `http`. A client you pass in keeps its own proxy setting.
 
 `users.register` checks the token with the provider before it answers, and a caller that gives up
-first loses the key the platform minted. `PlatformClient.register` first reads `auth.config`, where the
-platform states its deadline for the WorkOS check, and waits a bound that covers the longest check the
-platform runs (`register_timeout()`). A caller that already holds a bound passes it as `timeout`.
+first loses the key the platform minted. Pass `timeout=client.register_timeout()` to
+`PlatformClient.register`: `register_timeout()` reads `auth.config`, where the platform states its
+deadline for the WorkOS check, and covers the longest check the platform runs. Without `timeout`,
+`register` sends one request and waits the client's own timeout.
 
 ## Credit accounts
 
