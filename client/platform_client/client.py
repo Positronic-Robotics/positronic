@@ -165,8 +165,15 @@ class PlatformClient:
     # --- endpoints ---------------------------------------------------------------------------
 
     def auth_config(self) -> AuthConfig:
-        """The sign-ins this platform takes. A platform older than the route answers 404."""
-        return self._get(routes.AUTH_CONFIG, AuthConfig, auth=Auth.NONE)
+        """The sign-ins this platform takes. A platform older than the route takes GitHub tokens only."""
+        try:
+            return self._get(routes.AUTH_CONFIG, AuthConfig, auth=Auth.NONE)
+        except PlatformError as exc:
+            if exc.http_status != httpx.codes.NOT_FOUND:
+                raise
+            # rules-allow: swallowed-error — a gateway older than `auth.config` answers 404, and takes GitHub only
+            # TODO: drop this path once every platform serves `auth.config`, before GitHub sign-in goes away.
+            return AuthConfig(github_registration=True, workos=None)
 
     def register_timeout(self) -> httpx.Timeout:
         """The bound on `users.register` for a credential of any sign-in this platform takes, from `auth.config`.
@@ -174,22 +181,17 @@ class PlatformClient:
         The gateway checks the credential with the identity provider inside the call, and a caller that gives
         up first leaves a key behind that it can never read.
         """
-        try:
-            config = self.auth_config()
-        except PlatformError as exc:
-            if exc.http_status != httpx.codes.NOT_FOUND:
-                raise
-            # rules-allow: swallowed-error — a platform older than `auth.config` answers 404
-            return longest_register_timeout(None)
-        return longest_register_timeout(config)
+        return longest_register_timeout(self.auth_config())
 
     def register(self, request: RegisterRequest, *, timeout: httpx.Timeout | None = None) -> RegisterResponse:
         """Create-or-return a user, KEEPING any key it returns — the next call is authenticated.
 
         A key comes back only on a first registration or a `rotate`; a repeat registration answers
-        `existing` with none, and the client goes on holding whatever it already had. `timeout` replaces
-        the client's own for this call; pass `register_timeout()` unless the sign-in already named one.
+        `existing` with none, and the client goes on holding whatever it already had. Without `timeout`
+        it waits `register_timeout()`; a sign-in that already holds its own bound passes it.
         """
+        if timeout is None:
+            timeout = self.register_timeout()
         response = self._post(routes.USERS_REGISTER, request, RegisterResponse, auth=Auth.NONE, timeout=timeout)
         if response.api_key is not None:
             self.api_key = response.api_key

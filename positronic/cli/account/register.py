@@ -93,7 +93,7 @@ def register(
     ):
         if credential is not None:
             request = RegisterRequest(credential=credential, alias=alias, rotate=rotate)
-            response = client.register(request, timeout=client.register_timeout())
+            response = client.register(request)
         else:
             response = _register_by_sign_in(client, alias=alias, rotate=rotate, plaintext_http=plaintext_http)
         base_url = client.base_url

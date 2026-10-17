@@ -85,11 +85,8 @@ def register_timeout(deadline_s: float) -> httpx.Timeout:
 GITHUB_REGISTER_TIMEOUT = register_timeout(2 * MAX_REQUEST_STALL_S)
 
 
-def longest_register_timeout(config: AuthConfig | None) -> httpx.Timeout:
-    """The bound on `users.register` for a credential of any sign-in the platform takes.
-
-    None is a platform older than `auth.config`, which takes GitHub tokens only.
-    """
-    if config is None or config.workos is None:
+def longest_register_timeout(config: AuthConfig) -> httpx.Timeout:
+    """The bound on `users.register` for a credential of any sign-in the platform takes."""
+    if config.workos is None:
         return GITHUB_REGISTER_TIMEOUT
     return max(GITHUB_REGISTER_TIMEOUT, register_timeout(config.workos.register_deadline_s), key=max_stall_s)

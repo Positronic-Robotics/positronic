@@ -286,8 +286,8 @@ class WorkOSSettings(BaseModel):
 
     client_id: str
     authkit_domain: str
-    # The gateway's deadline for the WorkOS checks of one `users.register`.
-    register_deadline_s: float
+    # The gateway's deadline for the WorkOS checks of one `users.register`. Bounded, so it makes a valid timeout.
+    register_deadline_s: Annotated[float, Field(gt=0, le=24 * 60 * 60, allow_inf_nan=False)]
 
 
 class AuthConfig(BaseModel):

@@ -183,16 +183,39 @@ class DeviceFlow:
         }
         return outcomes.get(str(error), PollOutcome.UNREADABLE)
 
+    def _terminal_failure(
+        self, outcome: PollOutcome, error: object, failure_before: _TransientFailure | None
+    ) -> DeviceFlowError:
+        """The failure a terminal poll answer ends the flow with. UNREADABLE carries the provider's own word."""
+        terminal_messages = {
+            PollOutcome.DENIED: 'the user refused the authorization',
+            PollOutcome.EXPIRED: 'the device code expired before it was authorized',
+        }
+        message = terminal_messages.get(outcome, f'{self.provider.name} refused the device code: {error}')
+        # A poll before that reached the provider may have spent the code, and its token was lost in transit.
+        spent = failure_before is not None and failure_before.reached_the_provider
+        if outcome in (PollOutcome.UNREADABLE, PollOutcome.EXPIRED) and spent:
+            failure = ProviderFailed(f'{message}, after a poll that failed: {failure_before}')
+            failure.__cause__ = failure_before
+            return failure
+        return DeviceFlowError(message)
+
+    def _poll(self, authorization: DeviceAuthorization) -> Mapping[str, object]:
+        """One request to the token endpoint."""
+        return self._post_form(
+            self.provider.token_url,
+            {
+                _CLIENT_ID_FIELD: self.client_id,
+                _DEVICE_CODE_FIELD: authorization.device_code,
+                'grant_type': DEVICE_GRANT_TYPE,
+            },
+        )
+
     def poll_for_token(self, authorization: DeviceAuthorization) -> str:
         """Step two: poll the device code until the provider mints the access token, or until it expires.
 
         The access token is all this returns. Any other token in the answer is dropped here.
         """
-        # What each terminal outcome leaves the caller with. UNREADABLE carries the provider's own word.
-        terminal_messages = {
-            PollOutcome.DENIED: 'the user refused the authorization',
-            PollOutcome.EXPIRED: 'the device code expired before it was authorized',
-        }
         # How much a `slow_down` answer or a transient failure raises the poll interval (RFC 8628 §3.5).
         slow_down_step_s = 5.0
         interval = authorization.interval
@@ -208,14 +231,7 @@ class DeviceFlow:
                 raise DeviceFlowError('the device code was not authorized in time')
             self._sleep(interval)
             try:
-                payload = self._post_form(
-                    self.provider.token_url,
-                    {
-                        _CLIENT_ID_FIELD: self.client_id,
-                        _DEVICE_CODE_FIELD: authorization.device_code,
-                        'grant_type': DEVICE_GRANT_TYPE,
-                    },
-                )
+                payload = self._poll(authorization)
             except _TransientFailure as exc:
                 last_failure = exc
                 # RFC 8628 §3.5: a poll that timed out slows the rate and tries again, and WorkOS names a
@@ -235,12 +251,7 @@ class DeviceFlow:
                     interval + slow_down_step_s, self._optional_duration_s(payload, _INTERVAL_FIELD, interval)
                 )
             elif outcome is not PollOutcome.PENDING:
-                message = terminal_messages.get(outcome, f'{self.provider.name} refused the device code: {error}')
-                # A poll before that reached the provider may have spent the code, and its token was lost in transit.
-                spent = failure_before is not None and failure_before.reached_the_provider
-                if outcome in (PollOutcome.UNREADABLE, PollOutcome.EXPIRED) and spent:
-                    raise ProviderFailed(f'{message}, after a poll that failed: {failure_before}') from failure_before
-                raise DeviceFlowError(message)
+                raise self._terminal_failure(outcome, error, failure_before)
 
     @staticmethod
     def _retry_after_s(response: httpx.Response) -> float | None:
@@ -330,14 +341,7 @@ class SignIn:
 
 def sign_in_flow(platform: PlatformClient, http: httpx.Client, client_ids: ClientIds) -> SignIn:
     """The sign-in the platform's `auth.config` names."""
-    try:
-        config = platform.auth_config()
-    except PlatformError as exc:
-        if exc.http_status != httpx.codes.NOT_FOUND:
-            raise
-        # rules-allow: swallowed-error — a gateway older than `auth.config` answers 404, and it takes GitHub only
-        # TODO: drop this path once every platform serves `auth.config`, before GitHub sign-in goes away.
-        return SignIn(DeviceFlow(GITHUB, client_ids.github, http), GITHUB_REGISTER_TIMEOUT)
+    config = platform.auth_config()
     if config.workos is not None:
         client_id = config.workos.client_id if client_ids.workos is None else client_ids.workos
         return SignIn(DeviceFlow(WORKOS, client_id, http), register_timeout(config.workos.register_deadline_s))
@@ -348,7 +352,7 @@ def sign_in_flow(platform: PlatformClient, http: httpx.Client, client_ids: Clien
 
 def may_have_minted_a_key(exc: httpx.HTTPError) -> bool:
     """Whether a failed request reached `users.register`, which may have minted a key whose answer is lost."""
-    if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout):
+    if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout | httpx.PoolTimeout):
         return False
     return exc.request.url.path.endswith(routes.USERS_REGISTER)
 
