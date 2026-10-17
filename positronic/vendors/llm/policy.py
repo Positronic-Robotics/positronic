@@ -29,8 +29,6 @@ from pydantic_ai.tools import ToolDefinition
 from positronic import geom, keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
-from positronic.policy.processors import PauseOnUnavailable
-from positronic.policy.sequential import Sequential
 
 from .client import Endpoint
 from .motion import Motion, MoveTo
@@ -435,8 +433,8 @@ def llm(
     max_calls: int,
     max_invalid: int,
 ) -> Policy:
-    """Direct API policy, with fault handling and trajectory scheduling on the rig."""
-    policy = LLMPolicy(
+    """Direct API policy with trajectory scheduling on the rig."""
+    return LLMPolicy(
         Endpoint(model, timeout=timeout, settings=settings),
         motion,
         images=Images(images),
@@ -446,4 +444,3 @@ def llm(
         max_calls=max_calls,
         max_invalid=max_invalid,
     )
-    return Sequential(PauseOnUnavailable(), policy)

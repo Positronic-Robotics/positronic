@@ -57,7 +57,7 @@ Provider-specific behavior follows the library defaults. The example explicitly 
 
 ## Control contract
 
-The default config composes `PauseOnUnavailable` with `LLMPolicy`. Each episode runs a processor generator that yields `Step` values with commands and the next requested call time. A decision sees one frozen observation. The control thread prepares the messages and images, then submits one model invocation to the worker runtime. SDK network retries belong to that invocation. The processor consumes the reply on a later control-loop call. It can request a correction or picture, play a move, or end the episode. Picture and correction requests share the frozen observation. Once the waypoints play, the next decision receives measured state. Each observation includes the previous target and remaining translation/gripper error.
+The default config runs `LLMPolicy`. Each episode runs a processor generator that yields `Step` values with commands and the next requested call time. A decision sees one frozen observation. The control thread prepares the messages and images, then submits one model invocation to the worker runtime. SDK network retries belong to that invocation. The processor consumes the reply on a later control-loop call. It can request a correction or picture, play a move, or end the episode. Picture and correction requests share the frozen observation. Once the waypoints play, the next decision receives measured state. Each observation includes the previous target and remaining translation/gripper error.
 
 Only the task instruction, measured hand pose/gripper, and selected labelled RGB images enter the model prompt. Privileged simulator state and ground-truth success do not. Positions use the measured pose's coordinate frame, in metres. Orientations use roll/pitch/yaw in radians, with `R = Rz(yaw) Ry(pitch) Rx(roll)`. Gripper values run from 0 (open) to 1 (closed).
 
@@ -104,7 +104,7 @@ Events contain the system prompt and tool schemas, measured observations, call n
 
 The processor records responses when it consumes them. The recorded snapshot contains events available when the episode finishes; an unconsumed response is absent even if its API call has completed. Later responses and generator cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
 
-Only one model invocation can be in flight. `PauseOnUnavailable` pauses the processor while the robot is unavailable. It preserves the conversation and any pending reply. When availability returns, the processor consumes that reply or resumes playback, combining overdue waypoints into the latest command. API failures propagate. Follow-up invocations start only when the control loop resumes the processor. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including SDK retries within its timeout, before closing the generator.
+Only one model invocation can be in flight. The processor continues consuming replies and playing commands while the robot reports an unavailable status. Playback combines overdue waypoints into the latest command. API failures propagate. Follow-up invocations start only when the control loop resumes the processor. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including SDK retries within its timeout, before closing the generator.
 
 ## Supervised hardware
 

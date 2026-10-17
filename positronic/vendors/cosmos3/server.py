@@ -26,7 +26,7 @@ from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codecs import ACTION, Codec, RestrictImageSize
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule
 from positronic.vendors import cosmos3
 from positronic.vendors.cosmos3 import codecs
 
@@ -109,9 +109,7 @@ def cosmos3_model(checkpoint: str, revision: str | None, nvidia_python: str, bac
 @cfn.config(codec=codecs.droid)
 def pipeline(codec: Codec) -> PolicyDeployment:
     """The client plays each chunk whole, as NVIDIA's RoboLab client does, and `codec` runs on this server."""
-    return PolicyDeployment(
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(codecs.FPS), RestrictImageSize(*codecs.VIEW_SIZE)), codec
-    )
+    return PolicyDeployment(Sequential(ChunkedSchedule(codecs.FPS), RestrictImageSize(*codecs.VIEW_SIZE)), codec)
 
 
 COMMANDS = {

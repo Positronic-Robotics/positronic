@@ -10,7 +10,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import RestrictImageSize
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 from positronic.vendors.lerobot.policy import LerobotModel, _detect_device, warm_observation
@@ -49,9 +49,7 @@ def lerobot_model(checkpoints_dir: str, checkpoint: str | None, device: str | No
 # so none has a transform to declare.
 @cfn.config(codec=lerobot_codecs.ee)
 def pipeline(codec: Codec, fps: float = 15.0, horizon_sec: float | None = 1.0) -> PolicyDeployment:
-    return PolicyDeployment(
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps, horizon_sec), RestrictImageSize(512, 512)), codec
-    )
+    return PolicyDeployment(Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize(512, 512)), codec)
 
 
 ee = pipeline
