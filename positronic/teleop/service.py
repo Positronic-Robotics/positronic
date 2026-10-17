@@ -21,7 +21,6 @@ from typing import Any
 import cv2
 import numpy as np
 from positronic_model_server import spec
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
 
@@ -31,8 +30,8 @@ from positronic.policy.base import PolicyEnd
 from positronic.policy.codecs import EncodeImages
 from positronic.policy.teleop import TeleopClient
 
-from .clutch import OperatorPosition, Tracker
-from .protocol import EE_POSE, END, GRIP, IMAGES, KIND, START_TASK, TARGET, TASK, Reply, Request
+from .clutch import Tracker
+from .protocol import EE_POSE, END, GRIP, IMAGES, KIND, START_TASK, TARGET, TASK, Reply, Request, SessionParams
 
 QUAT = geom.Rotation.Representation.QUAT
 
@@ -146,31 +145,6 @@ class TrialState:
     control: bool
     attempt_started: bool
     cameras: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class SessionParams:
-    """The parameters of a session. A client sets them as JSON values in the query of its address.
-
-    ``operator_position`` names an ``OperatorPosition``, and ``None`` is UMI mode: control is always on, and the hand
-    pose is the robot pose. ``cameras`` names the cameras that the client sends, and ``None`` is every image of
-    ``Obs``.
-    """
-
-    operator_position: str | None = OperatorPosition.FRONT.name
-    cameras: list[str] | None = None
-    image_fps: float = 15.0
-    still_clock_timeout: float = 1.0
-    jpeg_quality: int = DEFAULT_JPEG_QUALITY
-
-    def __post_init__(self) -> None:
-        names = [position.name for position in OperatorPosition]
-        if self.operator_position is not None and self.operator_position not in names:
-            raise ValueError(f'operator_position must be one of {", ".join(names)}, or null for UMI mode')
-
-    def operator(self) -> geom.Transform3D | None:
-        """The transform of the operator position, or ``None`` in UMI mode."""
-        return None if self.operator_position is None else OperatorPosition[self.operator_position].value
 
 
 @dataclass(frozen=True)

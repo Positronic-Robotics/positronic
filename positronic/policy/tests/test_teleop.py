@@ -251,7 +251,7 @@ def test_an_episode_clock_that_stands_still_for_the_limit_fails_the_run(service,
         runtime.close()
 
 
-@pytest.mark.parametrize('cameras', [None, ['image.wrist']])
+@pytest.mark.parametrize('cameras', [None, [keys.WRIST_IMAGE]])
 def test_a_declared_client_builds_from_its_spec(cameras):
     client = TeleopClient(10.0, cameras=cameras, image_fps=5.0, still_clock_timeout=2.0)
     built = from_spec(client.to_spec())

@@ -30,7 +30,7 @@ from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
-# TODO: Replace this module with a `TeleopPolicy` run, and keep the clutch only in `positronic.teleop`.
+# TODO: Replace this module with a run of `cfg.policy.teleop`, and keep the clutch only in `positronic.teleop`.
 from positronic.teleop.clutch import OperatorPosition, Tracker
 from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler

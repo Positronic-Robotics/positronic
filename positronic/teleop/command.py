@@ -12,8 +12,8 @@ import pimm
 import positronic.cfg.webxr
 from positronic.drivers.webxr import RIGHT, WebXR
 
-from .protocol import default_socket_path
-from .service import Phase, SessionParams, TeleopService
+from .protocol import SessionParams, default_socket_path
+from .service import Phase, TeleopService
 from .window import Window, window_app
 
 logger = logging.getLogger(__name__)

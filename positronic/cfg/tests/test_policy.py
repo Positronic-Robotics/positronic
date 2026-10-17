@@ -1,11 +1,14 @@
 import json
+from urllib.parse import parse_qsl
 
 import pytest
+from positronic_model_server.spec import parse_params
 
 from positronic import keys
 from positronic.cfg import policy as policy_cfg
 from positronic.cfg.eval.sim.positronic import stack_cubes_collect
 from positronic.cfg.policy import file_headers
+from positronic.policy import RemotePolicy
 
 SECRET = 'ak-do-not-print-me'
 
@@ -63,6 +66,20 @@ def test_a_remote_policy_config_carries_an_address_its_network_flags_reach(name)
 
 def test_the_collection_eval_records_every_camera_that_the_teleop_collection_policy_shows():
     recorded = stack_cubes_collect.kwargs['camera_dict']
-    shown = policy_cfg.teleop_collect.kwargs['cameras']
-    assert set(shown) <= set(recorded)
+    assert set(policy_cfg.TELEOP_COLLECT_CAMERAS) <= set(recorded)
     assert {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE} <= set(recorded)
+
+
+def test_the_teleop_collection_policy_asks_the_service_for_its_cameras():
+    query = policy_cfg.teleop_collect.instantiate()._client.session_url.split('?', 1)[1]
+    assert parse_params(parse_qsl(query)) == {'cameras': list(policy_cfg.TELEOP_COLLECT_CAMERAS)}
+
+
+def test_the_teleop_policy_is_a_remote_policy_on_the_socket_of_the_service(tmp_path):
+    socket = tmp_path / 'teleop.sock'
+    teleop = policy_cfg.teleop.override(**{'address.uds': str(socket)}).instantiate()
+    plain = policy_cfg.remote.override(
+        wire='websocket_unix', address=policy_cfg.socket_address.override(uds=str(socket))
+    ).instantiate()
+    assert isinstance(teleop, RemotePolicy) and isinstance(plain, RemotePolicy)
+    assert teleop._client.session_url == plain._client.session_url == f'ws+unix://{socket}/api/v1/session'

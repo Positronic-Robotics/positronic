@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import socket
@@ -7,7 +6,6 @@ import time
 import types
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlencode
 
 import numpy as np
 import pos3
@@ -33,8 +31,8 @@ from positronic.policy.remote import RemotePolicy
 from positronic.policy.teleop import TrialNotStarted
 from positronic.teleop import command, protocol
 from positronic.teleop import service as service_module
-from positronic.teleop.protocol import Reply, Request
-from positronic.teleop.service import ButtonMap, Event, Phase, SessionParams, TeleopService
+from positronic.teleop.protocol import Reply, Request, session_query
+from positronic.teleop.service import ButtonMap, Event, Phase, TeleopService
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 from positronic.utils import package_assets_path
 
@@ -121,8 +119,8 @@ def runtime():
 
 def _policy(socket_path: Path, **params) -> RemotePolicy:
     """An ordinary remote policy that dials the service, with ``params`` in the query of its address."""
-    query = urlencode({name: json.dumps(value) for name, value in params.items()})
-    return RemotePolicy('websocket_unix', UnixSocketAddress(socket_path, SESSION_PATH, query), infer_timeout=10.0)
+    address = UnixSocketAddress(socket_path, SESSION_PATH, session_query(**params))
+    return RemotePolicy('websocket_unix', address, infer_timeout=10.0)
 
 
 class _Headset:
@@ -362,13 +360,19 @@ def test_the_service_refuses_a_second_session_within_a_slice_of_the_ready_wait(s
 
 
 def test_a_session_with_a_wrong_operator_position_is_refused_at_connect(service, socket_path):
+    address = UnixSocketAddress(socket_path, SESSION_PATH, 'operator_position="SIDE"')
     with pytest.raises(RuntimeError, match='operator_position must be one of'):
-        _policy(socket_path, operator_position='SIDE').meta()
+        RemotePolicy('websocket_unix', address).meta()
 
 
-def test_session_params_refuse_a_name_that_is_no_operator_position():
+def test_a_session_query_refuses_a_name_that_is_no_operator_position_or_no_parameter():
     with pytest.raises(ValueError, match='operator_position must be one of'):
-        SessionParams(operator_position='SIDE')
+        session_query(operator_position='SIDE')
+    with pytest.raises(TypeError, match='fps'):
+        session_query(fps=10)
+    assert session_query(operator_position=None, cameras=[keys.WRIST_IMAGE]) == (
+        'operator_position=null&cameras=%5B%22image.wrist%22%5D'
+    )
 
 
 class _BlankRenderer:

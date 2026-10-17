@@ -9,8 +9,7 @@ from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddres
 
 from positronic import keys
 from positronic.policy import RemotePolicy
-from positronic.teleop import TeleopPolicy
-from positronic.teleop.session import default_socket_path
+from positronic.teleop.protocol import default_socket_path, session_query
 from positronic.utils import nebius
 
 
@@ -43,17 +42,22 @@ def socket_address(uds: str, query: str) -> UnixSocketAddress:
 
 remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
 
-teleop = cfn.Config(
-    TeleopPolicy, wire='websocket_unix', address=socket_address.override(uds=str(default_socket_path()))
+# A person, through the teleop service on this machine: an ordinary remote policy on the socket of the service. A ready
+# request ends within a second, so a short infer timeout also bounds a frame. A service that is down fails the trial
+# after the connect deadline.
+teleop = remote.override(
+    wire='websocket_unix',
+    address=socket_address.override(uds=str(default_socket_path())),
+    infer_timeout=10.0,
+    connect_deadline=30.0,
 )
 
 # The views of `cfg.eval.sim.positronic.stack_cubes_collect` that a person teleoperates with, the most useful first.
-teleop_collect = teleop.override(
-    cameras=(keys.EXTERIOR_IMAGE, keys.WRIST_UPRIGHT_IMAGE, keys.HANDCAM_RIGHT_IMAGE, keys.WRIST_IMAGE)
-)
+TELEOP_COLLECT_CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_UPRIGHT_IMAGE, keys.HANDCAM_RIGHT_IMAGE, keys.WRIST_IMAGE)
+teleop_collect = teleop.override(**{'address.query': session_query(cameras=list(TELEOP_COLLECT_CAMERAS))})
 
 # A person on MolmoSpaces: a slow machine can hold the sim clock for seconds between two frames.
-teleop_molmo = teleop.override(still_clock_timeout=10.0)
+teleop_molmo = teleop.override(**{'address.query': session_query(still_clock_timeout=10.0)})
 
 
 @cfn.config()

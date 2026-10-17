@@ -1,14 +1,24 @@
-"""The requests and the replies between ``TeleopClient`` and the teleop service.
+"""The requests, the replies and the session parameters between ``TeleopClient`` and the teleop service.
 
 Each request is the observation of one inference call of protocol v3, and each reply is its result. Both are maps,
 with ``KIND`` naming the request or the reply. ``TeleopClient`` sends ``READY`` requests until the teleoperator is
 ready, and then one ``FRAME`` request at a time.
 """
 
+import json
 import os
 import tempfile
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode
+
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
+
+from positronic import geom
+
+from .clutch import OperatorPosition
 
 
 class Request(StrEnum):
@@ -56,3 +66,35 @@ def default_socket_path() -> Path:
     if runtime:
         return Path(runtime) / 'positronic-teleop.sock'
     return Path(tempfile.gettempdir()) / f'positronic-{os.getuid()}' / 'teleop.sock'
+
+
+@dataclass(frozen=True)
+class SessionParams:
+    """The parameters of a session. A client sets them as JSON values in the query of its address.
+
+    ``operator_position`` names an ``OperatorPosition``, and ``None`` is UMI mode: control is always on, and the hand
+    pose is the robot pose. ``cameras`` names the cameras that the client sends, and ``None`` is every image of
+    ``Obs``.
+    """
+
+    operator_position: str | None = OperatorPosition.FRONT.name
+    cameras: list[str] | None = None
+    image_fps: float = 15.0
+    still_clock_timeout: float = 1.0
+    jpeg_quality: int = DEFAULT_JPEG_QUALITY
+
+    def __post_init__(self) -> None:
+        names = [position.name for position in OperatorPosition]
+        if self.operator_position is not None and self.operator_position not in names:
+            raise ValueError(f'operator_position must be one of {", ".join(names)}, or null for UMI mode')
+
+    def operator(self) -> geom.Transform3D | None:
+        """The transform of the operator position, or ``None`` in UMI mode."""
+        return None if self.operator_position is None else OperatorPosition[self.operator_position].value
+
+
+def session_query(**params: Any) -> str:
+    """``params`` as the query of a session address, each value as a JSON literal. Raise for a name or a value that
+    ``SessionParams`` refuses."""
+    SessionParams(**params)
+    return urlencode({name: json.dumps(value) for name, value in params.items()})
