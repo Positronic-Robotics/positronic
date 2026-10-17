@@ -36,9 +36,13 @@ def _register_by_sign_in(
         with httpx.Client(timeout=REQUEST_TIMEOUT) as http:
             sign_in = sign_in_flow(client, http, client_ids)
             return register_with_device_flow(client, sign_in, alias=alias, rotate=rotate)
+    except NoSignIn as exc:
+        raise CommandFailed(
+            f'{exc}: to register without a sign-in, set a credential in {CREDENTIAL_ENV}', Fault.PLATFORM
+        ) from exc
     except DeviceFlowError as exc:
-        # A provider that fails and a platform that takes no sign-in are no fault of the caller.
-        fault = Fault.PLATFORM if isinstance(exc, ProviderFailed | NoSignIn) else Fault.CALLER
+        # A provider that fails is no fault of the caller.
+        fault = Fault.PLATFORM if isinstance(exc, ProviderFailed) else Fault.CALLER
         raise CommandFailed(str(exc), fault) from exc
 
 

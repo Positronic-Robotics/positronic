@@ -35,6 +35,7 @@ AT = '2026-03-04T05:06:07Z'
 # One canned answer per route, each the shape its response model requires. A submission is finished
 # the first time it is read, so a polling example terminates on its first pass.
 ANSWERS: dict[str, object] = {
+    routes.AUTH_CONFIG: {'github_registration': True, 'workos': None},
     routes.USERS_REGISTER: {
         'user_id': 'a0',
         'artifact_location': 's3://bucket/users/a0/',

@@ -94,7 +94,7 @@ def workos_register_timeout(settings: WorkOSSettings) -> httpx.Timeout:
 def longest_register_timeout(config: AuthConfig) -> httpx.Timeout:
     """The bound on `users.register` for a credential of any sign-in the platform takes.
 
-    A platform that names no WorkOS client takes the GitHub check, the one it runs without `auth.config`.
+    A platform that names no WorkOS client takes the GitHub check.
     """
     if config.workos is None:
         return GITHUB_REGISTER_TIMEOUT

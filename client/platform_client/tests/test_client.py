@@ -90,10 +90,6 @@ class Gateway:
         return json.loads(self.request().content)
 
 
-# What a platform older than `auth.config` answers there.
-OLDER_PLATFORM = (404, {'detail': 'Not Found'})
-
-
 def make_client(gateway: Gateway, *, api_key: ApiKey | None = KEY) -> PlatformClient:
     transport = httpx.MockTransport(gateway)
     return PlatformClient(client=httpx.Client(base_url=BASE, transport=transport), api_key=api_key)
@@ -195,7 +191,7 @@ def test_register_posts_the_body_unauthenticated_and_parses_the_response():
     assert gateway.body() == {'credential': 'token', 'alias': 'demo', 'rotate': False}
 
 
-def test_register_without_a_timeout_sends_one_request_on_the_clients_own_timeout():
+def test_register_without_a_timeout_sends_one_request_that_outwaits_the_clients_own_timeout():
     """One method per endpoint: the caller reads the bound `auth.config` implies through `register_timeout()`."""
     body = {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'}
     gateway = Gateway(200, body)
@@ -204,14 +200,12 @@ def test_register_without_a_timeout_sends_one_request_on_the_clients_own_timeout
     client.register(RegisterRequest(credential='token'))
 
     assert gateway.request().url.path == routes.USERS_REGISTER
-    assert gateway.request().extensions['timeout'] == httpx.Timeout(30.0).as_dict()
+    assert gateway.request().extensions['timeout'] == httpx.Timeout(90.0).as_dict()
 
 
-def test_an_older_platform_takes_github_tokens_only():
-    """A platform older than `auth.config` answers 404 there."""
-    config = make_client(Gateway(*OLDER_PLATFORM)).auth_config()
-
-    assert config.github_registration and config.workos is None
+def test_a_platform_without_auth_config_is_refused():
+    with pytest.raises(PlatformError):
+        make_client(Gateway(404, {'detail': 'Not Found'})).auth_config()
 
 
 @pytest.mark.parametrize('deadline', [0, -1, float('inf'), float('nan'), 10**9])
@@ -236,7 +230,6 @@ def test_register_waits_the_timeout_it_is_given():
 @pytest.mark.parametrize(
     ('status', 'config', 'expected'),
     [
-        (404, {'detail': 'Not Found'}, GITHUB_REGISTER_TIMEOUT),
         (200, {'github_registration': True, 'workos': None}, GITHUB_REGISTER_TIMEOUT),
         (
             200,
@@ -263,7 +256,7 @@ def test_register_waits_the_timeout_it_is_given():
             timeout_after_deadline(1.0),
         ),
     ],
-    ids=['an older platform', 'GitHub only', 'a slow WorkOS check', 'a fast WorkOS check beside GitHub', 'WorkOS only'],
+    ids=['GitHub only', 'a slow WorkOS check', 'a fast WorkOS check beside GitHub', 'WorkOS only'],
 )
 def test_the_register_timeout_covers_the_longest_check_the_platform_names(status, config, expected):
     """The gateway owns its WorkOS deadline and states it in `auth.config`; GitHub keeps its own figure."""

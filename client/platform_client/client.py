@@ -166,15 +166,8 @@ class PlatformClient:
     # --- endpoints ---------------------------------------------------------------------------
 
     def auth_config(self) -> AuthConfig:
-        """The sign-ins this platform takes. A platform older than the route takes GitHub tokens only."""
-        try:
-            return self._get(routes.AUTH_CONFIG, AuthConfig, auth=Auth.NONE)
-        except PlatformError as exc:
-            if exc.http_status != httpx.codes.NOT_FOUND:
-                raise
-            # rules-allow: swallowed-error — a gateway older than `auth.config` answers 404, and takes GitHub only
-            # TODO: drop this path once every platform serves `auth.config`, before GitHub sign-in goes away.
-            return AuthConfig(github_registration=True, workos=None)
+        """The sign-ins this platform takes."""
+        return self._get(routes.AUTH_CONFIG, AuthConfig, auth=Auth.NONE)
 
     def register_timeout(self) -> httpx.Timeout:
         """The bound on `users.register` for a credential of any sign-in this platform takes, from `auth.config`.
@@ -184,13 +177,17 @@ class PlatformClient:
         """
         return longest_register_timeout(self.auth_config())
 
-    def register(self, request: RegisterRequest, *, timeout: httpx.Timeout | None = None) -> RegisterResponse:
+    # `users.register` checks the credential with its identity provider before it answers.
+    DEFAULT_REGISTER_TIMEOUT: ClassVar[httpx.Timeout] = httpx.Timeout(90.0)
+
+    def register(
+        self, request: RegisterRequest, *, timeout: httpx.Timeout = DEFAULT_REGISTER_TIMEOUT
+    ) -> RegisterResponse:
         """Create-or-return a user, KEEPING any key it returns — the next call is authenticated.
 
         A key comes back only on a first registration or a `rotate`; a repeat registration answers
         `existing` with none, and the client goes on holding whatever it already had. Without `timeout`
-        it waits the client's own timeout, which can be shorter than the gateway's check: pass
-        `register_timeout()`, or the bound a sign-in holds.
+        it waits `DEFAULT_REGISTER_TIMEOUT`; `register_timeout()` gives the bound `auth.config` implies.
         """
         response = self._post(routes.USERS_REGISTER, request, RegisterResponse, auth=Auth.NONE, timeout=timeout)
         if response.api_key is not None:

@@ -728,21 +728,15 @@ def test_the_workos_override_does_not_turn_a_github_platform_into_a_workos_one()
     assert flow.provider is GITHUB
 
 
-def test_a_platform_older_than_auth_config_signs_in_through_github():
-    """Such a gateway answers 404, and it takes only GitHub tokens."""
-    not_found = httpx.Response(404, json={'detail': 'Not Found'})
-
-    assert _picked(not_found).flow.provider is GITHUB
-
-
 def test_a_platform_that_takes_no_sign_in_this_client_runs_is_refused():
     with pytest.raises(NoSignIn, match='gateway.example'):
         _picked({'github_registration': False, 'workos': None})
 
 
-def test_a_failing_auth_config_is_no_reason_to_pick_github():
+@pytest.mark.parametrize('status', [404, 500])
+def test_a_failing_auth_config_is_no_reason_to_pick_github(status: int):
     with pytest.raises(PlatformError):
-        _picked(httpx.Response(500, json={'detail': 'boom'}))
+        _picked(httpx.Response(status, json={'detail': 'boom'}))
 
 
 # --- the command --------------------------------------------------------------
