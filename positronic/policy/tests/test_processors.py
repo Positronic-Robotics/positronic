@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from positronic_model_server.spec import ARGS, NAME, VERSION
 
 import pimm
 from pimm.world import VirtualClock
@@ -391,6 +392,172 @@ class ObservingModel(SlowModel):
     def submit(self, function, obs, prefix=()):
         self.seen.append(obs[POSITION])
         return super().submit(function, obs, prefix)
+
+
+@pytest.mark.parametrize('status', list(RobotStatus))
+@pytest.mark.parametrize('arm', [None, *keys.BIMANUAL_ARMS])
+@pytest.mark.parametrize('replan_on_error', [False, True])
+def test_errors_bring_inference_and_playback_forward_when_enabled(execution, status, arm, replan_on_error):
+    runtime, clock = execution
+    requests = []
+    channel = f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.STATUS_SUFFIX}'
+
+    def infer(obs):
+        requests.append(dict(obs))
+        return [{MOTOR: (len(requests), index)} for index in range(5)]
+
+    run = runtime.start(ChunkedSchedule(fps=10, replan_on_error=replan_on_error), infer)
+    try:
+        assert run.send({}).commands == {MOTOR: (1, 0)}
+        clock.advance_to_ns(PERIOD_NS)
+        obs = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE.value, channel: status.value, POSITION: 42}
+        step = run.send(obs)
+        if replan_on_error and status is RobotStatus.ERROR:
+            assert step == Step({MOTOR: (2, 0)}, 2 * PERIOD_NS)
+            assert requests == [{}, obs]
+            assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 4
+        else:
+            assert step == Step({MOTOR: (1, 1)}, 2 * PERIOD_NS)
+            assert requests == [{}]
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('initial_status', [RobotStatus.AVAILABLE, RobotStatus.ERROR])
+def test_repeated_errors_keep_one_recovery_request_and_play_its_answer(execution, monkeypatch, initial_status):
+    runtime, clock = execution
+    model = ObservingModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    try:
+        run.send({POSITION: 0, keys.ROBOT_STATUS: initial_status})
+        model.answer('a', length=5)
+        assert run.send({POSITION: 0, keys.ROBOT_STATUS: initial_status}).commands == {MOTOR: 'a0'}
+        fault = {POSITION: 1, keys.ROBOT_STATUS: RobotStatus.ERROR}
+        for now_ns in (PERIOD_NS, PERIOD_NS + 1, 2 * PERIOD_NS):
+            clock.advance_to_ns(now_ns)
+            step = run.send(fault)
+            assert len(model.calls) == 2
+        assert step.commands == {MOTOR: 'a2'}
+        assert model.seen == [0, 1]
+        model.answer('b', length=5)
+        assert run.send(fault) == Step({MOTOR: 'b0'}, 3 * PERIOD_NS)
+        assert len(model.calls) == 2
+        clock.advance_to_ns(3 * PERIOD_NS)
+        run.send(fault)
+        assert len(model.calls) == 3
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('ready_at_error', [False, True])
+def test_a_request_before_the_error_finishes_before_replanning_from_current_state(
+    execution, monkeypatch, ready_at_error
+):
+    runtime, clock = execution
+    model = ObservingModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.3)), Mock())
+    try:
+        run.send({POSITION: 0})
+        model.answer('a', length=5)
+        run.send({POSITION: 0})
+        clock.advance_to_ns(2 * PERIOD_NS)
+        run.send({POSITION: 2})
+        assert len(model.calls) == 2
+        if ready_at_error:
+            model.answer('stale')
+        clock.advance_to_ns(250_000_000)
+        assert run.send({POSITION: 25, keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {}
+        if not ready_at_error:
+            assert len(model.calls) == 2
+            model.answer('stale')
+            clock.advance_to_ns(3 * PERIOD_NS)
+            assert run.send({POSITION: 3}).commands == {MOTOR: 'a3'}
+        assert model.seen == [0, 2, 25 if ready_at_error else 3]
+        model.answer('fresh')
+        assert run.send({POSITION: 4, keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: 'fresh0'}
+        assert len(model.calls) == 3
+    finally:
+        run.close()
+
+
+def test_errors_replace_a_prefetched_chunk_before_its_playback_starts(execution):
+    runtime, clock = execution
+    infer = Mock(side_effect=[[{MOTOR: name} for _ in range(5)] for name in ('a', 'prefetched', 'fresh')])
+    run = runtime.start(ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.3)), infer)
+    try:
+        run.send({})
+        clock.advance_to_ns(2 * PERIOD_NS)
+        assert run.send({}).commands == {MOTOR: 'a'}
+        assert infer.call_count == 2
+        clock.advance_to_ns(250_000_000)
+        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: 'fresh'}
+        assert infer.call_count == 3
+    finally:
+        run.close()
+
+
+def test_a_failed_request_before_the_error_still_raises(execution, monkeypatch):
+    runtime, _ = execution
+    future = Future()
+    monkeypatch.setattr(runtime, 'submit', Mock(return_value=_UnchargedAnswer(future)))
+    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    run.send({})
+    future.set_exception(RuntimeError('inference failed'))
+    with pytest.raises(RuntimeError, match='inference failed'):
+        run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
+
+
+def test_an_answer_finishing_during_the_error_round_cannot_emit_stale_commands(execution, monkeypatch):
+    runtime, _ = execution
+    stale = Mock(done=Mock(side_effect=[False, False, True]), result=Mock(return_value=[{MOTOR: 'stale'}]))
+    fresh = Mock(done=Mock(return_value=True), result=Mock(return_value=[{MOTOR: 'fresh'}]))
+    submit = Mock(side_effect=[stale, fresh])
+    monkeypatch.setattr(runtime, 'submit', submit)
+    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    try:
+        assert run.send({}).commands == {}
+        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {}
+        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: 'fresh'}
+        assert submit.call_count == 2
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('replan_on_error', [False, True])
+def test_serialized_error_replanning_preserves_the_behavior(execution, replan_on_error):
+    runtime, clock = execution
+    definition = ChunkedSchedule(fps=10, replan_on_error=replan_on_error)
+    encoded = json.loads(json.dumps(definition.to_spec()))
+    assert encoded[VERSION] == 3
+    rebuilt = spec.from_spec(encoded)
+    assert rebuilt.to_spec() == encoded
+    infer = Mock(return_value=[{MOTOR: 1}] * 5)
+    run = runtime.start(rebuilt, infer)
+    try:
+        run.send({})
+        clock.advance_to_ns(PERIOD_NS)
+        run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
+        assert infer.call_count == (2 if replan_on_error else 1)
+    finally:
+        run.close()
+
+
+def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution):
+    runtime, clock = execution
+    declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 2, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
+    schedule = spec.from_spec(declared)
+    assert schedule.to_spec() == declared
+    infer = Mock(return_value=[{MOTOR: index} for index in range(5)])
+    run = runtime.start(schedule, infer)
+    try:
+        for tick in range(6):
+            clock.advance_to_ns(tick * PERIOD_NS)
+            assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: tick % 5}
+        assert infer.call_count == 2
+    finally:
+        run.close()
 
 
 def test_a_slow_answer_is_asked_for_when_the_last_waypoint_is_due(execution, monkeypatch):
@@ -1005,7 +1172,7 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    declared = {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}
+    declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 3, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
     schedule = spec.from_spec(declared)
     assert type(schedule) is ChunkedSchedule
     assert schedule.to_spec() == declared

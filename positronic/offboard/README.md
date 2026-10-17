@@ -154,7 +154,7 @@ Upon connection, the server sends a ready packet with metadata:
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
-      {"name": "chunked_schedule", "version": 2, "args": {"fps": 15.0, "horizon_sec": 1.0}},
+      {"name": "chunked_schedule", "version": 3, "args": {"fps": 15.0, "horizon_sec": 1.0}},
       {"name": "restrict_image_size", "version": 1, "args": {"width": 224, "height": 224}}
     ]},
     "compress_images": true,
@@ -199,6 +199,10 @@ Each component leaf declares its own `version`. `seq` and `par` belong to the pr
 The client selects the exact registered implementation; it never substitutes a newer version or
 guesses from constructor arguments. Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
+
+`chunked_schedule` v3 defaults to `replan_on_error=True`: an arm's `ERROR` brings inference forward,
+and the fresh chunk replaces remaining commands on arrival. Set the argument to `false` to keep the
+regular deadlines. Version 2 keeps regular deadlines on errors and does not accept that argument.
 
 The client runs a protocol v1 server's stack on the current processors. `positronic.offboard.server`
 serves v2, including its optional server codec. `positronic_model_server.server` serves v3: the same

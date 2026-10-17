@@ -28,11 +28,12 @@ from positronic.policy.codecs.action import (
 )
 from positronic.policy.codecs.geometry import ConvertPose
 from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, DurationEstimate, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
 ComponentFactory = Callable[..., Processor | Codec]
+
 
 COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     component.WIRE_NAME: {component.WIRE_VERSION: Version(component.from_spec_args)}
@@ -59,6 +60,27 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         UnpackActionChunk,
     )
 }
+
+
+class _ChunkedScheduleV2(ChunkedSchedule):
+    WIRE_VERSION = 2
+
+    def __init__(
+        self,
+        fps: float,
+        horizon_sec: float | None = None,
+        record_stats: bool = True,
+        inference_lead: DurationEstimate | None = None,
+    ) -> None:
+        super().__init__(fps, horizon_sec, record_stats, inference_lead, replan_on_error=False)
+
+    def to_spec(self) -> dict[str, Any]:
+        node = super().to_spec()
+        del node[ARGS][self.REPLAN_ON_ERROR_ARG]
+        return node
+
+
+COMPONENTS[ChunkedSchedule.WIRE_NAME][_ChunkedScheduleV2.WIRE_VERSION] = Version(_ChunkedScheduleV2.from_spec_args)
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:

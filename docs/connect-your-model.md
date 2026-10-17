@@ -67,7 +67,9 @@ Two consequences shape the API:
 
 **The server usually returns an ordered action chunk.** A model predicts a short stretch of upcoming motion at once. The client policy decides when to request the next chunk and how to combine predictions with commands already being executed.
 
-**The client scheduler decides when each action runs.** `ChunkedSchedule` spaces commands at its configured FPS and finishes each chunk before starting the next. By default it requests the next prediction when the current chunk ends. The model returns ordered actions without timestamps and does not need to account for network or compute delay.
+**The client scheduler decides when each action runs.** `ChunkedSchedule` spaces commands at its configured FPS. It normally finishes each chunk before starting the next and requests the next prediction when the current chunk ends. The model returns ordered actions without timestamps and does not need to account for network or compute delay.
+
+`replan_on_error=True` is the default. If any arm reports `ERROR`, the scheduler requests a fresh prediction from the latest observation. Existing commands continue until the fresh chunk arrives, then the fresh chunk replaces the remaining commands immediately. If an earlier request is still pending, it finishes and its result is discarded before the fresh request starts. Repeated errors do not restart that recovery request. `BUSY` does not trigger replanning. Set `replan_on_error=False` to keep normal chunk timing through errors.
 
 ```mermaid
 sequenceDiagram

@@ -17,7 +17,7 @@ import pytest
 from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server import protocol, server_wire, websocket_wire
-from positronic_model_server.spec import ARGS
+from positronic_model_server.spec import ARGS, NAME, VERSION
 from positronic_wire import registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
@@ -289,7 +289,11 @@ def test_full_inference_cycle(stub_server):
     try:
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata['type'] == 'stub'
-        assert session.metadata['local_stack'] == {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}
+        assert session.metadata[offboard_keys.LOCAL_STACK] == {
+            NAME: ChunkedSchedule.WIRE_NAME,
+            VERSION: 3,
+            ARGS: {ChunkedSchedule.FPS_ARG: 10},
+        }
         assert policy_keys.POSITRONIC_VERSION in session.metadata
 
         obs = {'image': 'test'}
@@ -458,7 +462,11 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_model):
     )
     session = client.new_session()
     try:
-        assert session.metadata['local_stack'] == {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}
+        assert session.metadata[offboard_keys.LOCAL_STACK] == {
+            NAME: ChunkedSchedule.WIRE_NAME,
+            VERSION: 3,
+            ARGS: {ChunkedSchedule.FPS_ARG: 10},
+        }
     finally:
         session.close()
 
@@ -478,9 +486,9 @@ def test_a_pipeline_served_over_a_unix_socket(unix_stub_server, socket_path):
     try:
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata[offboard_keys.LOCAL_STACK] == {
-            'name': 'chunked_schedule',
-            'version': 2,
-            'args': {'fps': 10},
+            NAME: ChunkedSchedule.WIRE_NAME,
+            VERSION: 3,
+            ARGS: {ChunkedSchedule.FPS_ARG: 10},
         }
         assert session.metadata[offboard_keys.UDS] == socket_path
         assert offboard_keys.HOST not in session.metadata
