@@ -11,9 +11,6 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.teleop.protocol import EE_POSE, END, GRIP, IMAGES, KIND, START_TASK, TARGET, TASK, Reply, Request
 
-# A frame answer wakes the run. This is the latest time at which the run asks for its next step without one.
-_IDLE_NS = 1_000_000_000
-
 QUAT = geom.Rotation.Representation.QUAT
 
 
@@ -52,6 +49,8 @@ class TeleopClient(Policy):
 
     WIRE_NAME = 'teleop_client'
     WIRE_VERSION = 1
+    # A frame answer wakes the run. This is the latest time at which the run asks for its next step without one.
+    _IDLE_NS = 1_000_000_000
 
     def __init__(
         self,
@@ -116,11 +115,11 @@ class TeleopClient(Policy):
         pose = geom.Transform3D.from_vector(np.asarray(obs[keys.EE_POSE], dtype=float), QUAT)
         stay = {keys.ROBOT_COMMAND: CartesianPosition(pose), keys.TARGET_GRIP: float(obs[keys.GRIP])}
         pending = runtime.submit(infer, frame_request(obs))
-        obs = yield Step(stay, runtime.time_ns + _IDLE_NS)
+        obs = yield Step(stay, runtime.time_ns + self._IDLE_NS)
         while True:
             clock.check(runtime.time_ns)
             if not pending.done():
-                obs = yield Step({}, runtime.time_ns + _IDLE_NS)
+                obs = yield Step({}, runtime.time_ns + self._IDLE_NS)
                 continue
             reply = pending.result()
             if reply[START_TASK] and not attempt_started:
@@ -133,7 +132,7 @@ class TeleopClient(Policy):
                 target = geom.Transform3D.from_vector(np.asarray(reply[TARGET], dtype=float), QUAT)
                 commands = {keys.ROBOT_COMMAND: CartesianPosition(target), keys.TARGET_GRIP: float(reply[GRIP])}
             pending = runtime.submit(infer, frame_request(obs))
-            obs = yield Step(commands, runtime.time_ns + _IDLE_NS)
+            obs = yield Step(commands, runtime.time_ns + self._IDLE_NS)
 
     def to_spec(self) -> dict[str, Any]:
         args: dict[str, Any] = {

@@ -6,7 +6,6 @@ teleoperator stays in this process. The headset page shows the camera image of t
 The teleoperator uses the buttons of the right controller.
 """
 
-import dataclasses
 import os
 import stat
 import threading
@@ -231,7 +230,6 @@ class TeleopService:
             except BaseException as failed:
                 if started.done():
                     raise
-                # `__enter__` raises the cause.
                 started.set_exception(failed)
 
         self._server = server
@@ -445,7 +443,7 @@ class TeleopModel(Model):
 
     def __init__(self, service: TeleopService, defaults: SessionParams):
         super().__init__(
-            parameters=dataclasses.asdict(defaults),
+            parameters=defaults.to_json(),
             metadata={
                 policy_keys.TYPE: 'teleop',
                 'ready_limit_sec': service.ready_limit,
@@ -458,7 +456,7 @@ class TeleopModel(Model):
     def prepare_session(self, params: dict[str, Any]) -> TeleopSession:
         if self._open:
             raise RuntimeError('the teleop service serves one session at a time')
-        settings = SessionParams(**params)
+        settings = SessionParams.from_json(**params)
         client = TeleopClient(
             ready_backstop_sec=self._service.ready_limit + TeleopService.READY_BACKSTOP_MARGIN_SEC,
             cameras=settings.cameras,

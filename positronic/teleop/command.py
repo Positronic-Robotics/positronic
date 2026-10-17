@@ -12,6 +12,7 @@ import pimm
 import positronic.cfg.webxr
 from positronic.drivers.webxr import RIGHT, WebXR
 
+from .clutch import OperatorPosition
 from .protocol import SessionParams, default_socket_path
 from .service import Phase, TeleopService
 from .window import Window, window_app
@@ -65,7 +66,7 @@ def serve(
     view_fps: float = 30.0,
     headset_camera: str | None = None,
     open_window: bool = True,
-    operator_position: str | None = SessionParams.operator_position,
+    operator_position: OperatorPosition | None = SessionParams.operator_position,
     cameras: list[str] | None = SessionParams.cameras,
     image_fps: float = SessionParams.image_fps,
     still_clock_timeout: float = SessionParams.still_clock_timeout,

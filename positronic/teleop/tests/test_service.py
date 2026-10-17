@@ -446,7 +446,7 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
         camera_dict={
             keys.EXTERIOR_IMAGE: 'back_view_ph',
             keys.WRIST_IMAGE: 'handcam_left_ph',
-            'image.handcam_right': 'handcam_right_ph',
+            keys.HANDCAM_RIGHT_IMAGE: 'handcam_right_ph',
         },
         instruction='Pick up the green cube.',
         timeout=60,
@@ -478,7 +478,6 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
     assert episode.static[f'{policy_meta}.{policy_keys.TYPE}'] == 'remote'
     assert episode.static[f'{policy_meta}.{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
     assert keys.TARGET_EE_POSE in episode.signals
-    # The harness binds telemetry, so the end and the mark came up through the timed runs of the stack.
     names = {span.name for span in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
     assert {telemetry.component_name(TeleopClient(1.0)), telemetry_keys.SPAN_POLICY_INFER} <= names
 
@@ -618,7 +617,7 @@ def test_every_end_of_a_session_leaves_no_trial_in_the_service(service, socket_p
         if ending == 'give_up':
             headset.buttons = _buttons(stick=1.0)
             assert _drive(run, 2.0)[1] is PolicyEnd.GIVE_UP
-        run.close()  # The harness closes the run after a policy end, at the time limit and at the done of the env.
+        run.close()
         _until_cleared(service)
 
 

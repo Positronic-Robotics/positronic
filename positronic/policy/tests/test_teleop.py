@@ -201,7 +201,7 @@ def _sent_cameras(runtime, service, obs, **client_args) -> list[str]:
 MORE_CAMERAS = {
     **OBS,
     keys.WRIST_IMAGE: np.zeros((24, 32, 3), dtype=np.uint8),
-    'image.handcam_right': OBS[keys.EXTERIOR_IMAGE],
+    keys.HANDCAM_RIGHT_IMAGE: OBS[keys.EXTERIOR_IMAGE],
 }
 
 
@@ -209,12 +209,12 @@ def test_the_run_sends_every_camera_of_obs_by_default(runtime, service):
     assert _sent_cameras(runtime, service, MORE_CAMERAS) == [
         keys.EXTERIOR_IMAGE,
         keys.WRIST_IMAGE,
-        'image.handcam_right',
+        keys.HANDCAM_RIGHT_IMAGE,
     ]
 
 
 def test_the_run_sends_the_cameras_that_it_names_in_their_order(runtime, service):
-    cameras = ['image.handcam_right', keys.WRIST_IMAGE]
+    cameras = [keys.HANDCAM_RIGHT_IMAGE, keys.WRIST_IMAGE]
     assert _sent_cameras(runtime, service, MORE_CAMERAS, cameras=cameras) == cameras
 
 

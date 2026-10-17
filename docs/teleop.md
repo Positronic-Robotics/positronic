@@ -77,7 +77,7 @@ Conversion for training picks its own keys from the recording.
 1. In terminal 1, start the service. For an iPhone:
 
    ```bash
-   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop --operator_position=BACK
+   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop --operator_position=.BACK
    ```
 
 2. In terminal 2, start a run of 20 trials:
@@ -128,13 +128,13 @@ uv run positronic eval run \
   the config selects.
 - `teleop_molmo` shows every camera of the observation. It lets the sim clock stand still for 10 s before it stops the
   run, because MolmoSpaces is slow on a laptop.
-- Start the service with `--operator_position=BACK` if the arm moves the wrong way.
+- Start the service with `--operator_position=.BACK` if the arm moves the wrong way.
 
 Start `positronic teleop` first, as in MuJoCo.
 
 ## Session parameters
 
-The service CLI sets the defaults: `--operator_position` (`FRONT`, `BACK`, or `null` for UMI mode, where control is
+The service CLI sets the defaults: `--operator_position` (`.FRONT`, `.BACK`, or `None` for UMI mode, where control is
 always on and the hand pose is the robot pose), `--cameras` (a JSON list, or none for every image), `--image_fps` and
 `--still_clock_timeout`. A run sets its own in the query of its address, each value a JSON literal, for example
 `--policy.address.query='operator_position="BACK"'`. `positronic.teleop.protocol.session_query` builds such a query:

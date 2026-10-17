@@ -5,10 +5,12 @@ with ``KIND`` naming the request or the reply. ``TeleopClient`` sends ``READY`` 
 ready, and then one ``FRAME`` request at a time.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -70,31 +72,39 @@ def default_socket_path() -> Path:
 
 @dataclass(frozen=True)
 class SessionParams:
-    """The parameters of a session. A client sets them as JSON values in the query of its address.
+    """The parameters of a session. A client sets them as JSON values in the query of its address, with an
+    ``OperatorPosition`` as its name.
 
-    ``operator_position`` names an ``OperatorPosition``, and ``None`` is UMI mode: control is always on, and the hand
-    pose is the robot pose. ``cameras`` names the cameras that the client sends, and ``None`` is every image of
-    ``Obs``.
+    An ``operator_position`` of ``None`` is UMI mode: control is always on, and the hand pose is the robot pose.
+    ``cameras`` names the cameras that the client sends, and ``None`` is every image of ``Obs``.
     """
 
-    operator_position: str | None = OperatorPosition.FRONT.name
+    operator_position: OperatorPosition | None = OperatorPosition.FRONT
     cameras: list[str] | None = None
     image_fps: float = 15.0
     still_clock_timeout: float = 1.0
     jpeg_quality: int = DEFAULT_JPEG_QUALITY
 
-    def __post_init__(self) -> None:
+    @classmethod
+    def from_json(cls, operator_position: str | None, **params: Any) -> SessionParams:
+        """The parameters that the JSON values of a session name. Raise for a name that is no ``OperatorPosition``."""
         names = [position.name for position in OperatorPosition]
-        if self.operator_position is not None and self.operator_position not in names:
+        if operator_position is not None and operator_position not in names:
             raise ValueError(f'operator_position must be one of {", ".join(names)}, or null for UMI mode')
+        return cls(None if operator_position is None else OperatorPosition[operator_position], **params)
+
+    def to_json(self) -> dict[str, Any]:
+        """The parameters as JSON values."""
+        values = asdict(self).items()
+        return {name: value.name if isinstance(value, OperatorPosition) else value for name, value in values}
 
     def operator(self) -> geom.Transform3D | None:
         """The transform of the operator position, or ``None`` in UMI mode."""
-        return None if self.operator_position is None else OperatorPosition[self.operator_position].value
+        return None if self.operator_position is None else self.operator_position.value
 
 
 def session_query(**params: Any) -> str:
     """``params`` as the query of a session address, each value as a JSON literal. Raise for a name or a value that
     ``SessionParams`` refuses."""
-    SessionParams(**params)
+    SessionParams.from_json(**{**SessionParams().to_json(), **params})
     return urlencode({name: json.dumps(value) for name, value in params.items()})
