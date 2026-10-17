@@ -59,9 +59,6 @@ M = TypeVar('M', bound=BaseModel)
 
 DEFAULT_TIMEOUT_S = 30.0
 
-# `users.register` checks the credential with its identity provider before it answers.
-DEFAULT_REGISTER_TIMEOUT = httpx.Timeout(90.0)
-
 # The platform a caller reaches with no configuration at all.
 DEFAULT_PLATFORM_URL = 'https://platform.positronic.ro'
 
@@ -179,6 +176,9 @@ class PlatformClient:
         up first leaves a key behind that it can never read.
         """
         return longest_register_timeout(self.auth_config())
+
+    # `users.register` checks the credential with its identity provider before it answers.
+    DEFAULT_REGISTER_TIMEOUT: ClassVar[httpx.Timeout] = httpx.Timeout(90.0)
 
     def register(
         self, request: RegisterRequest, *, timeout: httpx.Timeout = DEFAULT_REGISTER_TIMEOUT
