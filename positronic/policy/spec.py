@@ -21,6 +21,7 @@ from positronic.policy.codecs import (
 from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
+    CartesianDeltaAction,
     JointDeltaAction,
     JointPositionAction,
     SetControlMode,
@@ -52,6 +53,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         PackObservationFields,
         RenameObservationFields,
         AbsolutePositionAction,
+        CartesianDeltaAction,
         AbsoluteJointsAction,
         JointDeltaAction,
         JointPositionAction,

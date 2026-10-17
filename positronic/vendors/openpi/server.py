@@ -2,10 +2,12 @@ import logging
 import os
 import socket
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
+import numpy as np
 import pos3
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
@@ -48,7 +50,6 @@ class OpenpiSubprocess:
         self._client: WebsocketClientPolicy | None = None
 
     def _build_command(self) -> list[str]:
-        """Build the command to start serve_policy.py."""
         return [
             self.uv_path,
             'run',
@@ -74,11 +75,10 @@ class OpenpiSubprocess:
         env = os.environ.copy()
         # JAX takes ~75% of the GPU at its first use, so a second server on that GPU finds none free.
         env.setdefault(PREALLOCATE_ENV, 'false')
-        # Don't pipeline stdout/stderr so we can see the output
         self.process = subprocess.Popen(command, env=env, cwd=str(self.openpi_root))
         self._wait_for_ready()
 
-    def _check_ready(self) -> bool:
+    def _is_ready(self) -> bool:
         """Check if OpenPI subprocess is ready by checking if port is accepting connections."""
         try:
             with socket.create_connection(('127.0.0.1', self.ws_port), timeout=1.0):
@@ -90,7 +90,7 @@ class OpenpiSubprocess:
         assert self.process is not None
         process = self.process
         wait_for_subprocess_ready(
-            self._check_ready, lambda: (process.poll() is not None, process.returncode), 'OpenPI subprocess'
+            self._is_ready, lambda: (process.poll() is not None, process.returncode), 'OpenPI subprocess'
         )
 
     @property
@@ -103,7 +103,6 @@ class OpenpiSubprocess:
         return self._client
 
     def stop(self):
-        """Stop the OpenPI subprocess."""
         self._client = None
 
         if self.process is not None:
@@ -119,13 +118,22 @@ class OpenpiSubprocess:
 class OpenpiModel(Model):
     """A running OpenPI subprocess; ``close()`` stops the subprocess."""
 
-    def __init__(self, subproc: OpenpiSubprocess, meta: dict[str, Any]):
+    def __init__(
+        self,
+        subproc: OpenpiSubprocess,
+        meta: dict[str, Any],
+        *,
+        transform_actions: Callable[[np.ndarray], np.ndarray] | None = None,
+    ):
         self._subproc = subproc
         self._meta = meta
+        self._transform_actions = transform_actions
 
     def __call__(self, obs: Obs, *, session_id: str):
         response = self._subproc.client.infer(obs)
-        actions = response['actions']
+        actions = response[openpi.ACTIONS]
+        if self._transform_actions is not None:
+            actions = self._transform_actions(actions)
         return [{ACTION: a} for a in actions]
 
     def meta(self) -> dict[str, Any]:
@@ -136,7 +144,13 @@ class OpenpiModel(Model):
 
 
 @cfn.config(config_name='pi05_positronic_lowmem', checkpoint=None, openpi_ws_port=8001)
-def openpi_model(checkpoints_dir: str, config_name: str, checkpoint: str | None, openpi_ws_port: int) -> Model:
+def openpi_model(
+    checkpoints_dir: str,
+    config_name: str,
+    checkpoint: str | None,
+    openpi_ws_port: int,
+    transform_actions: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> Model:
     """One OpenPI checkpoint under ``checkpoints_dir``: ``checkpoint``, else the latest one, served by a
     serve_policy.py subprocess.
 
@@ -166,6 +180,7 @@ def openpi_model(checkpoints_dir: str, config_name: str, checkpoint: str | None,
                 policy_keys.CHECKPOINT_PATH: checkpoint_path,
                 policy_keys.EXPERIMENT_NAME: checkpoints_dir.rsplit('/', 1)[-1],
             },
+            transform_actions=transform_actions,
         )
         # The subprocess compiles the model on its first inference, which outlasts a rig's inference timeout.
         warmup(policy, openpi.warm_observation())
@@ -254,7 +269,9 @@ COMMANDS = {
     # checkpoint speaks can be stated only once the env stops mislabelling its poses.
     'libero': serve.override(
         model=openpi_model.override(
-            checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero', config_name='pi05_libero'
+            checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero',
+            config_name='pi05_libero',
+            transform_actions=openpi.libero_actions_to_physical,
         ),
         pipeline=libero_pipe.override(ee_frame=None),
     ),
