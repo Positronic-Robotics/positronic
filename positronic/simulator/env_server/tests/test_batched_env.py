@@ -7,7 +7,7 @@ reports the grip of the last action it received, so a test can see which client'
 
 import ast
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -244,6 +244,9 @@ class _GripAdapter(EnvAdapter):
 
     def action(self, commands: dict[str, pimm.Message | None]) -> dict[str, Any]:
         return _action(self._grip)
+
+    def refused(self, channels: Collection[str]) -> None:
+        pass
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         return {_GRIP: raw_obs[_GRIP]}

@@ -54,6 +54,8 @@ FRAME_ROBOT_META = 'robot_meta'
 FRAME_CONTROL_DT = 'control_dt'
 FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
+# Optional in a step's slot: the command channels whose command the env could not execute. The arm holds.
+FRAME_REFUSED_COMMANDS = 'refused_commands'
 # An env answers the server one entry per slot under this field; the wire to a client carries one slot's frame.
 SLOTS = 'slots'
 

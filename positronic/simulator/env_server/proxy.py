@@ -16,6 +16,7 @@ from typing import Any
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
@@ -98,12 +99,19 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._meta = self._frame[protocol.FRAME_META]
         self._active = True
         self.robot_meta.emit(self._frame[protocol.FRAME_ROBOT_META])
-        self._emit_payload(self._frame[protocol.FRAME_OBS])
+        self._emit_payload(self._frame)
         # An empty payload clears the wire: a terminal the previous trial reached would end this one at once.
         self.done.emit({})
 
-    def _emit_payload(self, raw_obs: dict[str, Any]) -> None:
-        for name, value in self._adapter.observations(raw_obs).items():
+    def _emit_payload(self, frame: dict[str, Any]) -> None:
+        raw_obs = frame[protocol.FRAME_OBS]
+        observations = self._adapter.observations(raw_obs)
+        refused = frame.get(protocol.FRAME_REFUSED_COMMANDS, ())
+        self._adapter.refused(refused)
+        for channel in refused:
+            state = keys.arm_channel(keys.ROBOT_STATE, keys.channel_arm(channel, keys.ROBOT_COMMAND))
+            observations[state].set_status(RobotStatus.ERROR)
+        for name, value in observations.items():
             self.observations[name].emit(value)
         for name, value in self._adapter.privileged(raw_obs).items():
             self.privileged[name].emit(value)
@@ -122,7 +130,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                         self._frame = self._step_env()
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
-                            self._emit_payload(self._frame[protocol.FRAME_OBS])
+                            self._emit_payload(self._frame)
         finally:
             self._cleanup.close()
 
