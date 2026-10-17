@@ -27,7 +27,7 @@ import time
 
 import httpx
 from platform_client.client import API_KEY_ENV, CREDENTIAL_ENV, PlatformClient
-from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
+from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import plan_of_image
 from platform_client.ids import SubmissionId
@@ -38,18 +38,15 @@ from positronic_evals.evals import EvalRef
 
 
 def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None:
-    """Leave the client holding a usable key, rotating if this identity is already registered.
+    """Leave the client holding a usable key, in one registration.
 
-    `register` keeps whatever key it is given. A key's plaintext is stored only as a hash, so a
-    second registration reports `existing` and carries none; rotating issues a fresh one and
-    retires the old.
+    `register` keeps whatever key it is given. A key's plaintext is stored only as a hash, so only a
+    rotate gives an existing account a key, and a rotate of a new identity creates its account. A
+    WorkOS token registers once, so one call is all a token allows.
     """
-    registration = client.register(RegisterRequest(credential=credential, alias=alias))
+    registration = client.register(RegisterRequest(credential=credential, alias=alias, rotate=True))
     print(f'   user {registration.user_id} ({registration.key_status.name})')
-    if registration.api_key is None:
-        registration = client.register(RegisterRequest(credential=credential, alias=alias, rotate=True))
-        print(f'   rotated ({registration.key_status.name})')
-    assert client.api_key is not None, f'expected a key after {KeyStatus.rotated.name}'
+    assert client.api_key is not None, f'expected a key after {registration.key_status.name}'
 
 
 def poll_until_terminal(

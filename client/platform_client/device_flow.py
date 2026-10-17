@@ -66,8 +66,10 @@ class ProviderFailed(DeviceFlowError):
 class _TransientFailure(ProviderFailed):
     """One request failed in transport or timed out, or the provider answered 429 or 5xx."""
 
-    def __init__(self, message: str, retry_after_s: float | None = None) -> None:
+    def __init__(self, message: str, *, reached_the_provider: bool, retry_after_s: float | None = None) -> None:
         super().__init__(message)
+        # A request that reached the provider may have spent the device code before its answer was lost.
+        self.reached_the_provider = reached_the_provider
         self.retry_after_s = retry_after_s
 
 
@@ -227,7 +229,7 @@ class DeviceFlow:
                 )
             elif outcome is not PollOutcome.PENDING:
                 message = terminal_messages.get(outcome, f'{self.provider.name} refused the device code: {error}')
-                if failure_before is not None:
+                if outcome is PollOutcome.UNREADABLE and failure_before is not None and failure_before.reached_the_provider:
                     # The poll before may have spent the code, and its token was then lost in transit.
                     raise ProviderFailed(f'{message}, after a poll that failed: {failure_before}') from failure_before
                 raise DeviceFlowError(message)
@@ -250,18 +252,22 @@ class DeviceFlow:
                 'POST', url, data=dict(data), headers={'accept': 'application/json'}, timeout=REQUEST_TIMEOUT
             )
         except httpx.TimeoutException as exc:
-            raise _TransientFailure(f'{name} did not answer in time') from exc
+            reached = not isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout)
+            raise _TransientFailure(f'{name} did not answer in time', reached_the_provider=reached) from exc
         except httpx.TransportError as exc:
-            raise _TransientFailure(f'{name} is unreachable') from exc
+            reached = not isinstance(exc, httpx.ConnectError)
+            raise _TransientFailure(f'{name} is unreachable', reached_the_provider=reached) from exc
         except httpx.HTTPError as exc:
             raise ProviderFailed(f'{name} did not answer: {exc}') from exc
         status = response.status_code
         if status == httpx.codes.TOO_MANY_REQUESTS:
             retry_after_s = self._retry_after_s(response)
             wait = f'; it asks for {retry_after_s:g} s' if retry_after_s is not None else ''
-            raise _TransientFailure(f'{name} refused the request rate{wait}', retry_after_s)
+            raise _TransientFailure(
+                f'{name} refused the request rate{wait}', reached_the_provider=False, retry_after_s=retry_after_s
+            )
         if status >= httpx.codes.INTERNAL_SERVER_ERROR:
-            raise _TransientFailure(f'{name} is unavailable: HTTP {status}')
+            raise _TransientFailure(f'{name} is unavailable: HTTP {status}', reached_the_provider=True)
         carries_oauth_error = status in (httpx.codes.BAD_REQUEST, httpx.codes.UNAUTHORIZED)
         if status >= 400 and not carries_oauth_error:
             raise ProviderFailed(f'{name} is unavailable: HTTP {status}')

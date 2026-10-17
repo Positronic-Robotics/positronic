@@ -524,6 +524,21 @@ def test_a_refusal_after_a_failed_poll_is_the_providers_failure():
         flow.poll_for_token(_authorization())
 
 
+@pytest.mark.parametrize(
+    ('failed', 'answer'),
+    [(httpx.Response(429), {'error': 'invalid_grant'}), (httpx.Response(502), {'error': 'access_denied'})],
+    ids=['a rate limit spends no code', 'a refusal is the user'],
+)
+def test_a_refusal_after_a_failure_that_spent_no_code_is_still_a_refusal(failed: httpx.Response, answer: dict):
+    workos = _workos(polls=[failed, answer])
+    flow, _ = _flow(workos)
+
+    with pytest.raises(DeviceFlowError) as raised:
+        flow.poll_for_token(_authorization())
+
+    assert not isinstance(raised.value, ProviderFailed)
+
+
 def test_a_rate_limit_followed_by_a_pending_answer_expires_as_unauthorized():
     workos = _workos(polls=[httpx.Response(429), *[{'error': 'authorization_pending'}] * 10])
     flow, _ = _flow(workos)
