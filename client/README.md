@@ -42,7 +42,8 @@ export POSITRONIC_PLATFORM_API_KEY=<the key the command printed>
 The platform names its identity provider at `GET /v1/auth.config`, and the command runs the device
 flow of that provider:
 
-- WorkOS, when the platform names a WorkOS client. You sign in with Google, GitHub or an email code.
+- WorkOS, when the platform names a WorkOS client. You sign in with the methods that the platform's
+  WorkOS environment offers, such as Google, GitHub or an email code.
   `--workos-client-id` and `POSITRONIC_PLATFORM_WORKOS_CLIENT_ID` name another client instead.
 - GitHub, when the platform takes GitHub tokens and names no WorkOS client, or when the platform is
   older than `auth.config`. The command uses the platform's own OAuth app, whose client id it carries

@@ -238,7 +238,7 @@ class DeviceFlow:
                 message = terminal_messages.get(outcome, f'{self.provider.name} refused the device code: {error}')
                 # A poll before that reached the provider may have spent the code, and its token was lost in transit.
                 spent = failure_before is not None and failure_before.reached_the_provider
-                if outcome is PollOutcome.UNREADABLE and spent:
+                if outcome in (PollOutcome.UNREADABLE, PollOutcome.EXPIRED) and spent:
                     raise ProviderFailed(f'{message}, after a poll that failed: {failure_before}') from failure_before
                 raise DeviceFlowError(message)
 
