@@ -103,6 +103,7 @@ def web(
     output_dir=None,
     host: str = '127.0.0.1',
     port: int = 8080,
+    allowed_hosts: list[str] | str | None = None,
 ):
     """Run one hardware embodiment attended from a browser, at ``http://{host}:{port}/``.
 
@@ -114,7 +115,9 @@ def web(
         raise ValueError('the web console drives hardware in real time; run a simulated embodiment as `sim`')
 
     output_path = prepare_output_dir(output_dir)
-    console = StationConsole(next_task, policy, output_path, host=host, port=port)
+    # The command line gives a bare name as a string, and a JSON list as a list.
+    hosts = [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
+    console = StationConsole(next_task, policy, output_path, host=host, port=port, allowed_hosts=hosts)
     if output_path is not None:
         embodiment.video_encoder.ensure_available()
     harness = Harness(embodiment)
