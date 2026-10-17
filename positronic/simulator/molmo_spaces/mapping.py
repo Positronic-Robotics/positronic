@@ -211,9 +211,9 @@ def _same_command(a: dict[str, Any], b: dict[str, Any]) -> bool:
 class ArmTargets:
     """The arm's joint targets for successive wire commands of one episode.
 
-    A command out of IK reach holds the last target, or the measured joints before the first one. The error reads
-    true only on the step a refused command first arrives: a client sends its held command again on each step, and
-    an error that never clears pauses the policy.
+    A command out of IK reach holds the last target, or, before any target, the joints measured at that refusal. The
+    error reads true only on the step a refused command first arrives: a client sends its held command again on each
+    step, and an error that never clears pauses the policy.
     """
 
     def __init__(self) -> None:
@@ -232,8 +232,9 @@ class ArmTargets:
         self._previous = command
         target = wire_command_to_arm_action(command, current_q, ik=ik, current_eef=current_eef)
         if target is None:
-            held = np.asarray(current_q, dtype=np.float32).reshape(-1) if self._target is None else self._target
-            return ArmStep(held, error=not repeated)
+            if self._target is None:
+                self._target = np.asarray(current_q, dtype=np.float32).reshape(-1)
+            return ArmStep(self._target, error=not repeated)
         self._target = target
         return ArmStep(target, error=False)
 

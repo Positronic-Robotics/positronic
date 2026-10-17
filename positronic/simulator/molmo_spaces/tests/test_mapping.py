@@ -167,6 +167,14 @@ def test_a_different_unreachable_command_reports_the_error_again():
     assert np.allclose(refused.target, 0.0) and refused.error
 
 
+def test_a_refusal_before_any_target_holds_the_joints_measured_at_that_refusal():
+    targets = mapping.ArmTargets()
+    away = _pose_command(0.9)
+    first = targets.step(away, np.full(_JOINTS, 0.1), ik=_reach_up_to(0.5), current_eef=_MEASURED_EEF)
+    again = targets.step(away, np.full(_JOINTS, 0.2), ik=_reach_up_to(0.5), current_eef=_MEASURED_EEF)
+    assert np.allclose(first.target, 0.1) and np.allclose(again.target, 0.1)
+
+
 def test_an_unreachable_command_after_a_reachable_one_reports_the_error_again():
     targets = mapping.ArmTargets()
     _arm_step(targets, _pose_command(0.9))
