@@ -73,10 +73,10 @@ class ProviderFailed(DeviceFlowError):
 class _TransientFailure(ProviderFailed):
     """One request failed in transport or timed out, or the provider answered 429 or 5xx."""
 
-    def __init__(self, message: str, *, reached_the_provider: bool, retry_after_s: float | None = None) -> None:
+    def __init__(self, message: str, *, may_have_spent_the_code: bool, retry_after_s: float | None = None) -> None:
         super().__init__(message)
         # A request that reached the provider may have spent the device code before its answer was lost.
-        self.reached_the_provider = reached_the_provider
+        self.may_have_spent_the_code = may_have_spent_the_code
         self.retry_after_s = retry_after_s
 
 
@@ -184,7 +184,7 @@ class DeviceFlow:
         return outcomes.get(str(error), PollOutcome.UNREADABLE)
 
     def _terminal_failure(
-        self, outcome: PollOutcome, error: object, reached_before: _TransientFailure | None
+        self, outcome: PollOutcome, error: object, spent_by: _TransientFailure | None
     ) -> DeviceFlowError:
         """The failure a terminal poll answer ends the flow with. UNREADABLE carries the provider's own word."""
         terminal_messages = {
@@ -193,9 +193,9 @@ class DeviceFlow:
         }
         message = terminal_messages.get(outcome, f'{self.provider.name} refused the device code: {error}')
         # A failed poll that reached the provider may have spent the code, and its token was lost in transit.
-        if outcome in (PollOutcome.UNREADABLE, PollOutcome.EXPIRED) and reached_before is not None:
-            failure = ProviderFailed(f'{message}, after a poll that failed: {reached_before}')
-            failure.__cause__ = reached_before
+        if outcome in (PollOutcome.UNREADABLE, PollOutcome.EXPIRED) and spent_by is not None:
+            failure = ProviderFailed(f'{message}, after a poll that failed: {spent_by}')
+            failure.__cause__ = spent_by
             return failure
         return DeviceFlowError(message)
 
@@ -223,7 +223,7 @@ class DeviceFlow:
         deadline = self._monotonic() + authorization.expires_in
         last_failure: _TransientFailure | None = None
         # The first failed poll since the last answer that reached the provider. A later failure keeps it.
-        reached_before: _TransientFailure | None = None
+        spent_by: _TransientFailure | None = None
         while True:
             # RFC 8628 §3.3: the device waits the interval before each poll, the first one included.
             # A poll that starts at once is answered `slow_down`, which spends the code's lifetime.
@@ -237,8 +237,8 @@ class DeviceFlow:
                 payload = self._poll(authorization)
             except _TransientFailure as exc:
                 last_failure = exc
-                if reached_before is None and exc.reached_the_provider:
-                    reached_before = exc
+                if spent_by is None and exc.may_have_spent_the_code:
+                    spent_by = exc
                 # RFC 8628 §3.5: a poll that timed out slows the rate and tries again, and WorkOS names a
                 # 429 and a 5xx transient as well. The code may already be authorized, and the deadline
                 # above ends the flow.
@@ -257,8 +257,8 @@ class DeviceFlow:
                     interval + slow_down_step_s, self._optional_duration_s(payload, _INTERVAL_FIELD, interval)
                 )
             elif outcome is not PollOutcome.PENDING:
-                raise self._terminal_failure(outcome, error, reached_before)
-            reached_before = None
+                raise self._terminal_failure(outcome, error, spent_by)
+            spent_by = None
             wait = interval
 
     @staticmethod
@@ -279,11 +279,11 @@ class DeviceFlow:
                 'POST', url, data=dict(data), headers={'accept': 'application/json'}, timeout=REQUEST_TIMEOUT
             )
         except httpx.TimeoutException as exc:
-            reached = not isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout)
-            raise _TransientFailure(f'{name} did not answer in time', reached_the_provider=reached) from exc
+            spent = not isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout)
+            raise _TransientFailure(f'{name} did not answer in time', may_have_spent_the_code=spent) from exc
         except httpx.TransportError as exc:
-            reached = not isinstance(exc, httpx.ConnectError)
-            raise _TransientFailure(f'{name} is unreachable', reached_the_provider=reached) from exc
+            spent = not isinstance(exc, httpx.ConnectError)
+            raise _TransientFailure(f'{name} is unreachable', may_have_spent_the_code=spent) from exc
         except httpx.HTTPError as exc:
             raise ProviderFailed(f'{name} did not answer: {exc}') from exc
         status = response.status_code
@@ -291,10 +291,10 @@ class DeviceFlow:
             retry_after_s = self._retry_after_s(response)
             wait = f'; it asks for {retry_after_s:g} s' if retry_after_s is not None else ''
             raise _TransientFailure(
-                f'{name} refused the request rate{wait}', reached_the_provider=False, retry_after_s=retry_after_s
+                f'{name} refused the request rate{wait}', may_have_spent_the_code=False, retry_after_s=retry_after_s
             )
         if status >= httpx.codes.INTERNAL_SERVER_ERROR:
-            raise _TransientFailure(f'{name} is unavailable: HTTP {status}', reached_the_provider=True)
+            raise _TransientFailure(f'{name} is unavailable: HTTP {status}', may_have_spent_the_code=True)
         carries_oauth_error = status in (httpx.codes.BAD_REQUEST, httpx.codes.UNAUTHORIZED)
         if status >= 400 and not carries_oauth_error:
             raise ProviderFailed(f'{name} is unavailable: HTTP {status}')

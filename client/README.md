@@ -59,8 +59,9 @@ Run `platform-register --rotate` to mint a new key on a machine that lost it.
 
 `--platform-url` and `POSITRONIC_PLATFORM_URL` name a platform other than the default. The command
 refuses a plain `http` platform that is not loopback. Staging has no TLS and is reached over the
-tailnet: pass `--plaintext-http` to reach it. `PlatformClient` uses a proxy from the environment only
-for an `https` platform, so a proxy never carries a key or a token over plain `http`.
+tailnet: pass `--plaintext-http` to reach it. A client that `PlatformClient` builds itself uses a proxy
+from the environment only for an `https` platform, so such a proxy never carries a key or a token over
+plain `http`. A client you pass in keeps its own proxy setting.
 
 `users.register` checks the token with the provider before it answers, and a caller that gives up
 first loses the key the platform minted. `PlatformClient.register` first reads `auth.config`, where the

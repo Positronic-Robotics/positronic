@@ -549,7 +549,7 @@ def test_an_expiry_after_a_poll_that_reached_the_provider_is_the_providers_failu
 
 
 def test_a_rate_limit_after_a_lost_poll_keeps_the_lost_poll_in_mind():
-    """The timed-out poll may have spent the code; the 429 after it reached nothing and does not erase that."""
+    """The timed-out poll may have spent the code; the 429 after it spent nothing and does not erase that."""
     answers = iter(['timeout', httpx.Response(429), {'error': 'invalid_grant'}])
     slept: list[float] = []
 

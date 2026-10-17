@@ -81,7 +81,8 @@ def register_timeout(deadline_s: float) -> httpx.Timeout:
 
 
 # The gateway reads the GitHub account, plus the addresses of an account whose address is private.
-# `auth.config` states no GitHub deadline, so this count is a copy of the gateway's.
+# TODO: `auth.config` states no GitHub deadline, so this count is a copy of the gateway's; it goes with GitHub
+# sign-in.
 GITHUB_REGISTER_TIMEOUT = register_timeout(2 * MAX_REQUEST_STALL_S)
 
 
