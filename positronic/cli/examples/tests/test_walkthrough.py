@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import runpy
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from typing import Any
 import httpx
 import pytest
 from platform_client import routes
-from platform_client.client import API_KEY_ENV, AUTH_HEADER
+from platform_client.client import API_KEY_ENV, AUTH_HEADER, PlatformClient
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'walkthrough.py'
 BASE = 'http://gateway.test'
@@ -59,3 +60,22 @@ def test_an_empty_platform_url_is_a_cli_error_before_any_request(walkthrough: di
         walkthrough['main'](['--platform-url='])
     assert exit_info.value.code == 2
     assert 'base_url is empty' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('key_status', ['created', 'rotated'])
+def test_authentication_spends_the_token_on_one_registration(walkthrough: dict[str, Any], key_status: str):
+    """A WorkOS token registers once, so a second call with the same token would be refused."""
+    sent: list[dict[str, Any]] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path == routes.AUTH_CONFIG:
+            return httpx.Response(404, json={'detail': 'Not Found'})
+        sent.append(json.loads(request.content))
+        body = {'user_id': 'a0', 'artifact_location': 's3://b/a0/', 'api_key': 'pk_new', 'key_status': key_status}
+        return httpx.Response(200, json=body)
+
+    client = PlatformClient(client=httpx.Client(base_url=BASE, transport=httpx.MockTransport(answer)))
+    walkthrough['authenticate'](client, credential='token', alias='demo')
+
+    assert sent == [{'credential': 'token', 'alias': 'demo', 'rotate': True}]
+    assert client.api_key == 'pk_new'

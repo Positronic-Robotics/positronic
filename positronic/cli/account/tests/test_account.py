@@ -3,6 +3,7 @@
 import json
 import os
 
+import httpx
 import pytest
 from fire import parser
 from platform_client import config as config_module
@@ -18,7 +19,9 @@ from platform_client.billing import (
 )
 from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
+from platform_client.device_flow import WORKOS_CLIENT_ID_ENV
 from platform_client.enums import BillingMode, BillingRole, ErrorCode, KeyStatus
+from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, WORKOS, timeout_after_deadline
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId
 from platform_client.responses import MeResponse, RegisterResponse
 from pydantic import ValidationError
@@ -28,7 +31,7 @@ from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.credits import account, buy, get_purchase, list_purchases
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.account.register import register
-from positronic.cli.conftest import USER, WHEN, refusal
+from positronic.cli.conftest import BASE, USER, WHEN, refusal
 
 CREATED = RegisterResponse(
     user_id=USER, artifact_location='s3://b/users/a0/', api_key=ApiKey('pk_new'), key_status=KeyStatus.created
@@ -128,20 +131,160 @@ def test_a_registration_naming_its_platform_replaces_a_malformed_record(platform
     assert saved is not None and saved.api_key == 'pk_new'
 
 
-def test_register_refuses_when_no_credential_is_in_the_environment(platform, run_command, monkeypatch):
+WORKOS_CONFIG = {
+    'github_registration': False,
+    'workos': {'client_id': 'client_01', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 75.0},
+}
+WORKOS_DEVICE = {
+    'device_code': 'device-1',
+    'user_code': 'BCDF-GHJK',
+    'verification_uri': 'https://a.authkit.app/device',
+    'interval': 0.001,
+    'expires_in': 60,
+}
+
+
+@pytest.fixture
+def workos(monkeypatch):
+    """WorkOS on a scripted transport: one answer to the device request, then one per poll, in order."""
+    answers: dict[str, list[httpx.Response]] = {
+        WORKOS.device_authorization_url: [httpx.Response(200, json=WORKOS_DEVICE)],
+        WORKOS.token_url: [httpx.Response(200, json={'access_token': 'eyJ.access', 'refresh_token': 'refresh'})],
+    }
+    real_client = httpx.Client
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return answers[str(request.url)].pop(0)
+
+    # The stub platform's client names its own transport, which wins; the sign-in's client names none.
+    monkeypatch.setattr(
+        httpx, 'Client', lambda **kwargs: real_client(**{'transport': httpx.MockTransport(answer), **kwargs})
+    )
     monkeypatch.delenv(gateway_module.CREDENTIAL_ENV)
-    with pytest.raises(SystemExit) as raised:
+    return answers
+
+
+def test_register_without_a_credential_signs_in_through_the_provider_the_platform_names(
+    platform, workos, run_command, capsys
+):
+    platform.answer_by_route({routes.AUTH_CONFIG: (WORKOS_CONFIG, 200), routes.USERS_REGISTER: (CREATED, 200)})
+
+    run_command(register, alias='demo', plaintext_http=True)
+
+    assert platform.paths == [routes.AUTH_CONFIG, routes.USERS_REGISTER]
+    assert platform.body == {'credential': 'eyJ.access', 'alias': 'demo', 'rotate': False}
+    saved = read_config(config_dir(os.environ))
+    assert saved is not None and saved.api_key == 'pk_new'
+    captured = capsys.readouterr()
+    assert 'BCDF-GHJK' in captured.err
+    assert 'refresh' not in captured.out + captured.err
+
+
+def test_register_with_a_credential_runs_no_sign_in_and_waits_out_the_longest_check(platform, run_command):
+    """The credential's provider is unknown, so the wait covers every check `auth.config` names."""
+    platform.answer_by_route({routes.AUTH_CONFIG: (WORKOS_CONFIG, 200), routes.USERS_REGISTER: (CREATED, 200)})
+
+    run_command(register)
+
+    assert platform.paths == [routes.AUTH_CONFIG, routes.USERS_REGISTER]
+    assert platform.request.extensions['timeout'] == timeout_after_deadline(75.0).as_dict()
+
+
+def test_an_empty_credential_is_refused_rather_than_read_as_a_request_to_sign_in(platform, run_command, monkeypatch):
+    monkeypatch.setenv(gateway_module.CREDENTIAL_ENV, '')
+
+    with pytest.raises(CommandFailed) as raised:
         run_command(register)
-    assert gateway_module.CREDENTIAL_ENV in str(raised.value)
 
-
-def test_an_alias_the_request_model_refuses_is_a_refusal_naming_the_field(platform, run_command):
-    # configuronic literal-evaluates a CLI value, so `--alias=5` arrives as an int, which the model
-    # refuses — a refusal to read rather than a traceback out of the constructor.
-    with pytest.raises(SystemExit) as raised:
-        run_command(register, alias=5)
-    assert 'alias' in str(raised.value)
+    assert gateway_module.CREDENTIAL_ENV in str(raised.value) and raised.value.fault is Fault.USAGE
     assert platform.seen is None
+
+
+def test_register_without_a_credential_refuses_a_plain_http_platform_before_any_request(platform, workos, run_command):
+    """The platform URL here comes from the environment, so the gate reads the URL the client resolved."""
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register)
+
+    assert '--plaintext_http' in str(raised.value) and raised.value.fault is Fault.USAGE
+    assert platform.paths == []
+
+
+def test_register_without_a_credential_refuses_an_emptied_workos_override(platform, workos, run_command, monkeypatch):
+    monkeypatch.setenv(WORKOS_CLIENT_ID_ENV, '')
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register, plaintext_http=True)
+
+    assert WORKOS_CLIENT_ID_ENV in str(raised.value) and raised.value.fault is Fault.USAGE
+    assert platform.paths == []
+
+
+@pytest.mark.parametrize(
+    ('device', 'poll', 'fault'),
+    [
+        (httpx.Response(503), None, Fault.PLATFORM),
+        (httpx.Response(200, json=WORKOS_DEVICE), httpx.Response(400, json={'error': 'access_denied'}), Fault.CALLER),
+    ],
+    ids=['WorkOS is down', 'the user refused'],
+)
+def test_a_sign_in_that_yields_no_token_ends_the_command_with_its_fault(
+    platform, workos, run_command, device, poll, fault
+):
+    platform.answer_by_route({routes.AUTH_CONFIG: (WORKOS_CONFIG, 200)})
+    workos[WORKOS.device_authorization_url] = [device]
+    workos[WORKOS.token_url] = [poll]
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register, plaintext_http=True)
+
+    assert raised.value.fault is fault
+    assert routes.USERS_REGISTER not in platform.paths
+
+
+def test_a_platform_that_takes_no_sign_in_this_client_runs_is_the_platforms_fault(platform, workos, run_command):
+    platform.answer_by_route({routes.AUTH_CONFIG: ({'github_registration': False, 'workos': None}, 200)})
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register, plaintext_http=True)
+
+    assert 'takes no sign-in' in str(raised.value) and raised.value.fault is Fault.PLATFORM
+
+
+@pytest.mark.parametrize('credential', ['token', None], ids=['with a credential', 'signing in'])
+@pytest.mark.parametrize(('field', 'value'), [('alias', 5), ('rotate', 'maybe'), ('plaintext_http', 'false')])
+def test_a_value_of_the_wrong_kind_is_a_refusal_naming_the_field(
+    platform, run_command, monkeypatch, credential, field, value
+):
+    # configuronic literal-evaluates a CLI value, so `--alias=5` arrives as an int. A sign-in would spend
+    # the user's trip to the browser before the request model saw it, so the command refuses first.
+    if credential is None:
+        monkeypatch.delenv(gateway_module.CREDENTIAL_ENV)
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register, **{'plaintext_http': True, field: value})
+    assert field in str(raised.value) and raised.value.fault is Fault.USAGE
+    assert platform.seen is None
+
+
+def test_a_registration_whose_answer_is_lost_names_rotate_as_the_recovery(platform, run_command, monkeypatch):
+    """The gateway may have minted the key before the answer was lost, so a plain retry finds no key."""
+    monkeypatch.setattr(PlatformClient, 'register_timeout', lambda _self: GITHUB_REGISTER_TIMEOUT)
+    platform.no_answer = httpx.ReadTimeout('no answer', request=httpx.Request('POST', f'{BASE}{routes.USERS_REGISTER}'))
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register)
+
+    # The token from the environment is spent, so the advice names a new one rather than the same command.
+    assert '--rotate' in str(raised.value) and gateway_module.CREDENTIAL_ENV in str(raised.value)
+    assert raised.value.fault is Fault.PLATFORM
+
+
+def test_an_auth_config_lost_in_transit_does_not_name_rotate(platform, workos, run_command):
+    platform.no_answer = httpx.ReadTimeout('no answer', request=httpx.Request('GET', f'{BASE}{routes.AUTH_CONFIG}'))
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register, plaintext_http=True)
+
+    assert '--rotate' not in str(raised.value) and raised.value.fault is Fault.PLATFORM
 
 
 def test_register_says_no_key_came_back_for_an_existing_registration(platform, run_command, capsys):

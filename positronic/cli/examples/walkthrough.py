@@ -11,8 +11,8 @@ public boards and the eval each one ranks, and stops. A name the platform does n
 and the refusal names the evals on offer.
 
 The key comes from POSITRONIC_PLATFORM_API_KEY, which `platform-register` prints. With no key, the
-script registers with the GitHub token in POSITRONIC_PLATFORM_CREDENTIAL, which the platform's own
-OAuth app must have minted.
+script registers with the token in POSITRONIC_PLATFORM_CREDENTIAL, which the platform's identity
+provider must have minted for the platform's own client.
 
 Every call goes through `PlatformClient`, so each response is a typed model rather than a dict. The
 same flow from the command line is `positronic account register`, `positronic eval run` and
@@ -27,7 +27,7 @@ import time
 
 import httpx
 from platform_client.client import API_KEY_ENV, CREDENTIAL_ENV, PlatformClient
-from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
+from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import plan_of_image
 from platform_client.ids import SubmissionId
@@ -38,18 +38,16 @@ from positronic_evals.evals import EvalRef
 
 
 def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None:
-    """Leave the client holding a usable key, rotating if this identity is already registered.
+    """Leave the client holding a usable key, in one registration.
 
-    `register` keeps whatever key it is given. A key's plaintext is stored only as a hash, so a
-    second registration reports `existing` and carries none; rotating issues a fresh one and
-    retires the old.
+    `register` keeps whatever key it is given. A key's plaintext is stored only as a hash, so only a
+    rotate gives an existing account a key, and a rotate of a new identity creates its account. A
+    WorkOS token registers once, so one call is all a token allows.
     """
-    registration = client.register(RegisterRequest(credential=credential, alias=alias))
+    request = RegisterRequest(credential=credential, alias=alias, rotate=True)
+    registration = client.register(request, timeout=client.register_timeout())
     print(f'   user {registration.user_id} ({registration.key_status.name})')
-    if registration.api_key is None:
-        registration = client.register(RegisterRequest(credential=credential, alias=alias, rotate=True))
-        print(f'   rotated ({registration.key_status.name})')
-    assert client.api_key is not None, f'expected a key after {KeyStatus.rotated.name}'
+    assert client.api_key is not None, f'expected a key after {registration.key_status.name}'
 
 
 def poll_until_terminal(

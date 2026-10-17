@@ -393,7 +393,7 @@ The commands ship with `positronic`, and a checkout of this repository carries t
 client at the version it pins. Run them from the checkout:
 
 ```bash
-uv run platform-register --alias="<display name>"      # GitHub's device flow; prints the key once
+uv run platform-register --alias="<display name>"      # a device sign-in; prints the key once
 export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 uv run positronic eval catalog                          # the evals your key may name
 uv run positronic eval run --eval=<eval> \

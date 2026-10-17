@@ -1,28 +1,101 @@
 """`positronic account register` — the account this platform knows you by."""
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import configuronic as cfn
+import httpx
+from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, write_config
+from platform_client.device_flow import (
+    ClientIds,
+    DeviceFlowError,
+    NoSignIn,
+    ProviderFailed,
+    may_have_minted_a_key,
+    register_with_device_flow,
+    require_allowed_platform_url,
+    sign_in_flow,
+)
+from platform_client.identity_providers import REQUEST_TIMEOUT
 from platform_client.requests import RegisterRequest
+from platform_client.responses import RegisterResponse
 
-from positronic.cli.account.gateway import CommandFailed, Fault, credential, gateway, refusing_bad_input
+from positronic.cli.account.gateway import CREDENTIAL_ENV, CommandFailed, Fault, gateway, refusing_bad_input
+
+
+def _register_by_sign_in(
+    client: PlatformClient, *, alias: str | None, rotate: bool, plaintext_http: bool
+) -> RegisterResponse:
+    """Sign in through the device flow the platform names, and register with the token it yields."""
+    with refusing_bad_input():
+        client_ids = ClientIds.resolve(os.environ)
+        require_allowed_platform_url(client.base_url, plaintext_http=plaintext_http, flag='--plaintext_http')
+    try:
+        with httpx.Client(timeout=REQUEST_TIMEOUT) as http:
+            sign_in = sign_in_flow(client, http, client_ids)
+            return register_with_device_flow(client, sign_in, alias=alias, rotate=rotate)
+    except DeviceFlowError as exc:
+        # A provider that fails and a platform that takes no sign-in are no fault of the caller.
+        fault = Fault.PLATFORM if isinstance(exc, ProviderFailed | NoSignIn) else Fault.CALLER
+        raise CommandFailed(str(exc), fault) from exc
+
+
+@contextmanager
+def _naming_rotate_when_the_answer_is_lost(*, credential_from_environment: bool) -> Iterator[None]:
+    """A registration whose answer is lost may have minted the key, so its failure names `--rotate`."""
+    fresh_token = (
+        f'set a new token in {CREDENTIAL_ENV}, or unset it to sign in, and run `positronic account register --rotate`'
+        if credential_from_environment
+        else 'sign in again with `positronic account register --rotate`'
+    )
+    try:
+        yield
+    except httpx.HTTPError as exc:
+        if not may_have_minted_a_key(exc):
+            raise
+        raise CommandFailed(
+            f'{exc.request.url} did not answer the registration: {exc!r}. A key may have been minted, and a '
+            f'sign-in token may register only once: {fresh_token}.',
+            Fault.PLATFORM,
+        ) from exc
 
 
 @cfn.config()
-def register(alias: str | None = None, rotate: bool = False, platform_url: str | None = None):
+def register(
+    alias: str | None = None, rotate: bool = False, platform_url: str | None = None, plaintext_http: bool = False
+):
     """Register with the platform, or rotate an existing registration's API key.
 
-    Reads the credential from the environment, never an argument, and saves the key it mints in the
-    config record every other command reads.
+    Signs in through the device flow the platform names, or takes a credential from the environment, never
+    from an argument. Saves the key it mints in the config record every other command reads.
+    `plaintext_http` lets the sign-in token reach an http platform that is not loopback.
     """
-    with refusing_bad_input():
-        request = RegisterRequest(credential=credential(), alias=alias, rotate=rotate)
+    # configuronic literal-evaluates a CLI value, so `--alias=5` arrives as an int. The sign-in runs before
+    # the request model sees these values, so these refusals come first.
+    if alias is not None and not isinstance(alias, str):
+        raise CommandFailed(f'alias is text; quote one that reads as a number: \'"{alias}"\'', Fault.USAGE)
+    # `--plaintext_http=false` arrives as a string, which would open the gate it means to keep shut.
+    for name, value in (('rotate', rotate), ('plaintext_http', plaintext_http)):
+        if not isinstance(value, bool):
+            raise CommandFailed(f'{name} is True or False, not {value!r}', Fault.USAGE)
+    credential = os.environ.get(CREDENTIAL_ENV)
+    # Unset runs the sign-in. Empty is a script whose secret did not arrive, and a sign-in would wait for a person.
+    if credential == '':
+        raise CommandFailed(f'{CREDENTIAL_ENV} is empty: set a token, or unset it to sign in', Fault.USAGE)
     # A key is minted once and cannot be fetched again, so the destination is named before the
     # platform mints one: a config directory that cannot be resolved would otherwise cost the key.
     directory = config_dir(os.environ)
-    with gateway(platform_url, key_required=False) as client:
-        response = client.register(request)
+    with (
+        gateway(platform_url, key_required=False) as client,
+        _naming_rotate_when_the_answer_is_lost(credential_from_environment=credential is not None),
+    ):
+        if credential is not None:
+            request = RegisterRequest(credential=credential, alias=alias, rotate=rotate)
+            response = client.register(request, timeout=client.register_timeout())
+        else:
+            response = _register_by_sign_in(client, alias=alias, rotate=rotate, plaintext_http=plaintext_http)
         base_url = client.base_url
     print(f'user {response.user_id} ({response.key_status.name})')
     if response.api_key is None:
