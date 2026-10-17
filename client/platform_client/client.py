@@ -1,7 +1,8 @@
 """`PlatformClient` — one method per gateway endpoint, request model in, response model out.
 
     with PlatformClient() as client:
-        client.register(RegisterRequest(credential=..., alias=...))  # keeps the key it returns
+        # keeps the key it returns; the timeout covers the gateway's check of the credential
+        client.register(RegisterRequest(credential=..., alias=...), timeout=client.register_timeout())
         plan = EvalPlan(request_type=PrivateEval(org=...), tasks=..., endpoints=..., episodes_per_endpoint=...)
         client.create_submission(plan)
 
