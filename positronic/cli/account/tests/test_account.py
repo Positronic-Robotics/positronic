@@ -246,7 +246,7 @@ def test_a_platform_that_takes_no_sign_in_this_client_runs_is_the_platforms_faul
 
 
 @pytest.mark.parametrize('credential', ['token', None], ids=['with a credential', 'signing in'])
-@pytest.mark.parametrize(('field', 'value'), [('alias', 5), ('rotate', 'maybe')])
+@pytest.mark.parametrize(('field', 'value'), [('alias', 5), ('rotate', 'maybe'), ('plaintext_http', 'false')])
 def test_a_value_of_the_wrong_kind_is_a_refusal_naming_the_field(
     platform, run_command, monkeypatch, credential, field, value
 ):
@@ -255,7 +255,7 @@ def test_a_value_of_the_wrong_kind_is_a_refusal_naming_the_field(
     if credential is None:
         monkeypatch.delenv(gateway_module.CREDENTIAL_ENV)
     with pytest.raises(CommandFailed) as raised:
-        run_command(register, plaintext_http=True, **{field: value})
+        run_command(register, **{'plaintext_http': True, field: value})
     assert field in str(raised.value) and raised.value.fault is Fault.USAGE
     assert platform.seen is None
 

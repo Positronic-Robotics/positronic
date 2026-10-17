@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
-from platform_client import device_flow, routes
+from platform_client import device_flow, github_device_flow, routes
 from platform_client.client import PlatformClient
 from platform_client.device_flow import (
     DEFAULT_GITHUB_CLIENT_ID,
@@ -1035,6 +1035,11 @@ def test_only_a_registration_that_left_the_machine_may_have_minted_a_key(
     exc = error('lost', request=httpx.Request('POST', f'https://gateway.example{path}'))
 
     assert device_flow.may_have_minted_a_key(exc) is minted
+
+
+def test_the_old_module_path_still_names_the_github_scope():
+    """The platform web backend imports the scope from the old path until it drops that import."""
+    assert github_device_flow.IDENTITY_SCOPE == GITHUB.scope
 
 
 def test_a_refused_gateway_ends_the_command_rather_than_raising():

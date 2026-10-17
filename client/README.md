@@ -309,8 +309,9 @@ when given a plan file. To get a key, run `platform-register`, which prints the 
 `account register`, which saves the key in the record the other commands read. Both run the device
 flow of the provider that the platform names. In a checkout, run them through `uv run`. With a token
 in `POSITRONIC_PLATFORM_CREDENTIAL`, `account register` registers with that token and runs no sign-in.
-`account register` refuses a plain `http` platform that is not loopback unless you pass
-`--plaintext_http`.
+Its sign-in refuses a plain `http` platform that is not loopback unless you pass `--plaintext_http`. A
+token from `POSITRONIC_PLATFORM_CREDENTIAL` goes to the platform as given, like the key of every other
+command.
 
 ```bash
 platform-register --alias=<display name>            # in a checkout: uv run platform-register
@@ -331,9 +332,9 @@ A command that fails exits with a status that tells whose fault the failure is:
 
 | Status | Fault | Cases |
 |---|---|---|
-| 1 | the caller | the platform refused the request with a 4xx, no API key or a bad key, a quota used up, a run rejected at the door |
+| 1 | the caller | the platform refused the request with a 4xx, no API key or a bad key, a quota used up, a run rejected at the door, a sign-in the provider refused (an unknown client id, a refused or expired code) |
 | 2 | usage | the arguments are wrong before any call: an id that is not hexadecimal, a plan file that does not parse |
-| 3 | the platform | a 5xx, an `internal_error` or `upstream_unavailable` code, no answer, a timeout, an answer the client cannot read, a replayed run that ended for a platform reason |
+| 3 | the platform | a 5xx, an `internal_error` or `upstream_unavailable` code, no answer, a timeout, an answer the client cannot read, a replayed run that ended for a platform reason, an identity provider that is unreachable or unavailable, a platform that takes no sign-in this client can run |
 
 The read commands take `--json`: `eval status`, `eval list`, `eval catalog`, and `account credits account`,
 `get-purchase` and `list-purchases`. They print the data as JSON on stdout. `eval list --json` prints every

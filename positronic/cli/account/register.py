@@ -71,8 +71,10 @@ def register(
     # the request model sees these values, so these refusals come first.
     if alias is not None and not isinstance(alias, str):
         raise CommandFailed(f'alias is text; quote one that reads as a number: \'"{alias}"\'', Fault.USAGE)
-    if not isinstance(rotate, bool):
-        raise CommandFailed(f'rotate is True or False, not {rotate!r}', Fault.USAGE)
+    # `--plaintext_http=false` arrives as a string, which would open the gate it means to keep shut.
+    for name, value in (('rotate', rotate), ('plaintext_http', plaintext_http)):
+        if not isinstance(value, bool):
+            raise CommandFailed(f'{name} is True or False, not {value!r}', Fault.USAGE)
     credential = os.environ.get(CREDENTIAL_ENV)
     # Unset runs the sign-in. Empty is a script whose secret did not arrive, and a sign-in would wait for a person.
     if credential == '':
