@@ -475,6 +475,19 @@ def test_the_tables_an_export_writes_are_what_the_app_serves_reading_every_episo
             assert (out / 'api/groups/outcomes' / entry['file']).read_bytes() == served
 
 
+def test_an_exported_duration_runs_from_the_first_sample_when_a_command_stream_starts_late(tmp_path):
+    with LocalDatasetWriter(tmp_path / 'dataset') as writer, writer.new_episode() as episode:
+        for second in range(1, 12):
+            episode.append(keys.JOINTS, np.zeros(7, dtype=np.float32), Time(**{RECORDED_TIME: second * 1_000_000_000}))
+        for second in (4, 10):
+            episode.append(keys.TARGET_GRIP, 0.5, Time(**{RECORDED_TIME: second * 1_000_000_000}))
+    out = tmp_path / 'out'
+    duration = {'__duration__': ColumnConfig(label='Duration')}
+    export_all(load_all_datasets(tmp_path / 'dataset'), out, ep_table_cfg=duration, max_resolution=64, assets=False)
+
+    assert json.loads((out / 'api/episodes.json').read_text())['episodes'] == [[0, [10.0]]]
+
+
 def test_a_table_holds_no_download_of_an_episode(dataset, tmp_path):
     keys_seen: list[set[str]] = []
 

@@ -856,6 +856,28 @@ def test_episode_table_handles_disjoint_timelines(flat_with_hidden, monkeypatch,
     assert response.json()['episodes'] == [[0, [2.0]]]
 
 
+def test_the_duration_runs_from_the_first_sample_when_a_command_stream_starts_late(flat_with_hidden, monkeypatch):
+    signals = {
+        'state': DummySignal([1_000_000_000, 10_500_000_000], [1, 2]),
+        'command': DummySignal([4_000_000_000, 11_000_000_000], [1, 2]),
+    }
+    monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    response = flat_with_hidden.get('/api/episodes')
+    assert response.json()['episodes'] == [[0, [10.0]]]
+
+
+def test_the_duration_of_streams_that_start_together_runs_to_the_last_sample(flat_with_hidden, monkeypatch):
+    signals = {
+        'state': DummySignal([1_000_000_000, 11_000_000_000], [1, 2]),
+        'command': DummySignal([1_000_000_000, 10_500_000_000], [1, 2]),
+    }
+    monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    response = flat_with_hidden.get('/api/episodes')
+    assert response.json()['episodes'] == [[0, [10.0]]]
+
+
 def test_episode_table_does_not_interpret_ticks_as_seconds(flat_with_hidden, monkeypatch):
     episode = EpisodeContainer({'value': DummySignal([1, 2], [10, 20], timelines=('tick',))})
     monkeypatch.setitem(app_state, 'dataset', [episode])
