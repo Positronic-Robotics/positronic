@@ -171,7 +171,7 @@ def wire_command_to_arm_action(
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
     match command[protocol.COMMAND_TYPE]:
         case protocol.JOINT_POS:
-            target = np.asarray(command[protocol.COMMAND_JOINT_POS], dtype=np.float32).reshape(-1)
+            target = command[protocol.COMMAND_JOINT_POS]
         case protocol.JOINT_DELTA:
             dq = np.asarray(command[protocol.COMMAND_JOINT_DELTA], dtype=np.float32).reshape(-1)
             if dq.shape[0] != current.shape[0]:
@@ -180,63 +180,15 @@ def wire_command_to_arm_action(
         case protocol.HOLD:
             target = current
         case protocol.CARTESIAN:
-            solution = ik(*unpack_wire_pose(command[protocol.COMMAND_POSE]))
-            if solution is None:
-                return None
-            target = np.asarray(solution, dtype=np.float32).reshape(-1)
+            target = ik(*unpack_wire_pose(command[protocol.COMMAND_POSE]))
         case protocol.CARTESIAN_DELTA:
             delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            solution = ik(*compose_reference_delta(*current_eef, delta_pos, delta_rot))
-            if solution is None:
-                return None
-            target = np.asarray(solution, dtype=np.float32).reshape(-1)
+            target = ik(*compose_reference_delta(*current_eef, delta_pos, delta_rot))
         case other:
             raise ValueError(
                 f'{other!r} is not a canonical command type; the contract is {list(protocol.CANONICAL_COMMAND_TYPES)}'
             )
-    return target.astype(np.float32)
-
-
-class ArmStep(NamedTuple):
-    """The arm's joint target for one step, and whether the step reports an arm error."""
-
-    target: np.ndarray
-    error: bool
-
-
-def _same_command(a: dict[str, Any], b: dict[str, Any]) -> bool:
-    return a.keys() == b.keys() and all(np.array_equal(a[name], b[name]) for name in a)
-
-
-class ArmTargets:
-    """The arm's joint targets for successive wire commands of one episode.
-
-    A command out of IK reach holds the last target, or, before any target, the joints measured at that refusal. The
-    error reads true only on the step a refused command first arrives: a client sends its held command again on each
-    step, and an error that never clears pauses the policy.
-    """
-
-    def __init__(self) -> None:
-        self._target: np.ndarray | None = None
-        self._previous: dict[str, Any] | None = None
-
-    def step(
-        self,
-        command: dict[str, Any],
-        current_q: Any,
-        *,
-        ik: Callable[[np.ndarray, np.ndarray], Any],
-        current_eef: tuple[Any, Any],
-    ) -> ArmStep:
-        repeated = self._previous is not None and _same_command(command, self._previous)
-        self._previous = command
-        target = wire_command_to_arm_action(command, current_q, ik=ik, current_eef=current_eef)
-        if target is None:
-            if self._target is None:
-                self._target = np.asarray(current_q, dtype=np.float32).reshape(-1)
-            return ArmStep(self._target, error=not repeated)
-        self._target = target
-        return ArmStep(target, error=False)
+    return None if target is None else np.asarray(target, dtype=np.float32).reshape(-1)
 
 
 def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | None = None) -> int:

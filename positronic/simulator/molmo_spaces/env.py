@@ -107,7 +107,6 @@ class MolmoSpacesEnv(EnvProtocol):
         self._control_dt: float | None = None
         self._meta: dict[str, Any] | None = None
         self._camera_names: list[str] = []
-        self._arm_targets = mapping.ArmTargets()
 
     def _episodes_of(self, bench: mapping.BenchmarkPath) -> list[Any]:
         if bench not in self._episodes:
@@ -211,7 +210,6 @@ class MolmoSpacesEnv(EnvProtocol):
         obs, _info = self._task.reset()  # One observation dict per environment.
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
-        self._arm_targets = mapping.ArmTargets()
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(env_obs, arm_error=False)}],
             protocol.FRAME_META: self._meta,
@@ -222,12 +220,13 @@ class MolmoSpacesEnv(EnvProtocol):
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
         (action,) = actions.values()  # MolmoSpaces runs one scene per server, so this server serves one slot
         wire = protocol.single_arm(action)
-        arm = self._arm_targets.step(
-            wire[protocol.ROBOT_COMMAND], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
+        measured = self._measured_arm_q()
+        arm = mapping.wire_command_to_arm_action(
+            wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, current_eef=self._measured_eef_pose()
         )
         gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)
         obs, _reward, _term, _trunc, _infos = self._task.step({
-            mapping.MOLMO_ARM_GROUP: arm.target,
+            mapping.MOLMO_ARM_GROUP: measured if arm is None else arm,
             mapping.MOLMO_GRIPPER_GROUP: gripper,
         })
         success = bool(self._task.judge_success())
@@ -235,7 +234,7 @@ class MolmoSpacesEnv(EnvProtocol):
         return {
             protocol.SLOTS: [
                 {
-                    protocol.FRAME_OBS: self._observe(obs[0], arm_error=arm.error),
+                    protocol.FRAME_OBS: self._observe(obs[0], arm_error=arm is None),
                     protocol.FRAME_DONE: done,
                     protocol.FRAME_SUCCESS: success,
                 }

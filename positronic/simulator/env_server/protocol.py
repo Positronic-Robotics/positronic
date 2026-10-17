@@ -54,8 +54,7 @@ FRAME_ROBOT_META = 'robot_meta'
 FRAME_CONTROL_DT = 'control_dt'
 FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
-# In the observations of an env that can refuse an arm command: true on the step whose new command it could not
-# execute. The arm holds its last target, and the same command sent again does not set the field again.
+# Whether the environment reports an arm error in this observation.
 OBS_ARM_ERROR = 'arm_error'
 # An env answers the server one entry per slot under this field; the wire to a client carries one slot's frame.
 SLOTS = 'slots'
