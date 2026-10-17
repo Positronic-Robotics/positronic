@@ -33,7 +33,7 @@ The plain form of the policy works too:
 The banner of `positronic teleop` prints the URL of the page, and the IPv4 address of each network interface with its
 name. Use the address of the network that the phone or the headset is on. Open port 5005 in the firewall of the
 laptop. With https, the browser warns about the self-signed certificate. [Data Collection](data-collection.md) shows
-how to go past the warning on the Quest.
+how to accept the warning on the Quest.
 
 ## Controls
 
@@ -92,19 +92,20 @@ Conversion for training picks its own keys from the recording.
    - `stack_cubes_collect` is `stack_cubes` for a person: 20 trials, with 120 s for each trial. The time before
      Ready does not count. Change them with `--eval.trial_count` and `--eval.timeout`.
    - It records four cameras: `image.exterior` and `image.wrist` for training, and `image.wrist_upright` and
-     `image.handcam_right`. `teleop_collect` shows all four in that order.
+     `image.handcam_right`. `teleop_collect` shows `image.exterior`, `image.wrist_upright`, `image.handcam_right` and
+     `image.wrist`, in that order.
    - Seed `N` runs the scenes `N` to `N + 19`. So that sessions do not repeat a scene, move the seed of each session
-     on by the trial count (1, 21, 41, ...), or leave out `--eval.seed` to draw each scene at random. Use a new
+     on by the trial count (1, 21, 41, ...), or leave out `--eval.seed` to get a random scene for each trial. Use a new
      `--output_dir` for each session too.
 
 3. On the phone, open the page, tap **Enter AR**, and allow the camera and the motion sensors. Hold the phone upright.
 4. For each trial:
    1. When the phase line says "Human trial: tap Ready", hold the phone in a working pose and tap
       **Ready / Start task**.
-   2. Tap **Control** and move the phone: the arm follows. Use the slider for the grip. Tap **Control** again to pause
-      and hold the phone in a better way.
-   3. Try a few moves if you like. Tap **Ready / Start task** when the real attempt starts. A reader can cut off the
-      moves before it.
+   2. Tap **Control** and move the phone: the arm follows. Use the slider for the grip. Tap **Control** again to pause,
+      for example to change how you hold the phone.
+   3. You can practise before the attempt. Tap **Ready / Start task** when the real attempt starts. The episode records
+      this time, so a reader can remove the moves before it.
    4. Do the task. Then hold **Ready / Start task** for 1 s if you did it, or hold **Hold: Give up** for 1 s if you
       did not.
    5. The sim resets the scene, and the next trial waits for Ready.
@@ -126,8 +127,9 @@ uv run positronic eval run \
 
 - `--eval.horizon_sec` changes the horizon of each episode. Leave out `--eval.episodes` to run all the episodes that
   the config selects.
-- `teleop_molmo` shows every camera of the observation. It lets the sim clock stand still for 10 s before it stops the
-  run, because MolmoSpaces is slow on a laptop.
+- `teleop_molmo` shows `image.exterior`, `image.exterior_2` and `image.wrist`. The eval puts each shoulder camera in
+  one exterior slot at random, so the person sees both. It lets the sim clock stand still for 10 s before it stops
+  the run, because MolmoSpaces is slow on a laptop.
 - Start the service with `--operator_position=.BACK` if the arm moves the wrong way.
 
 Start `positronic teleop` first, as in MuJoCo.
@@ -169,12 +171,12 @@ and vary how you come to the object.
 
 ## Limits
 
-- A Cancel while the trial waits for Ready ends the whole `eval run`. To skip a trial, tap Ready, and then hold
-  **Hold: Give up**: the episode records a Give up.
+- A Cancel while the trial waits for Ready ends the whole `eval run`. The end of the ready limit does the same. To skip
+  a trial, tap Ready, and then hold **Hold: Give up**: the episode records a Give up.
 - The phone page shows no video. Watch the window on the laptop.
 - MolmoSpaces runs slowly and with jerks on a Mac. `teleop_molmo` allows for this, but the person feels it.
 - The policy waits for Ready before the episode starts, so the wait is outside the recording and the time limit. The
-  wait blocks the main group of the World. The client asks again each second. The service ends the wait after 120 s,
+  wait blocks the control loop of the World. The client asks again each second. The service ends the wait after 120 s,
   and the client stops after 130 s. A Ctrl-C during the wait takes effect after the next answer.
 - The service serves one session at a time, and refuses a second one. Each trial opens a new session. The `meta()` of
   a run opens a short session too, so start no second run while a trial runs.

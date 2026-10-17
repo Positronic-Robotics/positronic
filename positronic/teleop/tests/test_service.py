@@ -406,11 +406,17 @@ def test_a_session_with_a_wrong_operator_position_is_refused_at_connect(service,
         RemotePolicy('websocket_unix', address).meta()
 
 
-def test_a_session_query_refuses_a_name_that_is_no_operator_position_or_no_parameter():
+def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
     with pytest.raises(ValueError, match='operator_position must be one of'):
         session_query(operator_position='SIDE')
     with pytest.raises(TypeError, match='fps'):
         session_query(fps=10)
+    with pytest.raises(ValueError, match='image_fps must be finite and positive'):
+        session_query(image_fps=0)
+    with pytest.raises(ValueError, match='still_clock_timeout must be finite and positive'):
+        session_query(still_clock_timeout=float('inf'))
+    with pytest.raises(ValueError, match='cameras must be a list of camera names'):
+        session_query(cameras=keys.WRIST_IMAGE)
     assert session_query(operator_position=None, cameras=[keys.WRIST_IMAGE]) == (
         'operator_position=null&cameras=%5B%22image.wrist%22%5D'
     )
@@ -479,7 +485,7 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
     assert episode.static[f'{policy_meta}.{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
     assert keys.TARGET_EE_POSE in episode.signals
     names = {span.name for span in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
-    assert {telemetry.component_name(TeleopClient(1.0)), telemetry_keys.SPAN_POLICY_INFER} <= names
+    assert {telemetry.component_name(TeleopClient(1.0, (), 15.0, 1.0)), telemetry_keys.SPAN_POLICY_INFER} <= names
 
 
 class TestButtonsBetweenTrials:
@@ -529,6 +535,19 @@ def test_a_service_that_cannot_bind_raises_the_cause_at_once(tmp_path):
     assert time.monotonic() - started_at < 5
 
 
+def test_a_model_server_that_fails_after_its_start_stops_the_process(socket_path, monkeypatch):
+    def serve_then_fail(self, wires, on_ready):
+        on_ready()
+        raise RuntimeError('the event loop failed')
+
+    interrupted = threading.Event()
+    monkeypatch.setattr(service_module.ModelServer, 'serve', serve_then_fail)
+    monkeypatch.setattr(service_module._thread, 'interrupt_main', interrupted.set)
+    monkeypatch.setattr(service_module.ModelServer, 'shutdown', lambda self: None)
+    with TeleopService(socket_path, 1.0, 0.1, HOLD_SEC):
+        assert interrupted.wait(timeout=5)
+
+
 def test_a_socket_directory_that_others_can_open_is_refused(tmp_path):
     shared = tmp_path / 'shared'
     shared.mkdir(mode=0o755)
@@ -541,6 +560,13 @@ def test_a_socket_directory_that_others_can_open_is_refused(tmp_path):
 def test_the_default_socket_with_no_runtime_directory_is_in_a_directory_of_the_user(monkeypatch):
     monkeypatch.delenv('XDG_RUNTIME_DIR', raising=False)
     assert protocol.default_socket_path().parent.name == f'positronic-{os.getuid()}'
+
+
+def test_a_frame_request_before_ready_is_refused(service, socket_path, connect):
+    connection = connect(socket_path)
+    frame = {protocol.KIND: Request.FRAME, protocol.TASK: '', protocol.EE_POSE: OBS[keys.EE_POSE]}
+    with pytest.raises(RuntimeError, match='a frame request came in the idle phase'):
+        connection.ask(frame)
 
 
 def _readied_connection(service: TeleopService, socket_path: Path, connect):

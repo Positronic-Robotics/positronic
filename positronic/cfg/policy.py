@@ -57,8 +57,10 @@ TELEOP_COLLECT_CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_UPRIGHT_IMAGE, keys.HA
 teleop_collect = teleop.override(**{'address.query': session_query(cameras=list(TELEOP_COLLECT_CAMERAS))})
 
 # A person on MolmoSpaces: a slow machine can hold the sim clock for seconds between two frames.
+# The eval puts each shoulder camera in one exterior slot at random, so the person sees both exteriors.
+TELEOP_MOLMO_CAMERAS = (keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2, keys.WRIST_IMAGE)
 teleop_molmo = teleop.override(**{
-    'address.query': session_query(cameras=[keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE], still_clock_timeout=10.0)
+    'address.query': session_query(cameras=list(TELEOP_MOLMO_CAMERAS), still_clock_timeout=10.0)
 })
 
 

@@ -8,6 +8,7 @@ ready, and then one ``FRAME`` request at a time.
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from dataclasses import asdict, dataclass
@@ -70,6 +71,13 @@ def default_socket_path() -> Path:
     return Path(tempfile.gettempdir()) / f'positronic-{os.getuid()}' / 'teleop.sock'
 
 
+def camera_names(value: Any) -> tuple[str, ...]:
+    """``value`` as camera names. Raise for a string, or for a list that holds something other than names."""
+    if isinstance(value, str) or not isinstance(value, list | tuple) or not all(isinstance(n, str) for n in value):
+        raise ValueError(f'cameras must be a list of camera names, got {value!r}')
+    return tuple(value)
+
+
 @dataclass(frozen=True)
 class SessionParams:
     """The parameters of a session. A client sets them as JSON values in the query of its address, with an
@@ -85,13 +93,19 @@ class SessionParams:
     still_clock_timeout: float = 1.0
     jpeg_quality: int = DEFAULT_JPEG_QUALITY
 
+    def __post_init__(self) -> None:
+        for name, value in (('image_fps', self.image_fps), ('still_clock_timeout', self.still_clock_timeout)):
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f'{name} must be finite and positive, got {value}')
+
     @classmethod
-    def from_json(cls, operator_position: str | None, cameras: list[str], **params: Any) -> SessionParams:
+    def from_json(cls, operator_position: str | None, cameras: Any, **params: Any) -> SessionParams:
         """The parameters that the JSON values of a session name. Raise for a name that is no ``OperatorPosition``."""
         names = [position.name for position in OperatorPosition]
         if operator_position is not None and operator_position not in names:
             raise ValueError(f'operator_position must be one of {", ".join(names)}, or null for UMI mode')
-        return cls(None if operator_position is None else OperatorPosition[operator_position], tuple(cameras), **params)
+        position = None if operator_position is None else OperatorPosition[operator_position]
+        return cls(position, camera_names(cameras), **params)
 
     def to_json(self) -> dict[str, Any]:
         """The parameters as JSON values."""

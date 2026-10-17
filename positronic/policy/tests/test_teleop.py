@@ -88,7 +88,14 @@ def _holds_within(condition, seconds: float) -> bool:
 
 
 def _client(**args) -> TeleopClient:
-    return TeleopClient(**{'ready_backstop_sec': 5.0, **args})
+    defaults = protocol.SessionParams()
+    return TeleopClient(**{
+        'ready_backstop_sec': 5.0,
+        'cameras': defaults.cameras,
+        'image_fps': defaults.image_fps,
+        'still_clock_timeout': defaults.still_clock_timeout,
+        **args,
+    })
 
 
 def _started(runtime: Executor, service: _Service, **client_args):

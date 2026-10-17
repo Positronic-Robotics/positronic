@@ -488,6 +488,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
         driver = ManualDriver([
             (start_episode, 0.01),
+            (emit_pose, 0.01),
             (enable_tracking, 0.01),
             (emit_pose, 0.02),
             (stop_episode, 0.005),

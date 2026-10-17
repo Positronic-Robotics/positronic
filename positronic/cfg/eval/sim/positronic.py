@@ -47,8 +47,8 @@ def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, ins
 
 stack_cubes = _mujoco_franka_eval.override(instruction='Pick up the green cube and place it on the red cube.')
 
-# Demonstrations by a person: the cameras of `stack_cubes`, and the views that a person teleoperates with. A trial
-# gives a person two minutes.
+# Demonstrations by a person: the wrist and the exterior cameras of `stack_cubes`, and two more views that a person
+# teleoperates with. A trial gives a person two minutes.
 stack_cubes_collect = stack_cubes.override(
     camera_dict={
         keys.WRIST_IMAGE: 'handcam_left_ph',

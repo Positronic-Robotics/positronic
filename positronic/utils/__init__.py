@@ -57,7 +57,7 @@ def resolve_host_ip() -> str:
 
 
 def interface_ipv4_addresses() -> list[tuple[str, str]]:
-    """The name and the IPv4 address of each local interface that is not a loopback, for banner output."""
+    """The name and the IPv4 address of each local interface that is not a loopback."""
     return [
         (name, addr.address)
         for name, addrs in psutil.net_if_addrs().items()

@@ -52,13 +52,7 @@ class TeleopClient(Policy):
     # A frame answer wakes the run. This is the latest time at which the run asks for its next step without one.
     _IDLE_NS = 1_000_000_000
 
-    def __init__(
-        self,
-        ready_backstop_sec: float,
-        cameras: Sequence[str] = (),
-        image_fps: float = 15.0,
-        still_clock_timeout: float = 1.0,
-    ):
+    def __init__(self, ready_backstop_sec: float, cameras: Sequence[str], image_fps: float, still_clock_timeout: float):
         self._ready_backstop_sec = ready_backstop_sec
         self._cameras = tuple(cameras)
         self._image_fps = image_fps
@@ -70,7 +64,7 @@ class TeleopClient(Policy):
         return (yield from self._control(runtime, infer, obs))
 
     def _await_ready(self, infer: Callable[[dict], Any]) -> None:
-        """Wait until the teleoperator is ready. The backstop bounds the wait when the service does not answer."""
+        """Wait until the teleoperator is ready. The backstop ends a wait of WAITING answers with no end."""
         deadline = time.monotonic() + self._ready_backstop_sec
         while True:
             match Reply(infer({KIND: Request.READY})[KIND]):

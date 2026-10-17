@@ -14,24 +14,23 @@ class Tracker:
     def __init__(self, operator_position: geom.Transform3D | None):
         self._operator_position = operator_position
         self._offset = geom.Transform3D()
-        self._teleop_t = geom.Transform3D()
         self.on = self.is_umi_mode
 
     @property
     def is_umi_mode(self):
         return self._operator_position is None
 
-    # TODO: Take the hand pose here, and drop the need for an `update` call first. `data_collection.py` turns control
-    #  on before its first hand pose, so it must go first.
-    def turn_on(self, robot_pos: geom.Transform3D):
-        if self.is_umi_mode:
+    def turn_on(self, robot_pos: geom.Transform3D, hand_pos: geom.Transform3D):
+        operator = self._operator_position
+        if operator is None:
             logging.info('Ignoring tracking on/off in UMI mode')
             return
 
         self.on = True
         logging.info('Starting tracking')
+        teleop_t = operator * hand_pos * operator.inv
         self._offset = geom.Transform3D(
-            -self._teleop_t.translation + robot_pos.translation, self._teleop_t.rotation.inv * robot_pos.rotation
+            -teleop_t.translation + robot_pos.translation, teleop_t.rotation.inv * robot_pos.rotation
         )
 
     def turn_off(self):
@@ -46,9 +45,9 @@ class Tracker:
         if operator is None:
             return tracker_pos
 
-        self._teleop_t = operator * tracker_pos * operator.inv
+        teleop_t = operator * tracker_pos * operator.inv
         return geom.Transform3D(
-            self._teleop_t.translation + self._offset.translation, self._teleop_t.rotation * self._offset.rotation
+            teleop_t.translation + self._offset.translation, teleop_t.rotation * self._offset.rotation
         )
 
 

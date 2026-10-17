@@ -1079,7 +1079,7 @@ def test_wire_names_match_the_registered_components():
         'unpack_action_chunk': UnpackActionChunk({'action': ['prediction']}),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         'convert_pose': ConvertPose('rot6d'),
-        'teleop_client': TeleopClient(ready_backstop_sec=5.0),
+        'teleop_client': TeleopClient(ready_backstop_sec=5.0, cameras=(), image_fps=15.0, still_clock_timeout=1.0),
     }
     registered = spec.COMPONENTS
     assert set(instances) == set(registered)

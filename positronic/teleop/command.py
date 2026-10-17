@@ -13,7 +13,7 @@ import positronic.cfg.webxr
 from positronic.drivers.webxr import RIGHT, WebXR
 
 from .clutch import OperatorPosition
-from .protocol import SessionParams, default_socket_path
+from .protocol import SessionParams, camera_names, default_socket_path
 from .service import Phase, TeleopService
 from .window import Window, window_app
 
@@ -77,7 +77,7 @@ def serve(
     parameters (``SessionParams``). A run can set others in the query of its address.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
-    defaults = SessionParams(operator_position, cameras, image_fps, still_clock_timeout)
+    defaults = SessionParams(operator_position, camera_names(cameras), image_fps, still_clock_timeout)
     service = TeleopService(
         Path(socket), ready_limit, silence_limit, hold_sec, press_threshold, headset_camera, session_defaults=defaults
     )

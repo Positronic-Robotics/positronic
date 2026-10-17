@@ -116,6 +116,17 @@ class DataCollectionController(pimm.ControlSystem):
             logging.error(f'The arm gives no state: {error}')
             self.sound.emit(error_wav_path)
 
+    def _toggle_control(self, tracker: Tracker) -> None:
+        if tracker.on:
+            tracker.turn_off()
+            return
+        robot_pos = self.robot_state.value.ee_pose
+        hand_pos = self.controller_positions.value.get('right')
+        if hand_pos is None:
+            logging.warning('Control needs a pose of the right controller')
+            return
+        tracker.turn_on(robot_pos, hand_pos)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         sounds = Path(package_assets_path('assets/sounds'))
         start_wav_path = sounds / 'recording-has-started.wav'
@@ -144,10 +155,7 @@ class DataCollectionController(pimm.ControlSystem):
                         self.sound.emit(end_wav_path)
                     recording = not recording
                 elif button_handler.just_pressed('right_A'):
-                    if tracker.on:
-                        tracker.turn_off()
-                    else:
-                        tracker.turn_on(self.robot_state.value.ee_pose)
+                    self._toggle_control(tracker)
                 elif button_handler.just_pressed('right_stick') and not tracker.is_umi_mode:
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())

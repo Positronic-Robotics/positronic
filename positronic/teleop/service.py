@@ -6,6 +6,8 @@ teleoperator stays in this process. The headset page shows the camera image of t
 The teleoperator uses the buttons of the right controller.
 """
 
+import _thread
+import logging
 import os
 import stat
 import threading
@@ -31,6 +33,8 @@ from positronic.policy.teleop import TeleopClient
 
 from .clutch import Tracker
 from .protocol import EE_POSE, END, GRIP, IMAGES, KIND, START_TASK, TARGET, TASK, Reply, Request, SessionParams
+
+logger = logging.getLogger(__name__)
 
 QUAT = geom.Rotation.Representation.QUAT
 
@@ -228,9 +232,12 @@ class TeleopService:
             try:
                 server.serve(wires, on_ready=lambda: started.set_result(None))
             except BaseException as failed:
-                if started.done():
-                    raise
-                started.set_exception(failed)
+                if not started.done():
+                    started.set_exception(failed)
+                    return
+                # Stop the process, so that the page and the window do not stay up with no socket behind them.
+                logger.exception('The model server of the teleop service stopped')
+                _thread.interrupt_main()
 
         self._server = server
         self._thread = threading.Thread(target=serve, name='teleop-service', daemon=True)
@@ -359,6 +366,8 @@ class TeleopService:
         robot_pose = geom.Transform3D.from_vector(np.asarray(request[EE_POSE], dtype=float), QUAT)
         deadline = time.monotonic() + self.silence_limit
         with self._changed:
+            if self._phase is not Phase.RUNNING:
+                raise ValueError(f'a frame request came in the {self._phase} phase')
             self._task = str(request[TASK])
             self._images = dict(request.get(IMAGES, self._images))
             sample = self._next_sample(self._sample.number, deadline)
@@ -382,7 +391,7 @@ class TeleopService:
                 case Event.CLUTCH if tracker.on:
                     tracker.turn_off()
                 case Event.CLUTCH if sample.pose is not None:
-                    tracker.turn_on(robot_pose)
+                    tracker.turn_on(robot_pose, sample.pose)
                     target = tracker.update(sample.pose)
                 case Event.COMPLETE:
                     reply[END] = PolicyEnd.COMPLETE.value
