@@ -184,7 +184,7 @@ class DeviceFlow:
         return outcomes.get(str(error), PollOutcome.UNREADABLE)
 
     def _terminal_failure(
-        self, outcome: PollOutcome, error: object, failure_before: _TransientFailure | None
+        self, outcome: PollOutcome, error: object, reached_before: _TransientFailure | None
     ) -> DeviceFlowError:
         """The failure a terminal poll answer ends the flow with. UNREADABLE carries the provider's own word."""
         terminal_messages = {
@@ -192,11 +192,10 @@ class DeviceFlow:
             PollOutcome.EXPIRED: 'the device code expired before it was authorized',
         }
         message = terminal_messages.get(outcome, f'{self.provider.name} refused the device code: {error}')
-        # A poll before that reached the provider may have spent the code, and its token was lost in transit.
-        spent = failure_before is not None and failure_before.reached_the_provider
-        if outcome in (PollOutcome.UNREADABLE, PollOutcome.EXPIRED) and spent:
-            failure = ProviderFailed(f'{message}, after a poll that failed: {failure_before}')
-            failure.__cause__ = failure_before
+        # A failed poll that reached the provider may have spent the code, and its token was lost in transit.
+        if outcome in (PollOutcome.UNREADABLE, PollOutcome.EXPIRED) and reached_before is not None:
+            failure = ProviderFailed(f'{message}, after a poll that failed: {reached_before}')
+            failure.__cause__ = reached_before
             return failure
         return DeviceFlowError(message)
 
@@ -221,6 +220,8 @@ class DeviceFlow:
         interval = authorization.interval
         deadline = self._monotonic() + authorization.expires_in
         last_failure: _TransientFailure | None = None
+        # The first failed poll since the last answer that reached the provider. A later failure keeps it.
+        reached_before: _TransientFailure | None = None
         while True:
             # RFC 8628 §3.3: the device waits the interval before each poll, the first one included.
             # A poll that starts at once is answered `slow_down`, which spends the code's lifetime.
@@ -234,12 +235,14 @@ class DeviceFlow:
                 payload = self._poll(authorization)
             except _TransientFailure as exc:
                 last_failure = exc
+                if reached_before is None and exc.reached_the_provider:
+                    reached_before = exc
                 # RFC 8628 §3.5: a poll that timed out slows the rate and tries again, and WorkOS names a
                 # 429 and a 5xx transient as well. The code may already be authorized, and the deadline
                 # above ends the flow.
                 interval = max(interval + slow_down_step_s, exc.retry_after_s or 0.0)
                 continue
-            failure_before, last_failure = last_failure, None
+            last_failure = None
             error = payload.get(_ERROR_FIELD)
             outcome = self._outcome_of(error)
             if outcome is PollOutcome.GRANTED:
@@ -251,7 +254,8 @@ class DeviceFlow:
                     interval + slow_down_step_s, self._optional_duration_s(payload, _INTERVAL_FIELD, interval)
                 )
             elif outcome is not PollOutcome.PENDING:
-                raise self._terminal_failure(outcome, error, failure_before)
+                raise self._terminal_failure(outcome, error, reached_before)
+            reached_before = None
 
     @staticmethod
     def _retry_after_s(response: httpx.Response) -> float | None:

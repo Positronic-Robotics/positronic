@@ -63,10 +63,9 @@ tailnet: pass `--plaintext-http` to reach it. `PlatformClient` uses a proxy from
 for an `https` platform, so a proxy never carries a key or a token over plain `http`.
 
 `users.register` checks the token with the provider before it answers, and a caller that gives up
-first loses the key the platform minted. Pass `timeout=client.register_timeout()` to
-`PlatformClient.register`: it reads `auth.config`, where the platform states its deadline for the
-WorkOS check, and covers the longest check the platform runs. Without `timeout`, `register` waits the
-client's own timeout.
+first loses the key the platform minted. `PlatformClient.register` first reads `auth.config`, where the
+platform states its deadline for the WorkOS check, and waits a bound that covers the longest check the
+platform runs (`register_timeout()`). A caller that already holds a bound passes it as `timeout`.
 
 ## Credit accounts
 

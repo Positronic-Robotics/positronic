@@ -548,6 +548,24 @@ def test_an_expiry_after_a_poll_that_reached_the_provider_is_the_providers_failu
         flow.poll_for_token(_authorization())
 
 
+def test_a_rate_limit_after_a_lost_poll_keeps_the_lost_poll_in_mind():
+    """The timed-out poll may have spent the code; the 429 after it reached nothing and does not erase that."""
+    answers = iter(['timeout', httpx.Response(429), {'error': 'invalid_grant'}])
+    slept: list[float] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        body = next(answers)
+        if body == 'timeout':
+            raise httpx.ReadTimeout('no answer in time', request=request)
+        return body if isinstance(body, httpx.Response) else httpx.Response(400, json=body)
+
+    http = httpx.Client(transport=httpx.MockTransport(answer))
+    flow = DeviceFlow(WORKOS, CLIENT_ID, http, monotonic=lambda: 0.0, sleep=slept.append)
+
+    with pytest.raises(ProviderFailed, match='invalid_grant, after a poll that failed: WorkOS did not answer in time'):
+        flow.poll_for_token(_authorization())
+
+
 def test_a_rate_limit_followed_by_a_pending_answer_expires_as_unauthorized():
     workos = _workos(polls=[httpx.Response(429), *[{'error': 'authorization_pending'}] * 10])
     flow, _ = _flow(workos)
