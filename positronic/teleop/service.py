@@ -1,16 +1,17 @@
-"""The teleop service: the headset on one side, one ``TeleopPolicy`` session on the other.
+"""The teleop service: the headset on one side, one teleop session of a ``RemotePolicy`` on the other.
 
-``positronic teleop`` runs it beside a run that uses the ``teleop`` policy. The headset page shows the camera image
-of the run and the state of the trial. The teleoperator uses the buttons of the right controller.
+``positronic teleop`` runs it beside a run whose policy dials its socket. It is a model server: each session declares
+``TeleopClient`` in its client stack. The service keeps the trial state and the clutch, so the input of the
+teleoperator stays in this process. The headset page shows the camera image of the run and the state of the trial.
+The teleoperator uses the buttons of the right controller.
 """
 
-import asyncio
-import logging
+import dataclasses
 import os
 import stat
 import threading
 import time
-from collections.abc import Coroutine, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from enum import StrEnum
@@ -19,34 +20,38 @@ from typing import Any
 
 import cv2
 import numpy as np
-from positronic_model_server import server_wire
-from positronic_model_server.serialization import deserialise, serialise
+from positronic_model_server import spec
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
+from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
-from positronic_wire.wire import PeerDisconnected
 
 from positronic import geom
+from positronic.policy import keys as policy_keys
+from positronic.policy.base import PolicyEnd
+from positronic.policy.codecs import EncodeImages
+from positronic.policy.teleop import TeleopClient
 
-from .session import (
-    ATTEMPT_STARTED,
-    CONTROL,
-    DISPLAY,
-    EVENTS,
-    GRIP,
-    IMAGES,
-    KIND,
-    MESSAGE,
-    POSE,
-    TASK,
-    Event,
-    Reply,
-    Request,
-)
+from .clutch import OperatorPosition, Tracker
+from .protocol import EE_POSE, END, GRIP, IMAGES, KIND, START_TASK, TARGET, TASK, Reply, Request
 
-logger = logging.getLogger(__name__)
+QUAT = geom.Rotation.Representation.QUAT
 
 # The index of each button in the values that the headset page sends for a controller, in the xr-standard gamepad
 # layout.
 _TRIGGER, _STICK, _A, _B = 0, 3, 4, 5
+
+
+class Event(StrEnum):
+    """A press that the teleoperator made since the previous frame."""
+
+    # Turn control on or off.
+    CLUTCH = 'clutch'
+    # The real attempt starts. The moves before it are trial moves.
+    START_TASK = 'start_task'
+    # End the episode: the teleoperator thinks that the task is done.
+    COMPLETE = 'complete'
+    # End the episode: the teleoperator stops before the task is done.
+    GIVE_UP = 'give_up'
 
 
 class ButtonMap:
@@ -144,6 +149,31 @@ class TrialState:
 
 
 @dataclass(frozen=True)
+class SessionParams:
+    """The parameters of a session. A client sets them as JSON values in the query of its address.
+
+    ``operator_position`` names an ``OperatorPosition``, and ``None`` is UMI mode: control is always on, and the hand
+    pose is the robot pose. ``cameras`` names the cameras that the client sends, and ``None`` is every image of
+    ``Obs``.
+    """
+
+    operator_position: str | None = OperatorPosition.FRONT.name
+    cameras: list[str] | None = None
+    image_fps: float = 15.0
+    still_clock_timeout: float = 1.0
+    jpeg_quality: int = DEFAULT_JPEG_QUALITY
+
+    def __post_init__(self) -> None:
+        names = [position.name for position in OperatorPosition]
+        if self.operator_position is not None and self.operator_position not in names:
+            raise ValueError(f'operator_position must be one of {", ".join(names)}, or null for UMI mode')
+
+    def operator(self) -> geom.Transform3D | None:
+        """The transform of the operator position, or ``None`` in UMI mode."""
+        return None if self.operator_position is None else OperatorPosition[self.operator_position].value
+
+
+@dataclass(frozen=True)
 class _Sample:
     """What the headset sent last, and its number in the order of the samples."""
 
@@ -152,13 +182,21 @@ class _Sample:
     buttons: Sequence[float] | None
 
 
+_DEFAULT_SESSION_PARAMS = SessionParams()
+
+
 class TeleopService:
-    """Serve one ``TeleopPolicy`` session at a time on the Unix socket ``uds``.
+    """Serve one teleop session at a time on the Unix socket ``uds``, as a model server.
 
     ``take_sample`` takes each sample of the right controller. A frame request waits for the next sample. When none
-    comes within ``silence_limit``, the frame has no pose ("not tracked"). The ready request waits for Ready or Cancel,
-    and answers an error after ``ready_limit``.
+    comes within ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. A ready request waits
+    at most ``READY_SLICE_SEC`` for Ready or Cancel. The ready limit counts from the first ready request of a session.
+    ``session_defaults`` holds the parameters of a session that sets none.
     """
+
+    READY_SLICE_SEC = 1.0
+    # The client stops waiting for Ready this long after the ready limit, when the service does not answer.
+    READY_BACKSTOP_MARGIN_SEC = 10.0
 
     def __init__(
         self,
@@ -168,29 +206,29 @@ class TeleopService:
         hold_sec: float,
         press_threshold: float = 0.6,
         headset_camera: str | None = None,
+        session_defaults: SessionParams = _DEFAULT_SESSION_PARAMS,
     ):
         self._uds = uds
-        self._ready_limit = ready_limit
-        self._silence_limit = silence_limit
+        self.ready_limit = ready_limit
+        self.silence_limit = silence_limit
+        self._session_defaults = session_defaults
         self._buttons = ButtonMap(hold_sec, press_threshold)
-        self._wire = WebsocketWire(ServedUnixSocket(uds))
         self._changed = threading.Condition()
         self._sample = _Sample(0, None, None)
         self._phase = Phase.IDLE
         self._ready: Reply | None = None
         self._events: list[Event] = []
-        # Whether the service emitted Start task in this trial. `_display` can show it later.
+        self._task = ''
+        self._control = False
+        # Whether the service emitted Start task in this trial.
         self._attempt_started = False
-        self._display: dict[str, Any] = {}
-        # The last camera images of the run, by name, in the order that the policy sends them.
+        # The last camera images of the run, by name, in the order that the client sends them.
         self._images: dict[str, np.ndarray] = {}
         # The camera that the headset shows. ``None`` is the first camera of the run.
         self._headset_camera = headset_camera
-        self._open = False
-        # A wait ends at once when its session ended, or when the service stops.
-        self._session_ended = False
+        # A wait ends at once when the service stops.
         self._stopping = False
-        self._loop: asyncio.AbstractEventLoop | None = None
+        self._server: ModelServer | None = None
         self._thread: threading.Thread | None = None
 
     @staticmethod
@@ -209,38 +247,32 @@ class TeleopService:
 
     def __enter__(self) -> 'TeleopService':
         self._prepare_private_directory(self._uds.parent)
+        server = ModelServer(lambda: TeleopModel(self, self._session_defaults))
+        wires = [WebsocketWire(ServedUnixSocket(self._uds))]
         started: Future[None] = Future()
 
-        async def serve() -> None:
-            self._loop = asyncio.get_running_loop()
+        def serve() -> None:
             try:
-                await self._wire.start(self._session, lambda: None, lambda _headers: True)
+                server.serve(wires, on_ready=lambda: started.set_result(None))
             except BaseException as failed:
+                if started.done():
+                    raise
+                # `__enter__` raises the cause.
                 started.set_exception(failed)
-                raise
-            started.set_result(None)
-            await self._wire.serve()
 
-        self._thread = threading.Thread(target=asyncio.run, args=(serve(),), name='teleop-service', daemon=True)
+        self._server = server
+        self._thread = threading.Thread(target=serve, name='teleop-service', daemon=True)
         self._thread.start()
         started.result(timeout=10)
         return self
 
     def __exit__(self, *exc: object) -> None:
-        assert self._loop is not None and self._thread is not None
+        assert self._server is not None and self._thread is not None
         with self._changed:
             self._stopping = True
             self._changed.notify_all()
-        asyncio.run_coroutine_threadsafe(self._wire.stop(), self._loop).result(timeout=10)
+        self._server.shutdown()
         self._thread.join(timeout=10)
-
-    def _end_session(self) -> None:
-        with self._changed:
-            self._session_ended = True
-            self._changed.notify_all()
-
-    def _waits_must_end(self) -> bool:
-        return self._session_ended or self._stopping
 
     def take_sample(self, pose: geom.Transform3D | None, buttons: Sequence[float] | None) -> None:
         """Take one sample of the right controller. ``None`` is a part that the headset does not track."""
@@ -266,14 +298,7 @@ class TeleopService:
 
     def state(self) -> TrialState:
         with self._changed:
-            phase, display = self._phase, self._display
-            return TrialState(
-                phase,
-                str(display.get(TASK, '')),
-                bool(display.get(CONTROL)),
-                bool(display.get(ATTEMPT_STARTED)),
-                tuple(self._images),
-            )
+            return TrialState(self._phase, self._task, self._control, self._attempt_started, tuple(self._images))
 
     def camera_image(self, name: str) -> np.ndarray:
         """The last image of camera ``name``. Raise ``KeyError`` for a camera that the run does not send."""
@@ -295,7 +320,7 @@ class TeleopService:
     def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
         """``image``, or a black image, with ``lines`` of text at its top."""
         blank = (480, 640, 3)
-        # A copy: the text goes on the view, not on the image that the display state holds.
+        # A copy: the text goes on the view, not on the image that the service holds.
         view = np.zeros(blank, dtype=np.uint8) if image is None else np.array(image, dtype=np.uint8, order='C')
         for row, line in enumerate(lines):
             origin = (10, 30 + 30 * row)
@@ -306,114 +331,170 @@ class TeleopService:
     def view(self) -> np.ndarray:
         """The image for the headset: the camera image of the run, with the state of the trial."""
         with self._changed:
-            phase, display = self._phase, dict(self._display)
+            state = self.state()
             image = self._headset_image()
-        match phase:
+        match state.phase:
             case Phase.IDLE:
                 return self._view(None, ['Waiting for a trial'])
             case Phase.READY_WAIT:
                 return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'])
             case Phase.ENDED:
                 return self._view(None, ['The trial ended', 'Give the verdict on the console'])
-        control = 'Control on (A: off)' if display.get(CONTROL) else 'Control off (A: on)'
-        task = 'Hold B: Complete. Hold the stick: Give up' if display.get(ATTEMPT_STARTED) else 'B: Start task'
-        return self._view(image, [str(display.get(TASK, '')), control, task])
+        control = 'Control on (A: off)' if state.control else 'Control off (A: on)'
+        task = 'Hold B: Complete. Hold the stick: Give up' if state.attempt_started else 'B: Start task'
+        return self._view(image, [state.task, control, task])
 
     def _headset_image(self) -> np.ndarray | None:
         if self._headset_camera is not None:
             return self._images.get(self._headset_camera)
         return next(iter(self._images.values()), None)
 
-    def _await_ready(self) -> dict[str, Any]:
-        deadline = time.monotonic() + self._ready_limit
+    def begin_ready_wait(self) -> None:
+        """Start a new trial that waits for Ready."""
         with self._changed:
-            self._phase, self._ready, self._events, self._display = Phase.READY_WAIT, None, [], {}
-            self._images = {}
-            self._attempt_started = False
-            while self._ready is None:
-                left = deadline - time.monotonic()
-                if self._waits_must_end():
-                    self._phase = Phase.IDLE
-                    return {KIND: Reply.ERROR, MESSAGE: 'the teleop service ended the session'}
-                if left <= 0:
-                    self._phase = Phase.IDLE
-                    return {KIND: Reply.ERROR, MESSAGE: f'the teleoperator was not ready within {self._ready_limit} s'}
+            self._clear_trial()
+            self._phase, self._ready = Phase.READY_WAIT, None
+
+    def await_ready(self, deadline: float) -> Reply:
+        """Wait at most ``READY_SLICE_SEC`` for Ready or Cancel. Answer ``EXPIRED`` at the ``time.monotonic()``
+        instant ``deadline``, and ``WAITING`` when the slice ends first."""
+        slice_end = min(time.monotonic() + self.READY_SLICE_SEC, deadline)
+        with self._changed:
+            if self._phase is not Phase.READY_WAIT:
+                raise ValueError(f'a ready request came in the {self._phase} phase')
+            while self._ready is None and not self._stopping and (left := slice_end - time.monotonic()) > 0:
                 self._changed.wait(left)
+            if self._stopping:
+                self._phase = Phase.IDLE
+                raise RuntimeError('the teleop service stops')
+            if self._ready is None:
+                if time.monotonic() < deadline:
+                    return Reply.WAITING
+                self._phase = Phase.IDLE
+                return Reply.EXPIRED
             self._phase = Phase.RUNNING if self._ready is Reply.READY else Phase.IDLE
-            return {KIND: self._ready}
+            return self._ready
 
-    def _next_frame(self, display: dict[str, Any]) -> dict[str, Any]:
-        deadline = time.monotonic() + self._silence_limit
+    def _next_sample(self, seen: int, deadline: float) -> _Sample:
+        """The sample after sample number ``seen``, or a sample with no pose when none comes before ``deadline``. Hold
+        the lock."""
+        while self._sample.number == seen and not self._stopping and (left := deadline - time.monotonic()) > 0:
+            self._changed.wait(left)
+        return self._sample if self._sample.number != seen else _Sample(seen, None, None)
+
+    def next_frame(self, request: Mapping[str, Any], tracker: Tracker) -> dict[str, Any]:
+        """Take the state of the robot in ``request``, and answer with the next frame of the teleoperator input."""
+        robot_pose = geom.Transform3D.from_vector(np.asarray(request[EE_POSE], dtype=float), QUAT)
+        deadline = time.monotonic() + self.silence_limit
         with self._changed:
-            self._images = display.pop(IMAGES, self._images)
-            self._display = display
-            seen = self._sample.number
-            while (
-                self._sample.number == seen and not self._waits_must_end() and (left := deadline - time.monotonic()) > 0
-            ):
-                self._changed.wait(left)
-            sample = self._sample if self._sample.number != seen else _Sample(seen, None, None)
+            self._task = str(request[TASK])
+            self._images = dict(request.get(IMAGES, self._images))
+            sample = self._next_sample(self._sample.number, deadline)
             events, self._events = self._events, []
-            if Event.COMPLETE in events or Event.GIVE_UP in events:
+            reply = self._apply(sample, events, tracker, robot_pose)
+            self._control = tracker.on
+            if END in reply:
                 self._phase = Phase.ENDED
-        frame: dict[str, Any] = {
-            KIND: Reply.FRAME,
-            GRIP: 0.0 if sample.buttons is None else ButtonMap.grip(sample.buttons),
-            EVENTS: [str(event) for event in events],
-        }
-        if sample.pose is not None:
-            frame[POSE] = sample.pose.as_vector(geom.Rotation.Representation.QUAT)
-        return frame
+            return reply
 
-    async def _session(self, connection: server_wire.ServerConnection) -> None:
-        if self._open:
-            await connection.refuse('the teleop service serves one session at a time')
-            return
-        self._open = True
+    @staticmethod
+    def _apply(
+        sample: _Sample, events: Sequence[Event], tracker: Tracker, robot_pose: geom.Transform3D
+    ) -> dict[str, Any]:
+        """The frame reply of ``sample`` and ``events``. Control starts from ``robot_pose``, so the robot does not
+        jump."""
+        reply: dict[str, Any] = {KIND: Reply.FRAME, START_TASK: Event.START_TASK in events}
+        target = None if sample.pose is None else tracker.update(sample.pose)
+        for event in events:
+            match event:
+                case Event.CLUTCH if tracker.on:
+                    tracker.turn_off()
+                case Event.CLUTCH if sample.pose is not None:
+                    tracker.turn_on(robot_pose)
+                    target = tracker.update(sample.pose)
+                case Event.COMPLETE:
+                    reply[END] = PolicyEnd.COMPLETE.value
+                    return reply
+                case Event.GIVE_UP:
+                    reply[END] = PolicyEnd.GIVE_UP.value
+                    return reply
+        if target is None and tracker.on:
+            tracker.turn_off()
+        if tracker.on and target is not None:
+            reply[TARGET] = target.as_vector(QUAT)
+            reply[GRIP] = 0.0 if sample.buttons is None else ButtonMap.grip(sample.buttons)
+        return reply
+
+    def _clear_trial(self) -> None:
+        """Show no trial. Hold the lock."""
+        self._phase, self._events = Phase.IDLE, []
+        self._task, self._control, self._attempt_started, self._images = '', False, False, {}
+
+    def end_session(self) -> None:
         with self._changed:
-            self._session_ended = False
-        try:
-            await self._serve(connection)
-        finally:
-            with self._changed:
-                self._phase, self._display, self._images = Phase.IDLE, {}, {}
-            self._open = False
+            self._clear_trial()
 
-    async def _serve(self, connection: server_wire.ServerConnection) -> None:
-        while True:
-            try:
-                request = deserialise(await connection.receive())
-            except PeerDisconnected:
-                return  # The policy closed its end of the session.
-            match Request(request[KIND]):
-                case Request.READY:
-                    reply = await self._answer_unless_the_peer_speaks(connection, asyncio.to_thread(self._await_ready))
-                case Request.FRAME:
-                    reply = await asyncio.to_thread(self._next_frame, request[DISPLAY])
-            if reply is None:
-                return
-            await connection.send(serialise(reply))
 
-    async def _answer_unless_the_peer_speaks(
-        self, connection: server_wire.ServerConnection, wait: Coroutine[Any, Any, dict[str, Any]]
-    ) -> dict[str, Any] | None:
-        """The answer of ``wait``, or ``None`` when the policy disconnects or sends again first.
+class TeleopSession(Session):
+    """One trial of the teleop service: the ready wait, then the frames."""
 
-        The policy sends nothing while it waits for an answer, so a message then is a protocol error, and the session
-        ends. Any other failure of the receive raises, after ``wait`` ends.
-        """
-        answer = asyncio.ensure_future(wait)
-        peer = asyncio.ensure_future(connection.receive())
-        await asyncio.wait({answer, peer}, return_when=asyncio.FIRST_COMPLETED)
-        # A receive that completed holds a message or a disconnect, which a cancel cannot give back.
-        if not peer.done():
-            peer.cancel()
-            return answer.result()
-        self._end_session()
-        await answer
-        try:
-            peer.result()
-        except PeerDisconnected:
-            return None
-        logger.error('The policy sent a message while it waited for an answer, so its session ends')
-        return None
+    def __init__(
+        self, service: TeleopService, tracker: Tracker, client_stack: dict[str, Any], on_close: Callable[[], None]
+    ):
+        super().__init__(client_stack)
+        self._service = service
+        self._tracker = tracker
+        self._on_close = on_close
+        # The `time.monotonic()` instant at which the ready limit ends. It starts at the first ready request.
+        self._ready_deadline: float | None = None
+
+    def infer(self, observation: Any) -> dict[str, Any]:
+        match Request(observation[KIND]):
+            case Request.READY:
+                if self._ready_deadline is None:
+                    self._ready_deadline = time.monotonic() + self._service.ready_limit
+                    self._service.begin_ready_wait()
+                return {KIND: self._service.await_ready(self._ready_deadline)}
+            case Request.FRAME:
+                return self._service.next_frame(observation, self._tracker)
+
+    def close(self) -> None:
+        self._service.end_session()
+        self._on_close()
+
+
+class TeleopModel(Model):
+    """The teleop service as a model server serves it. It prepares one session at a time.
+
+    ``ModelServer`` calls it on one worker thread only.
+    """
+
+    def __init__(self, service: TeleopService, defaults: SessionParams):
+        super().__init__(
+            parameters=dataclasses.asdict(defaults),
+            metadata={
+                policy_keys.TYPE: 'teleop',
+                'ready_limit_sec': service.ready_limit,
+                'silence_limit_sec': service.silence_limit,
+            },
+        )
+        self._service = service
+        self._open = False
+
+    def prepare_session(self, params: dict[str, Any]) -> TeleopSession:
+        if self._open:
+            raise RuntimeError('the teleop service serves one session at a time')
+        settings = SessionParams(**params)
+        client = TeleopClient(
+            ready_backstop_sec=self._service.ready_limit + TeleopService.READY_BACKSTOP_MARGIN_SEC,
+            cameras=settings.cameras,
+            image_fps=settings.image_fps,
+            still_clock_timeout=settings.still_clock_timeout,
+        )
+        stack = spec.sequence(client.to_spec(), EncodeImages(quality=settings.jpeg_quality).to_spec())
+        session = TeleopSession(self._service, Tracker(settings.operator()), stack, self._release)
+        self._open = True
+        return session
+
+    def _release(self) -> None:
+        self._open = False

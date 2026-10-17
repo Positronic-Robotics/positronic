@@ -7,13 +7,13 @@ import numpy as np
 import PIL.Image
 import pytest
 from fastapi.testclient import TestClient
-from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
-from positronic_wire import registry
-from positronic_wire.wire import SESSION_PATH, UnixSocketAddress
+from positronic_model_server.serialization import encode_jpeg
 
-from positronic import keys
+from positronic import geom, keys
+from positronic.policy.base import PolicyEnd
+from positronic.teleop import protocol
 from positronic.teleop import service as service_module
-from positronic.teleop import session
+from positronic.teleop.protocol import Reply, Request
 from positronic.teleop.service import Phase, TeleopService
 from positronic.teleop.window import Window, WindowStatus, window_app
 from positronic.tests.testing_inference import free_port
@@ -30,15 +30,21 @@ def window(service):
     return TestClient(window_app(service), base_url='http://127.0.0.1:5006')
 
 
+FRAME_REQUEST = {
+    protocol.KIND: Request.FRAME,
+    protocol.TASK: 'pick up the cube',
+    protocol.EE_POSE: geom.Transform3D().as_vector(geom.Rotation.Representation.QUAT),
+}
+
+
 @pytest.fixture
-def waiting(service, socket_path):
-    """A session that waits for Ready."""
-    connection = registry.client_wire('websocket_unix').dial(UnixSocketAddress(socket_path, SESSION_PATH, ''), None, 5)
-    connection.send(serialise({session.KIND: session.Request.READY}))
+def waiting(service, socket_path, connect):
+    """A session that waits for Ready, and the answer that it gets."""
+    connection = connect(socket_path)
+    answer = connection.ready_in_background()
     while service.phase is not Phase.READY_WAIT:
         time.sleep(0.005)
-    yield connection
-    connection.close()
+    return connection, answer
 
 
 def test_the_window_says_when_no_trial_waits(window):
@@ -56,7 +62,7 @@ def _ready_from_the_headset(service, waiting) -> None:
     buttons = [0.0] * 6
     buttons[service_module._B] = 1.0
     service.take_sample(None, buttons)
-    assert deserialise(waiting.recv(5)) == {session.KIND: session.Reply.READY}
+    assert waiting[1].result(5) is Reply.READY
 
 
 def test_the_window_offers_no_ready(window, waiting):
@@ -67,7 +73,7 @@ def test_the_window_offers_no_ready(window, waiting):
 
 def test_cancel_from_the_window_cancels_the_trial(window, waiting):
     assert window.post('/cancel').status_code == 200
-    assert deserialise(waiting.recv(5)) == {session.KIND: session.Reply.CANCELLED}
+    assert waiting[1].result(5) is Reply.CANCELLED
     assert window.get('/status').json()['phase'] == 'idle'
 
 
@@ -89,8 +95,7 @@ def test_the_window_lists_and_serves_each_camera_of_the_run(window, service, wai
         keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 200, np.uint8),
     }
     encoded = {name: encode_jpeg(image) for name, image in images.items()}
-    waiting.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: {session.IMAGES: encoded}}))
-    waiting.recv(5)
+    waiting[0].ask({**FRAME_REQUEST, protocol.IMAGES: encoded})
     assert window.get('/status').json()['cameras'] == [keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE]
     for name, image in images.items():
         answer = window.get(f'/camera/{name}.jpg')
@@ -139,10 +144,9 @@ def test_a_request_under_another_host_name_gets_no_answer(service, waiting):
 
 def test_a_policy_that_leaves_mid_trial_leaves_no_old_task_in_the_window(window, service, waiting):
     _ready_from_the_headset(service, waiting)
-    waiting.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: {session.TASK: 'pick up the cube'}}))
-    waiting.recv(5)
+    waiting[0].ask(FRAME_REQUEST)
     assert window.get('/status').json()['task'] == 'pick up the cube'
-    waiting.close()
+    waiting[0].close()
     deadline = time.monotonic() + 5
     while service.phase is not Phase.IDLE:
         assert time.monotonic() < deadline, 'the session never ended'
@@ -166,10 +170,9 @@ def test_the_window_shows_no_trial_after_the_last_session_ends_with_complete(win
     service.take_sample(None, pressed)
     time.sleep(0.3)
     service.take_sample(None, pressed)
-    waiting.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: {session.TASK: 'pick up the cube'}}))
-    assert session.Event.COMPLETE in deserialise(waiting.recv(5))[session.EVENTS]
+    assert waiting[0].ask(FRAME_REQUEST)[protocol.END] == PolicyEnd.COMPLETE.value
     assert window.get('/status').json()['phase'] == 'ended'
-    waiting.close()
+    waiting[0].close()
     deadline = time.monotonic() + 5
     while service.phase is not Phase.IDLE:
         assert time.monotonic() < deadline, 'the session never ended'

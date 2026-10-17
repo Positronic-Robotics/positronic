@@ -12,8 +12,8 @@ import pimm
 import positronic.cfg.webxr
 from positronic.drivers.webxr import RIGHT, WebXR
 
-from .service import Phase, TeleopService
-from .session import default_socket_path
+from .protocol import default_socket_path
+from .service import Phase, SessionParams, TeleopService
 from .window import Window, window_app
 
 logger = logging.getLogger(__name__)
@@ -65,10 +65,21 @@ def serve(
     view_fps: float = 30.0,
     headset_camera: str | None = None,
     open_window: bool = True,
+    operator_position: str | None = SessionParams.operator_position,
+    cameras: list[str] | None = SessionParams.cameras,
+    image_fps: float = SessionParams.image_fps,
+    still_clock_timeout: float = SessionParams.still_clock_timeout,
 ):
-    """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen."""
+    """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
+
+    ``operator_position``, ``cameras``, ``image_fps`` and ``still_clock_timeout`` are the defaults of the session
+    parameters (``SessionParams``). A run can set others in the query of its address.
+    """
     # TODO: Set the ready limit and the silence limit for a rig.
-    service = TeleopService(Path(socket), ready_limit, silence_limit, hold_sec, press_threshold, headset_camera)
+    defaults = SessionParams(operator_position, cameras, image_fps, still_clock_timeout)
+    service = TeleopService(
+        Path(socket), ready_limit, silence_limit, hold_sec, press_threshold, headset_camera, session_defaults=defaults
+    )
     headset = _Headset(service, view_fps)
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)

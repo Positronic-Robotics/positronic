@@ -1,4 +1,4 @@
-import asyncio
+import json
 import os
 import re
 import socket
@@ -7,14 +7,15 @@ import time
 import types
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlencode
 
 import numpy as np
 import pos3
 import pytest
-from positronic_model_server import server_wire
+from positronic_model_server import keys as server_keys
+from positronic_model_server.protocol import OBSERVATION, RESULT, SESSION_ID, STATUS, ServerStatus
 from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
-from positronic_wire import registry
-from positronic_wire.wire import SESSION_PATH, PeerDisconnected, UnixSocketAddress
+from positronic_wire.wire import SESSION_PATH, UnixSocketAddress
 from websockets.sync.client import unix_connect
 
 import pimm
@@ -28,9 +29,12 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step
 from positronic.policy.executor import Executor
-from positronic.teleop import TeleopPolicy, command, session
+from positronic.policy.remote import RemotePolicy
+from positronic.policy.teleop import TrialNotStarted
+from positronic.teleop import command, protocol
 from positronic.teleop import service as service_module
-from positronic.teleop.service import ButtonMap, Phase, TeleopService
+from positronic.teleop.protocol import Reply, Request
+from positronic.teleop.service import ButtonMap, Event, Phase, SessionParams, TeleopService
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 from positronic.utils import package_assets_path
 
@@ -42,6 +46,7 @@ OBS = {
     keys.TASK: 'pick up the cube',
     keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 128, dtype=np.uint8),
 }
+FRAME_REQUEST = {protocol.KIND: Request.FRAME, protocol.TASK: OBS[keys.TASK], protocol.EE_POSE: OBS[keys.EE_POSE]}
 HOLD_SEC = 0.2
 
 
@@ -52,24 +57,24 @@ def _buttons(trigger=0.0, stick=0.0, a=0.0, b=0.0) -> list[float]:
 
 class TestButtonMap:
     def test_b_and_the_stick_answer_the_ready_request(self):
-        assert ButtonMap(HOLD_SEC).ready_reply(_buttons(b=1.0), 0) is session.Reply.READY
-        assert ButtonMap(HOLD_SEC).ready_reply(_buttons(stick=1.0), 0) is session.Reply.CANCELLED
+        assert ButtonMap(HOLD_SEC).ready_reply(_buttons(b=1.0), 0) is Reply.READY
+        assert ButtonMap(HOLD_SEC).ready_reply(_buttons(stick=1.0), 0) is Reply.CANCELLED
         assert ButtonMap(HOLD_SEC).ready_reply(_buttons(), 0) is None
 
     def test_a_turns_control_on_or_off_at_each_press(self):
         buttons = ButtonMap(HOLD_SEC)
-        assert buttons.events(_buttons(a=1.0), 0, False) == [session.Event.CLUTCH]
+        assert buttons.events(_buttons(a=1.0), 0, False) == [Event.CLUTCH]
         assert buttons.events(_buttons(a=1.0), 10, False) == []
         assert buttons.events(_buttons(), 20, False) == []
-        assert buttons.events(_buttons(a=1.0), 30, False) == [session.Event.CLUTCH]
+        assert buttons.events(_buttons(a=1.0), 30, False) == [Event.CLUTCH]
 
     def test_b_starts_the_task_and_a_later_hold_of_b_completes_it(self):
         buttons = ButtonMap(HOLD_SEC)
-        assert buttons.events(_buttons(b=1.0), 0, False) == [session.Event.START_TASK]
+        assert buttons.events(_buttons(b=1.0), 0, False) == [Event.START_TASK]
         assert buttons.events(_buttons(b=1.0), 1_000_000_000, True) == []
         buttons.events(_buttons(), 1_100_000_000, True)
         assert buttons.events(_buttons(b=1.0), 1_200_000_000, True) == []
-        assert buttons.events(_buttons(b=1.0), 1_500_000_000, True) == [session.Event.COMPLETE]
+        assert buttons.events(_buttons(b=1.0), 1_500_000_000, True) == [Event.COMPLETE]
 
     def test_no_hold_completes_before_the_task_starts(self):
         buttons = ButtonMap(HOLD_SEC)
@@ -79,13 +84,13 @@ class TestButtonMap:
     def test_a_hold_of_the_stick_gives_up_once(self):
         buttons = ButtonMap(HOLD_SEC)
         assert buttons.events(_buttons(stick=1.0), 0, False) == []
-        assert buttons.events(_buttons(stick=1.0), 300_000_000, False) == [session.Event.GIVE_UP]
+        assert buttons.events(_buttons(stick=1.0), 300_000_000, False) == [Event.GIVE_UP]
         assert buttons.events(_buttons(stick=1.0), 600_000_000, False) == []
 
     def test_a_value_below_the_press_threshold_presses_nothing(self):
         buttons = ButtonMap(HOLD_SEC, press_threshold=0.9)
         assert buttons.events(_buttons(a=0.8), 0, False) == []
-        assert buttons.events(_buttons(a=0.95), 10, False) == [session.Event.CLUTCH]
+        assert buttons.events(_buttons(a=0.95), 10, False) == [Event.CLUTCH]
 
     def test_the_indices_match_the_buttons_that_the_phone_page_names(self):
         page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
@@ -114,8 +119,10 @@ def runtime():
     executor.close()
 
 
-def _policy(socket_path: Path, **kwargs) -> TeleopPolicy:
-    return TeleopPolicy('websocket_unix', UnixSocketAddress(socket_path, SESSION_PATH, ''), **kwargs)
+def _policy(socket_path: Path, **params) -> RemotePolicy:
+    """An ordinary remote policy that dials the service, with ``params`` in the query of its address."""
+    query = urlencode({name: json.dumps(value) for name, value in params.items()})
+    return RemotePolicy('websocket_unix', UnixSocketAddress(socket_path, SESSION_PATH, query), infer_timeout=10.0)
 
 
 class _Headset:
@@ -192,17 +199,21 @@ def _moves(steps: list[Step]) -> list[Step]:
     return [step for step in steps if keys.ROBOT_COMMAND in step.commands]
 
 
-def _readied_run(service: TeleopService, headset: '_Headset', runtime: Executor, socket_path: Path):
-    """A run that the teleoperator readied, after its stay command."""
+def _readied_run(service: TeleopService, headset: '_Headset', runtime: Executor, socket_path: Path, **params):
+    """A run of a remote policy that the teleoperator readied, after its stay command."""
     _press_ready_when_asked(service, headset, b=1.0)
-    run = runtime.start(_policy(socket_path))
+    run = runtime.start(_policy(socket_path, **params))
     stay = run.send(OBS)
     assert stay is not None and keys.ROBOT_COMMAND in stay.commands
     return run
 
 
-def test_meta_probes_the_service(service, socket_path):
-    assert _policy(socket_path).meta()[policy_keys.TYPE] == 'teleop'
+def test_the_meta_of_a_remote_policy_needs_no_ready_and_names_the_teleop_service(service, socket_path):
+    meta = _policy(socket_path, operator_position='BACK').meta()
+    assert meta[policy_keys.TYPE] == 'remote'
+    assert meta[f'{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
+    assert meta[f'{policy_keys.SERVER}.{server_keys.EFFECTIVE_PARAMS}.operator_position'] == 'BACK'
+    assert service.phase is Phase.IDLE
 
 
 def test_a_teleoperator_readies_takes_control_starts_and_completes_a_trial(service, socket_path, runtime):
@@ -214,6 +225,7 @@ def test_a_teleoperator_readies_takes_control_starts_and_completes_a_trial(servi
         steps, _ = _drive(run, 0.3)
         [first, *_] = _moves(steps)
         np.testing.assert_allclose(first.commands[keys.ROBOT_COMMAND].pose.translation, ROBOT_POSE.translation)
+        assert service.state().control
 
         headset.press(b=1.0)
         _drive(run, 0.3)
@@ -222,7 +234,32 @@ def test_a_teleoperator_readies_takes_control_starts_and_completes_a_trial(servi
         headset.buttons = _buttons(b=1.0)
         _, end = _drive(run, 2.0)
         assert end is PolicyEnd.COMPLETE
+        run.close()
         _until_cleared(service)
+
+
+def test_control_follows_the_hand_from_where_it_came_on(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        headset.press(a=1.0)
+        _drive(run, 0.2)
+        headset.pose = geom.Transform3D(HAND.translation + np.array([0.0, 0.0, 0.05]), HAND.rotation)
+        steps, _ = _drive(run, 0.3)
+        shift = _moves(steps)[-1].commands[keys.ROBOT_COMMAND].pose.translation - ROBOT_POSE.translation
+        np.testing.assert_allclose(np.linalg.norm(shift), 0.05, atol=1e-9)
+        headset.press(a=1.0)
+        steps, _ = _drive(run, 0.3)
+        assert not _moves(steps[2:])
+        run.close()
+
+
+def test_with_no_operator_position_the_hand_pose_is_the_robot_pose_and_control_is_on(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path, operator_position=None)
+        steps, _ = _drive(run, 0.3)
+        target = _moves(steps)[-1].commands[keys.ROBOT_COMMAND].pose
+        np.testing.assert_allclose(target.translation, HAND.translation)
+        run.close()
 
 
 def test_a_hold_of_b_before_the_start_task_press_does_not_complete(service, socket_path, runtime):
@@ -233,6 +270,7 @@ def test_a_hold_of_b_before_the_start_task_press_does_not_complete(service, sock
         _, end = _drive(run, 1.0)
         assert end is None
         assert policy_keys.ATTEMPT_START_NS in runtime.metadata_snapshot()
+        run.close()
 
 
 def test_the_service_shows_the_camera_image_of_the_run(service, socket_path, runtime):
@@ -240,19 +278,53 @@ def test_the_service_shows_the_camera_image_of_the_run(service, socket_path, run
         run = _readied_run(service, headset, runtime, socket_path)
         _drive(run, 0.2)
         assert service.view().shape[:2] == OBS[keys.EXTERIOR_IMAGE].shape[:2]
+        run.close()
+
+
+def test_the_client_sends_the_cameras_that_the_session_names(service, socket_path, runtime):
+    obs = {**OBS, keys.WRIST_IMAGE: np.zeros((24, 32, 3), dtype=np.uint8)}
+    with _Headset(service) as headset:
+        _press_ready_when_asked(service, headset, b=1.0)
+        run = runtime.start(_policy(socket_path, cameras=[keys.WRIST_IMAGE]))
+        run.send(obs)
+        time.sleep(0.2)
+        run.send(obs)
+        assert service.state().cameras == (keys.WRIST_IMAGE,)
+        run.close()
 
 
 def test_a_cancel_fails_the_run_before_its_first_step(service, socket_path, runtime):
     with _Headset(service) as headset:
         _press_ready_when_asked(service, headset, stick=1.0)
-        with pytest.raises(session.Cancelled):
+        with pytest.raises(TrialNotStarted, match='cancelled'):
             runtime.start(_policy(socket_path))
+    _until_cleared(service)
 
 
 def test_no_ready_within_the_ready_limit_fails_the_run(socket_path, runtime):
-    with TeleopService(socket_path, ready_limit=0.1, silence_limit=0.1, hold_sec=HOLD_SEC):
-        with pytest.raises(session.ServiceError, match='not ready within 0.1 s'):
+    with TeleopService(socket_path, ready_limit=0.3, silence_limit=0.1, hold_sec=HOLD_SEC) as service:
+        started = time.monotonic()
+        with pytest.raises(TrialNotStarted, match='ready limit'):
             runtime.start(_policy(socket_path))
+        assert time.monotonic() - started < 0.3 + TeleopService.READY_SLICE_SEC + 1.0
+        _until_cleared(service)
+
+
+def test_a_ready_wait_longer_than_the_infer_timeout_still_ends_with_ready(socket_path, runtime):
+    """Each ready request ends within a slice, so the infer timeout bounds a slice, not the whole wait."""
+    with TeleopService(socket_path, ready_limit=10.0, silence_limit=0.1, hold_sec=HOLD_SEC) as service:
+        policy = RemotePolicy('websocket_unix', UnixSocketAddress(socket_path, SESSION_PATH, ''), infer_timeout=1.5)
+        with _Headset(service) as headset:
+
+            def press_late() -> None:
+                _until_phase(service, Phase.READY_WAIT)
+                time.sleep(2.5)
+                headset.press(b=1.0)
+
+            threading.Thread(target=press_late, daemon=True).start()
+            run = runtime.start(policy)
+            assert service.phase is Phase.RUNNING
+            run.close()
 
 
 def test_a_silent_headset_reads_as_not_tracked_and_turns_control_off(service, socket_path, runtime):
@@ -266,18 +338,37 @@ def test_a_silent_headset_reads_as_not_tracked_and_turns_control_off(service, so
         headset.pose = HAND
         steps, _ = _drive(run, 0.3)
         assert not _moves(steps)
+        run.close()
 
 
-def test_the_service_refuses_a_second_session(service, socket_path, runtime):
+def test_the_service_refuses_a_second_session_while_a_trial_runs(service, socket_path, runtime):
     with _Headset(service) as headset:
         first = _readied_run(service, headset, runtime, socket_path)
-        second = Executor(time.monotonic_ns, simulated=False, charge_inference_time=False)
-        try:
-            with pytest.raises(PeerDisconnected, match='one session at a time'):
-                second.start(_policy(socket_path, ready_timeout=1.0))
-        finally:
-            second.close()
+        with pytest.raises(RuntimeError, match='one session at a time'):
+            _policy(socket_path).meta()
         first.close()
+
+
+def test_the_service_refuses_a_second_session_within_a_slice_of_the_ready_wait(service, socket_path, connect):
+    waiting = connect(socket_path)
+    answer = waiting.ready_in_background()
+    _until_phase(service, Phase.READY_WAIT)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match='one session at a time'):
+        _policy(socket_path).meta()
+    assert time.monotonic() - started < TeleopService.READY_SLICE_SEC + 1.0
+    service.cancel_ready_wait()
+    assert answer.result(5) is Reply.CANCELLED
+
+
+def test_a_session_with_a_wrong_operator_position_is_refused_at_connect(service, socket_path):
+    with pytest.raises(RuntimeError, match='operator_position must be one of'):
+        _policy(socket_path, operator_position='SIDE').meta()
+
+
+def test_session_params_refuse_a_name_that_is_no_operator_position():
+    with pytest.raises(ValueError, match='operator_position must be one of'):
+        SessionParams(operator_position='SIDE')
 
 
 class _BlankRenderer:
@@ -301,7 +392,9 @@ class _BlankRenderer:
 
 
 @pytest.mark.timeout(120)
-def test_a_person_completes_a_trial_on_mujoco_franka(service, socket_path, tmp_path, monkeypatch):
+def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(
+    service, socket_path, tmp_path, monkeypatch
+):
     monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', _BlankRenderer)
     ev = stack_cubes(
         mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
@@ -333,9 +426,12 @@ def test_a_person_completes_a_trial_on_mujoco_franka(service, socket_path, tmp_p
         main(policy=_policy(socket_path), evals=[ev], output_dir=str(tmp_path))
 
     [episode] = LocalDataset(tmp_path)
+    policy_meta = policy_keys.POLICY_META
     assert episode.static[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
     assert episode.static[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
-    assert f'{policy_keys.POLICY_META}.{policy_keys.ATTEMPT_START_NS}' in episode.static
+    assert f'{policy_meta}.{policy_keys.ATTEMPT_START_NS}' in episode.static
+    assert episode.static[f'{policy_meta}.{policy_keys.TYPE}'] == 'remote'
+    assert episode.static[f'{policy_meta}.{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
     assert keys.TARGET_EE_POSE in episode.signals
 
 
@@ -343,9 +439,9 @@ class TestButtonsBetweenTrials:
     def test_a_button_released_after_the_trial_presses_again_in_the_next(self):
         buttons = ButtonMap(HOLD_SEC)
         buttons.events(_buttons(b=1.0), 0, True)
-        assert buttons.events(_buttons(b=1.0), 500_000_000, True) == [session.Event.COMPLETE]
+        assert buttons.events(_buttons(b=1.0), 500_000_000, True) == [Event.COMPLETE]
         buttons.observe(_buttons(), 600_000_000)
-        assert buttons.ready_reply(_buttons(b=1.0), 700_000_000) is session.Reply.READY
+        assert buttons.ready_reply(_buttons(b=1.0), 700_000_000) is Reply.READY
 
     def test_a_button_held_from_the_last_trial_is_no_ready(self):
         buttons = ButtonMap(HOLD_SEC)
@@ -353,27 +449,29 @@ class TestButtonsBetweenTrials:
         assert buttons.ready_reply(_buttons(b=1.0), 100_000_000) is None
 
 
-def test_a_policy_that_stops_waiting_for_ready_releases_the_session(socket_path, runtime):
-    with TeleopService(socket_path, ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC) as service:
-        with pytest.raises(TimeoutError):
-            runtime.start(_policy(socket_path, ready_timeout=0.2))
-        _until_phase(service, Phase.IDLE)
-        with _Headset(service) as headset:
-            run = _readied_run(service, headset, runtime, socket_path)
-            run.close()
+def _raw_session(socket_path: Path):
+    """A websocket on the service, after the handshake of protocol v3, and the ID of its session."""
+    websocket = unix_connect(str(socket_path), f'ws://localhost{SESSION_PATH}')
+    while (message := deserialise(websocket.recv(5)))[STATUS] != ServerStatus.READY:
+        pass
+    return websocket, message[SESSION_ID]
+
+
+def _drop(websocket) -> None:
+    """End the connection as a client process that exits does: with no close of the session."""
+    websocket.socket.shutdown(socket.SHUT_RDWR)
+    websocket.socket.close()
 
 
 def test_a_stop_of_the_service_ends_its_waits(socket_path):
     service = TeleopService(socket_path, ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC)
     with service:
-        connection = registry.client_wire('websocket_unix').dial(
-            UnixSocketAddress(socket_path, SESSION_PATH, ''), None, 5
-        )
-        connection.send(serialise({session.KIND: session.Request.READY}))
+        websocket, session_id = _raw_session(socket_path)
+        websocket.send(serialise({SESSION_ID: session_id, OBSERVATION: {protocol.KIND: Request.READY}}))
         _until_phase(service, Phase.READY_WAIT)
         stopped_at = time.monotonic()
     assert time.monotonic() - stopped_at < 5
-    connection.close()
+    websocket.close()
 
 
 def test_a_service_that_cannot_bind_raises_the_cause_at_once(tmp_path):
@@ -395,63 +493,31 @@ def test_a_socket_directory_that_others_can_open_is_refused(tmp_path):
 
 def test_the_default_socket_with_no_runtime_directory_is_in_a_directory_of_the_user(monkeypatch):
     monkeypatch.delenv('XDG_RUNTIME_DIR', raising=False)
-    assert session.default_socket_path().parent.name == f'positronic-{os.getuid()}'
+    assert protocol.default_socket_path().parent.name == f'positronic-{os.getuid()}'
 
 
-def test_a_hold_of_b_after_start_task_completes_before_the_policy_hears_of_the_start(service, socket_path):
-    connection = registry.client_wire('websocket_unix').dial(UnixSocketAddress(socket_path, SESSION_PATH, ''), None, 5)
-    try:
-        connection.send(serialise({session.KIND: session.Request.READY}))
-        _until_phase(service, Phase.READY_WAIT)
-        service.take_sample(HAND, _buttons(b=1.0))
-        service.take_sample(HAND, _buttons())
-        assert deserialise(connection.recv(5)) == {session.KIND: session.Reply.READY}
-        service.take_sample(HAND, _buttons(b=1.0))
-        service.take_sample(HAND, _buttons())
-        service.take_sample(HAND, _buttons(b=1.0))
-        time.sleep(HOLD_SEC + 0.05)
-        service.take_sample(HAND, _buttons(b=1.0))
-        connection.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: {}}))
-        frame = deserialise(connection.recv(5))
-        assert frame[session.EVENTS] == [session.Event.START_TASK, session.Event.COMPLETE]
-    finally:
-        connection.close()
+def _readied_connection(service: TeleopService, socket_path: Path, connect):
+    """A test session that the teleoperator readied from the headset."""
+    connection = connect(socket_path)
+    answer = connection.ready_in_background()
+    _until_phase(service, Phase.READY_WAIT)
+    service.take_sample(HAND, _buttons(b=1.0))
+    service.take_sample(HAND, _buttons())
+    assert answer.result(5) is Reply.READY
+    return connection
 
 
-class _Peer:
-    """The service's end of a session, whose receive gives ``outcome``: a message, or a raised error."""
-
-    def __init__(self, outcome: bytes | Exception):
-        self._outcome = outcome
-
-    async def receive(self) -> bytes:
-        if isinstance(self._outcome, Exception):
-            raise self._outcome
-        return self._outcome
-
-
-def _race(service: TeleopService, peer: _Peer):
-    wait = asyncio.to_thread(service._await_ready)
-    return asyncio.run(service._answer_unless_the_peer_speaks(cast(server_wire.ServerConnection, peer), wait))
-
-
-def test_a_disconnect_during_the_ready_wait_ends_the_wait_and_the_session(socket_path):
-    service = TeleopService(socket_path, 60.0, 0.1, HOLD_SEC)
-    assert _race(service, _Peer(PeerDisconnected('gone'))) is None
-    assert service.phase is Phase.IDLE
-
-
-def test_a_message_during_the_ready_wait_is_logged_and_ends_the_session(socket_path, caplog):
-    service = TeleopService(socket_path, 60.0, 0.1, HOLD_SEC)
-    assert _race(service, _Peer(b'too early')) is None
-    assert 'sent a message while it waited' in caplog.text
-
-
-def test_another_receive_failure_during_the_ready_wait_raises_after_the_wait_ends(socket_path):
-    service = TeleopService(socket_path, 60.0, 0.1, HOLD_SEC)
-    with pytest.raises(ValueError, match='binary'):
-        _race(service, _Peer(ValueError('A session message must be a binary WebSocket frame')))
-    assert service.phase is Phase.IDLE
+def test_a_hold_of_b_after_start_task_completes_in_one_frame_with_the_start(service, socket_path, connect):
+    connection = _readied_connection(service, socket_path, connect)
+    service.take_sample(HAND, _buttons(b=1.0))
+    service.take_sample(HAND, _buttons())
+    service.take_sample(HAND, _buttons(b=1.0))
+    time.sleep(HOLD_SEC + 0.05)
+    service.take_sample(HAND, _buttons(b=1.0))
+    frame = connection.ask(FRAME_REQUEST)
+    assert frame[protocol.START_TASK] is True
+    assert frame[protocol.END] == PolicyEnd.COMPLETE.value
+    assert service.phase is Phase.ENDED
 
 
 def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, socket_path, runtime):
@@ -462,29 +528,23 @@ def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, sock
         before = stored.copy()
         service.view()
         np.testing.assert_array_equal(stored, before)
+        run.close()
 
 
 @pytest.mark.parametrize('headset_camera', [None, keys.EXTERIOR_IMAGE])
-def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, headset_camera):
+def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, connect, headset_camera):
     images = {
         keys.WRIST_IMAGE: np.full((24, 32, 3), 50, np.uint8),
         keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 200, np.uint8),
     }
     with TeleopService(socket_path, 5.0, 0.05, HOLD_SEC, headset_camera=headset_camera) as service:
-        address = UnixSocketAddress(socket_path, SESSION_PATH, '')
-        teleop = session.TeleopSession(registry.client_wire('websocket_unix').dial(address, None, 5), 5.0, 5.0)
-        try:
-            ready = threading.Thread(target=teleop.ready)
-            ready.start()
-            _until_phase(service, Phase.READY_WAIT)
-            service.take_sample(HAND, _buttons(b=1.0))
-            ready.join(5)
-            teleop.frame({session.TASK: 'pick up the cube'}, images)
-            shown = keys.WRIST_IMAGE if headset_camera is None else headset_camera
-            assert service.view().shape == images[shown].shape
-            assert service.state().cameras == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
-        finally:
-            teleop.close()
+        connection = _readied_connection(service, socket_path, connect)
+        encoded = {name: encode_jpeg(image) for name, image in images.items()}
+        connection.ask({**FRAME_REQUEST, protocol.IMAGES: encoded})
+        shown = keys.WRIST_IMAGE if headset_camera is None else headset_camera
+        assert service.view().shape == images[shown].shape
+        assert service.state().cameras == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+        connection.close()
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
@@ -510,27 +570,34 @@ def test_every_end_of_a_session_leaves_no_trial_in_the_service(service, socket_p
         if ending == 'give_up':
             headset.buttons = _buttons(stick=1.0)
             assert _drive(run, 2.0)[1] is PolicyEnd.GIVE_UP
-        else:
-            run.close()  # The harness closes the run at the time limit and at the done of the env.
+        run.close()  # The harness closes the run after a policy end, at the time limit and at the done of the env.
         _until_cleared(service)
 
 
-def test_a_dropped_connection_leaves_no_trial_in_the_service(service, socket_path):
-    """The client process exits with no close of the session."""
-    with unix_connect(str(socket_path), f'ws://localhost{SESSION_PATH}') as websocket:
-        websocket.send(serialise({session.KIND: session.Request.READY}))
-        _until_phase(service, Phase.READY_WAIT)
-        service.take_sample(HAND, _buttons(b=1.0))
-        assert deserialise(websocket.recv(5)) == {session.KIND: session.Reply.READY}
-        display = {
-            session.TASK: OBS[keys.TASK],
-            session.IMAGES: {keys.EXTERIOR_IMAGE: encode_jpeg(OBS[keys.EXTERIOR_IMAGE])},
-        }
-        websocket.send(serialise({session.KIND: session.Request.FRAME, session.DISPLAY: display}))
-        websocket.recv(5)
-        assert service.state().task == OBS[keys.TASK]
-        websocket.socket.shutdown(socket.SHUT_RDWR)
-        websocket.socket.close()
+def test_a_dropped_connection_in_the_ready_wait_frees_the_service_for_the_next_session(service, socket_path):
+    websocket, session_id = _raw_session(socket_path)
+    websocket.send(serialise({SESSION_ID: session_id, OBSERVATION: {protocol.KIND: Request.READY}}))
+    _until_phase(service, Phase.READY_WAIT)
+    _drop(websocket)
+    _until_cleared(service)
+    assert _policy(socket_path).meta()[f'{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
+
+
+def test_a_dropped_connection_mid_trial_leaves_no_trial_in_the_service(service, socket_path):
+    websocket, session_id = _raw_session(socket_path)
+
+    def ask(request: dict) -> dict:
+        websocket.send(serialise({SESSION_ID: session_id, OBSERVATION: request}))
+        return deserialise(websocket.recv(5))[RESULT]
+
+    answer = threading.Thread(target=ask, args=({protocol.KIND: Request.READY},), daemon=True)
+    answer.start()
+    _until_phase(service, Phase.READY_WAIT)
+    service.take_sample(HAND, _buttons(b=1.0))
+    answer.join(5)
+    ask({**FRAME_REQUEST, protocol.IMAGES: {keys.EXTERIOR_IMAGE: encode_jpeg(OBS[keys.EXTERIOR_IMAGE])}})
+    assert service.state().task == OBS[keys.TASK]
+    _drop(websocket)
     _until_cleared(service)
 
 
@@ -540,6 +607,7 @@ def test_the_next_session_of_a_run_starts_a_new_trial_after_the_last_one_ended(s
         _drive(first, 0.2)
         headset.buttons = _buttons(stick=1.0)
         assert _drive(first, 2.0)[1] is PolicyEnd.GIVE_UP
+        first.close()
         headset.buttons = _buttons()
         _until_cleared(service)
         second = _readied_run(service, headset, runtime, socket_path)
@@ -556,13 +624,3 @@ def test_a_symlink_in_place_of_the_socket_directory_is_refused(tmp_path):
     with pytest.raises(PermissionError, match='not a link'):
         with TeleopService(link / 'teleop.sock', 1.0, 0.1, HOLD_SEC):
             pass
-
-
-def test_a_message_that_comes_with_the_answer_still_ends_the_session(socket_path):
-    service = TeleopService(socket_path, 60.0, 0.1, HOLD_SEC)
-
-    async def answered() -> dict:
-        return {session.KIND: session.Reply.READY}
-
-    connection = cast(server_wire.ServerConnection, _Peer(b'too early'))
-    assert asyncio.run(service._answer_unless_the_peer_speaks(connection, answered())) is None
