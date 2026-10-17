@@ -6,7 +6,7 @@ This release publishes five more distributions to PyPI beside `positronic`. A `p
 
 | Distribution | Version | Contents |
 |---|---|---|
-| `positronic-platform-client` | 0.37.1 | The platform wire contract, `positronic-platform` and `platform-register` |
+| `positronic-platform-client` | 0.37.1 | The platform wire contract and `platform-register` |
 | `positronic-evals` | 0.1.0 | The public eval definitions, labelers and scoring |
 | `positronic-eval-vocabulary` | 0.4.0 | The words an attended rollout records |
 | `positronic-wire` | 0.12.0 | The client side of the websocket and gRPC inference wires |
@@ -21,7 +21,7 @@ This release publishes five more distributions to PyPI beside `positronic`. A `p
 
 ### Inference
 - Policies emit timestamped action chunks, and every command channel carries a trajectory ([#393](https://github.com/Positronic-Robotics/positronic/pull/393), [#523](https://github.com/Positronic-Robotics/positronic/pull/523))
-- Policies are composable processor runs that end in a `ModelSource` ([#497](https://github.com/Positronic-Robotics/positronic/pull/497), [#652](https://github.com/Positronic-Robotics/positronic/pull/652), [#830](https://github.com/Positronic-Robotics/positronic/pull/830))
+- Policies are composable runs of processors ([#652](https://github.com/Positronic-Robotics/positronic/pull/652), [#830](https://github.com/Positronic-Robotics/positronic/pull/830))
 - A gRPC wire beside the websocket, a Unix-socket wire, and a `roboarena` wire ([#728](https://github.com/Positronic-Robotics/positronic/pull/728), [#735](https://github.com/Positronic-Robotics/positronic/pull/735), [#787](https://github.com/Positronic-Robotics/positronic/pull/787))
 - `RTCSchedule` asks for the next chunk while the current chunk runs, and chunk timing is configurable ([#825](https://github.com/Positronic-Robotics/positronic/pull/825), [#947](https://github.com/Positronic-Robotics/positronic/pull/947))
 - Each server serves one checkpoint in the EE frame it declares, and warms at load ([#485](https://github.com/Positronic-Robotics/positronic/pull/485), [#816](https://github.com/Positronic-Robotics/positronic/pull/816), [#754](https://github.com/Positronic-Robotics/positronic/pull/754))
@@ -41,10 +41,10 @@ This release publishes five more distributions to PyPI beside `positronic`. A `p
 - The gripper convention is 0 = open, 1 = closed ([#466](https://github.com/Positronic-Robotics/positronic/pull/466))
 
 ### Platform client
-- `positronic submit`, the rollout request calls and the `positronic-platform` command ([#601](https://github.com/Positronic-Robotics/positronic/pull/601), [#712](https://github.com/Positronic-Robotics/positronic/pull/712))
+- `positronic eval run --policy-image` submits a policy image to the platform, and `positronic eval status`, `list`, `cancel` and `catalog` read back what it did ([#601](https://github.com/Positronic-Robotics/positronic/pull/601), [#712](https://github.com/Positronic-Robotics/positronic/pull/712))
 - `platform-register` signs in through the device flow that the platform's `auth.config` names, and waits 90 s on a register with no timeout ([#706](https://github.com/Positronic-Robotics/positronic/pull/706), [#959](https://github.com/Positronic-Robotics/positronic/pull/959), [#964](https://github.com/Positronic-Robotics/positronic/pull/964))
 - The competition-enter command, and a guide for participants of the Physical AI Competition ([#919](https://github.com/Positronic-Robotics/positronic/pull/919), [#890](https://github.com/Positronic-Robotics/positronic/pull/890))
-- Billing organization discovery, prepaid credits and rig contracts ([#870](https://github.com/Positronic-Robotics/positronic/pull/870), [#871](https://github.com/Positronic-Robotics/positronic/pull/871), [#886](https://github.com/Positronic-Robotics/positronic/pull/886))
+- `positronic account register` and `positronic account credits`, with billing organization discovery, prepaid credits and rig contracts ([#870](https://github.com/Positronic-Robotics/positronic/pull/870), [#871](https://github.com/Positronic-Robotics/positronic/pull/871), [#886](https://github.com/Positronic-Robotics/positronic/pull/886))
 
 ### Core
 - `World` owns time through a virtual clock, and pimm has request/reply between control systems ([#413](https://github.com/Positronic-Robotics/positronic/pull/413), [#636](https://github.com/Positronic-Robotics/positronic/pull/636))
