@@ -51,11 +51,6 @@ class MolmoAdapter(WireCommandAdapter):
                 eval_keys.TASK: record[mapping.TASK_NAME],
                 molmo_keys.EPISODE_INDEX: record[mapping.TOKEN_EPISODE_INDEX],
                 molmo_keys.TASK_HORIZON: record[mapping.TASK_HORIZON_SEC],
-                **(
-                    {molmo_keys.TASK_HORIZON_OVERRIDE: record[mapping.TASK_HORIZON_OVERRIDE_SEC]}
-                    if record.get(mapping.TASK_HORIZON_OVERRIDE_SEC) is not None
-                    else {}
-                ),
             }
             for record in records
         ]
@@ -65,11 +60,6 @@ class MolmoAdapter(WireCommandAdapter):
             **{dimension: params[key] for dimension, key in self._DIMENSION_KEYS.items()},
             mapping.TOKEN_EPISODE_INDEX: params[molmo_keys.EPISODE_INDEX],
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
-            **(
-                {mapping.TOKEN_HORIZON_SEC: params[molmo_keys.TASK_HORIZON_OVERRIDE]}
-                if molmo_keys.TASK_HORIZON_OVERRIDE in params
-                else {}
-            ),
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

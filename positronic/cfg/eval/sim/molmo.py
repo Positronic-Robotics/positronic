@@ -27,7 +27,6 @@ _TIMEOUT_MARGIN_SEC = 1.0
     trial_count=1,
     timeout=None,
     seed=None,
-    horizon_sec=None,
 )
 def benchmarks(
     suite: str | list[str] | None,
@@ -38,14 +37,12 @@ def benchmarks(
     trial_count: int,
     timeout: float | None,
     seed: int | None,
-    horizon_sec: float | None,
 ) -> Eval:
     """A DROID evaluation over selected MolmoSpaces benchmark episodes.
 
     Each benchmark dimension accepts a name, a list or None (all found); ``episodes`` accepts indices.
     ``seed=None`` follows the benchmark's seed convention. The default timeout is the benchmark horizon
-    plus a margin; an explicit timeout replaces it. ``horizon_sec`` replaces the horizon of every selected
-    benchmark, and the default timeout follows it. It is for demonstrations by a person, not for a scored eval.
+    plus a margin; an explicit timeout replaces it.
 
     The policy sees the wrist camera and two shoulder cameras, left and right, in ``image.exterior`` and
     ``image.exterior_2``. The run draws their order once from ``seed``, or at random when ``seed`` is None,
@@ -55,8 +52,6 @@ def benchmarks(
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
     if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
         raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
-    if horizon_sec is not None and (not math.isfinite(horizon_sec) or horizon_sec <= 0):
-        raise ValueError(f'--eval.horizon_sec must be finite and positive, got {horizon_sec}')
     exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2)
     cameras = camera_dict(exterior_sides)
     proxy = RemoteEnvControlSystem(MolmoAdapter(cameras), serve_molmo_spaces())
@@ -71,7 +66,7 @@ def benchmarks(
             scene_dataset=scene_dataset,
             task_config=task_config,
             benchmark=benchmark,
-            **{mapping.SELECT_EPISODES: episodes, mapping.SELECT_HORIZON_SEC: horizon_sec},
+            **{mapping.SELECT_EPISODES: episodes},
         )
         if timeout is not None:
             logging.warning('--eval.timeout %ss replaces the benchmark horizon backstop', timeout)
@@ -94,13 +89,3 @@ bench_v2 = benchmarks.override(suite='molmospaces-bench-v2')
 
 pick_v1 = bench_v1.override(task_config='FrankaPickDroidMiniBench')
 first_episode = pick_v1.override(episodes=0)
-
-# Demonstrations by a person on the pick mini benchmark: two minutes for each episode, not the benchmark horizon. It
-# runs the episodes that the eval selects with no `episodes`, so it leaves out each episode that hides the start
-# grasp site from the right shoulder camera.
-pick_mini_collect = bench_v2.override(
-    scene_dataset='procthor-10k',
-    task_config='FrankaPickDroidMiniBench',
-    benchmark='FrankaPickDroidMiniBench_json_benchmark_20251231',
-    horizon_sec=120.0,
-)
