@@ -274,7 +274,9 @@ def test_control_follows_the_hand_from_where_it_came_on(service, socket_path, ru
         headset.pose = geom.Transform3D(HAND.translation + np.array([0.0, 0.0, 0.05]), HAND.rotation)
         moved = _drive_until(
             run,
-            lambda step: _is_move(step) and np.linalg.norm(_target(step).translation - ROBOT_POSE.translation) > 0.04,
+            lambda step: (
+                _is_move(step) and bool(np.linalg.norm(_target(step).translation - ROBOT_POSE.translation) > 0.04)
+            ),
         )
         shift = _target(moved).translation - ROBOT_POSE.translation
         np.testing.assert_allclose(np.linalg.norm(shift), 0.05, atol=1e-9)
