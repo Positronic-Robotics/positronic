@@ -118,7 +118,12 @@ def main() -> None:
     np.random.seed(0)
 
     sim_env = env.MolmoSpacesEnv(Path(os.environ[mapping.ASSETS_DIR_ENV]), right_view_blocked={})
-    token = {**args.benchmark._asdict(), mapping.TOKEN_EPISODE_INDEX: args.episode_index, mapping.TOKEN_SEED: args.seed}
+    token = {
+        **args.benchmark._asdict(),
+        mapping.TOKEN_EPISODE_INDEX: args.episode_index,
+        mapping.TOKEN_SEED: args.seed,
+        mapping.WITH_RIGHT_SHOULDER: True,
+    }
     sim_env.reset(token)
     print(f'molmo_spaces episode {args.episode_index} (seed {args.seed})')
     try:

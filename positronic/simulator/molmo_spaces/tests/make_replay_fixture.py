@@ -75,7 +75,12 @@ def replay_commands(
         conn = EnvConnection(host, port)
         try:
             # These recordings use the benchmark's default seed.
-            conn.reset({**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: None})
+            conn.reset({
+                **bench._asdict(),
+                mapping.TOKEN_EPISODE_INDEX: episode_index,
+                mapping.TOKEN_SEED: None,
+                mapping.WITH_RIGHT_SHOULDER: True,
+            })
             for command, grip in zip(commands, grips, strict=True):
                 action = protocol.single_arm_action(
                     {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: command}, float(grip)

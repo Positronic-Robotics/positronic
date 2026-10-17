@@ -37,10 +37,13 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
     with serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
-            for record in conn.tasks(bench._asdict() if bench is not None else {})[:episodes]:
+            for record in conn.tasks({
+                **(bench._asdict() if bench is not None else {}),
+                mapping.WITH_RIGHT_SHOULDER: True,
+            })[:episodes]:
                 i = record[mapping.TOKEN_EPISODE_INDEX]
                 benchmark = mapping.BenchmarkPath(**{d: record[d] for d in mapping.BenchmarkPath._fields})
-                token = {**benchmark._asdict(), mapping.TOKEN_EPISODE_INDEX: i}
+                token = {**benchmark._asdict(), mapping.TOKEN_EPISODE_INDEX: i, mapping.WITH_RIGHT_SHOULDER: True}
                 frame = conn.reset({**token, mapping.TOKEN_SEED: None})
                 obs = adapter.observations(frame[protocol.FRAME_OBS])
                 assert keys.ROBOT_STATE in obs and keys.GRIP in obs, f'missing contract keys: {sorted(obs)}'

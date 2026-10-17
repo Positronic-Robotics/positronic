@@ -161,11 +161,15 @@ class MolmoSpacesEnv(EnvProtocol):
         with_right.cameras = [*episode.cameras, right]
         return with_right
 
-    def _build(self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None) -> None:
+    def _build(
+        self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None, with_right_shoulder: bool
+    ) -> None:
         if self._sampler is not None:
             self._sampler.close()
         episodes = self._episodes_of(bench)
-        episode = self._with_right_shoulder_camera(episodes[episode_index], mapping.episode_rng(bench, episode_index))
+        episode = episodes[episode_index]
+        if with_right_shoulder:
+            episode = self._with_right_shoulder_camera(episode, mapping.episode_rng(bench, episode_index))
         cfg = _DroidEvalConfig()
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark.
@@ -190,7 +194,9 @@ class MolmoSpacesEnv(EnvProtocol):
         records = []
         for bench in mapping.select_benchmarks(self._found, spec):
             episodes = self._episodes_of(bench)
-            blocked = self._right_view_blocked.get(bench, frozenset())
+            blocked = (
+                self._right_view_blocked.get(bench, frozenset()) if spec[mapping.WITH_RIGHT_SHOULDER] else frozenset()
+            )
             indices = mapping.select_episodes(bench, len(episodes), pinned, blocked)
             horizon_sec = determine_task_horizon(episodes, None, cfg.policy_dt_ms) * cfg.policy_dt_ms / 1000.0
             records += [
@@ -206,7 +212,9 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         bench = mapping.BenchmarkPath(**{d: token[d] for d in mapping.BenchmarkPath._fields})
-        self._build(bench, token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED))
+        self._build(
+            bench, token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED), token[mapping.WITH_RIGHT_SHOULDER]
+        )
         obs, _info = self._task.reset()  # One observation dict per environment.
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
