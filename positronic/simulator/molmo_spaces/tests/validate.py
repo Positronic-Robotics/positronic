@@ -1,7 +1,7 @@
 """Check command conversions against a live MolmoSpaces scene.
 
 Checks FK against the measured grasp-site pose, IK on reachable targets, Cartesian hold,
-and conversion of every canonical command type.
+conversion of every canonical command type, and the arm error on a pose out of reach.
 
 Requires MolmoSpaces' environment, asset packs and a GL backend.
 Run with the launcher's subprocess environment::
@@ -104,6 +104,25 @@ def _check_every_canonical_command_converts(sim_env) -> None:
     print(f'  command contract: OK ({covered} -> {measured.size} joint targets)')
 
 
+_OUT_OF_REACH = np.array([3.0, 0.0, 0.5])  # metres in the robot base frame, past a Franka's full extension
+_HOLD_ATOL = 1e-2  # radians
+
+
+def _check_an_unreachable_pose_holds_the_arm_and_reports_errors(sim_env) -> None:
+    measured = np.asarray(sim_env._measured_arm_q(), dtype=np.float64)
+    pos, rot = sim_env._measured_eef_pose()
+    here = {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.concatenate([pos, rot.reshape(-1)])}
+    away = {**here, protocol.COMMAND_POSE: np.concatenate([_OUT_OF_REACH, rot.reshape(-1)])}
+    errors = []
+    for command in (away, away, here, away, away, here):
+        (slot,) = sim_env.step({0: protocol.single_arm_action(command, 0.0)})[protocol.SLOTS]
+        errors.append(bool(slot[protocol.FRAME_OBS][protocol.OBS_ARM_ERROR]))
+        drift = np.abs(np.asarray(sim_env._measured_arm_q(), dtype=np.float64) - measured).max()
+        assert drift < _HOLD_ATOL, f'the arm moved {drift} rad while it held the measured pose'
+    assert errors == [True, True, False, True, True, False], f'arm errors {errors}, expected one on every refused step'
+    print('  unreachable pose: OK (the arm holds, every refusal reports an error)')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate the MolmoSpaces rig's Cartesian command transform.")
     parser.add_argument(
@@ -131,6 +150,7 @@ def main() -> None:
         _check_ik_roundtrip(sim_env)
         _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env)
         _check_every_canonical_command_converts(sim_env)
+        _check_an_unreachable_pose_holds_the_arm_and_reports_errors(sim_env)
     finally:
         sim_env.close()
     print('all checks passed')

@@ -165,12 +165,15 @@ def wire_command_to_arm_action(
     *,
     ik: Callable[[np.ndarray, np.ndarray], Any],
     current_eef: tuple[Any, Any],
-) -> np.ndarray:
-    """Absolute arm joint targets; ``ik`` and ``current_eef`` use robot-frame grasp-site poses."""
+) -> np.ndarray | None:
+    """Absolute arm joint targets, or None where ``ik`` finds no solution.
+
+    ``ik`` and ``current_eef`` use robot-frame grasp-site poses.
+    """
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
     match command[protocol.COMMAND_TYPE]:
         case protocol.JOINT_POS:
-            target = np.asarray(command[protocol.COMMAND_JOINT_POS], dtype=np.float32).reshape(-1)
+            target = command[protocol.COMMAND_JOINT_POS]
         case protocol.JOINT_DELTA:
             dq = np.asarray(command[protocol.COMMAND_JOINT_DELTA], dtype=np.float32).reshape(-1)
             if dq.shape[0] != current.shape[0]:
@@ -179,16 +182,15 @@ def wire_command_to_arm_action(
         case protocol.HOLD:
             target = current
         case protocol.CARTESIAN:
-            target = np.asarray(ik(*unpack_wire_pose(command[protocol.COMMAND_POSE])), dtype=np.float32).reshape(-1)
+            target = ik(*unpack_wire_pose(command[protocol.COMMAND_POSE]))
         case protocol.CARTESIAN_DELTA:
             delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            target_pos, target_rot = compose_reference_delta(*current_eef, delta_pos, delta_rot)
-            target = np.asarray(ik(target_pos, target_rot), dtype=np.float32).reshape(-1)
+            target = ik(*compose_reference_delta(*current_eef, delta_pos, delta_rot))
         case other:
             raise ValueError(
                 f'{other!r} is not a canonical command type; the contract is {list(protocol.CANONICAL_COMMAND_TYPES)}'
             )
-    return target.astype(np.float32)
+    return None if target is None else np.asarray(target, dtype=np.float32).reshape(-1)
 
 
 def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | None = None) -> int:
