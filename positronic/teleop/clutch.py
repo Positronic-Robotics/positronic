@@ -11,12 +11,10 @@ class Tracker:
     With no ``operator_position``, control is always on and the hand pose is the robot pose (UMI mode).
     """
 
-    on = False
-    _offset = geom.Transform3D()
-    _teleop_t = geom.Transform3D()
-
     def __init__(self, operator_position: geom.Transform3D | None):
         self._operator_position = operator_position
+        self._offset = geom.Transform3D()
+        self._teleop_t = geom.Transform3D()
         self.on = self.is_umi_mode
 
     @property
