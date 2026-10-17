@@ -89,10 +89,12 @@ def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked)
     assert asked == [{'suite': 'molmospaces-bench-v2', 'task_config': ['A', 'B'], mapping.SELECT_EPISODES: [0, 1]}]
 
 
-def test_an_explicit_seed_sweeps_each_episode(asked):
+def test_an_explicit_seed_sweeps_each_episode_and_no_trial_records_it(asked):
     ev = benchmarks.override(seed=5, trial_count=2).instantiate()
-    scenes = [trial.prepare_args[eval_keys.SCENE] for trial in ev.tasks()]
-    assert [scene[eval_keys.SEED] for scene in scenes] == [5, 6, 5, 6]
+    trials = list(ev.tasks())
+    assert [trial.prepare_args[eval_keys.SCENE][eval_keys.SEED] for trial in trials] == [5, 6, 5, 6]
+    assert all(eval_keys.SEED not in trial.meta for trial in trials)
+    assert [trial.meta[molmo_keys.EPISODE_INDEX] for trial in trials] == [0, 0, 0, 0]
 
 
 def _exterior_sides(ev) -> list:
@@ -238,3 +240,18 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
         assert eval_keys.SUCCESS not in episode.static
     recorded = {keys.JOINTS, keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2, mapping.OBS_SIM_STATE}
     assert recorded <= episode.signals.keys()
+
+
+@pytest.mark.timeout(60.0)
+def test_a_seeded_molmo_run_resets_the_env_with_each_seed_and_records_none(monkeypatch, tmp_path):
+    env = _MolmoObservationEnv(done_after=2)
+    policy = StubPolicy(command=JointPosition(env.observation[mapping.OBS_JOINT_POS]), target_grip=0.0)
+    with serve_env(env) as address, pos3.mirror():
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
+        ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, seed=7, trial_count=2).instantiate()
+        main(policy=policy, evals=[ev], output_dir=tmp_path)
+
+    assert [token[mapping.TOKEN_SEED] for token in env.tokens] == [7, 8]
+    statics = [episode.static for episode in LocalDataset(tmp_path)]
+    assert all(eval_keys.SEED not in static for static in statics)
+    assert [(static[molmo_keys.EPISODE_INDEX], static[eval_keys.TRIAL_INDEX]) for static in statics] == [(3, 0), (3, 1)]

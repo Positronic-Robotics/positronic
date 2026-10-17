@@ -78,7 +78,7 @@ class Task:
     timeout_sec: float | None
     # What to ask for, keyed as ``Embodiment.prepare_handlers`` is; a handler this does not name goes unasked
     prepare_args: dict[str, Any] = field(default_factory=dict)
-    # What the episode records as this trial's identity: its seed, its place in the sweep, its scene
+    # What the episode records as this trial's identity: its place in the sweep, its scene
     meta: dict[str, Any] = field(default_factory=dict)
     # Charge the trial the wall time each model call takes. Only a sim states it off: a real rig pays it.
     charge_inference_time: bool = True

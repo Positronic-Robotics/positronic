@@ -21,7 +21,7 @@ from positronic_evals.scoring import score
 import pimm
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time
 from positronic import keys, telemetry, telemetry_keys
-from positronic.cfg.eval import number_trials, spec
+from positronic.cfg.eval import build_tasks, number_trials, spec
 from positronic.cfg.eval.real import droid as real_droid
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
@@ -334,6 +334,20 @@ def test_a_sweep_numbers_its_trials_across_every_task():
     assert [t.meta[eval_keys.TRIAL_COUNT] for t in trials] == [3, 3, 3]
     assert [t.meta[eval_keys.TASK] for t in trials] == ['quick', 'slow', 'slow']
     assert [t.prepare_args[eval_keys.SCENE] for t in trials] == [params for _, params in pairs]
+
+
+def test_a_seeded_sweep_asks_each_scene_for_its_seed_and_records_no_seed():
+    task = Task(instruction_source='stack', timeout_sec=1.0)
+    trials = build_tasks(task, 40, 2, scenes=[{eval_keys.TASK: 'a'}, {eval_keys.TASK: 'b'}])
+
+    assert [t.prepare_args[eval_keys.SCENE][eval_keys.SEED] for t in trials] == [40, 41, 40, 41]
+    assert all(eval_keys.SEED not in t.meta for t in trials)
+    assert [(t.meta[eval_keys.TASK], t.meta[eval_keys.TRIAL_INDEX]) for t in trials] == [
+        ('a', 0),
+        ('a', 1),
+        ('b', 2),
+        ('b', 3),
+    ]
 
 
 def test_a_real_droid_trial_homes_the_arm_with_no_control_law():

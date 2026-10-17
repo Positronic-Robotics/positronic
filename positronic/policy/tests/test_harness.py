@@ -956,7 +956,7 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     h = episode_harness
     h.embodiment.static_meta['rig'] = 'test-rig'
     output = tmp_path if record else None
-    task = Task('move', None, meta={'seed': 42})
+    task = Task('move', None, meta={'layout': 'kitchen'})
     answer = h.caller(Rollout(task, Hold(), output))
     next(h.loop)
     if record:
@@ -972,7 +972,7 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
         return
     meta = h.dataset.episodes[-1].static
     assert meta['rig'] == 'test-rig'
-    assert meta['seed'] == 42
+    assert meta['layout'] == 'kitchen'
     assert meta['inference.policy.config.name'] == 'hold'
     assert meta[keys.TASK] == 'move'
     assert meta[eval_keys.UNIVERSE] == 'sim'

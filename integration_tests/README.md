@@ -14,7 +14,7 @@ The default checks:
 
 - **Task success:** the green cube touches the red cube, sits 15–25 mm above its center, and touches
   neither finger, continuously for at least 0.5 seconds. The check reconstructs every recorded physics
-  sample; it also requires a complete episode with the requested seed and checkpoint. Robot pose,
+  sample; it also requires a complete episode with the requested checkpoint. Robot pose,
   joints and gripper observations must each contain one sample at every physics step.
 - **Camera recordings:** both camera videos decode completely and their frame counts match their
   timestamp indexes. Frame timestamps must be nonempty and ordered.
