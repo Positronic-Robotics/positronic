@@ -80,7 +80,6 @@ def client_stack(
     settings = deepcopy(settings)
     settings[model_settings.IMAGE_MAPPINGS] = image_mappings
     parts = [
-        component('stop_on_fault', version=2),
         component('chunked_schedule', version=2, fps=fps, horizon_sec=horizon_sec),
         inference(settings),
         component('metadata', values={model_settings.ACTION_FPS: fps}),

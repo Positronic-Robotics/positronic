@@ -288,7 +288,7 @@ def test_a_finished_run_returns_its_end_and_a_new_run_starts_fresh(model, ending
 
 
 @pytest.mark.parametrize('status', [RobotStatus.BUSY, RobotStatus.ERROR])
-def test_fault_pauses_commands_without_discarding_pending_reply(model, status):
+def test_unavailable_arm_does_not_pause_inference_or_commands(model, status):
     requests, replies = model
     entered, release = threading.Event(), threading.Event()
 
@@ -299,19 +299,18 @@ def test_fault_pauses_commands_without_discarding_pending_reply(model, status):
 
     replies.append(delayed)
     with execution(llm(model='test')) as (run, runtime, clock):
-        assert not run.send(observation()).commands
-        assert entered.wait(5)
+        obs = observation(x=0.02) | {keys.ROBOT_STATUS: status}
+        assert not run.send(obs).commands
         try:
-            fault = observation() | {keys.ROBOT_STATUS: status}
-            assert not run.send(fault).commands
+            assert entered.wait(5)
+            assert not run.send(obs).commands
         finally:
             release.set()
         runtime.wait(5)
-        assert not run.send(fault).commands
-        first = run.send(observation(x=0.02))
+        first = run.send(obs)
         assert first == Step({}, 40_000_000)
         clock.advance_to_ns(first.resume_at_ns)
-        command = run.send(observation(x=0.02)).commands[keys.ROBOT_COMMAND]
+        command = run.send(obs).commands[keys.ROBOT_COMMAND]
         assert 0.02 < command.pose.translation[0] <= 0.04
         accepted = [e for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] if e['event'] == 'accepted']
         assert accepted[0]['target']['x'] == 0.04

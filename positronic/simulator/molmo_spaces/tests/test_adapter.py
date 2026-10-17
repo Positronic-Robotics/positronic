@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import keys as molmo_keys
@@ -41,6 +42,13 @@ def test_observations_assemble_robot_state():
     assert obs[keys.GRIP] == 0.5
 
 
+@pytest.mark.parametrize('arm_error, status', [(True, RobotStatus.ERROR), (False, RobotStatus.AVAILABLE)])
+def test_the_arm_error_sets_the_robot_status(arm_error, status):
+    payload = _payload()
+    payload[protocol.OBS_ARM_ERROR] = arm_error
+    assert _adapter().observations(payload)[keys.ROBOT_STATE].status is status
+
+
 _WRIST_NEW, _WRIST_OLD = WRIST_CAMERAS
 _EXTERIOR_OLD = mapping.LEFT_SHOULDER_CAMERAS[-1]
 
@@ -68,6 +76,13 @@ def test_a_one_exterior_benchmark_fills_both_exterior_slots_in_the_drawn_order(e
     for logical, side in zip((keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2), exterior_sides, strict=True):
         np.testing.assert_array_equal(obs[logical].array, payload[SHOULDER_CAMERAS[side][-1]])
         assert obs[logical].array.reshape(-1, 3).mean(axis=0).argmax() == _SHOULDER_CHANNEL[side]
+
+
+def test_one_exterior_side_fills_image_exterior_alone():
+    payload = _payload()
+    obs = _adapter([ShoulderSide.LEFT]).observations(payload)
+    np.testing.assert_array_equal(obs[keys.EXTERIOR_IMAGE].array, payload[_EXTERIOR_OLD])
+    assert keys.EXTERIOR_IMAGE_2 not in obs
 
 
 def test_observations_prefer_the_first_camera_name_the_benchmark_carries():
@@ -123,14 +138,27 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
             molmo_keys.TASK_HORIZON: 30.0,
         }
     ]
+    assert adapter.reset_token(adapter.task_params([record])[0])[mapping.TOKEN_EPISODE_INDEX] == 3
 
 
 def test_reset_token_carries_benchmark_episode_and_seed():
     adapter = _adapter()
-    expected = {**_BENCH._asdict(), mapping.TOKEN_EPISODE_INDEX: 3, mapping.TOKEN_SEED: 7}
+    expected = {
+        **_BENCH._asdict(),
+        mapping.TOKEN_EPISODE_INDEX: 3,
+        mapping.TOKEN_SEED: 7,
+        mapping.WITH_RIGHT_SHOULDER: True,
+    }
     assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
     assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 2}) == {
         **_BENCH._asdict(),
         mapping.TOKEN_EPISODE_INDEX: 2,
         mapping.TOKEN_SEED: None,
+        mapping.WITH_RIGHT_SHOULDER: True,
     }
+
+
+def test_reset_token_asks_for_the_right_shoulder_only_when_the_adapter_declares_it():
+    params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
+    assert _adapter([ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is False
+    assert _adapter([ShoulderSide.RIGHT, ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is True

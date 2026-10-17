@@ -1,4 +1,4 @@
-"""`enter.py` over a stub gateway: the terms it shows, the version it sends, and the key it needs."""
+"""`enter.py` over a stub gateway: what it shows, the empty entry it sends, and the key it needs."""
 
 from __future__ import annotations
 
@@ -31,10 +31,7 @@ class StubGateway:
     """The two competition routes, answering scripted bodies and recording what reached them."""
 
     entry: CompetitionEntry = field(
-        default_factory=lambda: CompetitionEntry.model_validate({
-            'entered_at': '2026-10-14T09:30:00Z',
-            'terms_version': TERMS.version,
-        })
+        default_factory=lambda: CompetitionEntry.model_validate({'entered_at': '2026-10-14T09:30:00Z'})
     )
     refusal: httpx.Response | None = None
     requests: list[httpx.Request] = field(default_factory=list)
@@ -55,46 +52,46 @@ class StubGateway:
         return [request.url.path for request in self.requests]
 
 
-def test_without_the_flag_the_command_shows_the_terms_and_enters_nothing(capsys):
+def test_without_the_flag_the_command_shows_what_becomes_public_and_enters_nothing(capsys):
     gateway = StubGateway()
 
     with gateway.client() as client:
-        enter.run(client, accepts_terms=False)
+        enter.run(client, confirmed=False)
 
     shown = capsys.readouterr().out
-    assert TERMS.version in shown and TERMS.url in shown and 'videos of your runs' in shown
-    assert '--accept-terms' in shown and gateway.paths() == [COMPETITION_TERMS]
+    assert TERMS.url in shown and 'Your data' in shown and 'videos of your runs' in shown
+    assert 'first submission' in shown and '--yes' in shown and gateway.paths() == [COMPETITION_TERMS]
 
 
-def test_the_flag_enters_under_the_version_the_command_showed(capsys):
+def test_the_flag_enters_with_no_terms(capsys):
     gateway = StubGateway()
 
     with gateway.client() as client:
-        enter.run(client, accepts_terms=True)
+        enter.run(client, confirmed=True)
 
     assert gateway.paths() == [COMPETITION_TERMS, COMPETITION_ENTER]
-    sent = enter.EnterRequest.model_validate_json(gateway.requests[1].content)
-    assert sent.terms_version == TERMS.version
+    # rules-allow: hardcoded-keys — the test pins the request's wire spelling.
+    assert json.loads(gateway.requests[1].content) == {}
     assert gateway.requests[1].headers[AUTH_HEADER] == f'Bearer {KEY}'
     assert AUTH_HEADER not in gateway.requests[0].headers
-    assert f'2026-10-14 under the terms version {TERMS.version}' in capsys.readouterr().out
+    assert capsys.readouterr().out.endswith('entered the competition on 2026-10-14\n')
 
 
 def test_the_flag_without_a_key_stops_before_the_entry():
     gateway = StubGateway()
 
     with gateway.client(api_key=None) as client, pytest.raises(SystemExit) as raised:
-        enter.run(client, accepts_terms=True)
+        enter.run(client, confirmed=True)
 
     assert 'platform-register' in str(raised.value) and gateway.paths() == [COMPETITION_TERMS]
 
 
-def test_a_refusal_of_stale_terms_reaches_the_team(monkeypatch, capsys):
-    message = 'the terms are now version 2027-01-01: read them at https://terms.example/terms and enter again'
+def test_a_refusal_reaches_the_team(monkeypatch, capsys):
+    message = 'this gateway is not running'
     envelope = ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.bad_request, message=message))
     gateway = StubGateway(refusal=httpx.Response(400, json=envelope.model_dump(mode='json')))
     monkeypatch.setattr(enter, 'CompetitionClient', lambda platform_url: gateway.client())
-    monkeypatch.setattr('sys.argv', ['competition-enter', '--accept-terms'])
+    monkeypatch.setattr('sys.argv', ['competition-enter', '--yes'])
 
     with pytest.raises(SystemExit) as raised:
         enter.main()
@@ -103,20 +100,18 @@ def test_a_refusal_of_stale_terms_reaches_the_team(monkeypatch, capsys):
 
 
 def test_an_organizer_entry_says_so(capsys):
-    organizer = CompetitionEntry.model_validate({'entered_at': '2026-10-14T09:30:00Z'})
+    organizer = CompetitionEntry.model_validate({'entered_at': '2026-10-14T09:30:00Z', 'organizer': True})
     gateway = StubGateway(entry=organizer)
 
     with gateway.client() as client:
-        enter.run(client, accepts_terms=True)
+        enter.run(client, confirmed=True)
 
     assert 'as an organizer' in capsys.readouterr().out
-    # rules-allow: hardcoded-keys — the test pins the request's wire spelling.
-    assert json.loads(gateway.requests[1].content) == {'terms_version': TERMS.version}
 
 
 def test_the_models_keep_the_gateway_s_field_names():
     """The gateway declares its own copy of these models, so each field name is a contract."""
     # rules-allow: hardcoded-keys — these sets pin the wire names of the gateway's separate copy.
     assert set(CompetitionTerms.model_fields) == {'version', 'url'}
-    assert set(enter.EnterRequest.model_fields) == {'terms_version'}
-    assert set(CompetitionEntry.model_fields) == {'entered_at', 'terms_version'}
+    assert set(enter.EnterRequest.model_fields) == set()
+    assert set(CompetitionEntry.model_fields) == {'entered_at', 'terms_version', 'organizer'}

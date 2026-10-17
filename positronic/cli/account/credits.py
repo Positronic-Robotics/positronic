@@ -12,14 +12,14 @@ from platform_client.requests import (
 )
 from pydantic import ConfigDict, TypeAdapter
 
-from positronic.cli.account.gateway import gateway, refusing_bad_input
+from positronic.cli.account.gateway import CommandFailed, Fault, gateway, refusing_bad_input
 
 
 def _text(token: object, field: str) -> str:
     if not isinstance(token, str):
-        raise SystemExit(f'{field} must be text; quote the original argument with inner double quotes')
+        raise CommandFailed(f'{field} must be text; quote the original argument with inner double quotes', Fault.USAGE)
     if not token:
-        raise SystemExit(f'{field} must not be empty')
+        raise CommandFailed(f'{field} must not be empty', Fault.USAGE)
     return token
 
 
@@ -37,8 +37,8 @@ def _org(client: PlatformClient, named: OrgSlug | None) -> OrgSlug:
     else:
         organizations = client.me().organizations
         if len(organizations) != 1:
-            raise SystemExit(
-                f'choose an organization with --org: the platform lists {len(organizations)} organizations'
+            raise CommandFailed(
+                f'choose an organization with --org: the platform lists {len(organizations)} organizations', Fault.USAGE
             )
         org, source = organizations[0], 'sole organization'
     # On stderr, because stdout carries only the JSON answer.
@@ -47,10 +47,10 @@ def _org(client: PlatformClient, named: OrgSlug | None) -> OrgSlug:
 
 
 @cfn.config()
-def account(org: object = None, platform_url: str | None = None):
+def account(org: object = None, platform_url: str | None = None, json: bool = False):
     """Print exact credit units, tariff rates and purchase packages of the named or sole organization."""
     named = _named_org(org)
-    with gateway(platform_url) as client:
+    with gateway(platform_url, refusal_as_json=json) as client:
         result = client.billing_account(_org(client, named))
     print(result.model_dump_json(indent=2))
 
@@ -71,11 +71,11 @@ def buy(package_id: object, transaction_key: object, org: object = None, platfor
 
 
 @cfn.config()
-def get_purchase(id: object, platform_url: str | None = None):
+def get_purchase(id: object, platform_url: str | None = None, json: bool = False):
     """Print one purchase and any Checkout URL still available to its initiating member."""
     with refusing_bad_input():
         query = BillingPurchaseGetQuery(id=PurchaseId(_text(id, 'id')))
-    with gateway(platform_url) as client:
+    with gateway(platform_url, refusal_as_json=json) as client:
         result = client.get_purchase(query.id)
     print(result.model_dump_json(indent=2))
 
@@ -86,12 +86,13 @@ def list_purchases(
     after: object | None = None,
     limit: object = DEFAULT_PURCHASE_PAGE_SIZE,
     platform_url: str | None = None,
+    json: bool = False,
 ):
     """Print one purchase history page. Pass its next cursor as after to continue."""
     named = _named_org(org)
     cursor = PurchaseId(_text(after, 'after')) if after is not None else None
     with refusing_bad_input():
         page_limit = TypeAdapter(PurchasePageLimit, config=ConfigDict(title='limit')).validate_python(limit)
-    with gateway(platform_url) as client:
+    with gateway(platform_url, refusal_as_json=json) as client:
         result = client.list_purchases(_org(client, named), after=cursor, limit=page_limit)
     print(result.model_dump_json(indent=2))

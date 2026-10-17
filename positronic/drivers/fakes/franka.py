@@ -1,8 +1,7 @@
 from collections.abc import Iterator
 
 import pimm
-
-from . import State, command
+from positronic.drivers.roboarm import State, command
 
 
 class FakeFranka(pimm.ControlSystem):

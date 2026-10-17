@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from positronic_evals.molmo_spaces import RIGHT_VIEW_BLOCKED_PATH
 
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
@@ -73,7 +74,11 @@ def test_an_open_episode_resets_its_articulated_object(episode_index: int):
     with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
-            frame = conn.reset({**_OPEN_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index})
+            frame = conn.reset({
+                **_OPEN_BENCHMARK._asdict(),
+                mapping.TOKEN_EPISODE_INDEX: episode_index,
+                mapping.WITH_RIGHT_SHOULDER: True,
+            })
         finally:
             conn.close()
     assert frame[protocol.FRAME_META][mapping.META_HOUSE_INDEX] == 21
@@ -88,7 +93,7 @@ _HARD_BENCHMARK = mapping.BenchmarkPath(
 @pytest.mark.parametrize('bench', [_OPEN_BENCHMARK, _HARD_BENCHMARK], ids=['fixed_left', 'randomized_left'])
 def test_an_episode_serves_both_shoulder_cameras_and_one_right_view_for_any_trial_seed(bench):
     _skip_unless_present(bench)
-    token = {**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: 1}
+    token = {**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: True}
     with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
@@ -98,3 +103,30 @@ def test_an_episode_serves_both_shoulder_cameras_and_one_right_view_for_any_tria
     for obs in frames:
         assert any(name in obs for name in mapping.LEFT_SHOULDER_CAMERAS) and mapping.RIGHT_SHOULDER_CAMERA in obs
     np.testing.assert_array_equal(*(obs[mapping.RIGHT_SHOULDER_CAMERA] for obs in frames))
+
+
+def test_an_episode_without_the_right_shoulder_serves_the_left_shoulder_alone():
+    _skip_unless_present(_HARD_BENCHMARK)
+    token = {**_HARD_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: False}
+    with launcher.serve_molmo_spaces() as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            obs = conn.reset(token)[protocol.FRAME_OBS]
+        finally:
+            conn.close()
+    assert any(name in obs for name in mapping.LEFT_SHOULDER_CAMERAS) and mapping.RIGHT_SHOULDER_CAMERA not in obs
+
+
+def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
+    _skip_unless_present(_HARD_BENCHMARK)
+    blocked = sorted(mapping.load_right_view_blocked(RIGHT_VIEW_BLOCKED_PATH)[_HARD_BENCHMARK])
+    spec = {**_HARD_BENCHMARK._asdict(), mapping.SELECT_EPISODES: blocked}
+    with launcher.serve_molmo_spaces() as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            records = conn.tasks({**spec, mapping.WITH_RIGHT_SHOULDER: False})
+            open_records = conn.tasks({**_HARD_BENCHMARK._asdict(), mapping.WITH_RIGHT_SHOULDER: False})
+        finally:
+            conn.close()
+    assert [r[mapping.TOKEN_EPISODE_INDEX] for r in records] == blocked
+    assert len(open_records) == 200

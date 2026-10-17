@@ -16,8 +16,10 @@ _JOINTS = 7
 _MEASURED_EEF = (np.zeros(3), np.eye(3))
 
 
-def _action(command, current, *, ik=lambda _pos, _rot: np.zeros(_JOINTS), current_eef=_MEASURED_EEF):
-    return mapping.wire_command_to_arm_action(command, current, ik=ik, current_eef=current_eef)
+def _action(command, current, *, ik=lambda _pos, _rot: np.zeros(_JOINTS), current_eef=_MEASURED_EEF) -> np.ndarray:
+    target = mapping.wire_command_to_arm_action(command, current, ik=ik, current_eef=current_eef)
+    assert target is not None
+    return target
 
 
 def test_grip_qpos_normalization():
@@ -117,6 +119,17 @@ def test_cartesian_delta_composes_onto_the_measured_eef_before_solving():
     }
     _action(cmd, np.zeros(_JOINTS), ik=ik, current_eef=(np.array([0.5, 0.0, 0.2]), np.eye(3)))
     assert np.allclose(seen['pos'], [0.5, 0.1, 0.2])
+
+
+@pytest.mark.parametrize('command_type', [protocol.CARTESIAN, protocol.CARTESIAN_DELTA])
+def test_a_pose_the_ik_cannot_solve_gives_no_target(command_type):
+    pose = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
+    field = protocol.COMMAND_POSE if command_type == protocol.CARTESIAN else protocol.COMMAND_DELTA
+    command = {protocol.COMMAND_TYPE: command_type, field: pose}
+    no_solution = mapping.wire_command_to_arm_action(
+        command, np.zeros(_JOINTS), ik=lambda *_: None, current_eef=_MEASURED_EEF
+    )
+    assert no_solution is None
 
 
 def test_unknown_command_names_the_canonical_contract():

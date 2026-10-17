@@ -2,6 +2,7 @@ import importlib
 import inspect
 import logging
 import os
+import re
 import sys
 from contextlib import contextmanager
 from functools import partial
@@ -22,6 +23,7 @@ from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.cfg.eval.real import droid as real_droid
+from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
 from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import LocalDatasetWriter
@@ -40,8 +42,9 @@ def _eval(simulated: bool) -> Eval:
 def test_timed_sweep_rejects_real_embodiment(tmp_path):
     """``--timing`` with a real embodiment anywhere in the sweep fails up front: everything under the bound
     tracer enters the report, so a real eval's spans and wall time would silently corrupt it."""
-    with pytest.raises(ValueError, match='all-simulated'):
+    with pytest.raises(CommandFailed, match='all-simulated') as exc:
         main(policy=object(), evals=[_eval(True), _eval(False)], output_dir=tmp_path, timing=True)
+    assert exc.value.fault is Fault.USAGE
 
 
 class _IdlePolicy(Policy):
@@ -167,29 +170,11 @@ def _tasks(count: int) -> list[Task]:
 
 
 @pytest.mark.timeout(3.0)
-def test_a_signal_error_runs_its_task_again():
-    """Each task gets its own count: a signal error on the second task after one on the first ends nothing."""
+@pytest.mark.parametrize(
+    'failure', [pimm.SignalError('camera lost'), pimm.calls.HandlerStopped(), RuntimeError('the arm holds an error')]
+)
+def test_a_failed_episode_ends_the_run_and_no_task_runs_twice(failure):
     tasks = _tasks(2)
-    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), {}, pimm.SignalError('camera lost'), {}])
-    _drive(tasks, episodes)
-
-    assert episodes.asked == [tasks[0], tasks[0], tasks[1], tasks[1]]
-
-
-@pytest.mark.timeout(3.0)
-def test_a_task_failed_by_two_signal_errors_in_a_row_ends_the_run():
-    tasks = _tasks(2)
-    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), pimm.SignalError('camera lost again')])
-    with pytest.raises(pimm.SignalError, match='camera lost again'):
-        _drive(tasks, episodes)
-
-    assert episodes.asked == [tasks[0], tasks[0]]
-
-
-@pytest.mark.timeout(3.0)
-@pytest.mark.parametrize('failure', [pimm.calls.HandlerStopped(), RuntimeError('the arm holds an error')])
-def test_a_failure_other_than_a_signal_error_ends_the_run_at_once(failure):
-    tasks = _tasks(1)
     episodes = _ScriptedEpisodes([failure])
     with pytest.raises(type(failure)):
         _drive(tasks, episodes)
@@ -302,8 +287,9 @@ def test_a_local_run_refuses_a_name_the_public_code_does_not_define(run_command,
 
 @pytest.mark.parametrize('value', [None, 1])
 def test_a_local_run_refuses_an_eval_that_is_neither_a_config_nor_a_name(run_command, value: object):
-    with pytest.raises(SystemExit, match=f'--eval={value!r} names nothing to run'):
+    with pytest.raises(CommandFailed, match=f'--eval={value!r} names nothing to run') as exit_info:
         run_command(run_module.run, eval=value, policy='a policy')
+    assert exit_info.value.fault is Fault.USAGE
 
 
 PINNED = public_eval(EvalRef(SMOKE)).positronic_revision
@@ -360,8 +346,9 @@ def test_a_real_droid_trial_homes_the_arm_with_no_control_law():
 
 def test_timed_sweep_needs_an_output_dir():
     """There is nowhere to write the sidecars without one, so the sweep is rejected before it spends anything."""
-    with pytest.raises(ValueError, match='output_dir'):
+    with pytest.raises(CommandFailed, match='output_dir') as exc:
         main(policy=object(), evals=[_eval(True)], timing=True)
+    assert exc.value.fault is Fault.USAGE
 
 
 def test_failed_pass_exported_and_stamped(tmp_path):
@@ -433,6 +420,29 @@ def test_a_run_that_records_nothing_leaves_no_telemetry_directory(tmp_path, monk
 
     assert prepare_output_dir(None) is None
     assert ENV_TELEMETRY_DIR not in os.environ
+
+
+def test_an_output_dir_it_cannot_create_is_a_usage_fault_naming_it(tmp_path):
+    (tmp_path / 'a-file').write_text('')
+    output_dir = tmp_path / 'a-file' / 'episodes'
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False), scoped_env_var(ENV_TELEMETRY_DIR):
+        with pytest.raises(CommandFailed, match=re.escape(str(output_dir))) as exc:
+            prepare_output_dir(output_dir)
+
+    assert exc.value.fault is Fault.USAGE
+
+
+def test_a_failure_outside_the_output_dir_is_not_reported_as_one(tmp_path, monkeypatch):
+    # Recording the run reads files of its own, such as `uv.lock`; a failure there is a defect, not a bad argument.
+    def unreadable_lockfile(*_args, **_kwargs):
+        raise PermissionError(13, 'Permission denied', str(tmp_path / 'elsewhere' / 'uv.lock'))
+
+    monkeypatch.setattr('positronic.utils.save_run_metadata', unreadable_lockfile)
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False), scoped_env_var(ENV_TELEMETRY_DIR):
+        with pytest.raises(PermissionError):
+            prepare_output_dir(tmp_path / 'episodes')
 
 
 def test_a_recorded_run_leaves_no_telemetry_directory_behind(tmp_path, monkeypatch):

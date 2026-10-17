@@ -10,6 +10,8 @@ API_PREFIX = '/v1'
 
 USERS_REGISTER = f'{API_PREFIX}/users.register'
 USERS_ME = f'{API_PREFIX}/users.me'
+# The sign-in the platform takes. It needs no key, so a caller reads it before it holds one.
+AUTH_CONFIG = f'{API_PREFIX}/auth.config'
 SUBMISSIONS_CREATE = f'{API_PREFIX}/submissions.create'
 SUBMISSIONS_RESOLVE = f'{API_PREFIX}/submissions.resolve'
 SUBMISSIONS_LIST = f'{API_PREFIX}/submissions.list'

@@ -61,6 +61,19 @@ Other models:
 - **A model of your own.** Write an inference server ([Connect your model](connect-your-model.md))
   and hold the image to the rules in [Life of a submission](#life-of-a-submission).
 
+### What the example images use
+
+Approximate values, from one run of each image in October 2026. A later build of an image can use
+different values. The platform gives each image 40 GB of GPU memory.
+
+| Image | Disk, pulled image | Memory, test without a GPU | GPU memory |
+|---|---|---|---|
+| `positro/pi05-droid` | 50 GB | 20 GB | 10 GB |
+| `positro/gr00t-n17-droid` | 40 GB | needs a GPU | 10 GB |
+| `positro/molmoact2-droid` | 35 GB | 12 GB | 15 GB |
+| `positro/flux3-action` | 40 GB | needs a GPU | 35 GB |
+| `positro/cosmos3-nano` | 55 GB | needs a GPU | 35 GB |
+
 ### Three traps in the `positro/*` bases
 
 **`uv run` needs the network.** The `positro/<vendor>` images carry the positronic tree at
@@ -292,15 +305,16 @@ prints `the server answered HTTP <code>`, and a `401` means that it does not acc
 
 The probe exits with code 3 when the port is closed or the server does not answer in 5 s, and the
 loop then waits quietly. Any other failure stops the loop at once and shows its error: an error from
-`docker exec`, for example no Python at `/positronic/.venv/bin/python`, or a Python traceback.
+`docker exec`, for example no Python at `/positronic/.venv/bin/python`, or a Python traceback. The
+GR00T N1.7 image has its Python at `/opt/gr00t-venv/bin/python`.
 
-In a correct image, the server pins its checkpoint, starts the model process, and reads the
-weights from the image. The GR00T recipe then fails on the missing GPU with
-`Flash Attention 2 is not available on CPU`. The openpi and MolmoAct2 recipes load the model on the
-CPU and serve. For the FLUX 3 Action recipe, BFL's server exits on the missing GPU, and the server
-reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano recipe, NVIDIA's server exits
-the same way, and the server reports `Cosmos3 backend exited with code 1`. Everything you control is then
-correct. The log must not show `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
+In a correct image, the server pins its checkpoint and starts the model process. The openpi and
+MolmoAct2 recipes then load the model on the CPU and serve. The GR00T recipe stops on the missing GPU
+with `Flash Attention 2 is not available on CPU`. For the FLUX 3 Action recipe, BFL's server exits on
+the missing GPU, and the server reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano
+recipe, NVIDIA's server exits the same way, and the server reports `Cosmos3 backend exited with code 1`.
+These three stop before they read the weights, so for them, also run the test on a GPU below. The log
+must not show `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
 albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints
 `A new version of the following files was downloaded` when `transformers` copies the model's code
 into its module cache; no download occurs.
@@ -344,6 +358,9 @@ Action binds port 8000 after about 140 s, and GR00T loads in about 151 s. `no an
 means a hung server, or one too slow for the provisioning deadline, which it shares with VM boot
 and the pull.
 
+The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
+sure that your model uses less.
+
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
 
@@ -376,7 +393,7 @@ The commands ship with `positronic`, and a checkout of this repository carries t
 client at the version it pins. Run them from the checkout:
 
 ```bash
-uv run platform-register --alias="<display name>"      # GitHub's device flow; prints the key once
+uv run platform-register --alias="<display name>"      # a device sign-in; prints the key once
 export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 uv run positronic eval catalog                          # the evals your key may name
 uv run positronic eval run --eval=<eval> \

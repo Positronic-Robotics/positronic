@@ -13,7 +13,7 @@ the eval names and definitions (`evals/`). So a service that only speaks to the 
 its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.35.0"
+uv add "positronic-platform-client==0.37.1"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -24,33 +24,50 @@ platform serves the same contract as an OpenAPI schema at `<platform>/openapi.js
 browses it.
 
 `platform_client` never imports `positronic`. One command ships here, `platform-register`, which
-mints a key from GitHub. The commands that drive an eval, `positronic eval run`, `eval status`,
+mints a key through a sign-in. The commands that drive an eval, `positronic eval run`, `eval status`,
 `eval list`, `eval catalog` and `positronic account`, ship with `positronic`, which depends on this
 package.
 
 ## Registering
 
-`platform-register` mints the API key that every other call needs. It runs GitHub's device flow:
-it prints a short code and a URL, waits while you authorize the app in a browser, and registers
-the GitHub account that authorized it. The package install above puts the command on your path.
+`platform-register` mints the API key that every other call needs. It runs a device flow: it
+prints a short code and a URL, waits while you sign in and approve the code in a browser, and
+registers the account that signed in. The package install above puts the command on your path.
 
 ```bash
 platform-register --alias=<display name>
 export POSITRONIC_PLATFORM_API_KEY=<the key the command printed>
 ```
 
-The command registers through the platform's own OAuth app, whose client id it carries as its
-default. `--client-id` and `POSITRONIC_PLATFORM_GITHUB_CLIENT_ID` name another app instead.
+The platform names its identity provider at `GET /v1/auth.config`, and the command runs the device
+flow of that provider:
 
-The GitHub token carries the scopes `read:user` and `user:email`. The platform reads the account
-once, mints a key, and stores no GitHub token.
+- WorkOS, when the platform names a WorkOS client. You sign in with the methods that the platform's
+  WorkOS environment offers, such as Google, GitHub or an email code.
+  `--workos-client-id` and `POSITRONIC_PLATFORM_WORKOS_CLIENT_ID` name another client instead.
+- GitHub, when the platform takes GitHub tokens and names no WorkOS client. The command uses the
+  platform's own OAuth app, whose client id it carries as its default. `--client-id` and
+  `POSITRONIC_PLATFORM_GITHUB_CLIENT_ID` name another app instead. The GitHub token carries the scopes
+  `read:user` and `user:email`.
+
+The command keeps the access token in memory, sends it once to `users.register`, and keeps no other
+token. WorkOS also sends a refresh token, which the command drops. The platform reads the account
+once, mints a key, and stores no token of the provider.
 
 A second run returns the same account and no key: the platform cannot read back a key it issued.
 Run `platform-register --rotate` to mint a new key on a machine that lost it.
 
 `--platform-url` and `POSITRONIC_PLATFORM_URL` name a platform other than the default. The command
 refuses a plain `http` platform that is not loopback. Staging has no TLS and is reached over the
-tailnet: pass `--plaintext-http` to reach it.
+tailnet: pass `--plaintext-http` to reach it. A client that `PlatformClient` builds itself uses a proxy
+from the environment only for an `https` platform, so such a proxy never carries a key or a token over
+plain `http`. A client you pass in keeps its own proxy setting.
+
+`users.register` checks the token with the provider before it answers, and a caller that gives up
+first loses the key the platform minted. Pass `timeout=client.register_timeout()` to
+`PlatformClient.register`: `register_timeout()` reads `auth.config`, where the platform states its
+deadline for the WorkOS check, and covers the longest check the platform runs. Without `timeout`,
+`register` sends one request and waits 90 s.
 
 ## Credit accounts
 
@@ -292,10 +309,13 @@ Its README describes them. An eval name, `EvalRef`, is `positronic_evals.evals.E
 
 `positronic` carries the other commands, and a checkout needs no installation step. `eval run`
 runs an eval here when given a policy, on the platform when given a policy image, and on the lab rig
-when given a plan file. From zero, `platform-register` is the one path to a key: it runs GitHub's
-device flow and prints the `export` line. In a checkout, run it through `uv run`. `account register`
-takes a GitHub token the platform's OAuth app minted, in `POSITRONIC_PLATFORM_CREDENTIAL`, and saves
-the key in the record the other commands read; a new user holds no such token.
+when given a plan file. To get a key, run `platform-register`, which prints the `export` line, or
+`account register`, which saves the key in the record the other commands read. Both run the device
+flow of the provider that the platform names. In a checkout, run them through `uv run`. With a token
+in `POSITRONIC_PLATFORM_CREDENTIAL`, `account register` registers with that token and runs no sign-in.
+Its sign-in refuses a plain `http` platform that is not loopback unless you pass `--plaintext_http`. A
+token from `POSITRONIC_PLATFORM_CREDENTIAL` goes to the platform as given, like the key of every other
+command.
 
 ```bash
 platform-register --alias=<display name>            # in a checkout: uv run platform-register
@@ -312,6 +332,23 @@ uv run positronic eval catalog
 
 `positronic/cli/examples/` runs the whole flow end to end.
 
+A command that fails exits with a status that tells whose fault the failure is:
+
+| Status | Fault | Cases |
+|---|---|---|
+| 1 | the caller | the platform refused the request with a 4xx, no API key or a bad key, a quota used up, a run rejected at the door, a sign-in the provider refused (an unknown client id, a refused or expired code) |
+| 2 | usage | the arguments are wrong before any call: an id that is not hexadecimal, a plan file that does not parse |
+| 3 | the platform | a 5xx, an `internal_error` or `upstream_unavailable` code, no answer, a timeout, an answer the client cannot read, a replayed run that ended for a platform reason, an identity provider that is unreachable or unavailable, a platform that takes no sign-in this client can run |
+
+The read commands take `--json`: `eval status`, `eval list`, `eval catalog`, and `account credits account`,
+`get-purchase` and `list-purchases`. They print the data as JSON on stdout. `eval list --json` prints every
+page as one page, with `next` null. `eval catalog --json` prints the evals and the tasks as one object, with
+`tasks` null where the key may compose no plan. A refusal by the platform prints its error envelope as JSON on
+stdout. Any other failure prints its message on stderr. The exit status is the same with and without `--json`.
+
+An argument that a command does not declare, or a required argument that is missing, stops with a traceback
+and status 1. `--help` lists the arguments of a command.
+
 ## Configuration
 
 Calls go to `https://platform.positronic.ro` with nothing set. The environment carries the rest:
@@ -321,7 +358,9 @@ Calls go to `https://platform.positronic.ro` with nothing set. The environment c
 | `POSITRONIC_PLATFORM_URL` | a platform other than the default one, overridden per call by `--platform-url` |
 | `POSITRONIC_PLATFORM_API_KEY` | the key `register` mints — read from the environment or the saved record, never an argument, so it reaches no process listing |
 | `POSITRONIC_PLATFORM_CONFIG_DIR` | where `positronic account register` saves that record, else `~/.config/positronic-platform` |
-| `POSITRONIC_PLATFORM_CREDENTIAL` | a GitHub token the platform's OAuth app minted, for `account register` — read the same way, for the same reason. `platform-register` mints that token itself and needs none |
+| `POSITRONIC_PLATFORM_CREDENTIAL` | a token of the platform's identity provider, for `account register` in a script — read the same way, for the same reason. Without it, `account register` signs in itself |
+| `POSITRONIC_PLATFORM_WORKOS_CLIENT_ID` | a WorkOS client other than the one the platform names, for both register commands |
+| `POSITRONIC_PLATFORM_GITHUB_CLIENT_ID` | a GitHub OAuth app other than the platform's own, for both register commands |
 
 The record's key and its platform are read one at a time. A command that names another platform, and
 no key, sends the record's key to the platform it names. The client speaks one wire contract and runs
@@ -423,7 +462,10 @@ Ids are 64-bit ints in Python and bare lowercase hex on the wire; closed sets ar
 as slugs. A non-2xx response raises `PlatformError`, which carries the parsed error envelope: `code`
 for a program, `message` for a human, `reason_code` where a terminal caller fault has one, `quota`
 where a 429 names the rule that refused the request, and `evals` where the eval asked for is not one
-of them.
+of them. A response with no envelope, such as a proxy's HTML page, still raises `PlatformError`: the
+client builds an `internal_error` envelope around the raw body and sets `synthesized_envelope`.
+`ReasonCode.is_platform_fault` says whether a reason is the platform's fault, which refunds the quota,
+or the caller's, which charges it.
 
 `submissions.get` answers one model per status. A finished run reads its score off `scores` and its
 outputs off `artifacts`. A failed run reads `reason_code` and `reason`, and `artifacts` links the

@@ -70,7 +70,7 @@ def test_the_env_answers_which_episodes_the_sweep_runs(asked):
 
     trials = list(ev.tasks())
 
-    assert asked == [{}]
+    assert asked == [{mapping.WITH_RIGHT_SHOULDER: True}]
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
     assert [scene[_TASK_CONFIG] for scene in scenes] == [
         'FrankaPickDroidMiniBench',
@@ -86,7 +86,14 @@ def test_the_env_answers_which_episodes_the_sweep_runs(asked):
 def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked):
     ev = benchmarks.override(suite='molmospaces-bench-v2', task_config=['A', 'B'], episodes=[0, 1]).instantiate()
     ev.tasks()
-    assert asked == [{'suite': 'molmospaces-bench-v2', 'task_config': ['A', 'B'], mapping.SELECT_EPISODES: [0, 1]}]
+    assert asked == [
+        {
+            'suite': 'molmospaces-bench-v2',
+            'task_config': ['A', 'B'],
+            mapping.SELECT_EPISODES: [0, 1],
+            mapping.WITH_RIGHT_SHOULDER: True,
+        }
+    ]
 
 
 def test_an_explicit_seed_sweeps_each_episode(asked):
@@ -112,6 +119,14 @@ def test_an_explicit_seed_fixes_the_exterior_order_and_seeds_draw_both_orders(as
     orders = {seed: _exterior_sides(benchmarks.override(seed=seed).instantiate())[0] for seed in range(16)}
     assert all(_exterior_sides(benchmarks.override(seed=seed).instantiate())[0] == orders[seed] for seed in orders)
     assert {tuple(order) for order in orders.values()} == {tuple(ShoulderSide), tuple(reversed(ShoulderSide))}
+
+
+def test_a_run_without_the_right_shoulder_serves_the_left_shoulder_alone_and_keeps_every_episode(asked):
+    ev = benchmarks.override(with_right_shoulder=False, seed=3).instantiate()
+    assert _exterior_sides(ev) == [[ShoulderSide.LEFT.value]] * 2
+    assert asked[-1] == {mapping.WITH_RIGHT_SHOULDER: False}
+    assert keys.EXTERIOR_IMAGE in ev.embodiment.observations.keys()
+    assert keys.EXTERIOR_IMAGE_2 not in ev.embodiment.observations.keys()
 
 
 def test_a_non_positive_trial_count_is_refused():
@@ -208,8 +223,17 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
         ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, seed=seed, timeout=timeout).instantiate()
         main(policy=policy, evals=[ev], output_dir=tmp_path)
 
-    assert env.selections == [{**env.BENCHMARK._asdict(), mapping.SELECT_EPISODES: 3}]
-    assert env.tokens == [{**env.BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 3, mapping.TOKEN_SEED: seed}]
+    assert env.selections == [
+        {**env.BENCHMARK._asdict(), mapping.SELECT_EPISODES: 3, mapping.WITH_RIGHT_SHOULDER: True}
+    ]
+    assert env.tokens == [
+        {
+            **env.BENCHMARK._asdict(),
+            mapping.TOKEN_EPISODE_INDEX: 3,
+            mapping.TOKEN_SEED: seed,
+            mapping.WITH_RIGHT_SHOULDER: True,
+        }
+    ]
     assert policy.observations
     last_obs = policy.observations[-1]
     assert last_obs[keys.TASK] == env.INSTRUCTION

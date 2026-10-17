@@ -73,6 +73,7 @@ from platform_client.responses import (
     ArtifactEntry,
     ArtifactListResponse,
     ArtifactRefs,
+    AuthConfig,
     BaselineMark,
     BlockedSubmissionView,
     BoardListResponse,
@@ -102,6 +103,7 @@ from platform_client.responses import (
     SubmissionListResponse,
     SubmissionListRow,
     SubmissionView,
+    WorkOSSettings,
 )
 from platform_client.tasks import TaskRef
 from positronic_evals import scoring
@@ -701,6 +703,29 @@ def test_a_view_round_trips_back_to_its_own_variant():
     assert SUBMISSION_VIEWS.validate_python(SUBMISSION_VIEWS.dump_python(view, mode='json')) == view
 
 
+def test_every_reason_code_is_on_one_side_of_the_fault_split():
+    # A new member fails the first assertion until it is put on one side.
+    caller = {
+        ReasonCode.INVALID,
+        ReasonCode.image_unpullable,
+        ReasonCode.image_too_large,
+        ReasonCode.invalid_flags,
+        ReasonCode.policy_setup_crash,
+        ReasonCode.policy_inference_crash,
+        ReasonCode.policy_oom,
+        ReasonCode.latency_budget_exceeded,
+        ReasonCode.wall_clock_exceeded,
+    }
+    platform = {
+        ReasonCode.internal_error,
+        ReasonCode.quota_exceeded,
+        ReasonCode.provision_wedged,
+        ReasonCode.runner_unresponsive,
+    }
+    assert caller | platform == set(ReasonCode)
+    assert {reason for reason in ReasonCode if reason.is_platform_fault} == platform
+
+
 def test_the_error_exception_exposes_the_envelope_and_the_reason_code():
     payload = {
         'error': {
@@ -714,6 +739,7 @@ def test_the_error_exception_exposes_the_envelope_and_the_reason_code():
     assert err.message == 'image not pullable'
     assert err.reason_code is ReasonCode.image_unpullable
     assert err.http_status == 400
+    assert not err.synthesized_envelope
 
 
 def test_an_unparseable_error_body_still_raises_the_same_exception():
@@ -721,6 +747,7 @@ def test_an_unparseable_error_body_still_raises_the_same_exception():
     assert err.code is ErrorCode.internal_error
     assert err.http_status == 502
     assert err.details['body'] == '<html>bad gateway</html>'
+    assert err.synthesized_envelope
 
 
 def test_a_reason_code_this_client_cannot_read_is_invalid_rather_than_absent():
@@ -797,6 +824,32 @@ def test_identity_ignores_a_personal_org_field_from_an_older_platform():
     me = MeResponse.model_validate(answer)
     assert me.organizations == []
     assert 'personal_org' not in me.model_dump()
+
+
+def test_auth_config_has_the_fields_the_gateway_declares():
+    """The gateway declares `auth.config` and pins the same names on its side; this copy cannot import it."""
+    assert set(AuthConfig.model_fields) == {'github_registration', 'workos'}
+    assert set(WorkOSSettings.model_fields) == {'client_id', 'authkit_domain', 'register_deadline_s'}
+
+
+@pytest.mark.parametrize(
+    'body',
+    [
+        '{"github_registration": false, "workos": {"client_id": "client_01", "authkit_domain": "a.authkit.app", '
+        '"register_deadline_s": 75.0}}',
+        '{"github_registration": true, "workos": null}',
+        '{"github_registration": false, "workos": null}',
+    ],
+    ids=['WorkOS', 'GitHub', 'dev'],
+)
+def test_auth_config_reads_every_answer_the_gateway_gives(body: str):
+    assert AuthConfig.model_validate_json(body).model_dump_json() == body.replace(' ', '')
+
+
+def test_auth_config_needs_both_fields():
+    """`workos` is null rather than absent when the platform takes no WorkOS sign-in."""
+    with pytest.raises(ValidationError, match='workos'):
+        AuthConfig.model_validate_json('{"github_registration": true}')
 
 
 def test_identity_from_an_older_platform_has_an_independent_empty_list():

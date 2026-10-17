@@ -1,7 +1,8 @@
 """`PlatformClient` — one method per gateway endpoint, request model in, response model out.
 
     with PlatformClient() as client:
-        client.register(RegisterRequest(credential=..., alias=...))  # keeps the key it returns
+        # keeps the key it returns; the timeout covers the gateway's check of the credential
+        client.register(RegisterRequest(credential=..., alias=...), timeout=client.register_timeout())
         plan = EvalPlan(request_type=PrivateEval(org=...), tasks=..., endpoints=..., episodes_per_endpoint=...)
         client.create_submission(plan)
 
@@ -24,6 +25,7 @@ from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
+from platform_client.identity_providers import longest_register_timeout
 from platform_client.ids import ApiKey, OrgSlug, PurchaseId, SubmissionId
 from platform_client.requests import (
     DEFAULT_PURCHASE_PAGE_SIZE,
@@ -40,6 +42,7 @@ from platform_client.requests import (
 )
 from platform_client.responses import (
     ArtifactListResponse,
+    AuthConfig,
     BoardListResponse,
     CancelResponse,
     MeResponse,
@@ -77,12 +80,16 @@ def resolve_api_key(api_key: ApiKey | None = None) -> ApiKey | None:
 
 
 def require_absolute_url(url: str | httpx.URL, source: str) -> None:
-    """Refuse a base URL that names no host, naming the value and what it has to be.
+    """Refuse a base URL that does not parse or names no host, naming the value and what it has to be.
 
     Every endpoint sends a path relative to the client's base URL, so one that names no host — empty,
     or a bare path — resolves against nothing and the request never leaves for a platform.
     """
-    if httpx.URL(url).is_absolute_url:
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL as exc:
+        raise ValueError(f'{source} is {str(url)!r}, which does not parse as a URL: {exc}') from exc
+    if parsed.is_absolute_url:
         return
     raise ValueError(
         f'{source} is {str(url)!r}, which names no host: give an absolute URL, scheme and host, naming the platform'
@@ -129,7 +136,9 @@ class PlatformClient:
     ) -> None:
         self._owns_client = client is None
         if client is None:
-            client = httpx.Client(base_url=resolve_base_url(base_url), timeout=timeout)
+            url = resolve_base_url(base_url)
+            # An environment proxy would carry a plain-http key or token off the machine.
+            client = httpx.Client(base_url=url, timeout=timeout, trust_env=httpx.URL(url).scheme == 'https')
         else:
             if base_url is not None:
                 raise ValueError('a client of your own already carries its base URL; pass one or the other')
@@ -156,13 +165,31 @@ class PlatformClient:
 
     # --- endpoints ---------------------------------------------------------------------------
 
-    def register(self, request: RegisterRequest) -> RegisterResponse:
+    def auth_config(self) -> AuthConfig:
+        """The sign-ins this platform takes."""
+        return self._get(routes.AUTH_CONFIG, AuthConfig, auth=Auth.NONE)
+
+    def register_timeout(self) -> httpx.Timeout:
+        """The bound on `users.register` for a credential of any sign-in this platform takes, from `auth.config`.
+
+        The gateway checks the credential with the identity provider inside the call, and a caller that gives
+        up first leaves a key behind that it can never read.
+        """
+        return longest_register_timeout(self.auth_config())
+
+    # `users.register` checks the credential with its identity provider before it answers.
+    DEFAULT_REGISTER_TIMEOUT: ClassVar[httpx.Timeout] = httpx.Timeout(90.0)
+
+    def register(
+        self, request: RegisterRequest, *, timeout: httpx.Timeout = DEFAULT_REGISTER_TIMEOUT
+    ) -> RegisterResponse:
         """Create-or-return a user, KEEPING any key it returns — the next call is authenticated.
 
         A key comes back only on a first registration or a `rotate`; a repeat registration answers
-        `existing` with none, and the client goes on holding whatever it already had.
+        `existing` with none, and the client goes on holding whatever it already had. Without `timeout`
+        it waits `DEFAULT_REGISTER_TIMEOUT`; `register_timeout()` gives the bound `auth.config` implies.
         """
-        response = self._post(routes.USERS_REGISTER, request, RegisterResponse, auth=Auth.NONE)
+        response = self._post(routes.USERS_REGISTER, request, RegisterResponse, auth=Auth.NONE, timeout=timeout)
         if response.api_key is not None:
             self.api_key = response.api_key
         return response
@@ -254,10 +281,22 @@ class PlatformClient:
     def _get(self, path: str, model: type[M], *, query: BaseModel | None = None, auth: Auth = Auth.REQUIRED) -> M:
         return model.model_validate_json(self._send('GET', path, query=query, auth=auth).content)
 
-    def _post(self, path: str, request: BaseModel, model: type[M], *, auth: Auth = Auth.REQUIRED) -> M:
+    def _post(
+        self,
+        path: str,
+        request: BaseModel,
+        model: type[M],
+        *,
+        auth: Auth = Auth.REQUIRED,
+        timeout: httpx.Timeout | None = None,
+    ) -> M:
         # This dump reveals the registry password. Every other dump masks it.
         body = request.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
-        return model.model_validate_json(self._send('POST', path, json=body, auth=auth).content)
+        # None keeps the client's own timeout.
+        sent = self._send(
+            'POST', path, json=body, auth=auth, timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout
+        )
+        return model.model_validate_json(sent.content)
 
     def _send(
         self, method: str, path: str, *, query: BaseModel | None = None, auth: Auth = Auth.REQUIRED, **kwargs: Any

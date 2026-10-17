@@ -8,14 +8,17 @@ A coding agent can do most of the work. You approve the sign-in, and you choose 
 ## What you need
 
 You can install the commands, register and submit on any computer. To build and test your image, use a
-Linux machine with an x86-64 (amd64) processor, such as a [Nebius](https://nebius.com) virtual machine.
+Linux machine with an x86-64 (amd64) processor, such as a
+[Nebius virtual machine](#build-and-test-on-a-nebius-vm).
 
 - The platform runs only amd64 images. On a Mac with Apple silicon, or on another ARM machine, Docker
   emulates amd64. With emulation, the test is very slow, and it can fail.
 - The test loads your model into memory. Give the machine enough memory and free disk space for your
   model. For the π0.5 DROID example image, use 32 GB of memory and 100 GB of free disk space.
-- The first test needs no GPU. A GPU is necessary for [Test the image on a GPU](#test-the-image-on-a-gpu),
-  and to train your policy.
+  [What the example images use](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#what-the-example-images-use)
+  gives approximate values for each example image.
+- The first test needs no GPU, but some images stop without a GPU. A GPU is necessary for
+  [Test the image on a GPU](#test-the-image-on-a-gpu), and to train your policy.
 
 ## Use a coding agent
 
@@ -29,9 +32,9 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 1. Install the commands and register me. Ask me for a team name first.
    Show me the sign-in code and link, and wait while I approve it.
    Keep the API key in my environment. Never print it again.
-2. Enter me in the competition. Show me the terms link and what
-   becomes public, and ask whether I accept the terms for my team.
-   Never accept the terms without explicit human approval.
+2. Enter me in the competition. Show me what becomes public and
+   where to read how my data is used, and ask whether to enter.
+   Never enter without explicit human approval.
 3. Help me build a policy image, and push it to a container registry
    that I choose.
 4. Test the image with the network denied.
@@ -55,16 +58,20 @@ This command installs the commands from the positronic repository on GitHub. It 
 space.
 
 ```bash
-uv tool install --with-executables-from positronic-platform-client \
+uv tool install --managed-python --with-executables-from positronic-platform-client \
     git+https://github.com/Positronic-Robotics/positronic
 ```
+
+`--managed-python` makes uv use a Python that it installs. One dependency builds from source and needs
+`Python.h`, which the Python of Ubuntu does not include.
 
 To update the commands later, run `uv tool upgrade positronic`.
 
 ### Register
 
-Choose a team name. The command prints a code and a link. Open the link, sign in with GitHub, and enter
-the code. The command then prints your API key one time.
+Choose a team name. The command prints a code and a link. Open the link, sign in, and enter the code.
+The sign-in page shows the ways to sign in that the platform takes. The command then prints your API
+key one time.
 
 ```bash
 platform-register --alias="<team name>"
@@ -75,17 +82,18 @@ export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 ### Enter the competition
 
-Read the [terms](https://competition.phail.ai/terms). You can enter in your browser or with a command.
-Both enter the same team, so do one of the two.
+You can enter in your browser or with a command. Both enter the same team, so do one of the two. The
+entry asks for no terms: your team accepts the [terms](https://competition.phail.ai/terms) with its first
+submission. Their section "Your data" tells how the organizers use your data.
 
 - In your browser, open the [entry page](https://physical-ai-competition.positronic.ro/enter). Sign in
-  with the GitHub account that you used for `platform-register`, and accept the terms.
-- With the command, `competition-enter` shows the link and the version of the terms, and what becomes
-  public. With `--accept-terms`, you accept the terms for your team, and your team enters.
+  with the GitHub account that you used for `platform-register`.
+- With the command, `competition-enter` shows what becomes public, and the link to the terms. With
+  `--yes`, your team enters.
 
 ```bash
 competition-enter
-competition-enter --accept-terms
+competition-enter --yes
 ```
 
 - When you enter, the competition publishes your team name and the date you entered. When a run is
@@ -140,8 +148,9 @@ a GPU. The loop ends with one of these lines:
   an amd64 machine, as [What you need](#what-you-need) says. An empty `<arch>` means that Docker does not
   answer.
 - `{"alive_seconds": ...}`: the server loaded its weights, and it serves on the CPU.
-- `the server exited`: read the log. A correct image loads its weights, and then it stops on the missing
-  GPU.
+- `the server exited`: read the log. An image that needs a GPU stops with an error about CUDA. The GR00T
+  N1.7, FLUX 3 Action and Cosmos3-Nano example images stop in this way. For such an image, run
+  [Test the image on a GPU](#test-the-image-on-a-gpu) before you submit.
 - `the server answered HTTP <code>`: the server runs, but it refused the request. A `401` means that the
   server does not accept the token in `AUTH_TOKEN`. On the platform, this fails the run with
   `policy_setup_crash`.
@@ -152,10 +161,11 @@ a GPU. The loop ends with one of these lines:
 The probe exits with code 3 when the port is closed or the server does not answer in 5 s. The loop then
 waits quietly, because a server that loads its weights does not open the port yet.
 
-The log must not show a DNS error. The `docker exec` line uses the Python of the example images. In your
-own image, use any HTTP client that the image has. The probe runs inside the container, so it also gets
-an answer from a server that listens only on `127.0.0.1`. The platform connects from outside the
-container, so such a server fails with `policy_setup_crash`. The full test on a GPU machine is in
+The log must not show a DNS error. The `docker exec` line uses the Python of the example images. The
+GR00T N1.7 image has its Python at `/opt/gr00t-venv/bin/python`. In your own image, use any HTTP client
+that the image has. The probe runs inside the container, so it also gets an answer from a server that
+listens only on `127.0.0.1`. The platform connects from outside the container, so such a server fails
+with `policy_setup_crash`. The full test on a GPU machine is in
 [Test the image on a GPU](#test-the-image-on-a-gpu).
 
 ### Submit
@@ -200,10 +210,11 @@ Before submissions close, choose your final entry, as the
 Ask your questions on the [Positronic Discord](https://discord.gg/PXvBy4NBgv). The commands above call
 the platform's [HTTP API](https://platform.positronic.ro/docs), and your own tools can call it too.
 
-## Train on Nebius
+## Use Nebius
 
-To train on Nebius, sign up for Nebius Builder with the email address of the GitHub account that you
-register with.
+Sign up for Nebius Builder with the email address of the account that you register with. On
+Nebius, you can train your policy, and build and test your image.
+[Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) creates a VM for the build and the tests.
 
 ---
 
@@ -345,6 +356,8 @@ fi
 - The loop calls the route every 5 s, for up to 600 s. A slow model binds port 8000 late: FLUX 3 Action
   binds it after about 140 s.
 - The route answers `{"alive_seconds": ...}` when the model has loaded and warmed.
+- The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
+  sure that your model uses less.
 - `the server exited` means that the server crashed. The log shows why.
 - `the server answered HTTP <code>` means that the server refused the request. A `401` means that it does
   not accept the token in `AUTH_TOKEN`.
@@ -352,8 +365,8 @@ fi
   boot, the image pull and the server's start share one deadline of 1800 s.
 - An error from `docker exec` or a Python traceback means that the probe failed. The loop stops at once.
 - A server that checks the token answers `401` when the request has no token.
-- The `docker exec` line uses the Python of the example images. In your own image, use any HTTP client
-  that the image has.
+- The `docker exec` line uses the Python of the example images. The GR00T N1.7 image has its Python at
+  `/opt/gr00t-venv/bin/python`. In your own image, use any HTTP client that the image has.
 
 After you push the image, read its compressed size. The size limit counts the layers and the config, as
 this command adds them. The command needs [jq](https://jqlang.org/download/).
@@ -362,6 +375,42 @@ this command adds them. The command needs [jq](https://jqlang.org/download/).
 docker buildx imagetools inspect --raw docker.io/<you>/<image>:v1 \
   | jq '([.layers[].size] | add) + .config.size'
 ```
+
+## Build and test on a Nebius VM
+
+[`docker/nebius_vm.sh`](https://github.com/Positronic-Robotics/positronic/blob/main/docker/nebius_vm.sh)
+creates a Nebius virtual machine for the build and the tests, and deletes it. The VM has 32 GB of memory,
+a 200 GB disk, one NVIDIA L40S GPU with 48 GB of GPU memory, Docker with GPU access, and uv.
+
+Before you start:
+
+- Sign up for Nebius Builder, as [Use Nebius](#use-nebius) says.
+- Install the [Nebius CLI](https://docs.nebius.com/cli/install), and run `nebius profile create`. The
+  script creates the VM in the project of the profile.
+- If you have no SSH key, make one with `ssh-keygen -t ed25519`.
+
+```bash
+git clone https://github.com/Positronic-Robotics/positronic
+bash positronic/docker/nebius_vm.sh create
+```
+
+When the VM is ready, the command prints `ssh ubuntu@<address>`. Connect to the VM, and do the steps of
+this guide on it. Run your coding agent on the VM too.
+
+When you finish, delete the VM. Nebius charges for the VM until you delete it, also when it does nothing.
+
+```bash
+bash positronic/docker/nebius_vm.sh delete
+```
+
+- [Nebius prices](https://nebius.com/prices) give the cost of each VM type.
+- For a VM with no GPU, set `NEBIUS_PLATFORM=cpu-d3 NEBIUS_PRESET=8vcpu-32gb`. The header of the script
+  gives all the settings.
+- If Nebius has no free L40S, the command stops with `NotEnoughResources`, and it deletes the VM. Try
+  again later, or set `NEBIUS_PLATFORM` and `NEBIUS_PRESET` to another GPU type.
+- `nebius compute platform list` shows the VM types and presets in your region.
+- If Nebius refuses the VM because of a [quota](https://docs.nebius.com/overview/quotas), ask Nebius
+  for a larger quota.
 
 ## Submissions per day
 

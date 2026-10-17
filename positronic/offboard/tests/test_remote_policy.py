@@ -35,7 +35,7 @@ from positronic.policy.base import Obs, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration, PauseOnUnavailable, TemporalStack
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
@@ -513,18 +513,18 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
     statuses = []
 
     def script(base, clock):
-        assert (yield from wait(lambda: read_status(base), clock, seconds=60))
+        yield from wait(lambda: read_status(base), 'the console to answer', clock, seconds=60)
         for verdict in (Outcome.PASS, Outcome.FAIL):
             calls = model.call_count
             assert post(base, '/episode/start') == 200
-            assert (yield from wait(lambda calls=calls: model.call_count > calls, clock))
+            yield from wait(lambda calls=calls: model.call_count > calls, 'a model call', clock)
             assert post(base, '/episode/end', EndBody(verdict=verdict)) == 200
 
             def finished():
                 status = read_status(base)
                 return status is not None and status.run.phase is Phase.READY
 
-            assert (yield from wait(finished, clock))
+            yield from wait(finished, 'the episode to finish', clock)
         statuses.append(read_status(base))
 
     run_attended(policy, script)
@@ -537,9 +537,10 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 @pytest.mark.parametrize('resize_first', [False, True])
-def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_first):
+@pytest.mark.parametrize('lead_sec', [0.0, 0.05])
+def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_first, lead_sec):
     resize = RestrictImageSize(8, 8)
-    schedule = ChunkedSchedule(fps=10, horizon_sec=0.2)
+    schedule = ChunkedSchedule(fps=10, horizon_sec=0.2, inference_lead=ConstantDuration(lead_sec))
     local = (
         Sequential(resize, PauseOnUnavailable(), schedule)
         if resize_first
@@ -568,13 +569,20 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
             assert isinstance(step, Step) and step.commands == {'value': 1}
             assert len(model.observations) == 2 * episode + 1
             assert model.observations[-1]['image'].shape == (8, 8, 3)
-            now[0] = 200_000_000
+            now[0] = round((0.2 - lead_sec) * 1e9)
             first = run.send(obs)
             assert isinstance(first, Step)
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
             step = run.send(obs)
             assert isinstance(step, Step)
-            assert [commands for commands in (first.commands, step.commands) if commands] == [{'value': 0}]
+            if lead_sec:
+                assert first.commands == step.commands == {}
+                assert step.resume_at_ns == 200_000_000
+                now[0] = 200_000_000
+                step = run.send(obs)
+                assert isinstance(step, Step) and step.commands == {'value': 0}
+            else:
+                assert [commands for commands in (first.commands, step.commands) if commands] == [{'value': 0}]
             assert len(model.observations) == 2 * episode + 2
         finally:
             runtime.close()

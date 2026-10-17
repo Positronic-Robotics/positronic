@@ -6,13 +6,18 @@ the real thing.
 """
 
 import json
+from datetime import datetime
 
 import configuronic as cfn
 import httpx
 import pytest
 from platform_client import config as config_module
+from platform_client import routes
 from platform_client.client import PlatformClient
-from platform_client.ids import ApiKey
+from platform_client.enums import ErrorCode
+from platform_client.errors import ApiErrorBody, ErrorEnvelope
+from platform_client.ids import ApiKey, SubmissionId, UserId
+from pydantic import BaseModel
 
 from positronic.cli.account import gateway as gateway_module
 
@@ -20,6 +25,14 @@ BASE = 'http://gateway.test'
 KEY = 'pk_live_secret'
 ID = '5f3a91c2b7d40e18'
 AT = '2026-03-04T05:06:07Z'
+SUBMISSION = SubmissionId.parse(ID)
+USER = UserId.parse('a0')
+WHEN = datetime.fromisoformat(AT)
+
+
+def refusal(code: ErrorCode, message: str = 'refused', **details: object) -> dict:
+    """An error envelope as the platform sends it."""
+    return ErrorEnvelope(error=ApiErrorBody(code=code, message=message, details=details)).model_dump(mode='json')
 
 
 def runs_of_four(secret: str) -> set[str]:
@@ -27,8 +40,15 @@ def runs_of_four(secret: str) -> set[str]:
     return {secret[at : at + 4] for at in range(len(secret) - 3)}
 
 
+GITHUB_ONLY_AUTH_CONFIG = {'github_registration': True, 'workos': None}
+
+
 class StubPlatform:
-    """Records what a command sent, and the URL and key it was sent with, and answers a canned payload."""
+    """Records what a command sent, and the URL and key it was sent with, and answers a canned payload.
+
+    A payload that is a model goes out as the library dumps it; any other payload goes out as it is. It
+    takes GitHub tokens alone unless a test answers `auth.config`.
+    """
 
     def __init__(self):
         self.status = 200
@@ -39,6 +59,7 @@ class StubPlatform:
         self.paths: list[str] = []
         self.base_url: str | None = None
         self.api_key: ApiKey | None = None
+        self.no_answer: httpx.TransportError | None = None
 
     def answer(self, payload: object, *, status: int = 200) -> None:
         self.payload, self.status = payload, status
@@ -54,11 +75,16 @@ class StubPlatform:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.seen = request
         self.paths.append(request.url.path)
+        if self.no_answer is not None:
+            raise self.no_answer
         if queued := self.in_turn.get(request.url.path):
             payload, status = queued.pop(0)
+        elif request.url.path == routes.AUTH_CONFIG and routes.AUTH_CONFIG not in self.by_route:
+            payload, status = GITHUB_ONLY_AUTH_CONFIG, 200
         else:
             payload, status = self.by_route.get(request.url.path, (self.payload, self.status))
-        return httpx.Response(status, json=payload)
+        body = payload.model_dump(mode='json') if isinstance(payload, BaseModel) else payload
+        return httpx.Response(status, json=body)
 
     @property
     def request(self) -> httpx.Request:

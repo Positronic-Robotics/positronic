@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from typing import Any
 
 import httpx
 import pytest
@@ -40,12 +42,14 @@ from platform_client.eval_plan import (
     credential_from_file,
     plan_of_image,
 )
+from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, timeout_after_deadline
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
     ArtifactListResponse,
+    AuthConfig,
     BoardListResponse,
     CancelResponse,
     MeResponse,
@@ -185,6 +189,114 @@ def test_register_posts_the_body_unauthenticated_and_parses_the_response():
     assert gateway.request().method == 'POST'
     assert 'authorization' not in gateway.request().headers
     assert gateway.body() == {'credential': 'token', 'alias': 'demo', 'rotate': False}
+
+
+def test_register_without_a_timeout_sends_one_request_that_outwaits_the_clients_own_timeout():
+    """One method per endpoint: the caller reads the bound `auth.config` implies through `register_timeout()`."""
+    body = {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'}
+    gateway = Gateway(200, body)
+    client = PlatformClient(client=httpx.Client(base_url=BASE, transport=httpx.MockTransport(gateway), timeout=30.0))
+
+    client.register(RegisterRequest(credential='token'))
+
+    assert gateway.request().url.path == routes.USERS_REGISTER
+    assert gateway.request().extensions['timeout'] == httpx.Timeout(90.0).as_dict()
+
+
+def test_a_platform_without_auth_config_is_refused():
+    with pytest.raises(PlatformError):
+        make_client(Gateway(404, {'detail': 'Not Found'})).auth_config()
+
+
+@pytest.mark.parametrize('deadline', [0, -1, float('inf'), float('nan'), 10**9])
+def test_a_workos_deadline_that_makes_no_timeout_is_refused(deadline: float):
+    workos = {'client_id': 'c', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': deadline}
+
+    with pytest.raises(ValidationError):
+        AuthConfig.model_validate({'github_registration': False, 'workos': workos})
+
+
+def test_register_waits_the_timeout_it_is_given():
+    body = {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'}
+    gateway = Gateway(200, body)
+
+    make_client(gateway, api_key=None).register(
+        RegisterRequest(credential='token'), timeout=timeout_after_deadline(75.0)
+    )
+
+    assert gateway.request().extensions['timeout'] == timeout_after_deadline(75.0).as_dict()
+
+
+@pytest.mark.parametrize(
+    ('status', 'config', 'expected'),
+    [
+        (200, {'github_registration': True, 'workos': None}, GITHUB_REGISTER_TIMEOUT),
+        (
+            200,
+            {
+                'github_registration': False,
+                'workos': {'client_id': 'c', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 200.0},
+            },
+            timeout_after_deadline(200.0),
+        ),
+        (
+            200,
+            {
+                'github_registration': True,
+                'workos': {'client_id': 'c', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 1.0},
+            },
+            GITHUB_REGISTER_TIMEOUT,
+        ),
+        (
+            200,
+            {
+                'github_registration': False,
+                'workos': {'client_id': 'c', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 1.0},
+            },
+            timeout_after_deadline(1.0),
+        ),
+    ],
+    ids=['GitHub only', 'a slow WorkOS check', 'a fast WorkOS check beside GitHub', 'WorkOS only'],
+)
+def test_the_register_timeout_covers_the_longest_check_the_platform_names(status, config, expected):
+    """The gateway owns its WorkOS deadline and states it in `auth.config`; GitHub keeps its own figure."""
+    assert make_client(Gateway(status, config)).register_timeout() == expected
+
+
+def test_a_failing_auth_config_is_no_reason_to_guess_a_register_timeout():
+    with pytest.raises(PlatformError):
+        make_client(Gateway(500, {'detail': 'boom'})).register_timeout()
+
+
+def test_auth_config_reads_the_sign_ins_without_a_key():
+    workos = {'client_id': 'client_01', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 75.0}
+    config = {'github_registration': False, 'workos': workos}
+    gateway = Gateway(200, config)
+
+    answer = make_client(gateway).auth_config()
+
+    assert isinstance(answer, AuthConfig)
+    assert answer.workos is not None and answer.workos.client_id == 'client_01'
+    assert gateway.request().url.path == routes.AUTH_CONFIG
+    assert gateway.request().method == 'GET'
+    assert 'authorization' not in gateway.request().headers
+
+
+@pytest.mark.parametrize(('url', 'trusts_env'), [('http://127.0.0.1:8080', False), ('https://gateway.example', True)])
+def test_a_plain_http_platform_ignores_an_environment_proxy(url: str, trusts_env: bool, monkeypatch):
+    """`HTTP_PROXY` with no matching `NO_PROXY` would carry a plain-http key or token off the machine."""
+    built: list[dict[str, Any]] = []
+    real_client = httpx.Client
+
+    def record(**kwargs: Any) -> httpx.Client:
+        built.append(kwargs)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(httpx, 'Client', record)
+    with PlatformClient(url):
+        pass
+
+    assert built[0]['trust_env'] is trusts_env
 
 
 def test_register_sends_no_key_even_when_the_client_holds_one():
@@ -637,6 +749,13 @@ def test_a_base_url_that_names_no_host_is_refused_however_it_arrives(monkeypatch
         PlatformClient()
 
 
+@pytest.mark.parametrize('base_url', ['http://gateway:bad', 'http://[::1'])
+def test_a_base_url_that_does_not_parse_is_refused_naming_it(monkeypatch, base_url: str):
+    monkeypatch.delenv(API_URL_ENV, raising=False)
+    with pytest.raises(ValueError, match=re.escape(base_url)):
+        PlatformClient(base_url)
+
+
 def test_closing_leaves_a_caller_supplied_client_open():
     supplied = httpx.Client(base_url=BASE, transport=httpx.MockTransport(Gateway(200, {})))
     PlatformClient(client=supplied).close()
@@ -655,6 +774,7 @@ def test_every_endpoint_has_exactly_one_method():
         if name != 'API_PREFIX' and isinstance(value, str) and value.startswith(routes.API_PREFIX)
     }
     methods = {
+        'auth_config',
         'register',
         'me',
         'create_submission',

@@ -46,7 +46,12 @@ def _drive_env_server(bench: mapping.BenchmarkPath, episode_index: int, seed: in
     with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
-            token = {**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed}
+            token = {
+                **bench._asdict(),
+                mapping.TOKEN_EPISODE_INDEX: episode_index,
+                mapping.TOKEN_SEED: seed,
+                mapping.WITH_RIGHT_SHOULDER: True,
+            }
             frame = conn.reset(token)
             camera_names = [k for k, v in frame[protocol.FRAME_OBS].items() if mapping.is_rgb_frame(v)]
             cam_hashes = {name: [] for name in camera_names}
