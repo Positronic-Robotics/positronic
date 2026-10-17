@@ -286,6 +286,8 @@ class WorkOSSettings(BaseModel):
 
     client_id: str
     authkit_domain: str
+    # The gateway's deadline for the WorkOS checks of one `users.register`.
+    register_deadline_s: float
 
 
 class AuthConfig(BaseModel):

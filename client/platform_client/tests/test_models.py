@@ -829,13 +829,14 @@ def test_identity_ignores_a_personal_org_field_from_an_older_platform():
 def test_auth_config_has_the_fields_the_gateway_declares():
     """The gateway declares `auth.config` and pins the same names on its side; this copy cannot import it."""
     assert set(AuthConfig.model_fields) == {'github_registration', 'workos'}
-    assert set(WorkOSSettings.model_fields) == {'client_id', 'authkit_domain'}
+    assert set(WorkOSSettings.model_fields) == {'client_id', 'authkit_domain', 'register_deadline_s'}
 
 
 @pytest.mark.parametrize(
     'body',
     [
-        '{"github_registration": false, "workos": {"client_id": "client_01", "authkit_domain": "a.authkit.app"}}',
+        '{"github_registration": false, "workos": {"client_id": "client_01", "authkit_domain": "a.authkit.app", '
+        '"register_deadline_s": 75.0}}',
         '{"github_registration": true, "workos": null}',
         '{"github_registration": false, "workos": null}',
     ],

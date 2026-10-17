@@ -29,7 +29,14 @@ import httpx
 from platform_client import routes
 from platform_client.client import API_KEY_ENV, API_URL_ENV, PlatformClient, resolve_base_url
 from platform_client.errors import PlatformError
-from platform_client.identity_providers import GITHUB, REQUEST_TIMEOUT, WORKOS, IdentityProvider
+from platform_client.identity_providers import (
+    GITHUB,
+    GITHUB_REGISTER_TIMEOUT,
+    REQUEST_TIMEOUT,
+    WORKOS,
+    IdentityProvider,
+    register_timeout,
+)
 from platform_client.requests import RegisterRequest
 from platform_client.responses import RegisterResponse
 from pydantic import ValidationError
@@ -313,8 +320,16 @@ class ClientIds:
         )
 
 
-def sign_in_flow(platform: PlatformClient, http: httpx.Client, client_ids: ClientIds) -> DeviceFlow:
-    """The device flow of the provider the platform's `auth.config` names."""
+@dataclass(frozen=True)
+class SignIn:
+    """A device flow, and the bound on the `users.register` that takes its token."""
+
+    flow: DeviceFlow
+    register_timeout: httpx.Timeout
+
+
+def sign_in_flow(platform: PlatformClient, http: httpx.Client, client_ids: ClientIds) -> SignIn:
+    """The sign-in the platform's `auth.config` names."""
     try:
         config = platform.auth_config()
     except PlatformError as exc:
@@ -322,12 +337,12 @@ def sign_in_flow(platform: PlatformClient, http: httpx.Client, client_ids: Clien
             raise
         # rules-allow: swallowed-error — a gateway older than `auth.config` answers 404, and it takes GitHub only
         # TODO: drop this path once every platform serves `auth.config`, before GitHub sign-in goes away.
-        return DeviceFlow(GITHUB, client_ids.github, http)
+        return SignIn(DeviceFlow(GITHUB, client_ids.github, http), GITHUB_REGISTER_TIMEOUT)
     if config.workos is not None:
         client_id = config.workos.client_id if client_ids.workos is None else client_ids.workos
-        return DeviceFlow(WORKOS, client_id, http)
+        return SignIn(DeviceFlow(WORKOS, client_id, http), register_timeout(config.workos.register_deadline_s))
     if config.github_registration:
-        return DeviceFlow(GITHUB, client_ids.github, http)
+        return SignIn(DeviceFlow(GITHUB, client_ids.github, http), GITHUB_REGISTER_TIMEOUT)
     raise NoSignIn(f'the platform at {platform.base_url} takes no sign-in that this client can run')
 
 
@@ -339,15 +354,16 @@ def may_have_minted_a_key(exc: httpx.HTTPError) -> bool:
 
 
 def register_with_device_flow(
-    platform: PlatformClient, flow: DeviceFlow, *, alias: str | None = None, rotate: bool = False
+    platform: PlatformClient, sign_in: SignIn, *, alias: str | None = None, rotate: bool = False
 ) -> RegisterResponse:
     """Run the whole flow: show the code, poll for the token, register with it as the credential."""
+    flow = sign_in.flow
     authorization = flow.start_device_authorization()
     # To stderr: it is a prompt for the person at the terminal, and stdout carries the command's answer.
     print(f'open {authorization.verification_uri} and enter {authorization.user_code}', file=sys.stderr, flush=True)
     token = flow.poll_for_token(authorization)
     request = RegisterRequest(credential=token, alias=alias, rotate=rotate)
-    return platform.register(request, timeout=flow.provider.register_timeout)
+    return platform.register(request, timeout=sign_in.register_timeout)
 
 
 def platform_url_is_allowed(base_url: str, *, plaintext_http: bool) -> bool:
@@ -424,8 +440,8 @@ def run_registration(
     base_url = allowed_platform_url(platform_url, plaintext_http=plaintext_http)
     with httpx.Client(timeout=REQUEST_TIMEOUT) as provider_http, PlatformClient(base_url) as platform:
         try:
-            flow = sign_in_flow(platform, provider_http, client_ids)
-            return register_with_device_flow(platform, flow, alias=alias, rotate=rotate)
+            sign_in = sign_in_flow(platform, provider_http, client_ids)
+            return register_with_device_flow(platform, sign_in, alias=alias, rotate=rotate)
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             # The provider half wraps its own transport failures, so one arriving here dialled the
             # gateway. httpx names the cause and not the host, which is the half a reader needs.

@@ -24,7 +24,7 @@ from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
-from platform_client.identity_providers import LONGEST_REGISTER_TIMEOUT
+from platform_client.identity_providers import longest_register_timeout
 from platform_client.ids import ApiKey, OrgSlug, PurchaseId, SubmissionId
 from platform_client.requests import (
     DEFAULT_PURCHASE_PAGE_SIZE,
@@ -168,15 +168,27 @@ class PlatformClient:
         """The sign-ins this platform takes. A platform older than the route answers 404."""
         return self._get(routes.AUTH_CONFIG, AuthConfig, auth=Auth.NONE)
 
-    def register(
-        self, request: RegisterRequest, *, timeout: httpx.Timeout = LONGEST_REGISTER_TIMEOUT
-    ) -> RegisterResponse:
+    def register_timeout(self) -> httpx.Timeout:
+        """The bound on `users.register` for a credential of any sign-in this platform takes, from `auth.config`.
+
+        The gateway checks the credential with the identity provider inside the call, and a caller that gives
+        up first leaves a key behind that it can never read.
+        """
+        try:
+            config = self.auth_config()
+        except PlatformError as exc:
+            if exc.http_status != httpx.codes.NOT_FOUND:
+                raise
+            # rules-allow: swallowed-error — a platform older than `auth.config` answers 404
+            return longest_register_timeout(None)
+        return longest_register_timeout(config)
+
+    def register(self, request: RegisterRequest, *, timeout: httpx.Timeout | None = None) -> RegisterResponse:
         """Create-or-return a user, KEEPING any key it returns — the next call is authenticated.
 
         A key comes back only on a first registration or a `rotate`; a repeat registration answers
         `existing` with none, and the client goes on holding whatever it already had. `timeout` replaces
-        the client's own timeout for this call: the default waits out the slowest provider check, and a
-        caller that knows the provider passes its `register_timeout`.
+        the client's own for this call; pass `register_timeout()` unless the sign-in already named one.
         """
         response = self._post(routes.USERS_REGISTER, request, RegisterResponse, auth=Auth.NONE, timeout=timeout)
         if response.api_key is not None:

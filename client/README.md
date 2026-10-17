@@ -61,9 +61,11 @@ refuses a plain `http` platform that is not loopback. Staging has no TLS and is 
 tailnet: pass `--plaintext-http` to reach it. `PlatformClient` uses a proxy from the environment only
 for an `https` platform, so a proxy never carries a key or a token over plain `http`.
 
-`users.register` checks the token with the provider before it answers. `PlatformClient.register`
-waits for the slowest provider check by default, and a caller that knows the provider passes its
-`register_timeout` from `platform_client.identity_providers`.
+`users.register` checks the token with the provider before it answers, and a caller that gives up
+first loses the key the platform minted. Pass `timeout=client.register_timeout()` to
+`PlatformClient.register`: it reads `auth.config`, where the platform states its deadline for the
+WorkOS check, and covers the longest check the platform runs. Without `timeout`, `register` waits the
+client's own timeout.
 
 ## Credit accounts
 

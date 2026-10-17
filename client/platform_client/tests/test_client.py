@@ -41,7 +41,7 @@ from platform_client.eval_plan import (
     credential_from_file,
     plan_of_image,
 )
-from platform_client.identity_providers import LONGEST_REGISTER_TIMEOUT, WORKOS
+from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, register_timeout
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
@@ -190,21 +190,52 @@ def test_register_posts_the_body_unauthenticated_and_parses_the_response():
     assert gateway.body() == {'credential': 'token', 'alias': 'demo', 'rotate': False}
 
 
-def test_register_waits_out_the_slowest_provider_check_unless_told_the_provider():
-    """The gateway checks the credential with its provider inside the call; the client default of 30 s is shorter."""
+def test_register_waits_the_timeout_it_is_given():
     body = {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'}
     gateway = Gateway(200, body)
-    client = make_client(gateway, api_key=None)
 
-    client.register(RegisterRequest(credential='token'))
-    assert gateway.request().extensions['timeout'] == LONGEST_REGISTER_TIMEOUT.as_dict()
+    make_client(gateway, api_key=None).register(RegisterRequest(credential='token'), timeout=register_timeout(75.0))
 
-    client.register(RegisterRequest(credential='token'), timeout=WORKOS.register_timeout)
-    assert gateway.request().extensions['timeout'] == WORKOS.register_timeout.as_dict()
+    assert gateway.request().extensions['timeout'] == register_timeout(75.0).as_dict()
+
+
+@pytest.mark.parametrize(
+    ('status', 'config', 'expected'),
+    [
+        (404, {'detail': 'Not Found'}, GITHUB_REGISTER_TIMEOUT),
+        (200, {'github_registration': True, 'workos': None}, GITHUB_REGISTER_TIMEOUT),
+        (
+            200,
+            {
+                'github_registration': False,
+                'workos': {'client_id': 'c', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 200.0},
+            },
+            register_timeout(200.0),
+        ),
+        (
+            200,
+            {
+                'github_registration': True,
+                'workos': {'client_id': 'c', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 1.0},
+            },
+            GITHUB_REGISTER_TIMEOUT,
+        ),
+    ],
+    ids=['an older platform', 'GitHub only', 'a slow WorkOS check', 'a fast WorkOS check'],
+)
+def test_the_register_timeout_covers_the_longest_check_the_platform_names(status, config, expected):
+    """The gateway owns its WorkOS deadline and states it in `auth.config`; GitHub keeps its own figure."""
+    assert make_client(Gateway(status, config)).register_timeout() == expected
+
+
+def test_a_failing_auth_config_is_no_reason_to_guess_a_register_timeout():
+    with pytest.raises(PlatformError):
+        make_client(Gateway(500, {'detail': 'boom'})).register_timeout()
 
 
 def test_auth_config_reads_the_sign_ins_without_a_key():
-    config = {'github_registration': False, 'workos': {'client_id': 'client_01', 'authkit_domain': 'a.authkit.app'}}
+    workos = {'client_id': 'client_01', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 75.0}
+    config = {'github_registration': False, 'workos': workos}
     gateway = Gateway(200, config)
 
     answer = make_client(gateway).auth_config()

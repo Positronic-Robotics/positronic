@@ -44,7 +44,8 @@ def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None
     rotate gives an existing account a key, and a rotate of a new identity creates its account. A
     WorkOS token registers once, so one call is all a token allows.
     """
-    registration = client.register(RegisterRequest(credential=credential, alias=alias, rotate=True))
+    request = RegisterRequest(credential=credential, alias=alias, rotate=True)
+    registration = client.register(request, timeout=client.register_timeout())
     print(f'   user {registration.user_id} ({registration.key_status.name})')
     assert client.api_key is not None, f'expected a key after {registration.key_status.name}'
 

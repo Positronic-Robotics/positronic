@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import httpx
+from platform_client.responses import AuthConfig
 
 # The scope the minted GitHub token carries: the profile and the verified email. It reads no repository
 # and writes nothing, so the platform holds no power over the account.
@@ -52,41 +53,43 @@ class IdentityProvider:
     token_url: str
     # Sent with the device-code request when set (RFC 8628 §3.1).
     scope: str | None
-    # The requests the gateway sends this provider inside one `users.register`. Neither distribution
-    # imports the other, so this value is a copy.
-    gateway_requests: int
-
-    @property
-    def register_timeout(self) -> httpx.Timeout:
-        """The bound on `users.register` for a token from this provider.
-
-        The read phase covers the gateway's requests to the provider plus one request for its own work.
-        """
-        return httpx.Timeout(
-            connect=CONNECT_TIMEOUT_S,
-            read=self.gateway_requests * MAX_REQUEST_STALL_S + MAX_REQUEST_STALL_S,
-            write=WRITE_TIMEOUT_S,
-            pool=POOL_TIMEOUT_S,
-        )
 
 
-# The gateway reads the account, plus the addresses of an account whose address is private.
 GITHUB = IdentityProvider(
     name='GitHub',
     device_authorization_url='https://github.com/login/device/code',
     token_url='https://github.com/login/oauth/access_token',
     scope=IDENTITY_SCOPE,
-    gateway_requests=2,
 )
 
-# The gateway fetches the signing keys, reads the user, and ends the WorkOS session of the sign-in.
 WORKOS = IdentityProvider(
     name='WorkOS',
     device_authorization_url='https://api.workos.com/user_management/authorize/device',
     token_url='https://api.workos.com/user_management/authenticate',
     scope=None,
-    gateway_requests=3,
 )
 
-# The bound on `users.register` for a credential whose provider the caller does not know.
-LONGEST_REGISTER_TIMEOUT = max((GITHUB.register_timeout, WORKOS.register_timeout), key=max_stall_s)
+
+def register_timeout(deadline_s: float) -> httpx.Timeout:
+    """The bound on `users.register` when the gateway's identity check takes up to `deadline_s`.
+
+    The read phase covers that deadline plus one request for the gateway's own work.
+    """
+    return httpx.Timeout(
+        connect=CONNECT_TIMEOUT_S, read=deadline_s + MAX_REQUEST_STALL_S, write=WRITE_TIMEOUT_S, pool=POOL_TIMEOUT_S
+    )
+
+
+# The gateway reads the GitHub account, plus the addresses of an account whose address is private.
+# `auth.config` states no GitHub deadline, so this count is a copy of the gateway's.
+GITHUB_REGISTER_TIMEOUT = register_timeout(2 * MAX_REQUEST_STALL_S)
+
+
+def longest_register_timeout(config: AuthConfig | None) -> httpx.Timeout:
+    """The bound on `users.register` for a credential of any sign-in the platform takes.
+
+    None is a platform older than `auth.config`, which takes GitHub tokens only.
+    """
+    if config is None or config.workos is None:
+        return GITHUB_REGISTER_TIMEOUT
+    return max(GITHUB_REGISTER_TIMEOUT, register_timeout(config.workos.register_deadline_s), key=max_stall_s)

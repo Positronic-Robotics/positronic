@@ -21,7 +21,7 @@ from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
 from platform_client.device_flow import WORKOS_CLIENT_ID_ENV
 from platform_client.enums import BillingMode, BillingRole, ErrorCode, KeyStatus
-from platform_client.identity_providers import WORKOS
+from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, WORKOS, register_timeout
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId
 from platform_client.responses import MeResponse, RegisterResponse
 from pydantic import ValidationError
@@ -131,7 +131,10 @@ def test_a_registration_naming_its_platform_replaces_a_malformed_record(platform
     assert saved is not None and saved.api_key == 'pk_new'
 
 
-WORKOS_CONFIG = {'github_registration': False, 'workos': {'client_id': 'client_01', 'authkit_domain': 'a.authkit.app'}}
+WORKOS_CONFIG = {
+    'github_registration': False,
+    'workos': {'client_id': 'client_01', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 75.0},
+}
 WORKOS_DEVICE = {
     'device_code': 'device-1',
     'user_code': 'BCDF-GHJK',
@@ -177,12 +180,14 @@ def test_register_without_a_credential_signs_in_through_the_provider_the_platfor
     assert 'refresh' not in captured.out + captured.err
 
 
-def test_register_with_a_credential_reads_no_sign_in_settings(platform, run_command):
-    platform.answer(CREATED)
+def test_register_with_a_credential_runs_no_sign_in_and_waits_out_the_longest_check(platform, run_command):
+    """The credential's provider is unknown, so the wait covers every check `auth.config` names."""
+    platform.answer_by_route({routes.AUTH_CONFIG: (WORKOS_CONFIG, 200), routes.USERS_REGISTER: (CREATED, 200)})
 
     run_command(register)
 
-    assert platform.paths == [routes.USERS_REGISTER]
+    assert platform.paths == [routes.AUTH_CONFIG, routes.USERS_REGISTER]
+    assert platform.request.extensions['timeout'] == register_timeout(75.0).as_dict()
 
 
 def test_an_empty_credential_is_refused_rather_than_read_as_a_request_to_sign_in(platform, run_command, monkeypatch):
@@ -260,8 +265,9 @@ def test_a_value_of_the_wrong_kind_is_a_refusal_naming_the_field(
     assert platform.seen is None
 
 
-def test_a_registration_whose_answer_is_lost_names_rotate_as_the_recovery(platform, run_command):
+def test_a_registration_whose_answer_is_lost_names_rotate_as_the_recovery(platform, run_command, monkeypatch):
     """The gateway may have minted the key before the answer was lost, so a plain retry finds no key."""
+    monkeypatch.setattr(PlatformClient, 'register_timeout', lambda _self: GITHUB_REGISTER_TIMEOUT)
     platform.no_answer = httpx.ReadTimeout('no answer', request=httpx.Request('POST', f'{BASE}{routes.USERS_REGISTER}'))
 
     with pytest.raises(CommandFailed) as raised:

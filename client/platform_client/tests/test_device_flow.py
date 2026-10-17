@@ -28,6 +28,7 @@ from platform_client.device_flow import (
     DeviceFlowError,
     NoSignIn,
     ProviderFailed,
+    SignIn,
     register_with_device_flow,
     sign_in_flow,
 )
@@ -35,8 +36,8 @@ from platform_client.errors import PlatformError
 from platform_client.identity_providers import (
     CONNECT_TIMEOUT_S,
     GITHUB,
+    GITHUB_REGISTER_TIMEOUT,
     IDENTITY_SCOPE,
-    LONGEST_REGISTER_TIMEOUT,
     MAX_REQUEST_STALL_S,
     POOL_TIMEOUT_S,
     REQUEST_TIMEOUT,
@@ -576,7 +577,7 @@ def test_the_refresh_token_leaves_the_flow_nowhere(capsys):
     gateway = ScriptedGateway()
 
     with PlatformClient(client=gateway.client()) as platform:
-        response = register_with_device_flow(platform, flow)
+        response = register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT))
 
     assert json.loads(gateway.requests[-1].content)['credential'] == WORKOS_TOKEN
     captured = capsys.readouterr()
@@ -616,7 +617,11 @@ class ScriptedGateway:
         return httpx.Response(200, json=self.body)
 
 
-WORKOS_SETTINGS = {'client_id': 'client_from_the_gateway', 'authkit_domain': 'auth.example.authkit.app'}
+WORKOS_SETTINGS = {
+    'client_id': 'client_from_the_gateway',
+    'authkit_domain': 'auth.example.authkit.app',
+    'register_deadline_s': 75.0,
+}
 
 
 def test_the_registration_carries_the_access_token_as_the_credential():
@@ -625,7 +630,7 @@ def test_the_registration_carries_the_access_token_as_the_credential():
     gateway = ScriptedGateway()
 
     with PlatformClient(client=gateway.client()) as platform:
-        response = register_with_device_flow(platform, flow, alias='team-rocket')
+        response = register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT), alias='team-rocket')
 
     sent = gateway.requests[0]
     assert str(sent.url) == f'https://gateway.example{routes.USERS_REGISTER}'
@@ -640,7 +645,7 @@ def test_the_registration_asks_the_gateway_to_rotate_when_told_to():
     gateway = ScriptedGateway()
 
     with PlatformClient(client=gateway.client()) as platform:
-        register_with_device_flow(platform, flow, rotate=True)
+        register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT), rotate=True)
 
     assert json.loads(gateway.requests[0].content)['rotate'] is True
 
@@ -648,41 +653,41 @@ def test_the_registration_asks_the_gateway_to_rotate_when_told_to():
 # --- the pick: which provider `auth.config` names ------------------------------
 
 
-def _picked(config: dict[str, object] | httpx.Response, *, workos_client_id: str | None = None) -> DeviceFlow:
+def _picked(config: dict[str, object] | httpx.Response, *, workos_client_id: str | None = None) -> SignIn:
     gateway = ScriptedGateway(config=config)
     with PlatformClient(client=gateway.client()) as platform, httpx.Client() as http:
-        flow = sign_in_flow(platform, http, ClientIds(github=CLIENT_ID, workos=workos_client_id))
+        sign_in = sign_in_flow(platform, http, ClientIds(github=CLIENT_ID, workos=workos_client_id))
     assert gateway.requests[0].url.path == routes.AUTH_CONFIG
     assert 'authorization' not in gateway.requests[0].headers
-    return flow
+    return sign_in
 
 
 def test_a_platform_that_names_a_workos_client_signs_in_through_workos_with_that_client():
-    flow = _picked({'github_registration': False, 'workos': WORKOS_SETTINGS})
+    flow = _picked({'github_registration': False, 'workos': WORKOS_SETTINGS}).flow
 
     assert flow.provider is WORKOS
     assert flow.client_id == WORKOS_SETTINGS['client_id']
 
 
 def test_a_platform_that_takes_both_signs_in_through_workos():
-    assert _picked({'github_registration': True, 'workos': WORKOS_SETTINGS}).provider is WORKOS
+    assert _picked({'github_registration': True, 'workos': WORKOS_SETTINGS}).flow.provider is WORKOS
 
 
 def test_the_workos_override_replaces_the_client_the_platform_names():
-    flow = _picked({'github_registration': False, 'workos': WORKOS_SETTINGS}, workos_client_id='client_override')
+    flow = _picked({'github_registration': False, 'workos': WORKOS_SETTINGS}, workos_client_id='client_override').flow
 
     assert flow.client_id == 'client_override'
 
 
 def test_a_platform_that_takes_github_only_signs_in_through_github():
-    flow = _picked({'github_registration': True, 'workos': None})
+    flow = _picked({'github_registration': True, 'workos': None}).flow
 
     assert flow.provider is GITHUB
     assert flow.client_id == CLIENT_ID
 
 
 def test_the_workos_override_does_not_turn_a_github_platform_into_a_workos_one():
-    flow = _picked({'github_registration': True, 'workos': None}, workos_client_id='client_override')
+    flow = _picked({'github_registration': True, 'workos': None}, workos_client_id='client_override').flow
 
     assert flow.provider is GITHUB
 
@@ -691,7 +696,7 @@ def test_a_platform_older_than_auth_config_signs_in_through_github():
     """Such a gateway answers 404, and it takes only GitHub tokens."""
     not_found = httpx.Response(404, json={'detail': 'Not Found'})
 
-    assert _picked(not_found).provider is GITHUB
+    assert _picked(not_found).flow.provider is GITHUB
 
 
 def test_a_platform_that_takes_no_sign_in_this_client_runs_is_refused():
@@ -716,13 +721,13 @@ class Picked:
     workos_client_ids: list[str | None] = field(default_factory=list)
     rotations: list[bool] = field(default_factory=list)
 
-    def sign_in_flow(self, platform: PlatformClient, http: httpx.Client, client_ids: ClientIds) -> DeviceFlow:
+    def sign_in_flow(self, platform: PlatformClient, http: httpx.Client, client_ids: ClientIds) -> SignIn:
         self.github_client_ids.append(client_ids.github)
         self.workos_client_ids.append(client_ids.workos)
-        return self.flow or DeviceFlow(GITHUB, client_ids.github, http)
+        return SignIn(self.flow or DeviceFlow(GITHUB, client_ids.github, http), GITHUB_REGISTER_TIMEOUT)
 
     def register(
-        self, platform: PlatformClient, flow: DeviceFlow, *, alias: str | None = None, rotate: bool = False
+        self, platform: PlatformClient, sign_in: SignIn, *, alias: str | None = None, rotate: bool = False
     ) -> RegisterResponse:
         self.rotations.append(rotate)
         return RegisterResponse.model_validate(ScriptedGateway().body)
@@ -907,7 +912,7 @@ def _main_against(gateway: ScriptedGateway, flow: DeviceFlow | None = None) -> S
     real_client = httpx.Client
     with pytest.MonkeyPatch.context() as patch:
         if flow is not None:
-            patch.setattr(device_flow, 'sign_in_flow', lambda *_args, **_kwargs: flow)
+            patch.setattr(device_flow, 'sign_in_flow', lambda *_args, **_kwargs: SignIn(flow, GITHUB_REGISTER_TIMEOUT))
         patch.setattr(
             httpx,
             'Client',
@@ -966,7 +971,7 @@ def test_the_user_is_shown_the_code_on_stderr_before_the_poll_starts(capsys):
     flow, _ = _flow(github)
 
     with PlatformClient(client=ScriptedGateway().client()) as platform:
-        register_with_device_flow(platform, flow)
+        register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT))
 
     captured = capsys.readouterr()
     assert str(DEVICE_ANSWER['user_code']) in captured.err and str(DEVICE_ANSWER['verification_uri']) in captured.err
@@ -979,28 +984,40 @@ def test_the_registration_keeps_the_key_the_gateway_minted():
     flow, _ = _flow(github)
 
     with PlatformClient(client=ScriptedGateway().client()) as platform:
-        register_with_device_flow(platform, flow)
+        register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT))
         assert platform.api_key == MINTED_KEY
 
 
-@pytest.mark.parametrize(
-    ('scripted', 'provider_requests'),
-    [(ScriptedProvider(polls=[dict(GRANTED)]), 2), (_workos(polls=[dict(WORKOS_GRANTED)]), 3)],
-    ids=['GitHub', 'WorkOS'],
-)
-def test_the_registration_waits_out_the_gateways_own_provider_budget(
-    scripted: ScriptedProvider, provider_requests: int
-):
-    """The gateway sends the provider these requests inside `users.register`, then does one of its own."""
+def test_a_github_registration_waits_out_the_gateways_two_github_reads():
+    """The gateway reads the account and its addresses inside `users.register`, then does its own work."""
     gateway = ScriptedGateway()
-    flow, _ = _flow(scripted)
+    flow, _ = _flow(ScriptedProvider(polls=[dict(GRANTED)]))
+    sign_in = _picked({'github_registration': True, 'workos': None})
 
     with PlatformClient(client=gateway.client()) as platform:
-        register_with_device_flow(platform, flow)
+        register_with_device_flow(platform, SignIn(flow, sign_in.register_timeout))
 
     assert gateway.requests[0].extensions['timeout'] == {
         'connect': CONNECT_TIMEOUT_S,
-        'read': (provider_requests + 1) * MAX_REQUEST_STALL_S,
+        'read': 3 * MAX_REQUEST_STALL_S,
+        'write': WRITE_TIMEOUT_S,
+        'pool': POOL_TIMEOUT_S,
+    }
+
+
+def test_a_workos_registration_waits_out_the_deadline_the_gateway_names():
+    """`auth.config` states the gateway's deadline for its WorkOS checks; the client adds one request."""
+    gateway = ScriptedGateway()
+    flow, _ = _flow(_workos(polls=[dict(WORKOS_GRANTED)]))
+    settings = WORKOS_SETTINGS | {'register_deadline_s': 120.0}
+    sign_in = _picked({'github_registration': False, 'workos': settings})
+
+    with PlatformClient(client=gateway.client()) as platform:
+        register_with_device_flow(platform, SignIn(flow, sign_in.register_timeout))
+
+    assert gateway.requests[0].extensions['timeout'] == {
+        'connect': CONNECT_TIMEOUT_S,
+        'read': 120.0 + MAX_REQUEST_STALL_S,
         'write': WRITE_TIMEOUT_S,
         'pool': POOL_TIMEOUT_S,
     }
@@ -1075,7 +1092,7 @@ def test_a_registration_the_gateway_refuses_shows_its_message(message: str):
     http = httpx.Client(base_url='https://gateway.example', transport=httpx.MockTransport(lambda _: refused))
 
     with PlatformClient(client=http) as platform, pytest.raises(PlatformError) as raised:
-        register_with_device_flow(platform, flow)
+        register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT))
 
     assert message in str(raised.value)
 
@@ -1104,15 +1121,8 @@ def test_every_phase_of_a_provider_request_carries_a_bound():
     assert max_stall_s(REQUEST_TIMEOUT) == MAX_REQUEST_STALL_S
 
 
-@pytest.mark.parametrize('provider', [GITHUB, WORKOS], ids=['GitHub', 'WorkOS'])
-def test_every_phase_of_a_registration_carries_a_bound(provider: IdentityProvider):
-    assert max_stall_s(provider.register_timeout) > MAX_REQUEST_STALL_S
-
-
-def test_a_registration_whose_provider_is_unknown_waits_out_the_slowest_check():
-    assert max_stall_s(LONGEST_REGISTER_TIMEOUT) == max(
-        max_stall_s(GITHUB.register_timeout), max_stall_s(WORKOS.register_timeout)
-    )
+def test_every_phase_of_a_registration_carries_a_bound():
+    assert max_stall_s(GITHUB_REGISTER_TIMEOUT) > MAX_REQUEST_STALL_S
 
 
 def test_a_timeout_that_leaves_a_phase_open_bounds_no_stall():
