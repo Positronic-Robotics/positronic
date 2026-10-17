@@ -14,13 +14,16 @@ Describe a local stack without creating episode state::
     step = episode.send(obs)
 """
 
+from abc import ABC, abstractmethod
 from bisect import insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
 from statistics import fmean
-from typing import Any, TypeVar
+from sys import maxsize
+from typing import Any, Self, TypeVar
 
 import numpy as np
 from positronic_model_server.spec import ARGS, NAME, VERSION
@@ -91,14 +94,140 @@ class PauseOnUnavailable(Policy):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
+class DurationEstimateRun(ABC):
+    """One episode's inference-delay history and duration estimates."""
+
+    @abstractmethod
+    def update(self, delay_sec: float) -> float:
+        """Record a delay from submission to reading the answer, and return the updated estimate."""
+
+
+class DurationEstimate(ABC):
+    """A reusable strategy for estimating durations from completed inference delays."""
+
+    @abstractmethod
+    def run(self) -> DurationEstimateRun:
+        """Create an estimator with independent delay history for one episode."""
+
+    def to_spec(self) -> float | dict[str, Any]:
+        """Serialize configuration without the observed delays."""
+        raise NotImplementedError(f'{type(self).__name__} has no wire spec')
+
+    @staticmethod
+    def from_spec(spec: float | Mapping[str, Any]) -> 'DurationEstimate':
+        if isinstance(spec, Mapping):
+            return DelayEstimate(**{
+                **spec,
+                DelayEstimate.STATISTIC_ARG: DelayEstimate.Statistic(spec[DelayEstimate.STATISTIC_ARG]),
+            })
+        return ConstantDuration(spec)
+
+
+class ConstantDuration(DurationEstimate):
+    """A fixed duration, independent of inference delays."""
+
+    class _Run(DurationEstimateRun):
+        def __init__(self, strategy: 'ConstantDuration') -> None:
+            self._strategy = strategy
+
+        def update(self, delay_sec: float) -> float:
+            return self._strategy._seconds
+
+    def __init__(self, seconds: float = 0.0) -> None:
+        if not isfinite(seconds) or seconds < 0:
+            raise ValueError('seconds must be finite and not negative')
+        self._seconds = seconds
+
+    def run(self) -> DurationEstimateRun:
+        return self._Run(self)
+
+    def to_spec(self) -> float:
+        return self._seconds
+
+
+class DelayEstimate(DurationEstimate):
+    """A serializable statistic of recent inference delays, capped in seconds."""
+
+    class Statistic(Enum):
+        MEAN = 'mean'
+        MAX = 'max'
+
+    STATISTIC_ARG = 'statistic'
+    LAST_ARG = 'last'
+    MAX_SEC_ARG = 'max_sec'
+
+    class _Run(DurationEstimateRun):
+        def __init__(self, strategy: 'DelayEstimate') -> None:
+            self._strategy = strategy
+            self._delays: deque[float] = deque(maxlen=strategy._last)
+
+        def update(self, delay_sec: float) -> float:
+            self._delays.append(delay_sec)
+            strategy = self._strategy
+            value = fmean(self._delays) if strategy._statistic is strategy.Statistic.MEAN else max(self._delays)
+            return min(value, strategy._max_sec)
+
+    def __init__(self, statistic: Statistic, last: int, max_sec: float) -> None:
+        if isinstance(last, bool) or not isinstance(last, int) or not 1 <= last <= maxsize:
+            raise ValueError(f'last must be an integer between 1 and {maxsize}')
+        if not isfinite(max_sec) or max_sec < 0:
+            raise ValueError('max_sec must be finite and not negative')
+        self._statistic = statistic
+        self._last = last
+        self._max_sec = max_sec
+
+    def run(self) -> DurationEstimateRun:
+        return self._Run(self)
+
+    def to_spec(self) -> dict[str, Any]:
+        return {self.STATISTIC_ARG: self._statistic.value, self.LAST_ARG: self._last, self.MAX_SEC_ARG: self._max_sec}
+
+    @classmethod
+    def mean(cls, last: int = 5, max_sec: float = 0.4) -> 'DelayEstimate':
+        """The mean of the last `last` delays, capped at `max_sec`. Use `last=1` for the latest delay."""
+        return cls(cls.Statistic.MEAN, last, max_sec)
+
+    @classmethod
+    def max(cls, last: int = 5, max_sec: float = 0.4) -> 'DelayEstimate':
+        """The longest of the last `last` delays, capped at `max_sec`. The RTC paper does this."""
+        return cls(cls.Statistic.MAX, last, max_sec)
+
+
 class ChunkedSchedule(Policy):
     """Request action chunks asynchronously and emit their commands at a fixed cadence.
 
+        step                0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
+        observation T0      ^
+        inference           |--------|
+        answer                       ^
+        old chunk                    o0 o1 o2 o3 o4 o5 o6 o7 o8 o9
+        inference_lead                              |--------------|
+        observation T1                              ^
+        inference                                   |--------|
+        answer                                               ^
+        answer waits                                         |-----|
+        old chunk ends                                             ^
+        new chunk                                                  n0 n1 n2 n3 n4
+        robot executes      -- -- -- o0 o1 o2 o3 o4 o5 o6 o7 o8 o9 n0 n1 n2 n3 n4
+
+    The drawing uses ``fps=10`` and ``inference_lead=ConstantDuration(0.5)``. Each step is
+    100 ms. The old chunk starts at step 3 and ends at step 13, after o9's full period.
+    The next request starts five periods before that end, at step 8. Its answer arrives
+    at step 11 and waits until step 13: all old actions run, then the new chunk starts at n0.
+    If the answer arrives after the old chunk ends, the last target stays in force until
+    the answer is read. A zero lead starts the next request at step 13 instead.
+
     ``infer`` returns an ordered sequence of command sets and must not mutate episode state. The first
-    command is due when the completed answer is read; subsequent commands are spaced by ``1 / fps``.
-    A chunk of K commands covers K periods, including the final command's execution period.
-    ``horizon_sec`` limits that duration and discards commands at or beyond the horizon.
-    At most one call is pending, and another starts when the current chunk's duration ends.
+    command is due when the completed answer is read, but not before the previous chunk's duration ends;
+    subsequent commands are spaced by ``1 / fps``. A chunk of K commands covers K periods, including the
+    final command's execution period. ``horizon_sec`` limits that duration and discards commands at or
+    beyond the horizon.
+
+    At most one call is pending. ``inference_lead`` estimates how many seconds before a chunk ends to
+    request the next one, bounded by the chunk's duration. The default is zero: request at the end.
+    The first request starts immediately. Later deadlines use the delays of completed calls in this
+    episode. An early answer waits behind the remaining commands; the new chunk starts from its first
+    action. The observation is read at the request, before commands emitted in that same round.
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
     """
@@ -108,6 +237,13 @@ class ChunkedSchedule(Policy):
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
     RECORD_STATS_ARG = 'record_stats'
+    INFERENCE_LEAD_ARG = 'inference_lead'
+
+    @dataclass(frozen=True)
+    class _Waypoint:
+        commands: Commands
+        due_ns: int
+        starts_chunk: bool
 
     class _Stats:
         """How the schedule played its waypoints.
@@ -124,12 +260,15 @@ class ChunkedSchedule(Policy):
             self._gap_max_ns = 0
             self._last_emit_ns: int | None = None
 
-        def count_round(self, planned: int | None, due_ns: int | None, now_ns: int, queued: int) -> None:
+        def count_round(
+            self, planned: int | None, due_ns: int | None, now_ns: int, queued: int, *, starts_chunk: bool
+        ) -> None:
             """Count the ``planned`` waypoints of a new chunk and the one emitted at ``now_ns``, if any."""
             if planned is None and due_ns is None:
                 return
             if planned is not None:
                 self._scheduled += planned
+            if starts_chunk:
                 self._last_emit_ns = None
             if due_ns is not None:
                 insort(self._sorted_late_ns, now_ns - due_ns)
@@ -161,7 +300,13 @@ class ChunkedSchedule(Policy):
             high = min(low + 1, len(values) - 1)
             return values[low] + (values[high] - values[low]) * (position - low)
 
-    def __init__(self, fps: float, horizon_sec: float | None = None, record_stats: bool = True) -> None:
+    def __init__(
+        self,
+        fps: float,
+        horizon_sec: float | None = None,
+        record_stats: bool = True,
+        inference_lead: DurationEstimate | None = None,
+    ) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
         if horizon_sec is not None and (not isfinite(horizon_sec) or horizon_sec <= 0):
@@ -169,41 +314,62 @@ class ChunkedSchedule(Policy):
         self._fps = fps
         self._horizon_sec = horizon_sec
         self._record_stats = record_stats
+        self._inference_lead = ConstantDuration() if inference_lead is None else inference_lead
+
+    @staticmethod
+    def _next_call_ns(start_ns: int, end_ns: int, lead_sec: float) -> int:
+        if not isfinite(lead_sec) or lead_sec < 0:
+            raise ValueError('inference_lead must return a finite, nonnegative duration')
+        return end_ns - round(min(lead_sec * 1e9, end_ns - start_ns))
+
+    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[list[_Waypoint], int]:
+        period_sec = 1 / self._fps
+        duration_sec = len(chunk) * period_sec
+        if self._horizon_sec is not None:
+            duration_sec = min(duration_sec, self._horizon_sec)
+        waypoints = [
+            self._Waypoint(waypoint, start_ns + round(i * period_sec * 1e9), starts_chunk=i == 0)
+            for i, waypoint in enumerate(chunk)
+            if i * period_sec < duration_sec
+        ]
+        return waypoints, start_ns + round(duration_sec * 1e9)
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
-        period_sec = 1 / self._fps
         answer: Answer[Sequence[Commands]] | None = None
-        trajectory: deque[tuple[Commands, int]] = deque()
+        trajectory: deque[ChunkedSchedule._Waypoint] = deque()
         end_ns = 0
+        call_ns = 0
+        called_at_ns = 0
+        lead = self._inference_lead.run()
         stats = self._Stats(runtime) if self._record_stats else None
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 planned = None
-                if answer is None and now_ns >= end_ns:
-                    answer = runtime.submit(infer, obs)
+                if answer is None and now_ns >= call_ns:
+                    answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
-                    duration_sec = len(chunk) * period_sec
-                    if self._horizon_sec is not None:
-                        duration_sec = min(duration_sec, self._horizon_sec)
-                    end_ns = now_ns + round(duration_sec * 1e9)
-                    trajectory = deque(
-                        (waypoint, now_ns + round(i * period_sec * 1e9))
-                        for i, waypoint in enumerate(chunk)
-                        if i * period_sec < duration_sec
-                    )
-                    planned = len(trajectory)
+                    lead_sec = lead.update((now_ns - called_at_ns) / 1e9)
+                    start_ns = max(now_ns, end_ns)
+                    waypoints, end_ns = self._plan_chunk(chunk, start_ns)
+                    call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
+                    # An answer that arrives before the chunk ends waits behind the commands that are still due.
+                    trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
+                    planned = len(waypoints)
 
                 commands: dict[str, Any] = {}
                 due_ns = None
-                while trajectory and trajectory[0][1] <= now_ns:
-                    waypoint, due_ns = trajectory.popleft()
-                    commands.update(waypoint)
+                starts_chunk = False
+                while trajectory and trajectory[0].due_ns <= now_ns:
+                    waypoint = trajectory.popleft()
+                    due_ns = waypoint.due_ns
+                    starts_chunk |= waypoint.starts_chunk
+                    commands.update(waypoint.commands)
                 if stats is not None:
-                    stats.count_round(planned, due_ns, now_ns, queued=len(trajectory))
-                resume_at_ns = trajectory[0][1] if trajectory else end_ns
+                    stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
+                resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
         finally:
@@ -222,30 +388,15 @@ class ChunkedSchedule(Policy):
             args[self.HORIZON_SEC_ARG] = self._horizon_sec
         if not self._record_stats:
             args[self.RECORD_STATS_ARG] = False
+        lead = self._inference_lead.to_spec()
+        if lead != 0:
+            args[self.INFERENCE_LEAD_ARG] = lead
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
-
-PrefixDuration = Callable[[Sequence[float]], float]
-"""Gets the delays of earlier calls to `infer` in this episode, in seconds, newest last.
-A delay is the time from a call to its answer. Returns the prefix length in seconds."""
-
-
-def mean_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
-    """The mean of the last `last` delays, but not more than `max_sec`."""
-    if last < 1:
-        raise ValueError('last must be at least 1')
-    if not max_sec >= 0:
-        raise ValueError('max_sec must not be negative')
-    return lambda delays: min(fmean(delays[-last:]), max_sec)
-
-
-def max_delay(last: int = 5, max_sec: float = 0.4) -> PrefixDuration:
-    """The longest of the last `last` delays, but not more than `max_sec`. The RTC paper does this."""
-    if last < 1:
-        raise ValueError('last must be at least 1')
-    if not max_sec >= 0:
-        raise ValueError('max_sec must not be negative')
-    return lambda delays: min(max(delays[-last:]), max_sec)
+    @classmethod
+    def from_spec_args(cls, **args: Any) -> Self:
+        args[cls.INFERENCE_LEAD_ARG] = DurationEstimate.from_spec(args.get(cls.INFERENCE_LEAD_ARG, 0.0))
+        return cls(**args)
 
 
 class PrefixSampling(Enum):
@@ -348,8 +499,8 @@ class RTCSchedule(Policy):
 
     `call_after_sec` after T0, the policy takes the observation T1 and calls `infer`.
     The call also gets a prefix: the old chunk read at the new chunk's due times T1,
-    T1 + 1 / `fps`, ..., before T1 + `prefix_duration(delays)`, and not past the end of
-    the old chunk. The prefix tells the model what the robot does while the model
+    T1 + 1 / `fps`, ..., for the duration estimated by `prefix_duration`, and not past
+    the end of the old chunk. The prefix tells the model what the robot does while the model
     computes. Its length is the delay estimate: the server reads it as the number of
     prefix actions / `fps`. The server decides how to use the prefix.
 
@@ -379,7 +530,7 @@ class RTCSchedule(Policy):
         self,
         fps: float,
         call_after_sec: float,
-        prefix_duration: PrefixDuration,
+        prefix_duration: DurationEstimate,
         prefix_sampling: PrefixSampling = PrefixSampling.PREVIOUS,
     ) -> None:
         if not isfinite(fps) or fps <= 0:
@@ -392,7 +543,8 @@ class RTCSchedule(Policy):
         self._prefix_sampling = prefix_sampling
 
     def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
-        delays: list[float] = []
+        duration = self._prefix_duration.run()
+        prefix_sec = 0.0
         answer: Answer[Sequence[Commands]] | None = None
         called_at_ns = 0
         chunk: _TimedChunk | None = None
@@ -402,7 +554,7 @@ class RTCSchedule(Policy):
             while True:
                 now_ns = runtime.time_ns
                 if answer is not None and answer.done():
-                    delays.append((now_ns - called_at_ns) / 1e9)
+                    prefix_sec = duration.update((now_ns - called_at_ns) / 1e9)
                     # The first chunk counts from its answer: the robot did not move while it waited.
                     start_ns = now_ns if chunk is None else called_at_ns
                     chunk = _TimedChunk(answer.result(), start_ns, self._fps, now_ns)
@@ -412,7 +564,7 @@ class RTCSchedule(Policy):
                 if answer is None and now_ns >= next_call_ns:
                     prefix = []
                     if chunk is not None:
-                        prefix = chunk.prefix(now_ns, self._prefix_duration(delays), self._prefix_sampling)
+                        prefix = chunk.prefix(now_ns, prefix_sec, self._prefix_sampling)
                     called_at_ns = now_ns
                     answer = runtime.submit(infer, obs, prefix)
 

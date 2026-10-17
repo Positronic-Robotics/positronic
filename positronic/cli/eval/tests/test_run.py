@@ -170,29 +170,11 @@ def _tasks(count: int) -> list[Task]:
 
 
 @pytest.mark.timeout(3.0)
-def test_a_signal_error_runs_its_task_again():
-    """Each task gets its own count: a signal error on the second task after one on the first ends nothing."""
+@pytest.mark.parametrize(
+    'failure', [pimm.SignalError('camera lost'), pimm.calls.HandlerStopped(), RuntimeError('the arm holds an error')]
+)
+def test_a_failed_episode_ends_the_run_and_no_task_runs_twice(failure):
     tasks = _tasks(2)
-    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), {}, pimm.SignalError('camera lost'), {}])
-    _drive(tasks, episodes)
-
-    assert episodes.asked == [tasks[0], tasks[0], tasks[1], tasks[1]]
-
-
-@pytest.mark.timeout(3.0)
-def test_a_task_failed_by_two_signal_errors_in_a_row_ends_the_run():
-    tasks = _tasks(2)
-    episodes = _ScriptedEpisodes([pimm.SignalError('camera lost'), pimm.SignalError('camera lost again')])
-    with pytest.raises(pimm.SignalError, match='camera lost again'):
-        _drive(tasks, episodes)
-
-    assert episodes.asked == [tasks[0], tasks[0]]
-
-
-@pytest.mark.timeout(3.0)
-@pytest.mark.parametrize('failure', [pimm.calls.HandlerStopped(), RuntimeError('the arm holds an error')])
-def test_a_failure_other_than_a_signal_error_ends_the_run_at_once(failure):
-    tasks = _tasks(1)
     episodes = _ScriptedEpisodes([failure])
     with pytest.raises(type(failure)):
         _drive(tasks, episodes)

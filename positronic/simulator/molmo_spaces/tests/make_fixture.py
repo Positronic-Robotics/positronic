@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import WRIST_CAMERAS
 
@@ -35,6 +36,7 @@ def build_payload() -> dict[str, Any]:
         mapping.OBS_EEF_POS: np.array([0.4, 0.0, 0.35], dtype=np.float32),
         mapping.OBS_EEF_QUAT: np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
         mapping.OBS_GRIP: np.float32(0.5),
+        protocol.OBS_ARM_ERROR: False,
         _WRIST: _marked_frame((200, 40, 40)),
         _LEFT: _marked_frame((40, 160, 40)),
         _RIGHT: _marked_frame((40, 40, 200)),

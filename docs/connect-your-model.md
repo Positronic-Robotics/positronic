@@ -67,7 +67,7 @@ Two consequences shape the API:
 
 **The server usually returns an ordered action chunk.** A model predicts a short stretch of upcoming motion at once. The client policy decides when to request the next chunk and how to combine predictions with commands already being executed.
 
-**The client scheduler decides when each action runs.** `ChunkedSchedule` uses its configured FPS to space commands, starting when it reads the completed prediction. The model returns ordered actions without timestamps and does not need to account for network or compute delay.
+**The client scheduler decides when each action runs.** `ChunkedSchedule` spaces commands at its configured FPS and finishes each chunk before starting the next. By default it requests the next prediction when the current chunk ends. The model returns ordered actions without timestamps and does not need to account for network or compute delay.
 
 ```mermaid
 sequenceDiagram
@@ -81,7 +81,16 @@ sequenceDiagram
     S-->>C: next action chunk
 ```
 
-How the client fills the delay and merges successive predictions is a swappable choice. The default runs each trajectory to its end, then asks for the next. More advanced strategies — temporal ensembling ([Zhao et al. 2023](https://arxiv.org/abs/2304.13705)) and real-time chunking ([Black et al. 2025](https://arxiv.org/abs/2506.07339)) — overlap and blend predictions to stay smooth under latency. They all talk to the same server; only the client logic changes.
+To overlap inference with execution, set `inference_lead`. This requests the next prediction early while the current chunk finishes:
+
+```python
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration
+
+# Request 250 ms before each chunk ends.
+ChunkedSchedule(fps=15, inference_lead=ConstantDuration(0.25))
+```
+
+How the client fills the delay and merges successive predictions is a swappable choice. More advanced strategies — temporal ensembling ([Zhao et al. 2023](https://arxiv.org/abs/2304.13705)) and real-time chunking ([Black et al. 2025](https://arxiv.org/abs/2506.07339)) — blend or replace predictions to stay smooth under latency. They all talk to the same server; only the client logic changes.
 
 ## The pieces
 
@@ -116,7 +125,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
-Your server receives every key each step. An arm that is faulted or busy still reports where it is and says so in `robot_state.status`; the standard stack puts `PauseOnUnavailable` ahead of the model, which answers such a step itself rather than plan against an arm that will not take its commands. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
+Your server receives every key each step. An arm that is faulted or busy still reports where it is and says so in `robot_state.status`. The standard stack continues inference and command playback for those observations. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
 
 ### Actions (server → client)
 
@@ -180,8 +189,7 @@ from positronic.offboard.server_utils import warmup
 from positronic_model_server.server_wire import ServedHostPort
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic_model_server.websocket_wire import WebsocketWire
-from positronic.policy import Sequential
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule
 
 
 class MyModel(Model):
@@ -206,7 +214,7 @@ def build_my_model():
     return model
 
 
-deployment = PolicyDeployment(local=Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15)))
+deployment = PolicyDeployment(local=ChunkedSchedule(fps=15))
 server = PolicyServer(build_my_model, deployment)
 server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```

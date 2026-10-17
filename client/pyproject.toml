@@ -1,6 +1,6 @@
 [project]
 name = "positronic-platform-client"
-version = "0.36.0"
+version = "0.37.1"
 description = "Typed wire contract and HTTP client for the Positronic evaluation platform API"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-platform-register = "platform_client.github_device_flow:main"
+platform-register = "platform_client.device_flow:main"
 
 [build-system]
 requires = ["hatchling"]

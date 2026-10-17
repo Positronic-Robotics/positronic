@@ -409,21 +409,18 @@ class TestTheStack:
         assert len(emitted) == 32
         assert all(rig.ROBOT_COMMAND in commands for _, commands in emitted)
 
-    @pytest.mark.parametrize('status', [RobotStatus.ERROR, RobotStatus.BUSY])
-    def test_an_unavailable_arm_is_sent_no_command_and_the_server_no_observation(self, status):
+    @pytest.mark.parametrize('status', list(RobotStatus))
+    def test_inference_and_commands_continue_for_every_arm_status(self, status):
         client = FakeClient(np.zeros((32, 8), dtype=np.float32))
         runtime, run = start_stack(client, Clock())
+        obs = rig_observation(**{rig.ROBOT_STATUS: status})
         try:
-            steps = [run.send(rig_observation(**{rig.ROBOT_STATUS: status})) for _ in range(3)]
+            run.send(obs)
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            step = run.send(obs)
         finally:
             runtime.close()
             run.close()
 
-        assert [step.commands for step in steps] == [{}, {}, {}]
-        assert client.sent == []
-
-    def test_an_available_arm_is_served(self):
-        client = FakeClient(np.zeros((32, 8), dtype=np.float32))
-        one_inference(client, rig_observation(**{rig.ROBOT_STATUS: RobotStatus.AVAILABLE}))
-
         assert len(client.sent) == 1
+        assert rig.ROBOT_COMMAND in step.commands

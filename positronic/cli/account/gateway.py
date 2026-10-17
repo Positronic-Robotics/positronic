@@ -29,7 +29,6 @@ __all__ = [
     'CREDENTIAL_ENV',
     'CommandFailed',
     'Fault',
-    'credential',
     'gateway',
     'one_line',
     'parse_id',
@@ -118,18 +117,6 @@ def gateway(
             ) from exc
         except httpx.TransportError as exc:
             raise CommandFailed(f'{client.base_url} did not answer: {exc!r}', Fault.PLATFORM) from exc
-
-
-def credential() -> str:
-    """The identity to register with, from the environment."""
-    value = os.environ.get(CREDENTIAL_ENV)
-    if not value:
-        raise CommandFailed(
-            f"no credential: set {CREDENTIAL_ENV} to a GitHub token the platform's OAuth app minted, "
-            'or run `platform-register`, which mints one itself',
-            Fault.CALLER,
-        )
-    return value
 
 
 def parse_id(token: object, kind: type[ID]) -> ID:

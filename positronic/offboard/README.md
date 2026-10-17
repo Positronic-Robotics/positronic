@@ -154,7 +154,6 @@ Upon connection, the server sends a ready packet with metadata:
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
-      {"name": "stop_on_fault", "version": 2},
       {"name": "chunked_schedule", "version": 2, "args": {"fps": 15.0, "horizon_sec": 1.0}},
       {"name": "restrict_image_size", "version": 1, "args": {"width": 224, "height": 224}}
     ]},
@@ -349,12 +348,10 @@ from positronic_model_server.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.codecs import RestrictImageSize
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule
 
 pipeline = PolicyDeployment(
-    local=Sequential(
-        PauseOnUnavailable(), ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)
-    ),
+    local=Sequential(ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)),
     codec=my_model_codec,
 )
 server = PolicyServer(build_my_model, pipeline)

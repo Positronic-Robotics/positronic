@@ -727,7 +727,10 @@ async def api_episodes(request: Request):
         duration = None
         timeline = duration_timeline(ep.timelines)
         if timeline is not None:
-            first, last = ep.bounds(timeline)
+            # Count from the first sample of any stream. `Episode.bounds` starts at the latest first sample.
+            bounds = ep._signal_bounds_on((timeline,))
+            first = min(bound.start[timeline] for bound in bounds)
+            last = max(bound.finish[timeline] for bound in bounds)
             duration = (last - first) / 1e9
         return {'__episode_index__': i, '__meta__': ep.meta, '__duration__': duration, **ep.static}
 

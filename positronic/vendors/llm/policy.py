@@ -29,8 +29,7 @@ from pydantic_ai.tools import ToolDefinition
 from positronic import geom, keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
-from positronic.policy.processors import PauseOnUnavailable
-from positronic.policy.sequential import Sequential
+from positronic.utils import flatten_dict
 
 from .client import Endpoint
 from .motion import Motion, MoveTo
@@ -355,7 +354,7 @@ class LLMPolicy(Policy):
         ]
 
     def meta(self) -> dict[str, Any]:
-        return {
+        return flatten_dict({
             policy_keys.TYPE: 'llm',
             'model': self.endpoint.model_id,
             'settings': dict(self.endpoint.settings),
@@ -367,7 +366,7 @@ class LLMPolicy(Policy):
             'camera_keys': list(self.camera_keys),
             'image_size': self.image_size,
             'image_horizon': self.image_horizon,
-        }
+        })
 
     def run(self, runtime: Runtime) -> PolicyRun:
         with self.endpoint.open() as request:
@@ -435,8 +434,8 @@ def llm(
     max_calls: int,
     max_invalid: int,
 ) -> Policy:
-    """Direct API policy, with fault handling and trajectory scheduling on the rig."""
-    policy = LLMPolicy(
+    """Direct API policy with trajectory scheduling on the rig."""
+    return LLMPolicy(
         Endpoint(model, timeout=timeout, settings=settings),
         motion,
         images=Images(images),
@@ -446,4 +445,3 @@ def llm(
         max_calls=max_calls,
         max_invalid=max_invalid,
     )
-    return Sequential(PauseOnUnavailable(), policy)

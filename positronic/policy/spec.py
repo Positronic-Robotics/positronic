@@ -36,7 +36,7 @@ from positronic.utils.versions import Version, resolve_version
 ComponentFactory = Callable[..., Processor | Codec]
 
 COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
-    component.WIRE_NAME: {component.WIRE_VERSION: Version(component)}
+    component.WIRE_NAME: {component.WIRE_VERSION: Version(component.from_spec_args)}
     for component in (
         ChunkedSchedule,
         EncodeImages,

@@ -6,6 +6,7 @@ from typing import Any
 
 import pimm
 from positronic import geom, keys
+from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -27,14 +28,13 @@ SHOULDER_CAMERAS = {
 }
 
 
+_EXTERIOR_SLOTS = (keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2)
+
+
 def camera_dict(exterior_sides: Sequence[ShoulderSide]) -> dict[str, tuple[str, ...]]:
     """The aliases of each camera the embodiment declares; ``exterior_sides`` names the shoulder of each exterior."""
-    first, second = exterior_sides
-    return {
-        keys.WRIST_IMAGE: WRIST_CAMERAS,
-        keys.EXTERIOR_IMAGE: SHOULDER_CAMERAS[first],
-        keys.EXTERIOR_IMAGE_2: SHOULDER_CAMERAS[second],
-    }
+    slots = zip(_EXTERIOR_SLOTS[: len(exterior_sides)], exterior_sides, strict=True)
+    return {keys.WRIST_IMAGE: WRIST_CAMERAS, **{slot: SHOULDER_CAMERAS[side] for slot, side in slots}}
 
 
 class MolmoAdapter(WireCommandAdapter):
@@ -43,6 +43,7 @@ class MolmoAdapter(WireCommandAdapter):
     def __init__(self, cameras: Mapping[str, tuple[str, ...]]):
         super().__init__()
         self._cameras = cameras
+        self._with_right_shoulder = SHOULDER_CAMERAS[ShoulderSide.RIGHT] in cameras.values()
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
@@ -60,12 +61,15 @@ class MolmoAdapter(WireCommandAdapter):
             **{dimension: params[key] for dimension, key in self._DIMENSION_KEYS.items()},
             mapping.TOKEN_EPISODE_INDEX: params[molmo_keys.EPISODE_INDEX],
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
+            mapping.WITH_RIGHT_SHOULDER: self._with_right_shoulder,
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         ee_pose = geom.Transform3D(raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT]))
         state = MujocoFrankaState()
         state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
+        if raw_obs[protocol.OBS_ARM_ERROR]:
+            state.set_status(RobotStatus.ERROR)
         obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[mapping.OBS_GRIP])}
         for logical, candidates in self._cameras.items():
             key = next((c for c in candidates if c in raw_obs), candidates[-1])

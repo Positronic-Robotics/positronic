@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.3.0] - 2026-10-17
+
+This release publishes five more distributions to PyPI beside `positronic`. A `positronic` install pulls each one at the exact version it pins.
+
+| Distribution | Version | Contents |
+|---|---|---|
+| `positronic-platform-client` | 0.37.1 | The platform wire contract and `platform-register` |
+| `positronic-evals` | 0.1.0 | The public eval definitions, labelers and scoring |
+| `positronic-eval-vocabulary` | 0.4.0 | The words an attended rollout records |
+| `positronic-wire` | 0.12.0 | The client side of the websocket and gRPC inference wires |
+| `positronic-model-server` | 0.2.2 | The lightweight model-serving primitives |
+
+### Evaluation
+- `positronic eval run` with first-class `Task` and `Eval`, a full suite sweep in one run, and seeded sim trials ([#420](https://github.com/Positronic-Robotics/positronic/pull/420), [#462](https://github.com/Positronic-Robotics/positronic/pull/462), [#428](https://github.com/Positronic-Robotics/positronic/pull/428))
+- Remote env-server boundary, with LIBERO, RoboLab and MolmoSpaces behind it ([#450](https://github.com/Positronic-Robotics/positronic/pull/450), [#452](https://github.com/Positronic-Robotics/positronic/pull/452), [#469](https://github.com/Positronic-Robotics/positronic/pull/469), [#504](https://github.com/Positronic-Robotics/positronic/pull/504))
+- The edit layer: post-hoc review writes `edits.jsonl` as a view over immutable recordings ([#430](https://github.com/Positronic-Robotics/positronic/pull/430), [#431](https://github.com/Positronic-Robotics/positronic/pull/431), [#899](https://github.com/Positronic-Robotics/positronic/pull/899))
+- A browser station console, `positronic-inference web`, with between-episode jog teleop ([#460](https://github.com/Positronic-Robotics/positronic/pull/460), [#463](https://github.com/Positronic-Robotics/positronic/pull/463), [#847](https://github.com/Positronic-Robotics/positronic/pull/847))
+- A policy can end its episode, and a plan can state the start pose and sample its trials ([#926](https://github.com/Positronic-Robotics/positronic/pull/926), [#856](https://github.com/Positronic-Robotics/positronic/pull/856), [#868](https://github.com/Positronic-Robotics/positronic/pull/868))
+
+### Inference
+- Policies emit timestamped action chunks, and every command channel carries a trajectory ([#393](https://github.com/Positronic-Robotics/positronic/pull/393), [#523](https://github.com/Positronic-Robotics/positronic/pull/523))
+- Policies are composable runs of processors ([#652](https://github.com/Positronic-Robotics/positronic/pull/652), [#830](https://github.com/Positronic-Robotics/positronic/pull/830))
+- A gRPC wire beside the websocket, a Unix-socket wire, and a `roboarena` wire ([#728](https://github.com/Positronic-Robotics/positronic/pull/728), [#735](https://github.com/Positronic-Robotics/positronic/pull/735), [#787](https://github.com/Positronic-Robotics/positronic/pull/787))
+- `RTCSchedule` asks for the next chunk while the current chunk runs, and chunk timing is configurable ([#825](https://github.com/Positronic-Robotics/positronic/pull/825), [#947](https://github.com/Positronic-Robotics/positronic/pull/947))
+- Each server serves one checkpoint in the EE frame it declares, and warms at load ([#485](https://github.com/Positronic-Robotics/positronic/pull/485), [#816](https://github.com/Positronic-Robotics/positronic/pull/816), [#754](https://github.com/Positronic-Robotics/positronic/pull/754))
+- A direct-API VLM/LLM robot policy ([#781](https://github.com/Positronic-Robotics/positronic/pull/781))
+
+### Vendors and serving images
+- MolmoAct2 DROID and MolmoAct2-BimanualYAM ([#453](https://github.com/Positronic-Robotics/positronic/pull/453), [#806](https://github.com/Positronic-Robotics/positronic/pull/806))
+- GR00T N1.7 DROID, served in its native environment ([#733](https://github.com/Positronic-Robotics/positronic/pull/733), [#902](https://github.com/Positronic-Robotics/positronic/pull/902))
+- Public reference serving images for pi0.5 DROID, GR00T N1.7 DROID, MolmoAct2 DROID, FLUX 3 Action DROID and Cosmos3-Nano DROID, published from CI with the weights inside ([#852](https://github.com/Positronic-Robotics/positronic/pull/852), [#832](https://github.com/Positronic-Robotics/positronic/pull/832), [#835](https://github.com/Positronic-Robotics/positronic/pull/835), [#864](https://github.com/Positronic-Robotics/positronic/pull/864))
+- A recipe per model family to build and submit a policy image ([#777](https://github.com/Positronic-Robotics/positronic/pull/777), [#844](https://github.com/Positronic-Robotics/positronic/pull/844))
+
+### Hardware
+- i2rt YAM embodiment, with joint-target caps and a park at shutdown ([#501](https://github.com/Positronic-Robotics/positronic/pull/501), [#821](https://github.com/Positronic-Robotics/positronic/pull/821), [#783](https://github.com/Positronic-Robotics/positronic/pull/783))
+- Driver-managed Franka Desk: brakes, FCI, `SafetyError` reboot recovery and the Desk self-test ([#471](https://github.com/Positronic-Robotics/positronic/pull/471), [#522](https://github.com/Positronic-Robotics/positronic/pull/522), [#888](https://github.com/Positronic-Robotics/positronic/pull/888))
+- Franka joint commands are clamped to the arm's soft limits ([#884](https://github.com/Positronic-Robotics/positronic/pull/884))
+- A lost ZED camera reopens, and the SDK reboots a camera it cannot find ([#829](https://github.com/Positronic-Robotics/positronic/pull/829), [#812](https://github.com/Positronic-Robotics/positronic/pull/812))
+- The gripper convention is 0 = open, 1 = closed ([#466](https://github.com/Positronic-Robotics/positronic/pull/466))
+
+### Platform client
+- `positronic eval run --policy-image` submits a policy image to the platform, and `positronic eval status`, `list`, `cancel` and `catalog` read back what it did ([#601](https://github.com/Positronic-Robotics/positronic/pull/601), [#712](https://github.com/Positronic-Robotics/positronic/pull/712))
+- `platform-register` signs in through the device flow that the platform's `auth.config` names, and waits 90 s on a register with no timeout ([#706](https://github.com/Positronic-Robotics/positronic/pull/706), [#959](https://github.com/Positronic-Robotics/positronic/pull/959), [#964](https://github.com/Positronic-Robotics/positronic/pull/964))
+- The competition-enter command, and a guide for participants of the Physical AI Competition ([#919](https://github.com/Positronic-Robotics/positronic/pull/919), [#890](https://github.com/Positronic-Robotics/positronic/pull/890))
+- `positronic account register` and `positronic account credits`, with billing organization discovery, prepaid credits and rig contracts ([#870](https://github.com/Positronic-Robotics/positronic/pull/870), [#871](https://github.com/Positronic-Robotics/positronic/pull/871), [#886](https://github.com/Positronic-Robotics/positronic/pull/886))
+
+### Core
+- `World` owns time through a virtual clock, and pimm has request/reply between control systems ([#413](https://github.com/Positronic-Robotics/positronic/pull/413), [#636](https://github.com/Positronic-Robotics/positronic/pull/636))
+- Telemetry sidecars record wall-clock spans and machine stats beside the dataset ([#531](https://github.com/Positronic-Robotics/positronic/pull/531), [#811](https://github.com/Positronic-Robotics/positronic/pull/811))
+- Immutable `Time` with named coordinate operations, and symmetric named timelines in datasets ([#838](https://github.com/Positronic-Robotics/positronic/pull/838), [#841](https://github.com/Positronic-Robotics/positronic/pull/841))
+- The viewer renders under a prefix and exports static files one episode at a time ([#704](https://github.com/Positronic-Robotics/positronic/pull/704), [#932](https://github.com/Positronic-Robotics/positronic/pull/932))
+
+Full list: [v0.2.1...v0.3.0](https://github.com/Positronic-Robotics/positronic/compare/v0.2.1...v0.3.0)
+
 ## [0.2.1] - 2026-04-01
 
 ### Fixes
