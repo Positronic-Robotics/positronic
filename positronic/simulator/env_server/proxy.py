@@ -16,7 +16,6 @@ from typing import Any
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
@@ -106,11 +105,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
     def _emit_payload(self, frame: dict[str, Any]) -> None:
         raw_obs = frame[protocol.FRAME_OBS]
         observations = self._adapter.observations(raw_obs)
-        refused = frame.get(protocol.FRAME_REFUSED_COMMANDS, ())
-        self._adapter.refused(refused)
-        for channel in refused:
-            state = keys.arm_channel(keys.ROBOT_STATE, keys.channel_arm(channel, keys.ROBOT_COMMAND))
-            observations[state].set_status(RobotStatus.ERROR)
+        self._adapter.refused(frame.get(protocol.FRAME_REFUSED_COMMANDS, ()), observations)
         for name, value in observations.items():
             self.observations[name].emit(value)
         for name, value in self._adapter.privileged(raw_obs).items():

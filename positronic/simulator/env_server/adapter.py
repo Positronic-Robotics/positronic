@@ -15,8 +15,10 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
+from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.simulator.env_server import protocol
+from positronic.simulator.mujoco.sim import MujocoFrankaState
 
 
 class EnvAdapter(ABC):
@@ -42,8 +44,9 @@ class EnvAdapter(ABC):
         """
 
     @abstractmethod
-    def refused(self, channels: Collection[str]) -> None:
-        """The env could not execute the latest command on ``channels``, and their arms hold."""
+    def refused(self, channels: Collection[str], observations: dict[str, Any]) -> None:
+        """The env could not execute the latest command on ``channels``: their arms hold, and their states in
+        ``observations``, as this adapter mapped them, read ``ERROR``."""
 
     @abstractmethod
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
@@ -115,7 +118,8 @@ class WireCommandAdapter(EnvAdapter):
     arrives or the env refuses it, and fires a relative delta once. All action *encoding* — how the tagged
     command becomes the env's native action — stays server-side with the env's own model. Subclasses implement
     ``_reset_token`` (the base clears the per-trial command state around it) and keep the task, observation
-    and terminal mappings to themselves.
+    and terminal mappings to themselves. Their ``observations`` publish each arm's state as a
+    ``MujocoFrankaState`` under ``arm_channel(ROBOT_STATE, arm)``, where ``refused`` marks it.
     """
 
     def __init__(self, env_control_frame: geom.Transform3D | None = None):
@@ -142,10 +146,14 @@ class WireCommandAdapter(EnvAdapter):
                 self._held[name] = msg.data
         return {name: self._channel_payload(name) for name in commands}
 
-    def refused(self, channels: Collection[str]) -> None:
-        # Re-sent, the command would be refused again, and the arm would report ERROR for as long as it is held.
+    def refused(self, channels: Collection[str], observations: dict[str, Any]) -> None:
         for name in channels:
+            # Re-sent, the command would be refused again, and the arm would read ERROR for as long as it is held.
             self._held.pop(name, None)
+            state: MujocoFrankaState = observations[
+                keys.arm_channel(keys.ROBOT_STATE, keys.channel_arm(name, keys.ROBOT_COMMAND))
+            ]
+            state.set_status(RobotStatus.ERROR)
 
     def _channel_payload(self, name: str) -> Any:
         if not keys.is_robot_command(name):

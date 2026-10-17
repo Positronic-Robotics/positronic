@@ -245,7 +245,7 @@ class _GripAdapter(EnvAdapter):
     def action(self, commands: dict[str, pimm.Message | None]) -> dict[str, Any]:
         return _action(self._grip)
 
-    def refused(self, channels: Collection[str]) -> None:
+    def refused(self, channels: Collection[str], observations: dict[str, Any]) -> None:
         pass
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

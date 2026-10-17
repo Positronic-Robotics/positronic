@@ -380,10 +380,12 @@ class TestChannelMapAction:
         assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.HOLD
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
 
-    def test_a_refused_command_is_dropped_so_its_arm_holds(self):
+    def test_a_refused_command_is_dropped_so_its_arm_holds_in_error(self):
         adapter = _CommandOnlyAdapter()
         adapter.action(_held(robot_command=roboarm_command.CartesianPosition(geom.Transform3D.identity)))
-        adapter.refused([keys.ROBOT_COMMAND])
+        observations = {keys.ROBOT_STATE: MujocoFrankaState()}
+        adapter.refused([keys.ROBOT_COMMAND], observations)
+        assert observations[keys.ROBOT_STATE].status is RobotStatus.ERROR
         action = adapter.action(_held(robot_command=None))
         assert action[keys.ROBOT_COMMAND][protocol.COMMAND_TYPE] == protocol.HOLD
 
@@ -395,7 +397,10 @@ class TestChannelMapAction:
                 'robot_command.right': roboarm_command.JointPosition(np.zeros(6)),
             })
         )
-        adapter.refused(['robot_command.left'])
+        observations = {'robot_state.left': MujocoFrankaState(), 'robot_state.right': MujocoFrankaState()}
+        adapter.refused(['robot_command.left'], observations)
+        assert observations['robot_state.left'].status is RobotStatus.ERROR
+        assert observations['robot_state.right'].status is RobotStatus.AVAILABLE
         action = adapter.action(_held(**{'robot_command.left': None, 'robot_command.right': None}))
         assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.HOLD
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
@@ -602,7 +607,7 @@ class _CountdownAdapter(EnvAdapter):
     def action(self, commands):
         return {}
 
-    def refused(self, channels):
+    def refused(self, channels, observations):
         pass
 
     def observations(self, raw_obs):
@@ -677,8 +682,20 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
         assert obs_rx.read().data[0] >= 1
 
 
-class _CountdownArmAdapter(_CountdownAdapter):
+class _CountdownArmAdapter(WireCommandAdapter):
     """Reports the step count as the joints of an arm state."""
+
+    def task_params(self, records):
+        return [{eval_keys.TASK: record['name']} for record in records]
+
+    def _reset_token(self, params):
+        return params.get(eval_keys.SEED)
+
+    def privileged(self, raw_obs):
+        return {}
+
+    def terminal(self, result):
+        return None
 
     def observations(self, raw_obs):
         state = MujocoFrankaState()
