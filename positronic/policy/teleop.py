@@ -1,5 +1,5 @@
 import time
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Sequence
 from typing import Any
 
 import numpy as np
@@ -55,12 +55,12 @@ class TeleopClient(Policy):
     def __init__(
         self,
         ready_backstop_sec: float,
-        cameras: Sequence[str] | None = None,
+        cameras: Sequence[str] = (),
         image_fps: float = 15.0,
         still_clock_timeout: float = 1.0,
     ):
         self._ready_backstop_sec = ready_backstop_sec
-        self._cameras = None if cameras is None else tuple(cameras)
+        self._cameras = tuple(cameras)
         self._image_fps = image_fps
         self._still_clock_timeout = still_clock_timeout
 
@@ -70,8 +70,7 @@ class TeleopClient(Policy):
         return (yield from self._control(runtime, infer, obs))
 
     def _await_ready(self, infer: Callable[[dict], Any]) -> None:
-        """Ask for Ready until the service answers it. It blocks the control thread of the World, so the backstop
-        bounds it when the service does not."""
+        """Wait until the teleoperator is ready. The backstop bounds the wait when the service does not answer."""
         deadline = time.monotonic() + self._ready_backstop_sec
         while True:
             match Reply(infer({KIND: Request.READY})[KIND]):
@@ -88,12 +87,6 @@ class TeleopClient(Policy):
                 case kind:
                     raise ValueError(f'the teleop service answered {kind} to a {Request.READY} request')
 
-    def _camera_names(self, obs: Mapping[str, Any]) -> tuple[str, ...]:
-        """The cameras that the run sends: ``cameras``, or every image of ``Obs``, in its order."""
-        if self._cameras is not None:
-            return self._cameras
-        return tuple(name for name in obs if name.startswith(keys.IMAGE_PREFIX))
-
     def _control(self, runtime: Runtime, infer: Callable[[dict], Any], obs: Obs) -> Generator[Step, Obs, PolicyEnd]:
         """Hold the robot, then send each command of the service, until the teleoperator ends the run."""
         clock = _MovingClock(self._still_clock_timeout)
@@ -106,11 +99,12 @@ class TeleopClient(Policy):
             nonlocal images_due_ns
             request = {KIND: Request.FRAME, TASK: obs[keys.TASK], EE_POSE: np.asarray(obs[keys.EE_POSE], dtype=float)}
             if runtime.time_ns >= images_due_ns:
-                request[IMAGES] = {name: np.array(obs[name]) for name in self._camera_names(obs)}
+                request[IMAGES] = {name: np.array(obs[name]) for name in self._cameras}
                 images_due_ns = runtime.time_ns + image_period_ns
             return request
 
-        # A stay command, so that every command signal starts at the episode start. It asks for the pose that the arm
+        # `Episode.bounds` start at the latest first record of all signals. A stay command starts every command signal
+        # at the episode start, so the bounds keep the time before the first Control. It asks for the pose that the arm
         # has, so the arm does not move.
         pose = geom.Transform3D.from_vector(np.asarray(obs[keys.EE_POSE], dtype=float), QUAT)
         stay = {keys.ROBOT_COMMAND: CartesianPosition(pose), keys.TARGET_GRIP: float(obs[keys.GRIP])}
@@ -135,11 +129,10 @@ class TeleopClient(Policy):
             obs = yield Step(commands, runtime.time_ns + self._IDLE_NS)
 
     def to_spec(self) -> dict[str, Any]:
-        args: dict[str, Any] = {
+        args = {
             'ready_backstop_sec': self._ready_backstop_sec,
+            'cameras': list(self._cameras),
             'image_fps': self._image_fps,
             'still_clock_timeout': self._still_clock_timeout,
         }
-        if self._cameras is not None:
-            args['cameras'] = list(self._cameras)
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}

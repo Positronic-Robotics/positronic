@@ -76,22 +76,22 @@ class SessionParams:
     ``OperatorPosition`` as its name.
 
     An ``operator_position`` of ``None`` is UMI mode: control is always on, and the hand pose is the robot pose.
-    ``cameras`` names the cameras that the client sends, and ``None`` is every image of ``Obs``.
+    ``cameras`` names the cameras that the client sends.
     """
 
     operator_position: OperatorPosition | None = OperatorPosition.FRONT
-    cameras: list[str] | None = None
+    cameras: tuple[str, ...] = ()
     image_fps: float = 15.0
     still_clock_timeout: float = 1.0
     jpeg_quality: int = DEFAULT_JPEG_QUALITY
 
     @classmethod
-    def from_json(cls, operator_position: str | None, **params: Any) -> SessionParams:
+    def from_json(cls, operator_position: str | None, cameras: list[str], **params: Any) -> SessionParams:
         """The parameters that the JSON values of a session name. Raise for a name that is no ``OperatorPosition``."""
         names = [position.name for position in OperatorPosition]
         if operator_position is not None and operator_position not in names:
             raise ValueError(f'operator_position must be one of {", ".join(names)}, or null for UMI mode')
-        return cls(None if operator_position is None else OperatorPosition[operator_position], **params)
+        return cls(None if operator_position is None else OperatorPosition[operator_position], tuple(cameras), **params)
 
     def to_json(self) -> dict[str, Any]:
         """The parameters as JSON values."""

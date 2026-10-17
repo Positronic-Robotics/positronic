@@ -141,7 +141,7 @@ def test_a_service_that_waits_past_the_backstop_fails_the_run_before_its_first_s
 
 
 def test_the_first_step_holds_the_robot_where_it_is(runtime, service):
-    _, stay = _started(runtime, service)
+    _, stay = _started(runtime, service, cameras=[keys.EXTERIOR_IMAGE])
     command = stay.commands[keys.ROBOT_COMMAND]
     assert isinstance(command, CartesianPosition)
     np.testing.assert_allclose(command.pose.as_vector('quat'), OBS[keys.EE_POSE])
@@ -205,12 +205,8 @@ MORE_CAMERAS = {
 }
 
 
-def test_the_run_sends_every_camera_of_obs_by_default(runtime, service):
-    assert _sent_cameras(runtime, service, MORE_CAMERAS) == [
-        keys.EXTERIOR_IMAGE,
-        keys.WRIST_IMAGE,
-        keys.HANDCAM_RIGHT_IMAGE,
-    ]
+def test_the_run_sends_no_camera_by_default(runtime, service):
+    assert _sent_cameras(runtime, service, MORE_CAMERAS) == []
 
 
 def test_the_run_sends_the_cameras_that_it_names_in_their_order(runtime, service):
@@ -218,12 +214,8 @@ def test_the_run_sends_the_cameras_that_it_names_in_their_order(runtime, service
     assert _sent_cameras(runtime, service, MORE_CAMERAS, cameras=cameras) == cameras
 
 
-def test_a_client_with_no_camera_sends_no_image(runtime, service):
-    assert _sent_cameras(runtime, service, OBS, cameras=[]) == []
-
-
 def test_the_run_sends_images_at_most_at_its_image_rate(runtime, service):
-    run, _ = _started(runtime, service, image_fps=1.0)
+    run, _ = _started(runtime, service, cameras=[keys.EXTERIOR_IMAGE], image_fps=1.0)
     _answer(run, service, _frame())
     _answer(run, service, _frame())
     assert protocol.IMAGES in service.requests[1]
@@ -251,7 +243,7 @@ def test_an_episode_clock_that_stands_still_for_the_limit_fails_the_run(service,
         runtime.close()
 
 
-@pytest.mark.parametrize('cameras', [None, [keys.WRIST_IMAGE]])
+@pytest.mark.parametrize('cameras', [(), [keys.WRIST_IMAGE]])
 def test_a_declared_client_builds_from_its_spec(cameras):
     client = TeleopClient(10.0, cameras=cameras, image_fps=5.0, still_clock_timeout=2.0)
     built = from_spec(client.to_spec())

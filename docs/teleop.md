@@ -66,8 +66,8 @@ A run records the union of two camera sets:
 Conversion for training picks its own keys from the recording.
 
 - The eval names the recorded cameras in its `camera_dict`.
-- The session parameter `cameras` names the cameras that the person sees, in that order. With no `cameras`, the person
-  sees every image of the observation (see Session parameters).
+- The session parameter `cameras` names the cameras that the person sees, in that order. By default the person sees
+  no camera (see Session parameters).
 - The window shows the cameras of the policy in a grid, each with its name.
 - The headset video shows one camera: the first one, or the one that `positronic teleop --headset_camera=<name>`
   names. The phone page shows no video.
@@ -135,7 +135,7 @@ Start `positronic teleop` first, as in MuJoCo.
 ## Session parameters
 
 The service CLI sets the defaults: `--operator_position` (`.FRONT`, `.BACK`, or `None` for UMI mode, where control is
-always on and the hand pose is the robot pose), `--cameras` (a JSON list, or none for every image), `--image_fps` and
+always on and the hand pose is the robot pose), `--cameras` (a list, empty by default), `--image_fps` and
 `--still_clock_timeout`. A run sets its own in the query of its address, each value a JSON literal, for example
 `--policy.address.query='operator_position="BACK"'`. `positronic.teleop.protocol.session_query` builds such a query:
 `teleop_collect` and `teleop_molmo` use it. The episode records the values in `inference.policy.server.effective_params`.

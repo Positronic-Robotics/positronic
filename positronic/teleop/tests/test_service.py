@@ -308,7 +308,7 @@ def test_a_hold_of_b_before_the_start_task_press_does_not_complete(service, sock
 
 def test_the_service_shows_the_camera_image_of_the_run(service, socket_path, runtime):
     with _Headset(service) as headset:
-        run = _readied_run(service, headset, runtime, socket_path)
+        run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
         _drive(run, 0.2)
         assert service.view().shape[:2] == OBS[keys.EXTERIOR_IMAGE].shape[:2]
         run.close()
@@ -569,7 +569,7 @@ def test_a_hold_of_b_after_start_task_completes_in_one_frame_with_the_start(serv
 
 def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, socket_path, runtime):
     with _Headset(service) as headset:
-        run = _readied_run(service, headset, runtime, socket_path)
+        run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
         _drive(run, 0.2)
         stored = service.camera_image(keys.EXTERIOR_IMAGE)
         before = stored.copy()
@@ -611,7 +611,7 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
 @pytest.mark.parametrize('ending', ['give_up', 'time_limit'])
 def test_every_end_of_a_session_leaves_no_trial_in_the_service(service, socket_path, runtime, ending):
     with _Headset(service) as headset:
-        run = _readied_run(service, headset, runtime, socket_path)
+        run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
         _drive(run, 0.2)
         assert service.state().task == OBS[keys.TASK] and service.state().cameras == (keys.EXTERIOR_IMAGE,)
         if ending == 'give_up':

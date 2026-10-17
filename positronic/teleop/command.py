@@ -67,7 +67,7 @@ def serve(
     headset_camera: str | None = None,
     open_window: bool = True,
     operator_position: OperatorPosition | None = SessionParams.operator_position,
-    cameras: list[str] | None = SessionParams.cameras,
+    cameras: tuple[str, ...] = SessionParams.cameras,
     image_fps: float = SessionParams.image_fps,
     still_clock_timeout: float = SessionParams.still_clock_timeout,
 ):
