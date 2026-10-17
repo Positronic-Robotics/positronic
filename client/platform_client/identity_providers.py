@@ -70,7 +70,7 @@ WORKOS = IdentityProvider(
 )
 
 
-def register_timeout(deadline_s: float) -> httpx.Timeout:
+def timeout_after_deadline(deadline_s: float) -> httpx.Timeout:
     """The bound on `users.register` when the gateway's identity check takes up to `deadline_s`.
 
     The read phase covers that deadline plus one request for the gateway's own work.
@@ -83,16 +83,22 @@ def register_timeout(deadline_s: float) -> httpx.Timeout:
 # The gateway reads the GitHub account, plus the addresses of an account whose address is private.
 # TODO: `auth.config` states no GitHub deadline, so this count is a copy of the gateway's; it goes with GitHub
 # sign-in.
-GITHUB_REGISTER_TIMEOUT = register_timeout(2 * MAX_REQUEST_STALL_S)
+GITHUB_REGISTER_TIMEOUT = timeout_after_deadline(2 * MAX_REQUEST_STALL_S)
 
 
 def workos_register_timeout(settings: WorkOSSettings) -> httpx.Timeout:
     """The bound on `users.register` for a WorkOS token, from the deadline the platform states."""
-    return register_timeout(settings.register_deadline_s)
+    return timeout_after_deadline(settings.register_deadline_s)
 
 
 def longest_register_timeout(config: AuthConfig) -> httpx.Timeout:
-    """The bound on `users.register` for a credential of any sign-in the platform takes."""
+    """The bound on `users.register` for a credential of any sign-in the platform takes.
+
+    A platform that names no WorkOS client takes the GitHub check, the one it runs without `auth.config`.
+    """
     if config.workos is None:
         return GITHUB_REGISTER_TIMEOUT
-    return max(GITHUB_REGISTER_TIMEOUT, workos_register_timeout(config.workos), key=max_stall_s)
+    workos = workos_register_timeout(config.workos)
+    if not config.github_registration:
+        return workos
+    return max(GITHUB_REGISTER_TIMEOUT, workos, key=max_stall_s)

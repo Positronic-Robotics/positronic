@@ -21,7 +21,7 @@ from platform_client.client import PlatformClient
 from platform_client.config import CONFIG_FILENAME, Config, config_dir, read_config, write_config
 from platform_client.device_flow import WORKOS_CLIENT_ID_ENV
 from platform_client.enums import BillingMode, BillingRole, ErrorCode, KeyStatus
-from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, WORKOS, register_timeout
+from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, WORKOS, timeout_after_deadline
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId
 from platform_client.responses import MeResponse, RegisterResponse
 from pydantic import ValidationError
@@ -187,7 +187,7 @@ def test_register_with_a_credential_runs_no_sign_in_and_waits_out_the_longest_ch
     run_command(register)
 
     assert platform.paths == [routes.AUTH_CONFIG, routes.USERS_REGISTER]
-    assert platform.request.extensions['timeout'] == register_timeout(75.0).as_dict()
+    assert platform.request.extensions['timeout'] == timeout_after_deadline(75.0).as_dict()
 
 
 def test_an_empty_credential_is_refused_rather_than_read_as_a_request_to_sign_in(platform, run_command, monkeypatch):

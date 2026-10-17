@@ -42,7 +42,7 @@ from platform_client.eval_plan import (
     credential_from_file,
     plan_of_image,
 )
-from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, register_timeout
+from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, timeout_after_deadline
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
@@ -213,7 +213,7 @@ def test_register_without_a_timeout_waits_the_bound_auth_config_implies():
     make_client(gateway, api_key=None).register(RegisterRequest(credential='token'))
 
     assert gateway.request().url.path == routes.USERS_REGISTER
-    assert gateway.request().extensions['timeout'] == register_timeout(200.0).as_dict()
+    assert gateway.request().extensions['timeout'] == timeout_after_deadline(200.0).as_dict()
 
 
 def test_an_older_platform_takes_github_tokens_only():
@@ -235,9 +235,11 @@ def test_register_waits_the_timeout_it_is_given():
     body = {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'}
     gateway = Gateway(200, body)
 
-    make_client(gateway, api_key=None).register(RegisterRequest(credential='token'), timeout=register_timeout(75.0))
+    make_client(gateway, api_key=None).register(
+        RegisterRequest(credential='token'), timeout=timeout_after_deadline(75.0)
+    )
 
-    assert gateway.request().extensions['timeout'] == register_timeout(75.0).as_dict()
+    assert gateway.request().extensions['timeout'] == timeout_after_deadline(75.0).as_dict()
 
 
 @pytest.mark.parametrize(
@@ -251,7 +253,7 @@ def test_register_waits_the_timeout_it_is_given():
                 'github_registration': False,
                 'workos': {'client_id': 'c', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 200.0},
             },
-            register_timeout(200.0),
+            timeout_after_deadline(200.0),
         ),
         (
             200,
@@ -261,8 +263,16 @@ def test_register_waits_the_timeout_it_is_given():
             },
             GITHUB_REGISTER_TIMEOUT,
         ),
+        (
+            200,
+            {
+                'github_registration': False,
+                'workos': {'client_id': 'c', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 1.0},
+            },
+            timeout_after_deadline(1.0),
+        ),
     ],
-    ids=['an older platform', 'GitHub only', 'a slow WorkOS check', 'a fast WorkOS check'],
+    ids=['an older platform', 'GitHub only', 'a slow WorkOS check', 'a fast WorkOS check beside GitHub', 'WorkOS only'],
 )
 def test_the_register_timeout_covers_the_longest_check_the_platform_names(status, config, expected):
     """The gateway owns its WorkOS deadline and states it in `auth.config`; GitHub keeps its own figure."""
