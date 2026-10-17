@@ -43,8 +43,13 @@ def _register_by_sign_in(
 
 
 @contextmanager
-def _naming_rotate_when_the_answer_is_lost() -> Iterator[None]:
+def _naming_rotate_when_the_answer_is_lost(*, credential_from_environment: bool) -> Iterator[None]:
     """A registration whose answer is lost may have minted the key, so its failure names `--rotate`."""
+    fresh_token = (
+        f'set a new token in {CREDENTIAL_ENV}, or unset it to sign in, and run `positronic account register --rotate`'
+        if credential_from_environment
+        else 'sign in again with `positronic account register --rotate`'
+    )
     try:
         yield
     except httpx.HTTPError as exc:
@@ -52,7 +57,7 @@ def _naming_rotate_when_the_answer_is_lost() -> Iterator[None]:
             raise
         raise CommandFailed(
             f'{exc.request.url} did not answer the registration: {exc!r}. A key may have been minted, and a '
-            'WorkOS token registers once: sign in again with `positronic account register --rotate`.',
+            f'WorkOS token registers once: {fresh_token}.',
             Fault.PLATFORM,
         ) from exc
 
@@ -82,7 +87,10 @@ def register(
     # A key is minted once and cannot be fetched again, so the destination is named before the
     # platform mints one: a config directory that cannot be resolved would otherwise cost the key.
     directory = config_dir(os.environ)
-    with gateway(platform_url, key_required=False) as client, _naming_rotate_when_the_answer_is_lost():
+    with (
+        gateway(platform_url, key_required=False) as client,
+        _naming_rotate_when_the_answer_is_lost(credential_from_environment=credential is not None),
+    ):
         if credential is not None:
             response = client.register(RegisterRequest(credential=credential, alias=alias, rotate=rotate))
         else:

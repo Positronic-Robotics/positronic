@@ -267,7 +267,9 @@ def test_a_registration_whose_answer_is_lost_names_rotate_as_the_recovery(platfo
     with pytest.raises(CommandFailed) as raised:
         run_command(register)
 
-    assert '--rotate' in str(raised.value) and raised.value.fault is Fault.PLATFORM
+    # The token from the environment is spent, so the advice names a new one rather than the same command.
+    assert '--rotate' in str(raised.value) and gateway_module.CREDENTIAL_ENV in str(raised.value)
+    assert raised.value.fault is Fault.PLATFORM
 
 
 def test_an_auth_config_lost_in_transit_does_not_name_rotate(platform, workos, run_command):
