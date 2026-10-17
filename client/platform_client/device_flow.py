@@ -44,13 +44,12 @@ DEFAULT_GITHUB_CLIENT_ID = 'Ov23liw7qPBHHzUfjfZA'
 GITHUB_CLIENT_ID_ENV = 'POSITRONIC_PLATFORM_GITHUB_CLIENT_ID'
 WORKOS_CLIENT_ID_ENV = 'POSITRONIC_PLATFORM_WORKOS_CLIENT_ID'
 
-# The OAuth spelling of every field this flow reads or writes. The step that writes one and the step
-# that reads it have to agree, so each is named once.
+# The OAuth spelling of each field that more than one step writes or reads. Those steps have to agree,
+# so each is named once.
 _CLIENT_ID_FIELD = 'client_id'
 _DEVICE_CODE_FIELD = 'device_code'
 _ERROR_FIELD = 'error'
 _INTERVAL_FIELD = 'interval'
-_SCOPE_FIELD = 'scope'
 
 DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_EXPIRES_IN_S = 900.0
@@ -147,7 +146,7 @@ class DeviceFlow:
         """Step one: ask the provider for a device code, and for the short code the user types."""
         form = {_CLIENT_ID_FIELD: self.client_id}
         if self.provider.scope is not None:
-            form[_SCOPE_FIELD] = self.provider.scope
+            form['scope'] = self.provider.scope
         payload = self._post_form(self.provider.device_authorization_url, form)
         error = payload.get(_ERROR_FIELD)
         if error is not None:

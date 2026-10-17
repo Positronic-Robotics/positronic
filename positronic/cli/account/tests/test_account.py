@@ -185,6 +185,16 @@ def test_register_with_a_credential_reads_no_sign_in_settings(platform, run_comm
     assert platform.paths == [routes.USERS_REGISTER]
 
 
+def test_an_empty_credential_is_refused_rather_than_read_as_a_request_to_sign_in(platform, run_command, monkeypatch):
+    monkeypatch.setenv(gateway_module.CREDENTIAL_ENV, '')
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register)
+
+    assert gateway_module.CREDENTIAL_ENV in str(raised.value) and raised.value.fault is Fault.USAGE
+    assert platform.seen is None
+
+
 def test_register_without_a_credential_refuses_a_plain_http_platform_before_any_request(platform, workos, run_command):
     """The platform URL here comes from the environment, so the gate reads the URL the client resolved."""
     with pytest.raises(CommandFailed) as raised:

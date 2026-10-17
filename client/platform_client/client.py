@@ -270,10 +270,22 @@ class PlatformClient:
     def _get(self, path: str, model: type[M], *, query: BaseModel | None = None, auth: Auth = Auth.REQUIRED) -> M:
         return model.model_validate_json(self._send('GET', path, query=query, auth=auth).content)
 
-    def _post(self, path: str, request: BaseModel, model: type[M], *, auth: Auth = Auth.REQUIRED, **kwargs: Any) -> M:
+    def _post(
+        self,
+        path: str,
+        request: BaseModel,
+        model: type[M],
+        *,
+        auth: Auth = Auth.REQUIRED,
+        timeout: httpx.Timeout | None = None,
+    ) -> M:
         # This dump reveals the registry password. Every other dump masks it.
         body = request.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
-        return model.model_validate_json(self._send('POST', path, json=body, auth=auth, **kwargs).content)
+        # None keeps the client's own timeout.
+        sent = self._send(
+            'POST', path, json=body, auth=auth, timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout
+        )
+        return model.model_validate_json(sent.content)
 
     def _send(
         self, method: str, path: str, *, query: BaseModel | None = None, auth: Auth = Auth.REQUIRED, **kwargs: Any

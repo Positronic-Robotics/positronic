@@ -74,11 +74,14 @@ def register(
     if not isinstance(rotate, bool):
         raise CommandFailed(f'rotate is True or False, not {rotate!r}', Fault.USAGE)
     credential = os.environ.get(CREDENTIAL_ENV)
+    # Unset runs the sign-in. Empty is a script whose secret did not arrive, and a sign-in would wait for a person.
+    if credential == '':
+        raise CommandFailed(f'{CREDENTIAL_ENV} is empty: set a token, or unset it to sign in', Fault.USAGE)
     # A key is minted once and cannot be fetched again, so the destination is named before the
     # platform mints one: a config directory that cannot be resolved would otherwise cost the key.
     directory = config_dir(os.environ)
     with gateway(platform_url, key_required=False) as client, _naming_rotate_when_the_answer_is_lost():
-        if credential:
+        if credential is not None:
             response = client.register(RegisterRequest(credential=credential, alias=alias, rotate=rotate))
         else:
             response = _register_by_sign_in(client, alias=alias, rotate=rotate, plaintext_http=plaintext_http)
