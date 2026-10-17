@@ -3,7 +3,8 @@
 Walkthroughs for the competition's sim qualifier, on top of the same client every other caller uses.
 
 - `enter.py` — the `competition-enter` command: show the terms and what becomes public, with `--yes` enter
-  your team, and with `--accept-terms` also accept the terms, which the first submission needs.
+  your team, and with `--accept-terms=<version>` also accept that version of the terms, which the first
+  submission needs.
   It holds its own copy of the models of the competition's three routes, `competition.terms`,
   `competition.enter` and `competition.accept_terms`, because the client package carries no engagement words. A test pins their field
   names.

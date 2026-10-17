@@ -61,7 +61,7 @@ def test_without_the_flag_the_command_shows_what_becomes_public_and_enters_nothi
     gateway = StubGateway()
 
     with gateway.client() as client:
-        enter.run(client, confirmed=False, accepts_terms=False)
+        enter.run(client, confirmed=False, accepted_version=None)
 
     shown = capsys.readouterr().out
     assert TERMS.version in shown and TERMS.url in shown and 'Your data' in shown and 'videos of your runs' in shown
@@ -72,7 +72,7 @@ def test_the_flag_enters_with_no_terms(capsys):
     gateway = StubGateway()
 
     with gateway.client() as client:
-        enter.run(client, confirmed=True, accepts_terms=False)
+        enter.run(client, confirmed=True, accepted_version=None)
 
     assert gateway.paths() == [COMPETITION_TERMS, COMPETITION_ENTER]
     # rules-allow: hardcoded-keys — the test pins the request's wire spelling.
@@ -82,11 +82,11 @@ def test_the_flag_enters_with_no_terms(capsys):
     assert capsys.readouterr().out.endswith('entered the competition on 2026-10-14\n')
 
 
-def test_accept_terms_enters_and_accepts_the_version_the_command_showed(capsys):
+def test_accept_terms_enters_and_sends_the_version_the_team_approved(capsys):
     gateway = StubGateway()
 
     with gateway.client() as client:
-        enter.run(client, confirmed=False, accepts_terms=True)
+        enter.run(client, confirmed=False, accepted_version=TERMS.version)
 
     assert gateway.paths() == [COMPETITION_TERMS, COMPETITION_ENTER, COMPETITION_ACCEPT_TERMS]
     sent = enter.AcceptTermsRequest.model_validate_json(gateway.requests[2].content)
@@ -99,16 +99,26 @@ def test_accept_terms_without_a_key_stops_before_the_entry():
     gateway = StubGateway()
 
     with gateway.client(api_key=None) as client, pytest.raises(SystemExit):
-        enter.run(client, confirmed=False, accepts_terms=True)
+        enter.run(client, confirmed=False, accepted_version=TERMS.version)
 
     assert gateway.paths() == [COMPETITION_TERMS]
+
+
+def test_accept_terms_sends_the_approved_version_and_not_a_newer_current_one():
+    gateway = StubGateway()
+
+    with gateway.client() as client:
+        enter.run(client, confirmed=False, accepted_version='2026-01-01')
+
+    sent = enter.AcceptTermsRequest.model_validate_json(gateway.requests[2].content)
+    assert sent.terms_version == '2026-01-01' != TERMS.version
 
 
 def test_the_flag_without_a_key_stops_before_the_entry():
     gateway = StubGateway()
 
     with gateway.client(api_key=None) as client, pytest.raises(SystemExit) as raised:
-        enter.run(client, confirmed=True, accepts_terms=False)
+        enter.run(client, confirmed=True, accepted_version=None)
 
     assert 'platform-register' in str(raised.value) and gateway.paths() == [COMPETITION_TERMS]
 
@@ -131,7 +141,7 @@ def test_an_organizer_entry_says_so(capsys):
     gateway = StubGateway(entry=organizer)
 
     with gateway.client() as client:
-        enter.run(client, confirmed=True, accepts_terms=False)
+        enter.run(client, confirmed=True, accepted_version=None)
 
     assert 'as an organizer' in capsys.readouterr().out
 

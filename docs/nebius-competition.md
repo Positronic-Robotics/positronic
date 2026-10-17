@@ -187,8 +187,9 @@ positronic eval list
 ```
 
 - The platform refuses the first submission of your team until your team accepts the terms. Read the
-  [terms](https://competition.phail.ai/terms), then run `competition-enter --accept-terms` and submit
-  again. The command shows the version that you accept, and the platform records it with the time.
+  [terms](https://competition.phail.ai/terms), then run `competition-enter --accept-terms=<version>` with
+  the version that you read, and submit again. The platform refuses a version that is not current, and it
+  records the version and the time.
   A team that accepted the terms submits again with no new acceptance.
 - Pin the image by its digest. A tag can move to an image that you did not test.
 - Reuse the transaction key only to retry the same submission. The same key returns the same submission,

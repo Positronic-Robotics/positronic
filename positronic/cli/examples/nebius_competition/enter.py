@@ -1,9 +1,9 @@
 """Enter your team in the Physical AI Competition.
 
 Usage
-  competition-enter                 # show what becomes public, and where to read how your data is used
-  competition-enter --yes           # the same, then enter your team
-  competition-enter --accept-terms  # the same, then enter your team and accept the terms it shows
+  competition-enter                           # show what becomes public, and where to read how your data is used
+  competition-enter --yes                     # the same, then enter your team
+  competition-enter --accept-terms=<version>  # the same, then enter your team and accept that version
 
 The key comes from POSITRONIC_PLATFORM_API_KEY, which `platform-register` prints. The entry asks for no
 terms. The platform refuses the first submission of a team until the team accepts them.
@@ -72,7 +72,7 @@ def entry_notice(terms: CompetitionTerms) -> str:
     """The terms, what the competition publishes about the team, and where to read how it uses the team's data."""
     return (
         f'Terms of the Physical AI Competition, version {terms.version}: {terms.url}\n'
-        'Your team accepts them with its first submission: run again with --accept-terms.\n'
+        f'Your team accepts them with its first submission: run again with --accept-terms={terms.version}.\n'
         'The competition publishes your team name and the date you entered when you enter.\n'
         'It publishes your scores and the videos of your runs when they are scored.\n'
         'All of this stays public after the competition.\n'
@@ -89,17 +89,19 @@ def entry_line(entry: CompetitionEntry) -> str:
     return f'entered the competition on {day}, and accepted the terms version {entry.terms_version}'
 
 
-def run(client: CompetitionClient, *, confirmed: bool, accepts_terms: bool) -> None:
+def run(client: CompetitionClient, *, confirmed: bool, accepted_version: str | None) -> None:
+    """`accepted_version` is the terms version that the team approved, or None. The gateway refuses a version
+    that is not current, so a version published after the approval is never accepted in its place."""
     terms = client.terms()
     print(entry_notice(terms))
-    if not confirmed and not accepts_terms:
+    if not confirmed and accepted_version is None:
         print('To enter your team, run again with --yes.')
         return
     if client.api_key is None:
         raise SystemExit(f'set {API_KEY_ENV} to the key `platform-register` prints')
     entry = client.enter(EnterRequest())
-    if accepts_terms:
-        entry = client.accept_terms(AcceptTermsRequest(terms_version=terms.version))
+    if accepted_version is not None:
+        entry = client.accept_terms(AcceptTermsRequest(terms_version=accepted_version))
     print(entry_line(entry))
 
 
@@ -107,13 +109,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--yes', action='store_true', help='enter your team in the competition')
     parser.add_argument(
-        '--accept-terms', action='store_true', help='enter your team, and accept the terms shown for your team'
+        '--accept-terms',
+        metavar='VERSION',
+        default=None,
+        help='enter your team, and accept this version of the terms for your team',
     )
     parser.add_argument('--platform-url', default=None, help=f'the platform to enter on, else {API_URL_ENV}')
     args = parser.parse_args()
     try:
         with CompetitionClient(args.platform_url) as client:
-            run(client, confirmed=args.yes, accepts_terms=args.accept_terms)
+            run(client, confirmed=args.yes, accepted_version=args.accept_terms)
     except (PlatformError, httpx.HTTPError, ValidationError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
