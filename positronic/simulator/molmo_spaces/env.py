@@ -107,6 +107,7 @@ class MolmoSpacesEnv(EnvProtocol):
         self._control_dt: float | None = None
         self._meta: dict[str, Any] | None = None
         self._camera_names: list[str] = []
+        self._arm_targets = mapping.ArmTargets()
 
     def _episodes_of(self, bench: mapping.BenchmarkPath) -> list[Any]:
         if bench not in self._episodes:
@@ -210,8 +211,9 @@ class MolmoSpacesEnv(EnvProtocol):
         obs, _info = self._task.reset()  # One observation dict per environment.
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
+        self._arm_targets = mapping.ArmTargets()
         return {
-            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(env_obs)}],
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(env_obs, arm_error=False)}],
             protocol.FRAME_META: self._meta,
             protocol.FRAME_ROBOT_META: {},  # The client supplies the robot model through static_meta.
             protocol.FRAME_CONTROL_DT: self._control_dt,
@@ -220,19 +222,23 @@ class MolmoSpacesEnv(EnvProtocol):
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
         (action,) = actions.values()  # MolmoSpaces runs one scene per server, so this server serves one slot
         wire = protocol.single_arm(action)
-        arm = mapping.wire_command_to_arm_action(
+        arm = self._arm_targets.step(
             wire[protocol.ROBOT_COMMAND], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
         )
         gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)
         obs, _reward, _term, _trunc, _infos = self._task.step({
-            mapping.MOLMO_ARM_GROUP: arm,
+            mapping.MOLMO_ARM_GROUP: arm.target,
             mapping.MOLMO_GRIPPER_GROUP: gripper,
         })
         success = bool(self._task.judge_success())
         done = success or bool(self._task.is_done())
         return {
             protocol.SLOTS: [
-                {protocol.FRAME_OBS: self._observe(obs[0]), protocol.FRAME_DONE: done, protocol.FRAME_SUCCESS: success}
+                {
+                    protocol.FRAME_OBS: self._observe(obs[0], arm_error=arm.error),
+                    protocol.FRAME_DONE: done,
+                    protocol.FRAME_SUCCESS: success,
+                }
             ],
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
@@ -247,8 +253,8 @@ class MolmoSpacesEnv(EnvProtocol):
         )
         return eef_robot[:3, 3].copy(), eef_robot[:3, :3].copy()
 
-    def _ik(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
-        """Solve a robot-frame grasp-site target with MolmoSpaces' IK."""
+    def _ik(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray | None:
+        """Solve a robot-frame grasp-site target with MolmoSpaces' IK; None where it finds no solution."""
         pose = np.eye(4)
         pose[:3, 3] = target_pos
         pose[:3, :3] = target_rot
@@ -260,11 +266,9 @@ class MolmoSpacesEnv(EnvProtocol):
             base_pose=self._robot_view.base.pose,
             rel_to_base=True,
         )
-        if solution is None:
-            raise RuntimeError(f'MolmoSpaces IK failed for robot-frame target pose:\n{pose}')
-        return solution[mapping.MOLMO_ARM_GROUP]
+        return None if solution is None else solution[mapping.MOLMO_ARM_GROUP]
 
-    def _observe(self, env_obs: dict[str, Any]) -> dict[str, Any]:
+    def _observe(self, env_obs: dict[str, Any], *, arm_error: bool) -> dict[str, Any]:
         """Raw observations, including the grasp-site pose in the robot base frame."""
         arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
         eef_robot = np.asarray(arm.leaf_frame_to_robot, dtype=np.float64)
@@ -280,6 +284,7 @@ class MolmoSpacesEnv(EnvProtocol):
                 mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
             ),
             mapping.OBS_SIM_STATE: self._full_physics_state(),
+            protocol.OBS_ARM_ERROR: arm_error,
         }
         for name in self._camera_names:
             payload[name] = np.ascontiguousarray(env_obs[name])

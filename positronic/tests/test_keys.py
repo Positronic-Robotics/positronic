@@ -2,7 +2,6 @@ import ast
 from pathlib import Path
 
 import eval_vocabulary
-import pytest
 
 from positronic import keys
 from positronic.eval import keys as eval_keys
@@ -103,13 +102,3 @@ def test_keys_modules_import_only_from_the_vocabulary():
 def test_an_import_from_outside_the_vocabulary_is_found():
     source = 'from eval_vocabulary.episode import TASK\nimport os\nfrom eval_vocabulary_x import a\nfrom . import b\n'
     assert _lines_importing_outside_the_vocabulary(source) == [2, 3, 4]
-
-
-def test_channel_arm_inverts_arm_channel():
-    for arm in (None, keys.LEFT_ARM, keys.RIGHT_ARM):
-        assert keys.channel_arm(keys.arm_channel(keys.ROBOT_COMMAND, arm), keys.ROBOT_COMMAND) == arm
-
-
-def test_channel_arm_refuses_a_name_from_another_channel():
-    with pytest.raises(ValueError, match='not a'):
-        keys.channel_arm(keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM), keys.ROBOT_COMMAND)

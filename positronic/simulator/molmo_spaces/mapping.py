@@ -163,8 +163,11 @@ def wire_command_to_arm_action(
     *,
     ik: Callable[[np.ndarray, np.ndarray], Any],
     current_eef: tuple[Any, Any],
-) -> np.ndarray:
-    """Absolute arm joint targets; ``ik`` and ``current_eef`` use robot-frame grasp-site poses."""
+) -> np.ndarray | None:
+    """Absolute arm joint targets, or None where ``ik`` finds no solution.
+
+    ``ik`` and ``current_eef`` use robot-frame grasp-site poses.
+    """
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
     match command[protocol.COMMAND_TYPE]:
         case protocol.JOINT_POS:
@@ -177,16 +180,62 @@ def wire_command_to_arm_action(
         case protocol.HOLD:
             target = current
         case protocol.CARTESIAN:
-            target = np.asarray(ik(*unpack_wire_pose(command[protocol.COMMAND_POSE])), dtype=np.float32).reshape(-1)
+            solution = ik(*unpack_wire_pose(command[protocol.COMMAND_POSE]))
+            if solution is None:
+                return None
+            target = np.asarray(solution, dtype=np.float32).reshape(-1)
         case protocol.CARTESIAN_DELTA:
             delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            target_pos, target_rot = compose_reference_delta(*current_eef, delta_pos, delta_rot)
-            target = np.asarray(ik(target_pos, target_rot), dtype=np.float32).reshape(-1)
+            solution = ik(*compose_reference_delta(*current_eef, delta_pos, delta_rot))
+            if solution is None:
+                return None
+            target = np.asarray(solution, dtype=np.float32).reshape(-1)
         case other:
             raise ValueError(
                 f'{other!r} is not a canonical command type; the contract is {list(protocol.CANONICAL_COMMAND_TYPES)}'
             )
     return target.astype(np.float32)
+
+
+class ArmStep(NamedTuple):
+    """The arm's joint target for one step, and whether the step reports an arm error."""
+
+    target: np.ndarray
+    error: bool
+
+
+def _same_command(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    return a.keys() == b.keys() and all(np.array_equal(a[name], b[name]) for name in a)
+
+
+class ArmTargets:
+    """The arm's joint targets for successive wire commands of one episode.
+
+    A command out of IK reach holds the last target, or the measured joints before the first one. The error reads
+    true only on the step a refused command first arrives: a client sends its held command again on each step, and
+    an error that never clears pauses the policy.
+    """
+
+    def __init__(self) -> None:
+        self._target: np.ndarray | None = None
+        self._previous: dict[str, Any] | None = None
+
+    def step(
+        self,
+        command: dict[str, Any],
+        current_q: Any,
+        *,
+        ik: Callable[[np.ndarray, np.ndarray], Any],
+        current_eef: tuple[Any, Any],
+    ) -> ArmStep:
+        repeated = self._previous is not None and _same_command(command, self._previous)
+        self._previous = command
+        target = wire_command_to_arm_action(command, current_q, ik=ik, current_eef=current_eef)
+        if target is None:
+            held = np.asarray(current_q, dtype=np.float32).reshape(-1) if self._target is None else self._target
+            return ArmStep(held, error=not repeated)
+        self._target = target
+        return ArmStep(target, error=False)
 
 
 def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | None = None) -> int:

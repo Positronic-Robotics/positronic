@@ -25,7 +25,6 @@ from positronic.cfg.eval.sim import robolab as robolab_cfg
 from positronic.cli.eval.run import main
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
@@ -45,7 +44,7 @@ from positronic.simulator.env_server.tests.mujoco_env import (
     make_mujoco_env,
     remote_stack_cubes_eval,
 )
-from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE, SIM_STATE_INTEGRATION, MujocoFrankaState
+from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE, SIM_STATE_INTEGRATION
 from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.tests.testing_coutils import drive_scheduler
 
@@ -380,31 +379,6 @@ class TestChannelMapAction:
         assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.HOLD
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
 
-    def test_a_refused_command_is_dropped_so_its_arm_holds_in_error(self):
-        adapter = _CommandOnlyAdapter()
-        adapter.action(_held(robot_command=roboarm_command.CartesianPosition(geom.Transform3D.identity)))
-        observations = {keys.ROBOT_STATE: MujocoFrankaState()}
-        adapter.refused([keys.ROBOT_COMMAND], observations)
-        assert observations[keys.ROBOT_STATE].status is RobotStatus.ERROR
-        action = adapter.action(_held(robot_command=None))
-        assert action[keys.ROBOT_COMMAND][protocol.COMMAND_TYPE] == protocol.HOLD
-
-    def test_a_refusal_leaves_the_other_arms_command_held(self):
-        adapter = _CommandOnlyAdapter()
-        adapter.action(
-            _held(**{
-                'robot_command.left': roboarm_command.JointPosition(np.zeros(6)),
-                'robot_command.right': roboarm_command.JointPosition(np.zeros(6)),
-            })
-        )
-        observations = {'robot_state.left': MujocoFrankaState(), 'robot_state.right': MujocoFrankaState()}
-        adapter.refused(['robot_command.left'], observations)
-        assert observations['robot_state.left'].status is RobotStatus.ERROR
-        assert observations['robot_state.right'].status is RobotStatus.AVAILABLE
-        action = adapter.action(_held(**{'robot_command.left': None, 'robot_command.right': None}))
-        assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.HOLD
-        assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
-
 
 class TestSingleArm:
     """``single_arm`` is how a single-arm env reads the channel map it can act on."""
@@ -562,10 +536,9 @@ _COUNTDOWN = 'countdown'
 class _CountdownEnv(EnvProtocol):
     """Observe step counts starting at zero on reset; ``done_after=None`` never terminates."""
 
-    def __init__(self, done_after: int | None = None, control_dt: float = 0.1, refuse_at: int | None = None):
+    def __init__(self, done_after: int | None = None, control_dt: float = 0.1):
         self._done_after = done_after
         self._control_dt = control_dt
-        self._refuse_at = refuse_at
         self._steps = 0
 
     def tasks(self, spec):
@@ -588,10 +561,12 @@ class _CountdownEnv(EnvProtocol):
     def step(self, actions):
         self._steps += 1
         done = self._done_after is not None and self._steps >= self._done_after
-        slot = {protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)}, protocol.FRAME_DONE: done}
-        if self._steps == self._refuse_at:
-            slot[protocol.FRAME_REFUSED_COMMANDS] = [keys.ROBOT_COMMAND]
-        return {protocol.SLOTS: [slot], protocol.FRAME_CONTROL_DT: self._control_dt}
+        return {
+            protocol.SLOTS: [
+                {protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)}, protocol.FRAME_DONE: done}
+            ],
+            protocol.FRAME_CONTROL_DT: self._control_dt,
+        }
 
     def close(self):
         pass
@@ -606,9 +581,6 @@ class _CountdownAdapter(EnvAdapter):
 
     def action(self, commands):
         return {}
-
-    def refused(self, channels, observations):
-        pass
 
     def observations(self, raw_obs):
         return {'value': raw_obs['q']}
@@ -680,43 +652,6 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
 
         drive_scheduler(scheduler, steps=3)  # free-run: the env steps even with no command delivered
         assert obs_rx.read().data[0] >= 1
-
-
-class _CountdownArmAdapter(WireCommandAdapter):
-    """Reports the step count as the joints of an arm state."""
-
-    def task_params(self, records):
-        return [{eval_keys.TASK: record['name']} for record in records]
-
-    def _reset_token(self, params):
-        return params.get(eval_keys.SEED)
-
-    def privileged(self, raw_obs):
-        return {}
-
-    def terminal(self, result):
-        return None
-
-    def observations(self, raw_obs):
-        state = MujocoFrankaState()
-        state.encode(raw_obs['q'], np.zeros(7), geom.Transform3D.identity)
-        return {keys.ROBOT_STATE: state}
-
-
-@pytest.mark.timeout(60.0)
-def test_the_arm_reports_error_on_the_step_whose_command_the_env_refused():
-    with serve_env(_CountdownEnv(refuse_at=2)) as (host, port), pimm.World(virtual_time=True) as world:
-        proxy = RemoteEnvControlSystem(_CountdownArmAdapter(), nullcontext((host, port)))
-        state_rx = world.pair(proxy.observations[keys.ROBOT_STATE])
-        scheduler = world.start([proxy])
-        proxy.reset({eval_keys.SEED: 0})
-        statuses = {}
-        while len(statuses) < 4:
-            drive_scheduler(scheduler, steps=1)
-            state = state_rx.value
-            statuses[int(state.q[0])] = state.status
-        assert statuses[2] is RobotStatus.ERROR
-        assert all(status is RobotStatus.AVAILABLE for step, status in statuses.items() if step != 2)
 
 
 @pytest.mark.timeout(60.0)

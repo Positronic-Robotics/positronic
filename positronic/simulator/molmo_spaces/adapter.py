@@ -6,6 +6,7 @@ from typing import Any
 
 import pimm
 from positronic import geom, keys
+from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -66,6 +67,8 @@ class MolmoAdapter(WireCommandAdapter):
         ee_pose = geom.Transform3D(raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT]))
         state = MujocoFrankaState()
         state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
+        if raw_obs[protocol.OBS_ARM_ERROR]:
+            state.set_status(RobotStatus.ERROR)
         obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[mapping.OBS_GRIP])}
         for logical, candidates in self._cameras.items():
             key = next((c for c in candidates if c in raw_obs), candidates[-1])

@@ -8,17 +8,14 @@ benchmark ships one adapter (``vendors/``-style); the native ``MujocoSim`` fixtu
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Collection
 from typing import Any, final
 
 import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.simulator.env_server import protocol
-from positronic.simulator.mujoco.sim import MujocoFrankaState
 
 
 class EnvAdapter(ABC):
@@ -42,11 +39,6 @@ class EnvAdapter(ABC):
         A channel delivers a command only when one comes due, so the adapter owns what happens in between —
         e.g. hold the last commanded value, the absolute-mode invariant.
         """
-
-    @abstractmethod
-    def refused(self, channels: Collection[str], observations: dict[str, Any]) -> None:
-        """The env could not execute the latest command on ``channels``: their arms hold, and their states in
-        ``observations``, as this adapter mapped them, read ``ERROR``."""
 
     @abstractmethod
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
@@ -115,11 +107,10 @@ class WireCommandAdapter(EnvAdapter):
     """An adapter whose action is one wire payload per command channel.
 
     The command side of every remote benchmark adapter: it holds an absolute setpoint until the next command
-    arrives or the env refuses it, and fires a relative delta once. All action *encoding* — how the tagged
-    command becomes the env's native action — stays server-side with the env's own model. Subclasses implement
-    ``_reset_token`` (the base clears the per-trial command state around it) and keep the task, observation
-    and terminal mappings to themselves. Their ``observations`` publish each arm's state as a
-    ``MujocoFrankaState`` under ``arm_channel(ROBOT_STATE, arm)``, where ``refused`` marks it.
+    arrives and fires a relative delta once. All action *encoding* — how the tagged command becomes the env's
+    native action — stays server-side with the env's own model. Subclasses implement ``_reset_token`` (the
+    base clears the per-trial command state around it) and keep the task, observation and terminal mappings
+    to themselves.
     """
 
     def __init__(self, env_control_frame: geom.Transform3D | None = None):
@@ -145,15 +136,6 @@ class WireCommandAdapter(EnvAdapter):
             if msg is not None and msg.updated:
                 self._held[name] = msg.data
         return {name: self._channel_payload(name) for name in commands}
-
-    def refused(self, channels: Collection[str], observations: dict[str, Any]) -> None:
-        for name in channels:
-            # The env would refuse a re-sent command again, and the arm would read ERROR as long as it is held.
-            self._held.pop(name, None)
-            state: MujocoFrankaState = observations[
-                keys.arm_channel(keys.ROBOT_STATE, keys.channel_arm(name, keys.ROBOT_COMMAND))
-            ]
-            state.set_status(RobotStatus.ERROR)
 
     def _channel_payload(self, name: str) -> Any:
         if not keys.is_robot_command(name):

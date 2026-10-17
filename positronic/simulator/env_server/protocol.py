@@ -54,8 +54,9 @@ FRAME_ROBOT_META = 'robot_meta'
 FRAME_CONTROL_DT = 'control_dt'
 FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
-# Optional in a step's slot: the command channels whose command the env could not execute. The arm holds.
-FRAME_REFUSED_COMMANDS = 'refused_commands'
+# In the observations of an env that can refuse an arm command: true on the step whose new command it could not
+# execute. The arm holds its last target, and the same command sent again does not set the field again.
+OBS_ARM_ERROR = 'arm_error'
 # An env answers the server one entry per slot under this field; the wire to a client carries one slot's frame.
 SLOTS = 'slots'
 

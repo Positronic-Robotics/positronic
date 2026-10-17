@@ -47,15 +47,6 @@ def arm_channel(channel: str, arm: str | None) -> str:
     return channel if arm is None else f'{channel}.{arm}'
 
 
-def channel_arm(name: str, channel: str) -> str | None:
-    """The arm whose ``channel`` is ``name``; the inverse of ``arm_channel``."""
-    if name == channel:
-        return None
-    if not name.startswith(f'{channel}.'):
-        raise ValueError(f'{name!r} is not a {channel!r} channel')
-    return name.removeprefix(f'{channel}.')
-
-
 # The arms of a two-arm embodiment, left first.
 LEFT_ARM, RIGHT_ARM = 'left', 'right'
 BIMANUAL_ARMS = (LEFT_ARM, RIGHT_ARM)

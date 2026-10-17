@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import keys as molmo_keys
@@ -39,6 +40,13 @@ def test_observations_assemble_robot_state():
     assert np.allclose(state.ee_pose.translation, payload[mapping.OBS_EEF_POS])
     assert np.allclose(state.ee_pose.rotation.as_quat, payload[mapping.OBS_EEF_QUAT])
     assert obs[keys.GRIP] == 0.5
+
+
+@pytest.mark.parametrize('arm_error, status', [(True, RobotStatus.ERROR), (False, RobotStatus.AVAILABLE)])
+def test_the_arm_error_sets_the_robot_status(arm_error, status):
+    payload = _payload()
+    payload[protocol.OBS_ARM_ERROR] = arm_error
+    assert _adapter().observations(payload)[keys.ROBOT_STATE].status is status
 
 
 _WRIST_NEW, _WRIST_OLD = WRIST_CAMERAS

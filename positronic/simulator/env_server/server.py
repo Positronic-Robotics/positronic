@@ -70,8 +70,7 @@ class EnvProtocol(ABC):
         """Apply each slot's raw action for one control period; return ``slots`` and ``control_dt``.
 
         ``actions`` maps a slot index to its action and leaves out every slot that is not in an episode; the env
-        holds such a slot. ``slots`` answers with one ``{'obs', 'done'}`` per slot, in slot order. A slot also
-        names under ``refused_commands`` each command channel whose command the env could not execute.
+        holds such a slot. ``slots`` answers with one ``{'obs', 'done'}`` per slot, in slot order.
         ``control_dt`` is the wait until the next step and may vary each step.
         """
 

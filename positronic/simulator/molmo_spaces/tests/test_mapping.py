@@ -16,8 +16,10 @@ _JOINTS = 7
 _MEASURED_EEF = (np.zeros(3), np.eye(3))
 
 
-def _action(command, current, *, ik=lambda _pos, _rot: np.zeros(_JOINTS), current_eef=_MEASURED_EEF):
-    return mapping.wire_command_to_arm_action(command, current, ik=ik, current_eef=current_eef)
+def _action(command, current, *, ik=lambda _pos, _rot: np.zeros(_JOINTS), current_eef=_MEASURED_EEF) -> np.ndarray:
+    target = mapping.wire_command_to_arm_action(command, current, ik=ik, current_eef=current_eef)
+    assert target is not None
+    return target
 
 
 def test_grip_qpos_normalization():
@@ -117,6 +119,59 @@ def test_cartesian_delta_composes_onto_the_measured_eef_before_solving():
     }
     _action(cmd, np.zeros(_JOINTS), ik=ik, current_eef=(np.array([0.5, 0.0, 0.2]), np.eye(3)))
     assert np.allclose(seen['pos'], [0.5, 0.1, 0.2])
+
+
+def _pose_command(x: float) -> dict:
+    return {
+        protocol.COMMAND_TYPE: protocol.CARTESIAN,
+        protocol.COMMAND_POSE: np.concatenate([[x, 0.0, 0.0], np.eye(3).reshape(-1)]),
+    }
+
+
+def _reach_up_to(limit: float):
+    """An IK that solves a pose whose x is at most ``limit``, with every joint at that x."""
+    return lambda pos, _rot: np.full(_JOINTS, pos[0]) if pos[0] <= limit else None
+
+
+@pytest.mark.parametrize('command_type', [protocol.CARTESIAN, protocol.CARTESIAN_DELTA])
+def test_a_pose_the_ik_cannot_solve_gives_no_target(command_type):
+    pose = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
+    field = protocol.COMMAND_POSE if command_type == protocol.CARTESIAN else protocol.COMMAND_DELTA
+    command = {protocol.COMMAND_TYPE: command_type, field: pose}
+    no_solution = mapping.wire_command_to_arm_action(
+        command, np.zeros(_JOINTS), ik=lambda *_: None, current_eef=_MEASURED_EEF
+    )
+    assert no_solution is None
+
+
+def _arm_step(targets: mapping.ArmTargets, command: dict) -> mapping.ArmStep:
+    return targets.step(command, np.zeros(_JOINTS), ik=_reach_up_to(0.5), current_eef=_MEASURED_EEF)
+
+
+def test_an_unreachable_command_holds_the_last_target_and_reports_an_error_once():
+    targets = mapping.ArmTargets()
+    reached = _arm_step(targets, _pose_command(0.3))
+    assert np.allclose(reached.target, 0.3) and not reached.error
+    refused = _arm_step(targets, _pose_command(0.9))
+    assert np.allclose(refused.target, 0.3) and refused.error
+    sent_again = _arm_step(targets, _pose_command(0.9))
+    assert np.allclose(sent_again.target, 0.3) and not sent_again.error
+    reached = _arm_step(targets, _pose_command(0.4))
+    assert np.allclose(reached.target, 0.4) and not reached.error
+
+
+def test_a_different_unreachable_command_reports_the_error_again():
+    targets = mapping.ArmTargets()
+    assert _arm_step(targets, _pose_command(0.9)).error
+    refused = _arm_step(targets, _pose_command(0.8))
+    assert np.allclose(refused.target, 0.0) and refused.error
+
+
+def test_an_unreachable_command_after_a_reachable_one_reports_the_error_again():
+    targets = mapping.ArmTargets()
+    _arm_step(targets, _pose_command(0.9))
+    _arm_step(targets, _pose_command(0.3))
+    assert _arm_step(targets, _pose_command(0.9)).error
 
 
 def test_unknown_command_names_the_canonical_contract():
