@@ -1,4 +1,4 @@
-"""`enter.py` over a stub gateway: what it shows, the empty entry it sends, and the key it needs."""
+"""`enter.py` over a stub gateway: what it shows, the entry and the acceptance it sends, and the key it needs."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from platform_client.ids import ApiKey
 
 from positronic.cli.examples.nebius_competition import enter
 from positronic.cli.examples.nebius_competition.enter import (
+    COMPETITION_ACCEPT_TERMS,
     COMPETITION_ENTER,
     COMPETITION_TERMS,
     CompetitionClient,
@@ -42,6 +43,10 @@ class StubGateway:
             return httpx.Response(200, json=TERMS.model_dump(mode='json'))
         if request.url.path == COMPETITION_ENTER:
             return self.refusal or httpx.Response(200, json=self.entry.model_dump(mode='json'))
+        if request.url.path == COMPETITION_ACCEPT_TERMS:
+            accepted = self.entry.model_copy()
+            accepted.terms_version = TERMS.version
+            return httpx.Response(200, json=accepted.model_dump(mode='json'))
         raise AssertionError(f'the command reached a route it has no business at: {request.url.path}')
 
     def client(self, api_key: ApiKey | None = KEY) -> CompetitionClient:
@@ -56,10 +61,10 @@ def test_without_the_flag_the_command_shows_what_becomes_public_and_enters_nothi
     gateway = StubGateway()
 
     with gateway.client() as client:
-        enter.run(client, confirmed=False)
+        enter.run(client, confirmed=False, accepts_terms=False)
 
     shown = capsys.readouterr().out
-    assert TERMS.url in shown and 'Your data' in shown and 'videos of your runs' in shown
+    assert TERMS.version in shown and TERMS.url in shown and 'Your data' in shown and 'videos of your runs' in shown
     assert 'first submission' in shown and '--yes' in shown and gateway.paths() == [COMPETITION_TERMS]
 
 
@@ -67,7 +72,7 @@ def test_the_flag_enters_with_no_terms(capsys):
     gateway = StubGateway()
 
     with gateway.client() as client:
-        enter.run(client, confirmed=True)
+        enter.run(client, confirmed=True, accepts_terms=False)
 
     assert gateway.paths() == [COMPETITION_TERMS, COMPETITION_ENTER]
     # rules-allow: hardcoded-keys — the test pins the request's wire spelling.
@@ -77,11 +82,33 @@ def test_the_flag_enters_with_no_terms(capsys):
     assert capsys.readouterr().out.endswith('entered the competition on 2026-10-14\n')
 
 
+def test_accept_terms_enters_and_accepts_the_version_the_command_showed(capsys):
+    gateway = StubGateway()
+
+    with gateway.client() as client:
+        enter.run(client, confirmed=False, accepts_terms=True)
+
+    assert gateway.paths() == [COMPETITION_TERMS, COMPETITION_ENTER, COMPETITION_ACCEPT_TERMS]
+    sent = enter.AcceptTermsRequest.model_validate_json(gateway.requests[2].content)
+    assert sent.terms_version == TERMS.version
+    assert gateway.requests[2].headers[AUTH_HEADER] == f'Bearer {KEY}'
+    assert f'accepted the terms version {TERMS.version}' in capsys.readouterr().out
+
+
+def test_accept_terms_without_a_key_stops_before_the_entry():
+    gateway = StubGateway()
+
+    with gateway.client(api_key=None) as client, pytest.raises(SystemExit):
+        enter.run(client, confirmed=False, accepts_terms=True)
+
+    assert gateway.paths() == [COMPETITION_TERMS]
+
+
 def test_the_flag_without_a_key_stops_before_the_entry():
     gateway = StubGateway()
 
     with gateway.client(api_key=None) as client, pytest.raises(SystemExit) as raised:
-        enter.run(client, confirmed=True)
+        enter.run(client, confirmed=True, accepts_terms=False)
 
     assert 'platform-register' in str(raised.value) and gateway.paths() == [COMPETITION_TERMS]
 
@@ -104,7 +131,7 @@ def test_an_organizer_entry_says_so(capsys):
     gateway = StubGateway(entry=organizer)
 
     with gateway.client() as client:
-        enter.run(client, confirmed=True)
+        enter.run(client, confirmed=True, accepts_terms=False)
 
     assert 'as an organizer' in capsys.readouterr().out
 
@@ -114,4 +141,5 @@ def test_the_models_keep_the_gateway_s_field_names():
     # rules-allow: hardcoded-keys — these sets pin the wire names of the gateway's separate copy.
     assert set(CompetitionTerms.model_fields) == {'version', 'url'}
     assert set(enter.EnterRequest.model_fields) == set()
+    assert set(enter.AcceptTermsRequest.model_fields) == {'terms_version'}
     assert set(CompetitionEntry.model_fields) == {'entered_at', 'terms_version', 'organizer'}

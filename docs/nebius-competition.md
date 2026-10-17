@@ -38,7 +38,10 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 3. Help me build a policy image, and push it to a container registry
    that I choose.
 4. Test the image with the network denied.
-5. Submit it, pinned by digest, and check its status until the scores
+5. Before the first submission, show me the terms link and ask
+   whether I accept the terms for my team. Never accept the terms
+   without explicit human approval.
+6. Submit it, pinned by digest, and check its status until the scores
    arrive.
 ```
 
@@ -82,9 +85,10 @@ export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 ### Enter the competition
 
-The command shows what becomes public, and the link to the [terms](https://competition.phail.ai/terms).
-Their section "Your data" tells how the organizers use your data. With `--yes`, your team enters. The
-entry asks for no terms: your team accepts them with its first submission.
+The command shows the link to the [terms](https://competition.phail.ai/terms) and their version, and
+what becomes public. The section "Your data" of the terms tells how the organizers use your data. With
+`--yes`, your team enters. The entry asks for no terms: your team accepts them with its first submission
+(see [Submit](#submit)).
 
 ```bash
 competition-enter
@@ -182,6 +186,10 @@ positronic eval status --id=<submission id>
 positronic eval list
 ```
 
+- The platform refuses the first submission of your team until your team accepts the terms. Read the
+  [terms](https://competition.phail.ai/terms), then run `competition-enter --accept-terms` and submit
+  again. The command shows the version that you accept, and the platform records it with the time.
+  A team that accepted the terms submits again with no new acceptance.
 - Pin the image by its digest. A tag can move to an image that you did not test.
 - Reuse the transaction key only to retry the same submission. The same key returns the same submission,
   and it does not count again. A new image or another eval needs a new key: the platform refuses a changed

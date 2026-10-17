@@ -2,9 +2,10 @@
 
 Walkthroughs for the competition's sim qualifier, on top of the same client every other caller uses.
 
-- `enter.py` — the `competition-enter` command: show what becomes public, and with `--yes` enter your team.
-  It holds its own copy of the models of the competition's two routes, `competition.terms` and
-  `competition.enter`, because the client package carries no engagement words. A test pins their field
+- `enter.py` — the `competition-enter` command: show the terms and what becomes public, with `--yes` enter
+  your team, and with `--accept-terms` also accept the terms, which the first submission needs.
+  It holds its own copy of the models of the competition's three routes, `competition.terms`,
+  `competition.enter` and `competition.accept_terms`, because the client package carries no engagement words. A test pins their field
   names.
 - `standings.py` — print the public leaderboards, or every row of one of them. No key is needed.
 - `submit_sample.py` — submit a policy image to one eval, wait for it to finish, and report what it

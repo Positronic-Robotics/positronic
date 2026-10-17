@@ -1,11 +1,13 @@
 """Enter your team in the Physical AI Competition.
 
 Usage
-  competition-enter        # show what becomes public, and where to read how your data is used
-  competition-enter --yes  # the same, then enter your team
+  competition-enter                 # show what becomes public, and where to read how your data is used
+  competition-enter --yes           # the same, then enter your team
+  competition-enter --accept-terms  # the same, then enter your team and accept the terms it shows
 
 The key comes from POSITRONIC_PLATFORM_API_KEY, which `platform-register` prints. The entry asks for no
-terms: your team accepts them with its first submission.
+terms. The platform refuses the first submission of a team until the team accepts them. The gateway refuses
+terms that are not current, and records the version it serves.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationErro
 
 COMPETITION_TERMS = f'{API_PREFIX}/competition.terms'
 COMPETITION_ENTER = f'{API_PREFIX}/competition.enter'
+COMPETITION_ACCEPT_TERMS = f'{API_PREFIX}/competition.accept_terms'
 
 
 class CompetitionTerms(BaseModel):
@@ -36,6 +39,14 @@ class EnterRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
+class AcceptTermsRequest(BaseModel):
+    """`competition.accept_terms`. `terms_version` is the version this command showed the team."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    terms_version: str = Field(min_length=1)
+
+
 class CompetitionEntry(BaseModel):
     """The team's entry. `terms_version` is the version the team accepted last, and None before its first
     submission. `organizer` marks an entry that the organizers made, which accepts no terms."""
@@ -46,7 +57,7 @@ class CompetitionEntry(BaseModel):
 
 
 class CompetitionClient(PlatformClient):
-    """The platform client, with the competition's two routes."""
+    """The platform client, with the competition's three routes."""
 
     def terms(self) -> CompetitionTerms:
         return self._get(COMPETITION_TERMS, CompetitionTerms, auth=Auth.NONE)
@@ -54,16 +65,19 @@ class CompetitionClient(PlatformClient):
     def enter(self, request: EnterRequest) -> CompetitionEntry:
         return self._post(COMPETITION_ENTER, request, CompetitionEntry)
 
+    def accept_terms(self, request: AcceptTermsRequest) -> CompetitionEntry:
+        return self._post(COMPETITION_ACCEPT_TERMS, request, CompetitionEntry)
+
 
 def entry_notice(terms: CompetitionTerms) -> str:
-    """What the competition publishes about the team, where to read how it uses the team's data, and when the
-    team accepts the terms."""
+    """The terms, what the competition publishes about the team, and where to read how it uses the team's data."""
     return (
+        f'Terms of the Physical AI Competition, version {terms.version}: {terms.url}\n'
+        'Your team accepts them with its first submission: run again with --accept-terms.\n'
         'The competition publishes your team name and the date you entered when you enter.\n'
         'It publishes your scores and the videos of your runs when they are scored.\n'
         'All of this stays public after the competition.\n'
-        f'The section "Your data" of the terms tells how the organizers use your data: {terms.url}\n'
-        'Your team accepts the terms with its first submission.'
+        'The section "Your data" of the terms tells how the organizers use your data.'
     )
 
 
@@ -71,27 +85,36 @@ def entry_line(entry: CompetitionEntry) -> str:
     day = f'{entry.entered_at:%Y-%m-%d}'
     if entry.organizer:
         return f'entered the competition on {day} as an organizer'
-    return f'entered the competition on {day}'
+    if entry.terms_version is None:
+        return f'entered the competition on {day}'
+    return f'entered the competition on {day}, and accepted the terms version {entry.terms_version}'
 
 
-def run(client: CompetitionClient, *, confirmed: bool) -> None:
-    print(entry_notice(client.terms()))
-    if not confirmed:
+def run(client: CompetitionClient, *, confirmed: bool, accepts_terms: bool) -> None:
+    terms = client.terms()
+    print(entry_notice(terms))
+    if not confirmed and not accepts_terms:
         print('To enter your team, run again with --yes.')
         return
     if client.api_key is None:
         raise SystemExit(f'set {API_KEY_ENV} to the key `platform-register` prints')
-    print(entry_line(client.enter(EnterRequest())))
+    entry = client.enter(EnterRequest())
+    if accepts_terms:
+        entry = client.accept_terms(AcceptTermsRequest(terms_version=terms.version))
+    print(entry_line(entry))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--yes', action='store_true', help='enter your team in the competition')
+    parser.add_argument(
+        '--accept-terms', action='store_true', help='enter your team, and accept the terms shown for your team'
+    )
     parser.add_argument('--platform-url', default=None, help=f'the platform to enter on, else {API_URL_ENV}')
     args = parser.parse_args()
     try:
         with CompetitionClient(args.platform_url) as client:
-            run(client, confirmed=args.yes)
+            run(client, confirmed=args.yes, accepts_terms=args.accept_terms)
     except (PlatformError, httpx.HTTPError, ValidationError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
