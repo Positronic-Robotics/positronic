@@ -214,7 +214,7 @@ class DeviceFlow:
                 # above ends the flow.
                 interval = max(interval + slow_down_step_s, exc.retry_after_s or 0.0)
                 continue
-            last_failure = None
+            failure_before, last_failure = last_failure, None
             error = payload.get(_ERROR_FIELD)
             outcome = self._outcome_of(error)
             if outcome is PollOutcome.GRANTED:
@@ -226,9 +226,11 @@ class DeviceFlow:
                     interval + slow_down_step_s, self._optional_duration_s(payload, _INTERVAL_FIELD, interval)
                 )
             elif outcome is not PollOutcome.PENDING:
-                raise DeviceFlowError(
-                    terminal_messages.get(outcome, f'{self.provider.name} refused the device code: {error}')
-                )
+                message = terminal_messages.get(outcome, f'{self.provider.name} refused the device code: {error}')
+                if failure_before is not None:
+                    # The poll before may have spent the code, and its token was then lost in transit.
+                    raise ProviderFailed(f'{message}, after a poll that failed: {failure_before}') from failure_before
+                raise DeviceFlowError(message)
 
     @staticmethod
     def _retry_after_s(response: httpx.Response) -> float | None:
@@ -286,10 +288,13 @@ class ClientIds:
     def __post_init__(self) -> None:
         # A provider answers an empty id with an error that names nothing, so an empty override stops here.
         if not self.github:
-            raise ValueError(f'--client-id or {GITHUB_CLIENT_ID_ENV} is empty. Unset it to use the default.')
+            raise ValueError(
+                f'the GitHub client id is empty ({GITHUB_CLIENT_ID_ENV} or its flag): unset it for the default'
+            )
         if self.workos == '':
             raise ValueError(
-                f'--workos-client-id or {WORKOS_CLIENT_ID_ENV} is empty. Unset it to use the one the platform names.'
+                f'the WorkOS client id is empty ({WORKOS_CLIENT_ID_ENV} or its flag): '
+                'unset it for the one the platform names'
             )
 
     @classmethod

@@ -217,10 +217,14 @@ def test_auth_config_reads_the_sign_ins_without_a_key():
 
 
 @pytest.mark.parametrize(('url', 'trusts_env'), [('http://127.0.0.1:8080', False), ('https://gateway.example', True)])
-def test_a_plain_http_platform_ignores_an_environment_proxy(url: str, trusts_env: bool):
+def test_a_plain_http_platform_ignores_an_environment_proxy(url: str, trusts_env: bool, monkeypatch):
     """`HTTP_PROXY` with no matching `NO_PROXY` would carry a plain-http key or token off the machine."""
+    for variable in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'):
+        monkeypatch.setenv(variable, 'http://proxy.invalid:3128')
+    monkeypatch.delenv('NO_PROXY', raising=False)
     with PlatformClient(url) as client:
-        assert client._client.trust_env is trusts_env
+        transport = client._client._transport_for_url(httpx.URL(url))
+        assert (transport is not client._client._transport) is trusts_env
 
 
 def test_register_sends_no_key_even_when_the_client_holds_one():
