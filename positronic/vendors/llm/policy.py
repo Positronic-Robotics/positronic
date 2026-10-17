@@ -29,6 +29,7 @@ from pydantic_ai.tools import ToolDefinition
 from positronic import geom, keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
+from positronic.utils import flatten_dict
 
 from .client import Endpoint
 from .motion import Motion, MoveTo
@@ -353,7 +354,7 @@ class LLMPolicy(Policy):
         ]
 
     def meta(self) -> dict[str, Any]:
-        return {
+        return flatten_dict({
             policy_keys.TYPE: 'llm',
             'model': self.endpoint.model_id,
             'settings': dict(self.endpoint.settings),
@@ -365,7 +366,7 @@ class LLMPolicy(Policy):
             'camera_keys': list(self.camera_keys),
             'image_size': self.image_size,
             'image_horizon': self.image_horizon,
-        }
+        })
 
     def run(self, runtime: Runtime) -> PolicyRun:
         with self.endpoint.open() as request:
