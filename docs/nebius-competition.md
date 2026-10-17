@@ -69,8 +69,9 @@ To update the commands later, run `uv tool upgrade positronic`.
 
 ### Register
 
-Choose a team name. The command prints a code and a link. Open the link, sign in with GitHub, and enter
-the code. The command then prints your API key one time.
+Choose a team name. The command prints a code and a link. Open the link, sign in, and enter the code.
+The sign-in page shows the ways to sign in that the platform takes. The command then prints your API
+key one time.
 
 ```bash
 platform-register --alias="<team name>"
@@ -201,7 +202,7 @@ the platform's [HTTP API](https://platform.positronic.ro/docs), and your own too
 
 ## Use Nebius
 
-Sign up for Nebius Builder with the email address of the GitHub account that you register with. On
+Sign up for Nebius Builder with the email address of the account that you register with. On
 Nebius, you can train your policy, and build and test your image.
 [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) creates a VM for the build and the tests.
 

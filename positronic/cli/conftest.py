@@ -12,6 +12,7 @@ import configuronic as cfn
 import httpx
 import pytest
 from platform_client import config as config_module
+from platform_client import routes
 from platform_client.client import PlatformClient
 from platform_client.enums import ErrorCode
 from platform_client.errors import ApiErrorBody, ErrorEnvelope
@@ -42,7 +43,8 @@ def runs_of_four(secret: str) -> set[str]:
 class StubPlatform:
     """Records what a command sent, and the URL and key it was sent with, and answers a canned payload.
 
-    A payload that is a model goes out as the library dumps it; any other payload goes out as it is.
+    A payload that is a model goes out as the library dumps it; any other payload goes out as it is. It
+    is a platform older than `auth.config` unless a test answers that route.
     """
 
     def __init__(self):
@@ -74,6 +76,8 @@ class StubPlatform:
             raise self.no_answer
         if queued := self.in_turn.get(request.url.path):
             payload, status = queued.pop(0)
+        elif request.url.path == routes.AUTH_CONFIG and routes.AUTH_CONFIG not in self.by_route:
+            payload, status = refusal(ErrorCode.not_found, 'no such route'), 404
         else:
             payload, status = self.by_route.get(request.url.path, (self.payload, self.status))
         body = payload.model_dump(mode='json') if isinstance(payload, BaseModel) else payload
