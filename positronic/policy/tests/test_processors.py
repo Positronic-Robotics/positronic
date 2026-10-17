@@ -437,8 +437,9 @@ def test_repeated_errors_keep_one_recovery_request_and_play_its_answer(execution
         for now_ns in (PERIOD_NS, PERIOD_NS + 1, 2 * PERIOD_NS):
             clock.advance_to_ns(now_ns)
             step = run.send(fault)
+            assert step.commands == {}
             assert len(model.calls) == 2
-        assert step.commands == {MOTOR: 'a2'}
+        assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 4
         assert model.seen == [0, 1]
         model.answer('b', length=5)
         assert run.send(fault) == Step({MOTOR: 'b0'}, 3 * PERIOD_NS)
@@ -451,9 +452,7 @@ def test_repeated_errors_keep_one_recovery_request_and_play_its_answer(execution
 
 
 @pytest.mark.parametrize('ready_at_error', [False, True])
-def test_a_request_before_the_error_finishes_before_replanning_from_current_state(
-    execution, monkeypatch, ready_at_error
-):
+def test_errors_keep_an_existing_request_and_execute_its_answer_immediately(execution, monkeypatch, ready_at_error):
     runtime, clock = execution
     model = ObservingModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
@@ -466,17 +465,21 @@ def test_a_request_before_the_error_finishes_before_replanning_from_current_stat
         run.send({POSITION: 2})
         assert len(model.calls) == 2
         if ready_at_error:
-            model.answer('stale')
+            model.answer('b')
         clock.advance_to_ns(250_000_000)
-        assert run.send({POSITION: 25, keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {}
+        fault = {POSITION: 25, keys.ROBOT_STATUS: RobotStatus.ERROR}
+        step = run.send(fault)
         if not ready_at_error:
+            assert step.commands == {}
             assert len(model.calls) == 2
-            model.answer('stale')
             clock.advance_to_ns(3 * PERIOD_NS)
-            assert run.send({POSITION: 3}).commands == {MOTOR: 'a3'}
-        assert model.seen == [0, 2, 25 if ready_at_error else 3]
-        model.answer('fresh')
-        assert run.send({POSITION: 4, keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: 'fresh0'}
+            assert run.send(fault).commands == {}
+            model.answer('b')
+            step = run.send(fault)
+        assert step.commands == {MOTOR: 'b0'}
+        assert model.seen == [0, 2]
+        clock.advance_to_ns(4 * PERIOD_NS)
+        assert run.send(fault).commands == {}
         assert len(model.calls) == 3
     finally:
         run.close()
@@ -507,22 +510,6 @@ def test_a_failed_request_before_the_error_still_raises(execution, monkeypatch):
     future.set_exception(RuntimeError('inference failed'))
     with pytest.raises(RuntimeError, match='inference failed'):
         run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
-
-
-def test_an_answer_finishing_during_the_error_round_cannot_emit_stale_commands(execution, monkeypatch):
-    runtime, _ = execution
-    stale = Mock(done=Mock(side_effect=[False, False, True]), result=Mock(return_value=[{MOTOR: 'stale'}]))
-    fresh = Mock(done=Mock(return_value=True), result=Mock(return_value=[{MOTOR: 'fresh'}]))
-    submit = Mock(side_effect=[stale, fresh])
-    monkeypatch.setattr(runtime, 'submit', submit)
-    run = runtime.start(ChunkedSchedule(fps=10), Mock())
-    try:
-        assert run.send({}).commands == {}
-        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {}
-        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: 'fresh'}
-        assert submit.call_count == 2
-    finally:
-        run.close()
 
 
 @pytest.mark.parametrize('replan_on_error', [False, True])

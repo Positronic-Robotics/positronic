@@ -231,11 +231,9 @@ class ChunkedSchedule(Policy):
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
 
-    ``replan_on_error`` requests a fresh chunk when any arm reports ``ERROR``. Playback continues until
-    the fresh answer replaces the remaining commands. A request made before the error finishes and its
-    result is discarded before requesting from the latest observation. Repeated errors do not restart
-    a recovery request, and its commands can run while the arm still reports ``ERROR``. ``BUSY`` does not
-    trigger replanning. Set ``replan_on_error=False`` to keep the regular inference deadlines on errors.
+    ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
+    immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
+    until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
     """
 
     WIRE_NAME = 'chunked_schedule'
@@ -343,14 +341,9 @@ class ChunkedSchedule(Policy):
         ]
         return waypoints, start_ns + round(duration_sec * 1e9)
 
-    class _RequestState(Enum):
-        REGULAR = 'regular'
-        STALE = 'stale'
-        RECOVERY = 'recovery'
-
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         answer: Answer[Sequence[Commands]] | None = None
-        request_state = self._RequestState.REGULAR
+        recovering = False
         trajectory: deque[ChunkedSchedule._Waypoint] = deque()
         end_ns = 0
         call_ns = 0
@@ -358,33 +351,26 @@ class ChunkedSchedule(Policy):
         lead = self._inference_lead.run()
         stats = self._Stats(runtime) if self._record_stats else None
 
-        def advance_request(obs: Obs, now_ns: int) -> None:
-            nonlocal answer, request_state, call_ns, called_at_ns
-            if (
-                self._replan_on_error
-                and request_state is self._RequestState.REGULAR
-                and any(RobotStatus(obs[name]) is RobotStatus.ERROR for name in obs if _is_robot_status(name))
-            ):
-                request_state = self._RequestState.STALE if answer is not None else self._RequestState.RECOVERY
-                call_ns = now_ns
-            if request_state is self._RequestState.STALE and answer is not None and answer.done():
-                answer.result()
-                answer = None
-                request_state = self._RequestState.RECOVERY
-            if answer is None and now_ns >= call_ns:
-                answer, called_at_ns = runtime.submit(infer, obs), now_ns
-
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 planned = None
-                advance_request(obs, now_ns)
-                if request_state is not self._RequestState.STALE and answer is not None and answer.done():
+                if (
+                    self._replan_on_error
+                    and not recovering
+                    and any(RobotStatus(obs[name]) is RobotStatus.ERROR for name in obs if _is_robot_status(name))
+                ):
+                    trajectory.clear()
+                    end_ns = call_ns = now_ns
+                    planned = 0
+                    recovering = True
+                if answer is None and now_ns >= call_ns:
+                    answer, called_at_ns = runtime.submit(infer, obs), now_ns
+                if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
                     lead_sec = lead.update((now_ns - called_at_ns) / 1e9)
-                    start_ns = now_ns if request_state is self._RequestState.RECOVERY else max(now_ns, end_ns)
-                    request_state = self._RequestState.REGULAR
+                    start_ns = max(now_ns, end_ns)
                     waypoints, end_ns = self._plan_chunk(chunk, start_ns)
                     call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
                     # A regular early answer waits behind the commands that are still due.
@@ -399,6 +385,8 @@ class ChunkedSchedule(Policy):
                     due_ns = waypoint.due_ns
                     starts_chunk |= waypoint.starts_chunk
                     commands.update(waypoint.commands)
+                if commands:
+                    recovering = False
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
                 resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
