@@ -87,7 +87,7 @@ entry asks for no terms: your team accepts the [terms](https://competition.phail
 submission. Their section "Your data" tells how the organizers use your data.
 
 - In your browser, open the [entry page](https://physical-ai-competition.positronic.ro/enter). Sign in
-  with the GitHub account that you used for `platform-register`.
+  with the same account that you used for `platform-register`.
 - With the command, `competition-enter` shows what becomes public, and the link to the terms. With
   `--yes`, your team enters.
 
@@ -189,7 +189,7 @@ positronic eval list
 
 Your submissions also show in your browser: the
 [account page](https://physical-ai-competition.positronic.ro/enter/account) shows the status of each one.
-Sign in with the same GitHub account.
+Sign in with the same account that you used for `platform-register`.
 
 - Pin the image by its digest. A tag can move to an image that you did not test.
 - Reuse the transaction key only to retry the same submission. The same key returns the same submission,
