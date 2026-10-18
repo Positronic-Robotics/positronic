@@ -808,8 +808,8 @@ class Robot(pimm.ControlSystem):
         )
 
     def _clear_with_desk_prepare(self, desk: Desk | None, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
-        """Lock the brakes and turn FCI off, run ``Desk.prepare()`` as a run starts, connect to the arm again,
-        and run the recovery on the new connection.
+        """Take Desk control again where another login held it, lock the brakes and turn FCI off, run
+        ``Desk.prepare()`` as a run starts, connect to the arm again, and run the recovery on the new connection.
 
         It runs only where the driver holds a Desk session, and on a reading that found every safe input clear:
         a person may hold the arm, and only they release it. A failure once FCI is off leaves the driver with no
@@ -824,6 +824,7 @@ class Robot(pimm.ControlSystem):
             )
             return RecoveryOutcome.NOT_CLEARED
         logger.warning('The recovery did not clear the fault; preparing the arm through Desk as a run starts')
+        desk.ensure_control()
         arm.robot.stop()  # no control loop may drive the arm when FCI goes down
         # A self-test that Desk.prepare() runs needs locked brakes. A safety stop can lock them before the driver does.
         if _BrakeState.UNLOCKED in desk.safety_status()[BRAKE_STATE]:
