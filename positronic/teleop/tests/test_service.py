@@ -60,6 +60,16 @@ class TestButtonMap:
         assert ButtonMap(HOLD_SEC).ready_reply(_buttons(stick=1.0), 0) is Reply.CANCELLED
         assert ButtonMap(HOLD_SEC).ready_reply(_buttons(), 0) is None
 
+    @pytest.mark.parametrize('threshold', [0.0, -0.1, float('nan'), 1.5])
+    def test_a_press_threshold_outside_zero_to_one_is_refused(self, threshold):
+        with pytest.raises(ValueError, match='press_threshold must be in'):
+            ButtonMap(HOLD_SEC, threshold)
+
+    @pytest.mark.parametrize('hold_sec', [0.0, float('nan'), float('inf')])
+    def test_a_hold_time_that_is_not_finite_and_positive_is_refused(self, hold_sec):
+        with pytest.raises(ValueError, match='hold_sec must be finite and positive'):
+            ButtonMap(hold_sec)
+
     def test_a_turns_control_on_or_off_at_each_press(self):
         buttons = ButtonMap(HOLD_SEC)
         assert buttons.events(_buttons(a=1.0), 0, False) == [Event.CLUTCH]

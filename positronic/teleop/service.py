@@ -8,6 +8,7 @@ The teleoperator uses the buttons of the right controller.
 
 import _thread
 import logging
+import math
 import os
 import stat
 import threading
@@ -66,6 +67,10 @@ class ButtonMap:
     """
 
     def __init__(self, hold_sec: float, press_threshold: float = 0.6):
+        if not 0 < press_threshold <= 1:
+            raise ValueError(f'press_threshold must be in (0, 1], got {press_threshold}')
+        if not 0 < hold_sec < math.inf:
+            raise ValueError(f'hold_sec must be finite and positive, got {hold_sec}')
         self._hold_ns = round(hold_sec * 1e9)
         # A button whose value is at least this is down.
         self._press_threshold = press_threshold
