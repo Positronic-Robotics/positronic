@@ -10,8 +10,8 @@ needs a receipt for each pull request it takes (see `merged_along_with`).
 A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
 `main` is refused (`analyze_mcp`).
 
-A merge of a pull request in another repository is allowed: that repository keeps its own merge contract.
-A merge whose repository cannot be established stays guarded.
+A merge whose `-R` names another repository is allowed: that repository keeps its own merge contract.
+Every other merge stays guarded, including one run from a checkout of another repository.
 
 Scope: the git-command guards apply only to invocations that operate on THIS repo — same
 `origin` as the session's project repo, which covers clones and worktrees. A `git -C <dir> …`
@@ -975,7 +975,8 @@ def analyze(  # noqa: C901
             if _carries_expansion(cmd):
                 return MERGE_EXPANSION_MSG
             repo = _gh_repo(target, inv.dir, git, cmd, gh_repo_env)
-            if repo and guarded_slug and repo != guarded_slug:
+            # Only `-R` exempts: gh picks among a checkout's remotes by rules this guard does not copy.
+            if target and repo and guarded_slug and repo != guarded_slug:
                 continue
             if number is None:
                 return UNNUMBERED_MSG

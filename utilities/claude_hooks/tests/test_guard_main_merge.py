@@ -368,11 +368,10 @@ def test_a_merge_reading_its_token_from_a_substitution_still_passes(git):
     assert verdict(git, cmd, allow_merge=lambda *_: True) is None
 
 
-def test_a_merge_run_from_another_repo_is_not_this_repository_s(git):
-    """gh resolves the repository from the working directory when nothing names one."""
-    asked = []
-    assert verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda n, slug: asked.append(n) or False) is None
-    assert asked == []
+def test_a_merge_run_from_another_checkout_stays_guarded_without_a_repository_flag(git):
+    """gh can pick an `upstream` remote over `origin`, so the directory cannot exempt a merge."""
+    assert verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda *_: False) is not None
+    assert verdict(git, f'cd {INFRA} && gh pr merge 566 -R someone/agent_infra', allow_merge=lambda *_: False) is None
 
 
 def test_a_merge_whose_repository_cannot_be_established_is_refused(git):
