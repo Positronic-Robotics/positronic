@@ -19,12 +19,12 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
-from positronic_model_server import keys as offboard_keys
 from positronic_model_server import server_wire, websocket_wire
 from positronic_wire import registry, wire
 
 from positronic import keys
 from positronic.offboard import client
+from positronic.offboard import frame_ring as frames
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import Model, PolicyDeployment
@@ -82,7 +82,7 @@ def _time_calls(socket_path: Path, calls: int, cameras: int) -> tuple[list[float
     """Milliseconds per call over one session on ``socket_path``, after a warm-up, and whether it declared a ring."""
     address = wire.UnixSocketAddress(socket_path, wire.SESSION_PATH, '')
     session = InferenceClient(registry.client_wire('websocket_unix'), address).new_session()
-    declared = offboard_keys.FRAME_RING in session.metadata
+    declared = frames.HANDSHAKE_KEY in session.metadata
     obs: dict[str, Any] = {
         f'image.{i}': np.random.default_rng(i).integers(0, 256, HD720, dtype=np.uint8) for i in range(cameras)
     }
