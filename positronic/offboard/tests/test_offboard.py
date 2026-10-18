@@ -413,6 +413,17 @@ def test_a_sealed_ring_refuses_a_write_a_resize_and_a_hole():
 
 
 @pytestmark_ring
+def test_a_channel_that_answers_and_refuses_the_ring_still_raises(socket_path, frame_channel):
+    """Only a path that reaches no channel turns the ring off. A channel that refuses the handover raises."""
+    writer = frame_ring.FrameWriter(frame_ring.channel_path(Path(socket_path)), 'a-session-not-open-here')
+    try:
+        with pytest.raises(RuntimeError, match='did not map the frame ring'):
+            writer.pack({'image.left': _image()})
+    finally:
+        writer.close()
+
+
+@pytestmark_ring
 def test_a_slot_written_over_before_it_is_read_is_refused(frame_channel, frame_writer):
     stale = _over_the_wire(frame_writer.pack({'image.left': _image()}))
     for _ in range(frame_ring.SLOTS):

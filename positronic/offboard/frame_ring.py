@@ -184,31 +184,42 @@ HANDOVER_TIMEOUT_SEC = 10.0
 class FrameWriter:
     """The client's half: one ring per session, handed to the server and grown when a frame outgrows it.
 
-    ``pack`` returns the observation with a reference in place of every image.
+    ``pack`` returns the observation with a reference in place of every image. Where no channel answers
+    at ``channel``, the session takes no ring, and ``pack`` returns every image whole from then on.
     """
 
     def __init__(self, channel: Path, session_id: str):
         self._channel = channel
         self._session_id = session_id
         self._ring: FrameRing | None = None
+        self._channel_answers = True
 
     def pack(self, obs: Mapping[str, Any]) -> dict[str, Any]:
+        if not self._channel_answers:
+            return dict(obs)
         found: list[tuple[dict[bytes, Any], np.ndarray]] = []
         packed = _detach_images(obs, found)
         if not found:
             return packed
         arrays = [array for _reference, array in found]
         ring = self._ring_for(sum(_aligned(array.nbytes) for array in arrays))
+        if ring is None:
+            return dict(obs)
         for (reference, _array), written in zip(found, ring.write(arrays), strict=True):
             reference.update(written)
         return packed
 
-    def _ring_for(self, slot_bytes: int) -> FrameRing:
+    def _ring_for(self, slot_bytes: int) -> FrameRing | None:
+        """A ring with slots of at least ``slot_bytes`` the server has mapped, or None where no channel answers."""
         if self._ring is not None and self._ring.slot_bytes >= slot_bytes:
             return self._ring
+        sock = self._dial_channel()
+        if sock is None:
+            return None
         ring = FrameRing(slot_bytes)
         try:
-            self._hand_over(ring)
+            with sock:
+                self._hand_over(sock, ring)
         except Exception:
             ring.close()
             raise
@@ -218,14 +229,29 @@ class FrameWriter:
         self._ring = ring
         return ring
 
-    def _hand_over(self, ring: FrameRing) -> None:
-        header = serialization.serialise({_SESSION: self._session_id, _SLOTS: ring.slots, _SLOT_BYTES: ring.slot_bytes})
-        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as sock:
-            sock.settimeout(HANDOVER_TIMEOUT_SEC)
+    def _dial_channel(self) -> socket.socket | None:
+        """A socket connected to the channel, or None where no channel answers at ``channel``.
+
+        Each end derives the channel from its own name for the session socket. A hard link to the
+        socket, or a bind mount of the socket file alone, dials the session and reaches no channel.
+        """
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        sock.settimeout(HANDOVER_TIMEOUT_SEC)
+        try:
             sock.connect(str(self._channel))
-            socket.send_fds(sock, [header], [ring.fd])
-            if sock.recv(len(_ACK)) != _ACK:
-                raise RuntimeError(f'The server at {self._channel} did not map the frame ring it was handed')
+        # The ring is optional: the session sends whole images, as on a server that declares none.
+        except OSError as unreachable:
+            sock.close()
+            self._channel_answers = False
+            logger.error('No frame ring: no channel answers at %r (%s)', str(self._channel), unreachable)
+            return None
+        return sock
+
+    def _hand_over(self, sock: socket.socket, ring: FrameRing) -> None:
+        header = serialization.serialise({_SESSION: self._session_id, _SLOTS: ring.slots, _SLOT_BYTES: ring.slot_bytes})
+        socket.send_fds(sock, [header], [ring.fd])
+        if sock.recv(len(_ACK)) != _ACK:
+            raise RuntimeError(f'The server at {self._channel} did not map the frame ring it was handed')
 
     def close(self) -> None:
         if self._ring is not None:

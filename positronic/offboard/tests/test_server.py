@@ -1259,3 +1259,56 @@ def test_a_session_dialled_through_a_symlink_to_the_socket_carries_its_frames_th
 
     np.testing.assert_array_equal(model.call_args.args[0]['image.left'], image)
     assert max(len(message) for message in sent) < image.nbytes // 100
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_session_dialled_through_a_hard_link_to_the_socket_carries_its_frames_in_the_message(
+    unix_stub_server, socket_path, monkeypatch
+):
+    served, model = unix_stub_server
+    alias = pathlib.Path(socket_path).with_name('alias.sock')
+    # A hard link dials the socket, and no channel sits beside the link's name. A file bind mount of the
+    # socket alone leaves the client the same way, and a test cannot make one without root.
+    os.link(socket_path, alias)
+    image = _frame()
+    sent = _messages_the_client_sends(monkeypatch)
+
+    client_wire, _ = served.unix()
+    session = InferenceClient(client_wire, wire.UnixSocketAddress(alias, wire.SESSION_PATH, '')).new_session()
+    try:
+        session.infer({'image.left': image})
+        session.infer({'image.left': image})
+    finally:
+        session.close()
+
+    np.testing.assert_array_equal(model.call_args.args[0]['image.left'], image)
+    assert min(len(message) for message in sent) > image.nbytes
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+@pytest.mark.parametrize('alias_kind', ['directory symlink', 'parent step'])
+def test_a_session_dialled_through_another_name_for_its_directory_carries_its_frames_through_the_ring(
+    unix_stub_server, socket_path, monkeypatch, alias_kind
+):
+    served, model = unix_stub_server
+    directory = pathlib.Path(socket_path).parent
+    socket_name = pathlib.Path(socket_path).name
+    if alias_kind == 'directory symlink':
+        alias_directory = directory / 'd'
+        alias_directory.symlink_to(directory, target_is_directory=True)
+    else:
+        (directory / 'sub').mkdir()
+        alias_directory = directory / 'sub' / '..'
+    image = _frame()
+    sent = _messages_the_client_sends(monkeypatch)
+
+    client_wire, _ = served.unix()
+    address = wire.UnixSocketAddress(alias_directory / socket_name, wire.SESSION_PATH, '')
+    session = InferenceClient(client_wire, address).new_session()
+    try:
+        session.infer({'image.left': image})
+    finally:
+        session.close()
+
+    np.testing.assert_array_equal(model.call_args.args[0]['image.left'], image)
+    assert max(len(message) for message in sent) < image.nbytes // 100
