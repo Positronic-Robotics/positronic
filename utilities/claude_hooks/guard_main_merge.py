@@ -823,8 +823,9 @@ def _gh_flag(word: str) -> tuple[str, str]:
 def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
     """Whether this is `gh pr merge`, the pull request it names, and the repository it targets.
 
-    The number is None unless the merge target is written as one, and the repository is '' unless
-    `-R` names another — gh takes a URL or a branch there too, which no authorization can name.
+    The number is None unless the merge target is written as one. The repository is '' unless `-R`
+    names another or the target is a URL, which names its own — gh takes a URL or a branch in `-R` too,
+    which no authorization can name.
     gh (cobra) accepts persistent flags between `pr` and the subcommand — `gh pr -R o/r merge 1`.
     """
     positional: list[str] = []
@@ -847,6 +848,9 @@ def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
     if not after or after[0] != 'merge':
         return False, None, ''
     target = after[1] if len(after) > 1 else ''
+    if '://' in target:
+        # gh reads a URL target's repository ahead of `-R` and the working directory.
+        return True, None, target
     return True, int(target) if target.isdigit() else None, repo
 
 

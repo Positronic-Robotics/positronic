@@ -116,6 +116,9 @@ BLOCKED = [
     f"gh pr merge 5 -R 'https://github.com/{GUARDED}#x'",
     f'gh pr merge 5 -R ssh://git@github.com/{GUARDED}',
     f'gh pr merge 5 -R github.example.com/{GUARDED}',
+    # a URL target names its own repository, ahead of `-R` and the working directory
+    f'gh pr merge https://github.com/{GUARDED}/pull/566 -R someone/other --squash',
+    f'cd {INFRA} && gh pr merge https://github.com/{GUARDED}/pull/566',
     # second invocation still guarded after an exempt one
     f'cd {INFRA} && git push && git -C {CLONE} push',
     # grouped cd does not persist outside the subshell — dir tracking poisons, stays guarded
@@ -163,6 +166,7 @@ ALLOWED = [
     'gh pr merge -R o/r',
     'gh pr merge 5 -R https://github.com/o/r',
     'gh pr merge 5 -R github.com/o/r.git',
+    'gh pr merge owner:topic/branch -R o/r',
     'git status',
     'git log --oneline',
     'git pull --ff-only',
