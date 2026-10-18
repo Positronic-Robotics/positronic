@@ -79,7 +79,13 @@ def no_allow(number, guarded_slug):
     return False
 
 
-def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorized=None, stack_below=None):
+def same_name(slug):
+    return slug.casefold()
+
+
+def verdict(
+    git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorized=None, stack_below=None, canonical=same_name
+):
     return gmm.analyze(
         cmd,
         cwd,
@@ -90,6 +96,7 @@ def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorize
         gh_repo_env=gh_repo_env,
         authorized=authorized or (lambda *_: True),
         stack_below=stack_below or (lambda *_: []),
+        canonical=canonical,
     )
 
 
@@ -109,6 +116,38 @@ BLOCKED = [
     'git -C $DIR push',
     'gh pr merge 5',
     'gh pr -R o/r merge 5',
+    # every spelling of the guarded repository stays guarded
+    f'gh pr merge 5 -R github.com/{GUARDED}',
+    f'gh pr merge 5 --repo https://github.com/{GUARDED}.git',
+    f"gh pr merge 5 -R 'https://github.com/{GUARDED}?x=1'",
+    f"gh pr merge 5 -R 'https://github.com/{GUARDED}#x'",
+    f'gh pr merge 5 -R ssh://git@github.com/{GUARDED}',
+    f'gh pr merge 5 -R github.example.com/{GUARDED}',
+    # gh resolves these to the guarded repository, and none is the one form read as another's
+    f'gh pr merge https://github.com/{GUARDED}/pull/566 -R someone/other --squash',
+    'gh pr merge 566 -R someone/other --repo=',
+    'gh pr merge 566 -R someone/other -R someone/else',
+    'gh pr merge 566 -dR someone/other',
+    'gh pr merge 566 -R=someone/other',
+    'gh pr merge 566 -R someone/other --squash --rebase',
+    'gh pr merge 566 -R someone/other --admin',
+    'gh pr merge 566 -R someone/other -- 999',
+    'gh pr merge owner:topic/branch -R someone/other',
+    'gh pr merge 566 -R',
+    # a wrapper can hand gh arguments the command text does not spell out
+    'xargs -a /tmp/extra gh pr merge 566 -R someone/other',
+    'env gh pr merge 566 -R someone/other',
+    'sudo gh pr merge 566 -R someone/other',
+    'nice gh pr merge 566 -R someone/other',
+    # a path or a `PATH=` prefix can run a program other than gh
+    '/tmp/gh pr merge 566 -R someone/other',
+    'PATH=/tmp:$PATH gh pr merge 566 -R someone/other',
+    # a substitution stays inside the word it assigns, so the name it sets is still read
+    'PATH=$(cat /tmp/path) gh pr merge 566 -R someone/other',
+    'GH_TOKEN=$(cat ~/t) PATH=$(cat /tmp/path) gh pr merge 566 -R someone/other',
+    'GH_PATH=x GH_TOKEN=$(cat ~/t) gh pr merge 566 -R someone/other',
+    'A=1 gh pr merge 566 -R someone/other',
+    f'cd {INFRA} && gh pr merge 566',
     # second invocation still guarded after an exempt one
     f'cd {INFRA} && git push && git -C {CLONE} push',
     # grouped cd does not persist outside the subshell — dir tracking poisons, stays guarded
@@ -152,6 +191,14 @@ BLOCKED = [
 
 ALLOWED = [
     'ls -la',
+    # the one form read as a merge in another repository
+    'gh pr merge 5 -R o/r',
+    'gh pr merge 5 --repo=o/r --squash --delete-branch',
+    "gh pr merge 5 -R https://github.com/o/r -t 'Fix X' --body-file /tmp/b.md",
+    'gh pr merge 5 -R github.com/o/r.git -m -b body',
+    'gh pr merge 5 -R o/r --subject -R',
+    'GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 5 -R o/r --squash',
+    f'cd {INFRA} && gh pr merge 566 -R someone/agent_infra',
     'git status',
     'git log --oneline',
     'git pull --ff-only',
@@ -298,8 +345,94 @@ def test_a_value_taking_flag_does_not_donate_its_value_as_the_pull_request(git):
     assert asked == [999]
 
 
-def test_a_merge_in_another_repository_is_refused_without_consulting_any_authorization(git):
-    """`-R` selects a repository this guard holds no receipts for."""
+def test_the_exact_form_in_another_repository_runs_without_consulting_any_authorization(git):
+    def allow(number, slug):
+        raise AssertionError('another repository keeps its own merge contract')
+
+    assert verdict(git, 'gh pr merge 566 -R someone/other --squash', allow_merge=allow) is None
+
+
+def test_an_old_name_of_the_guarded_repository_stays_guarded(git):
+    """GitHub serves a renamed or transferred repository under its old name."""
+    moved_here = {'old-owner/old-name': GUARDED.casefold()}
+
+    def canonical(slug):
+        return moved_here.get(slug, slug)
+
+    assert verdict(git, 'gh pr merge 566 -R old-owner/old-name', canonical=canonical) is not None
+    assert verdict(git, 'gh pr merge 566 -R someone/other', canonical=canonical) is None
+    assert mcp_verdict(MERGE_TOOL, merge_args(566) | {'owner': 'old-owner', 'repo': 'old-name'}, canonical=canonical)
+
+
+def test_the_exact_form_in_another_repository_is_looked_up_only_when_it_runs_alone(git):
+    looked_up = []
+
+    def canonical(slug):
+        looked_up.append(slug)
+        return slug
+
+    cmd = 'gh pr merge 1 -R a/one && gh pr merge 2 -R b/two && gh pr merge 566'
+    assert verdict(git, cmd, allow_merge=lambda *_: True, canonical=canonical) is not None
+    assert looked_up == []
+    assert verdict(git, 'cd /tmp && gh pr merge 1 -R a/one --squash', canonical=canonical) is None
+    assert looked_up == ['a/one', GUARDED.casefold()]
+
+
+def unnamed(slug):
+    raise gmm.RepositoryLookupError(f'GitHub did not name `{slug}`: 404')
+
+
+def test_a_repository_github_cannot_name_stays_guarded(git):
+    with pytest.raises(gmm.RepositoryLookupError):
+        verdict(git, 'gh pr merge 566 -R someone/other', canonical=unnamed)
+    with pytest.raises(gmm.RepositoryLookupError):
+        mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}, canonical=unnamed)
+
+
+def test_a_failed_lookup_refuses_naming_the_lookup(monkeypatch, capsys, guarded_clone):
+    monkeypatch.setattr(gmm, 'canonical_repository', unnamed)
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(guarded_clone))
+    for payload in (
+        {'tool_name': 'Bash', 'tool_input': {'command': 'gh pr merge 566 -R someone/other'}, 'cwd': str(guarded_clone)},
+        {'tool_name': MERGE_TOOL, 'tool_input': {**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}},
+    ):
+        monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps(payload)))
+        assert gmm.main() == 2
+        assert 'GitHub did not name `someone/' in capsys.readouterr().err
+
+
+def test_the_current_name_of_the_guarded_repository_stays_guarded_from_a_checkout_under_its_old_name(git):
+    """After a rename the checkout's `origin` still names the old slug, which GitHub resolves to the new one."""
+    renamed = {GUARDED.casefold(): 'positronic-robotics/new-name'}
+
+    def canonical(slug):
+        return renamed.get(slug, slug)
+
+    assert verdict(git, 'gh pr merge 566 -R Positronic-Robotics/new-name', canonical=canonical) is not None
+    new_name_args = {'owner': 'Positronic-Robotics', 'repo': 'new-name', gmm.MCP_PULL_NUMBER: 566}
+    assert mcp_verdict(MERGE_TOOL, new_name_args, canonical=canonical) is not None
+    assert verdict(git, 'gh pr merge 566 -R someone/other', canonical=canonical) is None
+
+
+def test_canonical_repository_follows_github_s_name_and_raises_on_a_failed_lookup():
+    assert gmm.canonical_repository('old/name', gh_json=lambda *_: {'full_name': 'New/Name'}) == 'new/name'
+
+    def failing(*_):
+        raise gmm.StackLookupError('404')
+
+    with pytest.raises(gmm.RepositoryLookupError, match='404'):
+        gmm.canonical_repository('old/name', gh_json=failing)
+    with pytest.raises(gmm.RepositoryLookupError, match='unexpected shape'):
+        gmm.canonical_repository('old/name', gh_json=lambda *_: {})
+
+
+def test_a_set_gh_repo_keeps_the_exact_form_guarded(git):
+    assert verdict(git, 'GH_REPO=x/y gh pr merge 566 -R someone/other', allow_merge=lambda *_: True) is not None
+    assert verdict(git, 'gh pr merge 566 -R someone/other', gh_repo_env='x/y', allow_merge=lambda *_: True) is not None
+
+
+def test_a_flag_before_merge_keeps_a_merge_in_another_repository_guarded(git):
+    """Only `pr merge <number> -R …` is read as another repository's; a flag before `merge` is not."""
     asked = []
     assert (
         verdict(git, 'gh pr -R someone/other merge 566', allow_merge=lambda n, slug: asked.append(n) or True)
@@ -720,7 +853,9 @@ GUARDED_REPO_ARGS = {'owner': 'Positronic-Robotics', 'repo': 'positronic'}
 OTHER_REPO_ARGS = {'owner': 'someone', 'repo': 'agent_infra'}
 
 
-def mcp_verdict(tool, arguments, guarded=GUARDED, allow_merge=no_allow, authorized=None, stack_below=None):
+def mcp_verdict(
+    tool, arguments, guarded=GUARDED, allow_merge=no_allow, authorized=None, stack_below=None, canonical=same_name
+):
     return gmm.analyze_mcp(
         tool,
         arguments,
@@ -728,6 +863,7 @@ def mcp_verdict(tool, arguments, guarded=GUARDED, allow_merge=no_allow, authoriz
         allow_merge=allow_merge,
         authorized=authorized or (lambda *_: True),
         stack_below=stack_below or (lambda *_: []),
+        canonical=canonical,
     )
 
 
@@ -784,11 +920,11 @@ def test_a_stacked_mcp_merge_names_the_pull_requests_below_it_with_no_authorizat
     assert spent == []
 
 
-def test_an_mcp_merge_of_another_repository_is_refused_without_consulting_any_authorization():
+def test_an_mcp_merge_of_another_repository_runs_without_consulting_any_authorization():
     def allow(number, slug):
-        raise AssertionError('the authorization must not be spent on a merge refused anyway')
+        raise AssertionError('another repository keeps its own merge contract')
 
-    assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, 'pullNumber': 566}, allow_merge=allow) is not None
+    assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}, allow_merge=allow) is None
 
 
 @pytest.mark.parametrize('number', [None, 'abc', '', True, 1.5, {'n': 1}])
