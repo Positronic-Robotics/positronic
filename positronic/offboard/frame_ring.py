@@ -48,7 +48,6 @@ _SLOTS = 'slots'
 _SLOT_BYTES = 'slot_bytes'
 
 _ACK = b'\x01'
-_HANDOVER_BYTES = 4096
 
 
 class TornFrame(RuntimeError):
@@ -279,6 +278,8 @@ class MappedRing:
 
 # How long ``accept`` blocks before the thread re-reads whether the channel is closing.
 _ACCEPT_POLL_SEC = 0.2
+# The largest handover header the channel reads.
+_HANDOVER_BYTES = 4096
 
 
 class FrameChannel:

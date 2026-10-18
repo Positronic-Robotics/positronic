@@ -16,7 +16,7 @@ import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 from positronic_model_server import keys as offboard_keys
@@ -56,33 +56,46 @@ def _serve(socket_path: Path, frame_ring: bool) -> tuple[PolicyServer, threading
     return server, thread
 
 
-def _measure(socket_path: Path, frame_ring: bool, calls: int, cameras: int) -> tuple[list[float], int, bool]:
+class _Measurement(NamedTuple):
+    """One arm's milliseconds per call, its largest message in bytes, and whether the server declared a ring."""
+
+    times_ms: list[float]
+    message_bytes: int
+    declared: bool
+
+
+def _measure(socket_path: Path, frame_ring: bool, calls: int, cameras: int) -> _Measurement:
     server, thread = _serve(socket_path, frame_ring)
     sent: list[int] = []
     packer = client.serialise
     client.serialise = lambda obj: _record(packer(obj), sent)
     try:
-        address = wire.UnixSocketAddress(socket_path, wire.SESSION_PATH, '')
-        session = InferenceClient(registry.client_wire('websocket_unix'), address).new_session()
-        declared = offboard_keys.FRAME_RING in session.metadata
-        obs: dict[str, Any] = {
-            f'image.{i}': np.random.default_rng(i).integers(0, 256, HD720, dtype=np.uint8) for i in range(cameras)
-        }
-        obs[keys.GRIP] = 0.5
-        for _ in range(5):
-            session.infer(obs)
-        times = []
-        for _ in range(calls):
-            start = time.perf_counter()
-            session.infer(obs)
-            times.append((time.perf_counter() - start) * 1e3)
-        message = max(sent)
-        session.close()
+        times_ms, declared = _time_calls(socket_path, calls, cameras)
     finally:
         client.serialise = packer
         server.shutdown()
         thread.join(timeout=10.0)
-    return times, message, declared
+    return _Measurement(times_ms, max(sent), declared)
+
+
+def _time_calls(socket_path: Path, calls: int, cameras: int) -> tuple[list[float], bool]:
+    """Milliseconds per call over one session on ``socket_path``, after a warm-up, and whether it declared a ring."""
+    address = wire.UnixSocketAddress(socket_path, wire.SESSION_PATH, '')
+    session = InferenceClient(registry.client_wire('websocket_unix'), address).new_session()
+    declared = offboard_keys.FRAME_RING in session.metadata
+    obs: dict[str, Any] = {
+        f'image.{i}': np.random.default_rng(i).integers(0, 256, HD720, dtype=np.uint8) for i in range(cameras)
+    }
+    obs[keys.GRIP] = 0.5
+    for _ in range(5):
+        session.infer(obs)
+    times_ms = []
+    for _ in range(calls):
+        start = time.perf_counter()
+        session.infer(obs)
+        times_ms.append((time.perf_counter() - start) * 1e3)
+    session.close()
+    return times_ms, declared
 
 
 def _record(message: bytes, sent: list[int]) -> bytes:
@@ -90,12 +103,12 @@ def _record(message: bytes, sent: list[int]) -> bytes:
     return message
 
 
-def _report(name: str, times: list[float], message: int, declared: bool) -> None:
-    ordered = sorted(times)
+def _report(name: str, measured: _Measurement) -> None:
+    ordered = sorted(measured.times_ms)
     p95 = ordered[min(len(ordered) - 1, int(0.95 * len(ordered)))]
     print(
-        f'{name:<12} median {statistics.median(times):7.2f} ms   p95 {p95:7.2f} ms   '
-        f'min {ordered[0]:7.2f} ms   message {message / 1e6:6.2f} MB   declared {declared}'
+        f'{name:<12} median {statistics.median(ordered):7.2f} ms   p95 {p95:7.2f} ms   '
+        f'min {ordered[0]:7.2f} ms   message {measured.message_bytes / 1e6:6.2f} MB   declared {measured.declared}'
     )
 
 
@@ -110,7 +123,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(dir='/tmp') as directory:
         for name, frame_ring in (('message', False), ('ring', True)):
             path = Path(directory) / f'{name}.sock'
-            _report(name, *_measure(path, frame_ring, args.calls, args.cameras))
+            _report(name, _measure(path, frame_ring, args.calls, args.cameras))
 
 
 if __name__ == '__main__':
