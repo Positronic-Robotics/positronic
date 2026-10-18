@@ -68,7 +68,13 @@ def _measure(socket_path: Path, frame_ring: bool, calls: int, cameras: int) -> _
     server, thread = _serve(socket_path, frame_ring)
     sent: list[int] = []
     packer = client.serialise
-    client.serialise = lambda obj: _record(packer(obj), sent)
+
+    def record(obj: Any) -> bytes:
+        message = packer(obj)
+        sent.append(len(message))
+        return message
+
+    client.serialise = record
     try:
         times_ms, declared = _time_calls(socket_path, calls, cameras)
     finally:
@@ -96,11 +102,6 @@ def _time_calls(socket_path: Path, calls: int, cameras: int) -> tuple[list[float
         times_ms.append((time.perf_counter() - start) * 1e3)
     session.close()
     return times_ms, declared
-
-
-def _record(message: bytes, sent: list[int]) -> bytes:
-    sent.append(len(message))
-    return message
 
 
 def _report(name: str, measured: _Measurement) -> None:
