@@ -418,7 +418,7 @@ def test_every_container_the_wire_carries_reaches_the_server_as_the_message_path
         'tuple': (image, 0.5),
         'frames': _Frames([image]),
         'view': MappingProxyType({'image': image}),
-        'task': 'pick',
+        keys.TASK: 'pick',
     }
 
     served = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack(obs)))
@@ -428,7 +428,7 @@ def test_every_container_the_wire_carries_reaches_the_server_as_the_message_path
         np.testing.assert_array_equal(served[key][0], image)
     assert served['pair'][1] == served['tuple'][1] == 0.5
     np.testing.assert_array_equal(served['view']['image'], image)
-    assert served['task'] == 'pick'
+    assert served[keys.TASK] == 'pick'
 
 
 @pytestmark_ring
