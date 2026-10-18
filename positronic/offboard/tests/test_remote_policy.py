@@ -481,7 +481,7 @@ class TestADroppedConnectionReconnects:
         channel.start(websocket_wire.claim_socket_path(channel.path, socket.SOCK_SEQPACKET))
         channel.open_session('first')
         channel.open_session('second')
-        meta = {'model_name': 'test', offboard_keys.FRAME_RING: True}
+        meta = {'model_name': 'test', frame_ring.HANDSHAKE_KEY: True}
         end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
         dropped = _connection(_ready('first', meta), wire.PeerDisconnected('dropped'))
         reopened = _connection(_ready('second', meta), _answer({'action_data': [1, 2, 3]}), end_ack)

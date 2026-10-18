@@ -1177,7 +1177,7 @@ def test_a_unix_session_carries_its_frames_through_shared_memory(unix_stub_serve
 
     session = InferenceClient(*served.unix()).new_session()
     try:
-        assert session.metadata[offboard_keys.FRAME_RING] is True
+        assert session.metadata[frame_ring.HANDSHAKE_KEY] is True
         assert session.infer({'image.left': image, keys.GRIP: 0.5}) == [{'action': [1, 2, 3]}]
     finally:
         session.close()
@@ -1211,7 +1211,7 @@ def test_a_unix_session_with_the_ring_off_carries_its_frames_in_the_message(
 
     session = InferenceClient(*served.unix()).new_session()
     try:
-        assert offboard_keys.FRAME_RING not in session.metadata
+        assert frame_ring.HANDSHAKE_KEY not in session.metadata
         session.infer({'image.left': image})
     finally:
         session.close()
@@ -1226,11 +1226,12 @@ def test_a_server_on_a_port_declares_no_frame_ring(stub_server):
 
     session = InferenceClient(client_websocket.WebsocketClientWire(), address).new_session()
     try:
-        assert offboard_keys.FRAME_RING not in session.metadata
+        assert frame_ring.HANDSHAKE_KEY not in session.metadata
     finally:
         session.close()
 
 
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
 def test_a_companion_path_too_long_to_bind_declares_no_frame_ring(start_server, socket_path, make_mock_model):
     model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     directory = pathlib.Path(socket_path).parent
@@ -1259,7 +1260,7 @@ def test_a_companion_path_too_long_to_dial_carries_the_frames_in_the_message(
     address = wire.UnixSocketAddress(alias / socket_name, wire.SESSION_PATH, '')
     session = InferenceClient(client_wire, address).new_session()
     try:
-        assert offboard_keys.FRAME_RING in session.metadata
+        assert frame_ring.HANDSHAKE_KEY in session.metadata
         session.infer({'image.left': image})
     finally:
         session.close()

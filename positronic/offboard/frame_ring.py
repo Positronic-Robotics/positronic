@@ -26,6 +26,9 @@ MAX_SOCKET_PATH = 107
 # The suffix of the descriptor socket, which each side derives from its own session socket path.
 SOCKET_SUFFIX = '.frames'
 
+# The ready handshake's metadata key, true when the server takes this session's images through a ring.
+HANDSHAKE_KEY = 'frame_ring'
+
 # Slots per ring, so the writer never takes a slot the server may still read.
 SLOTS = 4
 

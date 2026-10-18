@@ -236,7 +236,7 @@ class PolicyServer:
                 policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
             if self._frames is not None:
-                meta[offboard_keys.FRAME_RING] = True
+                meta[frames.HANDSHAKE_KEY] = True
             infer = partial(model, session_id=session_id)
             infer = telemetry.traced(protocol.MODEL_CALL)(infer)
             if pipeline.codec is not None:
