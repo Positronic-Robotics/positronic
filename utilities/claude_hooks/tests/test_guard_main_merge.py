@@ -139,6 +139,10 @@ BLOCKED = [
     'env gh pr merge 566 -R someone/other',
     'sudo gh pr merge 566 -R someone/other',
     'nice gh pr merge 566 -R someone/other',
+    # a path or a `PATH=` prefix can run a program other than gh
+    '/tmp/gh pr merge 566 -R someone/other',
+    'PATH=/tmp:$PATH gh pr merge 566 -R someone/other',
+    'A=1 gh pr merge 566 -R someone/other',
     f'cd {INFRA} && gh pr merge 566',
     # second invocation still guarded after an exempt one
     f'cd {INFRA} && git push && git -C {CLONE} push',
@@ -190,7 +194,6 @@ ALLOWED = [
     'gh pr merge 5 -R github.com/o/r.git -m -b body',
     'gh pr merge 5 -R o/r --subject -R',
     'GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 5 -R o/r --squash',
-    'A=1 B=2 gh pr merge 5 -R o/r',
     f'cd {INFRA} && gh pr merge 566 -R someone/agent_infra',
     'git status',
     'git log --oneline',

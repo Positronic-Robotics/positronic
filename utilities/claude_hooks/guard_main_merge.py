@@ -748,6 +748,14 @@ def _builds_arguments(words: list[str]) -> bool:
     return False
 
 
+def _raw_segments(cmd: str) -> list[list[str]]:
+    """`cmd`'s commands as raw words, quoting kept. Raises ValueError on unbalanced quoting."""
+    segments: list[list[str]] = [[]]
+    for w in _raw_words(_strip_heredoc_bodies(cmd)):
+        segments.append([]) if w in COMMAND_SEPARATORS else segments[-1].append(w)
+    return segments
+
+
 def _carries_expansion(cmd: str) -> bool:
     """Whether a `gh` command in `cmd` is handed an argument its own text does not spell out.
 
@@ -761,14 +769,6 @@ def _carries_expansion(cmd: str) -> bool:
     except ValueError:
         return True
     return any(_builds_arguments(s) for s in segments if any(os.path.basename(w) == 'gh' for w in s))
-
-
-def _raw_segments(cmd: str) -> list[list[str]]:
-    """`cmd`'s commands as raw words, quoting kept. Raises ValueError on unbalanced quoting."""
-    segments: list[list[str]] = [[]]
-    for w in _raw_words(_strip_heredoc_bodies(cmd)):
-        segments.append([]) if w in COMMAND_SEPARATORS else segments[-1].append(w)
-    return segments
 
 
 def _sets_gh_repo(cmd: str) -> bool:
@@ -933,10 +933,14 @@ def _is_exact_merge_in_another_repository(
     return not _names_guarded(repo, guarded_slug, canonical)
 
 
-def _runs_gh_directly(cmd: str) -> bool:
-    """Whether every word before the `gh pr merge` in its segment is an environment assignment.
+# The one assignment the exact form may carry before `gh`: the requester's token, read from its file.
+GH_TOKEN_ASSIGNMENT = 'GH_TOKEN='
 
-    A wrapper (`xargs`, `env`, `sudo`) can hand gh arguments that the command text does not spell out.
+
+def _runs_gh_directly(cmd: str) -> bool:
+    """Whether `gh pr merge` runs as the bare `gh` word, with nothing before it but a `GH_TOKEN=` assignment.
+
+    A wrapper (`xargs`, `env`), a path (`/tmp/gh`) or a `PATH=` prefix can run a program other than gh.
     """
     try:
         segments = _raw_segments(cmd)
@@ -945,7 +949,7 @@ def _runs_gh_directly(cmd: str) -> bool:
     for segment in segments:
         for index, word in enumerate(segment):
             if os.path.basename(word) == 'gh' and segment[index + 1 : index + 3] == ['pr', 'merge']:
-                return all(ASSIGNMENT_RE.match(prefix) for prefix in segment[:index])
+                return word == 'gh' and all(prefix.startswith(GH_TOKEN_ASSIGNMENT) for prefix in segment[:index])
     return False
 
 
