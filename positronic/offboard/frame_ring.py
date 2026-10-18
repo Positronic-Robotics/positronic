@@ -11,7 +11,7 @@ import mmap
 import os
 import socket
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -164,6 +164,11 @@ class FrameRing:
         os.close(self.fd)
 
 
+def _as_wire_sequence(sequence: list | tuple, items: Iterable[Any]) -> list | tuple:
+    """``items`` as a plain list or tuple: the wire carries any subclass of either as a plain array."""
+    return list(items) if isinstance(sequence, list) else tuple(items)
+
+
 def _detach_images(value: Any, found: list[tuple[dict[bytes, Any], np.ndarray]]) -> Any:
     """``value`` with an empty reference in place of every image, each paired with its array in ``found``."""
     if serialization.is_image(value) and not serialization.is_unsupported_dtype(value.dtype):
@@ -173,7 +178,7 @@ def _detach_images(value: Any, found: list[tuple[dict[bytes, Any], np.ndarray]])
     if isinstance(value, Mapping):
         return {key: _detach_images(item, found) for key, item in value.items()}
     if isinstance(value, list | tuple):
-        return type(value)(_detach_images(item, found) for item in value)
+        return _as_wire_sequence(value, (_detach_images(item, found) for item in value))
     return value
 
 
@@ -349,7 +354,7 @@ class FrameChannel:
                 return self._ring(session_id).array(obs)
             return {key: self.resolve(session_id, item) for key, item in obs.items()}
         if isinstance(obs, list | tuple):
-            return type(obs)(self.resolve(session_id, item) for item in obs)
+            return _as_wire_sequence(obs, (self.resolve(session_id, item) for item in obs))
         return obs
 
     def _ring(self, session_id: str) -> MappedRing:
