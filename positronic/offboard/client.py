@@ -5,9 +5,11 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from enum import Enum
+from pathlib import Path
 from threading import Condition, Lock, local
 from typing import Any, TypeVar
 
+from positronic_model_server import keys as offboard_keys
 from positronic_model_server import protocol, serialization
 from positronic_wire import wire
 from positronic_wire.wire import ClientWire
@@ -16,6 +18,7 @@ from positronic import telemetry, telemetry_keys
 from positronic.offboard import protocol as legacy_protocol
 from positronic.utils.versions import Version, resolve_version
 
+from . import frame_ring as frames
 from .protocol import deserialise, serialise, typed_commands
 
 logger = logging.getLogger(__name__)
@@ -44,6 +47,10 @@ class InferenceSession:
     ``reopen`` returns a new session on the same server. A connection that drops before the server's first
     answer reconnects through it, once, and sends the observation again. ``ready_by`` is the
     ``time.monotonic()`` instant past which the status handshake waits for no further update.
+
+    ``uds`` is the Unix socket the session was dialled over, which says the server runs on this host.
+    A server that also declares a frame ring then gets every image through shared memory, and the
+    message carries a reference in place of each one.
     """
 
     def __init__(
@@ -53,6 +60,7 @@ class InferenceSession:
         *,
         ready_by: float = math.inf,
         reopen: Callable[[], 'InferenceSession'] | None = None,
+        uds: Path | None = None,
     ):
         self._conn = conn
         self._infer_timeout = infer_timeout
@@ -77,6 +85,7 @@ class InferenceSession:
         self._pending: deque[object] = deque()
         self._timings = local()
         self.served_timing = self.wire_timing = {}
+        self._frames = self._frame_writer(uds)
 
     @property
     def served_timing(self) -> Mapping[str, float]:
@@ -95,6 +104,16 @@ class InferenceSession:
     @wire_timing.setter
     def wire_timing(self, value: Mapping[str, float]) -> None:
         self._timings.wire = value
+
+    def _frame_writer(self, uds: Path | None) -> frames.FrameWriter | None:
+        declared = self._metadata.get(offboard_keys.FRAME_RING)
+        if uds is None or self._session_id is None or not declared or not frames.SUPPORTED:
+            return None
+        channel = frames.channel_path(uds)
+        if not frames.fits_a_socket_address(channel):
+            logger.error('No frame ring: the companion socket path %r is too long to dial', str(channel))
+            return None
+        return frames.FrameWriter(channel, self._session_id)
 
     def _handshake(self, ready_by: float, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -206,13 +225,19 @@ class InferenceSession:
             raise wire.PeerDisconnected('The server this session reconnected to declares other session settings')
         with self._send_lock:
             if not self._closing:
+                # A ring is handed over under one session id, so the new session's ring replaces this one's.
+                if self._frames is not None:
+                    self._frames.close()
                 self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
+                self._frames = reopened._frames
                 return
         reopened.close()
         raise RuntimeError('The inference session is closing')
 
     def _round_trip(self, obs: dict[str, Any]) -> Any:
         self.served_timing = self.wire_timing = {}
+        if self._frames is not None:
+            obs = self._frames.pack(obs)
         request = (
             obs
             if self._protocol is protocol.ProtocolVersion.V1
@@ -295,6 +320,10 @@ class InferenceSession:
 
     def close(self) -> None:
         """End the server session and wait for its cleanup before closing the connection."""
+        # A session closed by a failed round trip still holds its ring.
+        if self._frames is not None:
+            self._frames.close()
+            self._frames = None
         with self._send_lock:
             self._closing = True
         with self._responses:
@@ -410,8 +439,9 @@ class InferenceClient:
         transport handler, and a connection may hold a reader thread until it is closed.
         """
         conn = self._wire.dial(self._address, self.headers, open_timeout)
+        uds = self._address.uds if isinstance(self._address, wire.UnixSocketAddress) else None
         try:
-            return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen)
+            return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen, uds=uds)
         except BaseException:
             conn.close()
             raise
