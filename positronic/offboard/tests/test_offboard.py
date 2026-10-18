@@ -7,6 +7,8 @@ import logging
 import mmap
 import os
 import socket
+import threading
+import time
 from collections.abc import Generator
 from dataclasses import replace
 from pathlib import Path
@@ -603,3 +605,31 @@ def test_closing_a_channel_that_waits_for_a_handover_ends_its_thread(socket_path
     channel.close()
 
     assert accepting is not None and not accepting.is_alive()
+
+
+@pytestmark_ring
+def test_closing_a_channel_before_its_accept_thread_runs_raises_nothing_in_that_thread(socket_path, monkeypatch):
+    released = threading.Event()
+    accept_forever = frame_ring.FrameChannel._accept_forever
+
+    def held_until_released(self, *args):
+        released.wait()
+        accept_forever(self, *args)
+
+    monkeypatch.setattr(frame_ring.FrameChannel, '_accept_forever', held_until_released)
+    raised: list[BaseException | None] = []
+    monkeypatch.setattr(threading, 'excepthook', lambda failure: raised.append(failure.exc_value))
+    channel = frame_ring.FrameChannel(frame_ring.channel_path(Path(socket_path)))
+    listener = websocket_wire.claim_socket_path(channel.path, socket.SOCK_SEQPACKET)
+    channel.start(listener)
+    accepting = channel._thread
+    closing = threading.Thread(target=channel.close)
+    closing.start()
+    while listener.fileno() != -1:
+        time.sleep(0.01)
+
+    released.set()
+    closing.join(timeout=frame_ring.HANDOVER_TIMEOUT_SEC)
+
+    assert accepting is not None and not accepting.is_alive()
+    assert raised == []
