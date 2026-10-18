@@ -10,7 +10,11 @@ NAME = 'name'
 ARGS = 'args'
 VERSION = 'version'
 
-CURRENT_COMPONENT_VERSIONS = {'chunked_schedule': 3, 'stop_on_fault': 2, 'temporal_stack': 2}
+CHUNKED_SCHEDULE = 'chunked_schedule'
+STOP_ON_FAULT = 'stop_on_fault'
+TEMPORAL_STACK = 'temporal_stack'
+
+CURRENT_COMPONENT_VERSIONS = {CHUNKED_SCHEDULE: 3, STOP_ON_FAULT: 2, TEMPORAL_STACK: 2}
 
 
 def component(name: str, /, *, version: int | None = None, **args: Any) -> dict[str, Any]:

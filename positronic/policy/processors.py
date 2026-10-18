@@ -26,7 +26,15 @@ from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
-from positronic_model_server.spec import ARGS, CURRENT_COMPONENT_VERSIONS, NAME, VERSION
+from positronic_model_server.spec import (
+    ARGS,
+    CHUNKED_SCHEDULE,
+    CURRENT_COMPONENT_VERSIONS,
+    NAME,
+    STOP_ON_FAULT,
+    TEMPORAL_STACK,
+    VERSION,
+)
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
@@ -75,7 +83,7 @@ class PauseOnUnavailable(Policy):
     TODO(#789): Define plan invalidation and recovery after robot unavailability.
     """
 
-    WIRE_NAME = 'stop_on_fault'  # Stable protocol identifier, independent of the Python class name.
+    WIRE_NAME = STOP_ON_FAULT
     WIRE_VERSION = CURRENT_COMPONENT_VERSIONS.get(WIRE_NAME, 1)
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
@@ -236,7 +244,7 @@ class ChunkedSchedule(Policy):
     until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
     """
 
-    WIRE_NAME = 'chunked_schedule'
+    WIRE_NAME = CHUNKED_SCHEDULE
     WIRE_VERSION = CURRENT_COMPONENT_VERSIONS.get(WIRE_NAME, 1)
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
@@ -683,7 +691,7 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
     are omitted, and the stack grows until the full window has been observed.
     """
 
-    WIRE_NAME = 'temporal_stack'
+    WIRE_NAME = TEMPORAL_STACK
     WIRE_VERSION = CURRENT_COMPONENT_VERSIONS.get(WIRE_NAME, 1)
 
     def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True) -> None:

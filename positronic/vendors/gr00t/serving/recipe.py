@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
-from positronic_model_server.spec import component, parallel, sequence
+from positronic_model_server.spec import CHUNKED_SCHEDULE, component, parallel, sequence
 
 from . import EE_POSE, GRIP, JOINT_POSITION, LANGUAGE, STATE, STATE_DIMS, TASK, VIDEO
 from . import keys as obs_keys
@@ -80,7 +80,7 @@ def client_stack(
     settings = deepcopy(settings)
     settings[model_settings.IMAGE_MAPPINGS] = image_mappings
     parts = [
-        component('chunked_schedule', fps=fps, horizon_sec=horizon_sec),
+        component(CHUNKED_SCHEDULE, fps=fps, horizon_sec=horizon_sec),
         inference(settings),
         component('metadata', values={model_settings.ACTION_FPS: fps}),
     ]
