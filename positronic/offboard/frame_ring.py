@@ -335,7 +335,7 @@ class FrameChannel:
         """Serve handovers on ``sock``, which the caller already bound to ``path`` and listened on."""
         sock.settimeout(_ACCEPT_POLL_SEC)
         self._socket = sock
-        self._thread = threading.Thread(target=self._accept_forever, name='frame-channel', daemon=True)
+        self._thread = threading.Thread(target=self._accept_forever, args=(sock,), name='frame-channel', daemon=True)
         self._thread.start()
         logger.info('Frame ring channel listening on %s', self.path)
 
@@ -364,11 +364,11 @@ class FrameChannel:
             raise RuntimeError(f'Session {session_id} sent a frame reference before it handed over a ring')
         return ring
 
-    def _accept_forever(self) -> None:
-        assert self._socket is not None
+    def _accept_forever(self, sock: socket.socket) -> None:
+        """Take handovers on ``sock`` until ``close``, which clears ``self._socket`` while this loop may still run."""
         while not self._closing:
             try:
-                connection, _address = self._socket.accept()
+                connection, _address = sock.accept()
             except TimeoutError:
                 continue
             except OSError:
