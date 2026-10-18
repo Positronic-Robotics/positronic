@@ -469,8 +469,8 @@ def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client()
     assert client.headers == headers
 
 
-def test_a_remote_policy_stops_its_connect_retries_at_its_connect_deadline(tmp_path):
-    address = wire.UnixSocketAddress(tmp_path / 'absent.sock', wire.SESSION_PATH, '')
+def test_a_remote_policy_stops_its_connect_retries_at_its_connect_deadline(socket_path):
+    address = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.SESSION_PATH, '')
     policy = RemotePolicy('websocket_unix', address, connect_deadline=0.5)
     started = time.monotonic()
     with pytest.raises(TimeoutError):

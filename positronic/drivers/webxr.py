@@ -140,7 +140,7 @@ class WebXR(pimm.ControlSystem):
     Parameters
     - port: TCP port to bind.
     - ssl_keyfile, ssl_certfile: TLS files if `use_https=True`.
-    - frontend: the page to serve, a ``Frontend`` or its value.
+    - frontend: the page to serve, a ``Frontend``.
     - use_https: enable HTTPS; set False for iPhone dev.
     - jpeg_quality: the JPEG quality of the video stream.
     """
@@ -150,7 +150,7 @@ class WebXR(pimm.ControlSystem):
         port: int,
         ssl_keyfile: str = 'key.pem',
         ssl_certfile: str = 'cert.pem',
-        frontend: Frontend | str = Frontend.OCULUS,
+        frontend: Frontend = Frontend.OCULUS,
         use_https: bool = True,
         sensitivity: float = 1.0,
         jpeg_quality: int = 50,
@@ -158,7 +158,7 @@ class WebXR(pimm.ControlSystem):
         self.port = port
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
-        self.frontend = Frontend(frontend)
+        self.frontend = frontend
         self.use_https = use_https
         self.server_thread = None
         self.frame = pimm.ControlSystemReceiver(self)
