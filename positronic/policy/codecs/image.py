@@ -106,7 +106,9 @@ class RestrictImageSize(Codec):
         self._resample = resample
 
     @classmethod
-    def from_resample_spec(cls, width: int, height: int, resample: str) -> 'RestrictImageSize':
+    def from_resample_spec(
+        cls, width: int = 640, height: int = 640, resample: str = Resample.BILINEAR.value
+    ) -> 'RestrictImageSize':
         """The codec of a ``RESAMPLE_VERSION`` spec, whose ``resample`` is a `Resample` value."""
         return cls(width, height, Resample(resample))
 

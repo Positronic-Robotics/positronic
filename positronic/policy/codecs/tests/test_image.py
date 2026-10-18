@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from positronic_model_server import serialization
+from positronic_model_server.spec import LATEST, component
 
 from positronic.policy import spec
 from positronic.policy.codecs import EncodeImages, Resample, RestrictImageSize
@@ -103,6 +104,18 @@ class TestRestrictImageSize:
         rebuilt = spec.from_spec(description)
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.to_spec() == description
+
+    @pytest.mark.parametrize('version', [LATEST, RestrictImageSize.RESAMPLE_VERSION])
+    @pytest.mark.parametrize('bounds', [{}, {'width': 64}, {'height': 48}, {'width': 64, 'height': 48}])
+    @pytest.mark.parametrize('resample', [None, *Resample])
+    def test_server_specs_preserve_defaults_and_explicit_filters(self, version, bounds, resample):
+        args = bounds if resample is None else {**bounds, 'resample': resample.value}
+        rebuilt = spec.from_spec(component(RestrictImageSize.WIRE_NAME, version=version, **args))
+        assert isinstance(rebuilt, RestrictImageSize)
+        expected = RestrictImageSize(**bounds, resample=Resample.BILINEAR if resample is None else resample)
+        assert rebuilt.to_spec() == expected.to_spec()
+        frame = self._textured(720, 960)
+        np.testing.assert_array_equal(rebuilt.encode({'cam': frame})['cam'], expected.encode({'cam': frame})['cam'])
 
     def test_an_unknown_resample_in_a_spec_is_refused(self):
         description = {
