@@ -836,6 +836,61 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
     assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
 
 
+def _stop_short(world, driver: franka.Robot, arm: FakeArm, loop) -> None:
+    """Drive ``loop`` through a sync move the arm never lands, so the driver marks the arm as not where it put it."""
+    arm.goal_status = franka.pf.GoalStatus.ABORTED
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+    arm.goal_status = None
+
+
+def test_a_console_recover_call_that_clears_makes_an_arm_that_stopped_short_read_available(world):
+    """The console reads the streamed status to decide whether a person may start an episode. A clear the arm
+    answers CLEARED leaves it holding where it is, so ERROR would keep Start off until a move nobody can send."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(2):  # through the opening move
+        next(loop)
+    _stop_short(world, driver, arm, loop)
+    next(loop)
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+    answer = _recoverer(world, driver)(None)
+    next(loop)
+    next(loop)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+def test_a_console_recover_call_that_does_not_clear_leaves_the_arm_reading_error(world, monkeypatch):
+    """Only a clear that worked lifts the mark: a recovery that leaves the fault keeps the arm reading ERROR."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(2):  # through the opening move
+        next(loop)
+    _stop_short(world, driver, arm, loop)
+    monkeypatch.setattr(arm, 'recover_from_errors', lambda: False)
+
+    answer = _recoverer(world, driver)(None)
+    next(loop)
+    next(loop)
+
+    assert answer.result() is RecoveryOutcome.NOT_CLEARED
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+
 def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world):
     """The sample before the arriving poll was taken mid-travel, and would read AVAILABLE at the pose the
     arm set out from."""
