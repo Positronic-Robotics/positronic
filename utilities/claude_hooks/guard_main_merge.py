@@ -563,6 +563,11 @@ def canonical_repository(slug: str, gh_json=_gh_json) -> str:
     return str(name).casefold()
 
 
+def _names_guarded(slug: str, guarded_slug: str, canonical) -> bool:
+    """Whether GitHub resolves `slug` to the guarded repository, by its current name or by the checkout's."""
+    return canonical(slug) in (guarded_slug, canonical(guarded_slug))
+
+
 REPOSITORY_LOOKUP_MSG = (
     "BLOCKED: {reason}. A merge passes as another repository's only when GitHub names that repository,"
     ' so this one stays guarded.' + DENY_TAIL
@@ -915,22 +920,22 @@ def _repository_of_exact_merge_form(words: list[str]) -> str:
     return m.group(1).casefold() if m else ''
 
 
-def _is_exact_merge_in_another_repository(
-    words: list[str], guarded_slug: str, cmd: str, gh_repo_env: str, canonical=canonical_repository
-) -> bool:
-    """Whether `gh <words>` in `cmd` merges in a repository other than `guarded_slug`, in the one exempt form.
+def _merge_runs_alone(cmd: str) -> bool:
+    """Whether every simple command in `cmd` is the one gh invocation or a `cd`.
 
-    Any substitution, expansion or `GH_REPO` can still select the guarded repository, so each one says no.
-    The merge runs alone, as a guarded one must, so one command costs at most one lookup inside the hook timeout.
+    A substitution may only `cat` files, which is how a token reaches `GH_TOKEN=$(cat …)`.
     """
-    if gh_repo_env or _sets_gh_repo(cmd) or _carries_substitution(cmd) or _carries_expansion(cmd):
+    cmd = _strip_heredoc_bodies(cmd)
+    try:
+        for body in _substitution_bodies(cmd):
+            if [os.path.basename(s[0]) for s in _segments(body)] != ['cat']:
+                return False
+            cmd = cmd.replace(f'$({body})', SUBST).replace(f'`{body}`', SUBST)
+        segments = _segments(cmd)
+    except ValueError:
         return False
-    if not (_merge_runs_alone(cmd) and _runs_gh_directly(cmd)):
-        return False
-    repo = _repository_of_exact_merge_form(words)
-    if not (repo and guarded_slug) or repo == guarded_slug:
-        return False
-    return not _names_guarded(repo, guarded_slug, canonical)
+    gh_segments = [s for s in segments if _find_tool(s)[1] == 'gh']
+    return len(gh_segments) == 1 and all(s in gh_segments or os.path.basename(s[0]) == 'cd' for s in segments)
 
 
 # The one assignment the exact form may carry before `gh`: the requester's token, read from its file.
@@ -953,9 +958,22 @@ def _runs_gh_directly(cmd: str) -> bool:
     return False
 
 
-def _names_guarded(slug: str, guarded_slug: str, canonical) -> bool:
-    """Whether GitHub resolves `slug` to the guarded repository, by its current name or by the checkout's."""
-    return canonical(slug) in (guarded_slug, canonical(guarded_slug))
+def _is_exact_merge_in_another_repository(
+    words: list[str], guarded_slug: str, cmd: str, gh_repo_env: str, canonical=canonical_repository
+) -> bool:
+    """Whether `gh <words>` in `cmd` merges in a repository other than `guarded_slug`, in the one exempt form.
+
+    Any substitution, expansion or `GH_REPO` can still select the guarded repository, so each one says no.
+    The merge runs alone, as a guarded one must, so one command costs at most one lookup inside the hook timeout.
+    """
+    if gh_repo_env or _sets_gh_repo(cmd) or _carries_substitution(cmd) or _carries_expansion(cmd):
+        return False
+    if not (_merge_runs_alone(cmd) and _runs_gh_directly(cmd)):
+        return False
+    repo = _repository_of_exact_merge_form(words)
+    if not (repo and guarded_slug) or repo == guarded_slug:
+        return False
+    return not _names_guarded(repo, guarded_slug, canonical)
 
 
 def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
@@ -1133,24 +1151,6 @@ def analyze(  # noqa: C901
             return MERGE_NOT_ALONE_MSG
         return _authorize_merge(pending_merge, guarded_slug, allow_merge, authorized, stack_below, GH_MERGE_MSG)
     return None
-
-
-def _merge_runs_alone(cmd: str) -> bool:
-    """Whether every simple command in `cmd` is the one gh invocation or a `cd`.
-
-    A substitution may only `cat` files, which is how a token reaches `GH_TOKEN=$(cat …)`.
-    """
-    cmd = _strip_heredoc_bodies(cmd)
-    try:
-        for body in _substitution_bodies(cmd):
-            if [os.path.basename(s[0]) for s in _segments(body)] != ['cat']:
-                return False
-            cmd = cmd.replace(f'$({body})', SUBST).replace(f'`{body}`', SUBST)
-        segments = _segments(cmd)
-    except ValueError:
-        return False
-    gh_segments = [s for s in segments if _find_tool(s)[1] == 'gh']
-    return len(gh_segments) == 1 and all(s in gh_segments or os.path.basename(s[0]) == 'cd' for s in segments)
 
 
 def _authorize_merge(number: int, guarded_slug: str, allow_merge, authorized, stack_below, refused: str) -> str | None:
