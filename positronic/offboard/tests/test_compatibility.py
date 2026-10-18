@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 from positronic_model_server import protocol
+from positronic_model_server.spec import LATEST, component, sequence
 from positronic_wire import wire
 
 from positronic import keys
@@ -342,7 +343,7 @@ def test_deprecated_component_warns_once_per_stack_and_removed_one_fails(monkeyp
     notice = Deprecation(date(2020, 1, 1), date(2020, 7, 1), 'Serve flip_grip v2 instead.')
     monkeypatch.setitem(spec.COMPONENTS, 'flip_grip', {1: Version(current, notice)})
     with pytest.warns(FutureWarning, match='flip_grip.*2020-07-01') as warnings:
-        spec.from_spec({'seq': [{'name': 'flip_grip'}, {'name': 'flip_grip'}]})
+        spec.from_spec(sequence(component('flip_grip', version=LATEST), component('flip_grip', version=1)))
     assert len(warnings) == 1
     monkeypatch.setitem(spec.COMPONENTS, 'flip_grip', {1: Version(None, notice, removed_on=date(2020, 7, 1))})
     with pytest.raises(ValueError, match='has been removed.*flip_grip v2'):

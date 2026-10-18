@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 
 SEQ = 'seq'
 PAR = 'par'
@@ -10,21 +10,15 @@ NAME = 'name'
 ARGS = 'args'
 VERSION = 'version'
 
-CHUNKED_SCHEDULE = 'chunked_schedule'
-STOP_ON_FAULT = 'stop_on_fault'
-TEMPORAL_STACK = 'temporal_stack'
-
-CURRENT_COMPONENT_VERSIONS = {CHUNKED_SCHEDULE: 3, STOP_ON_FAULT: 2, TEMPORAL_STACK: 2}
+LATEST: Literal['latest'] = 'latest'
 
 
-def component(name: str, /, *, version: int | None = None, **args: Any) -> dict[str, Any]:
-    """Pin an omitted version to the shared current version, defaulting to v1, without importing the component."""
+def component(name: str, /, *, version: int | Literal['latest'] = LATEST, **args: Any) -> dict[str, Any]:
+    """Describe a component, requesting the client's latest supported version unless pinned."""
     if not isinstance(name, str) or not name:
         raise ValueError('A component needs a nonempty name')
-    if version is None:
-        version = CURRENT_COMPONENT_VERSIONS.get(name, 1)
-    if type(version) is not int or version < 1:
-        raise ValueError('A component version must be a positive integer')
+    if version != LATEST and (type(version) is not int or version < 1):
+        raise ValueError('A component version must be a positive integer or "latest"')
     # JSON normalizes tuples to lists and rejects Python objects and nonfinite numbers.
     return {NAME: name, VERSION: version, ARGS: json.loads(json.dumps(args, allow_nan=False))}
 
@@ -62,10 +56,7 @@ def validate(node: dict[str, Any]) -> None:
         name = node.get(NAME)
         if not isinstance(name, str):
             raise ValueError('A component needs a name')
-        version = node.get(VERSION, 1)
-        if type(version) is not int or version < 1:
-            raise ValueError('A component version must be a positive integer')
-        component(name, version=version, **node.get(ARGS, {}))
+        component(name, version=node.get(VERSION, 1), **node.get(ARGS, {}))
 
 
 def resolve_params(defaults: dict[str, Any], requested: dict[str, Any]) -> dict[str, Any]:

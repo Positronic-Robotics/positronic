@@ -3,9 +3,9 @@
 import json
 
 import pytest
-from positronic_model_server import spec as wire_spec
 from positronic_model_server.spec import (
     ARGS,
+    LATEST,
     NAME,
     PAR,
     SEQ,
@@ -24,29 +24,27 @@ def test_composition_uses_the_client_wire_format():
     assert json.loads(json.dumps(spec)) == {
         'seq': [
             {'name': 'scheduler', 'version': 2, 'args': {'fps': 20}},
-            {'par': [{'name': 'left', 'version': 1, 'args': {}}, {'name': 'right', 'version': 1, 'args': {}}]},
+            {
+                'par': [
+                    {'name': 'left', 'version': 'latest', 'args': {}},
+                    {'name': 'right', 'version': 'latest', 'args': {}},
+                ]
+            },
         ]
     }
 
 
-@pytest.mark.parametrize('name, version', [('chunked_schedule', 3), ('stop_on_fault', 2), ('metadata', 1)])
-def test_omitted_versions_pin_the_current_contract(name, version):
-    assert json.loads(json.dumps(component(name)))[VERSION] == version
-
-
-def test_saved_versions_stay_pinned_when_the_catalog_changes(monkeypatch):
-    name = 'chunked_schedule'
-    saved = json.loads(json.dumps(component(name, fps=20)))
-    monkeypatch.setitem(wire_spec.CURRENT_COMPONENT_VERSIONS, name, 4)
+def test_omitted_versions_request_latest():
+    saved = json.loads(json.dumps(component('vendor-owned')))
     validate(saved)
-    assert saved[VERSION] == 3
-    assert component(name, fps=20)[VERSION] == 4
-    assert component(name, version=2, fps=20)[VERSION] == 2
+    assert saved[VERSION] == LATEST
 
 
-def test_components_without_an_override_default_to_v1():
-    assert component('vendor-owned')[VERSION] == 1
-    assert component('vendor-owned', version=17)[VERSION] == 17
+@pytest.mark.parametrize('version', [LATEST, 1, 17])
+def test_explicit_versions_survive_json_and_validation(version):
+    saved = json.loads(json.dumps(component('vendor-owned', version=version)))
+    validate(saved)
+    assert saved[VERSION] == version
 
 
 def test_arguments_are_normalized_to_json():
@@ -63,7 +61,7 @@ def test_non_json_arguments_fail_at_construction(value):
         component('vendor-owned', value=value)
 
 
-@pytest.mark.parametrize('version', [0, -1, True, '1'])
+@pytest.mark.parametrize('version', [0, -1, True, '1', 'newest', None])
 def test_invalid_versions_are_rejected(version):
     with pytest.raises(ValueError, match='positive integer'):
         component('vendor-owned', version=version)

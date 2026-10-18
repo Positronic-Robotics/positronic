@@ -128,9 +128,9 @@ description = sequence(
 )
 ```
 
-`component` accepts a name and JSON-compatible keyword arguments. It records the current known version
-in the description, defaulting to v1 for unknown names. Pass `version=2`, for example, to choose a
-specific version. Saved descriptions keep their recorded versions after upgrades.
+`component` accepts a name and JSON-compatible keyword arguments. By default it writes `version="latest"`,
+which selects the client's latest supported version. This can change after a client upgrade;
+pass `version=2`, for example, to pin a specific version. Legacy descriptions without a version mean v1.
 
 `sequence` and `parallel` reject empty compositions. The helpers check description structure;
 the client checks component names, supported versions and arguments when it builds the pipeline.

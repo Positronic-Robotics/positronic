@@ -5,7 +5,7 @@ from functools import reduce
 from operator import and_, or_
 from typing import Any, cast
 
-from positronic_model_server.spec import ARGS, NAME, PAR, SEQ, VERSION
+from positronic_model_server.spec import ARGS, LATEST, NAME, PAR, SEQ, VERSION
 
 from positronic.policy.base import Processor
 from positronic.policy.codecs import (
@@ -67,7 +67,7 @@ COMPONENTS[ChunkedSchedule.WIRE_NAME][ChunkedScheduleV2.WIRE_VERSION] = Version(
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:
-    """Build an exact versioned stack. Unversioned components mean v1; warn once per component version."""
+    """Resolve latest or pinned versions. Missing versions mean v1; warn once per component version."""
     selected: dict[str, dict[int, ComponentFactory]] = {}
 
     def build(node: dict[str, Any]) -> Processor | Codec:
@@ -86,6 +86,11 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
         name, version = node.get(NAME), node.get(VERSION, 1)
         if not isinstance(name, str) or name not in COMPONENTS:
             raise ValueError(f'Unknown local-stack entry {name!r}; this build knows {sorted(COMPONENTS)}')
+        if version == LATEST:
+            supported = [number for number, entry in COMPONENTS[name].items() if entry.implementation is not None]
+            if not supported:
+                raise ValueError(f'No supported versions of component {name!r}. Upgrade the client.')
+            version = max(supported)
         versions = selected.setdefault(name, {})
         if type(version) is not int or version not in versions:
             factory = resolve_version(COMPONENTS[name], version, f'component {name!r}')

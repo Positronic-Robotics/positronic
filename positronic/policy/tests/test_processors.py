@@ -2,13 +2,14 @@
 
 import json
 from concurrent.futures import Future
+from datetime import date
 from sys import maxsize
 from typing import cast
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server.spec import ARGS, CURRENT_COMPONENT_VERSIONS, NAME, VERSION
+from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component
 
 import pimm
 from pimm.world import VirtualClock
@@ -51,6 +52,7 @@ from positronic.policy.processors import (
     TemporalStack,
 )
 from positronic.policy.sequential import Sequential
+from positronic.utils.versions import Deprecation, Version
 
 MOTOR = 'motor'
 POSITION = 'position'
@@ -1235,18 +1237,41 @@ def test_wire_names_match_the_registered_components():
     }
     registered = spec.COMPONENTS
     assert set(instances) == set(registered)
-    current_versions = {
-        name: max(version for version, entry in versions.items() if entry.implementation is not None)
-        for name, versions in registered.items()
-    }
-    assert CURRENT_COMPONENT_VERSIONS == {name: version for name, version in current_versions.items() if version != 1}
     for name, instance in instances.items():
-        assert CURRENT_COMPONENT_VERSIONS.get(name, 1) == instance.WIRE_VERSION
         assert instance.to_spec()['name'] == name
         factory = registered[name][instance.WIRE_VERSION].implementation
         assert factory is not None
         assert isinstance(factory(**instance.to_spec().get('args', {})), type(instance))
         assert instance.to_spec()['version'] == instance.WIRE_VERSION
+        assert spec.from_spec({**instance.to_spec(), VERSION: LATEST}).to_spec() == instance.to_spec()
+
+
+def test_latest_follows_client_upgrades_while_numeric_versions_stay_pinned(monkeypatch):
+    name = ChunkedSchedule.WIRE_NAME
+    latest = json.loads(json.dumps(component(name, fps=20)))
+    pinned = component(name, version=2, fps=20)
+    current = spec.COMPONENTS[name][3]
+    versions = {2: spec.COMPONENTS[name][2]}
+    monkeypatch.setitem(spec.COMPONENTS, name, versions)
+    assert spec.from_spec(latest).to_spec()[VERSION] == 2
+    assert spec.from_spec(pinned).to_spec()[VERSION] == 2
+    versions[3] = current
+    assert spec.from_spec(latest).to_spec()[VERSION] == 3
+    assert spec.from_spec(pinned).to_spec()[VERSION] == 2
+
+
+def test_latest_skips_removed_versions_and_fails_when_none_are_supported(monkeypatch):
+    name = ChunkedSchedule.WIRE_NAME
+    notice = Deprecation(date(2020, 1, 1), date(2020, 7, 1), 'Use another scheduler.')
+    versions = {3: spec.COMPONENTS[name][3], 4: Version(None, notice, removed_on=date(2020, 7, 1))}
+    monkeypatch.setitem(spec.COMPONENTS, name, versions)
+    latest = component(name, fps=20)
+    assert spec.from_spec(latest).to_spec()[VERSION] == 3
+    with pytest.raises(ValueError, match='has been removed.*Use another scheduler'):
+        spec.from_spec(component(name, version=4, fps=20))
+    del versions[3]
+    with pytest.raises(ValueError, match='No supported versions'):
+        spec.from_spec(latest)
 
 
 def test_unversioned_wire_specs_still_select_v1():
