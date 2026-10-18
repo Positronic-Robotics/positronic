@@ -79,7 +79,13 @@ def no_allow(number, guarded_slug):
     return False
 
 
-def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorized=None, stack_below=None):
+def same_name(slug):
+    return slug.casefold()
+
+
+def verdict(
+    git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorized=None, stack_below=None, canonical=same_name
+):
     return gmm.analyze(
         cmd,
         cwd,
@@ -90,6 +96,7 @@ def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorize
         gh_repo_env=gh_repo_env,
         authorized=authorized or (lambda *_: True),
         stack_below=stack_below or (lambda *_: []),
+        canonical=canonical,
     )
 
 
@@ -330,6 +337,32 @@ def test_the_exact_form_in_another_repository_runs_without_consulting_any_author
         raise AssertionError('another repository keeps its own merge contract')
 
     assert verdict(git, 'gh pr merge 566 -R someone/other --squash', allow_merge=allow) is None
+
+
+def test_an_old_name_of_the_guarded_repository_stays_guarded(git):
+    """GitHub serves a renamed or transferred repository under its old name."""
+    moved_here = {'old-owner/old-name': GUARDED.casefold()}
+
+    def canonical(slug):
+        return moved_here.get(slug, slug)
+
+    assert verdict(git, 'gh pr merge 566 -R old-owner/old-name', canonical=canonical) is not None
+    assert verdict(git, 'gh pr merge 566 -R someone/other', canonical=canonical) is None
+    assert mcp_verdict(MERGE_TOOL, merge_args(566) | {'owner': 'old-owner', 'repo': 'old-name'}, canonical=canonical)
+
+
+def test_a_repository_github_cannot_name_stays_guarded(git):
+    assert verdict(git, 'gh pr merge 566 -R someone/other', canonical=lambda _: '') is not None
+    assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}, canonical=lambda _: '') is not None
+
+
+def test_canonical_repository_follows_github_s_name_and_gives_empty_on_a_failed_lookup():
+    assert gmm.canonical_repository('old/name', gh_json=lambda *_: {'full_name': 'New/Name'}) == 'new/name'
+
+    def failing(*_):
+        raise gmm.StackLookupError('404')
+
+    assert gmm.canonical_repository('old/name', gh_json=failing) == ''
 
 
 def test_a_set_gh_repo_keeps_the_exact_form_guarded(git):
@@ -759,7 +792,9 @@ GUARDED_REPO_ARGS = {'owner': 'Positronic-Robotics', 'repo': 'positronic'}
 OTHER_REPO_ARGS = {'owner': 'someone', 'repo': 'agent_infra'}
 
 
-def mcp_verdict(tool, arguments, guarded=GUARDED, allow_merge=no_allow, authorized=None, stack_below=None):
+def mcp_verdict(
+    tool, arguments, guarded=GUARDED, allow_merge=no_allow, authorized=None, stack_below=None, canonical=same_name
+):
     return gmm.analyze_mcp(
         tool,
         arguments,
@@ -767,6 +802,7 @@ def mcp_verdict(tool, arguments, guarded=GUARDED, allow_merge=no_allow, authoriz
         allow_merge=allow_merge,
         authorized=authorized or (lambda *_: True),
         stack_below=stack_below or (lambda *_: []),
+        canonical=canonical,
     )
 
 

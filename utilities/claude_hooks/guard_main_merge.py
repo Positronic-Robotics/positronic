@@ -541,6 +541,17 @@ def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[
     return chain[: chain.index(number)]
 
 
+def canonical_repository(slug: str, gh_json=_gh_json) -> str:
+    """The `owner/repo` GitHub names `slug` by now, past a rename or a transfer; '' when GitHub does not say.
+
+    GitHub still serves a moved repository under its old name, so the name a command writes is not its identity.
+    """
+    try:
+        return str(gh_json(f'repos/{slug}', time.monotonic() + STACK_LOOKUP_BUDGET_S)['full_name']).casefold()
+    except (StackLookupError, KeyError, TypeError):
+        return ''
+
+
 # Membership is a shape read off the call, not a list of tool names. A call carrying a commit
 # `message` and no `branch` commits to the default branch. A tool whose name carries `branch` and
 # names a pull request merges the base into the head, which can be the guarded branch.
@@ -582,6 +593,7 @@ def analyze_mcp(
     allow_merge=consume_merge_allow,
     authorized=merge_authorized,
     stack_below=merged_along_with,
+    canonical=canonical_repository,
 ) -> str | None:
     """The deny message for a GitHub MCP call, or None to allow it."""
     if not tool.startswith(GITHUB_MCP_PREFIX):
@@ -589,7 +601,7 @@ def analyze_mcp(
     verb = tool.removeprefix(GITHUB_MCP_PREFIX)
     guarded_slug, slug = guarded_slug.casefold(), _mcp_slug(arguments)
     if MERGE_VERB in verb:
-        if slug and guarded_slug and slug != guarded_slug:
+        if slug and guarded_slug and slug != guarded_slug and canonical(slug) not in ('', guarded_slug):
             return None
         number = _mcp_pull_number(arguments)
         if number is None:
@@ -881,7 +893,9 @@ def _repository_of_exact_merge_form(words: list[str]) -> str:
     return m.group(1).casefold() if m else ''
 
 
-def _is_exact_merge_in_another_repository(words: list[str], guarded_slug: str, cmd: str, gh_repo_env: str) -> bool:
+def _is_exact_merge_in_another_repository(
+    words: list[str], guarded_slug: str, cmd: str, gh_repo_env: str, canonical=canonical_repository
+) -> bool:
     """Whether `gh <words>` in `cmd` merges in a repository other than `guarded_slug`, in the one exempt form.
 
     Any substitution, expansion or `GH_REPO` can still select the guarded repository, so each one says no.
@@ -889,7 +903,9 @@ def _is_exact_merge_in_another_repository(words: list[str], guarded_slug: str, c
     if gh_repo_env or _sets_gh_repo(cmd) or _carries_substitution(cmd) or _carries_expansion(cmd):
         return False
     repo = _repository_of_exact_merge_form(words)
-    return bool(repo and guarded_slug) and repo != guarded_slug
+    if not (repo and guarded_slug) or repo == guarded_slug:
+        return False
+    return canonical(repo) not in ('', guarded_slug)
 
 
 def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
@@ -956,6 +972,7 @@ def analyze(  # noqa: C901
     gh_repo_env='',
     authorized=merge_authorized,
     stack_below=merged_along_with,
+    canonical=canonical_repository,
 ) -> str | None:
     """The deny message for `cmd`, or None to allow it."""
     guarded_slug = guarded_slug.casefold()
@@ -976,6 +993,7 @@ def analyze(  # noqa: C901
                 gh_repo_env,
                 authorized,
                 stack_below,
+                canonical,
             )
             if deny:
                 return deny
@@ -1004,7 +1022,9 @@ def analyze(  # noqa: C901
 
     pending_merge = None
     for inv in invs:
-        if inv.kind != 'gh' or _is_exact_merge_in_another_repository(inv.words, guarded_slug, cmd, gh_repo_env):
+        if inv.kind != 'gh' or _is_exact_merge_in_another_repository(
+            inv.words, guarded_slug, cmd, gh_repo_env, canonical
+        ):
             continue
         is_merge, number, target = _gh_pr_merge(inv.words)
         if is_merge:
