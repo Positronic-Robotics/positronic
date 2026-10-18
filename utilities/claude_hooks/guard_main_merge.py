@@ -10,6 +10,9 @@ needs a receipt for each pull request it takes (see `merged_along_with`).
 A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
 `main` is refused (`analyze_mcp`).
 
+A merge of a pull request in another repository is allowed: that repository keeps its own merge contract.
+A merge whose repository cannot be established stays guarded.
+
 Scope: the git-command guards apply only to invocations that operate on THIS repo — same
 `origin` as the session's project repo, which covers clones and worktrees. A `git -C <dir> …`
 or `cd <dir> && git …` targeting a different repo (a deploy clone with its own push contract)
@@ -586,11 +589,13 @@ def analyze_mcp(
     verb = tool.removeprefix(GITHUB_MCP_PREFIX)
     guarded_slug, slug = guarded_slug.casefold(), _mcp_slug(arguments)
     if MERGE_VERB in verb:
+        if slug and guarded_slug and slug != guarded_slug:
+            return None
         number = _mcp_pull_number(arguments)
         if number is None:
             return MCP_UNNUMBERED_MSG.format(tool=tool)
         refused = MCP_MERGE_MSG.format(tool=tool)
-        if not guarded_slug or slug != guarded_slug:
+        if slug != guarded_slug:
             return refused
         return _authorize_merge(number, guarded_slug, allow_merge, authorized, stack_below, refused)
     # A write the guard cannot place — no repository named, or none to compare it against — is
@@ -746,6 +751,12 @@ def _sets_gh_repo(cmd: str) -> bool:
     return any(word.startswith(GH_REPO_ENV + '=') for segment in segments for word in segment)
 
 
+def _explicit_slug(repo: str) -> str:
+    """`owner/repo` from what `-R` names — `[HOST/]OWNER/REPO` or a URL; '' when it names neither."""
+    parts = re.sub(r'\.git/?$', '', repo).rstrip('/').split('/')
+    return '/'.join(parts[-2:]).casefold() if len(parts) >= 2 and all(parts[-2:]) else ''
+
+
 def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo_env: str) -> str:
     """The repository a `gh` invocation acts on, or '' when that cannot be established.
 
@@ -757,7 +768,7 @@ def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo
     if gh_repo_env or _sets_gh_repo(cmd):
         return ''
     if explicit:
-        return explicit.casefold()
+        return _explicit_slug(explicit)
     return repo_slug(git.origin_url(inv_dir)) if inv_dir is not None else ''
 
 
@@ -955,11 +966,14 @@ def analyze(  # noqa: C901
                 return MERGE_SUBSTITUTION_MSG
             if _carries_expansion(cmd):
                 return MERGE_EXPANSION_MSG
+            repo = _gh_repo(target, inv.dir, git, cmd, gh_repo_env)
+            if repo and guarded_slug and repo != guarded_slug:
+                continue
             if number is None:
                 return UNNUMBERED_MSG
             if pending_merge is not None:
                 return MULTIPLE_MERGES_MSG
-            if _gh_repo(target, inv.dir, git, cmd, gh_repo_env) != guarded_slug:
+            if repo != guarded_slug:
                 return GH_MERGE_MSG
             # Spending it here would pay for a merge a later invocation in the same command can
             # still block, so the authorization is consulted once everything else has passed.

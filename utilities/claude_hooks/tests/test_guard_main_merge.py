@@ -108,7 +108,9 @@ BLOCKED = [
     'git push origin HEAD:$BR',
     'git -C $DIR push',
     'gh pr merge 5',
-    'gh pr -R o/r merge 5',
+    # another host or a URL can still name the guarded repository
+    f'gh pr merge 5 -R github.com/{GUARDED}',
+    f'gh pr merge 5 --repo https://github.com/{GUARDED}.git',
     # second invocation still guarded after an exempt one
     f'cd {INFRA} && git push && git -C {CLONE} push',
     # grouped cd does not persist outside the subshell — dir tracking poisons, stays guarded
@@ -152,6 +154,8 @@ BLOCKED = [
 
 ALLOWED = [
     'ls -la',
+    'gh pr -R o/r merge 5',
+    'gh pr merge -R o/r',
     'git status',
     'git log --oneline',
     'git pull --ff-only',
@@ -298,13 +302,11 @@ def test_a_value_taking_flag_does_not_donate_its_value_as_the_pull_request(git):
     assert asked == [999]
 
 
-def test_a_merge_in_another_repository_is_refused_without_consulting_any_authorization(git):
-    """`-R` selects a repository this guard holds no receipts for."""
+def test_a_merge_in_another_repository_runs_without_consulting_any_authorization(git):
+    """`-R` selects a repository that keeps its own merge contract."""
     asked = []
-    assert (
-        verdict(git, 'gh pr -R someone/other merge 566', allow_merge=lambda n, slug: asked.append(n) or True)
-        is not None
-    )
+    verdict_ = verdict(git, 'gh pr -R someone/other merge 566', allow_merge=lambda n, slug: asked.append(n) or False)
+    assert verdict_ is None
     assert asked == []
 
 
@@ -317,9 +319,9 @@ def test_a_repository_shorthand_selects_it_however_pflag_writes_it(git):
         'gh pr merge 566 -dRsomeone/other',
         'gh pr merge 566 -dR someone/other',
     ):
-        assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None, cmd
+        assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or False) is None, cmd
     assert asked == []
-    assert verdict(git, f'gh pr merge 566 -dR{GUARDED}', allow_merge=lambda *_: True) is None
+    assert verdict(git, f'gh pr merge 566 -dR{GUARDED}', allow_merge=lambda *_: False) is not None
 
 
 def test_a_merge_word_the_shell_builds_is_refused(git):
@@ -358,9 +360,7 @@ def test_a_merge_reading_its_token_from_a_substitution_still_passes(git):
 def test_a_merge_run_from_another_repo_is_not_this_repository_s(git):
     """gh resolves the repository from the working directory when nothing names one."""
     asked = []
-    assert (
-        verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda n, slug: asked.append(n) or True) is not None
-    )
+    assert verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda n, slug: asked.append(n) or False) is None
     assert asked == []
 
 
@@ -784,11 +784,15 @@ def test_a_stacked_mcp_merge_names_the_pull_requests_below_it_with_no_authorizat
     assert spent == []
 
 
-def test_an_mcp_merge_of_another_repository_is_refused_without_consulting_any_authorization():
+def test_an_mcp_merge_of_another_repository_runs_without_consulting_any_authorization():
     def allow(number, slug):
-        raise AssertionError('the authorization must not be spent on a merge refused anyway')
+        raise AssertionError('another repository keeps its own merge contract')
 
-    assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, 'pullNumber': 566}, allow_merge=allow) is not None
+    assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, 'pullNumber': 566}, allow_merge=allow) is None
+
+
+def test_an_mcp_merge_that_names_no_repository_is_this_repository_s():
+    assert mcp_verdict(MERGE_TOOL, {'pullNumber': 566}, allow_merge=lambda *_: True) is not None
 
 
 @pytest.mark.parametrize('number', [None, 'abc', '', True, 1.5, {'n': 1}])
