@@ -2,7 +2,7 @@ import json
 
 import numpy as np
 import pytest
-from positronic_model_server.spec import ARGS, component
+from positronic_model_server.spec import ARGS, VERSION, component
 
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys as obs_keys
@@ -55,7 +55,7 @@ def test_observation_packing_preserves_values_and_adds_dimensions(unsqueeze_dims
     assert inputs['robot.state'] is values
     assert values.shape == (2, 3)
     assert inputs['task/prompt'] == 'pick'
-    assert codec.to_spec() == description
+    assert codec.to_spec() == {**description, VERSION: 1}
 
 
 def test_observation_packing_handles_images_and_plain_values_without_coercion():

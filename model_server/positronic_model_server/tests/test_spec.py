@@ -5,6 +5,7 @@ import json
 import pytest
 from positronic_model_server.spec import (
     ARGS,
+    LATEST,
     NAME,
     PAR,
     SEQ,
@@ -23,9 +24,27 @@ def test_composition_uses_the_client_wire_format():
     assert json.loads(json.dumps(spec)) == {
         'seq': [
             {'name': 'scheduler', 'version': 2, 'args': {'fps': 20}},
-            {'par': [{'name': 'left', 'version': 1, 'args': {}}, {'name': 'right', 'version': 1, 'args': {}}]},
+            {
+                'par': [
+                    {'name': 'left', 'version': 'latest', 'args': {}},
+                    {'name': 'right', 'version': 'latest', 'args': {}},
+                ]
+            },
         ]
     }
+
+
+def test_omitted_versions_request_latest():
+    saved = json.loads(json.dumps(component('vendor-owned')))
+    validate(saved)
+    assert saved[VERSION] == LATEST
+
+
+@pytest.mark.parametrize('version', [LATEST, 1, 17])
+def test_explicit_versions_survive_json_and_validation(version):
+    saved = json.loads(json.dumps(component('vendor-owned', version=version)))
+    validate(saved)
+    assert saved[VERSION] == version
 
 
 def test_arguments_are_normalized_to_json():
@@ -42,7 +61,7 @@ def test_non_json_arguments_fail_at_construction(value):
         component('vendor-owned', value=value)
 
 
-@pytest.mark.parametrize('version', [0, -1, True, '1'])
+@pytest.mark.parametrize('version', [0, -1, True, '1', 'newest', None])
 def test_invalid_versions_are_rejected(version):
     with pytest.raises(ValueError, match='positive integer'):
         component('vendor-owned', version=version)
@@ -62,6 +81,7 @@ def test_empty_composition_is_rejected(compose):
         {PAR: []},
         {SEQ: [component('x')], NAME: 'x'},
         {NAME: 'x', VERSION: False},
+        {NAME: 'chunked_schedule', VERSION: None},
         {NAME: 'x', ARGS: []},
         {NAME: 'x', ARGS: {'value': float('nan')}},
     ],
@@ -73,6 +93,12 @@ def test_invalid_description_structure_is_rejected(node):
 
 def test_structural_validation_does_not_need_a_component_registry():
     validate(sequence(component('unknown-vendor-component', version=17), parallel(component('another'))))
+
+
+def test_validation_preserves_unversioned_wire_descriptions():
+    node = {NAME: 'chunked_schedule', ARGS: {'fps': 20}}
+    validate(node)
+    assert VERSION not in node
 
 
 def test_parameter_resolution_refuses_unknown_names_and_copies_defaults():

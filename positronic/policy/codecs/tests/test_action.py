@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pytest
 from positronic_model_server import serialization
-from positronic_model_server.spec import ARGS, component
+from positronic_model_server.spec import ARGS, VERSION, component
 
 import positronic.drivers.roboarm.command as cmd_module
 from pimm.time import EMITTED_WORLD, RECEIVED_WORLD
@@ -80,7 +80,7 @@ def test_unpack_action_chunk_selects_fields_and_preserves_every_timestep(horizon
         np.testing.assert_array_equal(action['grip'], grip[0, index])
         assert action['joints'].dtype == np.float32
         assert action['grip'].dtype == np.float64
-    assert codec.to_spec() == description
+    assert codec.to_spec() == {**description, VERSION: 1}
 
 
 @pytest.mark.parametrize('squeeze_dims', [0, 2])

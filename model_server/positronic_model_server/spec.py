@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 
 SEQ = 'seq'
 PAR = 'par'
@@ -10,13 +10,15 @@ NAME = 'name'
 ARGS = 'args'
 VERSION = 'version'
 
+LATEST: Literal['latest'] = 'latest'
 
-def component(name: str, /, *, version: int = 1, **args: Any) -> dict[str, Any]:
-    """Describe a component without importing it; arguments must survive a JSON round trip."""
+
+def component(name: str, /, *, version: int | Literal['latest'] = LATEST, **args: Any) -> dict[str, Any]:
+    """Describe a component, requesting the client's latest supported version unless pinned."""
     if not isinstance(name, str) or not name:
         raise ValueError('A component needs a nonempty name')
-    if type(version) is not int or version < 1:
-        raise ValueError('A component version must be a positive integer')
+    if version != LATEST and (type(version) is not int or version < 1):
+        raise ValueError('A component version must be a positive integer or "latest"')
     # JSON normalizes tuples to lists and rejects Python objects and nonfinite numbers.
     return {NAME: name, VERSION: version, ARGS: json.loads(json.dumps(args, allow_nan=False))}
 
