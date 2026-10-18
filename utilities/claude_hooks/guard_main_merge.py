@@ -920,18 +920,24 @@ def _repository_of_exact_merge_form(words: list[str]) -> str:
     return m.group(1).casefold() if m else ''
 
 
+def _substitutions_as_words(cmd: str) -> str:
+    """`cmd` with each command substitution replaced by one SUBST word, so a tokenizer keeps it inside its word."""
+    cmd = _strip_heredoc_bodies(cmd)
+    for body in _substitution_bodies(cmd):
+        cmd = cmd.replace(f'$({body})', SUBST).replace(f'`{body}`', SUBST)
+    return cmd
+
+
 def _merge_runs_alone(cmd: str) -> bool:
     """Whether every simple command in `cmd` is the one gh invocation or a `cd`.
 
     A substitution may only `cat` files, which is how a token reaches `GH_TOKEN=$(cat …)`.
     """
-    cmd = _strip_heredoc_bodies(cmd)
     try:
-        for body in _substitution_bodies(cmd):
-            if [os.path.basename(s[0]) for s in _segments(body)] != ['cat']:
-                return False
-            cmd = cmd.replace(f'$({body})', SUBST).replace(f'`{body}`', SUBST)
-        segments = _segments(cmd)
+        bodies = _substitution_bodies(_strip_heredoc_bodies(cmd))
+        if any([os.path.basename(s[0]) for s in _segments(body)] != ['cat'] for body in bodies):
+            return False
+        segments = _segments(_substitutions_as_words(cmd))
     except ValueError:
         return False
     gh_segments = [s for s in segments if _find_tool(s)[1] == 'gh']
@@ -948,7 +954,7 @@ def _runs_gh_directly(cmd: str) -> bool:
     A wrapper (`xargs`, `env`), a path (`/tmp/gh`) or a `PATH=` prefix can run a program other than gh.
     """
     try:
-        segments = _raw_segments(cmd)
+        segments = _raw_segments(_substitutions_as_words(cmd))
     except ValueError:
         return False
     for segment in segments:

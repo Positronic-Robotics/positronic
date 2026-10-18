@@ -142,6 +142,10 @@ BLOCKED = [
     # a path or a `PATH=` prefix can run a program other than gh
     '/tmp/gh pr merge 566 -R someone/other',
     'PATH=/tmp:$PATH gh pr merge 566 -R someone/other',
+    # a substitution stays inside the word it assigns, so the name it sets is still read
+    'PATH=$(cat /tmp/path) gh pr merge 566 -R someone/other',
+    'GH_TOKEN=$(cat ~/t) PATH=$(cat /tmp/path) gh pr merge 566 -R someone/other',
+    'GH_PATH=x GH_TOKEN=$(cat ~/t) gh pr merge 566 -R someone/other',
     'A=1 gh pr merge 566 -R someone/other',
     f'cd {INFRA} && gh pr merge 566',
     # second invocation still guarded after an exempt one
