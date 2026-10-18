@@ -38,35 +38,30 @@ ComponentFactory = Callable[..., Processor | Codec]
 
 
 COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
-    **{
-        component.WIRE_NAME: {component.WIRE_VERSION: Version(component.from_spec_args)}
-        for component in (
-            ChunkedSchedule,
-            EncodeImages,
-            PauseOnUnavailable,
-            TemporalStack,
-            BinarizeGripTraining,
-            BinarizeGripInference,
-            FlipGrip,
-            Metadata,
-            ChangeEEFrame,
-            ConvertPose,
-            ObservationCodec,
-            PackObservationFields,
-            RenameObservationFields,
-            AbsolutePositionAction,
-            CartesianDeltaAction,
-            AbsoluteJointsAction,
-            JointDeltaAction,
-            JointPositionAction,
-            SetControlMode,
-            UnpackActionChunk,
-        )
-    },
-    RestrictImageSize.WIRE_NAME: {
-        RestrictImageSize.WIRE_VERSION: Version(RestrictImageSize),
-        RestrictImageSize.RESAMPLE_VERSION: Version(RestrictImageSize.from_resample_spec),
-    },
+    component.WIRE_NAME: {component.WIRE_VERSION: Version(component.from_spec_args)}
+    for component in (
+        ChunkedSchedule,
+        EncodeImages,
+        PauseOnUnavailable,
+        TemporalStack,
+        BinarizeGripTraining,
+        BinarizeGripInference,
+        FlipGrip,
+        Metadata,
+        RestrictImageSize,
+        ChangeEEFrame,
+        ConvertPose,
+        ObservationCodec,
+        PackObservationFields,
+        RenameObservationFields,
+        AbsolutePositionAction,
+        CartesianDeltaAction,
+        AbsoluteJointsAction,
+        JointDeltaAction,
+        JointPositionAction,
+        SetControlMode,
+        UnpackActionChunk,
+    )
 }
 
 

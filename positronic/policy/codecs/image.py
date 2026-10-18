@@ -3,7 +3,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from functools import partial
-from typing import Any
+from typing import Any, Self
 
 import cv2
 import numpy as np
@@ -88,13 +88,9 @@ class RestrictImageSize(Codec):
 
     Images larger than ``width`` x ``height`` are scaled down to fit it, keeping aspect ratio; anything
     already within it passes through untouched. ``resample`` selects the filter (see `Resample`).
-
-    A `BILINEAR` codec declares version 1, whose arguments are only the bounds, so a rig that predates
-    ``resample`` still reads it. Any other filter declares ``RESAMPLE_VERSION``.
     """
 
     WIRE_NAME = 'restrict_image_size'
-    RESAMPLE_VERSION = 2
 
     # Below this a stack scales quicker in one thread than a pool costs to raise.
     _PARALLEL_FROM = 4
@@ -106,11 +102,9 @@ class RestrictImageSize(Codec):
         self._resample = resample
 
     @classmethod
-    def from_resample_spec(
-        cls, width: int = 640, height: int = 640, resample: str = Resample.BILINEAR.value
-    ) -> 'RestrictImageSize':
-        """The codec of a ``RESAMPLE_VERSION`` spec, whose ``resample`` is a `Resample` value."""
-        return cls(width, height, Resample(resample))
+    def from_spec_args(cls, **args: Any) -> Self:
+        args['resample'] = Resample(args.get('resample', Resample.BILINEAR.value))
+        return cls(**args)
 
     def encode(self, data):
         return {key: self._restrict(value) for key, value in data.items()}
@@ -166,7 +160,8 @@ class RestrictImageSize(Codec):
         )
 
     def to_spec(self):
-        args: dict[str, Any] = {'width': self._width, 'height': self._height}
-        if self._resample is Resample.BILINEAR:
-            return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
-        return {NAME: self.WIRE_NAME, VERSION: self.RESAMPLE_VERSION, ARGS: {**args, 'resample': self._resample.value}}
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'width': self._width, 'height': self._height, 'resample': self._resample.value},
+        }

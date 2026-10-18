@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from positronic_model_server import serialization
-from positronic_model_server.spec import LATEST, component
+from positronic_model_server.spec import LATEST, NAME, component
 
 from positronic.policy import spec
 from positronic.policy.codecs import EncodeImages, Resample, RestrictImageSize
@@ -85,27 +85,27 @@ class TestRestrictImageSize:
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
 
-    def test_v1_keeps_its_published_argument_schema(self):
-        description = {'name': 'restrict_image_size', 'version': 1, 'args': {'width': 64, 'height': 48}}
-        assert RestrictImageSize(64, 48).to_spec() == description
+    def test_a_spec_without_a_filter_uses_bilinear(self):
+        description = component(RestrictImageSize.WIRE_NAME, version=1, width=64, height=48)
         restored = spec.from_spec(description)
         assert isinstance(restored, RestrictImageSize)
-        assert restored.to_spec() == description
+        assert restored.to_spec() == RestrictImageSize(64, 48).to_spec()
 
     def test_a_v1_spec_without_bounds_takes_the_standard_bound(self):
-        restored = spec.from_spec({'name': 'restrict_image_size'})
+        restored = spec.from_spec({NAME: RestrictImageSize.WIRE_NAME})
         assert isinstance(restored, RestrictImageSize)
         assert restored.encode({'cam': _image(1080, 1920)})['cam'].shape == (360, 640, 3)
 
-    def test_area_declares_the_resample_version_and_survives_a_wire_round_trip(self):
+    def test_area_survives_a_wire_round_trip(self):
         description = RestrictImageSize(64, 48, resample=Resample.AREA).to_spec()
-        assert description['version'] == RestrictImageSize.RESAMPLE_VERSION
-        assert description['args'] == {'width': 64, 'height': 48, 'resample': 'area'}
+        assert description == component(
+            RestrictImageSize.WIRE_NAME, version=1, width=64, height=48, resample=Resample.AREA.value
+        )
         rebuilt = spec.from_spec(description)
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.to_spec() == description
 
-    @pytest.mark.parametrize('version', [LATEST, RestrictImageSize.RESAMPLE_VERSION])
+    @pytest.mark.parametrize('version', [LATEST, 1])
     @pytest.mark.parametrize('bounds', [{}, {'width': 64}, {'height': 48}, {'width': 64, 'height': 48}])
     @pytest.mark.parametrize('resample', [None, *Resample])
     def test_server_specs_preserve_defaults_and_explicit_filters(self, version, bounds, resample):
@@ -117,12 +117,9 @@ class TestRestrictImageSize:
         frame = self._textured(720, 960)
         np.testing.assert_array_equal(rebuilt.encode({'cam': frame})['cam'], expected.encode({'cam': frame})['cam'])
 
-    def test_an_unknown_resample_in_a_spec_is_refused(self):
-        description = {
-            'name': RestrictImageSize.WIRE_NAME,
-            'version': RestrictImageSize.RESAMPLE_VERSION,
-            'args': {'width': 64, 'height': 48, 'resample': 'bicubic'},
-        }
+    @pytest.mark.parametrize('version', [LATEST, 1])
+    def test_an_unknown_resample_in_a_spec_is_refused(self, version):
+        description = component(RestrictImageSize.WIRE_NAME, version=version, resample='bicubic')
         with pytest.raises(ValueError, match='bicubic'):
             spec.from_spec(description)
 
