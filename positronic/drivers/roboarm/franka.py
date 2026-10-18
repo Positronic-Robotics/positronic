@@ -312,7 +312,8 @@ class _Arm(DriverRun[command.CommandType]):
         self.robot.stop()
 
     def publish(self, st: pf.State) -> None:
-        """Ship the arm as it is reported, marked ERROR while it is not where the driver put it."""
+        """Ship the arm as it is reported, marked ERROR while it is not where the driver put it and no clear a
+        caller asked for has worked since."""
         faulted = self.moves.errored or st.error != 0  # the robot reports its own faults; a stall is not one
         self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
         self.emit_state()
@@ -441,6 +442,10 @@ class _Arm(DriverRun[command.CommandType]):
         if self.disconnect_cause is not None:
             return RecoveryOutcome.NOT_CLEARED
         return RecoveryOutcome.CLEARED if self.robot.recover_from_errors() else RecoveryOutcome.NOT_CLEARED
+
+    def forget_missed_target(self) -> None:
+        """Read AVAILABLE again after a move that missed: a cleared fault leaves the arm holding where it is."""
+        self.moves.errored = False
 
     def clear_held_fault(self) -> None:
         """Clear a fault the arm holds, so the move about to go out is not rejected before it starts.
@@ -860,6 +865,8 @@ class Robot(pimm.ControlSystem):
                 logger.info(f'A console asked to clear a fault; the recovery returned {outcome.name}')
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
                 outcome = self._clear_with_desk_prepare(desk, arm, brakes)
+            if asked and outcome is RecoveryOutcome.CLEARED:
+                arm.forget_missed_target()
         # rules-allow: swallowed-error — the throw is handed to every caller that asked
         except Exception as exc:
             if not asked:
