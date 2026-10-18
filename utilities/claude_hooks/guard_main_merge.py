@@ -541,15 +541,32 @@ def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[
     return chain[: chain.index(number)]
 
 
+# Each lookup of a repository's name. A merge makes two, which together stay inside the hook timeout.
+REPOSITORY_LOOKUP_BUDGET_S = 10
+
+
+class RepositoryLookupError(RuntimeError):
+    """GitHub did not say which repository a name refers to, so a merge naming it stays guarded."""
+
+
 def canonical_repository(slug: str, gh_json=_gh_json) -> str:
-    """The `owner/repo` GitHub names `slug` by now, past a rename or a transfer; '' when GitHub does not say.
+    """The `owner/repo` GitHub names `slug` by now, past a rename or a transfer.
 
     GitHub still serves a moved repository under its old name, so the name a command writes is not its identity.
     """
     try:
-        return str(gh_json(f'repos/{slug}', time.monotonic() + STACK_LOOKUP_BUDGET_S)['full_name']).casefold()
-    except (StackLookupError, KeyError, TypeError):
-        return ''
+        name = gh_json(f'repos/{slug}', time.monotonic() + REPOSITORY_LOOKUP_BUDGET_S)['full_name']
+    except StackLookupError as e:
+        raise RepositoryLookupError(f'GitHub did not name `{slug}`: {e}') from None
+    except (KeyError, TypeError):
+        raise RepositoryLookupError(f'GitHub named `{slug}` in an unexpected shape') from None
+    return str(name).casefold()
+
+
+REPOSITORY_LOOKUP_MSG = (
+    "BLOCKED: {reason}. A merge passes as another repository's only when GitHub names that repository,"
+    ' so this one stays guarded.' + DENY_TAIL
+)
 
 
 # Membership is a shape read off the call, not a list of tool names. A call carrying a commit
@@ -601,7 +618,7 @@ def analyze_mcp(
     verb = tool.removeprefix(GITHUB_MCP_PREFIX)
     guarded_slug, slug = guarded_slug.casefold(), _mcp_slug(arguments)
     if MERGE_VERB in verb:
-        if slug and guarded_slug and slug != guarded_slug and canonical(slug) not in ('', guarded_slug):
+        if slug and guarded_slug and slug != guarded_slug and not _names_guarded(slug, guarded_slug, canonical):
             return None
         number = _mcp_pull_number(arguments)
         if number is None:
@@ -740,13 +757,18 @@ def _carries_expansion(cmd: str) -> bool:
     gh's arguments.
     """
     try:
-        words = _raw_words(_strip_heredoc_bodies(cmd))
+        segments = _raw_segments(cmd)
     except ValueError:
         return True
-    segments: list[list[str]] = [[]]
-    for w in words:
-        segments.append([]) if w in COMMAND_SEPARATORS else segments[-1].append(w)
     return any(_builds_arguments(s) for s in segments if any(os.path.basename(w) == 'gh' for w in s))
+
+
+def _raw_segments(cmd: str) -> list[list[str]]:
+    """`cmd`'s commands as raw words, quoting kept. Raises ValueError on unbalanced quoting."""
+    segments: list[list[str]] = [[]]
+    for w in _raw_words(_strip_heredoc_bodies(cmd)):
+        segments.append([]) if w in COMMAND_SEPARATORS else segments[-1].append(w)
+    return segments
 
 
 def _sets_gh_repo(cmd: str) -> bool:
@@ -903,12 +925,33 @@ def _is_exact_merge_in_another_repository(
     """
     if gh_repo_env or _sets_gh_repo(cmd) or _carries_substitution(cmd) or _carries_expansion(cmd):
         return False
-    if not _merge_runs_alone(cmd):
+    if not (_merge_runs_alone(cmd) and _runs_gh_directly(cmd)):
         return False
     repo = _repository_of_exact_merge_form(words)
     if not (repo and guarded_slug) or repo == guarded_slug:
         return False
-    return canonical(repo) not in ('', guarded_slug)
+    return not _names_guarded(repo, guarded_slug, canonical)
+
+
+def _runs_gh_directly(cmd: str) -> bool:
+    """Whether every word before the `gh pr merge` in its segment is an environment assignment.
+
+    A wrapper (`xargs`, `env`, `sudo`) can hand gh arguments that the command text does not spell out.
+    """
+    try:
+        segments = _raw_segments(cmd)
+    except ValueError:
+        return False
+    for segment in segments:
+        for index, word in enumerate(segment):
+            if os.path.basename(word) == 'gh' and segment[index + 1 : index + 3] == ['pr', 'merge']:
+                return all(ASSIGNMENT_RE.match(prefix) for prefix in segment[:index])
+    return False
+
+
+def _names_guarded(slug: str, guarded_slug: str, canonical) -> bool:
+    """Whether GitHub resolves `slug` to the guarded repository, by its current name or by the checkout's."""
+    return canonical(slug) in (guarded_slug, canonical(guarded_slug))
 
 
 def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
@@ -1183,6 +1226,8 @@ def main() -> int:
     if tool.startswith(GITHUB_MCP_PREFIX):
         try:
             deny = analyze_mcp(tool, hook_payload.tool_input(payload), guarded_slug)
+        except RepositoryLookupError as e:
+            deny = REPOSITORY_LOOKUP_MSG.format(reason=e)
         except Exception:  # noqa: BLE001 — a gate that crashes open is worse than one that refuses
             deny = MCP_UNREADABLE_MSG
         return _refuse(deny) if deny else 0
@@ -1190,7 +1235,10 @@ def main() -> int:
     if not cmd:
         return 0
     cwd = payload.get(hook_payload.CWD) or os.getcwd()
-    deny = analyze(cmd, cwd, guarded_slug, git, gh_repo_env=os.environ.get(GH_REPO_ENV, ''))
+    try:
+        deny = analyze(cmd, cwd, guarded_slug, git, gh_repo_env=os.environ.get(GH_REPO_ENV, ''))
+    except RepositoryLookupError as e:
+        deny = REPOSITORY_LOOKUP_MSG.format(reason=e)
     return _refuse(deny) if deny else 0
 
 

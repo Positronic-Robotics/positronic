@@ -134,6 +134,11 @@ BLOCKED = [
     'gh pr merge 566 -R someone/other -- 999',
     'gh pr merge owner:topic/branch -R someone/other',
     'gh pr merge 566 -R',
+    # a wrapper can hand gh arguments the command text does not spell out
+    'xargs -a /tmp/extra gh pr merge 566 -R someone/other',
+    'env gh pr merge 566 -R someone/other',
+    'sudo gh pr merge 566 -R someone/other',
+    'nice gh pr merge 566 -R someone/other',
     f'cd {INFRA} && gh pr merge 566',
     # second invocation still guarded after an exempt one
     f'cd {INFRA} && git push && git -C {CLONE} push',
@@ -185,6 +190,7 @@ ALLOWED = [
     'gh pr merge 5 -R github.com/o/r.git -m -b body',
     'gh pr merge 5 -R o/r --subject -R',
     'GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 5 -R o/r --squash',
+    'A=1 B=2 gh pr merge 5 -R o/r',
     f'cd {INFRA} && gh pr merge 566 -R someone/agent_infra',
     'git status',
     'git log --oneline',
@@ -351,7 +357,7 @@ def test_an_old_name_of_the_guarded_repository_stays_guarded(git):
     assert mcp_verdict(MERGE_TOOL, merge_args(566) | {'owner': 'old-owner', 'repo': 'old-name'}, canonical=canonical)
 
 
-def test_the_exact_form_in_another_repository_costs_one_lookup_and_runs_alone(git):
+def test_the_exact_form_in_another_repository_is_looked_up_only_when_it_runs_alone(git):
     looked_up = []
 
     def canonical(slug):
@@ -362,21 +368,55 @@ def test_the_exact_form_in_another_repository_costs_one_lookup_and_runs_alone(gi
     assert verdict(git, cmd, allow_merge=lambda *_: True, canonical=canonical) is not None
     assert looked_up == []
     assert verdict(git, 'cd /tmp && gh pr merge 1 -R a/one --squash', canonical=canonical) is None
-    assert looked_up == ['a/one']
+    assert looked_up == ['a/one', GUARDED.casefold()]
+
+
+def unnamed(slug):
+    raise gmm.RepositoryLookupError(f'GitHub did not name `{slug}`: 404')
 
 
 def test_a_repository_github_cannot_name_stays_guarded(git):
-    assert verdict(git, 'gh pr merge 566 -R someone/other', canonical=lambda _: '') is not None
-    assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}, canonical=lambda _: '') is not None
+    with pytest.raises(gmm.RepositoryLookupError):
+        verdict(git, 'gh pr merge 566 -R someone/other', canonical=unnamed)
+    with pytest.raises(gmm.RepositoryLookupError):
+        mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}, canonical=unnamed)
 
 
-def test_canonical_repository_follows_github_s_name_and_gives_empty_on_a_failed_lookup():
+def test_a_failed_lookup_refuses_naming_the_lookup(monkeypatch, capsys, guarded_clone):
+    monkeypatch.setattr(gmm, 'canonical_repository', unnamed)
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(guarded_clone))
+    for payload in (
+        {'tool_name': 'Bash', 'tool_input': {'command': 'gh pr merge 566 -R someone/other'}, 'cwd': str(guarded_clone)},
+        {'tool_name': MERGE_TOOL, 'tool_input': {**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}},
+    ):
+        monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps(payload)))
+        assert gmm.main() == 2
+        assert 'GitHub did not name `someone/' in capsys.readouterr().err
+
+
+def test_the_current_name_of_the_guarded_repository_stays_guarded_from_a_checkout_under_its_old_name(git):
+    """After a rename the checkout's `origin` still names the old slug, which GitHub resolves to the new one."""
+    renamed = {GUARDED.casefold(): 'positronic-robotics/new-name'}
+
+    def canonical(slug):
+        return renamed.get(slug, slug)
+
+    assert verdict(git, 'gh pr merge 566 -R Positronic-Robotics/new-name', canonical=canonical) is not None
+    new_name_args = {'owner': 'Positronic-Robotics', 'repo': 'new-name', gmm.MCP_PULL_NUMBER: 566}
+    assert mcp_verdict(MERGE_TOOL, new_name_args, canonical=canonical) is not None
+    assert verdict(git, 'gh pr merge 566 -R someone/other', canonical=canonical) is None
+
+
+def test_canonical_repository_follows_github_s_name_and_raises_on_a_failed_lookup():
     assert gmm.canonical_repository('old/name', gh_json=lambda *_: {'full_name': 'New/Name'}) == 'new/name'
 
     def failing(*_):
         raise gmm.StackLookupError('404')
 
-    assert gmm.canonical_repository('old/name', gh_json=failing) == ''
+    with pytest.raises(gmm.RepositoryLookupError, match='404'):
+        gmm.canonical_repository('old/name', gh_json=failing)
+    with pytest.raises(gmm.RepositoryLookupError, match='unexpected shape'):
+        gmm.canonical_repository('old/name', gh_json=lambda *_: {})
 
 
 def test_a_set_gh_repo_keeps_the_exact_form_guarded(git):
