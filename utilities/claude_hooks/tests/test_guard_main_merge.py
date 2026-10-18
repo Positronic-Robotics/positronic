@@ -108,17 +108,26 @@ BLOCKED = [
     'git push origin HEAD:$BR',
     'git -C $DIR push',
     'gh pr merge 5',
-    # another host or a URL can still name the guarded repository
+    'gh pr -R o/r merge 5',
+    # every spelling of the guarded repository stays guarded
     f'gh pr merge 5 -R github.com/{GUARDED}',
     f'gh pr merge 5 --repo https://github.com/{GUARDED}.git',
-    # gh drops a query or a fragment, and the guard does not read a shape it cannot parse
     f"gh pr merge 5 -R 'https://github.com/{GUARDED}?x=1'",
     f"gh pr merge 5 -R 'https://github.com/{GUARDED}#x'",
     f'gh pr merge 5 -R ssh://git@github.com/{GUARDED}',
     f'gh pr merge 5 -R github.example.com/{GUARDED}',
-    # a URL target names its own repository, ahead of `-R` and the working directory
+    # gh resolves these to the guarded repository, and none is the one form read as another's
     f'gh pr merge https://github.com/{GUARDED}/pull/566 -R someone/other --squash',
-    f'cd {INFRA} && gh pr merge https://github.com/{GUARDED}/pull/566',
+    'gh pr merge 566 -R someone/other --repo=',
+    'gh pr merge 566 -R someone/other -R someone/else',
+    'gh pr merge 566 -dR someone/other',
+    'gh pr merge 566 -R=someone/other',
+    'gh pr merge 566 -R someone/other --squash --rebase',
+    'gh pr merge 566 -R someone/other --admin',
+    'gh pr merge 566 -R someone/other -- 999',
+    'gh pr merge owner:topic/branch -R someone/other',
+    'gh pr merge 566 -R',
+    f'cd {INFRA} && gh pr merge 566',
     # second invocation still guarded after an exempt one
     f'cd {INFRA} && git push && git -C {CLONE} push',
     # grouped cd does not persist outside the subshell — dir tracking poisons, stays guarded
@@ -162,11 +171,14 @@ BLOCKED = [
 
 ALLOWED = [
     'ls -la',
-    'gh pr -R o/r merge 5',
-    'gh pr merge -R o/r',
-    'gh pr merge 5 -R https://github.com/o/r',
-    'gh pr merge 5 -R github.com/o/r.git',
-    'gh pr merge owner:topic/branch -R o/r',
+    # the one form read as a merge in another repository
+    'gh pr merge 5 -R o/r',
+    'gh pr merge 5 --repo=o/r --squash --delete-branch',
+    "gh pr merge 5 -R https://github.com/o/r -t 'Fix X' --body-file /tmp/b.md",
+    'gh pr merge 5 -R github.com/o/r.git -m -b body',
+    'gh pr merge 5 -R o/r --subject -R',
+    'GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 5 -R o/r --squash',
+    f'cd {INFRA} && gh pr merge 566 -R someone/agent_infra',
     'git status',
     'git log --oneline',
     'git pull --ff-only',
@@ -313,11 +325,25 @@ def test_a_value_taking_flag_does_not_donate_its_value_as_the_pull_request(git):
     assert asked == [999]
 
 
-def test_a_merge_in_another_repository_runs_without_consulting_any_authorization(git):
-    """`-R` selects a repository that keeps its own merge contract."""
+def test_the_exact_form_in_another_repository_runs_without_consulting_any_authorization(git):
+    def allow(number, slug):
+        raise AssertionError('another repository keeps its own merge contract')
+
+    assert verdict(git, 'gh pr merge 566 -R someone/other --squash', allow_merge=allow) is None
+
+
+def test_a_set_gh_repo_keeps_the_exact_form_guarded(git):
+    assert verdict(git, 'GH_REPO=x/y gh pr merge 566 -R someone/other', allow_merge=lambda *_: True) is not None
+    assert verdict(git, 'gh pr merge 566 -R someone/other', gh_repo_env='x/y', allow_merge=lambda *_: True) is not None
+
+
+def test_a_flag_before_merge_keeps_a_merge_in_another_repository_guarded(git):
+    """Only `pr merge <number> -R …` is read as another repository's; a flag before `merge` is not."""
     asked = []
-    verdict_ = verdict(git, 'gh pr -R someone/other merge 566', allow_merge=lambda n, slug: asked.append(n) or False)
-    assert verdict_ is None
+    assert (
+        verdict(git, 'gh pr -R someone/other merge 566', allow_merge=lambda n, slug: asked.append(n) or True)
+        is not None
+    )
     assert asked == []
 
 
@@ -330,9 +356,9 @@ def test_a_repository_shorthand_selects_it_however_pflag_writes_it(git):
         'gh pr merge 566 -dRsomeone/other',
         'gh pr merge 566 -dR someone/other',
     ):
-        assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or False) is None, cmd
+        assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None, cmd
     assert asked == []
-    assert verdict(git, f'gh pr merge 566 -dR{GUARDED}', allow_merge=lambda *_: False) is not None
+    assert verdict(git, f'gh pr merge 566 -dR{GUARDED}', allow_merge=lambda *_: True) is None
 
 
 def test_a_merge_word_the_shell_builds_is_refused(git):
@@ -368,10 +394,13 @@ def test_a_merge_reading_its_token_from_a_substitution_still_passes(git):
     assert verdict(git, cmd, allow_merge=lambda *_: True) is None
 
 
-def test_a_merge_run_from_another_checkout_stays_guarded_without_a_repository_flag(git):
-    """gh can pick an `upstream` remote over `origin`, so the directory cannot exempt a merge."""
-    assert verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda *_: False) is not None
-    assert verdict(git, f'cd {INFRA} && gh pr merge 566 -R someone/agent_infra', allow_merge=lambda *_: False) is None
+def test_a_merge_run_from_another_repo_is_not_this_repository_s(git):
+    """gh resolves the repository from the working directory when nothing names one."""
+    asked = []
+    assert (
+        verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda n, slug: asked.append(n) or True) is not None
+    )
+    assert asked == []
 
 
 def test_a_merge_whose_repository_cannot_be_established_is_refused(git):

@@ -10,8 +10,8 @@ needs a receipt for each pull request it takes (see `merged_along_with`).
 A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
 `main` is refused (`analyze_mcp`).
 
-A merge whose `-R` names another repository is allowed: that repository keeps its own merge contract.
-Every other merge stays guarded, including one run from a checkout of another repository.
+A merge in another repository is allowed in one exact form (`_merge_in_another_repository`): that
+repository keeps its own merge contract. Every other form stays guarded.
 
 Scope: the git-command guards apply only to invocations that operate on THIS repo — same
 `origin` as the session's project repo, which covers clones and worktrees. A `git -C <dir> …`
@@ -751,16 +751,6 @@ def _sets_gh_repo(cmd: str) -> bool:
     return any(word.startswith(GH_REPO_ENV + '=') for segment in segments for word in segment)
 
 
-# The one `-R` shape read as a repository. gh also accepts other shapes, so anything else stays guarded.
-GH_REPO_SELECTOR_RE = re.compile(r'(?:https?://)?(?:github\.com/)?([\w.-]+/[\w.-]+?)(?:\.git)?/?', re.IGNORECASE)
-
-
-def _explicit_slug(repo: str) -> str:
-    """`owner/repo` from what `-R` names, on github.com; '' for any other shape."""
-    m = GH_REPO_SELECTOR_RE.fullmatch(repo)
-    return m.group(1).casefold() if m else ''
-
-
 def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo_env: str) -> str:
     """The repository a `gh` invocation acts on, or '' when that cannot be established.
 
@@ -772,7 +762,7 @@ def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo
     if gh_repo_env or _sets_gh_repo(cmd):
         return ''
     if explicit:
-        return _explicit_slug(explicit)
+        return explicit.casefold()
     return repo_slug(git.origin_url(inv_dir)) if inv_dir is not None else ''
 
 
@@ -823,9 +813,8 @@ def _gh_flag(word: str) -> tuple[str, str]:
 def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
     """Whether this is `gh pr merge`, the pull request it names, and the repository it targets.
 
-    The number is None unless the merge target is written as one. The repository is '' unless `-R`
-    names another or the target is a URL, which names its own — gh takes a URL or a branch in `-R` too,
-    which no authorization can name.
+    The number is None unless the merge target is written as one, and the repository is '' unless
+    `-R` names another — gh takes a URL or a branch there too, which no authorization can name.
     gh (cobra) accepts persistent flags between `pr` and the subcommand — `gh pr -R o/r merge 1`.
     """
     positional: list[str] = []
@@ -848,10 +837,57 @@ def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
     if not after or after[0] != 'merge':
         return False, None, ''
     target = after[1] if len(after) > 1 else ''
-    if '://' in target:
-        # gh reads a URL target's repository ahead of `-R` and the working directory.
-        return True, None, target
     return True, int(target) if target.isdigit() else None, repo
+
+
+# The `-R` value read as another repository. gh accepts other spellings too; they stay guarded.
+GH_REPO_SELECTOR_RE = re.compile(r'(?:https?://)?(?:github\.com/)?([\w.-]+/[\w.-]+?)(?:\.git)?/?', re.IGNORECASE)
+# The flags the exact form takes after `pr merge <number>`, each with the name it is counted under and
+# whether it consumes a value. One merge method; each other flag at most once; `-R` exactly once.
+EXACT_MERGE_FLAGS: dict[str, tuple[str, bool]] = {
+    '-R': ('--repo', True),
+    '--repo': ('--repo', True),
+    '-s': ('merge method', False),
+    '--squash': ('merge method', False),
+    '-m': ('merge method', False),
+    '--merge': ('merge method', False),
+    '-r': ('merge method', False),
+    '--rebase': ('merge method', False),
+    '-d': ('--delete-branch', False),
+    '--delete-branch': ('--delete-branch', False),
+    '-t': ('--subject', True),
+    '--subject': ('--subject', True),
+    '-b': ('--body', True),
+    '--body': ('--body', True),
+    '-F': ('--body-file', True),
+    '--body-file': ('--body-file', True),
+}
+
+
+def _merge_in_another_repository(words: list[str]) -> str:
+    """`owner/repo` when `gh <words>` is exactly `pr merge <number> -R <owner>/<repo> [flags]`; '' otherwise.
+
+    An allowlist, so a gh form this parser does not model stays guarded rather than passing as another
+    repository's: a URL target, a flag before `merge`, a shorthand cluster, a repeated or unknown flag.
+    """
+    if len(words) < 3 or words[:2] != ['pr', 'merge'] or not words[2].isdigit():
+        return ''
+    seen: dict[str, str] = {}
+    rest = iter(words[3:])
+    for word in rest:
+        flag, eq, value = word.partition('=') if word.startswith('--') else (word, '', '')
+        if flag not in EXACT_MERGE_FLAGS:
+            return ''
+        name, takes_value = EXACT_MERGE_FLAGS[flag]
+        if (eq and not takes_value) or name in seen:
+            return ''
+        if takes_value and not eq:
+            value = next(rest, None)
+            if value is None:
+                return ''
+        seen[name] = value
+    m = GH_REPO_SELECTOR_RE.fullmatch(seen.get('--repo', ''))
+    return m.group(1).casefold() if m else ''
 
 
 def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
@@ -974,15 +1010,14 @@ def analyze(  # noqa: C901
                 return MERGE_SUBSTITUTION_MSG
             if _carries_expansion(cmd):
                 return MERGE_EXPANSION_MSG
-            repo = _gh_repo(target, inv.dir, git, cmd, gh_repo_env)
-            # Only `-R` exempts: gh picks among a checkout's remotes by rules this guard does not copy.
-            if target and repo and guarded_slug and repo != guarded_slug:
+            other = _merge_in_another_repository(inv.words)
+            if other and guarded_slug and other != guarded_slug and not (gh_repo_env or _sets_gh_repo(cmd)):
                 continue
             if number is None:
                 return UNNUMBERED_MSG
             if pending_merge is not None:
                 return MULTIPLE_MERGES_MSG
-            if repo != guarded_slug:
+            if _gh_repo(target, inv.dir, git, cmd, gh_repo_env) != guarded_slug:
                 return GH_MERGE_MSG
             # Spending it here would pay for a merge a later invocation in the same command can
             # still block, so the authorization is consulted once everything else has passed.
