@@ -411,11 +411,13 @@ class TestTheStack:
 
     @pytest.mark.parametrize('status', list(RobotStatus))
     def test_inference_and_commands_continue_for_every_arm_status(self, status):
-        client = FakeClient(np.zeros((32, 8), dtype=np.float32))
+        client = HeldClient(np.zeros((32, 8), dtype=np.float32))
         runtime, run = start_stack(client, Clock())
         obs = rig_observation(**{rig.ROBOT_STATUS: status})
         try:
             run.send(obs)
+            # Released after the first round: an answer that is done in that round plays its first action there.
+            client.released.set()
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
             step = run.send(obs)
         finally:
