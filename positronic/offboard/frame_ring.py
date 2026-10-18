@@ -56,7 +56,14 @@ class TornFrame(RuntimeError):
 
 
 def channel_path(socket_path: Path) -> Path:
-    """The descriptor socket that belongs to the session socket at ``socket_path``."""
+    """The descriptor socket that belongs to the session socket at ``socket_path``.
+
+    A symlink at ``socket_path`` dials the socket it points to, and the server bound the channel beside
+    that socket, so the channel follows the link. A directory keeps the name given: a bind mount gives
+    one directory two names, and each end reaches the channel through its own.
+    """
+    while socket_path.is_symlink():
+        socket_path = socket_path.parent / socket_path.readlink()
     return socket_path.with_name(socket_path.name + SOCKET_SUFFIX)
 
 
