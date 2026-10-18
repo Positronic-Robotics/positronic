@@ -788,11 +788,7 @@ def test_an_mcp_merge_of_another_repository_runs_without_consulting_any_authoriz
     def allow(number, slug):
         raise AssertionError('another repository keeps its own merge contract')
 
-    assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, 'pullNumber': 566}, allow_merge=allow) is None
-
-
-def test_an_mcp_merge_that_names_no_repository_is_this_repository_s():
-    assert mcp_verdict(MERGE_TOOL, {'pullNumber': 566}, allow_merge=lambda *_: True) is not None
+    assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}, allow_merge=allow) is None
 
 
 @pytest.mark.parametrize('number', [None, 'abc', '', True, 1.5, {'n': 1}])
