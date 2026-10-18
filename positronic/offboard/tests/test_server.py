@@ -13,6 +13,7 @@ from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import configuronic as cfn
+import numpy as np
 import pytest
 from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_model_server import keys as offboard_keys
@@ -26,6 +27,7 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK, Inv
 from websockets.http11 import Response
 from websockets.sync.client import connect, unix_connect
 
+from positronic.offboard import client, frame_ring
 from positronic.offboard.client import ConnectRetries, InferenceClient, InferenceSession
 from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, PolicyServer, bearer
@@ -1146,3 +1148,118 @@ class TestKeepalive:
         with pytest.raises(wire.ConnectRefused) as refused:
             _ws_client(host, port).keepalive()
         assert refused.value.refusal is refusal
+
+
+def _messages_the_client_sends(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """Every observation message ``InferenceSession.infer`` puts on the wire."""
+    sent: list[bytes] = []
+    packer = client.serialise
+
+    def record(obj):
+        message = packer(obj)
+        sent.append(message)
+        return message
+
+    monkeypatch.setattr(client, 'serialise', record)
+    return sent
+
+
+def _frame() -> np.ndarray:
+    return np.random.default_rng(0).integers(0, 256, (240, 320, 3), dtype=np.uint8)
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_unix_session_carries_its_frames_through_shared_memory(unix_stub_server, monkeypatch):
+    served, model = unix_stub_server
+    image = _frame()
+    sent = _messages_the_client_sends(monkeypatch)
+
+    session = InferenceClient(*served.unix()).new_session()
+    try:
+        assert session.metadata[offboard_keys.FRAME_RING] is True
+        assert session.infer({'image.left': image, 'grip': 0.5}) == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+    served_obs = model.call_args.args[0]
+    np.testing.assert_array_equal(served_obs['image.left'], image)
+    assert served_obs['grip'] == 0.5
+    assert max(len(message) for message in sent) < image.nbytes // 100
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_ring_hands_the_server_a_view_it_cannot_write(unix_stub_server):
+    served, model = unix_stub_server
+
+    session = InferenceClient(*served.unix()).new_session()
+    try:
+        session.infer({'image.left': _frame()})
+    finally:
+        session.close()
+
+    assert not model.call_args.args[0]['image.left'].flags.writeable
+
+
+def test_a_unix_session_with_the_ring_off_carries_its_frames_in_the_message(
+    start_server, socket_path, make_mock_model, monkeypatch
+):
+    model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), uds=socket_path, frame_ring=False)
+    image = _frame()
+    sent = _messages_the_client_sends(monkeypatch)
+
+    session = InferenceClient(*served.unix()).new_session()
+    try:
+        assert offboard_keys.FRAME_RING not in session.metadata
+        session.infer({'image.left': image})
+    finally:
+        session.close()
+
+    np.testing.assert_array_equal(model.call_args.args[0]['image.left'], image)
+    assert max(len(message) for message in sent) > image.nbytes
+
+
+def test_a_server_on_a_port_declares_no_frame_ring(stub_server):
+    host, port, _server, _model = stub_server
+    address = wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
+
+    session = InferenceClient(client_websocket.WebsocketClientWire(), address).new_session()
+    try:
+        assert offboard_keys.FRAME_RING not in session.metadata
+    finally:
+        session.close()
+
+
+def test_a_companion_path_too_long_to_bind_declares_no_frame_ring(start_server, socket_path, make_mock_model):
+    model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    directory = pathlib.Path(socket_path).parent
+    longest = str(directory / ('p' * (frame_ring.MAX_SOCKET_PATH - len(str(directory)) - 1)))
+
+    served = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), uds=longest)
+
+    assert served.server._frames is None
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_companion_path_too_long_to_dial_carries_the_frames_in_the_message(
+    unix_stub_server, socket_path, monkeypatch
+):
+    served, model = unix_stub_server
+    directory = pathlib.Path(socket_path).parent
+    alias = directory / ('a' * (frame_ring.MAX_SOCKET_PATH - len(str(directory)) - 1))
+    # A bind mount can give one directory two names of different lengths, and a symlink gives the test
+    # the same asymmetry: the server bound a path it can serve a ring beside, and this one it cannot.
+    alias.symlink_to(socket_path)
+    image = _frame()
+    sent = _messages_the_client_sends(monkeypatch)
+
+    client_wire, _ = served.unix()
+    session = InferenceClient(client_wire, wire.UnixSocketAddress(alias, wire.SESSION_PATH, '')).new_session()
+    try:
+        assert offboard_keys.FRAME_RING in session.metadata
+        session.infer({'image.left': image})
+    finally:
+        session.close()
+
+    np.testing.assert_array_equal(model.call_args.args[0]['image.left'], image)
+    assert max(len(message) for message in sent) > image.nbytes

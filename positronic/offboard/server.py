@@ -5,6 +5,7 @@ import hmac
 import logging
 import math
 import os
+import socket
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -22,6 +23,7 @@ from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_wire import wire
 
 from positronic import telemetry
+from positronic.offboard import frame_ring as frames
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
@@ -86,6 +88,9 @@ class PolicyServer:
     warmed, with ``server_utils.warmup``: a client reads any keepalive answer as ready. A config-launched
     pipeline accepts session parameters as dotted configuration overrides. They build a new pipeline and
     never reach the model. An instantiated PolicyDeployment refuses session parameters.
+
+    ``frame_ring`` takes each observation's images through shared memory, which a Unix socket makes
+    possible; ``positronic.offboard.frame_ring`` states the contract.
     """
 
     def __init__(
@@ -94,6 +99,7 @@ class PolicyServer:
         pipeline: cfn.Config | PolicyDeployment,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
+        frame_ring: bool = True,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -104,6 +110,10 @@ class PolicyServer:
         self._build_model = build_model
         # Set by ``serve`` before any wire binds, and closed when it returns.
         self._model: Model | None = None
+        # A ring needs a kernel that seals a memfd, and a Unix socket to ride beside. The socket belongs
+        # to a wire, so ``serve`` opens the channel once the wires have bound.
+        self._takes_rings = frame_ring and frames.SUPPORTED
+        self._frames: frames.FrameChannel | None = None
 
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
@@ -178,6 +188,9 @@ class PolicyServer:
                     return
                 raw_obs = request[protocol.OBSERVATION]
             try:
+                # A torn frame refuses this observation alone, as any other failed inference does.
+                if self._frames is not None:
+                    raw_obs = self._frames.resolve(session_id, raw_obs)
                 # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
                 # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                 with timing.phase(protocol.TIMING_QUEUED):
@@ -206,11 +219,14 @@ class PolicyServer:
 
         self._active_sessions += 1
         self._last_activity = time.monotonic()
+        session_id = uuid4().hex
+        # A ring is handed over under the session id, so it reaches the session that declared it.
+        if self._frames is not None:
+            self._frames.open_session(session_id)
         try:
             model = self._model
             assert model is not None, 'A session arrived before the model loaded'
             pipeline = self._session_pipeline(spec.parse_params(conn.query_params))
-            session_id = uuid4().hex
             meta = {
                 **conn.served_address.meta,
                 **model.meta(),
@@ -219,6 +235,8 @@ class PolicyServer:
                 policy_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
+            if self._frames is not None:
+                meta[offboard_keys.FRAME_RING] = True
             infer = partial(model, session_id=session_id)
             infer = telemetry.traced(protocol.MODEL_CALL)(infer)
             if pipeline.codec is not None:
@@ -254,6 +272,8 @@ class PolicyServer:
         finally:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
+            if self._frames is not None:
+                self._frames.close_session(session_id)
 
     async def _idle_watchdog(self):
         """Return once no session or keepalive call has touched the server for ``idle_timeout_min``."""
@@ -283,6 +303,23 @@ class PolicyServer:
     def _load(self) -> None:
         self._model = self._build_model()
 
+    def _open_frame_channel(self, started: Sequence[server_wire.Wire]) -> None:
+        """Serve frame rings beside the Unix socket a wire bound, where this server takes them at all.
+
+        A wire names its socket once it has started, so this runs after ``start`` and before the first
+        session. A server whose wires all bind a port takes no ring.
+        """
+        served = (w.served_address for w in started)
+        uds = next((a.uds for a in served if isinstance(a, websocket_wire.ServedUnixSocket)), None)
+        if not self._takes_rings or uds is None:
+            return
+        channel = frames.channel_path(uds)
+        if not frames.fits_a_socket_address(channel):
+            logger.error('No frame ring: the companion socket path %r is too long to bind', str(channel))
+            return
+        self._frames = frames.FrameChannel(channel)
+        self._frames.start(websocket_wire.claim_socket_path(self._frames.path, socket.SOCK_SEQPACKET))
+
     def serve(self, wires: Sequence[server_wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
 
@@ -303,6 +340,7 @@ class PolicyServer:
                 for w in wires:
                     await w.start(self._serve_session, self._keepalive, self._authorized)
                     started.append(w)
+                self._open_frame_channel(started)
                 self._last_activity = time.monotonic()
                 if on_ready is not None:
                     on_ready()
@@ -328,6 +366,9 @@ class PolicyServer:
             logger.info('Server stopped by user')
         finally:
             self._loop, self._stop = None, None
+            if self._frames is not None:
+                self._frames.close()
+                self._frames = None
             if self._model is not None:
                 self._model.close()
                 self._model = None
@@ -357,6 +398,7 @@ def serve_model(
     pipeline: cfn.Config | PolicyDeployment,
     wires: Sequence[server_wire.Wire],
     idle_timeout_min: float | None,
+    frame_ring: bool = True,
 ) -> None:
     """Serve ``build_model`` through ``pipeline`` on every wire in ``wires``, until the server stops.
 
@@ -364,18 +406,23 @@ def serve_model(
     Unset serves open.
     """
     server = PolicyServer(
-        build_model, pipeline, idle_timeout_min=idle_timeout_min, auth_token=os.environ.get(AUTH_TOKEN_ENV)
+        build_model,
+        pipeline,
+        idle_timeout_min=idle_timeout_min,
+        auth_token=os.environ.get(AUTH_TOKEN_ENV),
+        frame_ring=frame_ring,
     )
     server.serve(wires)
 
 
-@cfn.config(websocket=websocket, grpc=None, idle_timeout_min=None)
+@cfn.config(websocket=websocket, grpc=None, idle_timeout_min=None, frame_ring=True)
 def serve(
     model: cfn.Config,
     pipeline: cfn.Config,
     websocket: server_wire.Wire | None,
     grpc: server_wire.Wire | None,
     idle_timeout_min: float | None,
+    frame_ring: bool,
 ):
     """The CLI entry point of a vendor server that binds a ``model`` config and a ``pipeline`` config; the
     commands are configs of this.
@@ -389,6 +436,8 @@ def serve(
         --websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/p.sock
         --grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001
 
+    ``frame_ring=false`` keeps every image in the message.
+
     The bearer token comes from ``AUTH_TOKEN_ENV``, as ``serve_model`` reads it.
     """
-    serve_model(model, pipeline, [w for w in (websocket, grpc) if w is not None], idle_timeout_min)
+    serve_model(model, pipeline, [w for w in (websocket, grpc) if w is not None], idle_timeout_min, frame_ring)

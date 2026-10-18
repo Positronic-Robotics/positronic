@@ -6,10 +6,9 @@ from functools import partial
 from threading import Lock, Thread
 from typing import Any
 
-import numpy as np
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import ProtocolVersion
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg, is_image
 from positronic_model_server.tree import map_leaves
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
@@ -28,7 +27,7 @@ from .spec import from_spec
 
 
 def _prepare_value(value: Any, jpeg_quality: int) -> Any:
-    if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+    if is_image(value):
         # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's message cap.
         return encode_jpeg(value, jpeg_quality)
     return value

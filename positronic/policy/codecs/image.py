@@ -4,7 +4,13 @@ from functools import partial
 from typing import Any, Self
 
 import numpy as np
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, JpegEncoding, encode_images, encode_jpeg
+from positronic_model_server.serialization import (
+    DEFAULT_JPEG_QUALITY,
+    JpegEncoding,
+    encode_images,
+    encode_jpeg,
+    is_image,
+)
 from positronic_model_server.spec import ARGS, NAME, VERSION
 from positronic_model_server.tree import map_leaves, update_at
 
@@ -103,7 +109,7 @@ class TransformImages(Codec):
         return data
 
     def _transform_value(self, value: Any) -> Any:
-        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+        if is_image(value):
             return self._transform_image(value)
         return value
 
