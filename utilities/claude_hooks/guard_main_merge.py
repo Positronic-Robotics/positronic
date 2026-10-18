@@ -10,7 +10,7 @@ needs a receipt for each pull request it takes (see `merged_along_with`).
 A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
 `main` is refused (`analyze_mcp`).
 
-A merge in another repository is allowed in one exact form (`_merge_in_another_repository`): that
+A merge in another repository is allowed in one exact form (`_is_exact_merge_in_another_repository`): that
 repository keeps its own merge contract. Every other form stays guarded.
 
 Scope: the git-command guards apply only to invocations that operate on THIS repo — same
@@ -842,33 +842,23 @@ def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
 
 # The `-R` value read as another repository. gh accepts other spellings too; they stay guarded.
 GH_REPO_SELECTOR_RE = re.compile(r'(?:https?://)?(?:github\.com/)?([\w.-]+/[\w.-]+?)(?:\.git)?/?', re.IGNORECASE)
-# The flags the exact form takes after `pr merge <number>`, each with the name it is counted under and
-# whether it consumes a value. One merge method; each other flag at most once; `-R` exactly once.
-EXACT_MERGE_FLAGS: dict[str, tuple[str, bool]] = {
-    '-R': ('--repo', True),
-    '--repo': ('--repo', True),
-    '-s': ('merge method', False),
-    '--squash': ('merge method', False),
-    '-m': ('merge method', False),
-    '--merge': ('merge method', False),
-    '-r': ('merge method', False),
-    '--rebase': ('merge method', False),
-    '-d': ('--delete-branch', False),
-    '--delete-branch': ('--delete-branch', False),
-    '-t': ('--subject', True),
-    '--subject': ('--subject', True),
-    '-b': ('--body', True),
-    '--body': ('--body', True),
-    '-F': ('--body-file', True),
-    '--body-file': ('--body-file', True),
+# The flags the exact form takes after `pr merge <number>`, each with the name it is counted under:
+# one merge method, each other flag at most once, `-R` exactly once.
+EXACT_MERGE_FLAGS: dict[str, str] = {
+    **dict.fromkeys(GH_REPO_FLAGS, GH_REPO_FLAGS[-1]),
+    **dict.fromkeys(('-s', '--squash', '-m', '--merge', '-r', '--rebase'), 'merge method'),
+    **dict.fromkeys(('-d', '--delete-branch'), '--delete-branch'),
+    **dict.fromkeys(('-t', '--subject'), '--subject'),
+    **dict.fromkeys(('-b', '--body'), '--body'),
+    **dict.fromkeys(('-F', '--body-file'), '--body-file'),
 }
 
 
-def _merge_in_another_repository(words: list[str]) -> str:
+def _repository_of_exact_merge_form(words: list[str]) -> str:
     """`owner/repo` when `gh <words>` is exactly `pr merge <number> -R <owner>/<repo> [flags]`; '' otherwise.
 
-    An allowlist, so a gh form this parser does not model stays guarded rather than passing as another
-    repository's: a URL target, a flag before `merge`, a shorthand cluster, a repeated or unknown flag.
+    An allowlist: a URL target, a flag before `merge`, a shorthand cluster, a repeated or unknown flag
+    all give ''.
     """
     if len(words) < 3 or words[:2] != ['pr', 'merge'] or not words[2].isdigit():
         return ''
@@ -876,9 +866,10 @@ def _merge_in_another_repository(words: list[str]) -> str:
     rest = iter(words[3:])
     for word in rest:
         flag, eq, value = word.partition('=') if word.startswith('--') else (word, '', '')
-        if flag not in EXACT_MERGE_FLAGS:
+        name = EXACT_MERGE_FLAGS.get(flag)
+        if name is None:
             return ''
-        name, takes_value = EXACT_MERGE_FLAGS[flag]
+        takes_value = flag in GH_MERGE_VALUE_FLAGS
         if (eq and not takes_value) or name in seen:
             return ''
         if takes_value and not eq:
@@ -886,8 +877,19 @@ def _merge_in_another_repository(words: list[str]) -> str:
             if value is None:
                 return ''
         seen[name] = value
-    m = GH_REPO_SELECTOR_RE.fullmatch(seen.get('--repo', ''))
+    m = GH_REPO_SELECTOR_RE.fullmatch(seen.get(GH_REPO_FLAGS[-1], ''))
     return m.group(1).casefold() if m else ''
+
+
+def _is_exact_merge_in_another_repository(words: list[str], guarded_slug: str, cmd: str, gh_repo_env: str) -> bool:
+    """Whether `gh <words>` in `cmd` merges in a repository other than `guarded_slug`, in the one exempt form.
+
+    Any substitution, expansion or `GH_REPO` can still select the guarded repository, so each one says no.
+    """
+    if gh_repo_env or _sets_gh_repo(cmd) or _carries_substitution(cmd) or _carries_expansion(cmd):
+        return False
+    repo = _repository_of_exact_merge_form(words)
+    return bool(repo and guarded_slug) and repo != guarded_slug
 
 
 def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
@@ -1002,7 +1004,7 @@ def analyze(  # noqa: C901
 
     pending_merge = None
     for inv in invs:
-        if inv.kind != 'gh':
+        if inv.kind != 'gh' or _is_exact_merge_in_another_repository(inv.words, guarded_slug, cmd, gh_repo_env):
             continue
         is_merge, number, target = _gh_pr_merge(inv.words)
         if is_merge:
@@ -1010,9 +1012,6 @@ def analyze(  # noqa: C901
                 return MERGE_SUBSTITUTION_MSG
             if _carries_expansion(cmd):
                 return MERGE_EXPANSION_MSG
-            other = _merge_in_another_repository(inv.words)
-            if other and guarded_slug and other != guarded_slug and not (gh_repo_env or _sets_gh_repo(cmd)):
-                continue
             if number is None:
                 return UNNUMBERED_MSG
             if pending_merge is not None:
