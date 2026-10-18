@@ -105,6 +105,12 @@ class TestRestrictImageSize:
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.to_spec() == description
 
+    @staticmethod
+    def _textured(h, w):
+        y, x = np.mgrid[0:h, 0:w]
+        image = np.stack([127 + 100 * np.sin(x / 7.0) * np.cos(y / 11.0), 255 * x / w, 255 * y / h], axis=-1)
+        return np.clip(image, 0, 255).astype(np.uint8)
+
     @pytest.mark.parametrize('version', [LATEST, 1])
     @pytest.mark.parametrize('bounds', [{}, {'width': 64}, {'height': 48}, {'width': 64, 'height': 48}])
     @pytest.mark.parametrize('resample', [None, *Resample])
@@ -122,12 +128,6 @@ class TestRestrictImageSize:
         description = component(RestrictImageSize.WIRE_NAME, version=version, resample='bicubic')
         with pytest.raises(ValueError, match='bicubic'):
             spec.from_spec(description)
-
-    @staticmethod
-    def _textured(h, w):
-        y, x = np.mgrid[0:h, 0:w]
-        image = np.stack([127 + 100 * np.sin(x / 7.0) * np.cos(y / 11.0), 255 * x / w, 255 * y / h], axis=-1)
-        return np.clip(image, 0, 255).astype(np.uint8)
 
     @pytest.mark.parametrize('bound', [(320, 320), (160, 160), (64, 48)])
     def test_area_gives_the_bilinear_shape_and_near_pixels(self, bound):
