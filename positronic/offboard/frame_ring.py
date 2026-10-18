@@ -365,7 +365,7 @@ class FrameChannel:
         return ring
 
     def _accept_forever(self, sock: socket.socket) -> None:
-        """Take handovers on ``sock`` until ``close``, which clears ``self._socket`` while this loop may still run."""
+        """Take handovers on ``sock`` until the channel closes."""
         while not self._closing:
             try:
                 connection, _address = sock.accept()
