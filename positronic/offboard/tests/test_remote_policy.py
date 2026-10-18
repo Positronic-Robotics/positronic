@@ -3,6 +3,7 @@ import http.server
 import json
 import logging
 import pathlib
+import socket
 import threading
 import time
 from collections.abc import Mapping
@@ -12,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 from positronic_model_server import keys as offboard_keys
-from positronic_model_server import protocol, spec
+from positronic_model_server import protocol, spec, websocket_wire
 from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
@@ -21,6 +22,7 @@ from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
+from positronic.offboard import frame_ring
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
@@ -78,6 +80,31 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
         if isinstance(outcome, wire.ConnectRefused):
             raise outcome
         return outcome
+
+
+class _FakeUnixWire(wire.ClientWire[wire.UnixSocketAddress]):
+    """A client wire on a Unix socket, which lets a session take a frame ring. Each dial returns the next of
+    ``conns``."""
+
+    NAME = 'fake_unix'
+    ADDRESS = wire.UnixSocketAddress
+
+    def __init__(self, *conns: wire.ClientConnection):
+        self._conns = list(conns)
+
+    def session_url(self, address: wire.UnixSocketAddress) -> str:
+        return f'fake+unix://{address.uds}{address.path}'
+
+    def probe(
+        self, address: wire.UnixSocketAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        return None
+
+    def keepalive(self, address, headers, timeout):
+        raise wire.KeepaliveUnsupported('this wire answers sessions alone')
+
+    def dial(self, address: wire.UnixSocketAddress, headers: Mapping[str, str] | None, open_timeout: float):
+        return self._conns.pop(0)
 
 
 def _address(host: str, port: int, query: str = '') -> wire.HostPortAddress:
@@ -157,6 +184,7 @@ class TestInferenceClientHeaders:
         assert fake.dials == [(_ADDRESS, headers, DEFAULT_OPEN_TIMEOUT)]
         assert mock_session_cls.call_args.args[0] is conn
         assert mock_session_cls.call_args.kwargs['infer_timeout'] == DEFAULT_INFER_TIMEOUT
+        assert mock_session_cls.call_args.kwargs['uds'] is None, 'a network address names no socket'
 
     def test_new_session_without_headers_dials_with_none(self):
         fake = _FakeWire(MagicMock())
@@ -425,6 +453,30 @@ class TestADroppedConnectionReconnects:
 
         assert _observations_sent(reopened) == []
         reopened.close.assert_called_once()
+
+    @pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+    def test_a_reconnected_session_sends_its_frames_through_a_ring_of_its_own(self, socket_path):
+        """A ring is handed over under one session ID, so the new session hands over a ring of its own."""
+        channel = frame_ring.FrameChannel(frame_ring.channel_path(pathlib.Path(socket_path)))
+        channel.start(websocket_wire.claim_socket_path(channel.path, socket.SOCK_SEQPACKET))
+        channel.open_session('first')
+        channel.open_session('second')
+        meta = {'model_name': 'test', offboard_keys.FRAME_RING: True}
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        dropped = _connection(_ready('first', meta), wire.PeerDisconnected('dropped'))
+        reopened = _connection(_ready('second', meta), _answer({'action_data': [1, 2, 3]}), end_ack)
+        address = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.SESSION_PATH, '')
+        image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+        try:
+            session = InferenceClient(_FakeUnixWire(dropped, reopened), address).new_session()
+            try:
+                assert session.infer({'image': image}) == {'action_data': [1, 2, 3]}
+                (sent,) = _observations_sent(reopened)
+                np.testing.assert_array_equal(channel.resolve('second', sent)['image'], image)
+            finally:
+                session.close()
+        finally:
+            channel.close()
 
     def test_a_reconnect_retries_a_refused_connect(self):
         """A restarted backend refuses connects for a moment, and the reconnect waits it out."""

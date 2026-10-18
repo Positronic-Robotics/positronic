@@ -62,6 +62,8 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 
 **A Unix socket reaches a server on the same machine.** `--policy.wire=websocket_unix --policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=/run/policy.sock` dials the socket a server bound with `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock`, over no network. `--policy.address.query` names session params as it does on any other wire; this wire's address has no host and no port to fill. Use this carrier for a policy process that runs beside the harness and has no network interface of its own.
 
+Such a server also takes each observation's images through shared memory, which keeps 8 MB of raw frames out of the message; `--frame_ring=false` turns that off. The ring carries raw arrays, so a deployment that sends frames this way sets `compress_images=False`. [`positronic/offboard/README.md`](../positronic/offboard/README.md) states the contract.
+
 **Credentials stay off the command line.** A token rides a header instead. It stays off the command line too: `save_run_metadata()` writes `sys.argv` beside the run's episodes. Three policy configs build the header:
 
 - `.authed_remote` — a bearer token read from `AUTH_TOKEN`, which it raises about when that is unset. Every endpoint [`workflows/nebius/serve.sh`](../workflows/nebius/README.md) creates is gated this way, whether the server checks the token itself or a proxy in front of it does.
