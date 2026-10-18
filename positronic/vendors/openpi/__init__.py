@@ -1,4 +1,4 @@
-"""OpenPI observation fields, training columns and required assets."""
+"""OpenPI fields, numeric conventions and required assets."""
 
 import logging
 import os
@@ -24,6 +24,7 @@ EXTERIOR_IMAGE_LEFT = 'observation/exterior_image_1_left'
 WRIST_IMAGE_LEFT = 'observation/wrist_image_left'
 
 PROMPT = 'prompt'
+ACTIONS = 'actions'
 
 # Columns consumed by OpenPI's LeRobot dataset transforms.
 TRAINING_STATE = 'observation.state'
@@ -37,7 +38,7 @@ _STATE_DIM = 8
 
 
 def warm_observation() -> dict[str, Any]:
-    """Zero-filled inputs carrying every field above, so one observation warms a checkpoint under any config.
+    """Zero-filled values for all supported inference input fields.
 
     A config's input transform pulls out the fields it names and ignores the rest, which is what lets one
     observation stand in for the codec that normally feeds the subprocess. Images are resized by openpi itself.
@@ -53,6 +54,20 @@ def warm_observation() -> dict[str, Any]:
         WRIST_IMAGE_LEFT: frame,
         PROMPT: '',
     }
+
+
+LIBERO_OSC_SCALE = (0.05, 0.05, 0.05, 0.5, 0.5, 0.5)
+
+
+def libero_actions_to_physical(actions: np.ndarray) -> np.ndarray:
+    """Convert LIBERO OSC actions to translation in metres, rotation vectors in radians and grip closure."""
+    if actions.ndim != 2 or actions.shape[1] != 7:
+        raise ValueError('LIBERO actions must have shape (T, 7)')
+    # robosuite OSC_POSE clips each channel before applying its controller scale.
+    physical = actions.astype(float).clip(-1, 1)
+    physical[:, :6] *= LIBERO_OSC_SCALE
+    physical[:, 6] = (physical[:, 6] + 1) / 2
+    return physical
 
 
 # Google revoked anonymous access to gs://big_vision, breaking OpenPI's tokenizer download.

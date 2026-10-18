@@ -14,8 +14,16 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm.command import Impedance, JointDelta
-from positronic.geom import Rotation
-from positronic.policy.codecs import ACTION, JointPositionAction, ObservationCodec, SetControlMode, UnpackActionChunk
+from positronic.geom import Rotation, Transform3D
+from positronic.policy.codecs import (
+    ACTION,
+    CartesianDeltaAction,
+    Codec,
+    JointPositionAction,
+    ObservationCodec,
+    SetControlMode,
+    UnpackActionChunk,
+)
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
 from positronic.policy.spec import from_spec
 
@@ -161,6 +169,77 @@ def test_joint_position_action_preserves_values_and_does_not_threshold_grip(num_
 def test_joint_position_action_requires_the_configured_joint_count_and_one_grip(joints, grip):
     with pytest.raises(ValueError):
         JointPositionAction('q', 'g').decode({'q': joints, 'g': grip})
+
+
+def test_cartesian_delta_action_uses_physical_units_and_live_pose():
+    decoded = CartesianDeltaAction().decode({ACTION: [0.1, -0.2, 0.3, 0.0, 0.0, np.pi / 2, 0.25]})
+    command = decoded[obs_keys.ROBOT_COMMAND]
+    assert isinstance(command, cmd_module.CartesianDelta)
+    assert command.mode is None
+    assert decoded[obs_keys.TARGET_GRIP] == 0.25
+    turn = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+    for position in ([1, 2, 3], [4, 5, 6]):
+        current = Transform3D(translation=position, rotation=Rotation.from_rotvec(np.array([np.pi / 2, 0, 0])))
+        target = command.apply(current)
+        np.testing.assert_allclose(target.translation, np.asarray(position) + [0.1, -0.2, 0.3])
+        np.testing.assert_allclose(
+            target.rotation.as_rotation_matrix, turn @ current.rotation.as_rotation_matrix, atol=1e-12
+        )
+
+
+def test_cartesian_delta_action_spec_decodes_a_chunk_with_a_custom_key():
+    decoder = CartesianDeltaAction(action_key='prediction') | UnpackActionChunk({'prediction': ['actions']})
+    restored = from_spec(json.loads(json.dumps(decoder.to_spec())))
+    assert isinstance(restored, Codec)
+    predictions = np.array([[3, -3, 1, 0, 0, 1, 0.25], [-3, 3, -1, 0, 1, 0, 0.75]], dtype=np.float32)
+    original = predictions.copy()
+    decoded = restored.decode({'actions': predictions})
+
+    assert len(decoded) == 2
+    for action, position, rotvec, grip in zip(
+        decoded, [[3, -3, 1], [-3, 3, -1]], [[0, 0, 1], [0, 1, 0]], [0.25, 0.75], strict=True
+    ):
+        command = action[obs_keys.ROBOT_COMMAND]
+        assert isinstance(command, cmd_module.CartesianDelta)
+        np.testing.assert_allclose(command.delta.translation, position)
+        np.testing.assert_allclose(
+            command.delta.rotation.as_rotation_matrix, Rotation.from_rotvec(np.asarray(rotvec)).as_rotation_matrix
+        )
+        assert action[obs_keys.TARGET_GRIP] == grip
+    np.testing.assert_array_equal(predictions, original)
+
+
+@pytest.mark.parametrize('rotation_rep', list(Rotation.Representation))
+def test_cartesian_delta_action_preserves_the_selected_rotation_format_through_json(rotation_rep):
+    expected = Transform3D([0.1, -0.2, 0.3], Rotation.from_rotvec(np.array([0.3, -0.6, 0.8])))
+    codec = CartesianDeltaAction(rotation_rep=rotation_rep.value)
+    description = json.loads(json.dumps(codec.to_spec()))
+    assert description[ARGS]['rotation_rep'] == rotation_rep.value
+    restored = from_spec(description)
+    assert isinstance(restored, CartesianDeltaAction)
+    assert restored.to_spec() == description
+    prediction = np.concatenate([expected.as_vector(rotation_rep), [0.25]])
+
+    decoded = restored.decode({ACTION: prediction})
+
+    command = decoded[obs_keys.ROBOT_COMMAND]
+    assert isinstance(command, cmd_module.CartesianDelta)
+    np.testing.assert_allclose(command.delta.as_matrix, expected.as_matrix, atol=1e-12)
+    assert decoded[obs_keys.TARGET_GRIP] == 0.25
+
+
+@pytest.mark.parametrize('rotation_rep', list(Rotation.Representation))
+def test_cartesian_delta_action_requires_the_selected_rotation_width(rotation_rep):
+    codec = CartesianDeltaAction(rotation_rep=rotation_rep.value)
+    size = 4 + rotation_rep.size
+    for action in (np.zeros(size - 1), np.zeros(size + 1), np.zeros((1, size)), np.zeros((size, 1))):
+        with pytest.raises(ValueError, match='shape'):
+            codec.decode({ACTION: action})
+
+
+def test_cartesian_delta_action_rejects_an_unknown_rotation_format():
+    with pytest.raises(ValueError):
+        from_spec(component('cartesian_delta_action', rotation_rep='unknown'))
 
 
 def test_absolute_position_action_encode_decode_quat():

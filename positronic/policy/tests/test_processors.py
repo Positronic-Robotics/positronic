@@ -32,6 +32,7 @@ from positronic.policy.codecs import (
 from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
+    CartesianDeltaAction,
     JointDeltaAction,
     JointPositionAction,
     SetControlMode,
@@ -1227,6 +1228,7 @@ def test_wire_names_match_the_registered_components():
         'pack_observation_fields': PackObservationFields({'state': 'input'}),
         'rename_observation_fields': RenameObservationFields({'state': 'input'}),
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
+        'cartesian_delta_action': CartesianDeltaAction(),
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
         'joint_delta_action': JointDeltaAction(),
         'joint_position_action': JointPositionAction('joints', 'grip'),
