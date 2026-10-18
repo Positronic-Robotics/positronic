@@ -27,6 +27,7 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.http11 import Response
 from websockets.sync.client import connect, unix_connect
 
+from positronic import keys
 from positronic.offboard import client, frame_ring
 from positronic.offboard.client import ConnectRetries, InferenceClient, InferenceSession
 from positronic.offboard.protocol import deserialise, serialise
@@ -1148,13 +1149,13 @@ def test_a_unix_session_carries_its_frames_through_shared_memory(unix_stub_serve
     session = InferenceClient(*served.unix()).new_session()
     try:
         assert session.metadata[offboard_keys.FRAME_RING] is True
-        assert session.infer({'image.left': image, 'grip': 0.5}) == [{'action': [1, 2, 3]}]
+        assert session.infer({'image.left': image, keys.GRIP: 0.5}) == [{'action': [1, 2, 3]}]
     finally:
         session.close()
 
     served_obs = model.call_args.args[0]
     np.testing.assert_array_equal(served_obs['image.left'], image)
-    assert served_obs['grip'] == 0.5
+    assert served_obs[keys.GRIP] == 0.5
     assert max(len(message) for message in sent) < image.nbytes // 100
 
 
