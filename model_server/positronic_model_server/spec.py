@@ -10,11 +10,15 @@ NAME = 'name'
 ARGS = 'args'
 VERSION = 'version'
 
+CURRENT_COMPONENT_VERSIONS = {'chunked_schedule': 3, 'stop_on_fault': 2, 'temporal_stack': 2}
 
-def component(name: str, /, *, version: int = 1, **args: Any) -> dict[str, Any]:
-    """Describe a component without importing it; arguments must survive a JSON round trip."""
+
+def component(name: str, /, *, version: int | None = None, **args: Any) -> dict[str, Any]:
+    """Pin an omitted version to the shared current version, defaulting to v1, without importing the component."""
     if not isinstance(name, str) or not name:
         raise ValueError('A component needs a nonempty name')
+    if version is None:
+        version = CURRENT_COMPONENT_VERSIONS.get(name, 1)
     if type(version) is not int or version < 1:
         raise ValueError('A component version must be a positive integer')
     # JSON normalizes tuples to lists and rejects Python objects and nonfinite numbers.
@@ -54,7 +58,10 @@ def validate(node: dict[str, Any]) -> None:
         name = node.get(NAME)
         if not isinstance(name, str):
             raise ValueError('A component needs a name')
-        component(name, version=node.get(VERSION, 1), **node.get(ARGS, {}))
+        version = node.get(VERSION, 1)
+        if type(version) is not int or version < 1:
+            raise ValueError('A component version must be a positive integer')
+        component(name, version=version, **node.get(ARGS, {}))
 
 
 def resolve_params(defaults: dict[str, Any], requested: dict[str, Any]) -> dict[str, Any]:

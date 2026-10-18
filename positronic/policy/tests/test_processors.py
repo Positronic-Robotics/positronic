@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server.spec import ARGS, NAME, VERSION
+from positronic_model_server.spec import ARGS, CURRENT_COMPONENT_VERSIONS, NAME, VERSION
 
 import pimm
 from pimm.world import VirtualClock
@@ -1235,9 +1235,21 @@ def test_wire_names_match_the_registered_components():
     }
     registered = spec.COMPONENTS
     assert set(instances) == set(registered)
+    current_versions = {
+        name: max(version for version, entry in versions.items() if entry.implementation is not None)
+        for name, versions in registered.items()
+    }
+    assert CURRENT_COMPONENT_VERSIONS == {name: version for name, version in current_versions.items() if version != 1}
     for name, instance in instances.items():
+        assert CURRENT_COMPONENT_VERSIONS.get(name, 1) == instance.WIRE_VERSION
         assert instance.to_spec()['name'] == name
         factory = registered[name][instance.WIRE_VERSION].implementation
         assert factory is not None
         assert isinstance(factory(**instance.to_spec().get('args', {})), type(instance))
         assert instance.to_spec()['version'] == instance.WIRE_VERSION
+
+
+def test_unversioned_wire_specs_still_select_v1():
+    assert isinstance(spec.from_spec({NAME: Metadata.WIRE_NAME, ARGS: {'values': {}}}), Metadata)
+    with pytest.raises(ValueError, match='Unsupported .* version 1'):
+        spec.from_spec({NAME: ChunkedSchedule.WIRE_NAME, ARGS: {ChunkedSchedule.FPS_ARG: 20}})

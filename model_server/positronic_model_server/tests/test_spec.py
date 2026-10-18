@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from positronic_model_server import spec as wire_spec
 from positronic_model_server.spec import (
     ARGS,
     NAME,
@@ -26,6 +27,26 @@ def test_composition_uses_the_client_wire_format():
             {'par': [{'name': 'left', 'version': 1, 'args': {}}, {'name': 'right', 'version': 1, 'args': {}}]},
         ]
     }
+
+
+@pytest.mark.parametrize('name, version', [('chunked_schedule', 3), ('stop_on_fault', 2), ('metadata', 1)])
+def test_omitted_versions_pin_the_current_contract(name, version):
+    assert json.loads(json.dumps(component(name)))[VERSION] == version
+
+
+def test_saved_versions_stay_pinned_when_the_catalog_changes(monkeypatch):
+    name = 'chunked_schedule'
+    saved = json.loads(json.dumps(component(name, fps=20)))
+    monkeypatch.setitem(wire_spec.CURRENT_COMPONENT_VERSIONS, name, 4)
+    validate(saved)
+    assert saved[VERSION] == 3
+    assert component(name, fps=20)[VERSION] == 4
+    assert component(name, version=2, fps=20)[VERSION] == 2
+
+
+def test_components_without_an_override_default_to_v1():
+    assert component('vendor-owned')[VERSION] == 1
+    assert component('vendor-owned', version=17)[VERSION] == 17
 
 
 def test_arguments_are_normalized_to_json():
@@ -62,6 +83,7 @@ def test_empty_composition_is_rejected(compose):
         {PAR: []},
         {SEQ: [component('x')], NAME: 'x'},
         {NAME: 'x', VERSION: False},
+        {NAME: 'chunked_schedule', VERSION: None},
         {NAME: 'x', ARGS: []},
         {NAME: 'x', ARGS: {'value': float('nan')}},
     ],
@@ -73,6 +95,12 @@ def test_invalid_description_structure_is_rejected(node):
 
 def test_structural_validation_does_not_need_a_component_registry():
     validate(sequence(component('unknown-vendor-component', version=17), parallel(component('another'))))
+
+
+def test_validation_preserves_unversioned_wire_descriptions():
+    node = {NAME: 'chunked_schedule', ARGS: {'fps': 20}}
+    validate(node)
+    assert VERSION not in node
 
 
 def test_parameter_resolution_refuses_unknown_names_and_copies_defaults():

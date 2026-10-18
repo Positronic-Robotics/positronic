@@ -26,7 +26,7 @@ from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
-from positronic_model_server.spec import ARGS, NAME, VERSION
+from positronic_model_server.spec import ARGS, CURRENT_COMPONENT_VERSIONS, NAME, VERSION
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
@@ -76,7 +76,7 @@ class PauseOnUnavailable(Policy):
     """
 
     WIRE_NAME = 'stop_on_fault'  # Stable protocol identifier, independent of the Python class name.
-    WIRE_VERSION = 2
+    WIRE_VERSION = CURRENT_COMPONENT_VERSIONS.get(WIRE_NAME, 1)
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
         obs = yield
@@ -237,7 +237,7 @@ class ChunkedSchedule(Policy):
     """
 
     WIRE_NAME = 'chunked_schedule'
-    WIRE_VERSION = 3
+    WIRE_VERSION = CURRENT_COMPONENT_VERSIONS.get(WIRE_NAME, 1)
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
     RECORD_STATS_ARG = 'record_stats'
@@ -356,15 +356,12 @@ class ChunkedSchedule(Policy):
             while True:
                 now_ns = runtime.time_ns
                 planned = None
-                if (
-                    self._replan_on_error
-                    and not recovering
-                    and any(RobotStatus(obs[name]) is RobotStatus.ERROR for name in obs if _is_robot_status(name))
-                ):
+                statuses = (RobotStatus(obs[name]) for name in obs if _is_robot_status(name))
+                needs_recovery = self._replan_on_error and not recovering and RobotStatus.ERROR in statuses
+                if needs_recovery:
                     trajectory.clear()
                     end_ns = call_ns = now_ns
-                    planned = 0
-                    recovering = True
+                    planned, recovering = 0, True
                 if answer is None and now_ns >= call_ns:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
@@ -385,8 +382,7 @@ class ChunkedSchedule(Policy):
                     due_ns = waypoint.due_ns
                     starts_chunk |= waypoint.starts_chunk
                     commands.update(waypoint.commands)
-                if commands:
-                    recovering = False
+                recovering = recovering and not commands
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
                 resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
@@ -688,7 +684,7 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
     """
 
     WIRE_NAME = 'temporal_stack'
-    WIRE_VERSION = 2
+    WIRE_VERSION = CURRENT_COMPONENT_VERSIONS.get(WIRE_NAME, 1)
 
     def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True) -> None:
         self._keys = tuple(keys)
