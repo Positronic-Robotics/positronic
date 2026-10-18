@@ -1217,15 +1217,17 @@ def test_a_companion_path_too_long_to_dial_carries_the_frames_in_the_message(
 ):
     served, model = unix_stub_server
     directory = pathlib.Path(socket_path).parent
-    alias = directory / ('a' * (frame_ring.MAX_SOCKET_PATH - len(str(directory)) - 1))
-    # A bind mount can give one directory two names of different lengths, and a symlink gives the test
-    # the same asymmetry: the server bound a path it can serve a ring beside, and this one it cannot.
-    alias.symlink_to(socket_path)
+    socket_name = pathlib.Path(socket_path).name
+    alias = directory / ('a' * (frame_ring.MAX_SOCKET_PATH - len(str(directory)) - len(socket_name) - 2))
+    # A bind mount can give one directory two names of different lengths, and a directory symlink gives the
+    # test the same asymmetry: the client dials the socket, and the companion path is one suffix too long.
+    alias.symlink_to(directory, target_is_directory=True)
     image = _frame()
     sent = _messages_the_client_sends(monkeypatch)
 
     client_wire, _ = served.unix()
-    session = InferenceClient(client_wire, wire.UnixSocketAddress(alias, wire.SESSION_PATH, '')).new_session()
+    address = wire.UnixSocketAddress(alias / socket_name, wire.SESSION_PATH, '')
+    session = InferenceClient(client_wire, address).new_session()
     try:
         assert offboard_keys.FRAME_RING in session.metadata
         session.infer({'image.left': image})
@@ -1234,3 +1236,24 @@ def test_a_companion_path_too_long_to_dial_carries_the_frames_in_the_message(
 
     np.testing.assert_array_equal(model.call_args.args[0]['image.left'], image)
     assert max(len(message) for message in sent) > image.nbytes
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_session_dialled_through_a_symlink_to_the_socket_carries_its_frames_through_the_ring(
+    unix_stub_server, socket_path, monkeypatch
+):
+    served, model = unix_stub_server
+    alias = pathlib.Path(socket_path).with_name('alias.sock')
+    alias.symlink_to(socket_path)
+    image = _frame()
+    sent = _messages_the_client_sends(monkeypatch)
+
+    client_wire, _ = served.unix()
+    session = InferenceClient(client_wire, wire.UnixSocketAddress(alias, wire.SESSION_PATH, '')).new_session()
+    try:
+        session.infer({'image.left': image})
+    finally:
+        session.close()
+
+    np.testing.assert_array_equal(model.call_args.args[0]['image.left'], image)
+    assert max(len(message) for message in sent) < image.nbytes // 100

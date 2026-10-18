@@ -148,7 +148,8 @@ keeps sending whole images, and so does every client over TCP.
 - **The descriptor travels beside the session socket.** The server binds a second `AF_UNIX` socket at the
   session socket's path plus `.frames`, of type `SOCK_SEQPACKET`, and the client dials the same suffix on the
   path it dialled. Each side builds that path from the socket path it already holds, so a bind mount that gives
-  the two processes different names for one directory still lands them on the same socket. The client sends the
+  the two processes different names for one directory still lands them on the same socket. A client that dialled
+  a symlink to the session socket builds the path beside the socket the link names. The client sends the
   descriptor with `SCM_RIGHTS`, names the session ID from the handshake, and waits for the server to map it.
   A session that reconnects hands its ring over again, under the new session ID.
 - **A ring holds four slots.** One round trip is in flight at a time, so the writer returns to a slot four
