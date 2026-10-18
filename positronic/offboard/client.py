@@ -8,7 +8,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from positronic_model_server import keys as offboard_keys
 from positronic_model_server import protocol, serialization
 from positronic_wire import wire
 from positronic_wire.wire import ClientWire
@@ -84,7 +83,7 @@ class InferenceSession:
         self._frames = self._frame_writer(uds)
 
     def _frame_writer(self, uds: Path | None) -> frames.FrameWriter | None:
-        declared = self._metadata.get(offboard_keys.FRAME_RING)
+        declared = self._metadata.get(frames.HANDSHAKE_KEY)
         if uds is None or self._session_id is None or not declared or not frames.SUPPORTED:
             return None
         channel = frames.channel_path(uds)
