@@ -751,10 +751,14 @@ def _sets_gh_repo(cmd: str) -> bool:
     return any(word.startswith(GH_REPO_ENV + '=') for segment in segments for word in segment)
 
 
+# The one `-R` shape read as a repository. gh also accepts other shapes, so anything else stays guarded.
+GH_REPO_SELECTOR_RE = re.compile(r'(?:https?://)?(?:github\.com/)?([\w.-]+/[\w.-]+?)(?:\.git)?/?', re.IGNORECASE)
+
+
 def _explicit_slug(repo: str) -> str:
-    """`owner/repo` from what `-R` names — `[HOST/]OWNER/REPO` or a URL; '' when it names neither."""
-    parts = re.sub(r'\.git/?$', '', repo).rstrip('/').split('/')
-    return '/'.join(parts[-2:]).casefold() if len(parts) >= 2 and all(parts[-2:]) else ''
+    """`owner/repo` from what `-R` names, on github.com; '' for any other shape."""
+    m = GH_REPO_SELECTOR_RE.fullmatch(repo)
+    return m.group(1).casefold() if m else ''
 
 
 def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo_env: str) -> str:

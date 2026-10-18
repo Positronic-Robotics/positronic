@@ -111,6 +111,11 @@ BLOCKED = [
     # another host or a URL can still name the guarded repository
     f'gh pr merge 5 -R github.com/{GUARDED}',
     f'gh pr merge 5 --repo https://github.com/{GUARDED}.git',
+    # gh drops a query or a fragment, and the guard does not read a shape it cannot parse
+    f"gh pr merge 5 -R 'https://github.com/{GUARDED}?x=1'",
+    f"gh pr merge 5 -R 'https://github.com/{GUARDED}#x'",
+    f'gh pr merge 5 -R ssh://git@github.com/{GUARDED}',
+    f'gh pr merge 5 -R github.example.com/{GUARDED}',
     # second invocation still guarded after an exempt one
     f'cd {INFRA} && git push && git -C {CLONE} push',
     # grouped cd does not persist outside the subshell — dir tracking poisons, stays guarded
@@ -156,6 +161,8 @@ ALLOWED = [
     'ls -la',
     'gh pr -R o/r merge 5',
     'gh pr merge -R o/r',
+    'gh pr merge 5 -R https://github.com/o/r',
+    'gh pr merge 5 -R github.com/o/r.git',
     'git status',
     'git log --oneline',
     'git pull --ff-only',
