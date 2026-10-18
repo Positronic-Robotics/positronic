@@ -2,7 +2,6 @@
 
 Runs in MolmoSpaces' isolated interpreter, with ``mapping``, ``server`` and ``protocol`` on ``PYTHONPATH``.
 End-effector poses describe ``gripper/grasp_site`` in the arm base frame, ``fr3_link0``, as the real FR3 reports them.
-MolmoSpaces' robot base frame is at the bottom of the stand below the arm.
 """
 
 import argparse
