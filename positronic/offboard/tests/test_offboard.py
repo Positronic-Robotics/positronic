@@ -11,6 +11,7 @@ from collections.abc import Generator
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
+from typing import NamedTuple
 from unittest.mock import AsyncMock
 
 import numpy as np
@@ -395,6 +396,39 @@ def test_a_ring_carries_every_image_of_an_observation_byte_identical(frame_chann
     np.testing.assert_array_equal(served['nested']['frames'][0], image)
     np.testing.assert_array_equal(served['nested']['frames'][1], stack)
     assert served[keys.GRIP] == 0.5
+
+
+class _Pair(NamedTuple):
+    image: np.ndarray
+    grip: float
+
+
+class _Frames(list):
+    pass
+
+
+@pytestmark_ring
+def test_every_container_the_wire_carries_reaches_the_server_as_the_message_path_delivers_it(
+    frame_channel, frame_writer
+):
+    """The wire carries a tuple, a list and any subclass of either as a plain array, and a mapping as a dict."""
+    image = _image()
+    obs = {
+        'pair': _Pair(image, 0.5),
+        'tuple': (image, 0.5),
+        'frames': _Frames([image]),
+        'view': MappingProxyType({'image': image}),
+        'task': 'pick',
+    }
+
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack(obs)))
+
+    for key in ('pair', 'tuple', 'frames'):
+        assert type(served[key]) is list, key
+        np.testing.assert_array_equal(served[key][0], image)
+    assert served['pair'][1] == served['tuple'][1] == 0.5
+    np.testing.assert_array_equal(served['view']['image'], image)
+    assert served['task'] == 'pick'
 
 
 @pytestmark_ring
