@@ -970,7 +970,7 @@ def _is_exact_merge_in_another_repository(
     """Whether `gh <words>` in `cmd` merges in a repository other than `guarded_slug`, in the one exempt form.
 
     Any substitution, expansion or `GH_REPO` can still select the guarded repository, so each one says no.
-    The merge runs alone, as a guarded one must, so one command costs at most one lookup inside the hook timeout.
+    The merge runs alone, as a guarded one must, so one command makes only the two lookups of one merge.
     """
     if gh_repo_env or _sets_gh_repo(cmd) or _carries_substitution(cmd) or _carries_expansion(cmd):
         return False
