@@ -5,20 +5,25 @@ and the leaderboard.
 
 A coding agent can do most of the work. You approve the sign-in, and you choose where to push your image.
 
-## What you need
+Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
+3 [Enter](#enter-the-competition) · 4 [Build](#build-and-push-your-image) · 5 [Test](#test-the-image) ·
+6 [Submit](#submit)
 
-You can install the commands, register and submit on any computer. To build and test your image, use a
-Linux machine with an x86-64 (amd64) processor, such as a
-[Nebius virtual machine](#build-and-test-on-a-nebius-vm).
+## Before you start
 
-- The platform runs only amd64 images. On a Mac with Apple silicon, or on another ARM machine, Docker
-  emulates amd64. With emulation, the test is very slow, and it can fail.
-- The test loads your model into memory. Give the machine enough memory and free disk space for your
-  model. For the π0.5 DROID example image, use 32 GB of memory and 100 GB of free disk space.
+- A machine to build and test on: Linux on amd64, with enough memory and free disk space for your model.
   [What the example images use](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#what-the-example-images-use)
-  gives approximate values for each example image.
-- The first test needs no GPU, but some images stop without a GPU. A GPU is necessary for
-  [Test the image on a GPU](#test-the-image-on-a-gpu), and to train your policy.
+  gives values for each example image. Some images also need a GPU.
+  - No such machine? [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) creates one with one
+    command. Sign up for Nebius Builder with the email address of the account that you register with.
+    Nebius also has the GPUs to train your policy.
+  - Do not use a Mac with Apple silicon, or another ARM machine. Docker emulates amd64 there, and the test
+    is very slow and can fail.
+- On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, and Docker.
+- Push access to a container registry, such as Docker Hub.
+
+You can install the commands, register and submit on any computer. Run the other steps, and your coding
+agent, on the build machine.
 
 ## Use a coding agent
 
@@ -38,13 +43,12 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 3. Help me build a policy image, and push it to a container registry
    that I choose.
 4. Test the image with the network denied.
-5. Submit it, pinned by digest, and check its status until the scores
+5. Before the first submission, show me the terms link and ask
+   whether I accept the terms for my team. Never accept the terms
+   without explicit human approval.
+6. Submit it, pinned by digest, and check its status until the scores
    arrive.
 ```
-
-The agent needs git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, Docker and push access to a
-container registry, such as Docker Hub. Run the agent on the machine that builds and tests the image, as
-[What you need](#what-you-need) says.
 
 ## Get started by hand
 
@@ -62,8 +66,8 @@ uv tool install --managed-python --with-executables-from positronic-platform-cli
     git+https://github.com/Positronic-Robotics/positronic
 ```
 
-`--managed-python` makes uv use a Python that it installs. One dependency builds from source and needs
-`Python.h`, which the Python of Ubuntu does not include.
+`--managed-python` makes uv use a Python that it installs. The Python of Ubuntu cannot build one of the
+dependencies.
 
 To update the commands later, run `uv tool upgrade positronic`.
 
@@ -84,12 +88,12 @@ export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
 
 You can enter in your browser or with a command. Both enter the same team, so do one of the two. The
 entry asks for no terms: your team accepts the [terms](https://competition.phail.ai/terms) with its first
-submission. Their section "Your data" tells how the organizers use your data.
+submission (see [Submit](#submit)). Their section "Your data" tells how the organizers use your data.
 
 - In your browser, open the [entry page](https://physical-ai-competition.positronic.ro/enter). Sign in
   with the same account that you used for `platform-register`.
-- With the command, `competition-enter` shows what becomes public, and the link to the terms. With
-  `--yes`, your team enters.
+- With the command, `competition-enter` shows the link to the terms and their version, and what becomes
+  public. With `--yes`, your team enters.
 
 ```bash
 competition-enter
@@ -103,70 +107,74 @@ competition-enter --yes
 
 ### Build and push your image
 
-Your image runs an inference server for your policy. [Your policy image](#your-policy-image) says what the
-platform needs from the image, and how to build one from an example.
+Your image runs an inference server for your policy. Start from an example image: each one serves a public
+DROID checkpoint, and its recipe says where your own checkpoint goes.
+[Your policy image](#your-policy-image) lists the examples, and says what the platform needs from an
+image.
+
+The recipes build from the root of the positronic source. The header of each recipe gives its build
+command. For example, for π0.5 DROID:
+
+```bash
+git clone https://github.com/Positronic-Robotics/positronic
+cd positronic
+docker login
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+    -f docker/Dockerfile.serve-pi05-droid -t docker.io/<you>/<image>:v1 --push .
+```
+
+- `--platform linux/amd64` names the architecture that the platform runs.
+- `--provenance=false --sbom=false` makes buildx push one image manifest, with no attestation beside it.
+- Push to Docker Hub when your base is a `positro/*` image. Then only your own layers upload, because the
+  base layers come from the public repository.
+- A public repository needs nothing more. A private repository needs a credential, as
+  [A private image](#a-private-image) shows.
+
+After the push, read the compressed size of the image. The size limit counts the layers and the config, as
+this command adds them. The command needs [jq](https://jqlang.org/download/).
+
+```bash
+docker buildx imagetools inspect --raw docker.io/<you>/<image>:v1 \
+  | jq '([.layers[].size] | add) + .config.size'
+```
 
 ### Test the image
 
-Start the image with the network denied, and wait for its server. This test needs no GPU, and it uses
-no submission. It needs an amd64 machine with enough memory, as [What you need](#what-you-need) says.
-`--pull=always` makes Docker test the image in your registry, not an older local copy.
+Start the image as the platform starts it, with the network denied, and wait for its server. The test uses
+no submission. Run it on the build machine that [Before you start](#before-you-start) describes, in the
+positronic source:
 
 ```bash
-probe='import sys, urllib.error, urllib.request as u
-try:
-    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
-          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
-except urllib.error.HTTPError as e:
-    print("the server answered HTTP", e.code)
-except OSError as e:
-    reason = e.reason if isinstance(e, urllib.error.URLError) else e
-    if not isinstance(reason, (ConnectionError, TimeoutError)):
-        raise
-    sys.exit(3)'
-arch=$(docker version -f '{{.Server.Arch}}')
-if [ "$arch" != amd64 ]; then
-  echo "Docker runs on '$arch'. Run this test on an amd64 machine."
-elif cid=$(docker run -d --pull=always --network none -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
-  deadline=$((SECONDS + 900))
-  while :; do
-    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
-    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 900 s"; break; }
-    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
-    [ $? = 3 ] || break
-    sleep 5
-  done
-  docker logs --tail 30 "$cid"
-  docker rm -f "$cid"
-fi
+bash docker/test_policy_image.sh docker.io/<you>/<image>:v1
 ```
 
-The loop calls the keepalive route every 5 s, for up to 900 s. A model loads more slowly on a CPU than on
-a GPU. The loop ends with one of these lines:
+The script pulls the image from your registry, so it tests what the platform pulls. It calls the keepalive
+route from outside the container every 5 s, for up to 900 s, because a model loads more slowly on a CPU
+than on a GPU. Then it prints one of these lines, and the end of the log:
 
-- `Docker runs on '<arch>'`: Docker does not run amd64 images natively, and the test does not start. Use
-  an amd64 machine, as [What you need](#what-you-need) says. An empty `<arch>` means that Docker does not
-  answer.
-- `{"alive_seconds": ...}`: the server loaded its weights, and it serves on the CPU.
+- `the server answered: {"alive_seconds": ...}`: the server loaded its weights. The test passed.
 - `the server exited`: read the log. An image that needs a GPU stops with an error about CUDA. The GR00T
-  N1.7, FLUX 3 Action and Cosmos3-Nano example images stop in this way. For such an image, run
-  [Test the image on a GPU](#test-the-image-on-a-gpu) before you submit.
+  N1.7, FLUX 3 Action and Cosmos3-Nano example images stop in this way. Test such an image on a GPU.
 - `the server answered HTTP <code>`: the server runs, but it refused the request. A `401` means that the
   server does not accept the token in `AUTH_TOKEN`. On the platform, this fails the run with
   `policy_setup_crash`.
+- `the server answered 200 without {"alive_seconds": ...}`: the keepalive route must answer a JSON object
+  whose `alive_seconds` is an integer or `null`. On the platform, any other answer fails the run.
+- `the server listens only on 127.0.0.1`: the platform connects from outside the container, so the run
+  fails with `policy_setup_crash`. Make the server listen on `0.0.0.0`.
 - `no answer in 900 s`: the server hung. Read the log for the step where it stopped.
-- An error from `docker exec` or a Python traceback: the probe failed, and the loop stopped at once. For
-  example, the image has no Python at `/positronic/.venv/bin/python`.
 
-The probe exits with code 3 when the port is closed or the server does not answer in 5 s. The loop then
-waits quietly, because a server that loads its weights does not open the port yet.
+The log must not show a DNS error.
 
-The log must not show a DNS error. The `docker exec` line uses the Python of the example images. The
-GR00T N1.7 image has its Python at `/opt/gr00t-venv/bin/python`. In your own image, use any HTTP client
-that the image has. The probe runs inside the container, so it also gets an answer from a server that
-listens only on `127.0.0.1`. The platform connects from outside the container, so such a server fails
-with `policy_setup_crash`. The full test on a GPU machine is in
-[Test the image on a GPU](#test-the-image-on-a-gpu).
+On a machine with a GPU, add `--gpu`. The script then gives the server 600 s:
+
+```bash
+bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
+```
+
+- The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
+  sure that your model uses less.
+- On the platform, machine boot, the image pull and the server's start share one deadline of 1800 s.
 
 ### Submit
 
@@ -191,12 +199,15 @@ Your submissions also show in your browser: the
 [account page](https://physical-ai-competition.positronic.ro/enter/account) shows the status of each one.
 Sign in with the same account that you used for `platform-register`.
 
+- The platform refuses the first submission of your team until your team accepts the terms. Read the
+  [terms](https://competition.phail.ai/terms), then run `competition-enter --accept-terms=<version>` with
+  the version that you read, and submit again. The platform refuses a version that is not current, and it
+  records the version and the time.
+  A team that accepted the terms submits again with no new acceptance.
 - Pin the image by its digest. A tag can move to an image that you did not test.
 - Reuse the transaction key only to retry the same submission. The same key returns the same submission,
   and it does not count again. A new image or another eval needs a new key: the platform refuses a changed
   request under a used key with `transaction_conflict`.
-- `positronic eval catalog` also prints a `tasks: forbidden` line. That line is correct for a participant
-  key.
 - You can make one submission per day. [Submissions per day](#submissions-per-day) says what counts.
 - [Read the outcome](#read-the-outcome) says what the status tells you.
 
@@ -209,12 +220,6 @@ Before submissions close, choose your final entry, as the
 
 Ask your questions on the [Positronic Discord](https://discord.gg/PXvBy4NBgv). The commands above call
 the platform's [HTTP API](https://platform.positronic.ro/docs), and your own tools can call it too.
-
-## Use Nebius
-
-Sign up for Nebius Builder with the email address of the account that you register with. On
-Nebius, you can train your policy, and build and test your image.
-[Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) creates a VM for the build and the tests.
 
 ---
 
@@ -258,25 +263,6 @@ lists them, with the recipe for each.
 - [Three traps in the `positro/*` bases](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#three-traps-in-the-positro-bases)
   are failures that show only when the network is denied.
 
-### Build and push
-
-The recipes build from the root of the positronic source. The header of each recipe gives its build
-command. For example:
-
-```bash
-git clone https://github.com/Positronic-Robotics/positronic
-cd positronic
-docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-    -f docker/Dockerfile.serve-pi05-droid -t docker.io/<you>/<image>:v1 --push .
-```
-
-- `--platform linux/amd64` names the architecture that the platform runs.
-- `--provenance=false --sbom=false` makes buildx push one image manifest, with no attestation beside it.
-- Push to Docker Hub when your base is a `positro/*` image. Then only your own layers upload, because the
-  base layers come from the public repository.
-- A public repository needs nothing more. A private repository needs a credential, as
-  [A private image](#a-private-image) shows.
-
 ### A private image
 
 Push to a private repository, and give the platform a read-only credential for it. First write the
@@ -317,65 +303,6 @@ What the platform does with your credential:
 - A retry with the same `--transaction-key` returns the first submission, also with a new credential. To
   use a new credential, use a new transaction key.
 
-## Test the image on a GPU
-
-On a machine with a GPU, serve the image with the network denied. Then wait until the keepalive route
-answers, from inside the container, with the token:
-
-```bash
-docker network create --internal noegress
-probe='import sys, urllib.error, urllib.request as u
-try:
-    print(u.urlopen(u.Request("http://127.0.0.1:8000/api/v1/keepalive", method="POST",
-          headers={"Authorization": "Bearer test"}), timeout=5).read().decode())
-except urllib.error.HTTPError as e:
-    print("the server answered HTTP", e.code)
-except OSError as e:
-    reason = e.reason if isinstance(e, urllib.error.URLError) else e
-    if not isinstance(reason, (ConnectionError, TimeoutError)):
-        raise
-    sys.exit(3)'
-arch=$(docker version -f '{{.Server.Arch}}')
-if [ "$arch" != amd64 ]; then
-  echo "Docker runs on '$arch'. Run this test on an amd64 machine."
-elif cid=$(docker run -d --pull=always --network noegress --gpus all -e AUTH_TOKEN=test docker.io/<you>/<image>:v1); then
-  deadline=$((SECONDS + 600))
-  while :; do
-    [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = true ] || { echo "the server exited"; break; }
-    [ "$SECONDS" -lt "$deadline" ] || { echo "no answer in 600 s"; break; }
-    docker exec "$cid" /positronic/.venv/bin/python -c "$probe"
-    [ $? = 3 ] || break
-    sleep 5
-  done
-  docker logs --tail 30 "$cid"
-  docker rm -f "$cid"
-fi
-```
-
-- `Docker runs on '<arch>'` means that the machine is not amd64. The test does not start.
-- The loop calls the route every 5 s, for up to 600 s. A slow model binds port 8000 late: FLUX 3 Action
-  binds it after about 140 s.
-- The route answers `{"alive_seconds": ...}` when the model has loaded and warmed.
-- The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
-  sure that your model uses less.
-- `the server exited` means that the server crashed. The log shows why.
-- `the server answered HTTP <code>` means that the server refused the request. A `401` means that it does
-  not accept the token in `AUTH_TOKEN`.
-- `no answer in 600 s` means that the server hung, or that it starts too slowly. On the platform, machine
-  boot, the image pull and the server's start share one deadline of 1800 s.
-- An error from `docker exec` or a Python traceback means that the probe failed. The loop stops at once.
-- A server that checks the token answers `401` when the request has no token.
-- The `docker exec` line uses the Python of the example images. The GR00T N1.7 image has its Python at
-  `/opt/gr00t-venv/bin/python`. In your own image, use any HTTP client that the image has.
-
-After you push the image, read its compressed size. The size limit counts the layers and the config, as
-this command adds them. The command needs [jq](https://jqlang.org/download/).
-
-```bash
-docker buildx imagetools inspect --raw docker.io/<you>/<image>:v1 \
-  | jq '([.layers[].size] | add) + .config.size'
-```
-
 ## Build and test on a Nebius VM
 
 [`docker/nebius_vm.sh`](https://github.com/Positronic-Robotics/positronic/blob/main/docker/nebius_vm.sh)
@@ -384,7 +311,7 @@ a 200 GB disk, one NVIDIA L40S GPU with 48 GB of GPU memory, Docker with GPU acc
 
 Before you start:
 
-- Sign up for Nebius Builder, as [Use Nebius](#use-nebius) says.
+- Sign up for Nebius Builder, as [Before you start](#before-you-start) says.
 - Install the [Nebius CLI](https://docs.nebius.com/cli/install), and run `nebius profile create`. The
   script creates the VM in the project of the profile.
 - If you have no SSH key, make one with `ssh-keygen -t ed25519`.
