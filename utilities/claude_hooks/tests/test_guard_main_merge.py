@@ -351,6 +351,20 @@ def test_an_old_name_of_the_guarded_repository_stays_guarded(git):
     assert mcp_verdict(MERGE_TOOL, merge_args(566) | {'owner': 'old-owner', 'repo': 'old-name'}, canonical=canonical)
 
 
+def test_the_exact_form_in_another_repository_costs_one_lookup_and_runs_alone(git):
+    looked_up = []
+
+    def canonical(slug):
+        looked_up.append(slug)
+        return slug
+
+    cmd = 'gh pr merge 1 -R a/one && gh pr merge 2 -R b/two && gh pr merge 566'
+    assert verdict(git, cmd, allow_merge=lambda *_: True, canonical=canonical) is not None
+    assert looked_up == []
+    assert verdict(git, 'cd /tmp && gh pr merge 1 -R a/one --squash', canonical=canonical) is None
+    assert looked_up == ['a/one']
+
+
 def test_a_repository_github_cannot_name_stays_guarded(git):
     assert verdict(git, 'gh pr merge 566 -R someone/other', canonical=lambda _: '') is not None
     assert mcp_verdict(MERGE_TOOL, {**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}, canonical=lambda _: '') is not None
