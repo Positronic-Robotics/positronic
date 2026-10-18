@@ -443,6 +443,10 @@ class _Arm(DriverRun[command.CommandType]):
             return RecoveryOutcome.NOT_CLEARED
         return RecoveryOutcome.CLEARED if self.robot.recover_from_errors() else RecoveryOutcome.NOT_CLEARED
 
+    def forget_missed_target(self) -> None:
+        """Read AVAILABLE again after a move that missed: a cleared fault leaves the arm holding where it is."""
+        self.moves.errored = False
+
     def clear_held_fault(self) -> None:
         """Clear a fault the arm holds, so the move about to go out is not rejected before it starts.
 
@@ -862,7 +866,7 @@ class Robot(pimm.ControlSystem):
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
                 outcome = self._clear_with_desk_prepare(desk, arm, brakes)
             if asked and outcome is RecoveryOutcome.CLEARED:
-                arm.moves.errored = False  # a cleared fault leaves the arm holding where it is
+                arm.forget_missed_target()
         # rules-allow: swallowed-error — the throw is handed to every caller that asked
         except Exception as exc:
             if not asked:
