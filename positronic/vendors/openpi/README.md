@@ -28,10 +28,8 @@ OpenPI supports multiple codecs for different use cases:
 
 Both DROID codecs execute each chunk under DROID's impedance gains (`codecs.droid_execution`; see [Control mode](../../policy/codecs/README.md#control-mode)).
 
-The `libero` server preset clips model predictions to `[-1, 1]`, scales translation by `0.05` metres and
-rotation vectors by `0.5` radians, and maps grip to `[0, 1]` closure. Its codec takes these physical values
-and constructs commands. Each delta applies to the live pose. Pair the `libero` codec with that server
-preset; the codec does not accept raw LIBERO predictions.
+Use the `libero` server preset with its matching codec: the server converts predictions into physical units,
+and the codec builds robot commands.
 
 ## 1. Prepare Data
 
