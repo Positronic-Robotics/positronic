@@ -41,6 +41,10 @@
       .phase { font-weight: 700; margin-top: 12px; }
       .btn--control-on { background: #06d6a0; color: #111; }
       .btn--control-off { background: #6c757d; color: #fff; }
+      /* The B button pulses while the trial waits for its press: Ready, then Start task. */
+      @keyframes next-press { 50% { opacity: 0.55; } }
+      .btn--next-press { background: #ff8c00; color: #111; animation: next-press 1s ease-in-out infinite; }
+      .btn--task-running { background: #06d6a0; color: #111; }
     </style>
   </head>
   <body>
@@ -154,11 +158,18 @@
           case PHASE.readyWait: return 'Human trial: tap Ready';
           case PHASE.running:
             return state[STATE_FIELD.attemptStarted]
-              ? 'Task running: hold Ready/Start for Complete'
+              ? 'Task running: hold Complete for 1 s'
               : 'Trial running: tap Start task when you begin';
           case PHASE.ended: return 'Trial ended';
           default: return 'Waiting for a trial';
         }
+      }
+
+      // The label of the B button: what its next press does.
+      function recordLabel(phase, attemptStarted) {
+        if (phase === PHASE.readyWait) return 'Ready';
+        if (phase === PHASE.running) return attemptStarted ? 'Complete' : 'Start task';
+        return 'Ready / Start task';
       }
 
       // A new trial and the end of a trial open the gripper, so a closed slider does not close it at the next Control.
@@ -180,6 +191,14 @@
             configs.track.el.classList.toggle('btn--control-off', !control);
             configs.reset.baseLabel = phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
             applyVisual('reset');
+            const started = phase === PHASE.running && state[STATE_FIELD.attemptStarted] === true;
+            const nextPress = phase === PHASE.readyWait || (phase === PHASE.running && !started);
+            configs.record.el.classList.toggle('btn--next-press', nextPress);
+            configs.record.el.classList.toggle('btn--task-running', started);
+            configs.record.baseLabel = recordLabel(phase, started);
+            const hold = started ? 'hold 1 s' : '';
+            configs.record.labels = { off: hold, on: hold };
+            applyVisual('record');
           } catch (e) {
             phaseEl.textContent = 'The teleop service does not answer';
           }
@@ -233,9 +252,12 @@
           teleop(configs.track, 'Control', 'tap: on / off');
           teleop(configs.record, 'Ready / Start task', 'hold: Complete');
           teleop(configs.reset, 'Cancel', '');
-          // The service gives the colour of Control, so a press does not change it.
+          // The service gives the colour of Control and of B, so a press does not change it. B gets its label from the
+          // service too.
           configs.track.classes = null;
           configs.track.el.classList.remove('btn--track', 'btn--track-off');
+          Object.assign(configs.record, { classes: null, aria: null, titles: null });
+          configs.record.el.classList.remove('btn--record', 'btn--record-off');
         }
 
         const state = {

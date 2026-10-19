@@ -6,6 +6,12 @@
   <style>
     body { font-family: sans-serif; background: #111; color: #eee; margin: 24px; }
     #state { font-size: 28px; margin-bottom: 8px; }
+    /* The running state: whether the teleoperator still must press Start task. */
+    @keyframes next-press { 50% { opacity: 0.55; } }
+    #state.start-task { display: inline-block; padding: 4px 12px; background: #ff8c00; color: #111;
+      animation: next-press 1s ease-in-out infinite; }
+    #state.task-running { display: inline-block; padding: 4px 12px; background: #06d6a0; color: #111; }
+    #control { font-size: 20px; margin-bottom: 8px; }
     #task { font-size: 20px; margin-bottom: 16px; }
     button { font-size: 22px; padding: 12px 28px; margin-right: 12px; }
     #error { color: #f88; min-height: 1.5em; }
@@ -17,6 +23,7 @@
 </head>
 <body>
   <div id="state">Waiting for a trial</div>
+  <div id="control"></div>
   <div id="task"></div>
   <button id="cancel" disabled>Cancel</button>
   <div id="error"></div>
@@ -31,13 +38,15 @@
     const STATE = {
       [PHASE.idle]: 'Waiting for a trial',
       [PHASE.readyWait]: 'Human trial: put on the headset, then press Ready on the headset or the phone',
-      [PHASE.running]: 'Trial running',
+      [PHASE.running]: 'Trial running: press Start task (B) when the attempt starts',
       [PHASE.ended]: 'The trial ended: give the verdict on the console',
     };
     // The fields of `/status`, as the server names them. `parseStatus` reads them once.
-    const STATUS_FIELD = { phase: 'phase', task: 'task', cameras: 'cameras' };
+    const STATUS_FIELD = {
+      phase: 'phase', task: 'task', control: 'control', attemptStarted: 'attempt_started', cameras: 'cameras',
+    };
     function parseStatus(json) {
-      return { phase: json[STATUS_FIELD.phase], task: json[STATUS_FIELD.task], cameras: json[STATUS_FIELD.cameras] };
+      return Object.fromEntries(Object.entries(STATUS_FIELD).map(([name, field]) => [name, json[field]]));
     }
     let shownPhase = null;
     // The phase in which the last error came, or 'unreachable'. The error stays until a poll shows another phase.
@@ -56,7 +65,12 @@
         document.getElementById('error').textContent = '';
         errorPhase = null;
       }
-      document.getElementById('state').textContent = STATE[status.phase];
+      const running = status.phase === PHASE.running;
+      const started = running && status.attemptStarted === true;
+      const state = document.getElementById('state');
+      state.textContent = started ? 'Task running' : STATE[status.phase];
+      state.className = !running ? '' : started ? 'task-running' : 'start-task';
+      document.getElementById('control').textContent = !running ? '' : status.control ? 'Control on' : 'Control off';
       document.getElementById('task').textContent = status.task;
       const waiting = status.phase === PHASE.readyWait;
       document.getElementById('cancel').disabled = !waiting;

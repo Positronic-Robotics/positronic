@@ -324,6 +324,18 @@ def test_the_service_shows_the_camera_image_of_the_run(service, socket_path, run
         run.close()
 
 
+def test_the_headset_view_shows_whether_start_task_is_still_due(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
+        _drive(run, 0.2)
+        assert tuple(service.view()[-1, 0]) == service_module._Banner.START_TASK.colour
+        headset.press(b=1.0)
+        _drive(run, 0.2)
+        assert service.state().attempt_started
+        assert tuple(service.view()[-1, 0]) == service_module._Banner.TASK_RUNNING.colour
+        run.close()
+
+
 def test_the_client_sends_the_cameras_that_the_session_names(service, socket_path, runtime):
     obs = {**OBS, keys.WRIST_IMAGE: np.zeros((24, 32, 3), dtype=np.uint8)}
     with _Headset(service) as headset:
@@ -640,6 +652,12 @@ def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, con
 def test_a_view_rate_that_is_not_finite_and_positive_is_refused(socket_path, view_fps):
     with pytest.raises(ValueError, match='view_fps must be finite and positive'):
         command._Headset(TeleopService(socket_path, 1.0, 0.05, HOLD_SEC), view_fps)
+
+
+def test_the_phone_page_reads_the_fields_of_the_page_state():
+    page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
+    [fields] = re.findall(r'const STATE_FIELD = \{([^}]*)\};', page)
+    assert set(re.findall(r"'(\w+)'", fields)) == set(command.PageState.__dataclass_fields__)
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):

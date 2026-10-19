@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -153,6 +153,17 @@ class TrialState:
     control: bool
     attempt_started: bool
     cameras: tuple[str, ...]
+
+
+class _Banner(Enum):
+    """A coloured strip across the bottom of the headset view: whether the attempt started. Its colour is RGB."""
+
+    START_TASK = ('B: START TASK', (255, 140, 0))
+    TASK_RUNNING = ('TASK RUNNING', (6, 214, 160))
+
+    def __init__(self, text: str, colour: tuple[int, int, int]):
+        self.text = text
+        self.colour = colour
 
 
 @dataclass(frozen=True)
@@ -304,8 +315,8 @@ class TeleopService:
             self._changed.notify_all()
 
     @staticmethod
-    def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
-        """``image``, or a black image, with ``lines`` of text at its top."""
+    def _view(image: np.ndarray | None, lines: Sequence[str], banner: _Banner | None = None) -> np.ndarray:
+        """``image``, or a black image, with ``lines`` of text at its top and ``banner`` at its bottom."""
         blank = (480, 640, 3)
         # A copy: the text goes on the view, not on the image that the service holds.
         view = np.zeros(blank, dtype=np.uint8) if image is None else np.array(image, dtype=np.uint8, order='C')
@@ -313,6 +324,15 @@ class TeleopService:
             origin = (10, 30 + 30 * row)
             cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
             cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+        if banner is not None:
+            height, width = view.shape[:2]
+            top = height - max(1, round(0.12 * height))
+            view[top:] = banner.colour
+            scale = (height - top) / 45
+            thickness = max(1, round(2 * scale))
+            (text_width, text_height), _ = cv2.getTextSize(banner.text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+            origin = ((width - text_width) // 2, (top + height + text_height) // 2)
+            cv2.putText(view, banner.text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thickness, cv2.LINE_AA)
         return view
 
     def view(self) -> np.ndarray:
@@ -328,8 +348,11 @@ class TeleopService:
             case Phase.ENDED:
                 return self._view(None, ['The trial ended', 'Give the verdict on the console'])
         control = 'Control on (A: off)' if state.control else 'Control off (A: on)'
-        task = 'Hold B: Complete. Hold the stick: Give up' if state.attempt_started else 'B: Start task'
-        return self._view(image, [state.task, control, task])
+        if state.attempt_started:
+            return self._view(
+                image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], _Banner.TASK_RUNNING
+            )
+        return self._view(image, [state.task, control], _Banner.START_TASK)
 
     def _headset_image(self) -> np.ndarray | None:
         if self._headset_camera is not None:

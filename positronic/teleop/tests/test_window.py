@@ -1,4 +1,5 @@
 import io
+import re
 import socket
 import time
 
@@ -15,7 +16,7 @@ from positronic.teleop import protocol
 from positronic.teleop import service as service_module
 from positronic.teleop.protocol import Reply, Request
 from positronic.teleop.service import Phase, TeleopService
-from positronic.teleop.window import Window, WindowStatus, window_app
+from positronic.teleop.window import STATIC_DIR, Window, WindowStatus, window_app
 from positronic.tests.testing_inference import free_port
 
 
@@ -184,3 +185,9 @@ def test_the_window_shows_no_trial_after_the_last_session_ends_with_complete(win
         'attempt_started': False,
         'cameras': [],
     }
+
+
+def test_the_window_page_reads_the_fields_of_the_status():
+    page = (STATIC_DIR / 'window.html').read_text()
+    [fields] = re.findall(r'const STATUS_FIELD = \{([^}]*)\};', page)
+    assert set(re.findall(r"'(\w+)'", fields)) == set(WindowStatus.model_fields)

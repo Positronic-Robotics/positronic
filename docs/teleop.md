@@ -42,20 +42,25 @@ confirms that the person holds the controller. The window on the laptop offers o
 
 | Phase | Phone (teleop mode) | Quest (right controller) | What it does |
 |---|---|---|---|
-| The trial waits for Ready | tap **Ready / Start task** | press B | Ready: the episode starts |
+| The trial waits for Ready | tap **Ready** | press B | Ready: the episode starts |
 | The trial waits for Ready | tap **Cancel** (or Cancel in the window) | press the stick | Cancel (see Limits) |
 | The trial runs | tap **Control** | press A | control on or off (the clutch) |
 | Control is on | the slider | the trigger | the grip |
-| The trial runs, before the task | tap **Ready / Start task** | press B | Start task: the real attempt starts here |
-| After Start task | hold **Ready / Start task** for 1 s | hold B for 1 s | Complete: the episode ends |
+| The trial runs, before the task | tap **Start task** | press B | Start task: the real attempt starts here |
+| After Start task | hold **Complete** for 1 s | hold B for 1 s | Complete: the episode ends |
 | The trial runs | hold **Hold: Give up** for 1 s | hold the stick for 1 s | Give up: the episode ends |
 
 When control comes on, the hand moves the robot from its current pose, so the robot does not jump. When the phone or
 the controller is not tracked for 0.5 s, control goes off.
 
 The phone page shows the phase above its buttons. It colours Control green while control is on and grey while it is
-off. At each new trial and at each end it opens the grip slider, so a closed gripper does not close again at the next
-Control. The Quest shows the phase and the task on its video.
+off. The B button is labelled with what its next press does: Ready, Start task or Complete. It pulses orange while the
+trial waits for Ready or for Start task, and it is green after Start task. At each new trial and at each end the page
+opens the grip slider, so a closed gripper does not close again at the next Control.
+
+The Quest shows the phase, the task and the control state on its video. While the trial runs, a strip across the bottom
+of the video is orange with "B: START TASK" until Start task, and then green with "TASK RUNNING". The window on the
+laptop shows the same state, and the control state, in the same colours.
 
 ## Cameras
 
@@ -101,12 +106,12 @@ Conversion for training picks its own keys from the recording.
 3. On the phone, open the page, tap **Enter AR**, and allow the camera and the motion sensors. Hold the phone upright.
 4. For each trial:
    1. When the phase line says "Human trial: tap Ready", hold the phone in a working pose and tap
-      **Ready / Start task**.
+      **Ready**.
    2. Tap **Control** and move the phone: the arm follows. Use the slider for the grip. Tap **Control** again to pause,
       for example to change how you hold the phone.
-   3. You can practise before the attempt. Tap **Ready / Start task** when the real attempt starts. The episode records
+   3. You can practise before the attempt. Tap **Start task** when the real attempt starts. The episode records
       this time, so a reader can remove the moves before it.
-   4. Do the task. Then hold **Ready / Start task** for 1 s if you did it, or hold **Hold: Give up** for 1 s if you
+   4. Do the task. Then hold **Complete** for 1 s if you did it, or hold **Hold: Give up** for 1 s if you
       did not.
    5. The sim resets the scene, and the next trial waits for Ready.
 
