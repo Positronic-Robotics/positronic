@@ -159,6 +159,23 @@ class PolicyServer:
         # Python object to import.
         return self._pipeline_cfg.override_data(**params).instantiate()
 
+    async def _infer_observation(self, infer: Callable[[Obs], Any], obs: Obs, timing: _ServedTiming) -> Any:
+        """Serialize backend calls and keep the session alive until its worker finishes."""
+        # A waiting client expects a result, so lock acquisition sends no keepalive messages.
+        with timing.phase(protocol.TIMING_QUEUED):
+            await self._infer_lock.acquire()
+        try:
+            with timing.phase(protocol.TIMING_INFER):
+                work = asyncio.create_task(asyncio.to_thread(timing.infer, infer, obs))
+                try:
+                    return await asyncio.shield(work)
+                except asyncio.CancelledError:
+                    # Session cleanup must wait for the worker that still uses its state.
+                    await work
+                    raise
+        finally:
+            self._infer_lock.release()
+
     async def _answer_observations(
         self, conn: server_wire.ServerConnection, infer: Callable[[Obs], Any], session_id: str
     ) -> None:
@@ -191,21 +208,7 @@ class PolicyServer:
             decoded = {}
             raw_obs = request[protocol.OBSERVATION]
             try:
-                # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
-                # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
-                with timing.phase(protocol.TIMING_QUEUED):
-                    await self._infer_lock.acquire()
-                try:
-                    with timing.phase(protocol.TIMING_INFER):
-                        work = asyncio.create_task(asyncio.to_thread(timing.infer, infer, raw_obs))
-                        try:
-                            actions = await asyncio.shield(work)
-                        except asyncio.CancelledError:
-                            # Session cleanup must wait for the worker that still uses its state.
-                            await work
-                            raise
-                finally:
-                    self._infer_lock.release()
+                actions = await self._infer_observation(infer, raw_obs, timing)
                 answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
                 await conn.send(answer)
             except wire.PeerDisconnected:

@@ -328,8 +328,11 @@ def _observations_sent(conn: MagicMock) -> list:
     ]
 
 
-def test_a_push_answer_of_another_shape_closes_the_connection():
-    conn = _connection(_ready('first'), _answer([]))
+@pytest.mark.parametrize(
+    'response', [{protocol.RESULT: []}, *({legacy_protocol.CONTEXT: count} for count in (0, 2, True, 1.0, '1', None))]
+)
+def test_an_invalid_push_acknowledgment_closes_the_connection(response):
+    conn = _connection(_ready('first'), legacy_protocol.serialise(response))
     session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
 
     with pytest.raises(RuntimeError, match='context push'):
@@ -989,13 +992,14 @@ def test_a_reference_the_server_does_not_hold_is_sent_again_in_full_once(served,
     np.testing.assert_array_equal(first['image'], second['image'])
 
 
-def test_a_context_push_records_its_span_and_a_request_counts_its_references(served, tmp_path):
+@pytest.mark.parametrize('pixels', [[1, 2], [1, 1]])
+def test_a_context_push_records_its_span_and_a_request_counts_its_references(served, tmp_path, pixels):
     address, _, _ = served(model=ImageModel(), local=CONTEXT_STACK)
     session = InferenceClient(registry.client_wire('websocket'), address).new_session()
     try:
         with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-context'):
-            frames = push_context(session, {'image': _solid([1, 2])}, jpeg_quality=90)
-            round_trip(session, {'image': _solid([1, 2, 3])}, True, 90, frames)
+            frames = push_context(session, {'image': _solid(pixels)}, jpeg_quality=90)
+            round_trip(session, {'image': _solid([*pixels, 3])}, True, 90, frames)
     finally:
         session.close()
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))

@@ -174,19 +174,23 @@ class InferenceSession:
 
     def push_context(self, images: Mapping[str, Any]) -> None:
         """Send JPEG image stacks for the server to hold until the next push, so requests can send their frames as
-        digests. A server that does not answer with the count it holds closes the connection."""
+        digests. An acknowledgment must give the number of unique frames sent, or the connection closes."""
         if self._closed:
             raise wire.PeerDisconnected('The inference session is closed')
         if self._protocol is not protocol.ProtocolVersion.V2:
             raise ValueError(f'A {self._protocol.name} server takes no context push')
         self._held = frozenset()
+        held = frozenset(serialization.frame_digests(images))
         response = self._exchange({protocol.SESSION_ID: self._session_id, legacy_protocol.CONTEXT: dict(images)})
-        if not isinstance(response, dict) or legacy_protocol.CONTEXT not in response:
-            # An answer of another shape leaves the requests and answers out of step.
+        if (
+            not isinstance(response, dict)
+            or type(response.get(legacy_protocol.CONTEXT)) is not int
+            or response[legacy_protocol.CONTEXT] != len(held)
+        ):
             self._closed = True
             self._conn.close()
             raise RuntimeError(f'Unexpected context push response: {response}')
-        self._held = frozenset(serialization.frame_digests(images))
+        self._held = held
 
     def _round_trip(self, obs: dict[str, Any]) -> Any:
         self.served_timing = self.wire_timing = {}
