@@ -29,6 +29,14 @@ BOARDS = {  # rules-allow: hardcoded-keys — a wire fixture pins the server's s
 }
 
 
+@pytest.fixture(autouse=True)
+def no_saved_record(monkeypatch, tmp_path):
+    """A config directory with no record and no key in the environment, so the box's own never reach a test."""
+    monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(API_KEY_ENV, raising=False)
+    monkeypatch.delenv(API_URL_ENV, raising=False)
+
+
 @pytest.fixture(scope='module')
 def walkthrough() -> dict[str, Any]:
     """The script's globals, loaded from its path: the examples directory is not a package."""
@@ -85,12 +93,30 @@ def test_authentication_spends_the_token_on_one_registration(walkthrough: dict[s
 
 def test_a_run_takes_the_key_and_platform_that_register_saved(walkthrough: dict[str, Any], monkeypatch, tmp_path):
     write_config(tmp_path, Config(platform_url=BASE, api_key=ApiKey('pk_live_saved')))
-    monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path))
-    monkeypatch.delenv(API_KEY_ENV, raising=False)
-    monkeypatch.delenv(API_URL_ENV, raising=False)
     clients: list[PlatformClient] = []
     monkeypatch.setitem(walkthrough['main'].__globals__, 'walkthrough', lambda client, **_: clients.append(client))
 
     walkthrough['main'](['--eval=a.eval', '--policy-image=org/policy@sha256:abc'])
 
     assert [(client.api_key, client.base_url) for client in clients] == [('pk_live_saved', BASE)]
+
+
+def test_the_discovery_run_lists_the_boards_of_the_platform_that_register_saved(
+    walkthrough: dict[str, Any], monkeypatch, tmp_path, capsys
+):
+    write_config(tmp_path, Config(platform_url=BASE, api_key=ApiKey('pk_live_saved')))
+    platform = Platform()
+    platforms: list[str | None] = []
+
+    def anonymous_client(platform_url: str | None) -> PlatformClient:
+        platforms.append(platform_url)
+        return walkthrough['anonymous_client'](
+            client=httpx.Client(base_url=BASE, transport=httpx.MockTransport(platform))
+        )
+
+    monkeypatch.setitem(walkthrough['main'].__globals__, 'anonymous_client', anonymous_client)
+
+    walkthrough['main']([])
+
+    assert platforms == [BASE] and AUTH_HEADER not in platform.requests[0].headers
+    assert 'a.board' in capsys.readouterr().out

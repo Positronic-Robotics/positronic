@@ -28,6 +28,14 @@ TERMS = CompetitionTerms(version='2026-10-14', url='https://terms.example/terms'
 KEY = ApiKey('pk_live_team')
 
 
+@pytest.fixture(autouse=True)
+def no_saved_record(monkeypatch, tmp_path):
+    """A config directory with no record and no key in the environment, so the box's own never reach a test."""
+    monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(API_KEY_ENV, raising=False)
+    monkeypatch.delenv(API_URL_ENV, raising=False)
+
+
 @dataclass
 class StubGateway:
     """The two competition routes, answering scripted bodies and recording what reached them."""
@@ -140,8 +148,6 @@ def test_a_refusal_reaches_the_team(monkeypatch, capsys):
 def enter_from_the_command_line(monkeypatch, tmp_path, gateway: StubGateway, *, saved: ApiKey) -> list[str | None]:
     """Run `main` with `--yes` and a record that `register` saved; return the platform the client got."""
     write_config(tmp_path, Config(platform_url=BASE, api_key=saved))
-    monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path))
-    monkeypatch.delenv(API_URL_ENV, raising=False)
     platforms: list[str | None] = []
 
     def client(platform_url: str | None, api_key: ApiKey | None) -> CompetitionClient:
@@ -156,7 +162,6 @@ def enter_from_the_command_line(monkeypatch, tmp_path, gateway: StubGateway, *, 
 
 def test_the_flag_enters_with_the_key_and_platform_that_register_saved(monkeypatch, tmp_path):
     gateway = StubGateway()
-    monkeypatch.delenv(API_KEY_ENV, raising=False)
 
     platforms = enter_from_the_command_line(monkeypatch, tmp_path, gateway, saved=ApiKey('pk_live_saved'))
 

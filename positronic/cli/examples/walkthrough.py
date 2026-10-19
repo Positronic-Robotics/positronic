@@ -154,13 +154,12 @@ def main(argv: list[str] | None = None) -> None:
     try:
         eval_ref = EvalRef(args.eval) if args.eval is not None else None
         policy_image = PolicyImage(args.policy_image) if args.policy_image is not None else None
+        record = record_if_needed(os.environ, args.platform_url, key_required=eval_ref is not None)
+        platform_url = platform_url_from(os.environ, args.platform_url, record)
         if eval_ref is None:
-            client = anonymous_client(args.platform_url)
+            client = anonymous_client(platform_url)
         else:
-            record = record_if_needed(os.environ, args.platform_url)
-            client = PlatformClient(
-                platform_url_from(os.environ, args.platform_url, record), api_key=api_key_from(os.environ, record)
-            )
+            client = PlatformClient(platform_url, api_key=api_key_from(os.environ, record))
     except ValueError as exc:
         parser.error(str(exc))
 
