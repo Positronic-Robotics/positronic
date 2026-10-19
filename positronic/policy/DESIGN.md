@@ -405,6 +405,10 @@ class Runtime(ABC):
     @property
     def tick(self) -> int: ...
 
+    # Whether the clock stands still while a submitted call runs: an uncharged call in a sim.
+    @property
+    def calls_hold_clock(self) -> bool: ...
+
     def start(
         self, processor: Processor[InputT, OutputT, ReturnT], /, *args: Any, **kwargs: Any
     ) -> ProcessorRun[InputT, OutputT, ReturnT]: ...

@@ -475,7 +475,6 @@ class TeleopModel(Model):
             ready_backstop_sec=self._service.ready_limit + TeleopService.READY_BACKSTOP_MARGIN_SEC,
             cameras=settings.cameras,
             image_fps=settings.image_fps,
-            still_clock_timeout=settings.still_clock_timeout,
         )
         stack = spec.sequence(client.to_spec(), EncodeImages(quality=settings.jpeg_quality).to_spec())
         session = TeleopSession(self._service, Tracker(settings.operator()), stack, self._release)

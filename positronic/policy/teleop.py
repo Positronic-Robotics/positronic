@@ -18,27 +18,6 @@ class TrialNotStarted(Exception):
     """The teleoperator cancelled the trial, or was not ready within the ready limit of the service."""
 
 
-# HACK: The run reads wall time, so it learns whether its clock is simulated. A person needs the episode clock to run
-#  with the wall clock, as a charged sim clock does.
-# TODO: Let a policy state that it needs a charged clock, and let `eval run` refuse an uncharged run for it.
-class _MovingClock:
-    """Raise when the episode clock stands still for ``still_limit_sec`` of wall time."""
-
-    def __init__(self, still_limit_sec: float):
-        self._still_limit_ns = round(still_limit_sec * 1e9)
-        self._time_ns: int | None = None
-        self._still_since_ns = time.monotonic_ns()
-
-    def check(self, time_ns: int) -> None:
-        now_ns = time.monotonic_ns()
-        if time_ns != self._time_ns:
-            self._time_ns, self._still_since_ns = time_ns, now_ns
-        elif now_ns - self._still_since_ns > self._still_limit_ns:
-            raise RuntimeError(
-                'the episode clock stands still while a person waits: run the sim with charged inference time'
-            )
-
-
 class TeleopClient(Policy):
     """The client half of a teleop session: a person controls the robot through the teleop service.
 
@@ -52,13 +31,14 @@ class TeleopClient(Policy):
     # A frame answer wakes the run. This is the latest time at which the run asks for its next step without one.
     _IDLE_NS = 1_000_000_000
 
-    def __init__(self, ready_backstop_sec: float, cameras: Sequence[str], image_fps: float, still_clock_timeout: float):
+    def __init__(self, ready_backstop_sec: float, cameras: Sequence[str], image_fps: float):
         self._ready_backstop_sec = ready_backstop_sec
         self._cameras = tuple(cameras)
         self._image_fps = image_fps
-        self._still_clock_timeout = still_clock_timeout
 
     def run(self, runtime: Runtime, infer: Callable[[dict], Any]) -> PolicyRun:
+        if runtime.calls_hold_clock:
+            raise RuntimeError('a person needs a clock that runs during calls: run the sim with charged inference time')
         self._await_ready(infer)
         obs = yield
         return (yield from self._control(runtime, infer, obs))
@@ -83,7 +63,6 @@ class TeleopClient(Policy):
 
     def _control(self, runtime: Runtime, infer: Callable[[dict], Any], obs: Obs) -> Generator[Step, Obs, PolicyEnd]:
         """Hold the robot, then send each command of the service, until the teleoperator ends the run."""
-        clock = _MovingClock(self._still_clock_timeout)
         image_period_ns = round(1e9 / self._image_fps)
         images_due_ns = runtime.time_ns
         attempt_started = False
@@ -105,7 +84,6 @@ class TeleopClient(Policy):
         pending = runtime.submit(infer, frame_request(obs))
         obs = yield Step(stay, runtime.time_ns + self._IDLE_NS)
         while True:
-            clock.check(runtime.time_ns)
             if not pending.done():
                 obs = yield Step({}, runtime.time_ns + self._IDLE_NS)
                 continue
@@ -127,6 +105,5 @@ class TeleopClient(Policy):
             'ready_backstop_sec': self._ready_backstop_sec,
             'cameras': list(self._cameras),
             'image_fps': self._image_fps,
-            'still_clock_timeout': self._still_clock_timeout,
         }
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}

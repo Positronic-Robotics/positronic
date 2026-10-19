@@ -90,13 +90,11 @@ class SessionParams:
     operator_position: OperatorPosition | None = OperatorPosition.FRONT
     cameras: tuple[str, ...] = ()
     image_fps: float = 15.0
-    still_clock_timeout: float = 1.0
     jpeg_quality: int = DEFAULT_JPEG_QUALITY
 
     def __post_init__(self) -> None:
-        for name, value in (('image_fps', self.image_fps), ('still_clock_timeout', self.still_clock_timeout)):
-            if not math.isfinite(value) or value <= 0:
-                raise ValueError(f'{name} must be finite and positive, got {value}')
+        if not math.isfinite(self.image_fps) or self.image_fps <= 0:
+            raise ValueError(f'image_fps must be finite and positive, got {self.image_fps}')
 
     @classmethod
     def from_json(cls, operator_position: str | None, cameras: Any, **params: Any) -> SessionParams:

@@ -93,7 +93,6 @@ def _client(**args) -> TeleopClient:
         'ready_backstop_sec': 5.0,
         'cameras': defaults.cameras,
         'image_fps': defaults.image_fps,
-        'still_clock_timeout': defaults.still_clock_timeout,
         **args,
     })
 
@@ -229,29 +228,18 @@ def test_the_run_sends_images_at_most_at_its_image_rate(runtime, service):
     assert all(protocol.IMAGES not in request for request in service.requests[2:])
 
 
-@pytest.mark.parametrize(('limit', 'fails'), [(0.1, True), (30.0, False)])
-def test_an_episode_clock_that_stands_still_for_the_limit_fails_the_run(service, limit, fails):
+def test_a_clock_that_stands_still_during_calls_fails_the_run_before_it_asks_for_ready(service):
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
     try:
-        run, _ = _started(runtime, service, still_clock_timeout=limit)
-        deadline = time.monotonic() + 0.5
-        failure = None
-        while time.monotonic() < deadline and failure is None:
-            try:
-                run.send(OBS)
-            except RuntimeError as raised:
-                failure = raised
-            time.sleep(0.01)
-        assert (failure is not None) is fails
-        if failure is not None:
-            assert 'stands still' in str(failure)
+        with pytest.raises(RuntimeError, match='charged inference time'):
+            runtime.start(_client(), service)
+        assert service.requests == []
     finally:
-        service.replies.put(_frame())
         runtime.close()
 
 
 @pytest.mark.parametrize('cameras', [(), [keys.WRIST_IMAGE]])
 def test_a_declared_client_builds_from_its_spec(cameras):
-    client = TeleopClient(10.0, cameras=cameras, image_fps=5.0, still_clock_timeout=2.0)
+    client = TeleopClient(10.0, cameras=cameras, image_fps=5.0)
     built = from_spec(client.to_spec())
     assert isinstance(built, TeleopClient) and built.to_spec() == client.to_spec()

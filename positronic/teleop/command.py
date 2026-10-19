@@ -69,15 +69,14 @@ def serve(
     operator_position: OperatorPosition | None = SessionParams.operator_position,
     cameras: tuple[str, ...] = SessionParams.cameras,
     image_fps: float = SessionParams.image_fps,
-    still_clock_timeout: float = SessionParams.still_clock_timeout,
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
-    ``operator_position``, ``cameras``, ``image_fps`` and ``still_clock_timeout`` are the defaults of the session
+    ``operator_position``, ``cameras`` and ``image_fps`` are the defaults of the session
     parameters (``SessionParams``). A run can set others in the query of its address.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
-    defaults = SessionParams(operator_position, camera_names(cameras), image_fps, still_clock_timeout)
+    defaults = SessionParams(operator_position, camera_names(cameras), image_fps)
     service = TeleopService(
         Path(socket), ready_limit, silence_limit, hold_sec, press_threshold, headset_camera, session_defaults=defaults
     )

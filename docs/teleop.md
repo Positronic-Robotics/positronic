@@ -128,8 +128,7 @@ uv run positronic eval run \
 - `--eval.horizon_sec` changes the horizon of each episode. Leave out `--eval.episodes` to run all the episodes that
   the config selects.
 - `teleop_molmo` shows `image.exterior`, `image.exterior_2` and `image.wrist`. The eval puts each shoulder camera in
-  one exterior slot at random, so the person sees both. It lets the sim clock stand still for 10 s before it stops
-  the run, because MolmoSpaces is slow on a laptop.
+  one exterior slot at random, so the person sees both.
 - Start the service with `--operator_position=.BACK` if the arm moves the wrong way.
 
 Start `positronic teleop` first, as in MuJoCo.
@@ -137,8 +136,8 @@ Start `positronic teleop` first, as in MuJoCo.
 ## Session parameters
 
 The service CLI sets the defaults: `--operator_position` (`.FRONT`, `.BACK`, or `None` for UMI mode, where control is
-always on and the hand pose is the robot pose), `--cameras` (a list, empty by default), `--image_fps` and
-`--still_clock_timeout`. A run sets its own in the query of its address, each value a JSON literal, for example
+always on and the hand pose is the robot pose), `--cameras` (a list, empty by default) and `--image_fps`.
+A run sets its own in the query of its address, each value a JSON literal, for example
 `--policy.address.query='operator_position="BACK"'`. `positronic.teleop.protocol.session_query` builds such a query:
 `teleop_collect` and `teleop_molmo` use it. The episode records the values in `inference.policy.server.effective_params`.
 
@@ -174,7 +173,9 @@ and vary how you come to the object.
 - A Cancel while the trial waits for Ready ends the whole `eval run`. The end of the ready limit does the same. To skip
   a trial, tap Ready, and then hold **Hold: Give up**: the episode records a Give up.
 - The phone page shows no video. Watch the window on the laptop.
-- MolmoSpaces runs slowly and with jerks on a Mac. `teleop_molmo` allows for this, but the person feels it.
+- MolmoSpaces runs slowly and with jerks on a Mac, and the person feels it.
+- A sim run must charge inference time, as `eval run` does by default. With `--charge_inference_time=False` the sim
+  stops while each call runs, so a trial fails before it asks for Ready.
 - The policy waits for Ready before the episode starts, so the wait is outside the recording and the time limit. The
   wait blocks the control loop of the World. The client asks again each second. The service ends the wait after 120 s,
   and the client stops after 130 s. A Ctrl-C during the wait takes effect after the next answer.

@@ -423,8 +423,6 @@ def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
         session_query(fps=10)
     with pytest.raises(ValueError, match='image_fps must be finite and positive'):
         session_query(image_fps=0)
-    with pytest.raises(ValueError, match='still_clock_timeout must be finite and positive'):
-        session_query(still_clock_timeout=float('inf'))
     with pytest.raises(ValueError, match='cameras must be a list of camera names'):
         session_query(cameras=keys.WRIST_IMAGE)
     assert session_query(operator_position=None, cameras=[keys.WRIST_IMAGE]) == (
@@ -495,7 +493,7 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
     assert episode.static[f'{policy_meta}.{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
     assert keys.TARGET_EE_POSE in episode.signals
     names = {span.name for span in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
-    assert {telemetry.component_name(TeleopClient(1.0, (), 15.0, 1.0)), telemetry_keys.SPAN_POLICY_INFER} <= names
+    assert {telemetry.component_name(TeleopClient(1.0, (), 15.0)), telemetry_keys.SPAN_POLICY_INFER} <= names
 
 
 class TestButtonsBetweenTrials:

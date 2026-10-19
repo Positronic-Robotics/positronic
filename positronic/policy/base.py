@@ -87,6 +87,11 @@ class Runtime(ABC):
         """The current tick number."""
         pass
 
+    @property
+    @abstractmethod
+    def calls_hold_clock(self) -> bool:
+        """Whether the clock stands still while a submitted call runs."""
+
     @staticmethod
     def _timed_run(run: ProcessorRun[InputT, OutputT, ReturnT], name: str) -> ProcessorRun[InputT, OutputT, ReturnT]:
         """Time each resumption, leaving no span active while the generator is suspended."""
