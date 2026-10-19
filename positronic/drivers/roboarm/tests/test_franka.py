@@ -1812,22 +1812,18 @@ def test_desk_prepare_leaves_alone_the_brakes_a_safety_stop_locked(desk, world, 
 
 
 def test_desk_prepare_waits_for_every_safe_input_to_read_clear(desk, world):
-    """A person may hold the arm, and only they release it."""
+    """A person may hold the arm, and only they release it. The recovery step never says it connects."""
     arm = FakeArm(PARK)
     arm.error = 1
     desk.safe_inputs['x4'] = 'Active'  # a person holds the enabling device
-    driver = _driver(arm)
-    clock = MockClock()
-    driver.state._bind(RecordingEmitter(), clock=clock)
-    loop = driver.run(StopFlag(), clock)
+    run = _start_run(world, _driver(arm), ticks=3)
 
-    for _ in range(3):  # init + the opening move
-        next(loop)
-    answer = _recoverer(world, driver)(None)
-    next(loop)
+    answer = run.recover(None)
+    run.tick()
 
     assert answer.result() is RecoveryOutcome.NOT_CLEARED
     assert desk.calls == [Call.PREPARE]
+    assert run.step_names == [RecoveryStep.IDLE, RecoveryStep.IDLE]
 
 
 def test_a_driver_with_no_desk_session_answers_without_desk_prepare(world, monkeypatch):

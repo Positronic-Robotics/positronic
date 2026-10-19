@@ -976,6 +976,7 @@ class Robot(pimm.ControlSystem):
         if not session.managed or not self._safe_to_prepare(arm):
             return RecoveryOutcome.NOT_CLEARED
         logger.warning('The recovery did not clear the fault; preparing the arm through Desk as a run starts')
+        self.recovery_step.emit(RecoveryStep.CONNECTING)
         try:
             return self._prepare_and_connect(session, arm, brakes)
         except Exception as exc:
@@ -1008,7 +1009,6 @@ class Robot(pimm.ControlSystem):
             if asked:
                 logger.info(f'A console asked to clear a fault; the recovery returned {outcome.name}')
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
-                self.recovery_step.emit(RecoveryStep.CONNECTING)
                 outcome = self._clear_with_desk_prepare(session, arm, brakes)
             if asked and outcome is RecoveryOutcome.CLEARED:
                 arm.forget_missed_target()
