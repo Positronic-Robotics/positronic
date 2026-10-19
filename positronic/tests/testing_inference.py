@@ -1,5 +1,7 @@
 """Shared devices and browser-world setup for attended inference tests."""
 
+import os
+import random
 import socket
 from collections.abc import Callable, Iterator
 from functools import partial
@@ -68,10 +70,24 @@ def make_trial(instruction: str = 'stub') -> Callable[[], Task]:
     return partial(Task, instruction_source=instruction, timeout_sec=None, prepare_args=prepare_args)
 
 
+# Below the range Linux and macOS hand out for port 0, so that a server that binds port 0 in another test cannot take
+# the port between this probe and the console's own bind. Each xdist worker draws from its own block of ports.
+_FIRST_PORT = 20000
+_PORTS_PER_WORKER = 400
+_WORKER_BLOCKS = 30
+
+
 def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(('127.0.0.1', 0))
-        return probe.getsockname()[1]
+    worker = os.environ.get('PYTEST_XDIST_WORKER', '').removeprefix('gw')
+    first = _FIRST_PORT + (int(worker) % _WORKER_BLOCKS if worker.isdigit() else 0) * _PORTS_PER_WORKER
+    for port in random.sample(range(first, first + _PORTS_PER_WORKER), _PORTS_PER_WORKER):
+        with socket.socket() as probe:
+            try:
+                probe.bind(('127.0.0.1', port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError(f'no free port in {first}-{first + _PORTS_PER_WORKER - 1}')
 
 
 def read_status(base: str) -> Status | None:
