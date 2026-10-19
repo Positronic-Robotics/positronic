@@ -18,7 +18,7 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
 
-from .base import Policy, PolicyRun, Processor, Runtime
+from .base import ContextPushResult, Policy, PolicyRun, Processor, Runtime
 from .compatibility import from_v1_spec
 from .spec import from_spec
 
@@ -181,8 +181,9 @@ class RemotePolicy(Policy):
     codecs run.
 
     A call from the declared stack with ``context_only=True`` is a context push: it sends the image stacks of the
-    observation for the server to hold, and returns ``None``. A server that does not declare the push gets
-    nothing. The next requests reuse the JPEG bytes of the pushed frames, and send each one as its digest.
+    observation for the server to hold, and returns ``ContextPushResult.PUSHED``. An unsupported server or an
+    observation without image stacks returns ``SKIPPED``. The next requests reuse the JPEG bytes of the pushed
+    frames, and send each one as its digest.
     """
 
     def __init__(
@@ -235,7 +236,7 @@ class RemotePolicy(Policy):
 
             def infer(
                 obs: cabc.Mapping[str, Any], *, context_only: bool = False
-            ) -> list[dict[str, Any]] | dict[str, Any] | None:
+            ) -> list[dict[str, Any]] | dict[str, Any] | ContextPushResult:
                 nonlocal pushed
                 with connection_lock:
                     if not context_only:
@@ -243,7 +244,9 @@ class RemotePolicy(Policy):
                     if supports_context_push:
                         pushed = {}
                         pushed = push_context(session, obs, self._jpeg_quality)
-                    return None
+                        if pushed:
+                            return ContextPushResult.PUSHED
+                    return ContextPushResult.SKIPPED
 
             with closing(runtime.start(stack, infer)) as run:
                 obs = yield

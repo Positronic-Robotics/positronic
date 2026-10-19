@@ -959,15 +959,32 @@ def test_a_declared_context_lead_pushes_the_settled_frames_and_the_model_gets_ev
     assert messages[2][1] < messages[0][1]
 
 
-def test_a_server_that_compresses_no_images_declares_no_push_and_gets_none(start_server, monkeypatch):
+@pytest.mark.parametrize('compress_images', [False, True])
+def test_a_skipped_push_leaves_late_inference_frames_fresh(start_server, monkeypatch, compress_images):
     model = ImageModel()
-    served = start_server(model, PolicyDeployment(CONTEXT_STACK, compress_images=False))
+    served = start_server(model, PolicyDeployment(CONTEXT_STACK, compress_images=compress_images))
     policy = RemotePolicy('websocket', served.ws()[1])
-    assert policy_keys.CONTEXT_PUSH not in policy.meta()
     messages = _record_messages(monkeypatch)
-    _drive_to_the_second_chunk(policy)
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    run = runtime.start(policy)
+    try:
+        for ms in [*range(0, 601, 50), 610, *range(650, 951, 50), 1013]:
+            now[0] = ms * 1_000_000
+            # Compressed sessions receive non-image stacks, so both cases skip uploading.
+            value = np.array([ms // 10]) if compress_images else _solid([ms // 10])[0]
+            run.send({'image': value})
+            if runtime.has_pending:
+                assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+                run.send({'image': value})
+    finally:
+        runtime.close()
+        run.close()
     assert [kind for kind, _ in messages] == ['request', 'request']
-    np.testing.assert_array_equal(model.observations[-1]['image'], _solid([60, 70, 80, 90, 100]))
+    expected = [61, 70, 80, 90, 101]
+    np.testing.assert_array_equal(
+        model.observations[-1]['image'], np.array(expected)[:, None] if compress_images else _solid(expected)
+    )
 
 
 def test_a_reference_the_server_does_not_hold_is_sent_again_in_full_once(served, monkeypatch):

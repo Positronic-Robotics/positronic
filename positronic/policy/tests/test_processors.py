@@ -20,7 +20,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, JointPosition,
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
-from positronic.policy.base import Policy, PolicyEnd, Step
+from positronic.policy.base import ContextPushResult, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -341,13 +341,23 @@ def test_empty_chunks_request_an_immediate_retry(execution):
     run.close()
 
 
-def _context_schedule(runtime, calls, offsets, lead_sec=0.25, *, stacked=True, inference_lead=None, chunk_size=10):
+def _context_schedule(
+    runtime,
+    calls,
+    offsets,
+    lead_sec=0.25,
+    *,
+    stacked=True,
+    inference_lead=None,
+    chunk_size=10,
+    outcome=ContextPushResult.PUSHED,
+):
     """Chunks at 10 fps under ``TemporalStack``; ``calls`` records each call's time, kind and frames."""
 
     def infer(obs, *, context_only=False):
         frames = np.asarray(obs[POSITION])[:, 0].tolist() if stacked else None
         calls.append((runtime.time_ns // 1_000_000, context_only, frames))
-        return None if context_only else [{MOTOR: i} for i in range(chunk_size)]
+        return outcome if context_only else [{MOTOR: i} for i in range(chunk_size)]
 
     schedule = ChunkedSchedule(fps=10, context_lead_sec=lead_sec, inference_lead=inference_lead)
     return runtime.start(Sequential(TemporalStack((POSITION,), offsets), schedule) if stacked else schedule, infer)
@@ -391,6 +401,17 @@ def test_context_upload_precedes_early_inference_and_reuses_its_frames(execution
     assert calls == [(0, False, [0, 0, 0, 0, 0]), (550, True, [400, 500]), (803, False, [400, 500, 600, 700, 803])]
 
 
+def test_a_skipped_context_upload_keeps_fresh_sampling(execution):
+    runtime, clock = execution
+    calls = []
+    run = _context_schedule(runtime, calls, (-0.4, -0.3, -0.2, -0.1, 0.0), outcome=ContextPushResult.SKIPPED)
+    try:
+        _drive(run, clock)
+    finally:
+        run.close()
+    assert calls[-1] == (1003, False, [601, 700, 800, 900, 1003])
+
+
 def test_a_short_chunk_wakes_immediately_for_its_context_upload(execution):
     runtime, clock = execution
     calls = []
@@ -413,7 +434,7 @@ def test_a_completed_context_upload_releases_its_observation(execution):
         if context_only:
             obs[POSITION]
             pushed.append(weakref.ref(obs))
-            return None
+            return ContextPushResult.PUSHED
         return [{MOTOR: i} for i in range(10)]
 
     run = runtime.start(
@@ -422,6 +443,45 @@ def test_a_completed_context_upload_releases_its_observation(execution):
     try:
         _drive(run, clock, [0, 750, 800])
         assert len(pushed) == 1 and pushed[0]() is None
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize(
+    'schedule',
+    [
+        ChunkedSchedule(fps=10),
+        ChunkedSchedule(fps=10, context_lead_sec=0.025),
+        RTCSchedule(fps=10, call_after_sec=0.1, prefix_duration=ConstantDuration()),
+    ],
+)
+def test_pending_inference_releases_unsampled_history(execution, monkeypatch, schedule):
+    runtime, clock = execution
+    unused = []
+    submitted = []
+    pending = Future()
+    append = _StackBuffer.append
+
+    def record_history(buffer, now, values):
+        append(buffer, now, values)
+        if now == 0.05:
+            unused.append(weakref.ref(buffer._entries[-1][1][POSITION]))
+
+    def submit(function, obs, *args):
+        submitted.append(obs)
+        if len(submitted) == 1:
+            answered = Future()
+            answered.set_result([{MOTOR: 0}])
+            return _UnchargedAnswer(answered)
+        return _UnchargedAnswer(pending)
+
+    monkeypatch.setattr(_StackBuffer, 'append', record_history)
+    monkeypatch.setattr(runtime, 'submit', submit)
+    run = runtime.start(Sequential(TemporalStack((POSITION,), (-0.1, 0.0)), schedule), Mock())
+    try:
+        _drive(run, clock, [0, 0, 50, 100, 300])
+        assert len(unused) == 1 and unused[0]() is None
+        np.testing.assert_array_equal(submitted[1][POSITION], [[0], [100]])
     finally:
         run.close()
 
@@ -462,7 +522,7 @@ def test_a_slow_context_upload_keeps_sampling_until_inference_can_start(
     try:
         _drive(run, clock, range(0, finished_ms, 50))
         assert calls == [(0, False, [0, 0, 0, 0, 0]), (750, True, [600, 700])]
-        upload.set_result(None)
+        upload.set_result(ContextPushResult.PUSHED)
         _drive(run, clock, [finished_ms])
         assert calls[-1] == (finished_ms, False, expected_frames)
     finally:
@@ -538,7 +598,7 @@ def test_an_unavailable_arm_stops_at_once_while_a_push_is_pending(execution, mon
         clock.advance_to_ns(800_000_000)
         faulted = {keys.ROBOT_STATUS: RobotStatus.ERROR, POSITION: np.array([800])}
         assert run.send(faulted) == Step({}, 801_000_000)
-        pending.set_result(None)
+        pending.set_result(ContextPushResult.PUSHED)
         clock.advance_to_ns(1_000_000_000)
         assert run.send({**available, POSITION: np.array([1000])}).commands == {MOTOR: 0}
         assert submitted == [False, True, False]

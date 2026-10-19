@@ -37,6 +37,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     Answer,
     Commands,
+    ContextPushResult,
     Infer,
     Obs,
     Policy,
@@ -234,11 +235,11 @@ class _Window:
 class _StackedObs(Mapping[str, Any]):
     """``obs`` with each buffered key replaced by its stack, built on the first read of that key.
 
-    ``settled`` and ``anchored`` sample the same window again, with the settled offsets timed from an anchor; see
-    ``_Window.pick``.
+    A retained window allows ``settled`` and ``anchored`` to resample its entries during the control tick.
+    Without a window, only the picked entries remain available.
     """
 
-    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]], window: _Window):
+    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]], window: _Window | None):
         self._obs = obs
         self._picked = picked
         self._window = window
@@ -262,21 +263,22 @@ class _StackedObs(Mapping[str, Any]):
 
         The buffer pins these entries until ``anchored`` or its retention bound expires.
         """
+        assert self._window is not None, 'Settled sampling requires a retained window'
         picked = self._window.pick(anchor, settled, settled_only=True)
         if not picked:
             return None
         self._window.buffer.pin(anchor + min(self._window.buffer.offsets_sec))
-        return _StackedObs(self._obs, picked, self._window)
+        return _StackedObs(self._obs, picked, None)
 
     @property
     def has_pinned_history(self) -> bool:
-        return self._window.buffer._pinned is not None
+        return self._window is not None and self._window.buffer._pinned is not None
 
     def anchored(self, anchor: float, settled: float) -> '_StackedObs':
         """Sample retained history at the anchor for settled offsets and at now for the others."""
-        assert self.has_pinned_history, 'Anchored sampling requires retained history'
+        assert self._window is not None and self.has_pinned_history, 'Anchored sampling requires retained history'
         self._window.buffer.unpin()
-        return _StackedObs(self._obs, self._window.pick(anchor, settled), self._window)
+        return _StackedObs(self._obs, self._window.pick(anchor, settled), None)
 
 
 class _StackBuffer:
@@ -505,7 +507,7 @@ class ChunkedSchedule(Policy):
             if self._lead_ns is not None and not isinstance(obs, _StackedObs):
                 logger.warning('ChunkedSchedule makes no context push: no TemporalStack is directly around it')
                 self._lead_ns = None
-            self.pending: Answer[Any] | None = None
+            self.pending: Answer[ContextPushResult] | None = None
             self.window_handled = True
             self._anchor_sec: float | None = None
             self._settled_sec = 0.0
@@ -513,13 +515,14 @@ class ChunkedSchedule(Policy):
         def recover(self, obs: Obs) -> None:
             self._anchor_sec = None
             self.window_handled = True
-            if isinstance(obs, _StackedObs):
+            if isinstance(obs, _StackedObs) and obs._window is not None:
                 obs._window.buffer.unpin()
 
         def update(self, obs: Obs, call_ns: int) -> None:
             if self.pending is not None and self.pending.done():
                 pending, self.pending = self.pending, None
-                pending.result()
+                if pending.result() is ContextPushResult.SKIPPED:
+                    self.recover(obs)
             now_ns = self._runtime.time_ns
             if self._lead_ns is None or self.window_handled or not call_ns - self._lead_ns <= now_ns < call_ns:
                 return
@@ -848,10 +851,13 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
         while True:
             now_sec = runtime.time_ns / 1e9
             buffer.append(now_sec, {k: obs[k] for k in self._keys})
+            stacked = buffer.sample(now_sec, obs)
             try:
-                output = inner.send(buffer.sample(now_sec, obs))
+                output = inner.send(stacked)
             except StopIteration as end:
                 return end.value
+            finally:
+                stacked._window = None
             obs = yield output
 
     def to_spec(self) -> dict[str, Any]:

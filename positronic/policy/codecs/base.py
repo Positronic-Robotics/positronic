@@ -64,7 +64,7 @@ class Codec:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
         Steps retain their wake-up time; only nonempty commands are decoded. Around an ``Infer``, a call with
-        ``context_only=True`` passes it on with the encoded input, and returns ``None``. The caller owns
+        ``context_only=True`` passes it on with the encoded input and returns its upload outcome. The caller owns
         the wrapped dependency, including closing it when it is a generator.
         """
         if isinstance(function, cabc.Generator):
@@ -80,8 +80,7 @@ class Codec:
         def call(obs: Obs, /, *, context_only: bool = False) -> Any:
             encoded = encode(dict(obs))
             if context_only:
-                cast(Infer, function)(encoded, context_only=True)
-                return None
+                return cast(Infer, function)(encoded, context_only=True)
             result = function(encoded)
             if isinstance(result, Step):
                 return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result

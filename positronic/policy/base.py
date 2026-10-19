@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping
+from enum import Enum
 from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, Protocol, Self
 
@@ -43,9 +44,16 @@ Obs = Mapping[str, Any]
 Commands = Mapping[str, Any]
 
 
+class ContextPushResult(Enum):
+    """Whether a context-only call uploaded frames for the next inference to reuse."""
+
+    PUSHED = 'pushed'
+    SKIPPED = 'skipped'
+
+
 class Infer(Protocol):
     """The call a schedule makes for a chunk, or, with ``context_only=True``, for a context push that returns
-    ``None``."""
+    ``ContextPushResult``."""
 
     def __call__(self, obs: Obs, /, *, context_only: bool = False) -> Any: ...
 

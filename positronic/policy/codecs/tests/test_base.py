@@ -8,7 +8,7 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import PolicyEnd, spec
-from positronic.policy.base import Step
+from positronic.policy.base import ContextPushResult, Step
 from positronic.policy.codecs import (
     ACTION,
     LEROBOT_FEATURES,
@@ -221,10 +221,11 @@ class _HalvingCodec(Codec):
         return {name: value // 2 for name, value in data.items()}
 
 
-def test_a_wrapped_call_passes_a_context_push_on_with_the_encoded_input_and_answers_none():
+@pytest.mark.parametrize('outcome', list(ContextPushResult))
+def test_a_wrapped_context_push_preserves_its_outcome(outcome):
     calls = []
-    wrapped = _HalvingCodec().wrap(lambda obs, **kwargs: calls.append((obs, kwargs)) or [{'value': 1}])
-    assert wrapped({'image': 8}, context_only=True) is None
+    wrapped = _HalvingCodec().wrap(lambda obs, **kwargs: calls.append((obs, kwargs)) or outcome)
+    assert wrapped({'image': 8}, context_only=True) is outcome
     assert calls == [({'image': 4}, {'context_only': True})]
 
 
