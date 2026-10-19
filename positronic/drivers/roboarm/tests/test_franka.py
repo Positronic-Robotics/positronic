@@ -2781,3 +2781,38 @@ def test_a_handle_that_fails_its_configuration_stops_its_control_loop_before_the
 
     tail = [c for c in arm.calls if c in (Call.SET_CONTROL_MODE, Call.SET_LOAD, Call.STOP, Call.CLOSE_BRAKES)]
     assert tail == [Call.SET_CONTROL_MODE, Call.SET_LOAD, Call.STOP, Call.CLOSE_BRAKES]
+
+
+def _one_error_line(caplog, text: str) -> logging.LogRecord:
+    """The one record whose message carries ``text``, after checking that no record carries a traceback."""
+    assert all(r.exc_info is None for r in caplog.records), 'a record carries a traceback'
+    [line] = [r for r in caplog.records if text in r.getMessage()]
+    assert line.levelno == logging.ERROR
+    return line
+
+
+def test_a_recover_call_that_fails_logs_one_line_with_its_type_and_reason_and_no_traceback(desk, world, caplog):
+    """A run log reads a traceback as a crash, and the run goes on after a failed recover call."""
+    desk.safety_error = True
+    desk.reboot_clears = False
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO, logger=franka.__name__):
+        answer = run.recover(None)
+        run.tick()
+
+    with pytest.raises(franka.SafetyControllerError):
+        answer.result()
+    line = _one_error_line(caplog, 'The recovery a console asked for failed')
+    assert 'SafetyControllerError' in line.getMessage() and 'scripted' in line.getMessage()
+
+
+def test_a_park_that_fails_at_start_logs_one_line_with_its_type_and_reason_and_no_traceback(desk, world, caplog):
+    arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)  # the arm refuses the move to the park pose
+
+    with caplog.at_level(logging.INFO, logger=franka.__name__):
+        _start_run(world, _driver(arm), ticks=3)
+
+    line = _one_error_line(caplog, 'did not reach the park pose')
+    assert 'RuntimeError' in line.getMessage() and 'stopped short' in line.getMessage()

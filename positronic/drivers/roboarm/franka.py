@@ -167,8 +167,9 @@ class _SafeInputs:
         self._unreadable = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        # The watch thread and the driver's own reads share one Desk client.
-        self._lock = threading.Lock()
+        # `renew` swaps the client while the watch thread may read over the old one: unguarded, that thread's failure
+        # handler wipes the fresh reading, or the two threads open two Desk logins.
+        self._reading_lock = threading.Lock()
 
     @property
     def triggered(self) -> list[str]:
@@ -209,12 +210,12 @@ class _SafeInputs:
 
     def sample(self) -> None:
         """Take one reading, and log a safe input that changed."""
-        with self._lock:
+        with self._reading_lock:
             self._sample()
 
     def renew(self) -> None:
         """Take a reading over a new Desk client, as after a control box reboot ended the login of the old one."""
-        with self._lock:
+        with self._reading_lock:
             self._desk = None
             self._reading = self._reading._replace(sampled=False)
             self._sample()
@@ -645,8 +646,8 @@ class _Arm(DriverRun[command.CommandType]):
             # The park pose is a long way off, and only the native law shapes the reference on the way there.
             yield from self.move_to(_PARK_JOINTS, None, at_teardown=at_teardown)
         # rules-allow: swallowed-error — a failed park reads ERROR on the arm and ends neither run nor shutdown
-        except Exception:
-            logger.exception('The arm did not reach the park pose, it stays where it stands')
+        except Exception as exc:
+            logger.error(f'The arm did not reach the park pose ({type(exc).__name__}: {exc}); it stays where it stands')
 
 
 class _DeskSession:
@@ -1023,7 +1024,7 @@ class Robot(pimm.ControlSystem):
         except Exception as exc:
             if not asked:
                 raise
-            logger.exception('The recovery a console asked for failed')
+            logger.error(f'The recovery a console asked for failed ({type(exc).__name__}: {exc})')
             for call in asked:
                 call.set_exception(exc)
             return RecoveryOutcome.NOT_CLEARED
