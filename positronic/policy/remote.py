@@ -106,17 +106,18 @@ def _nest(values: cabc.Mapping[ValuePath, Any]) -> dict[str, Any]:
     return nested
 
 
+@telemetry.traced(telemetry_keys.SPAN_POLICY_CONTEXT)
 def push_context(session: InferenceSession, obs: cabc.Mapping[str, Any], jpeg_quality: int) -> EncodedFrames:
-    """Send the image stacks of ``obs`` as a context push, timed as the ``policy.context`` span, and return the
-    pushed frames by the path of their stack. A stack inside a mapping or a list goes in the push under its own
-    key, inside the same containers. An ``obs`` without a stack sends nothing and returns none."""
-    with telemetry.span(telemetry_keys.SPAN_POLICY_CONTEXT):
-        stacks = dict(_image_stacks(obs, ()))
-        if not stacks:
-            return {}
-        markers = {path: encode_jpeg(stack, jpeg_quality) for path, stack in stacks.items()}
-        session.push_context(_nest(markers))
-        return {path: encoded_frames(stacks[path], marker, jpeg_quality) for path, marker in markers.items()}
+    """Send image stacks recursively and return cached frames keyed by their original paths.
+
+    An observation without image stacks sends nothing and returns an empty cache.
+    """
+    stacks = dict(_image_stacks(obs, ()))
+    if not stacks:
+        return {}
+    markers = {path: encode_jpeg(stack, jpeg_quality) for path, stack in stacks.items()}
+    session.push_context(_nest(markers))
+    return {path: encoded_frames(stacks[path], marker, jpeg_quality) for path, marker in markers.items()}
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:

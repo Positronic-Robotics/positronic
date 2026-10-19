@@ -501,8 +501,9 @@ class ChunkedSchedule(Policy):
     def run(self, runtime: Runtime, infer: Infer) -> PolicyRun:
         answer: Answer[Sequence[Commands]] | None = None
         push: Answer[Any] | None = None
-        pushed = True
-        context_times: tuple[float, float] | None = None
+        context_window_handled = True
+        context_anchor_sec: float | None = None
+        context_settled_sec = 0.0
         recovering = False
         trajectory: deque[ChunkedSchedule._Waypoint] = deque()
         end_ns = 0
@@ -523,25 +524,30 @@ class ChunkedSchedule(Policy):
                     trajectory.clear()
                     end_ns = call_ns = now_ns
                     planned, recovering = 0, True
-                    context_times = None
-                    pushed = True
+                    context_anchor_sec = None
+                    context_window_handled = True
                     if isinstance(obs, _StackedObs):
                         obs._window.buffer.unpin()
                 if push is not None and push.done():
                     push, done = None, push
                     done.result()
-                if lead_ns is not None and not pushed and answer is None and call_ns - lead_ns <= now_ns < call_ns:
-                    pushed = True
-                    times = (call_ns / 1e9, now_ns / 1e9)
-                    context = obs.settled(*times) if isinstance(obs, _StackedObs) else None
+                if (
+                    lead_ns is not None
+                    and not context_window_handled
+                    and answer is None
+                    and call_ns - lead_ns <= now_ns < call_ns
+                ):
+                    context_window_handled = True
+                    anchor_sec, settled_sec = call_ns / 1e9, now_ns / 1e9
+                    context = obs.settled(anchor_sec, settled_sec) if isinstance(obs, _StackedObs) else None
                     if context is not None:
                         push = runtime.submit(infer, context, context_only=True)
-                        context_times = times
+                        context_anchor_sec, context_settled_sec = anchor_sec, settled_sec
                     context = None
-                if answer is None and now_ns >= call_ns:
-                    if context_times is not None and isinstance(obs, _StackedObs):
-                        obs = obs.anchored(*context_times)
-                    context_times = None
+                if answer is None and push is None and now_ns >= call_ns:
+                    if context_anchor_sec is not None and isinstance(obs, _StackedObs):
+                        obs = obs.anchored(context_anchor_sec, context_settled_sec)
+                    context_anchor_sec = None
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
@@ -552,7 +558,7 @@ class ChunkedSchedule(Policy):
                     # A regular early answer waits behind the commands that are still due.
                     trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
                     planned = len(waypoints)
-                    pushed = False
+                    context_window_handled = False
 
                 commands: dict[str, Any] = {}
                 due_ns = None
@@ -566,7 +572,7 @@ class ChunkedSchedule(Policy):
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
                 resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
-                if lead_ns is not None and not pushed and answer is None and now_ns < call_ns:
+                if lead_ns is not None and not context_window_handled and answer is None and now_ns < call_ns:
                     resume_at_ns = min(resume_at_ns, max(now_ns, call_ns - lead_ns))
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
