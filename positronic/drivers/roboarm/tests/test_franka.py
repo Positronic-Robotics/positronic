@@ -2736,3 +2736,19 @@ def test_a_driver_that_does_not_manage_desk_ends_the_run_on_a_failed_connection(
 
     with pytest.raises(RuntimeError, match='Connection timeout'):
         next(loop)
+
+
+def test_a_recover_call_after_a_failed_configuration_connects_over_a_new_handle(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    StartFailure.CONFIGURATION.script(desk, driver, arm, monkeypatch)
+    run = _start_run(world, driver)
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert arm.calls.count(Call.SET_COLLISION_BEHAVIOR) == 1, 'the driver configured the handle that failed again'
+    assert Call.SET_COLLISION_BEHAVIOR in reconnected.calls

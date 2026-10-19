@@ -865,9 +865,16 @@ class Robot(pimm.ControlSystem):
         )
 
     def _connect(self, arm: _Arm) -> None:
-        """Configure the libfranka handle, and drive the arm over it. Only a configured handle drives the arm."""
+        """Configure the libfranka handle, and drive the arm over it. Only a configured handle drives the arm.
+
+        A handle that fails its configuration is dropped, so that the next connection opens a new one.
+        """
         robot = self._robot
-        self._init_robot(robot)
+        try:
+            self._init_robot(robot)
+        except Exception:
+            self._forget_connection()
+            raise
         arm.connect(robot)
 
     def _start(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> None:
