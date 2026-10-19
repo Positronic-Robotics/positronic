@@ -1,6 +1,7 @@
 """Scheduling, fault gating, temporal history, and deliverable stack specifications."""
 
 import json
+import weakref
 from concurrent.futures import Future
 from datetime import date
 from sys import maxsize
@@ -340,15 +341,15 @@ def test_empty_chunks_request_an_immediate_retry(execution):
     run.close()
 
 
-def _context_schedule(runtime, calls, offsets, lead_sec=0.25, *, stacked=True):
-    """A 10-action chunk at 10 fps under ``TemporalStack``; ``calls`` records each call's time, kind and frames."""
+def _context_schedule(runtime, calls, offsets, lead_sec=0.25, *, stacked=True, inference_lead=None, chunk_size=10):
+    """Chunks at 10 fps under ``TemporalStack``; ``calls`` records each call's time, kind and frames."""
 
     def infer(obs, *, context_only=False):
         frames = np.asarray(obs[POSITION])[:, 0].tolist() if stacked else None
         calls.append((runtime.time_ns // 1_000_000, context_only, frames))
-        return None if context_only else [{MOTOR: i} for i in range(10)]
+        return None if context_only else [{MOTOR: i} for i in range(chunk_size)]
 
-    schedule = ChunkedSchedule(fps=10, context_lead_sec=lead_sec)
+    schedule = ChunkedSchedule(fps=10, context_lead_sec=lead_sec, inference_lead=inference_lead)
     return runtime.start(Sequential(TemporalStack((POSITION,), offsets), schedule) if stacked else schedule, infer)
 
 
@@ -376,6 +377,67 @@ def test_a_context_push_sends_the_settled_frames_and_the_request_repeats_them(ex
     # passed: 0.6 s and 0.7 s. The request repeats them, and times the others from its own tick at 1.003 s.
     assert calls == [(0, False, [0, 0, 0, 0, 0]), (750, True, [600, 700]), (1003, False, [600, 700, 800, 900, 1003])]
     assert steps[700].resume_at_ns == 750_000_000
+
+
+def test_context_upload_precedes_early_inference_and_reuses_its_frames(execution):
+    runtime, clock = execution
+    calls = []
+    run = _context_schedule(runtime, calls, (-0.4, -0.3, -0.2, -0.1, 0.0), inference_lead=ConstantDuration(0.2))
+    try:
+        steps = _drive(run, clock, [*range(0, 401, 50), 401, *range(450, 751, 50), 803])
+    finally:
+        run.close()
+    assert steps[500].resume_at_ns == 550_000_000
+    assert calls == [(0, False, [0, 0, 0, 0, 0]), (550, True, [400, 500]), (803, False, [400, 500, 600, 700, 803])]
+
+
+def test_a_short_chunk_wakes_immediately_for_its_context_upload(execution):
+    runtime, clock = execution
+    calls = []
+    run = _context_schedule(runtime, calls, (-0.4, 0.0), chunk_size=1)
+    try:
+        assert run.send({POSITION: np.array([0])}) == Step({MOTOR: 0}, 0)
+        assert run.send({POSITION: np.array([0])}).resume_at_ns == 100_000_000
+        clock.advance_to_ns(100_000_000)
+        run.send({POSITION: np.array([100])})
+    finally:
+        run.close()
+    assert calls == [(0, False, [0, 0]), (0, True, [0]), (100, False, [0, 100])]
+
+
+def test_a_completed_context_upload_releases_its_observation(execution):
+    runtime, clock = execution
+    pushed = []
+
+    def infer(obs, *, context_only=False):
+        if context_only:
+            obs[POSITION]
+            pushed.append(weakref.ref(obs))
+            return None
+        return [{MOTOR: i} for i in range(10)]
+
+    run = runtime.start(
+        Sequential(TemporalStack((POSITION,), (-0.4, 0.0)), ChunkedSchedule(fps=10, context_lead_sec=0.25)), infer
+    )
+    try:
+        _drive(run, clock, [0, 750, 800])
+        assert len(pushed) == 1 and pushed[0]() is None
+    finally:
+        run.close()
+
+
+def test_recovery_discards_the_context_anchor_and_requests_fresh_frames(execution):
+    runtime, clock = execution
+    calls = []
+    run = _context_schedule(runtime, calls, (-0.4, 0.0))
+    try:
+        _drive(run, clock, [0, 400, 500, 600, 750])
+        clock.advance_to_ns(800_000_000)
+        step = run.send({POSITION: np.array([800]), keys.ROBOT_STATUS: RobotStatus.ERROR})
+        assert step.commands == {MOTOR: 0}
+        assert calls[-1] == (800, False, [400, 800])
+    finally:
+        run.close()
 
 
 def test_a_context_push_waits_for_a_settled_offset(execution):
@@ -1330,24 +1392,18 @@ def test_stack_specs_round_trip(definition):
     assert spec.from_spec(definition.to_spec()).to_spec() == definition.to_spec()
 
 
-def test_a_schedule_without_a_context_lead_keeps_version_2():
-    description = ChunkedSchedule(fps=10).to_spec()
-    assert description['version'] == ChunkedSchedule.WIRE_VERSION == 2
-    assert ChunkedSchedule.CONTEXT_LEAD_SEC_ARG not in description['args']
-
-
-def test_a_context_lead_declares_the_context_push_version():
-    description = ChunkedSchedule(fps=10, context_lead_sec=0.3).to_spec()
-    assert description['version'] == ChunkedSchedule.CONTEXT_PUSH_VERSION
-    assert description['args'] == {'fps': 10, 'context_lead_sec': 0.3}
-    rebuilt = spec.from_spec(description)
+@pytest.mark.parametrize('context_lead_sec', [None, 0.3])
+@pytest.mark.parametrize('version', [ChunkedSchedule.WIRE_VERSION, LATEST])
+def test_context_leads_use_the_current_schedule(context_lead_sec, version):
+    schedule = ChunkedSchedule(fps=10, context_lead_sec=context_lead_sec, inference_lead=ConstantDuration(0.2))
+    description = schedule.to_spec()
+    assert description[VERSION] == ChunkedSchedule.WIRE_VERSION
+    if context_lead_sec is None:
+        assert ChunkedSchedule.CONTEXT_LEAD_SEC_ARG not in description[ARGS]
+    else:
+        assert description[ARGS][ChunkedSchedule.CONTEXT_LEAD_SEC_ARG] == context_lead_sec
+    rebuilt = spec.from_spec({**description, VERSION: version})
     assert isinstance(rebuilt, ChunkedSchedule) and rebuilt.to_spec() == description
-
-
-def test_a_rig_that_predates_the_push_refuses_a_context_lead_by_its_version(monkeypatch):
-    monkeypatch.setitem(spec.COMPONENTS, ChunkedSchedule.WIRE_NAME, {2: Version(ChunkedSchedule)})
-    with pytest.raises(ValueError, match='supported versions: \\[2\\]'):
-        spec.from_spec(ChunkedSchedule(fps=10, context_lead_sec=0.3).to_spec())
 
 
 @pytest.mark.parametrize(

@@ -123,13 +123,12 @@ def encoded_frames(image: np.ndarray, marker: cabc.Mapping[bytes, Any], quality:
     """Each frame of ``image`` with its JPEG bytes in ``marker``, the ``encode_jpeg`` result of ``image`` at
     ``quality``."""
     frames = image.reshape((-1, *image.shape[-3:]))
-    return [EncodedFrame(_snapshot(frame), jpeg, quality) for frame, jpeg in zip(frames, marker[_FRAMES], strict=True)]
-
-
-def _snapshot(frame: np.ndarray) -> np.ndarray:
-    copy = frame.copy()
-    copy.flags.writeable = False
-    return copy
+    result = []
+    for frame, jpeg in zip(frames, marker[_FRAMES], strict=True):
+        pixels = frame.copy()
+        pixels.flags.writeable = False
+        result.append(EncodedFrame(pixels, jpeg, quality))
+    return result
 
 
 def frame_digest(data: bytes) -> bytes:
