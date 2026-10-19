@@ -11,9 +11,60 @@ from PIL import Image as PilImage
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, JpegEncoding, encode_images, encode_jpeg
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
-from positronic.dataset.transforms.episode import EpisodeTransform
+from positronic.dataset import Signal
+from positronic.dataset.episode import Episode
+from positronic.dataset.transforms import image
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform
 
 from .base import Codec
+from .metadata import LEROBOT_FEATURES, lerobot_image
+
+
+class ImageObservationCodec(Codec):
+    """Select RGB images and resize with bilinear interpolation and zero padding.
+
+    ``images`` maps each output name to ``(input_key, (width, height))``. The same settings
+    prepare live observations and recorded image signals, including LeRobot feature metadata.
+    """
+
+    WIRE_NAME = 'image_observation'
+
+    def __init__(self, images: dict[str, tuple[str, tuple[int, int]]]):
+        self._images = images
+
+    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
+        obs: dict[str, Any] = {}
+        for out_name, (input_key, (width, height)) in self._images.items():
+            if input_key not in data:
+                raise KeyError(f"Missing image input '{input_key}' for '{out_name}', available keys: {data.keys()}")
+            frame = data[input_key]
+            if not isinstance(frame, np.ndarray):
+                frame = np.asarray(frame)
+            if frame.ndim != 3 or frame.shape[2] != 3:
+                raise ValueError(f"Image '{input_key}' must be HWC with 3 channels, got {frame.shape}")
+            obs[out_name] = image.resize_with_pad_per_frame(width, height, PilImage.Resampling.BILINEAR, frame)
+        return obs
+
+    def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
+        input_key, (width, height) = self._images[out_name]
+        return image.resize_with_pad(width, height, signal=episode[input_key])
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        features = {name: lerobot_image(*size) for name, (_, size) in self._images.items()}
+        return Derive(
+            meta={LEROBOT_FEATURES: features}, **{name: partial(self._derive_image, name) for name in self._images}
+        )
+
+    @property
+    def meta(self):
+        sizes = {input_key: (w, h) for input_key, (w, h) in self._images.values()}
+        unique = set(sizes.values())
+        return {self.IMAGE_SIZES: unique.pop() if len(unique) == 1 else sizes}
+
+    def to_spec(self):
+        images = {name: [key, list(size)] for name, (key, size) in self._images.items()}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'images': images}}
 
 
 class EncodeImages(Codec):

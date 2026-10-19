@@ -3,17 +3,15 @@ from typing import Any
 
 import numpy as np
 from eval_vocabulary.timeline import recording_timeline
-from PIL import Image as PilImage
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
-from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity
 
 from .base import Codec
-from .metadata import LEROBOT_FEATURES, lerobot_image, lerobot_vector
+from .metadata import LEROBOT_FEATURES, lerobot_vector
 
 # The encoded prompt name shared by LeRobot training and inference.
 TASK_FIELD = 'task'
@@ -115,37 +113,27 @@ class RenameObservationFields(Codec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mapping': dict(self._mapping)}}
 
 
-class ObservationCodec(Codec):
-    """Encode state vectors and images for training and inference.
+class StateObservationCodec(Codec):
+    """Pack float32 state vectors and a task prompt for training and inference.
 
     Args:
         state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
-        images: mapping from output image name to tuple (input_key, (width, height)).
         task_field: output key carrying the language prompt at inference.
     """
 
-    WIRE_NAME = 'observation_codec'
+    WIRE_NAME = 'state_observation'
 
-    def __init__(
-        self,
-        state: dict[str, dict[str, int]],
-        images: dict[str, tuple[str, tuple[int, int]]],
-        task_field: str = TASK_FIELD,
-    ):
+    def __init__(self, state: dict[str, dict[str, int]], task_field: str = TASK_FIELD):
         self._state = state
-        self._image_configs = images
         self._task_field = task_field
 
         self._derive_transforms: dict[str, Any] = {k: partial(self._derive_state, k) for k in state.keys()}
-        self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
         self._derive_transforms[TASK_FIELD] = Get(keys.TASK, '')
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():
             if isinstance(features, dict):
                 lerobot_features[name] = lerobot_vector(sum(features.values()), list(features.keys()))
-        for name, (_, (w, h)) in images.items():
-            lerobot_features[name] = lerobot_image(w, h)
         self._training_meta = {LEROBOT_FEATURES: lerobot_features}
 
     def _derive_state(self, out_name: str, episode: Episode) -> Signal[Any]:
@@ -154,25 +142,11 @@ class ObservationCodec(Codec):
         timeline = recording_timeline({name for signal in signals for name in signal.timelines})
         return transforms.concat(*signals, dtype=np.float32, timelines=(timeline,))
 
-    def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
-        input_key, (width, height) = self._image_configs[out_name]
-        return image.resize_with_pad(width, height, signal=episode[input_key])
-
     def encode(self, data: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 
         if keys.TASK in data:
             obs[self._task_field] = data[keys.TASK]
-
-        for out_name, (input_key, (width, height)) in self._image_configs.items():
-            if input_key not in data:
-                raise KeyError(f"Missing image input '{input_key}' for '{out_name}', available keys: {data.keys()}")
-            frame = data[input_key]
-            if not isinstance(frame, np.ndarray):
-                frame = np.asarray(frame)
-            if frame.ndim != 3 or frame.shape[2] != 3:
-                raise ValueError(f"Image '{input_key}' must be HWC with 3 channels, got {frame.shape}")
-            obs[out_name] = image.resize_with_pad_per_frame(width, height, PilImage.Resampling.BILINEAR, frame)
 
         for out_name, feature_names in self._state.items():
             parts = []
@@ -185,20 +159,12 @@ class ObservationCodec(Codec):
         return obs
 
     @property
-    def meta(self):
-        sizes = {input_key: (w, h) for _out, (input_key, (w, h)) in self._image_configs.items()}
-        unique = set(sizes.values())
-        return {self.IMAGE_SIZES: unique.pop() if len(unique) == 1 else sizes}
-
-    @property
     def training_encoder(self):
         return Derive(meta=self._training_meta, **self._derive_transforms)
 
     def to_spec(self):
-        # Normalized to lists so the spec is identical before and after a wire round-trip.
-        images = {name: [key, list(size)] for name, (key, size) in self._image_configs.items()}
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'state': self._state, 'images': images, 'task_field': self._task_field},
+            ARGS: {'state': self._state, 'task_field': self._task_field},
         }

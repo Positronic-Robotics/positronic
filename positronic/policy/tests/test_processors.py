@@ -28,6 +28,7 @@ from positronic.policy.codecs import (
     EncodeImages,
     EndCommand,
     FlipGrip,
+    ImageObservationCodec,
     Metadata,
     Resample,
     RestrictImageSize,
@@ -42,7 +43,8 @@ from positronic.policy.codecs.action import (
     UnpackActionChunk,
 )
 from positronic.policy.codecs.geometry import ConvertPose
-from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
+from positronic.policy.codecs.observation import PackObservationFields, RenameObservationFields, StateObservationCodec
+from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.keys import END
 from positronic.policy.processors import (
@@ -1232,7 +1234,9 @@ def test_wire_names_match_the_registered_components():
         'flip_grip': FlipGrip(),
         'metadata': Metadata({'action_fps': 15}),
         'restrict_image_size': RestrictImageSize(),
-        'observation_codec': ObservationCodec(state={}, images={}),
+        'observation_codec': ObservationCodecV1(state={}, images={}),
+        'state_observation': StateObservationCodec(state={}),
+        'image_observation': ImageObservationCodec(images={}),
         'pack_observation_fields': PackObservationFields({'state': 'input'}),
         'rename_observation_fields': RenameObservationFields({'state': 'input'}),
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),

@@ -10,9 +10,11 @@ from typing import Any, overload
 
 from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION
 
+from positronic import keys as obs_keys
+from positronic.dataset.transforms.episode import Derive, Get
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
-from positronic.policy.codecs import Codec
+from positronic.policy.codecs import TASK_FIELD, Codec, ImageObservationCodec, StateObservationCodec
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule, DurationEstimate, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
@@ -27,6 +29,51 @@ V1_LAYERS_UPGRADED_IN_PLACE = (PauseOnUnavailable.WIRE_NAME, TemporalStack.WIRE_
 V1_SERVER_DEFAULT_ACTION_FPS = 15.0
 
 logger = logging.getLogger(__name__)
+
+
+class ObservationCodecV1(Codec):
+    """Decode the combined state/image observation schema published as version 1."""
+
+    WIRE_NAME = 'observation_codec'
+
+    def __init__(
+        self,
+        state: dict[str, dict[str, int]],
+        images: dict[str, tuple[str, tuple[int, int]]],
+        task_field: str = TASK_FIELD,
+    ):
+        self._state = StateObservationCodec(state, task_field)
+        self._images = ImageObservationCodec(images)
+        self._state_names = tuple(state)
+        self._task_field = task_field
+
+    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
+        # V1 inference gives state precedence over images, and images over the prompt.
+        obs = {self._task_field: data[obs_keys.TASK]} if obs_keys.TASK in data else {}
+        obs.update(self._images.encode(data))
+        state = self._state.encode(data)
+        obs.update({name: state[name] for name in self._state_names})
+        return obs
+
+    @property
+    def training_encoder(self):
+        # V1 training gives the task column precedence over images, and images over state.
+        return (
+            Derive(meta=None, **{TASK_FIELD: Get(obs_keys.TASK, '')})
+            & self._images.training_encoder
+            & self._state.training_encoder
+        )
+
+    @property
+    def meta(self):
+        return self._images.meta
+
+    def to_spec(self):
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {**self._state.to_spec()[ARGS], **self._images.to_spec()[ARGS]},
+        }
 
 
 class ChunkedScheduleV2(ChunkedSchedule):

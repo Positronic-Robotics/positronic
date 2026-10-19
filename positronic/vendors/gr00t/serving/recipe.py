@@ -35,13 +35,14 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
         parallel(
             sequence(
                 component('rename_observation_fields', mapping={observation_keys[TASK]: obs_keys.TASK}),
-                component(
-                    'observation_codec',
-                    state=state,
-                    images={
-                        source: [source, settings[model_settings.IMAGE_SIZE]] for source in image_mappings.values()
-                    },
-                    task_field=observation_keys[TASK],
+                parallel(
+                    component('state_observation', state=state, task_field=observation_keys[TASK]),
+                    component(
+                        'image_observation',
+                        images={
+                            source: [source, settings[model_settings.IMAGE_SIZE]] for source in image_mappings.values()
+                        },
+                    ),
                 ),
             ),
             sequence(

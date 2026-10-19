@@ -1,10 +1,83 @@
+import json
+
 import numpy as np
 import pytest
+from PIL import Image as PilImage
 from positronic_model_server import serialization
 from positronic_model_server.spec import LATEST, NAME, component
 
+from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
+from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.tests.utils import DummySignal
 from positronic.policy import spec
-from positronic.policy.codecs import EncodeImages, Resample, RestrictImageSize
+from positronic.policy.codecs import LEROBOT_FEATURES, EncodeImages, ImageObservationCodec, Resample, RestrictImageSize
+
+
+@pytest.mark.parametrize(
+    'shape, resized, pad',
+    [((6, 8), (6, 4), (0, 1)), ((2, 4), (6, 3), (0, 1)), ((6, 6), (6, 6), (0, 0)), ((8, 3), (2, 6), (2, 0))],
+)
+def test_image_observations_preserve_pixels_training_timelines_and_metadata(shape, resized, pad):
+    frame = np.random.default_rng(42).integers(0, 256, (*shape, 3), dtype=np.uint8)
+    definition = ImageObservationCodec({'video': ('camera', (6, 6))})
+    codec = spec.from_spec(json.loads(json.dumps(definition.to_spec())))
+    assert isinstance(codec, ImageObservationCodec)
+    assert codec.to_spec() == definition.to_spec()
+    expected = np.zeros((6, 6, 3), dtype=np.uint8)
+    x, y = pad
+    w, h = resized
+    expected[y : y + h, x : x + w] = np.asarray(PilImage.fromarray(frame).resize(resized, PilImage.Resampling.BILINEAR))
+
+    encoded = codec.encode({'camera': frame, 'unused': 1})
+    assert set(encoded) == {'video'}
+    np.testing.assert_array_equal(encoded['video'], expected, strict=True)
+
+    episode = EpisodeContainer(
+        {
+            'camera': DummySignal([[10, 100], [20, 200]], [frame, frame], timelines=(RECEIVED_WORLD, RECEIVED_WALL)),
+            'unused': 1,
+        },
+        meta={'label': 'test'},
+    )
+    training = codec.training_encoder(episode)
+    assert set(training) == {'video'}
+    assert training.meta == episode.meta
+    assert training['video'].timelines == (RECEIVED_WORLD, RECEIVED_WALL)
+    assert list(training['video'].timestamps(RECEIVED_WORLD)) == [10, 20]
+    assert list(training['video'].timestamps(RECEIVED_WALL)) == [100, 200]
+    np.testing.assert_array_equal(training['video'].values(), np.stack([expected, expected]), strict=True)
+    assert codec.meta == {codec.IMAGE_SIZES: (6, 6)}
+    assert codec.training_encoder.meta == {
+        LEROBOT_FEATURES: {'video': {'shape': (6, 6, 3), 'names': ['height', 'width', 'channel'], 'dtype': 'video'}}
+    }
+    assert codec.decode({'action': 1}) == {}
+
+
+@pytest.mark.parametrize('as_list', [False, True])
+def test_image_observations_accept_lists_and_noncontiguous_frames(as_list):
+    frame = np.arange(72, dtype=np.uint8).reshape(4, 6, 3)[:, ::-1]
+    data = frame.tolist() if as_list else frame
+    codec = ImageObservationCodec({'image': ('camera', (6, 4))})
+    expected = frame.astype(np.int64) if as_list else frame
+    np.testing.assert_array_equal(codec.encode({'camera': data})['image'], expected, strict=True)
+
+
+def test_image_observations_require_rgb_images():
+    codec = ImageObservationCodec({'image': ('camera', (8, 6))})
+    with pytest.raises(KeyError, match='camera'):
+        codec.encode({})
+    with pytest.raises(ValueError, match='HWC with 3 channels'):
+        codec.encode({'camera': np.zeros((8, 8), dtype=np.uint8)})
+
+
+def test_image_observations_report_different_camera_sizes_and_support_no_images():
+    codec = ImageObservationCodec({'front': ('a', (8, 6)), 'wrist': ('b', (4, 4))})
+    assert codec.meta == {codec.IMAGE_SIZES: {'a': (8, 6), 'b': (4, 4)}}
+    empty = ImageObservationCodec({})
+    assert empty.encode({'unused': 1}) == {}
+    assert empty.meta == {codec.IMAGE_SIZES: {}}
+    assert len(empty.training_encoder(EpisodeContainer({}))) == 0
+    assert empty.training_encoder.meta == {LEROBOT_FEATURES: {}}
 
 
 def _image(h, w):
