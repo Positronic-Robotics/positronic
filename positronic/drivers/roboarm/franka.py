@@ -873,7 +873,10 @@ class Robot(pimm.ControlSystem):
         try:
             self._init_robot(robot)
         except Exception:
-            self._forget_connection()
+            try:
+                robot.stop()  # the control loop that `set_control_mode` started
+            finally:
+                self._forget_connection()
             raise
         arm.connect(robot)
 

@@ -2025,7 +2025,7 @@ def test_a_new_connection_that_fails_its_configuration_never_drives_the_arm(desk
     for _ in range(3):
         next(loop)
     assert arm.calls[mark:] == []
-    assert reconnected.calls == [Call.SET_COLLISION_BEHAVIOR]
+    assert reconnected.calls == [Call.SET_COLLISION_BEHAVIOR, Call.STOP], 'the failed handle drives the arm'
 
 
 def test_the_next_command_opens_the_brakes_the_driver_locked_when_fci_stays_on(desk, world):
@@ -2765,3 +2765,19 @@ def test_a_start_failure_logs_one_line_with_its_type_and_reason_and_no_traceback
     assert failure.reason in line.getMessage()
     assert 'Error' in line.getMessage(), 'the line does not name the exception type'
     assert all(r.exc_info is None for r in caplog.records), 'a record carries a traceback'
+
+
+def test_a_handle_that_fails_its_configuration_stops_its_control_loop_before_the_brakes_lock(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    desk.calls = arm.calls  # one log for both fakes, so the halt and the brakes are ordered
+
+    def refuse_load(*_load) -> None:
+        arm.calls.append(Call.SET_LOAD)
+        raise RuntimeError('libfranka: set_load rejected')
+
+    monkeypatch.setattr(arm, 'set_load', refuse_load)
+
+    _start_run(world, _driver(arm))
+
+    tail = [c for c in arm.calls if c in (Call.SET_CONTROL_MODE, Call.SET_LOAD, Call.STOP, Call.CLOSE_BRAKES)]
+    assert tail == [Call.SET_CONTROL_MODE, Call.SET_LOAD, Call.STOP, Call.CLOSE_BRAKES]
