@@ -107,13 +107,6 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[FrankaState.STATUS_OFFSET] = status.value
 
 
-def _revolute_joint_names(urdf_xml):
-    root = ET.fromstring(urdf_xml)
-    return [j.get('name') for j in root.findall('joint') if j.get('type') == 'revolute']
-
-
-# The FR3 model the driver reads its joint names and soft limits from, with or without a connection to the arm.
-_FR3_URDF = (Path(__file__).resolve().parent / 'fr3.urdf').read_text()
 # Where the driver leaves the arm: taking control it travels here, and handing it back it returns here.
 _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
@@ -294,6 +287,8 @@ class _Arm(DriverRun[command.CommandType]):
     # How long an error the recovery does not clear holds a waiting sync move before it is refused.
     _RECOVERY_GRACE_S = 2.0
     _TARGET_MARGIN_INSIDE_SOFT_LIMITS_RAD = 0.05
+    # The FR3 model the joint names and the soft limits come from, with or without a connection to the arm.
+    _FR3_URDF = (Path(__file__).resolve().parent / 'fr3.urdf').read_text()
 
     def __init__(
         self,
@@ -323,8 +318,9 @@ class _Arm(DriverRun[command.CommandType]):
         self._error_started = 0.0
         self._q_at_error = np.zeros(len(_PARK_JOINTS))
         self._moved_in_error = 0.0
-        self._joint_names = _revolute_joint_names(_FR3_URDF)
-        soft_limits = ET.fromstring(_FR3_URDF).findall("joint[@type='revolute']/safety_controller")
+        model = ET.fromstring(self._FR3_URDF)
+        self._joint_names = [joint.get('name') for joint in model.findall("joint[@type='revolute']")]
+        soft_limits = model.findall("joint[@type='revolute']/safety_controller")
         margin = self._TARGET_MARGIN_INSIDE_SOFT_LIMITS_RAD
         self._lowest_target = np.array([float(c.attrib['soft_lower_limit']) for c in soft_limits]) + margin
         self._highest_target = np.array([float(c.attrib['soft_upper_limit']) for c in soft_limits]) - margin
@@ -770,6 +766,8 @@ class _Brakes:
 
 # The field Desk answers the state of each joint brake in.
 BRAKE_STATE = 'brakeState'
+# The field Desk answers the recoverable safety errors in, each by name.
+RECOVERABLE_ERRORS = 'recoverableErrors'
 
 
 class _BrakeState(StrEnum):
@@ -857,7 +855,8 @@ class Robot(pimm.ControlSystem):
 
     def _forget_connection(self) -> None:
         """Drop the libfranka handle, so that the next connection opens a new one."""
-        vars(self).pop('_robot', None)
+        with contextlib.suppress(AttributeError):  # no handle is cached until the first connection
+            del self._robot
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, safe_inputs: _SafeInputs) -> _Arm:
         """The arm this run drives, built from the driver's configuration, with no connection yet."""
@@ -942,28 +941,26 @@ class Robot(pimm.ControlSystem):
     @staticmethod
     def _reports_fsoe_error(desk: Desk) -> bool:
         try:
-            return bool(desk.safety_status()['recoverableErrors'].get(FSOE_CONNECTION_ERROR))
+            return bool(desk.safety_status()[RECOVERABLE_ERRORS].get(FSOE_CONNECTION_ERROR))
         # rules-allow: swallowed-error — an unread status names no error, and the caller raises the step's own failure
         except Exception:
             return False
 
     def _clear_with_desk_prepare(
-        self, session: _DeskSession, arm: _Arm, brakes: _Brakes, *, on_recover_call: bool
+        self, session: _DeskSession, arm: _Arm, brakes: _Brakes, *, may_reboot: bool
     ) -> RecoveryOutcome:
         """Run ``_prepare_and_connect`` where the driver runs the Desk session and every safe input reads clear.
 
-        For a recover call, a failure that only a reboot clears reboots the control box once. The step then reads the
-        safe inputs again and runs once more. ``recovery_step`` carries each step of a recover call.
+        With ``may_reboot``, a failure that only a reboot clears reboots the control box once, and ``recovery_step``
+        says so. The step then reads the safe inputs again and runs once more.
         """
         if not session.managed or not self._safe_to_prepare(arm):
             return RecoveryOutcome.NOT_CLEARED
         logger.warning('The recovery did not clear the fault; preparing the arm through Desk as a run starts')
-        if on_recover_call:
-            self.recovery_step.emit(RecoveryStep.CONNECTING)
         try:
             return self._prepare_and_connect(session, arm, brakes)
         except Exception as exc:
-            why = self._reboot_clears(session, exc) if on_recover_call else None
+            why = self._reboot_clears(session, exc) if may_reboot else None
             if why is None:
                 raise
             refused = exc
@@ -993,7 +990,8 @@ class Robot(pimm.ControlSystem):
             if asked:
                 logger.info(f'A console asked to clear a fault; the recovery returned {outcome.name}')
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
-                outcome = self._clear_with_desk_prepare(session, arm, brakes, on_recover_call=True)
+                self.recovery_step.emit(RecoveryStep.CONNECTING)
+                outcome = self._clear_with_desk_prepare(session, arm, brakes, may_reboot=True)
             if asked and outcome is RecoveryOutcome.CLEARED:
                 arm.forget_missed_target()
         # rules-allow: swallowed-error — the throw is handed to every caller that asked
@@ -1026,8 +1024,7 @@ class Robot(pimm.ControlSystem):
             if (
                 arm.robot.state().error != 0
                 and arm.recover() is RecoveryOutcome.NOT_CLEARED
-                and self._clear_with_desk_prepare(session, arm, brakes, on_recover_call=False)
-                is RecoveryOutcome.NOT_CLEARED
+                and self._clear_with_desk_prepare(session, arm, brakes, may_reboot=False) is RecoveryOutcome.NOT_CLEARED
             ):
                 # Desk's step may have replaced the connection
                 remaining = arm.robot.state().error_message

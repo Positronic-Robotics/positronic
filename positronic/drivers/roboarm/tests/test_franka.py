@@ -281,8 +281,7 @@ class FakeDesk:
         return {
             franka.SAFE_INPUT_STATE: dict(self.safe_inputs),
             franka.BRAKE_STATE: brakes,
-            'safetyControllerStatus': 'SafetyError' if self.safety_error else 'Work',
-            'recoverableErrors': {franka.FSOE_CONNECTION_ERROR: self.fsoe_error, 'td2Timeout': False},
+            franka.RECOVERABLE_ERRORS: {franka.FSOE_CONNECTION_ERROR: self.fsoe_error},
         }
 
 
@@ -2478,55 +2477,67 @@ def _start_run(world: pimm.World, driver: franka.Robot, ticks: int = 2) -> _Run:
     return run
 
 
-# Each way Desk or libfranka refuses a start, by name, with the text the streamed error carries.
-START_FAILURES = {
-    'safety error': 'scripted',
-    'stranded token': 'user',
-    'another login': 'safe',
-    'joint recovery': 'Desk demands a recovery at the robot',
-    'brakes': "Brakes did not reach 'Unlocked'",
-    'fci': 'FCI did not activate',
-    'fsoe': 'Failed Dependency',
-    'connect': 'libfranka: Connection timeout',
-    'configuration': 'set_collision_behavior rejected',
+class StartFailure(StrEnum):
+    """Each way Desk or libfranka refuses a start. ``reason`` is the text the streamed error carries."""
+
+    SAFETY_ERROR = 'safety error'
+    STRANDED_TOKEN = 'stranded token'
+    ANOTHER_LOGIN = 'another login'
+    JOINT_RECOVERY = 'joint recovery'
+    BRAKES = 'brakes'
+    FCI = 'fci'
+    FSOE = 'fsoe'
+    CONNECT = 'connect'
+    CONFIGURATION = 'configuration'
+
+    @property
+    def reason(self) -> str:
+        return _START_FAILURE_REASONS[self]
+
+    def script(self, desk: FakeDesk, driver: franka.Robot, arm: FakeArm, monkeypatch) -> None:
+        """Script this failure into the next start of ``driver`` on ``arm``."""
+        match self:
+            case StartFailure.SAFETY_ERROR:
+                desk.safety_error = True
+            case StartFailure.STRANDED_TOKEN:
+                desk.holder = 'user'  # the Desk login the fixture gives the driver
+            case StartFailure.ANOTHER_LOGIN:
+                desk.holder = 'safe'
+            case StartFailure.JOINT_RECOVERY | StartFailure.BRAKES | StartFailure.FCI:
+                desk.raises[Call.PREPARE] = RuntimeError(self.reason)
+            case StartFailure.FSOE:
+                desk.fsoe_error = True
+            case StartFailure.CONNECT:
+                del driver._robot
+
+                def refuse(*_args, **_kwargs):
+                    raise RuntimeError(self.reason)
+
+                monkeypatch.setattr(franka.pf, 'Robot', refuse)
+            case StartFailure.CONFIGURATION:
+                arm.raises_once = RuntimeError(self.reason)
+
+
+_START_FAILURE_REASONS = {
+    StartFailure.SAFETY_ERROR: 'scripted',
+    StartFailure.STRANDED_TOKEN: 'user',
+    StartFailure.ANOTHER_LOGIN: 'safe',
+    StartFailure.JOINT_RECOVERY: 'Desk demands a recovery at the robot: joint 4',
+    StartFailure.BRAKES: "Brakes did not reach 'Unlocked' within 20.0s",
+    StartFailure.FCI: 'FCI did not activate within 15.0s',
+    StartFailure.FSOE: 'Failed Dependency',
+    StartFailure.CONNECT: 'libfranka: Connection timeout',
+    StartFailure.CONFIGURATION: 'libfranka: set_collision_behavior rejected',
 }
 
 
-def _fail_the_start(failure: str, desk: FakeDesk, driver: franka.Robot, arm: FakeArm, monkeypatch) -> None:
-    """Script ``failure``, one of ``START_FAILURES``, into the next start of ``driver`` on ``arm``."""
-    match failure:
-        case 'safety error':
-            desk.safety_error = True
-        case 'stranded token':
-            desk.holder = 'user'  # the Desk login the fixture gives the driver
-        case 'another login':
-            desk.holder = 'safe'
-        case 'joint recovery':
-            desk.raises[Call.PREPARE] = RuntimeError('Desk demands a recovery at the robot: joint 4 (scripted)')
-        case 'brakes':
-            desk.raises[Call.PREPARE] = TimeoutError("Brakes did not reach 'Unlocked' within 20.0s")
-        case 'fci':
-            desk.raises[Call.PREPARE] = TimeoutError('FCI did not activate within 15.0s')
-        case 'fsoe':
-            desk.fsoe_error = True
-        case 'connect':
-            vars(driver).pop('_robot')
-
-            def refuse(*_args, **_kwargs):
-                raise RuntimeError('libfranka: Connection timeout')
-
-            monkeypatch.setattr(franka.pf, 'Robot', refuse)
-        case 'configuration':
-            arm.raises_once = RuntimeError('libfranka: set_collision_behavior rejected')
-
-
-@pytest.mark.parametrize('failure', START_FAILURES)
+@pytest.mark.parametrize('failure', StartFailure)
 def test_a_start_that_desk_or_libfranka_refuses_comes_up_with_no_connection_and_streams_why(
     desk, world, monkeypatch, failure
 ):
     arm = FakeArm(JOGGED)
     driver = _driver(arm)
-    _fail_the_start(failure, desk, driver, arm, monkeypatch)
+    failure.script(desk, driver, arm, monkeypatch)
 
     run = _start_run(world, driver)
     for _ in range(3):
@@ -2534,7 +2545,7 @@ def test_a_start_that_desk_or_libfranka_refuses_comes_up_with_no_connection_and_
 
     [error] = run.streamed
     assert isinstance(error, pimm.SignalError)
-    assert str(error).startswith(franka.NO_CONNECTION) and START_FAILURES[failure] in str(error)
+    assert str(error).startswith(franka.NO_CONNECTION) and failure.reason in str(error)
     assert arm.targets == [], 'the arm parked with no connection'
     assert run.meta.emitted, 'a run with no connection sends no robot model'
 
@@ -2584,11 +2595,11 @@ def test_ready_calls_on_an_arm_with_no_connection_answer_the_error_and_run_no_de
     assert run.step_names == [RecoveryStep.IDLE]
 
 
-@pytest.mark.parametrize('failure', ['safety error', 'stranded token', 'fsoe'])
+@pytest.mark.parametrize('failure', [StartFailure.SAFETY_ERROR, StartFailure.STRANDED_TOKEN, StartFailure.FSOE])
 def test_a_recover_call_on_a_box_only_a_reboot_clears_reboots_it_once_and_connects(desk, world, monkeypatch, failure):
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    _fail_the_start(failure, desk, driver, arm, monkeypatch)
+    failure.script(desk, driver, arm, monkeypatch)
     run = _start_run(world, driver)
     reconnected = FakeArm(PARK)
     _reconnect_to(monkeypatch, reconnected)
@@ -2643,19 +2654,19 @@ def test_the_safe_inputs_are_read_again_after_a_reboot_before_the_brakes_open(de
     assert run.step_names[-1] is RecoveryStep.IDLE
 
 
-@pytest.mark.parametrize('failure', ['another login', 'joint recovery', 'brakes'])
+@pytest.mark.parametrize('failure', [StartFailure.ANOTHER_LOGIN, StartFailure.JOINT_RECOVERY, StartFailure.BRAKES])
 def test_a_recover_call_on_a_failure_a_reboot_does_not_clear_answers_it_and_reboots_nothing(
     desk, world, monkeypatch, failure
 ):
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    _fail_the_start(failure, desk, driver, arm, monkeypatch)
+    failure.script(desk, driver, arm, monkeypatch)
     run = _start_run(world, driver)
 
     answer = run.recover(None)
     run.tick()
 
-    with pytest.raises(Exception, match=START_FAILURES[failure]):
+    with pytest.raises(Exception, match=failure.reason):
         answer.result()
     assert Call.REBOOT not in desk.calls
     assert RecoveryStep.REBOOTING not in run.step_names
