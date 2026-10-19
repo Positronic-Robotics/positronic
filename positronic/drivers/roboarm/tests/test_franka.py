@@ -2098,72 +2098,39 @@ def test_a_ready_call_clears_an_error_the_recovery_clears_without_desk_prepare(d
     assert desk.calls == [Call.PREPARE], 'a ready call prepared the arm through Desk again'
 
 
-def test_a_ready_call_on_an_error_the_recovery_leaves_is_answered_after_desk_prepare(desk, world, monkeypatch):
-    """An error the recovery leaves sends Start through Desk preparation; the run goes on over the new connection."""
-    arm = FakeArm(PARK)
-    desk.calls = arm.calls  # one log for both fakes, so the halt, the brakes, FCI and prepare are ordered
-    reconnected = FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED)
-    _reconnect_to(monkeypatch, reconnected)
-    loop, ready = _started_with_error(arm, world)
-    mark = len(arm.calls)
-
-    answer = ready(None)
-    next(loop)
-
-    assert answer.result() is None
-    assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
-        Call.RECOVER_FROM_ERRORS,
-        Call.ENSURE_CONTROL,
-        Call.STOP,
-        Call.STOP,  # the brakes halt the control loop again before they lock
-        Call.CLOSE_BRAKES,
-        Call.DEACTIVATE_FCI,
-        Call.PREPARE,
-    ]
-    assert reconnected.calls[:4] == [
-        Call.SET_COLLISION_BEHAVIOR,
-        Call.SET_CONTROL_MODE,
-        Call.SET_LOAD,
-        Call.RECOVER_FROM_ERRORS,
-    ]
-    mark = len(arm.calls)
-    next(loop)
-    assert arm.calls[mark:] == [], 'the run still drives the connection FCI ended'
-
-
-def test_a_ready_call_answers_the_error_that_desk_prepare_leaves(desk, world, monkeypatch):
-    arm = FakeArm(PARK)
-    arm.error_message = 'the error on the connection FCI ended'
-    reconnected = FakeArm(PARK)
-    reconnected.error = 1  # Desk.prepare() does not clear it either
-    reconnected.error_message = 'the error on the new connection'
-    _reconnect_to(monkeypatch, reconnected)
-    loop, ready = _started_with_error(arm, world)
-
-    answer = ready(None)
-    next(loop)
-
-    with pytest.raises(RuntimeError, match='recovery did not clear: the error on the new connection'):
-        answer.result()
-    assert desk.calls.count(Call.PREPARE) == 2
-
-
-def test_a_ready_call_answers_a_failed_desk_prepare_and_the_run_goes_on_with_no_connection(desk, world, monkeypatch):
-    arm = FakeArm(PARK)
+def test_a_ready_call_on_an_error_the_recovery_leaves_answers_it_and_takes_no_desk_control(desk, world, monkeypatch):
+    """The harness asks again and again between episodes: a ready call takes no control and opens no brakes."""
     monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
+    arm = FakeArm(PARK)
+    arm.error_message = 'a fault the recovery leaves'
     loop, ready = _started_with_error(arm, world)
-    desk.raises[Call.PREPARE] = RuntimeError('TD2 self-test did not complete')
+    desk.safety_error = True  # a box that a recover call would reboot
+    mark = len(desk.calls)
 
-    answer = ready(None)
-    next(loop)
-
-    with pytest.raises(RuntimeError, match='TD2 self-test'):
-        answer.result()
-    arm.raises = ConnectionError('libfranka: TCP send bytes: Connection reset by peer')  # the connection FCI off ended
-    mark = len(arm.calls)
     for _ in range(3):
+        answer = ready(None)
         next(loop)
-    assert arm.calls[mark:] == [], 'the run drives the connection FCI ended'
+        with pytest.raises(RuntimeError, match='recovery did not clear: a fault the recovery leaves'):
+            answer.result()
+
+    assert desk.calls[mark:] == []
+
+
+def test_a_recover_call_on_an_error_the_recovery_leaves_runs_the_desk_step_and_clears_it(desk, world, monkeypatch):
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    arm.error = 1  # a fault recover_from_errors does not clear
+    mark = len(desk.calls)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert desk.calls[mark:] == [Call.ENSURE_CONTROL, Call.CLOSE_BRAKES, Call.DEACTIVATE_FCI, Call.PREPARE]
+    assert Call.RECOVER_FROM_ERRORS in reconnected.calls
 
 
 def test_a_ready_call_on_a_driver_with_no_desk_session_answers_the_error_without_desk(world, monkeypatch, caplog):
@@ -2712,19 +2679,6 @@ def test_a_recover_call_on_a_connected_arm_that_meets_a_safety_error_reboots_and
         Call.PREPARE,
     ]
     assert Call.RECOVER_FROM_ERRORS in reconnected.calls
-
-
-def test_a_ready_call_whose_desk_step_meets_a_safety_error_answers_it_and_reboots_nothing(desk, world, monkeypatch):
-    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
-    loop, ready = _started_with_error(FakeArm(PARK), world)
-    desk.safety_error = True
-
-    answer = ready(None)
-    next(loop)
-
-    with pytest.raises(franka.SafetyControllerError):
-        answer.result()
-    assert Call.REBOOT not in desk.calls
 
 
 def test_a_driver_that_does_not_manage_desk_ends_the_run_on_a_failed_connection(monkeypatch):

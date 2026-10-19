@@ -953,13 +953,11 @@ class Robot(pimm.ControlSystem):
         except Exception:
             return False
 
-    def _clear_with_desk_prepare(
-        self, session: _DeskSession, arm: _Arm, brakes: _Brakes, *, may_reboot: bool
-    ) -> RecoveryOutcome:
+    def _clear_with_desk_prepare(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
         """Run ``_prepare_and_connect`` where the driver runs the Desk session and every safe input reads clear.
 
-        With ``may_reboot``, a failure that only a reboot clears reboots the control box once, and ``recovery_step``
-        says so. The step then reads the safe inputs again and runs once more.
+        A failure that only a reboot clears reboots the control box once, and ``recovery_step`` says so. The step then
+        reads the safe inputs again and runs once more.
         """
         if not session.managed or not self._safe_to_prepare(arm):
             return RecoveryOutcome.NOT_CLEARED
@@ -967,8 +965,7 @@ class Robot(pimm.ControlSystem):
         try:
             return self._prepare_and_connect(session, arm, brakes)
         except Exception as exc:
-            why = self._reboot_clears(session, exc) if may_reboot else None
-            if why is None:
+            if (why := self._reboot_clears(session, exc)) is None:
                 raise
             refused = exc
         logger.warning(f'Desk refused the step: {why}. Rebooting the control box, then preparing the arm again')
@@ -998,7 +995,7 @@ class Robot(pimm.ControlSystem):
                 logger.info(f'A console asked to clear a fault; the recovery returned {outcome.name}')
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
                 self.recovery_step.emit(RecoveryStep.CONNECTING)
-                outcome = self._clear_with_desk_prepare(session, arm, brakes, may_reboot=True)
+                outcome = self._clear_with_desk_prepare(session, arm, brakes)
             if asked and outcome is RecoveryOutcome.CLEARED:
                 arm.forget_missed_target()
         # rules-allow: swallowed-error — the throw is handed to every caller that asked
@@ -1016,24 +1013,19 @@ class Robot(pimm.ControlSystem):
             call.set_result(outcome)
         return outcome
 
-    def _ready(self, session: _DeskSession, arm: _Arm, brakes: _Brakes, call: pimm.calls.Call[None, None]) -> None:
+    def _ready(self, arm: _Arm, call: pimm.calls.Call[None, None]) -> None:
         """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
 
-        Where the recovery leaves the error, ``_clear_with_desk_prepare`` runs, with no reboot. Answer with the error
-        instead when it stays. A pressed emergency stop gets the release instruction, and no recovery. With no
-        connection the call gets that error and no Desk step: only a recover call connects.
+        Answer with the error where the recovery leaves it, and with the missing connection where there is none. A
+        pressed emergency stop gets the release instruction, and no recovery. A ready call takes no Desk control and
+        opens no brakes: the harness asks again and again between episodes, with nobody at the rig.
         """
         with pimm.calls.raise_to(call):
             if arm.stop_pressed:
                 raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
             if not arm.connected:
                 raise RuntimeError(arm.no_connection)
-            if (
-                arm.robot.state().error != 0
-                and arm.recover() is RecoveryOutcome.NOT_CLEARED
-                and self._clear_with_desk_prepare(session, arm, brakes, may_reboot=False) is RecoveryOutcome.NOT_CLEARED
-            ):
-                # Desk's step may have replaced the connection
+            if arm.robot.state().error != 0 and arm.recover() is RecoveryOutcome.NOT_CLEARED:
                 remaining = arm.robot.state().error_message
                 raise RuntimeError(f'the arm holds an error that the recovery did not clear: {remaining}')
             arm.clear_held_fault()
@@ -1062,7 +1054,7 @@ class Robot(pimm.ControlSystem):
 
             while not should_stop.value:
                 for call in self.ready.incoming():
-                    self._ready(session, arm, brakes, call)
+                    self._ready(arm, call)
                 if not arm.connected:
                     arm.emit_state()  # the emergency stop's error comes and goes over the missing connection's
                     arm.refuse_moves()
