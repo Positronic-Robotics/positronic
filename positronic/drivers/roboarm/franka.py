@@ -15,11 +15,18 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
-from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveRefused, MoveStatus, RecoveryOutcome, log_failure
+from positronic.drivers.utils import (
+    DriverRun,
+    MoveAbandoned,
+    MoveRefused,
+    MoveStatus,
+    RecoveryOutcome,
+    RecoveryStep,
+    log_failure,
+)
 
 from . import RobotStatus, State, command
-from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
+from .models import bundled_franka_model
 
 with vendor_import(
     'positronic_franka',
@@ -28,7 +35,7 @@ with vendor_import(
     platforms=('linux',),
 ):
     import positronic_franka._franka as pf
-    from positronic_franka.desk import Desk, SafetyControllerError
+    from positronic_franka.desk import ControlHeldElsewhere, Desk, SafetyControllerError
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +112,8 @@ def _revolute_joint_names(urdf_xml):
     return [j.get('name') for j in root.findall('joint') if j.get('type') == 'revolute']
 
 
-_MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
+# The FR3 model the driver reads its joint names and soft limits from, with or without a connection to the arm.
+_FR3_URDF = (Path(__file__).resolve().parent / 'fr3.urdf').read_text()
 # Where the driver leaves the arm: taking control it travels here, and handing it back it returns here.
 _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
@@ -115,6 +123,11 @@ SAFE_INPUT_STATE = 'safeInputState'
 EMERGENCY_STOP_INPUT = 'x31'
 # The error the arm's state carries, and a ready call answers, while the emergency stop is pressed.
 EMERGENCY_STOP_PRESSED = 'Release the emergency stop button'
+# How the error the arm's state carries starts, and a ready call answers, while the driver has no connection to the
+# arm. The reason follows it. A recover call is the one call that connects again.
+NO_CONNECTION = 'The driver has no connection to the arm'
+# The recoverable error that Desk reports for a lost safety bus. Desk refuses to open the brakes until a reboot.
+FSOE_CONNECTION_ERROR = 'fsoeConnectionError'
 
 
 class _SafeInputLevel(StrEnum):
@@ -161,6 +174,8 @@ class _SafeInputs:
         self._unreadable = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # The watch thread and the driver's own reads share one Desk client.
+        self._lock = threading.Lock()
 
     @property
     def triggered(self) -> list[str]:
@@ -201,6 +216,17 @@ class _SafeInputs:
 
     def sample(self) -> None:
         """Take one reading, and log a safe input that changed."""
+        with self._lock:
+            self._sample()
+
+    def renew(self) -> None:
+        """Take a reading over a new Desk client, as after a control box reboot ended the login of the old one."""
+        with self._lock:
+            self._desk = None
+            self._reading = self._reading._replace(sampled=False)
+            self._sample()
+
+    def _sample(self) -> None:
         credentials = self._credentials
         if credentials is None:
             return
@@ -254,7 +280,8 @@ class _SafeInputs:
 
 
 class _Arm(DriverRun[command.CommandType]):
-    """The arm the driver drives: the robot handle, and the state and moves that go with it."""
+    """The arm the driver drives: the robot handle while the driver has a connection, and the state and moves that
+    go with it."""
 
     # A move needs a deadline at all because the robot reports a goal it abandons, but a goal it never
     # converges on stays in flight for as long as the arm is pushed off course.
@@ -270,7 +297,6 @@ class _Arm(DriverRun[command.CommandType]):
 
     def __init__(
         self,
-        robot: pf.Robot,
         sync_move: pimm.calls.ControlSystemHandler[command.CommandType, None],
         async_move: pimm.SignalReceiver[command.CommandType],
         out: pimm.SignalEmitter[FrankaState],
@@ -280,9 +306,9 @@ class _Arm(DriverRun[command.CommandType]):
         safe_inputs: _SafeInputs,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=2000)
-        self.robot = robot
-        # The failure of a Desk step that turned FCI off and did not connect again; None while ``robot`` drives the arm.
-        self.disconnect_cause: Exception | None = None
+        self._robot: pf.Robot | None = None
+        # Why the driver has no connection to the arm; None while ``robot`` drives the arm.
+        self.disconnect_cause: Exception | None = RuntimeError('the driver has not connected yet')
         self.out = out
         self.state = FrankaState()
         self._dynamics_factor = dynamics_factor
@@ -290,15 +316,15 @@ class _Arm(DriverRun[command.CommandType]):
         self._refusals = 0
         self._refused = False
         self._quiet_at = 0.0
-        self._stop_emitted = False
+        # The error last emitted in place of the state, so that each one goes out once.
+        self._emitted_error: str | None = None
         # A sync move that arrived while the arm errors, held until the error clears or the grace runs out.
         self._held: pimm.calls.Call[command.CommandType, None] | None = None
         self._error_started = 0.0
         self._q_at_error = np.zeros(len(_PARK_JOINTS))
         self._moved_in_error = 0.0
-        model = robot.get_robot_model()
-        self._joint_names = _revolute_joint_names(model)
-        soft_limits = ET.fromstring(model).findall("joint[@type='revolute']/safety_controller")
+        self._joint_names = _revolute_joint_names(_FR3_URDF)
+        soft_limits = ET.fromstring(_FR3_URDF).findall("joint[@type='revolute']/safety_controller")
         margin = self._TARGET_MARGIN_INSIDE_SOFT_LIMITS_RAD
         self._lowest_target = np.array([float(c.attrib['soft_lower_limit']) for c in soft_limits]) + margin
         self._highest_target = np.array([float(c.attrib['soft_upper_limit']) for c in soft_limits]) - margin
@@ -312,9 +338,33 @@ class _Arm(DriverRun[command.CommandType]):
         if self._held is not None:
             self._held.set_exception(MoveAbandoned())
             self._held = None
-        # Before ``_desk_session`` deactivates FCI, or the thread dies mid-control with
+        # Before the Desk session deactivates FCI, or the thread dies mid-control with
         # "TCP connection got interrupted".
-        self.robot.stop()
+        self.halt()
+
+    @property
+    def robot(self) -> pf.Robot:
+        """The configured handle that drives the arm."""
+        assert self._robot is not None, f'{NO_CONNECTION}: {self.disconnect_cause}'
+        return self._robot
+
+    @property
+    def connected(self) -> bool:
+        return self._robot is not None
+
+    def connect(self, robot: pf.Robot) -> None:
+        """Drive the arm over ``robot``, a handle already configured."""
+        self._robot, self.disconnect_cause = robot, None
+
+    def disconnect(self, cause: Exception) -> None:
+        """Drive the arm no more, for ``cause``, and stream the error that says so."""
+        self._robot, self.disconnect_cause = None, cause
+        self.emit_state()
+
+    def halt(self) -> None:
+        """Stop the control loop, where there is a connection that runs one."""
+        if self._robot is not None:
+            self._robot.stop()
 
     def publish(self, st: pf.State) -> None:
         """Ship the arm as it is reported, marked ERROR while it is not where the driver put it and no clear a
@@ -333,18 +383,25 @@ class _Arm(DriverRun[command.CommandType]):
         """Whether the last reading found the emergency stop pressed."""
         return self.safe_inputs.level(EMERGENCY_STOP_INPUT) is _SafeInputLevel.INACTIVE
 
+    @property
+    def no_connection(self) -> str:
+        """The error that says the driver has no connection to the arm, and why."""
+        return f'{NO_CONNECTION}: {self.disconnect_cause}'
+
     def emit_state(self) -> None:
-        """Emit ``self.state``, or the emergency stop's error once in its place while the stop is pressed.
+        """Emit ``self.state``, or an error once in its place: the emergency stop's while the stop is pressed, and
+        the missing connection's while the driver has none.
 
         Once, because a reader keeps the last value and the link queues every error it carries.
         """
-        if not self.stop_pressed:
-            self._stop_emitted = False
+        error = EMERGENCY_STOP_PRESSED if self.stop_pressed else None if self.connected else self.no_connection
+        if error is None:
+            self._emitted_error = None
             self.out.emit(self.state)
-        elif not self._stop_emitted:
+        elif error != self._emitted_error:
             # The Message types do not name the SignalError that any message can carry.
-            self.out.emit(cast(FrankaState, pimm.SignalError(EMERGENCY_STOP_PRESSED)))
-            self._stop_emitted = True
+            self.out.emit(cast(FrankaState, pimm.SignalError(error)))
+            self._emitted_error = error
 
     def hold_through_error(self, st: pf.State, entered: bool, outcome: 'RecoveryOutcome') -> None:
         """Take one tick of an arm error for the sync move that waits on it.
@@ -380,7 +437,7 @@ class _Arm(DriverRun[command.CommandType]):
     def refuse_moves(self) -> None:
         """Answer every waiting sync move with the failure that ended the connection, and drop a streamed one."""
         while isinstance(asked := self.next_request(), pimm.calls.Call):
-            asked.set_exception(RuntimeError(f'the driver has no connection to the arm: {self.disconnect_cause}'))
+            asked.set_exception(RuntimeError(self.no_connection))
 
     @staticmethod
     def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
@@ -444,7 +501,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def recover(self) -> RecoveryOutcome:
         """Run the vendor's error recovery. NOT_CLEARED with no connection: only the Desk step reaches the arm then."""
-        if self.disconnect_cause is not None:
+        if not self.connected:
             return RecoveryOutcome.NOT_CLEARED
         return RecoveryOutcome.CLEARED if self.robot.recover_from_errors() else RecoveryOutcome.NOT_CLEARED
 
@@ -596,6 +653,62 @@ class _Arm(DriverRun[command.CommandType]):
             logger.exception('The arm did not reach the park pose, it stays where it stands')
 
 
+class _DeskSession:
+    """The Desk session that holds robot control for the run, opened at first use.
+
+    A control box reboot ends the session, and the next use opens a new one. On exit the open session turns FCI off,
+    locks the brakes and releases control.
+    """
+
+    def __init__(self, ip: str, credentials: tuple[str, str] | None):
+        self._ip = ip
+        self._credentials = credentials
+        self._stack = contextlib.ExitStack()
+        self.desk: Desk | None = None
+
+    @property
+    def managed(self) -> bool:
+        """Whether the driver runs the Desk session, rather than the operator."""
+        return self._credentials is not None
+
+    @property
+    def login(self) -> str | None:
+        return self._credentials[0] if self._credentials is not None else None
+
+    def take_control(self) -> Desk:
+        """The open session, with robot control. Raises ``ControlHeldElsewhere`` while another session holds it."""
+        assert self._credentials is not None, 'the driver runs no Desk session'
+        if self.desk is None:
+            self.desk = self._stack.enter_context(Desk(self._ip, *self._credentials))
+        else:
+            self.desk.ensure_control()
+        return self.desk
+
+    def reboot(self) -> None:
+        """Reboot the control box, wait until it settles, and end the session.
+
+        The reboot resets FCI, the brakes and every control token, so it needs no control of its own.
+        """
+        assert self._credentials is not None, 'the driver runs no Desk session'
+        desk = self.desk or Desk(self._ip, *self._credentials)
+        try:
+            desk.reboot(wait=True)
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        self.desk = None
+        self._stack.close()
+
+    def __enter__(self) -> '_DeskSession':
+        if self._credentials is None:
+            logger.info('Desk is not managed by the driver; brakes must be open and FCI active before the run')
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+
 class _Brakes:
     """The arm's joint brakes, and the idle time the driver holds them open for.
 
@@ -603,8 +716,8 @@ class _Brakes:
     open for the whole run.
     """
 
-    def __init__(self, desk: Desk | None, arm: _Arm, clock: pimm.Clock, after_idle_s: float | None):
-        self._desk = desk
+    def __init__(self, session: _DeskSession, arm: _Arm, clock: pimm.Clock, after_idle_s: float | None):
+        self._session = session
         self._arm = arm
         self._clock = clock
         self._after_idle_s = after_idle_s
@@ -613,9 +726,10 @@ class _Brakes:
 
     def close(self) -> None:
         """Halt the control loop and lock the brakes."""
-        assert self._desk is not None, 'only a Desk session closes the brakes'
-        self._arm.robot.stop()  # the brakes cannot engage on an arm the control loop still drives
-        self._desk.close_brakes()
+        desk = self._session.desk
+        assert desk is not None, 'only a Desk session closes the brakes'
+        self._arm.halt()  # the brakes cannot engage on an arm the control loop still drives
+        desk.close_brakes()
         self._closed = True
 
     def record_opened(self) -> None:
@@ -627,9 +741,10 @@ class _Brakes:
     def opened(self) -> Iterator[None]:
         """Open the brakes for the block, and count the idle time from the moment the block ends."""
         if self._closed:
-            assert self._desk is not None, 'only a Desk session closes the brakes'
+            desk = self._session.desk
+            assert desk is not None, 'only a Desk session closes the brakes'
             logger.info('A command arrived, opening the brakes')
-            self._desk.open_brakes()
+            desk.open_brakes()
             self._closed = False
         try:
             yield
@@ -642,7 +757,7 @@ class _Brakes:
         A streamed setpoint is published and done with, so ``goal`` is the only thing that says the arm is
         still travelling towards it.
         """
-        if self._closed or self._desk is None or self._after_idle_s is None:
+        if self._closed or self._session.desk is None or self._after_idle_s is None:
             return
         if goal.status == pf.GoalStatus.IN_FLIGHT:
             self._idle_since = self._clock.now()
@@ -673,7 +788,6 @@ class Robot(pimm.ControlSystem):
         load: tuple | None = None,
         collision_coeff: float = 2.0,
         manage_desk: bool = True,
-        reboot_on_safety_error: bool = False,
         brake_after_idle_s: float | None = None,
     ) -> None:
         """
@@ -681,12 +795,10 @@ class Robot(pimm.ControlSystem):
         :param relative_dynamics_factor: Relative dynamics factor in (0, 1]. Smaller values are more conservative.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
         :param manage_desk: Run the Desk session from the driver: open the brakes and activate FCI on start, close
-            them on stop. Requires ``FRANKA_DESK_USER`` and ``FRANKA_DESK_PASSWORD`` in the environment. Set to
-            False to leave brakes and FCI to the operator; the driver then never contacts Desk and expects FCI to
-            be up already.
-        :param reboot_on_safety_error: When the control box is in an unrecoverable ``SafetyError`` on start, reboot
-            it, wait for it to come back, and try once more before giving up. Only applies when ``manage_desk`` is
-            set.
+            them on stop. Requires ``FRANKA_DESK_USER`` and ``FRANKA_DESK_PASSWORD`` in the environment. A start that
+            Desk or libfranka refuses leaves the driver running with no connection to the arm, and a recover call
+            connects it. Set to False to leave brakes and FCI to the operator; the driver then never contacts Desk,
+            expects FCI to be up already, and a failed connection ends the run.
         :param brake_after_idle_s: How long the arm may sit with no command and no move in flight before the driver
             closes the brakes; the next command opens them again. None holds the brakes open for the whole run.
             Needs ``manage_desk``.
@@ -706,47 +818,12 @@ class Robot(pimm.ControlSystem):
         self.robot_meta = pimm.ControlSystemEmitter(self)
         # FOOTGUN: recovers whatever ``state().error`` reads, since a latched Reflex reads 0.
         self.recover = pimm.calls.ControlSystemHandler[None, RecoveryOutcome](self)
+        # The step a recover call is at. A control box reboot holds one for minutes.
+        self.recovery_step = pimm.ControlSystemEmitter[RecoveryStep](self)
         self._load = load
         self._collision_coeff = collision_coeff
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
-        self._reboot_on_safety_error = reboot_on_safety_error
         self._brake_after_idle_s = brake_after_idle_s
-
-    @staticmethod
-    def _build_robot_meta(robot) -> dict:
-        urdf_xml = robot.get_robot_model()
-        meshes = {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
-        root = ET.fromstring(urdf_xml)
-        # Rewrite mesh references to bare filenames matching the bundled STL meshes.
-        # The libfranka URDF uses package:// URIs (e.g. package://franka_description/.../link0.dae)
-        # and references .dae visual meshes we don't bundle. Strip unresolvable elements and
-        # normalise remaining refs so the URDF is self-contained — matching the style of
-        # fr3.urdf used by cfg.ds.internal for offline dataset transforms.
-        for link in root.findall('link'):
-            for tag in ('visual', 'collision'):
-                for vc_el in list(link.findall(tag)):
-                    mesh_el = vc_el.find('.//mesh')
-                    if mesh_el is None:
-                        continue
-                    basename = Path(mesh_el.get('filename', '')).name
-                    if basename in meshes:
-                        mesh_el.set('filename', basename)
-                    else:
-                        link.remove(vc_el)
-            stl = link.get('name', '') + '.stl'
-            if stl in meshes and link.find('visual') is None:
-                ET.SubElement(ET.SubElement(link, 'visual'), 'geometry').append(ET.Element('mesh', filename=stl))
-        # TODO: The arm driver should not own the gripper. Move the 2F-85 model to the gripper driver
-        # (drivers/gripper) and compose the arm and gripper together at the embodiment level.
-        gripper = attach_robotiq_2f85(root, meshes)
-        add_default_frame(root, EE_LINK)
-        return {
-            roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
-            roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
-            'meshes': meshes,
-            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-            roboarm_keys.GRIPPER: gripper,
-        }
 
     def _init_robot(self, robot):
         coeff = self._collision_coeff
@@ -771,32 +848,6 @@ class Robot(pimm.ControlSystem):
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
-    @contextlib.contextmanager
-    def _desk_session(self):
-        """Bracket the run with a Franka Desk session that opens brakes and activates FCI, and always releases
-        control on exit. Hands both over to the operator when the driver does not manage Desk. When configured,
-        recover a control box stuck in ``SafetyError`` by rebooting it once and retrying."""
-        if self._desk_credentials is None:
-            logger.info('Desk is not managed by the driver; brakes must be open and FCI active before the run')
-            yield
-            return
-        rebooted = False
-        while True:
-            with Desk(self._ip, *self._desk_credentials) as desk:
-                try:
-                    desk.prepare()
-                except SafetyControllerError:
-                    if rebooted or not self._reboot_on_safety_error:
-                        raise
-                    logger.warning('Control box in SafetyError; rebooting it (unreachable ~40s) and retrying once')
-                    desk.reboot(wait=True)
-                    rebooted = True
-                else:
-                    if rebooted:
-                        logger.info('Control box recovered after reboot')
-                    yield desk
-                    return
-
     @functools.cached_property
     def _robot(self) -> pf.Robot:
         """The libfranka handle, connected on first use."""
@@ -804,59 +855,132 @@ class Robot(pimm.ControlSystem):
             self._ip, realtime_config=pf.RealtimeConfig.Ignore, relative_dynamics_factor=self._relative_dynamics_factor
         )
 
+    def _forget_connection(self) -> None:
+        """Drop the libfranka handle, so that the next connection opens a new one."""
+        vars(self).pop('_robot', None)
+
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, safe_inputs: _SafeInputs) -> _Arm:
-        """The arm this run drives, built from the driver's configuration."""
+        """The arm this run drives, built from the driver's configuration, with no connection yet."""
         return _Arm(
-            self._robot,
-            self.sync_move,
-            self.commands,
-            self.state,
-            self._relative_dynamics_factor,
-            should_stop,
-            clock,
-            safe_inputs,
+            self.sync_move, self.commands, self.state, self._relative_dynamics_factor, should_stop, clock, safe_inputs
         )
 
-    def _clear_with_desk_prepare(self, desk: Desk | None, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
-        """Take Desk control again where another login held it, lock the brakes and turn FCI off, run
-        ``Desk.prepare()`` as a run starts, connect to the arm again, and run the recovery on the new connection.
+    def _connect(self, arm: _Arm) -> None:
+        """Configure the libfranka handle, and drive the arm over it. Only a configured handle drives the arm."""
+        robot = self._robot
+        self._init_robot(robot)
+        arm.connect(robot)
 
-        It runs only where the driver holds a Desk session, and on a reading that found every safe input clear:
-        a person may hold the arm, and only they release it. A failure once FCI is off leaves the driver with no
-        connection to the arm, and only this step connects again.
+    def _start(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> None:
+        """Prepare the arm through Desk and connect to it, as a run starts.
+
+        Where the driver runs the Desk session, a failure leaves the run with no connection. Without one, the
+        failure ends the run.
         """
-        if desk is None:
-            return RecoveryOutcome.NOT_CLEARED
-        if not arm.safe_inputs.confirmed_clear:
-            logger.warning(
-                'The recovery did not clear the fault; no reading shows every safe input clear, so Desk does '
-                'not prepare the arm again'
-            )
-            return RecoveryOutcome.NOT_CLEARED
-        logger.warning('The recovery did not clear the fault; preparing the arm through Desk as a run starts')
-        desk.ensure_control()
-        arm.robot.stop()  # no control loop may drive the arm when FCI goes down
+        if not session.managed:
+            self._connect(arm)
+            return
+        try:
+            session.take_control().prepare()
+            brakes.record_opened()
+            self._connect(arm)
+        # rules-allow: swallowed-error — the arm streams the failure, and a recover call connects again
+        except Exception as exc:
+            logger.exception('The arm did not come up; the run goes on with no connection until a recover call')
+            arm.disconnect(exc)
+
+    def _prepare_and_connect(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
+        """Take Desk control again, lock the brakes and turn FCI off, run ``Desk.prepare()`` as a run starts, connect
+        to the arm again, and run the recovery on the new connection.
+
+        A failure once FCI is off leaves the driver with no connection to the arm.
+        """
+        desk = session.take_control()
+        arm.halt()  # no control loop may drive the arm when FCI goes down
         # A self-test that Desk.prepare() runs needs locked brakes. A safety stop can lock them before the driver does.
         if _BrakeState.UNLOCKED in desk.safety_status()[BRAKE_STATE]:
             brakes.close()
-        # A failed step turned FCI off, and a box in Recovery refuses requests until prepare() acknowledges the error.
-        if arm.disconnect_cause is None:
+        # With no connection FCI is off, and a box in Recovery refuses requests until prepare() acknowledges the error.
+        if arm.connected:
             desk.deactivate_fci()
-            del self._robot  # FCI off ended the connection this handle holds
+            self._forget_connection()  # FCI off ended the connection this handle holds
         try:
             desk.prepare()
             brakes.record_opened()
-            self._init_robot(self._robot)
+            self._connect(arm)
         except Exception as exc:
-            arm.disconnect_cause = exc
+            arm.disconnect(exc)
             raise
-        arm.robot, arm.disconnect_cause = self._robot, None  # only a configured handle drives the arm
         cleared = arm.robot.recover_from_errors()
         logger.info(f'After Desk prepared the arm, recover_from_errors returned {cleared}')
         return RecoveryOutcome.CLEARED if cleared else RecoveryOutcome.NOT_CLEARED
 
+    @staticmethod
+    def _safe_to_prepare(arm: _Arm) -> bool:
+        """Whether a reading found every safe input clear: a person may hold the arm, and only they release it."""
+        if not arm.safe_inputs.confirmed_clear:
+            logger.warning('No reading shows every safe input clear, so Desk does not prepare the arm again')
+        return arm.safe_inputs.confirmed_clear
+
+    @staticmethod
+    def _reboot_clears(session: _DeskSession, exc: Exception) -> str | None:
+        """Why only a control box reboot clears ``exc``, the failure of a Desk step; None where a reboot does not.
+
+        A control token of the driver's own Desk login that the session cannot take is stranded. Every actor that
+        shares the login reads as that name, so the reboot also stops a run that one of them started by hand.
+        """
+        if isinstance(exc, SafetyControllerError):
+            return 'the safety controller is in SafetyError'
+        if isinstance(exc, ControlHeldElsewhere):
+            # The checker runs without the Franka package, so it cannot narrow `exc` to its error.
+            holder = exc.holder  # pyright: ignore[reportAttributeAccessIssue]
+            return 'a control token of this Desk login is stranded' if holder == session.login else None
+        if session.desk is not None and Robot._reports_fsoe_error(session.desk):
+            return f'Desk reports {FSOE_CONNECTION_ERROR}'
+        return None
+
+    @staticmethod
+    def _reports_fsoe_error(desk: Desk) -> bool:
+        try:
+            return bool(desk.safety_status()['recoverableErrors'].get(FSOE_CONNECTION_ERROR))
+        # rules-allow: swallowed-error — an unread status names no error, and the caller raises the step's own failure
+        except Exception:
+            return False
+
+    def _clear_with_desk_prepare(
+        self, session: _DeskSession, arm: _Arm, brakes: _Brakes, *, on_recover_call: bool
+    ) -> RecoveryOutcome:
+        """Run ``_prepare_and_connect`` where the driver runs the Desk session and every safe input reads clear.
+
+        For a recover call, a failure that only a reboot clears reboots the control box once. The step then reads the
+        safe inputs again and runs once more. ``recovery_step`` carries each step of a recover call.
+        """
+        if not session.managed or not self._safe_to_prepare(arm):
+            return RecoveryOutcome.NOT_CLEARED
+        logger.warning('The recovery did not clear the fault; preparing the arm through Desk as a run starts')
+        if on_recover_call:
+            self.recovery_step.emit(RecoveryStep.CONNECTING)
+        try:
+            return self._prepare_and_connect(session, arm, brakes)
+        except Exception as exc:
+            why = self._reboot_clears(session, exc) if on_recover_call else None
+            if why is None:
+                raise
+            refused = exc
+        logger.warning(f'Desk refused the step: {why}. Rebooting the control box, then preparing the arm again')
+        self.recovery_step.emit(RecoveryStep.REBOOTING)
+        arm.halt()
+        arm.disconnect(refused)
+        self._forget_connection()  # the reboot ends every connection
+        session.reboot()
+        arm.safe_inputs.renew()
+        if not self._safe_to_prepare(arm):
+            return RecoveryOutcome.NOT_CLEARED
+        self.recovery_step.emit(RecoveryStep.CONNECTING)
+        return self._prepare_and_connect(session, arm, brakes)
+
     def _recover(
-        self, desk: Desk | None, arm: _Arm, brakes: _Brakes, asked: list[pimm.calls.Call[None, RecoveryOutcome]]
+        self, session: _DeskSession, arm: _Arm, brakes: _Brakes, asked: list[pimm.calls.Call[None, RecoveryOutcome]]
     ) -> RecoveryOutcome:
         """Run the arm's error recovery once, answer every caller that asked for it on this tick, and return
         what it did.
@@ -869,7 +993,7 @@ class Robot(pimm.ControlSystem):
             if asked:
                 logger.info(f'A console asked to clear a fault; the recovery returned {outcome.name}')
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
-                outcome = self._clear_with_desk_prepare(desk, arm, brakes)
+                outcome = self._clear_with_desk_prepare(session, arm, brakes, on_recover_call=True)
             if asked and outcome is RecoveryOutcome.CLEARED:
                 arm.forget_missed_target()
         # rules-allow: swallowed-error — the throw is handed to every caller that asked
@@ -880,27 +1004,33 @@ class Robot(pimm.ControlSystem):
             for call in asked:
                 call.set_exception(exc)
             return RecoveryOutcome.NOT_CLEARED
+        finally:
+            if asked:
+                self.recovery_step.emit(RecoveryStep.IDLE)
         for call in asked:
             call.set_result(outcome)
         return outcome
 
-    def _ready(self, desk: Desk | None, arm: _Arm, brakes: _Brakes, call: pimm.calls.Call[None, None]) -> None:
+    def _ready(self, session: _DeskSession, arm: _Arm, brakes: _Brakes, call: pimm.calls.Call[None, None]) -> None:
         """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
 
-        Where the recovery leaves the error, or the driver has no connection to the arm, ``_clear_with_desk_prepare``
-        runs. Answer with the error instead when it stays. A pressed emergency stop gets the release instruction, and
-        no recovery.
+        Where the recovery leaves the error, ``_clear_with_desk_prepare`` runs, with no reboot. Answer with the error
+        instead when it stays. A pressed emergency stop gets the release instruction, and no recovery. With no
+        connection the call gets that error and no Desk step: only a recover call connects.
         """
         with pimm.calls.raise_to(call):
             if arm.stop_pressed:
                 raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
+            if not arm.connected:
+                raise RuntimeError(arm.no_connection)
             if (
-                (arm.disconnect_cause is not None or arm.robot.state().error != 0)
+                arm.robot.state().error != 0
                 and arm.recover() is RecoveryOutcome.NOT_CLEARED
-                and self._clear_with_desk_prepare(desk, arm, brakes) is RecoveryOutcome.NOT_CLEARED
+                and self._clear_with_desk_prepare(session, arm, brakes, on_recover_call=False)
+                is RecoveryOutcome.NOT_CLEARED
             ):
-                # Desk's step may have replaced the connection, or left none
-                remaining = arm.disconnect_cause or arm.robot.state().error_message
+                # Desk's step may have replaced the connection
+                remaining = arm.robot.state().error_message
                 raise RuntimeError(f'the arm holds an error that the recovery did not clear: {remaining}')
             arm.clear_held_fault()
             if arm.rejects_moves and not arm.safe_inputs.confirmed_clear:
@@ -913,23 +1043,27 @@ class Robot(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
-        with self._desk_session() as desk, safe_inputs, self._arm(should_stop, clock, safe_inputs) as arm:
-            self._init_robot(arm.robot)
-            self.robot_meta.emit(Robot._build_robot_meta(arm.robot))
-            brakes = _Brakes(desk, arm, clock, self._brake_after_idle_s)
+        session = _DeskSession(self._ip, self._desk_credentials)
+        with session, safe_inputs, self._arm(should_stop, clock, safe_inputs) as arm:
+            self.robot_meta.emit(bundled_franka_model())
+            self.recovery_step.emit(RecoveryStep.IDLE)
+            brakes = _Brakes(session, arm, clock, self._brake_after_idle_s)
+            self._start(session, arm, brakes)
 
-            with brakes.opened():
-                yield from arm.park()
+            if arm.connected:
+                with brakes.opened():
+                    yield from arm.park()
 
             in_error = False
 
             while not should_stop.value:
                 for call in self.ready.incoming():
-                    self._ready(desk, arm, brakes, call)
-                if arm.disconnect_cause is not None:
+                    self._ready(session, arm, brakes, call)
+                if not arm.connected:
+                    arm.emit_state()  # the emergency stop's error comes and goes over the missing connection's
                     arm.refuse_moves()
                     if asked_to_recover := list(self.recover.incoming()):
-                        self._recover(desk, arm, brakes, asked_to_recover)
+                        self._recover(session, arm, brakes, asked_to_recover)
                     yield arm.limiter.wait()
                     continue
                 st = arm.robot.state()
@@ -943,7 +1077,7 @@ class Robot(pimm.ControlSystem):
 
                 asked_to_recover = list(self.recover.incoming())
                 if asked_to_recover or in_error:
-                    outcome = self._recover(desk, arm, brakes, asked_to_recover)
+                    outcome = self._recover(session, arm, brakes, asked_to_recover)
                     if in_error:
                         arm.hold_through_error(st, entered_error, outcome)
                     # This tick commands nothing; the next one reads the arm the recovery left behind.
@@ -962,7 +1096,7 @@ class Robot(pimm.ControlSystem):
 
                 yield arm.limiter.wait()
 
-            if arm.disconnect_cause is None:
+            if arm.connected:
                 with brakes.opened():
                     yield from arm.park(at_teardown=True)
 
