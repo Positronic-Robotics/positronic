@@ -894,6 +894,19 @@ class Robot(pimm.ControlSystem):
         except Exception as exc:
             logger.exception('The arm did not come up; the run goes on with no connection until a recover call')
             arm.disconnect(exc)
+            self._lock_open_brakes(session, brakes)
+
+    @staticmethod
+    def _lock_open_brakes(session: _DeskSession, brakes: _Brakes) -> None:
+        """Lock the brakes a failed Desk step left open: with no connection nothing drives the arm."""
+        if session.desk is None:
+            return  # the brakes are the session's that holds control
+        try:
+            if _BrakeState.UNLOCKED in session.desk.safety_status()[BRAKE_STATE]:
+                brakes.close()
+        # rules-allow: swallowed-error — the caller gets the step's own failure, and the session teardown locks them
+        except Exception:
+            logger.exception('Cannot lock the brakes that the failed Desk step left open')
 
     def _prepare_and_connect(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
         """Take Desk control again, lock the brakes and turn FCI off, run ``Desk.prepare()`` as a run starts, connect
@@ -916,6 +929,7 @@ class Robot(pimm.ControlSystem):
             self._connect(arm)
         except Exception as exc:
             arm.disconnect(exc)
+            self._lock_open_brakes(session, brakes)
             raise
         cleared = arm.robot.recover_from_errors()
         logger.info(f'After Desk prepared the arm, recover_from_errors returned {cleared}')

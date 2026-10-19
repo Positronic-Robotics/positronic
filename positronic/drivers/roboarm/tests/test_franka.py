@@ -2706,3 +2706,46 @@ def test_a_recover_call_after_a_failed_configuration_connects_over_a_new_handle(
     assert answer.result() is RecoveryOutcome.CLEARED
     assert arm.calls.count(Call.SET_COLLISION_BEHAVIOR) == 1, 'the driver configured the handle that failed again'
     assert Call.SET_COLLISION_BEHAVIOR in reconnected.calls
+
+
+@pytest.mark.parametrize('failure', [StartFailure.CONNECT, StartFailure.CONFIGURATION])
+def test_a_start_that_fails_after_desk_opened_the_brakes_locks_them(desk, world, monkeypatch, failure):
+    """Nothing drives the arm with no connection, so no brake stays open for it."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    failure.script(desk, driver, arm, monkeypatch)
+
+    _start_run(world, driver)
+
+    assert desk.calls == [Call.PREPARE, Call.CLOSE_BRAKES]
+    assert set(desk.brakes) == {franka._BrakeState.LOCKED}
+
+
+def test_a_start_that_another_login_refuses_leaves_its_brakes_alone(desk, world, monkeypatch):
+    """The brakes belong to the session that holds control."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    StartFailure.ANOTHER_LOGIN.script(desk, driver, arm, monkeypatch)
+
+    _start_run(world, driver)
+
+    assert Call.CLOSE_BRAKES not in desk.calls
+
+
+def test_a_recover_call_whose_connection_fails_after_desk_prepare_locks_the_brakes(desk, world, monkeypatch):
+    desk.safety_error = True
+    driver = _driver(FakeArm(PARK))
+    run = _start_run(world, driver)
+    desk.safety_error = False
+
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError('libfranka: Connection timeout')
+
+    monkeypatch.setattr(franka.pf, 'Robot', refuse)
+    del driver._robot
+    answer = run.recover(None)
+    run.tick()
+
+    with pytest.raises(RuntimeError, match='Connection timeout'):
+        answer.result()
+    assert desk.calls[-2:] == [Call.PREPARE, Call.CLOSE_BRAKES]
