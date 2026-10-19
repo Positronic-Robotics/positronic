@@ -10,7 +10,9 @@ from typing import Any
 import httpx
 import pytest
 from platform_client import routes
-from platform_client.client import API_KEY_ENV, AUTH_HEADER, PlatformClient
+from platform_client.client import API_KEY_ENV, API_URL_ENV, AUTH_HEADER, PlatformClient
+from platform_client.config import CONFIG_DIR_ENV, Config, write_config
+from platform_client.ids import ApiKey
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'walkthrough.py'
 BASE = 'http://gateway.test'
@@ -79,3 +81,16 @@ def test_authentication_spends_the_token_on_one_registration(walkthrough: dict[s
 
     assert sent == [{'credential': 'token', 'alias': 'demo', 'rotate': True}]
     assert client.api_key == 'pk_new'
+
+
+def test_a_run_takes_the_key_and_platform_that_register_saved(walkthrough: dict[str, Any], monkeypatch, tmp_path):
+    write_config(tmp_path, Config(platform_url=BASE, api_key=ApiKey('pk_live_saved')))
+    monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(API_KEY_ENV, raising=False)
+    monkeypatch.delenv(API_URL_ENV, raising=False)
+    clients: list[PlatformClient] = []
+    monkeypatch.setitem(walkthrough['main'].__globals__, 'walkthrough', lambda client, **_: clients.append(client))
+
+    walkthrough['main'](['--eval=a.eval', '--policy-image=org/policy@sha256:abc'])
+
+    assert [(client.api_key, client.base_url) for client in clients] == [('pk_live_saved', BASE)]

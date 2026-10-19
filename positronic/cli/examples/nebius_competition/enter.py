@@ -5,17 +5,19 @@ Usage
   competition-enter --yes                     # the same, then enter your team
   competition-enter --accept-terms=<version>  # the same, then enter your team and accept that version
 
-The key comes from POSITRONIC_PLATFORM_API_KEY, which `platform-register` prints. The entry asks for no
-terms. The platform refuses the first submission of a team until the team accepts them.
+The key comes from POSITRONIC_PLATFORM_API_KEY, else from the record `positronic account register` saves.
+The entry asks for no terms. The platform refuses the first submission of a team until the team accepts them.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import httpx
 from platform_client.client import API_KEY_ENV, API_URL_ENV, Auth, PlatformClient
+from platform_client.config import REGISTER_COMMAND, api_key_from, platform_url_from, record_if_needed
 from platform_client.errors import PlatformError
 from platform_client.routes import API_PREFIX
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
@@ -98,7 +100,7 @@ def run(client: CompetitionClient, *, confirmed: bool, accepted_version: str | N
         print('To enter your team, run again with --yes.')
         return
     if client.api_key is None:
-        raise SystemExit(f'set {API_KEY_ENV} to the key `platform-register` prints')
+        raise SystemExit(f'no API key: set {API_KEY_ENV}, or run `{REGISTER_COMMAND}`')
     entry = client.enter(EnterRequest())
     if accepted_version is not None:
         entry = client.accept_terms(AcceptTermsRequest(terms_version=accepted_version))
@@ -116,8 +118,11 @@ def main() -> None:
     )
     parser.add_argument('--platform-url', default=None, help=f'the platform to enter on, else {API_URL_ENV}')
     args = parser.parse_args()
+    enters = args.yes or args.accept_terms is not None
+    record = record_if_needed(os.environ, args.platform_url, key_required=enters)
+    key = api_key_from(os.environ, record) if enters else None
     try:
-        with CompetitionClient(args.platform_url) as client:
+        with CompetitionClient(platform_url_from(os.environ, args.platform_url, record), api_key=key) as client:
             run(client, confirmed=args.yes, accepted_version=args.accept_terms)
     except (PlatformError, httpx.HTTPError, ValidationError, ValueError) as exc:
         print(str(exc), file=sys.stderr)

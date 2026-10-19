@@ -10,8 +10,8 @@ readable by every process on the box and lands in shell history.
 public boards and the eval each one ranks, and stops. A name the platform does not offer is refused,
 and the refusal names the evals on offer.
 
-The key comes from POSITRONIC_PLATFORM_API_KEY, which `platform-register` prints. With no key, the
-script registers with the token in POSITRONIC_PLATFORM_CREDENTIAL, which the platform's identity
+The key comes from POSITRONIC_PLATFORM_API_KEY, else from the record `positronic account register` saves.
+With no key, the script registers with the token in POSITRONIC_PLATFORM_CREDENTIAL, which the platform's identity
 provider must have minted for the platform's own client.
 
 Every call goes through `PlatformClient`, so each response is a typed model rather than a dict. The
@@ -27,6 +27,7 @@ import time
 
 import httpx
 from platform_client.client import API_KEY_ENV, CREDENTIAL_ENV, PlatformClient
+from platform_client.config import REGISTER_COMMAND, api_key_from, platform_url_from, record_if_needed
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import plan_of_image
@@ -98,7 +99,7 @@ def walkthrough(
     elif credential is not None:
         authenticate(client, credential=credential, alias=alias)
     else:
-        raise SystemExit(f'   set {API_KEY_ENV} to the key `platform-register` prints')
+        raise SystemExit(f'   no API key: set {API_KEY_ENV}, or run `{REGISTER_COMMAND}`')
 
     print('2. submit')
     # The eval is the whole of the choice: it names the embodiment its tasks run on, and asking for
@@ -153,7 +154,13 @@ def main(argv: list[str] | None = None) -> None:
     try:
         eval_ref = EvalRef(args.eval) if args.eval is not None else None
         policy_image = PolicyImage(args.policy_image) if args.policy_image is not None else None
-        client = anonymous_client(args.platform_url) if eval_ref is None else PlatformClient(args.platform_url)
+        if eval_ref is None:
+            client = anonymous_client(args.platform_url)
+        else:
+            record = record_if_needed(os.environ, args.platform_url)
+            client = PlatformClient(
+                platform_url_from(os.environ, args.platform_url, record), api_key=api_key_from(os.environ, record)
+            )
     except ValueError as exc:
         parser.error(str(exc))
 

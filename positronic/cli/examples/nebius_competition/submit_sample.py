@@ -8,8 +8,8 @@ each one ranks; a submission with a name the platform does not offer is refused,
 names the evals on offer.
 
 `uv run` builds the environment this needs from the checkout, so nothing has to be installed first.
-The key comes from POSITRONIC_PLATFORM_API_KEY: a secret passed as an argument lands in your shell
-history and in every process listing on the box.
+The key comes from POSITRONIC_PLATFORM_API_KEY, else from the record `positronic account register` saves:
+a secret passed as an argument lands in your shell history and in every process listing on the box.
 
 Assumes a key you already hold; `../walkthrough.py` covers registration. Re-running with the same
 `--transaction-key` returns the original submission rather than spending quota twice.
@@ -25,10 +25,11 @@ import os
 import time
 
 from platform_client.client import API_KEY_ENV, PlatformClient
+from platform_client.config import REGISTER_COMMAND, api_key_from, platform_url_from, record_if_needed
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, ReasonCode
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import EvalPlan, plan_of_image
-from platform_client.ids import ApiKey, SubmissionId, TransactionKey
+from platform_client.ids import SubmissionId, TransactionKey
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import FinishedSubmissionView, SubmissionCreateResponse, SubmissionView
 from positronic_evals.evals import EvalRef
@@ -64,11 +65,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--transaction-key', default=None, help='reuse it to retry without a second charge')
     parser.add_argument('--timeout', type=float, default=3600.0, help='seconds to wait for a terminal status')
     args = parser.parse_args(argv)
-    key = os.environ.get(API_KEY_ENV)
-    if not key:
-        # `positronic account register` saves the key in its record, which this script does not read.
-        # `platform-register` prints the export line, so it is the one that helps here.
-        raise SystemExit(f'set {API_KEY_ENV} to the key `platform-register` prints')
+    record = record_if_needed(os.environ, args.platform_url)
+    key = api_key_from(os.environ, record)
+    if key is None:
+        raise SystemExit(f'no API key: set {API_KEY_ENV}, or run `{REGISTER_COMMAND}`')
     # Every value the wire types refuse — a name, a reference, a transaction key, a platform URL — is
     # refused here, before any request. A pydantic `ValidationError` is a `ValueError`.
     try:
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> None:
         plan = plan_of_image(
             PolicyImage(args.policy_image), EvalRef(args.eval), alias=args.alias, transaction_key=transaction_key
         )
-        client = PlatformClient(args.platform_url, api_key=ApiKey(key))
+        client = PlatformClient(platform_url_from(os.environ, args.platform_url, record), api_key=key)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
