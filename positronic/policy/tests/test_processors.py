@@ -27,6 +27,7 @@ from positronic.policy.codecs import (
     EncodeImages,
     FlipGrip,
     Metadata,
+    Resample,
     RestrictImageSize,
 )
 from positronic.policy.codecs.action import (
@@ -1188,6 +1189,7 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48, Resample.AREA)),
         ChunkedSchedule(fps=10, record_stats=False),
     ],
 )
