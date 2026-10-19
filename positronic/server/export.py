@@ -735,7 +735,7 @@ def main(
         out_dir: Directory the files are written under; it is created
         ep_table_cfg: Columns of the episode table, by static key
         max_resolution: Long side an episode's videos are re-encoded down to
-        max_hz: Rate an episode's videos and numeric signals are thinned to; 0 keeps every frame and sample
+        max_hz: Rate an episode's raw image streams and numeric signals are thinned to; 0 keeps every sample
         layout: Where an episode's replay shows its views; None keeps the default replay
         group_tables: Grouped tables, by name
         home_page: The group table served at the root, or None for the episodes

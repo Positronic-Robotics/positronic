@@ -647,16 +647,14 @@ def _encode_frames_as_video(
 _DOWNSCALE_OPTIONS = {'crf': '28', 'preset': 'veryfast'}
 
 
-def _mp4_reduced_to(src: Path, max_resolution: int, kept: np.ndarray | None = None) -> bytes:
-    """``src`` re-encoded to at most ``max_resolution`` on the long side and to the frames at the indexes in
-    ``kept``; unchanged when it fits and ``kept`` is None."""
+def _mp4_reduced_to(src: Path, max_resolution: int) -> bytes:
+    """``src`` re-encoded frame for frame to at most ``max_resolution`` on the long side; unchanged when it fits."""
     with av.open(str(src)) as inp:
         in_stream = inp.streams.video[0]
         source = (in_stream.codec_context.width, in_stream.codec_context.height)
         # Odd sides pass through; evening them here would re-encode every source that already fits.
-        if max(source) <= max_resolution and kept is None:
+        if max(source) <= max_resolution:
             return src.read_bytes()
-        wanted = None if kept is None else set(kept.tolist())
         width, height = _size_capped_to(*source, max_resolution)
 
         buffer = io.BytesIO()
@@ -670,9 +668,7 @@ def _mp4_reduced_to(src: Path, max_resolution: int, kept: np.ndarray | None = No
             out_stream.max_b_frames = 0
             out_stream.options = dict(_DOWNSCALE_OPTIONS)
 
-            for index, frame in enumerate(inp.decode(in_stream)):
-                if wanted is not None and index not in wanted:
-                    continue
+            for frame in inp.decode(in_stream):
                 scaled = frame.reformat(width=width, height=height, format='yuv420p')
                 scaled.pts, scaled.time_base = frame.pts, frame.time_base
                 out.mux(out_stream.encode(scaled))
@@ -689,23 +685,21 @@ def _log_video_signals(
     max_hz: float,
     recorded_also_on: str | None,
 ) -> Iterator[bytes]:
-    """Log stored videos as frame references and raw images as a video stream."""
+    """Log stored videos as frame references, every frame kept, and raw images as a video stream thinned to
+    ``max_hz``."""
     for name in signals.videos:
         sig = ep.signals[name]
         if not len(sig):
             continue
         timestamps = _timestamp_columns(sig, recorded_also_on)
         if isinstance(sig, VideoSignal):
-            kept = _sample_indices(timestamps, max_hz)
-            video_bytes = _mp4_reduced_to(sig.video_path, max_resolution, kept if len(kept) < len(sig) else None)
+            video_bytes = _mp4_reduced_to(sig.video_path, max_resolution)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
             rr.log(name, asset, static=True)
 
             frame_pts_ns = asset.read_frame_timestamps_nanos()
             rr.send_columns(
-                name,
-                indexes=_rerun_indexes({name: values[kept] for name, values in timestamps.items()}),
-                columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
+                name, indexes=_rerun_indexes(timestamps), columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns)
             )
         else:
             _encode_frames_as_video(name, sig, timestamps, max_resolution, max_hz)
@@ -1024,8 +1018,8 @@ def stream_episode_rrd(
 ) -> Iterator[bytes]:
     """Yield an episode RRD as chunks while it is being generated.
 
-    Videos and numeric signals with a recognized nanosecond clock are thinned to ``max_hz``.
-    ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
+    Raw image streams and numeric signals with a recognized nanosecond clock are thinned to ``max_hz``; a stored
+    video keeps every frame. ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
     Without a ``layout``, the replay shows the cameras beside
     the 3D view over a grid of every signal. ``timeline`` selects the initial view; all timelines are exported.
     """
