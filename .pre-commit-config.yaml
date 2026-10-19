@@ -89,3 +89,9 @@ repos:
         stages: [post-commit]
         always_run: true
         pass_filenames: false
+
+  # Secret scan of the staged changes, with the rules in .gitleaks.toml
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

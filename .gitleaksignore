@@ -1,0 +1,2 @@
+# Reviewed false positives in the current tree, one gitleaks fingerprint (file:rule:line) per line.
+positronic/cli/eval/tests/test_run_on_the_rig.py:generic-api-key:142
