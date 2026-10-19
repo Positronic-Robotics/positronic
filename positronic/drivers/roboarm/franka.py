@@ -790,6 +790,9 @@ class Robot(pimm.ControlSystem):
         brake_after_idle_s: float | None = None,
     ) -> None:
         """
+        The robot model a run sends is the bundled FR3 model, with or without a connection to the arm. An arm whose
+        end-effector frame in Desk differs from that model's still records the bundled one.
+
         :param ip: IP address of the robot.
         :param relative_dynamics_factor: Relative dynamics factor in (0, 1]. Smaller values are more conservative.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
