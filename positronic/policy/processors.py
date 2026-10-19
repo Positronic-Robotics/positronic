@@ -260,7 +260,7 @@ class _StackedObs(Mapping[str, Any]):
     def settled(self, anchor: float, settled: float) -> '_StackedObs | None':
         """The observation with stacks of the settled offsets only, or ``None`` when no offset is settled.
 
-        The buffer keeps the entries these stacks hold until ``anchored``.
+        The buffer pins these entries until ``anchored`` or its retention bound expires.
         """
         picked = self._window.pick(anchor, settled, settled_only=True)
         if not picked:
@@ -268,8 +268,13 @@ class _StackedObs(Mapping[str, Any]):
         self._window.buffer.pin(anchor + min(self._window.buffer.offsets_sec))
         return _StackedObs(self._obs, picked, self._window)
 
+    @property
+    def has_pinned_history(self) -> bool:
+        return self._window.buffer._pinned is not None
+
     def anchored(self, anchor: float, settled: float) -> '_StackedObs':
-        """The observation with the settled offsets timed from ``anchor``, and the others from now."""
+        """Sample retained history at the anchor for settled offsets and at now for the others."""
+        assert self.has_pinned_history, 'Anchored sampling requires retained history'
         self._window.buffer.unpin()
         return _StackedObs(self._obs, self._window.pick(anchor, settled), self._window)
 
@@ -490,20 +495,55 @@ class ChunkedSchedule(Policy):
         ]
         return waypoints, start_ns + round(duration_sec * 1e9)
 
-    def _context_lead_ns(self, obs: Obs) -> int | None:
-        if self._context_lead_sec is None:
-            return None
-        if not isinstance(obs, _StackedObs):
-            logger.warning('ChunkedSchedule makes no context push: no TemporalStack is directly around it')
-            return None
-        return round(self._context_lead_sec * 1e9)
+    class _ContextPush:
+        """One episode's upload, sampling anchor, and context-window deadline."""
+
+        def __init__(self, runtime: Runtime, infer: Infer, lead_sec: float | None, obs: Obs):
+            self._runtime = runtime
+            self._infer = infer
+            self._lead_ns = None if lead_sec is None else round(lead_sec * 1e9)
+            if self._lead_ns is not None and not isinstance(obs, _StackedObs):
+                logger.warning('ChunkedSchedule makes no context push: no TemporalStack is directly around it')
+                self._lead_ns = None
+            self.pending: Answer[Any] | None = None
+            self.window_handled = True
+            self._anchor_sec: float | None = None
+            self._settled_sec = 0.0
+
+        def recover(self, obs: Obs) -> None:
+            self._anchor_sec = None
+            self.window_handled = True
+            if isinstance(obs, _StackedObs):
+                obs._window.buffer.unpin()
+
+        def update(self, obs: Obs, call_ns: int) -> None:
+            if self.pending is not None and self.pending.done():
+                pending, self.pending = self.pending, None
+                pending.result()
+            now_ns = self._runtime.time_ns
+            if self._lead_ns is None or self.window_handled or not call_ns - self._lead_ns <= now_ns < call_ns:
+                return
+            self.window_handled = True
+            anchor_sec, settled_sec = call_ns / 1e9, now_ns / 1e9
+            context = obs.settled(anchor_sec, settled_sec) if isinstance(obs, _StackedObs) else None
+            if context is not None:
+                self.pending = self._runtime.submit(self._infer, context, context_only=True)
+                self._anchor_sec, self._settled_sec = anchor_sec, settled_sec
+
+        def observation(self, obs: Obs) -> Obs:
+            if self._anchor_sec is not None and isinstance(obs, _StackedObs) and obs.has_pinned_history:
+                obs = obs.anchored(self._anchor_sec, self._settled_sec)
+            self._anchor_sec = None
+            return obs
+
+        def next_wake_ns(self, call_ns: int) -> int:
+            now_ns = self._runtime.time_ns
+            if self._lead_ns is not None and not self.window_handled and now_ns < call_ns:
+                return max(now_ns, call_ns - self._lead_ns)
+            return call_ns
 
     def run(self, runtime: Runtime, infer: Infer) -> PolicyRun:
         answer: Answer[Sequence[Commands]] | None = None
-        push: Answer[Any] | None = None
-        context_window_handled = True
-        context_anchor_sec: float | None = None
-        context_settled_sec = 0.0
         recovering = False
         trajectory: deque[ChunkedSchedule._Waypoint] = deque()
         end_ns = 0
@@ -513,7 +553,7 @@ class ChunkedSchedule(Policy):
         stats = self._Stats(runtime) if self._record_stats else None
 
         obs = yield
-        lead_ns = self._context_lead_ns(obs)
+        context = self._ContextPush(runtime, infer, self._context_lead_sec, obs)
         try:
             while True:
                 now_ns = runtime.time_ns
@@ -524,31 +564,10 @@ class ChunkedSchedule(Policy):
                     trajectory.clear()
                     end_ns = call_ns = now_ns
                     planned, recovering = 0, True
-                    context_anchor_sec = None
-                    context_window_handled = True
-                    if isinstance(obs, _StackedObs):
-                        obs._window.buffer.unpin()
-                if push is not None and push.done():
-                    push, done = None, push
-                    done.result()
-                if (
-                    lead_ns is not None
-                    and not context_window_handled
-                    and answer is None
-                    and call_ns - lead_ns <= now_ns < call_ns
-                ):
-                    context_window_handled = True
-                    anchor_sec, settled_sec = call_ns / 1e9, now_ns / 1e9
-                    context = obs.settled(anchor_sec, settled_sec) if isinstance(obs, _StackedObs) else None
-                    if context is not None:
-                        push = runtime.submit(infer, context, context_only=True)
-                        context_anchor_sec, context_settled_sec = anchor_sec, settled_sec
-                    context = None
-                if answer is None and push is None and now_ns >= call_ns:
-                    if context_anchor_sec is not None and isinstance(obs, _StackedObs):
-                        obs = obs.anchored(context_anchor_sec, context_settled_sec)
-                    context_anchor_sec = None
-                    answer, called_at_ns = runtime.submit(infer, obs), now_ns
+                    context.recover(obs)
+                context.update(obs, call_ns)
+                if answer is None and context.pending is None and now_ns >= call_ns:
+                    answer, called_at_ns = runtime.submit(infer, context.observation(obs)), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
                     lead_sec = lead.update((now_ns - called_at_ns) / 1e9)
@@ -558,7 +577,7 @@ class ChunkedSchedule(Policy):
                     # A regular early answer waits behind the commands that are still due.
                     trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
                     planned = len(waypoints)
-                    context_window_handled = False
+                    context.window_handled = False
 
                 commands: dict[str, Any] = {}
                 due_ns = None
@@ -571,16 +590,16 @@ class ChunkedSchedule(Policy):
                 recovering = recovering and not commands
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
-                resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
-                if lead_ns is not None and not context_window_handled and answer is None and now_ns < call_ns:
-                    resume_at_ns = min(resume_at_ns, max(now_ns, call_ns - lead_ns))
+                resume_at_ns = context.next_wake_ns(call_ns)
+                if trajectory:
+                    resume_at_ns = min(resume_at_ns, trajectory[0].due_ns)
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
         finally:
             if answer is not None:
                 answer.cancel()
-            if push is not None:
-                push.cancel()
+            if context.pending is not None:
+                context.pending.cancel()
 
     def meta(self) -> dict[str, Any]:
         meta = {ACTION_FPS: self._fps}

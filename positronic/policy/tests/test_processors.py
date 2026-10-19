@@ -440,7 +440,12 @@ def test_recovery_discards_the_context_anchor_and_requests_fresh_frames(executio
         run.close()
 
 
-def test_a_slow_context_upload_keeps_sampling_until_inference_can_start(execution, monkeypatch):
+@pytest.mark.parametrize(
+    'finished_ms, expected_frames', [(1403, [600, 700, 1200, 1300, 1403]), (2503, [2100, 2200, 2300, 2400, 2503])]
+)
+def test_a_slow_context_upload_keeps_sampling_until_inference_can_start(
+    execution, monkeypatch, finished_ms, expected_frames
+):
     runtime, clock = execution
     upload = Future()
     calls = []
@@ -455,11 +460,11 @@ def test_a_slow_context_upload_keeps_sampling_until_inference_can_start(executio
     monkeypatch.setattr(runtime, 'submit', submit_with_delayed_upload)
     run = _context_schedule(runtime, calls, (-0.4, -0.3, -0.2, -0.1, 0.0))
     try:
-        _drive(run, clock, range(0, 1400, 50))
+        _drive(run, clock, range(0, finished_ms, 50))
         assert calls == [(0, False, [0, 0, 0, 0, 0]), (750, True, [600, 700])]
         upload.set_result(None)
-        _drive(run, clock, [1403])
-        assert calls[-1] == (1403, False, [600, 700, 1200, 1300, 1403])
+        _drive(run, clock, [finished_ms])
+        assert calls[-1] == (finished_ms, False, expected_frames)
     finally:
         run.close()
 
