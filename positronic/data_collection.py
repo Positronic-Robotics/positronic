@@ -25,7 +25,7 @@ from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers import roboarm
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import State as RoboarmState
-from positronic.drivers.webxr import WebXR
+from positronic.drivers.webxr import LEFT, RIGHT, WebXR
 from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
@@ -37,7 +37,7 @@ from positronic.utils.buttons import ButtonHandler
 
 
 def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
-    for side in ['left', 'right']:
+    for side in [LEFT, RIGHT]:
         if buttons[side] is None:
             continue
 
@@ -121,7 +121,7 @@ class DataCollectionController(pimm.ControlSystem):
             tracker.turn_off()
             return
         robot_pos = self.robot_state.value.ee_pose
-        hand_pos = self.controller_positions.value.get('right')
+        hand_pos = self.controller_positions.value.get(RIGHT)
         if hand_pos is None:
             logging.warning('Control needs a pose of the right controller')
             return
@@ -172,7 +172,7 @@ class DataCollectionController(pimm.ControlSystem):
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
                 if cp_msg.updated:
-                    target_robot_pos = tracker.update(cp_msg.data['right'])
+                    target_robot_pos = tracker.update(cp_msg.data[RIGHT])
 
                 if tracker.on:
                     in_error, entered_error = _check_error(

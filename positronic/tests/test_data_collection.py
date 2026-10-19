@@ -410,6 +410,12 @@ def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
     assert utils.interface_ipv4_addresses() == [('en0', '10.0.0.5'), ('utun3', '100.64.0.2')]
 
 
+@pytest.mark.parametrize('quality', [-1, 101, 50.0])
+def test_a_jpeg_quality_that_is_not_an_integer_from_0_to_100_is_refused(quality):
+    with pytest.raises(ValueError, match='jpeg_quality must be an integer between 0 and 100'):
+        WebXR(port=free_port(), jpeg_quality=quality)
+
+
 def test_the_page_state_is_empty_until_something_sends_one(world):
     served = WebXR(port=free_port(), frontend=Frontend.IPHONE_TELEOP, use_https=False)
     emitter, receiver = world.local_pipe()

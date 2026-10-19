@@ -155,6 +155,8 @@ class WebXR(pimm.ControlSystem):
         sensitivity: float = 1.0,
         jpeg_quality: int = 50,
     ):
+        if type(jpeg_quality) is not int or not 0 <= jpeg_quality <= 100:
+            raise ValueError(f'jpeg_quality must be an integer between 0 and 100, got {jpeg_quality!r}')
         self.port = port
         self.ssl_keyfile = ssl_keyfile
         self.ssl_certfile = ssl_certfile
