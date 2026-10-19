@@ -312,7 +312,8 @@ class _Arm(DriverRun[command.CommandType]):
         self.robot.stop()
 
     def publish(self, st: pf.State) -> None:
-        """Ship the arm as it is reported, marked ERROR while it is not where the driver put it."""
+        """Ship the arm as it is reported, marked ERROR while it is not where the driver put it and no clear a
+        caller asked for has worked since."""
         faulted = self.moves.errored or st.error != 0  # the robot reports its own faults; a stall is not one
         self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
         self.emit_state()
@@ -441,6 +442,10 @@ class _Arm(DriverRun[command.CommandType]):
         if self.disconnect_cause is not None:
             return RecoveryOutcome.NOT_CLEARED
         return RecoveryOutcome.CLEARED if self.robot.recover_from_errors() else RecoveryOutcome.NOT_CLEARED
+
+    def forget_missed_target(self) -> None:
+        """Read AVAILABLE again after a move that missed: a cleared fault leaves the arm holding where it is."""
+        self.moves.errored = False
 
     def clear_held_fault(self) -> None:
         """Clear a fault the arm holds, so the move about to go out is not rejected before it starts.
@@ -808,8 +813,8 @@ class Robot(pimm.ControlSystem):
         )
 
     def _clear_with_desk_prepare(self, desk: Desk | None, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
-        """Lock the brakes and turn FCI off, run ``Desk.prepare()`` as a run starts, connect to the arm again,
-        and run the recovery on the new connection.
+        """Take Desk control again where another login held it, lock the brakes and turn FCI off, run
+        ``Desk.prepare()`` as a run starts, connect to the arm again, and run the recovery on the new connection.
 
         It runs only where the driver holds a Desk session, and on a reading that found every safe input clear:
         a person may hold the arm, and only they release it. A failure once FCI is off leaves the driver with no
@@ -824,6 +829,7 @@ class Robot(pimm.ControlSystem):
             )
             return RecoveryOutcome.NOT_CLEARED
         logger.warning('The recovery did not clear the fault; preparing the arm through Desk as a run starts')
+        desk.ensure_control()
         arm.robot.stop()  # no control loop may drive the arm when FCI goes down
         # A self-test that Desk.prepare() runs needs locked brakes. A safety stop can lock them before the driver does.
         if _BrakeState.UNLOCKED in desk.safety_status()[BRAKE_STATE]:
@@ -859,6 +865,8 @@ class Robot(pimm.ControlSystem):
                 logger.info(f'A console asked to clear a fault; the recovery returned {outcome.name}')
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
                 outcome = self._clear_with_desk_prepare(desk, arm, brakes)
+            if asked and outcome is RecoveryOutcome.CLEARED:
+                arm.forget_missed_target()
         # rules-allow: swallowed-error — the throw is handed to every caller that asked
         except Exception as exc:
             if not asked:

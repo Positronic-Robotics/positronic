@@ -235,11 +235,11 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
 
 
 def _check_osc_delta_scale(env: LiberoEnv, token: dict) -> None:
-    """Pin the OSC scaling and control rate the libero codec bakes: ``PoseDeltaAction.OUTPUT_MAX``
-    must equal the controller's per-step output range, and the codec stamps the chunk at the env's control rate."""
+    """Pin the OSC scaling and control rate: ``openpi.LIBERO_OSC_SCALE`` must equal the controller's per-step
+    output range, and the codec stamps the chunk at the env's control rate."""
     _reset(env, token)
     c = env._controller
-    output_max = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])  # mirrors PoseDeltaAction.OUTPUT_MAX
+    output_max = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])  # mirrors openpi.LIBERO_OSC_SCALE
     assert np.allclose(c.output_max, output_max) and np.allclose(c.output_min, -output_max), (
         f'OSC output range [{c.output_min}, {c.output_max}] != +/-{output_max.tolist()}'
     )

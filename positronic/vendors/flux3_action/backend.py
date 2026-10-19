@@ -29,9 +29,16 @@ def main(argv: list[str] | None = None) -> None:
         torch.zeros(1, device='cuda')
 
     # The defaults of `serve-robolab`: DiT in bfloat16, compiled, one warm-up request before the bind.
+    # The text encoder waits on the CPU while the DiT packs: the packing peak and its 8.9 GB overflow a 32 GB card.
     policy = robolab.load_serving_policy(
-        args.checkpoint, revision=args.revision, subfolder=args.subfolder, device='cuda', dtype='bfloat16'
+        args.checkpoint,
+        revision=args.revision,
+        subfolder=args.subfolder,
+        device='cuda',
+        dtype='bfloat16',
+        offload_text_encoder=True,
     )
+    policy.set_text_encoder_offload(False)
     metadata = {
         'checkpoint': args.checkpoint,
         'revision': args.revision,

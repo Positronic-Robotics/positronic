@@ -96,6 +96,7 @@ These are the public codec classes exported by this package. Each name links to 
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
 | [`JointPositionAction`](action.py) | Decodes separate joint and grip fields into an absolute command. | The model returns named predictions; training labels are defined independently. |
+| [`CartesianDeltaAction`](action.py) | Inference: decodes translation in metres, rotation in the selected `rotation_rep` format (default `rotvec`) and grip closure into a `CartesianDelta` command plus absolute grip. | Predictions describe per-step Cartesian deltas in physical units. |
 | [`IKJointsAction`](action.py) | Training: replaces pose targets with joint targets through inverse kinematics. Inference: passes through. | Train a joint-position model from recorded pose targets; compose before `AbsoluteJointsAction`. |
 | [`JointDeltaAction`](action.py) | Inference: clips and scales normalized DROID joint velocities into `JointDelta` commands, and thresholds grip. | Serve a checkpoint using the DROID joint-delta action convention. |
 | [`SetControlMode`](action.py) | Inference: stamps a supplied control mode on each decoded arm command. | Require explicit impedance or position control; compose to the left of the action decoder. |
@@ -119,7 +120,7 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`RestrictImageSize`](image.py) | Inference: shrinks nested RGB images and frame stacks to fit bounds, preserving aspect ratio. Does not upscale; training encoding is unsupported. | Cap image dimensions before sending observations over the network. |
+| [`RestrictImageSize`](image.py) | Inference: shrinks nested RGB images and frame stacks to fit bounds, preserving aspect ratio. Does not upscale; training encoding is unsupported. `resample=Resample.AREA` scales with OpenCV `INTER_AREA`, faster than the default Pillow bilinear filter, but with other pixels. | Cap image dimensions before sending observations over the network. Use `AREA` only when the model resizes the frames again. |
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
 
 Image transport codecs belong in the serving stack. Use `ObservationCodec` for image preparation
@@ -159,7 +160,7 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 It is declared in two places, for the two things it does:
 
 - **Training** — `compose(ee_frame=DROID_EE_FRAME)` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it. It defaults to unset, which trains in `default`.
-- **Serving** — the OpenPI pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts and the server stays frame-agnostic. It has no default: every deployment states its frame — `None` for a checkpoint trained in `default`, or one that speaks joints, which are unambiguous. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
+- **Serving** — the OpenPI pipeline's `ee_frame=` puts `ChangeEEFrame` in the client's pipeline. It has no default: every deployment states its frame — `None` for a checkpoint trained in `default`, or one that speaks joints, which are unambiguous. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
 
 Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as a translation and wxyz quaternion.
 

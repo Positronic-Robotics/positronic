@@ -17,6 +17,7 @@ OpenPI supports multiple codecs for different use cases:
 | `joints_traj` | Joints + grip (no EE pose) | Absolute joint trajectory (binarized grip) | Pure joint-space trajectory training |
 | `droid` | Joint positions + grip | Per-step `JointDelta` | Inference with pretrained DROID models |
 | `droid_jointpos` | Joint positions + grip | Absolute `JointPosition` (binarized grip) | Inference with DROID jointpos models (RoboLab leaderboard) |
+| `libero` | EE pose + finger positions, rotated cameras | Per-step `CartesianDelta` | Inference with pretrained LIBERO models |
 
 **Key notes:**
 - **`ee`**: The primary codec. Handles both training data generation (LeRobot format) and inference (OpenPI format) automatically.
@@ -26,6 +27,9 @@ OpenPI supports multiple codecs for different use cases:
 - **`droid_jointpos`**: Inference-only codec for openpi's `*_droid_jointpos` checkpoints — the policies RoboLab's leaderboard evaluates. The model emits absolute joint-position chunks; the codec decodes each step into a `JointPosition` command (grip binarized at 0.5) and the client scheduler executes the whole chunk before replanning, matching RoboLab's client cadence (`open_loop_horizon` = the model's `action_horizon`). Serve with `droid_jointpos`.
 
 Both DROID codecs execute each chunk under DROID's impedance gains (`codecs.droid_execution`; see [Control mode](../../policy/codecs/README.md#control-mode)).
+
+Use the `libero` server preset with its matching codec: the server converts predictions into physical units,
+and the codec builds robot commands.
 
 ## 1. Prepare Data
 
@@ -57,7 +61,7 @@ docker compose run --rm -v ~/datasets:/data lerobot-0_3_3-convert convert \
 - `--dataset.dataset`: The raw dataset configuration (see available datasets above)
 - `--dataset.codec`: OpenPI codec that defines observation/action encoding (see table above)
 - `--output_dir`: Destination for the converted LeRobot dataset (can be local or `s3://bucket/path`)
-- `--fps`: (Optional) Override frames per second (defaults to codec's `action_fps`)
+- `--fps`: (Optional) Override frames per second (defaults to codec's `training_fps`)
 
 ## 2. Generate Assets
 
@@ -282,5 +286,5 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 **Solutions:**
 1. First startup may be slow (model download, loading weights)
 2. Check available GPU memory (OpenPI requires ~8GB VRAM)
-3. Increase timeout by modifying `_wait_for_ready(timeout=...)` in server.py
+3. Set a larger `max_wait` in the `wait_for_subprocess_ready` call in server.py
 4. Check OpenPI subprocess logs for slow operations

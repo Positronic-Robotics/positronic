@@ -73,7 +73,7 @@ def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersi
     if declared is None:
         raise ValueError('Server declares no client processor stack')
     if protocol_version is ProtocolVersion.V1:
-        stack = from_v1_spec(declared, meta)
+        stack = from_v1_spec(declared, meta, from_spec)
     else:
         stack = from_spec(declared)
     if not isinstance(stack, Processor):

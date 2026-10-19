@@ -23,8 +23,7 @@ from PIL import Image as PilImage
 from positronic import geom, keys
 from positronic.cfg import codecs
 from positronic.dataset.transforms import image
-from positronic.drivers.roboarm import command
-from positronic.policy.codecs import ACTION, Codec
+from positronic.policy.codecs import CartesianDeltaAction, Codec
 from positronic.policy.codecs.observation import TASK_FIELD, ObservationCodec, RenameObservationFields
 from positronic.vendors import openpi
 
@@ -97,28 +96,6 @@ droid_jointpos = codecs.compose.override(
 )
 
 
-class PoseDeltaAction(Codec):
-    """Decodes pi05_libero's OSC pose-delta chunk into per-step end-effector ``CartesianDelta`` (inference only).
-
-    The policy emits a chunk of per-step actions ``[Δpos(3), Δrotvec(3), grip(1)]`` normalized to ``[-1, 1]`` in
-    robosuite OSC_POSE space. Each step's pose delta is scaled by the controller's per-step output range
-    (``OUTPUT_MAX``) and forwarded as a world-frame ``CartesianDelta`` the driver composes onto its live measured
-    pose, reproducing robosuite's feed-forward OSC control (``goal = live_eef ∘ Δ`` every step). Integrating the
-    chunk into absolute waypoints instead chases the open-loop trajectory and folds the OSC tracking residual back
-    into each command — dynamics the policy was never trained against. The grip channel maps to the absolute
-    ``[0, 1]`` closure the gripper command uses.
-    """
-
-    OUTPUT_MAX = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])
-
-    def _decode_single(self, data):
-        action = np.asarray(data[ACTION]).clip(-1.0, 1.0)  # robosuite clips both pose and gripper to [-1, 1]
-        physical = action[:6] * self.OUTPUT_MAX
-        delta = geom.Transform3D(translation=physical[:3], rotation=geom.Rotation.from_rotvec(physical[3:6]))
-        grip = (float(action[6]) + 1.0) / 2.0
-        return {keys.ROBOT_COMMAND: command.CartesianDelta(delta=delta), keys.TARGET_GRIP: grip}
-
-
 # Constants pi05_libero's training distribution requires that the env's wire observation does not carry
 # directly, measured once on a LIBERO box (`validate.py` drives the arm/gripper and prints these to bake):
 #   - the env reports the eef orientation in the grip-site frame; openpi trained on robosuite's hand-body
@@ -164,15 +141,12 @@ class LiberoObservationCodec(Codec):
     def _libero_state(self, inputs: dict[str, Any]) -> np.ndarray:
         ee_pose = np.asarray(inputs[keys.EE_POSE], dtype=float)
         hand_rot = geom.Rotation.from_quat(ee_pose[3:7]) * _GRIP_SITE_TO_HAND
-        # Reproduce robosuite's axis-angle branch. Its `robot0_eef_quat` is MuJoCo's `body_xquat`, FK-continuous
-        # from the tool-down home pose and thus consistently in the w<=0 hemisphere (angle >= pi) across the
-        # manipulation workspace — not the canonical w>=0 a fresh `mat2quat` would pick. Canonicalize to w<=0 to
-        # match (`validate.py` asserts the per-pose axis-angle equals robosuite's; rerun it per suite to confirm).
+        # TODO: Verify the quaternion hemisphere against LIBERO's axis-angle convention; as_rotvec is principal.
         quat = np.asarray(hand_rot.to(geom.Rotation.Representation.QUAT))
         canonical = geom.Rotation.from_quat(quat if quat[0] <= 0 else -quat)
         axisangle = np.asarray(canonical.to(geom.Rotation.Representation.ROTVEC)).reshape(3)
-        closure = 1.0 - float(inputs[keys.GRIP])
-        gripper_qpos = _GRIPPER_QPOS_CLOSED + closure * (_GRIPPER_QPOS_OPEN - _GRIPPER_QPOS_CLOSED)
+        openness = 1.0 - float(inputs[keys.GRIP])
+        gripper_qpos = _GRIPPER_QPOS_CLOSED + openness * (_GRIPPER_QPOS_OPEN - _GRIPPER_QPOS_CLOSED)
         return np.concatenate([ee_pose[:3], axisangle, gripper_qpos]).astype(np.float32)
 
     def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
@@ -186,7 +160,7 @@ class LiberoObservationCodec(Codec):
 
 
 libero_obs = cfn.Config(LiberoObservationCodec)
-libero_action = cfn.Config(PoseDeltaAction)
+libero_action = cfn.Config(CartesianDeltaAction)
 
 # LIBERO training observations are sampled at 20 Hz.
 libero = codecs.compose.override(obs=libero_obs, action=libero_action, training_fps=20.0)

@@ -1,4 +1,4 @@
-"""Build the stack that a protocol v1 server declares from v2 processors.
+"""Support legacy processor specs and protocol v1 server stacks.
 
 The offboard README states the translation and what the client refuses.
 """
@@ -14,9 +14,8 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
 from positronic.policy.codecs import Codec
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, DurationEstimate, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
-from positronic.policy.spec import from_spec
 
 TIMESTAMP = 'timestamp'
 WALL_TIME_NS = 'wall_time_ns'
@@ -28,6 +27,24 @@ V1_LAYERS_UPGRADED_IN_PLACE = (PauseOnUnavailable.WIRE_NAME, TemporalStack.WIRE_
 V1_SERVER_DEFAULT_ACTION_FPS = 15.0
 
 logger = logging.getLogger(__name__)
+
+
+class ChunkedScheduleV2(ChunkedSchedule):
+    WIRE_VERSION = 2
+
+    def __init__(
+        self,
+        fps: float,
+        horizon_sec: float | None = None,
+        record_stats: bool = True,
+        inference_lead: DurationEstimate | None = None,
+    ) -> None:
+        super().__init__(fps, horizon_sec, record_stats, inference_lead, replan_on_error=False)
+
+    def to_spec(self) -> dict[str, Any]:
+        node = super().to_spec()
+        del node[ARGS][self.REPLAN_ON_ERROR_ARG]
+        return node
 
 
 class StampObservationTimes(Policy):
@@ -87,7 +104,9 @@ def _is_v1(part: dict[str, Any], name: str) -> bool:
     return part.get(NAME) == name and part.get(VERSION, 1) == 1
 
 
-def from_v1_spec(node: dict[str, Any], server_meta: Mapping[str, Any]) -> Processor[Obs, Any]:
+def from_v1_spec(
+    node: dict[str, Any], server_meta: Mapping[str, Any], build_stack: Callable[[dict[str, Any]], Processor | Codec]
+) -> Processor[Obs, Any]:
     """Build the stack a protocol v1 server declares, from its spec and its handshake metadata."""
     timing: dict[str, float] = {}
     parts: list[dict[str, Any]] = []
@@ -118,4 +137,4 @@ def from_v1_spec(node: dict[str, Any], server_meta: Mapping[str, Any]) -> Proces
     else:
         layers = [i for i, part in enumerate(parts) if part.get(NAME) in V1_LAYERS_UPGRADED_IN_PLACE]
         parts.insert(layers[-1] + 1 if layers else 0, schedule)
-    return Sequential(StampObservationTimes(), from_spec({SEQ: parts}), ChunkFromV1Answer())
+    return Sequential(StampObservationTimes(), build_stack({SEQ: parts}), ChunkFromV1Answer())

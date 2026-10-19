@@ -50,6 +50,7 @@ class Call(StrEnum):
     CLOSE_BRAKES = 'close_brakes'
     DEACTIVATE_FCI = 'deactivate_fci'
     PREPARE = 'prepare'
+    ENSURE_CONTROL = 'ensure_control'
 
 
 class _StatusFromCpp:
@@ -230,6 +231,9 @@ class FakeDesk:
     def prepare(self) -> None:
         self._record(Call.PREPARE)
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
+
+    def ensure_control(self) -> None:
+        self._record(Call.ENSURE_CONTROL)
 
     def _authenticate(self) -> None:
         pass
@@ -830,6 +834,61 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
     next(loop)
 
     assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+def _stop_short(world, driver: franka.Robot, arm: FakeArm, loop) -> None:
+    """Drive ``loop`` through a sync move the arm never lands, so the driver marks the arm as not where it put it."""
+    arm.goal_status = franka.pf.GoalStatus.ABORTED
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+    arm.goal_status = None
+
+
+def test_a_console_recover_call_that_clears_makes_an_arm_that_stopped_short_read_available(world):
+    """The console reads the streamed status to decide whether a person may start an episode. A clear the arm
+    answers CLEARED leaves it holding where it is, so ERROR would keep Start off until a move nobody can send."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(2):  # through the opening move
+        next(loop)
+    _stop_short(world, driver, arm, loop)
+    next(loop)
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+    answer = _recoverer(world, driver)(None)
+    next(loop)
+    next(loop)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+def test_a_console_recover_call_that_does_not_clear_leaves_the_arm_reading_error(world, monkeypatch):
+    """Only a clear that worked lifts the mark: a recovery that leaves the fault keeps the arm reading ERROR."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(2):  # through the opening move
+        next(loop)
+    _stop_short(world, driver, arm, loop)
+    monkeypatch.setattr(arm, 'recover_from_errors', lambda: False)
+
+    answer = _recoverer(world, driver)(None)
+    next(loop)
+    next(loop)
+
+    assert answer.result() is RecoveryOutcome.NOT_CLEARED
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
 
 
 def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world):
@@ -1622,6 +1681,7 @@ def test_a_fault_the_recovery_leaves_is_cleared_by_desk_prepare(desk, world, mon
 
     assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
         Call.RECOVER_FROM_ERRORS,
+        Call.ENSURE_CONTROL,
         Call.STOP,
         Call.STOP,  # the brakes halt the control loop again before they lock
         Call.CLOSE_BRAKES,
@@ -1640,6 +1700,41 @@ def test_a_fault_the_recovery_leaves_is_cleared_by_desk_prepare(desk, world, mon
     next(loop)
     assert arm.calls[mark:] == [], 'the run still drives the connection FCI ended'
     assert Call.STATE in reconnected.calls
+
+
+def test_a_desk_step_refused_while_another_login_holds_control_touches_nothing(desk, world, monkeypatch):
+    """The refusal reaches the console, and a press after the other login releases control clears the fault."""
+    arm = FakeArm(PARK)
+    desk.calls = arm.calls  # one log for both fakes, so the refusal is ordered against the halt and the brakes
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    recover = _recoverer(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.error = 1
+    desk.raises[Call.ENSURE_CONTROL] = RuntimeError("Another session holds robot control: Desk login 'safe'")
+    mark = len(arm.calls)
+    refused = recover(None)
+    next(loop)
+
+    with pytest.raises(RuntimeError, match="Desk login 'safe'"):
+        refused.result()
+    assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
+        Call.RECOVER_FROM_ERRORS,
+        Call.ENSURE_CONTROL,
+    ]
+
+    del desk.raises[Call.ENSURE_CONTROL]
+    answer = recover(None)
+    next(loop)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert Call.RECOVER_FROM_ERRORS in reconnected.calls
 
 
 def test_desk_prepare_leaves_alone_the_brakes_a_safety_stop_locked(desk, world, monkeypatch):
@@ -1662,6 +1757,7 @@ def test_desk_prepare_leaves_alone_the_brakes_a_safety_stop_locked(desk, world, 
 
     assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
         Call.RECOVER_FROM_ERRORS,
+        Call.ENSURE_CONTROL,
         Call.STOP,
         Call.DEACTIVATE_FCI,
         Call.PREPARE,
@@ -1804,7 +1900,15 @@ def test_a_console_recovery_with_no_connection_runs_the_desk_step_again_and_conn
     next(loop)
 
     assert answer.result() is RecoveryOutcome.CLEARED
-    assert desk.calls == [Call.PREPARE, Call.CLOSE_BRAKES, Call.DEACTIVATE_FCI, Call.PREPARE, Call.PREPARE]
+    assert desk.calls == [
+        Call.PREPARE,
+        Call.ENSURE_CONTROL,
+        Call.CLOSE_BRAKES,
+        Call.DEACTIVATE_FCI,
+        Call.PREPARE,
+        Call.ENSURE_CONTROL,
+        Call.PREPARE,
+    ]
     assert Call.STATE in reconnected.calls[mark:], 'the run does not read the new connection'
 
 
@@ -1967,6 +2071,7 @@ def test_a_ready_call_on_an_error_the_recovery_leaves_is_answered_after_desk_pre
     assert answer.result() is None
     assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
         Call.RECOVER_FROM_ERRORS,
+        Call.ENSURE_CONTROL,
         Call.STOP,
         Call.STOP,  # the brakes halt the control loop again before they lock
         Call.CLOSE_BRAKES,
