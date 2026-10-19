@@ -131,7 +131,8 @@ class WebXR(pimm.ControlSystem):
     - If HTTPS is required, provide a cert trusted by the device.
 
     Endpoints
-    - `/`                -> selected frontend (no redirect)
+    - `/`                -> selected frontend; the phone teleop frontend redirects to `/?mode=teleop`
+    - `/state`           -> the last `page_state` value as JSON
     - `/ws`              -> JSON controller stream from client to server
     - `/video`           -> optional base64 JPEG frames (server to client)
     - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`

@@ -93,7 +93,8 @@ class ButtonMap:
 
     def observe(self, buttons: Sequence[float], now_ns: int) -> None:
         """Record the state of the buttons, outside a trial. A button that is down here does not press in the next."""
-        self._used.update(self._new_presses(buttons, now_ns))
+        self._new_presses(buttons, now_ns)
+        self._used.update(self._down_since)
 
     def _is_held(self, button: int, now_ns: int) -> bool:
         since = self._down_since.get(button)
@@ -101,11 +102,11 @@ class ButtonMap:
 
     def ready_reply(self, buttons: Sequence[float], now_ns: int) -> Reply | None:
         new_presses = self._new_presses(buttons, now_ns)
+        # A button that is down before the trial runs does not hold in it.
+        self._used.update(self._down_since)
         if _B in new_presses:
-            self._used.add(_B)
             return Reply.READY
         if _STICK in new_presses:
-            self._used.add(_STICK)
             return Reply.CANCELLED
         return None
 

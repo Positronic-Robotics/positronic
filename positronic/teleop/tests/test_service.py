@@ -521,6 +521,19 @@ class TestButtonsBetweenTrials:
         buttons.observe(_buttons(b=1.0), 0)
         assert buttons.ready_reply(_buttons(b=1.0), 100_000_000) is None
 
+    def test_a_stick_held_from_the_last_trial_gives_no_give_up_in_the_next(self):
+        buttons = ButtonMap(HOLD_SEC)
+        assert buttons.events(_buttons(stick=1.0), 0, True) == []
+        buttons.observe(_buttons(stick=1.0), 100_000_000)
+        assert buttons.ready_reply(_buttons(stick=1.0, b=1.0), 500_000_000) is Reply.READY
+        assert buttons.events(_buttons(stick=1.0), 900_000_000, False) == []
+
+    def test_a_stick_held_into_the_ready_wait_gives_no_give_up_in_the_trial(self):
+        buttons = ButtonMap(HOLD_SEC)
+        assert buttons.events(_buttons(stick=1.0), 0, True) == []
+        assert buttons.ready_reply(_buttons(stick=1.0, b=1.0), 500_000_000) is Reply.READY
+        assert buttons.events(_buttons(stick=1.0), 900_000_000, False) == []
+
 
 def _raw_session(socket_path: Path):
     """A websocket on the service, after the handshake of protocol v3, and the ID of its session."""
