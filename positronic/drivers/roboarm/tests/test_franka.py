@@ -2745,3 +2745,23 @@ def test_a_recover_call_whose_connection_fails_after_desk_prepare_locks_the_brak
     with pytest.raises(RuntimeError, match='Connection timeout'):
         answer.result()
     assert desk.calls[-2:] == [Call.PREPARE, Call.CLOSE_BRAKES]
+
+
+@pytest.mark.parametrize('failure', [StartFailure.SAFETY_ERROR, StartFailure.CONNECT])
+def test_a_start_failure_logs_one_line_with_its_type_and_reason_and_no_traceback(
+    desk, world, monkeypatch, caplog, failure
+):
+    """A run log reads a traceback as a crash, and this run goes on."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    failure.script(desk, driver, arm, monkeypatch)
+    desk.raises[Call.CLOSE_BRAKES] = ConnectionError('the control box is not answering')  # the brake lock fails too
+
+    with caplog.at_level(logging.INFO, logger=franka.__name__):
+        _start_run(world, driver)
+
+    [line] = [r for r in caplog.records if 'did not come up' in r.getMessage()]
+    assert line.levelno == logging.ERROR
+    assert failure.reason in line.getMessage()
+    assert 'Error' in line.getMessage(), 'the line does not name the exception type'
+    assert all(r.exc_info is None for r in caplog.records), 'a record carries a traceback'
