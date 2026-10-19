@@ -190,6 +190,9 @@ class TeleopService:
         headset_camera: str | None = None,
         session_defaults: SessionParams = _DEFAULT_SESSION_PARAMS,
     ):
+        for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
+            if not 0 < value < math.inf:
+                raise ValueError(f'{name} must be finite and positive, got {value}')
         self._uds = uds
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit

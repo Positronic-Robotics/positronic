@@ -556,6 +556,14 @@ def test_a_model_server_that_fails_after_its_start_stops_the_process(socket_path
         assert interrupted.wait(timeout=5)
 
 
+@pytest.mark.parametrize('name', ['ready_limit', 'silence_limit'])
+@pytest.mark.parametrize('value', [0.0, -1.0, float('nan'), float('inf')])
+def test_a_time_limit_that_is_not_finite_and_positive_is_refused(socket_path, name, value):
+    limits = {'ready_limit': 1.0, 'silence_limit': 0.05, name: value}
+    with pytest.raises(ValueError, match=f'{name} must be finite and positive'):
+        TeleopService(socket_path, hold_sec=HOLD_SEC, **limits)
+
+
 def test_a_socket_directory_that_others_can_open_is_refused(tmp_path):
     shared = tmp_path / 'shared'
     shared.mkdir(mode=0o755)
@@ -626,6 +634,12 @@ def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, con
         assert service.view().shape == images[shown].shape
         assert service.state().cameras == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
         connection.close()
+
+
+@pytest.mark.parametrize('view_fps', [0.0, -1.0, float('nan'), float('inf')])
+def test_a_view_rate_that_is_not_finite_and_positive_is_refused(socket_path, view_fps):
+    with pytest.raises(ValueError, match='view_fps must be finite and positive'):
+        command._Headset(TeleopService(socket_path, 1.0, 0.05, HOLD_SEC), view_fps)
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
