@@ -860,14 +860,6 @@
         ],
         "./positronic/data_collection.py": [
             {
-                "code": "reportPossiblyUnboundVariable",
-                "range": {
-                    "startColumn": 64,
-                    "endColumn": 80,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportReturnType",
                 "range": {
                     "startColumn": 11,

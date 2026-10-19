@@ -171,8 +171,6 @@ class DataCollectionController(pimm.ControlSystem):
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
-                if cp_msg.updated:
-                    target_robot_pos = tracker.update(cp_msg.data[RIGHT])
 
                 if tracker.on:
                     in_error, entered_error = _check_error(
@@ -181,7 +179,7 @@ class DataCollectionController(pimm.ControlSystem):
                     if entered_error:
                         self.sound.emit(error_wav_path)
                     if not in_error and cp_msg.updated:
-                        cmd = roboarm.command.CartesianPosition(target_robot_pos)
+                        cmd = roboarm.command.CartesianPosition(tracker.update(cp_msg.data[RIGHT]))
                         self.robot_commands.emit(cmd)
 
                 yield pimm.Sleep(0.001)
