@@ -244,6 +244,7 @@ class WebXR(pimm.ControlSystem):
     def _add_controller_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
         """``/ws``: the controller stream from the page."""
 
+        # TODO: Require a pairing key before `/ws` accepts a client. Any client that can reach the port sends input.
         @app.websocket('/ws')
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
