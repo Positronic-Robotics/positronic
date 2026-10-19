@@ -161,11 +161,6 @@ class MolmoSpacesEnv(EnvProtocol):
         with_right.cameras = [*episode.cameras, right]
         return with_right
 
-    @staticmethod
-    def _horizon_steps(horizon_sec: float | None, policy_dt_ms: float) -> int | None:
-        """``horizon_sec`` in policy steps, as MolmoSpaces converts its own ``--task_horizon_sec``, or None."""
-        return None if horizon_sec is None else round(horizon_sec * 1000.0 / policy_dt_ms)
-
     def _build(
         self,
         bench: mapping.BenchmarkPath,
@@ -184,7 +179,7 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark, unless an override in steps replaces it.
         cfg.task_horizon = determine_task_horizon(
-            episodes, self._horizon_steps(horizon_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
+            episodes, mapping.horizon_steps(horizon_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
         )
         self._sampler = _JointGraspSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
@@ -212,7 +207,7 @@ class MolmoSpacesEnv(EnvProtocol):
             )
             indices = mapping.select_episodes(bench, len(episodes), pinned, blocked)
             horizon_steps = determine_task_horizon(
-                episodes, self._horizon_steps(override_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
+                episodes, mapping.horizon_steps(override_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
             )
             horizon_sec = horizon_steps * cfg.policy_dt_ms / 1000.0
             records += [
