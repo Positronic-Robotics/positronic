@@ -293,6 +293,7 @@ def test_register_tells_an_existing_account_to_set_its_key_and_that_rotate_stops
 
     run_command(register)
 
+    # rules-allow: hardcoded-keys — the test pins the exact text that a person reads.
     assert capsys.readouterr().out.endswith(
         'You already have an API key. Set POSITRONIC_PLATFORM_API_KEY to it. '
         'Lost it? Run positronic account register --rotate. This stops the old key.\n'
