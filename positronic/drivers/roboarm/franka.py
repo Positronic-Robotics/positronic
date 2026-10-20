@@ -15,6 +15,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import (
     DriverRun,
     MoveAbandoned,
@@ -26,7 +27,7 @@ from positronic.drivers.utils import (
 )
 
 from . import RobotStatus, State, command
-from .models import bundled_franka_model
+from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
 
 with vendor_import(
     'positronic_franka',
@@ -107,6 +108,12 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[FrankaState.STATUS_OFFSET] = status.value
 
 
+def _revolute_joint_names(urdf_xml):
+    root = ET.fromstring(urdf_xml)
+    return [j.get('name') for j in root.findall('joint') if j.get('type') == 'revolute']
+
+
+_MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
 # Where the driver leaves the arm: taking control it travels here, and handing it back it returns here.
 _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
@@ -320,7 +327,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._q_at_error = np.zeros(len(_PARK_JOINTS))
         self._moved_in_error = 0.0
         model = ET.fromstring(self._FR3_URDF)
-        self._joint_names = [joint.get('name') for joint in model.findall("joint[@type='revolute']")]
+        self._joint_names = _revolute_joint_names(self._FR3_URDF)
         soft_limits = model.findall("joint[@type='revolute']/safety_controller")
         margin = self._TARGET_MARGIN_INSIDE_SOFT_LIMITS_RAD
         self._lowest_target = np.array([float(c.attrib['soft_lower_limit']) for c in soft_limits]) + margin
@@ -790,8 +797,7 @@ class Robot(pimm.ControlSystem):
         brake_after_idle_s: float | None = None,
     ) -> None:
         """
-        The robot model a run sends is the bundled FR3 model, with or without a connection to the arm. An arm whose
-        end-effector frame in Desk differs from that model's still records the bundled one.
+        A run sends the model the arm reports each time it connects, and no model before its first connection.
 
         :param ip: IP address of the robot.
         :param relative_dynamics_factor: Relative dynamics factor in (0, 1]. Smaller values are more conservative.
@@ -826,6 +832,42 @@ class Robot(pimm.ControlSystem):
         self._collision_coeff = collision_coeff
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
         self._brake_after_idle_s = brake_after_idle_s
+
+    @staticmethod
+    def _build_robot_meta(robot) -> dict:
+        urdf_xml = robot.get_robot_model()
+        meshes = {f.name: f.read_bytes() for f in _MESH_DIR.iterdir() if f.suffix == '.stl'}
+        root = ET.fromstring(urdf_xml)
+        # Rewrite mesh references to bare filenames matching the bundled STL meshes.
+        # The libfranka URDF uses package:// URIs (e.g. package://franka_description/.../link0.dae)
+        # and references .dae visual meshes we don't bundle. Strip unresolvable elements and
+        # normalise remaining refs so the URDF is self-contained — matching the style of
+        # fr3.urdf used by cfg.ds.internal for offline dataset transforms.
+        for link in root.findall('link'):
+            for tag in ('visual', 'collision'):
+                for vc_el in list(link.findall(tag)):
+                    mesh_el = vc_el.find('.//mesh')
+                    if mesh_el is None:
+                        continue
+                    basename = Path(mesh_el.get('filename', '')).name
+                    if basename in meshes:
+                        mesh_el.set('filename', basename)
+                    else:
+                        link.remove(vc_el)
+            stl = link.get('name', '') + '.stl'
+            if stl in meshes and link.find('visual') is None:
+                ET.SubElement(ET.SubElement(link, 'visual'), 'geometry').append(ET.Element('mesh', filename=stl))
+        # TODO: The arm driver should not own the gripper. Move the 2F-85 model to the gripper driver
+        # (drivers/gripper) and compose the arm and gripper together at the embodiment level.
+        gripper = attach_robotiq_2f85(root, meshes)
+        add_default_frame(root, EE_LINK)
+        return {
+            roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
+            roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
+            'meshes': meshes,
+            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
+            roboarm_keys.GRIPPER: gripper,
+        }
 
     def _init_robot(self, robot):
         coeff = self._collision_coeff
@@ -883,6 +925,7 @@ class Robot(pimm.ControlSystem):
                 self._forget_connection()
             raise
         arm.connect(robot)
+        self.robot_meta.emit(self._build_robot_meta(robot))
 
     def _start(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> None:
         """Prepare the arm through Desk and connect to it, as a run starts.
@@ -1066,7 +1109,6 @@ class Robot(pimm.ControlSystem):
         safe_inputs = _SafeInputs(self._ip, self._desk_credentials)
         session = _DeskSession(self._ip, self._desk_credentials)
         with session, safe_inputs, self._arm(should_stop, clock, safe_inputs) as arm:
-            self.robot_meta.emit(bundled_franka_model())
             self.recovery_step.emit(RecoveryStep.IDLE)
             brakes = _Brakes(session, arm, clock, self._brake_after_idle_s)
             self._start(session, arm, brakes)

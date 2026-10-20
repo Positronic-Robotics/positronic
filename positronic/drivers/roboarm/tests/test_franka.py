@@ -13,6 +13,7 @@ import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command, franka
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned, RecoveryOutcome, RecoveryStep
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
@@ -2510,7 +2511,7 @@ def test_a_start_that_desk_or_libfranka_refuses_comes_up_with_no_connection_and_
     assert isinstance(error, pimm.SignalError)
     assert str(error).startswith(franka.NO_CONNECTION) and failure.reason in str(error)
     assert arm.targets == [], 'the arm parked with no connection'
-    assert run.meta.emitted, 'a run with no connection sends no robot model'
+    assert not run.meta.emitted, 'a run with no connection sent a robot model'
 
 
 def test_a_clean_start_connects_once_parks_and_streams_the_arm_state(desk, world):
@@ -2522,6 +2523,7 @@ def test_a_clean_start_connects_once_parks_and_streams_the_arm_state(desk, world
     assert run.streamed and all(isinstance(data, franka.FrankaState) for data in run.streamed)
     assert desk.calls == [Call.PREPARE]
     assert run.step_names == [RecoveryStep.IDLE]
+    assert len(run.meta.emitted) == 1, 'a clean start sends the robot model once'
 
 
 def test_the_run_streams_the_release_instruction_over_the_missing_connection_while_the_stop_is_pressed(
@@ -2633,6 +2635,26 @@ def test_a_recover_call_on_a_failure_a_reboot_does_not_clear_answers_it_and_rebo
         answer.result()
     assert Call.REBOOT not in desk.calls
     assert RecoveryStep.REBOOTING not in run.step_names
+
+
+def test_a_run_sends_the_model_the_arm_reports_when_a_recover_call_connects_it(desk, world, monkeypatch):
+    desk.holder = 'safe'
+    arm = FakeArm(PARK)
+    fr3 = arm.get_robot_model()
+    longer_tool = fr3.replace('xyz="0 0 0.1033999994"', 'xyz="0 0 0.2"')
+    assert longer_tool != fr3
+    arm.get_robot_model = lambda: longer_tool  # an arm whose end-effector frame in Desk is not the bundled one
+    run = _start_run(world, _driver(arm))
+    assert not run.meta.emitted, 'a run with no connection sent a robot model'
+    desk.holder = None
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    [meta] = [data for _, data in run.meta.emitted]
+    assert 'xyz="0 0 0.2"' in meta[roboarm_keys.URDF]
+    assert meta[roboarm_keys.JOINT_NAMES] == [f'joint{i}' for i in range(1, 8)]
 
 
 def test_a_recover_call_after_another_login_releases_control_connects_with_no_reboot(desk, world, monkeypatch):
