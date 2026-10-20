@@ -65,8 +65,9 @@ _AUTHORIZATION_VALUE = re.compile(
 _AUTHORIZATION_VALUE_ENTROPY = 2.75
 
 # The names in positronic's own configuration: `image.wrist_2`, `robot_state.q_7dof`. A value with no digit
-# can still be a random token, so this passes lowercase names with a separator, and nothing broader.
-_DOTTED_SNAKE_CASE = re.compile(r'[a-z][a-z0-9]*(?:[._][a-z0-9]+)+', re.ASCII)
+# can still be a random token, so this passes lowercase names with a separator, and nothing broader. A part
+# longer than 12 characters is not a name part: `sbp_<hex>` and `tok_<hex>` tokens have one.
+_DOTTED_SNAKE_CASE = re.compile(r'[a-z][a-z0-9]{0,11}(?:[._][a-z0-9]{1,12})+', re.ASCII)
 
 # `--policy.headers={...}` and `--policy.headers.Modal-Key=...` carry a header set inline;
 # `--policy.headers.path=<file>` names the file that holds it.
@@ -117,9 +118,11 @@ def check_command(argv: Sequence[str]) -> None:
         for candidate in joined:
             flag = _inline_headers_flag(candidate)
             if flag is not None:
+                owner = flag.partition('.headers')[0]
                 raise CredentialInRunMetadata(
                     f'command: argv[{i}] gives {flag} inline, and run metadata stores the command line; '
-                    f'put the header set in a JSON file and pass {flag.partition(".headers")[0]}.headers.path=<file>'
+                    f'put the header set in a JSON file and read it with a config that takes a path: '
+                    f'{owner}=@positronic.cfg.policy.file_authed_remote {owner}.headers.path=<file>'
                 )
             if _holds_credential(candidate):
                 raise CredentialInRunMetadata(

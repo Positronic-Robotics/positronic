@@ -114,7 +114,8 @@ def test_run_metadata_records_the_installed_revision_and_no_diff_for_a_wheel(cwd
     assert metadata['git.current']['dirty'] is True
 
 
-TOKEN = 'q7RfX2mKp9WzL4vNc8YbT3hJd'
+# Split, so that a diff which holds this line does not look like it holds a credential.
+TOKEN = 'q7RfX2mKp' + '9WzL4vNc8' + 'YbT3hJd'
 
 
 def test_run_metadata_with_a_credential_in_the_command_is_refused_and_not_written(tmp_path, monkeypatch):
@@ -146,5 +147,18 @@ def test_deferred_run_metadata_refuses_a_credential_before_it_starts_its_thread(
 
     with pytest.raises(CredentialInRunMetadata):
         utils.save_run_metadata_deferred(tmp_path / 'out')
+
+    assert started == []
+
+
+def test_deferred_run_metadata_refuses_a_credential_in_the_diff_before_it_starts_its_thread(cwd_repo, monkeypatch):
+    install_as(monkeypatch, vcs_wheel())
+    monkeypatch.setattr(sys, 'argv', ['pos'])
+    Path('f').write_text(f'API_TOKEN = "{TOKEN}"\n')
+    started = []
+    monkeypatch.setattr(threading.Thread, 'start', lambda self: started.append(self))
+
+    with pytest.raises(CredentialInRunMetadata, match=r'^git\.current\.diff: '):
+        utils.save_run_metadata_deferred(Path('out'), patterns=['f'])
 
     assert started == []

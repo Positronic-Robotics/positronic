@@ -6,8 +6,9 @@ import pytest
 
 from positronic.utils.credentials import CredentialInRunMetadata, check_command, check_text
 
-TOKEN = 'q7RfX2mKp9WzL4vNc8YbT3hJd'
-LETTERS_ONLY_TOKEN = 'qRfXmKpWzLvNcYbThJdGsAeUo'
+# Split, so that a diff which holds this line does not look like it holds a credential.
+TOKEN = 'q7RfX2mKp' + '9WzL4vNc8' + 'YbT3hJd'
+LETTERS_ONLY_TOKEN = 'qRfXmKpWz' + 'LvNcYbThJ' + 'dGsAeUo'
 REPO = Path(__file__).resolve().parents[3]
 
 
@@ -25,6 +26,7 @@ REPO = Path(__file__).resolve().parents[3]
         ['pos', '--token', TOKEN],
         ['pos', f'Authorization: Bearer {TOKEN}'],
         ['pos', f'--token=act_{TOKEN}'],
+        ['pos', '--x.access_token=sbp_' + '0123456789abcdef' * 2],
     ],
     ids=[
         'inline header set',
@@ -38,6 +40,7 @@ REPO = Path(__file__).resolve().parents[3]
         'flag and token as two arguments',
         'authorization value',
         'token with a gitleaks stopword',
+        'lowercase token with a prefix',
     ],
 )
 def test_a_command_with_a_credential_is_refused(argv):
@@ -104,3 +107,8 @@ def test_a_diff_with_no_credential_passes():
         '+    image_key = "image.wrist_2"\n+    api_version = "v1"\n+    token = os.environ[TOKEN_ENV]\n',
         'git.current.diff',
     )
+
+
+def test_the_refusal_of_an_inline_header_set_names_a_config_that_reads_a_file():
+    with pytest.raises(CredentialInRunMetadata, match=re.escape('--policy=@positronic.cfg.policy.file_authed_remote')):
+        check_command(['pos', '--policy.headers={}'])

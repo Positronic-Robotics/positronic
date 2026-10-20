@@ -148,6 +148,10 @@ def get_docker_info() -> dict | None:  # noqa: C901
     return None
 
 
+POSITRONIC_DIFF = 'git.positronic.diff'
+CURRENT_DIFF = 'git.current.diff'
+
+
 def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, add_uv_lock: bool = True) -> dict:  # noqa: C901
     """Capture script run metadata for maximum reproducibility.
 
@@ -196,7 +200,7 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
         if add_git_diff and pkg_checkout is not None:
             git_diff = get_git_diff(workdir=pkg_checkout, patterns=patterns)
             if git_diff:
-                metadata['git.positronic.diff'] = git_diff
+                metadata[POSITRONIC_DIFF] = git_diff
 
     git_state = get_git_state()
     if git_state and git_state != pkg_git_state:
@@ -204,7 +208,7 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
         if add_git_diff:
             git_diff = get_git_diff(patterns=patterns)
             if git_diff:
-                metadata['git.current.diff'] = git_diff
+                metadata[CURRENT_DIFF] = git_diff
 
     # Environment information
     environment = {}
@@ -238,35 +242,16 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
     return metadata
 
 
-def save_run_metadata(
-    output_dir: str | Path,
-    patterns: list[str] | None = None,
-    add_git_diff: bool = True,
-    add_uv_lock: bool = True,
-    prefix: str = 'run_metadata',
-) -> Path:
-    """Capture and save script run metadata to a YAML file.
-
-    Args:
-        output_dir: Directory where the metadata YAML file should be saved.
-        patterns: List of file patterns for git diff (e.g., ['*.py', '*.toml']).
-                 Defaults to ['*.py'] if None.
-        add_git_diff: Whether to include git diff in the metadata.
-        add_uv_lock: Whether to include uv.lock in the metadata.
-        prefix: Prefix for the metadata filename (default: 'run_metadata').
-                The filename will be '{prefix}_{timestamp}.yaml'.
-
-    Returns:
-        Path to the saved metadata file.
-
-    Raises:
-        CredentialInRunMetadata: the command or a diff looks like it holds a credential. Nothing is written.
-    """
-    metadata = run_metadata(patterns, add_git_diff, add_uv_lock)
+def check_run_metadata(metadata: dict) -> None:
+    """Raise `CredentialInRunMetadata` when the command or a diff of ``metadata`` looks like it holds a credential."""
     check_command(metadata['command'])
-    for field, value in metadata.items():
-        if field.startswith('git.') and field.endswith('.diff'):
-            check_text(value, field)
+    for field in (POSITRONIC_DIFF, CURRENT_DIFF):
+        if field in metadata:
+            check_text(metadata[field], field)
+
+
+def write_run_metadata(output_dir: str | Path, metadata: dict, prefix: str = 'run_metadata') -> Path:
+    """Write ``metadata`` to ``{output_dir}/{prefix}_{timestamp}.yaml`` and return that path."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
@@ -297,6 +282,35 @@ def save_run_metadata(
     return output_path
 
 
+def save_run_metadata(
+    output_dir: str | Path,
+    patterns: list[str] | None = None,
+    add_git_diff: bool = True,
+    add_uv_lock: bool = True,
+    prefix: str = 'run_metadata',
+) -> Path:
+    """Capture and save script run metadata to a YAML file.
+
+    Args:
+        output_dir: Directory where the metadata YAML file should be saved.
+        patterns: List of file patterns for git diff (e.g., ['*.py', '*.toml']).
+                 Defaults to ['*.py'] if None.
+        add_git_diff: Whether to include git diff in the metadata.
+        add_uv_lock: Whether to include uv.lock in the metadata.
+        prefix: Prefix for the metadata filename (default: 'run_metadata').
+                The filename will be '{prefix}_{timestamp}.yaml'.
+
+    Returns:
+        Path to the saved metadata file.
+
+    Raises:
+        CredentialInRunMetadata: the command or a diff looks like it holds a credential. Nothing is written.
+    """
+    metadata = run_metadata(patterns, add_git_diff, add_uv_lock)
+    check_run_metadata(metadata)
+    return write_run_metadata(output_dir, metadata, prefix)
+
+
 def save_run_metadata_deferred(
     output_dir: str | Path, patterns: list[str] | None = None, prefix: str = 'run_metadata', timeout: int = 300
 ):
@@ -305,12 +319,13 @@ def save_run_metadata_deferred(
     Useful when the training framework (e.g. lerobot) rejects pre-existing output dirs.
     """
     output_path = Path(output_dir)
-    check_command(sys.argv)
+    metadata = run_metadata(patterns)
+    check_run_metadata(metadata)
 
     def _save():
         for _ in range(timeout // 5):
             if output_path.exists():
-                save_run_metadata(output_path, patterns=patterns, prefix=prefix)
+                write_run_metadata(output_path, metadata, prefix)
                 return
             time.sleep(5)
         logging.warning(f'Timed out waiting for output directory {output_path} to be created')
