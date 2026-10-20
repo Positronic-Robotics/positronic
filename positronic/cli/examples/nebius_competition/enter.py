@@ -6,8 +6,7 @@ Usage
   competition-enter --accept-terms=<version>  # the same, then enter your team and accept that version
 
 The key comes from POSITRONIC_PLATFORM_API_KEY, else from the record `positronic account register` saves.
-The entry asks for no terms. The platform refuses the first submission of a team until the team accepts them,
-and its refusal names the version to accept.
+A team accepts the terms at its first submission: the platform refuses it until then, and names the version.
 """
 
 from __future__ import annotations
