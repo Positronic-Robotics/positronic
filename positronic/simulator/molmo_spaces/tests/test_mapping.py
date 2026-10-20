@@ -1,5 +1,7 @@
 """Benchmark selection, seed handling and command conversion checks without the MolmoSpaces runtime."""
 
+import json
+import os
 import types
 from pathlib import Path
 
@@ -358,3 +360,33 @@ def test_the_server_reads_the_right_view_list_every_other_reader_reads():
     shared = read_episode_list(RIGHT_VIEW_BLOCKED_PATH)
     server = mapping.load_right_view_blocked(RIGHT_VIEW_BLOCKED_PATH)
     assert server == {mapping.BenchmarkPath(*benchmark.parts): episodes for benchmark, episodes in shared.items()}
+
+
+# The `robot.robot_name` of a benchmark episode that the DROID eval runs.
+_DROID_ROBOT_NAME = 'franka_droid'
+
+
+@pytest.fixture(scope='module')
+def installed_droid_episode_counts() -> dict[mapping.BenchmarkPath, int]:
+    """The episode count of each DROID benchmark in the installed asset packs."""
+    assets = os.environ.get(mapping.ASSETS_DIR_ENV)
+    if not assets:
+        pytest.skip(f'{mapping.ASSETS_DIR_ENV} is unset — the MolmoSpaces asset packs list the benchmarks')
+    counts = {}
+    for bench in mapping.discover_benchmarks(Path(assets)):
+        episodes = json.loads((bench.under(Path(assets)) / mapping.MOLMO_BENCHMARK_MANIFEST).read_text())
+        if episodes and episodes[0]['robot']['robot_name'] == _DROID_ROBOT_NAME:
+            counts[bench] = len(episodes)
+    return counts
+
+
+def test_every_installed_droid_benchmark_has_a_right_view_entry(installed_droid_episode_counts):
+    blocked = mapping.load_right_view_blocked(RIGHT_VIEW_BLOCKED_PATH)
+    assert sorted(set(installed_droid_episode_counts) - set(blocked)) == []
+
+
+def test_every_listed_right_view_episode_exists_in_its_installed_benchmark(installed_droid_episode_counts):
+    blocked = mapping.load_right_view_blocked(RIGHT_VIEW_BLOCKED_PATH)
+    for bench, episodes in blocked.items():
+        if bench in installed_droid_episode_counts:
+            assert all(0 <= i < installed_droid_episode_counts[bench] for i in episodes), bench

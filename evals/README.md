@@ -92,6 +92,9 @@ from positronic_evals.molmo_spaces import RIGHT_VIEW_BLOCKED_PATH, read_episode_
 blocked = read_episode_list(RIGHT_VIEW_BLOCKED_PATH)
 ```
 
-A benchmark that a list does not name is unswept. Rebuild a list when the pinned MolmoSpaces revision
-or the asset packs change. A new list goes beside `right_view_blocked.json`, with its path constant in
-`positronic_evals.molmo_spaces`, and `read_episode_list` reads it.
+A benchmark that a list does not name is unswept. The right-view list names every DROID benchmark in the
+asset packs of the pinned MolmoSpaces revision. An empty entry is a swept benchmark with no blocked
+episode. On a machine with the packs, `positronic/simulator/molmo_spaces/tests/test_mapping.py` checks
+that each DROID benchmark has an entry and that each listed episode exists. Rebuild a list when the
+pinned MolmoSpaces revision or the asset packs change. A new list goes beside `right_view_blocked.json`,
+with its path constant in `positronic_evals.molmo_spaces`, and `read_episode_list` reads it.
