@@ -442,6 +442,12 @@ def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
     )
 
 
+def test_session_params_refuse_an_operator_position_that_is_no_operator_position():
+    with pytest.raises(ValueError, match="operator_position must be one of .*, got '.BACK'"):
+        protocol.SessionParams('.BACK')  # pyright: ignore[reportArgumentType]
+    assert protocol.SessionParams(None).operator() is None
+
+
 class _BlankRenderer:
     """A MuJoCo renderer that draws black images, so the test needs no GL."""
 

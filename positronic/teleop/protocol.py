@@ -93,17 +93,20 @@ class SessionParams:
     jpeg_quality: int = DEFAULT_JPEG_QUALITY
 
     def __post_init__(self) -> None:
+        if self.operator_position is not None and not isinstance(self.operator_position, OperatorPosition):
+            names = ', '.join(OperatorPosition.__members__)
+            raise ValueError(
+                f'operator_position must be one of {names}, or null for UMI mode, got {self.operator_position!r}'
+            )
         if not math.isfinite(self.image_fps) or self.image_fps <= 0:
             raise ValueError(f'image_fps must be finite and positive, got {self.image_fps}')
 
     @classmethod
-    def from_json(cls, operator_position: str | None, cameras: Any, **params: Any) -> SessionParams:
+    def from_json(cls, operator_position: Any, cameras: Any, **params: Any) -> SessionParams:
         """The parameters that the JSON values of a session name. Raise for a name that is no ``OperatorPosition``."""
-        names = [position.name for position in OperatorPosition]
-        if operator_position is not None and operator_position not in names:
-            raise ValueError(f'operator_position must be one of {", ".join(names)}, or null for UMI mode')
-        position = None if operator_position is None else OperatorPosition[operator_position]
-        return cls(position, camera_names(cameras), **params)
+        if isinstance(operator_position, str):
+            operator_position = OperatorPosition.__members__.get(operator_position, operator_position)
+        return cls(operator_position, camera_names(cameras), **params)
 
     def to_json(self) -> dict[str, Any]:
         """The parameters as JSON values."""
