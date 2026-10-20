@@ -32,6 +32,7 @@ from positronic.drivers.roboarm.models import (
     bundled_franka_model,
     bundled_panda_model,
 )
+from positronic.drivers.roboarm.so101.driver import Robot as So101Robot
 from positronic.utils import package_assets_path
 
 PANDA_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
@@ -129,6 +130,21 @@ def test_dls_solver_with_limits_damps_joint_motion_at_a_singularity():
     q_result = solver.solve(q_start, target_pose)
 
     assert np.linalg.norm(q_result - q_start) <= tool_change / IK_DAMPING_SINGULAR_VALUE + 1e-3
+
+
+def test_dls_solver_with_limits_solves_a_five_joint_arm():
+    meta = So101Robot._build_robot_meta()
+    solver = DLSIKSolverWithLimits(meta[roboarm_keys.URDF], meta[roboarm_keys.JOINT_NAMES], DEFAULT_FRAME)
+    q_start = np.array([0.1, -0.2, 0.3, 0.2, 0.1])
+    q_target = q_start + 0.05
+    pos, R, _ = solver._fk_jac(q_target)
+    target_pose = geom.Transform3D(pos, geom.Rotation.from_rotation_matrix(R)).as_vector(
+        geom.Rotation.Representation.QUAT
+    )
+
+    q_result = solver.solve(q_start, target_pose)
+
+    np.testing.assert_allclose(solver._fk_jac(q_result)[0], pos, atol=1e-3)
 
 
 @pytest.mark.parametrize('q_target', TEST_CONFIGS)

@@ -419,22 +419,19 @@ class DLSIKSolver(_SolverBase):
 # Mirrors of the positronic-franka IK constants, in src/pose_ik.hpp.
 IK_DAMPING_SINGULAR_VALUE = 0.1
 IK_MAX_JOINT_STEP = 0.5
-IK_POSTURE_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
-IK_POSTURE_PULL_PER_COMMAND = 0.02
 
 
 class DLSIKSolverWithLimits(_SolverBase):
     """IK that puts the tool as close as the bounds allow to the target, in one solve per command.
 
     Ports inverse_kinematics_with_limits from positronic-franka pose_ik.hpp: each joint stays within the model's
-    limits and within ``max_step`` of the current joints, the move is damped near a singularity, and a posture row
-    pulls the joints towards ``IK_POSTURE_JOINTS`` along the null space of the tool Jacobian.
+    limits and within ``max_step`` of the current joints, and the move is damped near a singularity. The driver's
+    posture row is left out: it holds a seven-joint Franka pose, and it only moves the joints in the null space.
     """
 
     _ITERATIONS = 60
     _STEP_TOLERANCE = 1e-9
     _LEVENBERG = 1e-4
-    _POSTURE_WEIGHT = 0.1
 
     def __init__(self, urdf_xml, joint_names, control_frame, *, max_step=IK_MAX_JOINT_STEP):
         super().__init__(urdf_xml, joint_names, control_frame)
@@ -445,12 +442,10 @@ class DLSIKSolverWithLimits(_SolverBase):
         q0 = current_q.astype(np.float64)
         n = len(q0)
 
-        _, sv, Vt = np.linalg.svd(self._fk_jac(q0)[2])
-        s_min, null_direction = sv[-1], Vt[-1]
+        s_min = np.linalg.svd(self._fk_jac(q0)[2], compute_uv=False)[-1]
         # Chiaverini's law; mu_max = S0 / sqrt(2) keeps the weak-direction gain s / (s^2 + mu^2) at or below 1 / S0.
         S0 = IK_DAMPING_SINGULAR_VALUE
-        mu_sq = 0.5 * S0**2 * (1.0 - (s_min / S0) ** 2) if s_min < S0 else 0.0
-        posture_target = -IK_POSTURE_PULL_PER_COMMAND * null_direction @ (q0 - IK_POSTURE_JOINTS)
+        mu = np.sqrt(0.5 * S0**2 * (1.0 - (s_min / S0) ** 2)) if s_min < S0 else 0.0
 
         lower = np.maximum(q0 - self.max_step, self._joint_lower)
         upper = np.minimum(q0 + self.max_step, self._joint_upper)
@@ -458,23 +453,13 @@ class DLSIKSolverWithLimits(_SolverBase):
             raise ValueError('No joints are within max_step of current_q and inside the joint limits')
         q = np.clip(q0, lower, upper)
 
-        # min |e(q)|^2 + mu^2 |q - q0|^2 + w^2 (n0.(q - q0) - posture_target)^2 on the box, by Gauss-Newton on q.
-        rows = np.vstack([
-            np.sqrt(mu_sq) * np.eye(n),
-            np.sqrt(self._LEVENBERG) * np.eye(n),
-            self._POSTURE_WEIGHT * null_direction,
-        ])
+        # min |e(q)|^2 + mu^2 |q - q0|^2 on the box, by Gauss-Newton on q.
+        damping_rows = np.vstack([mu * np.eye(n), np.sqrt(self._LEVENBERG) * np.eye(n)])
         for _ in range(self._ITERATIONS):
             pos, R_cur, J = self._fk_jac(q)
             e = _cartesian_error(pos, R_cur, t_tgt, R_tgt)
-            posture_residual = null_direction @ (q - q0) - posture_target
-            A = np.vstack([J, rows])
-            b = np.concatenate([
-                -e,
-                -np.sqrt(mu_sq) * (q - q0),
-                np.zeros(n),
-                [-self._POSTURE_WEIGHT * posture_residual],
-            ])
+            A = np.vstack([J, damping_rows])
+            b = np.concatenate([-e, -mu * (q - q0), np.zeros(n)])
             d = lsq_linear(A, b, bounds=(lower - q - 1e-12, upper - q + 1e-12), method='bvls').x
             q = np.clip(q + d, lower, upper)
             if np.linalg.norm(d) < self._STEP_TOLERANCE:
