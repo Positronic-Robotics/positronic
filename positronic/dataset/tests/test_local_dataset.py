@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pos3
 import pytest
 
 from positronic.dataset import Episode, edits
@@ -14,11 +15,13 @@ from positronic.dataset.local_dataset import (
     LocalDatasetWriter,
     load_all_datasets,
     load_dataset,
+    sync_recording_dir,
 )
 from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 
 from .test_dataset import build_dataset_with_signal, episode_ids
+from .utils import InMemoryS3
 
 
 def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
@@ -778,3 +781,53 @@ def test_load_all_datasets_keeps_all_dropped_dataset(tmp_path):
         load_dataset(tmp_path / 'ds1').drop(ds[i].meta['uid'])
     # All episodes are curated out, but the directory is still a dataset: an empty view, not an error
     assert len(load_all_datasets(tmp_path)) == 0
+
+
+BUCKET = 'recordings'
+PREFIX = f's3://{BUCKET}/run/'
+
+
+@pytest.fixture
+def s3(monkeypatch):
+    storage = InMemoryS3()
+    monkeypatch.setattr(pos3._Mirror, '_get_client', lambda self, profile=None: storage)
+    return storage
+
+
+def _record_one_episode(root: Path) -> None:
+    with LocalDatasetWriter(root) as w, w.new_episode() as ew:
+        ew.set_static('id', 0)
+
+
+def test_a_recording_sync_keeps_a_key_that_another_writer_put_after_it_started(tmp_path, s3):
+    with pos3.mirror(cache_root=str(tmp_path / 'cache'), show_progress=False):
+        root = sync_recording_dir(PREFIX)
+        s3.objects[BUCKET, 'run/other/meta.json'] = b'{}'
+        _record_one_episode(root)
+
+    assert s3.objects[BUCKET, 'run/other/meta.json'] == b'{}'
+
+
+def test_an_episode_that_a_sync_caught_open_lists_as_finished_in_s3(tmp_path, s3):
+    with pos3.mirror(cache_root=str(tmp_path / 'cache'), show_progress=False):
+        root = sync_recording_dir(PREFIX)
+        with LocalDatasetWriter(root) as w, w.new_episode() as ew:
+            ew.set_static('id', 0)
+            # `_sync_uploads` and `_uploads` are pos3 internals: they run the 300 s background sync now.
+            mirror = pos3._require_active_mirror()
+            mirror._sync_uploads(list(mirror._uploads.values()))
+
+    assert not [key for _, key in s3.objects if key.endswith(UNFINISHED_MARKER)]
+    with pos3.mirror(cache_root=str(tmp_path / 'reader'), show_progress=False):
+        assert [ep['id'] for ep in LocalDataset(pos3.download(PREFIX))] == [0]
+
+
+def test_a_recording_sync_does_not_revert_edits_that_grew_in_s3(tmp_path, s3):
+    key = f'run/{edits.EDITS_FILE}'
+    s3.objects[BUCKET, key] = b'{"op": "drop"}\n'
+    with pos3.mirror(cache_root=str(tmp_path / 'cache'), show_progress=False):
+        root = sync_recording_dir(PREFIX)
+        s3.objects[BUCKET, key] += b'{"op": "undrop"}\n'
+        _record_one_episode(root)
+
+    assert s3.objects[BUCKET, key] == b'{"op": "drop"}\n{"op": "undrop"}\n'
