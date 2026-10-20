@@ -95,7 +95,7 @@ hardware = [
 # The Franka arm, apart from `hardware`, because `positronic-franka` ships no wheel: it builds against a
 # libfranka that the machine must already carry. A station with no Franka installs `hardware` without it.
 franka = [
-    "positronic-franka>=0.8.1; sys_platform == 'linux'",
+    "positronic-franka>=0.9.0; sys_platform == 'linux'",
 ]
 lerobot_0_3_3 = [
     "lerobot==0.3.3",
