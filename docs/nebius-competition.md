@@ -1,6 +1,6 @@
 # Enter the Physical AI Competition
 
-The [competition site](https://physical-ai-competition.positronic.ro/index.html) has the rules, the dates
+The [competition site](https://competition.phail.ai/) has the rules, the dates
 and the leaderboard.
 
 A coding agent can do most of the work. You approve the sign-in, and you choose where to push your image.
@@ -206,7 +206,7 @@ positronic eval list
 ### Choose your final entry
 
 Before submissions close, choose your final entry, as the
-[rules](https://physical-ai-competition.positronic.ro/rules.html#finale) say.
+[rules](https://competition.phail.ai/rules#finale) say.
 
 ### Ask for help
 
@@ -238,7 +238,7 @@ eval against the server in the image.
 - The GPU is one `3g.40gb` slice of an NVIDIA H100, with 40448 MiB of memory.
 - The platform runs the image digest that it found when you submitted. It pulls that digest from your
   registry when the run starts, and it keeps no copy of the image.
-- The [rules](https://physical-ai-competition.positronic.ro/rules.html#limits) give the other limits on
+- The [rules](https://competition.phail.ai/rules#limits) give the other limits on
   the image.
 
 ### Start from an example image
@@ -345,7 +345,7 @@ You can make one submission per day. The count starts again at 00:00 UTC each da
 - A retry with the same `--transaction-key` returns the first submission, and it does not count again.
 - The platform refuses a submission over the limit with `quota_exceeded`.
 - The competition can change the limit during the season. It announces each change on the
-  [competition site](https://physical-ai-competition.positronic.ro/index.html).
+  [competition site](https://competition.phail.ai/).
 
 ## Read the outcome
 
