@@ -22,7 +22,8 @@ Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
 - On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, and Docker.
 - Push access to a container registry, such as Docker Hub.
 
-You can install the commands, register and submit on any computer. Run the other steps, and your coding
+You can install the commands, register, enter and submit on any computer. Do these four steps on the same
+computer, because the API key stays on the computer that registered. Build and test, and run your coding
 agent, on the build machine.
 
 ## Use a coding agent
@@ -36,7 +37,7 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 
 1. Install the commands and register me. Ask me for a team name first.
    Show me the sign-in code and link, and wait while I approve it.
-   Keep the API key in my environment. Never print it again.
+   The command saves my API key on this computer. Never print the key.
 2. Enter me in the competition. Show me what becomes public and
    where to read how my data is used, and ask whether to enter.
    Never enter without explicit human approval.
@@ -54,35 +55,31 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 
 ### Install the commands
 
-The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later, the first version with
-`--with-executables-from`. Run `uv --version` to check. To update uv, run `uv self update`, or use the
-tool that installed uv.
+The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later. Run `uv --version` to check. To update
+uv, run `uv self update`, or use the tool that installed uv.
 
-This command installs the commands from the positronic repository on GitHub. It uses about 2 GB of disk
-space.
+This command installs the released `positronic` package. It uses about 2.5 GB of disk space.
 
 ```bash
-uv tool install --managed-python --with-executables-from positronic-platform-client \
-    git+https://github.com/Positronic-Robotics/positronic
+uv tool install --managed-python --python 3.13 'positronic>=0.3.1'
 ```
 
-`--managed-python` makes uv use a Python that it installs. The Python of Ubuntu cannot build one of the
-dependencies.
+`--managed-python --python 3.13` makes uv install Python 3.13 and use it. The Python of Ubuntu cannot
+build one of the dependencies, and `positronic` does not run on Python 3.14 or later.
 
 To update the commands later, run `uv tool upgrade positronic`.
 
 ### Register
 
 Choose a team name. The command prints a code and a link. Open the link, sign in, and enter the code.
-The sign-in page shows the ways to sign in that the platform takes. The command then prints your API
-key one time.
+The sign-in page shows the ways to sign in that the platform takes. The command saves your API key on
+this computer, and prints the path of the file. The other commands read the key from that file.
 
 ```bash
-platform-register --alias="<team name>"
-export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
+positronic account register --alias="<team name>"
 ```
 
-- Keep the key secret. If you lose it, run `platform-register --rotate` to get a new key.
+- Keep the key file secret. If you lose it, run `positronic account register --rotate` to get a new key.
 
 ### Enter the competition
 
