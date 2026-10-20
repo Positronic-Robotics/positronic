@@ -118,11 +118,11 @@ def check_command(argv: Sequence[str]) -> None:
         for candidate in joined:
             flag = _inline_headers_flag(candidate)
             if flag is not None:
-                owner = flag.partition('.headers')[0]
+                headers = flag.partition('.headers')[0] + '.headers'
                 raise CredentialInRunMetadata(
                     f'command: argv[{i}] gives {flag} inline, and run metadata stores the command line; '
-                    f'put the header set in a JSON file and read it with a config that takes a path: '
-                    f'{owner}=@positronic.cfg.policy.file_authed_remote {owner}.headers.path=<file>'
+                    f'put the header set in a JSON file and read it from there: '
+                    f'{headers}=@positronic.cfg.policy.file_headers {headers}.path=<file>'
                 )
             if _holds_credential(candidate):
                 raise CredentialInRunMetadata(

@@ -109,6 +109,9 @@ def test_a_diff_with_no_credential_passes():
     )
 
 
-def test_the_refusal_of_an_inline_header_set_names_a_config_that_reads_a_file():
-    with pytest.raises(CredentialInRunMetadata, match=re.escape('--policy=@positronic.cfg.policy.file_authed_remote')):
-        check_command(['pos', '--policy.headers={}'])
+@pytest.mark.parametrize('flag', ['--policy.headers', '--policy.headers.Modal-Key', '--policy.base.headers'])
+def test_the_refusal_of_an_inline_header_set_names_the_config_that_reads_a_header_file(flag):
+    headers = flag.partition('.headers')[0] + '.headers'
+    with pytest.raises(CredentialInRunMetadata, match=re.escape(f'{headers}=@positronic.cfg.policy.file_headers')):
+        check_command(['pos', f'{flag}=short'])
+    check_command(['pos', f'{headers}=@positronic.cfg.policy.file_headers', f'{headers}.path=/tmp/h.json'])
