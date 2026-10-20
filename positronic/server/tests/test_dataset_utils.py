@@ -592,7 +592,7 @@ def test_a_chart_plots_the_signals_the_episode_records_and_a_chart_with_none_is_
 
 
 def test_the_signals_no_chart_plots_follow_the_charts_in_one_group(tmp_path):
-    widths = {keys.GRIP: 1, keys.TARGET_GRIP: 1, 'progress.delivered': 1, 'progress.placed': 1, 'device.level': 1}
+    widths = {keys.GRIP: 1, keys.TARGET_GRIP: 1, _DELIVERED: 1, 'progress.placed': 1, 'device.level': 1}
     ep = _episode(tmp_path / 'ep', widths)
 
     grip, other = _bottom_row(ep, _layout(_GRIP))
@@ -615,7 +615,7 @@ def test_other_lists_its_signals_by_name_in_any_order_the_recording_holds_them(t
 
 
 def test_with_unnamed_signals_off_only_the_charts_show(tmp_path):
-    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.TARGET_GRIP: 1, 'progress.delivered': 1, 'wide': 33})
+    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.TARGET_GRIP: 1, _DELIVERED: 1, 'wide': 33})
 
     assert [view.name for view in _bottom_row(ep, _layout(_GRIP, show_unnamed_signals=False))] == ['Grip']
 
