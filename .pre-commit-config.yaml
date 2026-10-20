@@ -95,3 +95,6 @@ repos:
     rev: v8.30.1
     hooks:
       - id: gitleaks
+        # gitleaks 8.30.1 reads no changes from git output it colors (color.ui or color.diff set to
+        # always), and then passes. Turn git color off for its run.
+        entry: env GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=color.ui GIT_CONFIG_VALUE_0=never GIT_CONFIG_KEY_1=color.diff GIT_CONFIG_VALUE_1=never gitleaks git --pre-commit --redact --staged --verbose
