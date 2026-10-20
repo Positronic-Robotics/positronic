@@ -736,6 +736,28 @@ def test_the_default_charts_the_progress_marks_and_keeps_only_their_text_log_in_
     ]
 
 
+def _control_mode(arm: str | None, entry: str) -> str:
+    return f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.CONTROL_MODE_SUFFIX}.{entry}'
+
+
+def test_the_default_leaves_the_control_mode_of_each_arms_commands_out_of_other(tmp_path):
+    modes = {_control_mode(None, 'impedance.kq'): 7, _control_mode(keys.LEFT_ARM, 'position_control'): 1}
+    ep = _episode(tmp_path / 'ep', {**modes, 'device.level': 1})
+
+    (other,) = _default_column(ep).contents
+
+    assert [view.name for view in other.contents[0].contents] == ['device.level']
+
+
+def test_a_chart_that_names_a_control_mode_plots_it(tmp_path):
+    kq = _control_mode(None, 'impedance.kq')
+    ep = _episode(tmp_path / 'ep', {kq: 7})
+
+    (chart,) = _bottom_row(ep, _layout({'Stiffness': [kq]}))
+
+    assert chart.contents == [f'/signals/{kq}/**']
+
+
 def test_a_text_signal_holds_its_last_value_to_the_last_sample(tmp_path, monkeypatch):
     sent: dict[str, list[int]] = {}
     monkeypatch.setattr(

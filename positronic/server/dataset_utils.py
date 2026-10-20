@@ -275,7 +275,7 @@ class ReplayLayout:
     any other key is a chart of its own. A list names each line by its signal, and a dict by its key. A text signal
     plots the index of its value, and its line name also names each value. A chart with no signal in the episode is
     left out. With ``show_unnamed_signals``, the signals that no chart plots and the log of each text signal follow in
-    one group, Other.
+    one group, Other. Other leaves out a command's control mode.
     """
 
     split_shares: tuple[float, float]  # views, charts
@@ -303,8 +303,8 @@ def _value_names(key: str, signals: EpisodeSignals, ep: Episode) -> list[str] | 
     return None
 
 
-def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | rrb.Container]:
-    """A view of each signal that is not in ``placed``, and the text log of each text signal, by name.
+def _signal_views(signals: EpisodeSignals, left_out: set[str]) -> list[rrb.View | rrb.Container]:
+    """A view of each signal that is not in ``left_out``, and the text log of each text signal, by name.
 
     A group of signals that share a prefix shows as tabs.
     """
@@ -330,7 +330,7 @@ def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | 
 
     # Each group becomes a Tabs container that opens on its first text signal.
     # A text signal's log is a cell of its own beside its group: a share of one grid cell is too narrow to read.
-    unplaced = sorted(sig for sig in [*signals.plotted, *signals.plotted_texts] if sig not in placed)
+    unplaced = sorted(sig for sig in [*signals.plotted, *signals.plotted_texts] if sig not in left_out)
     views: list[rrb.View | rrb.Container] = []
     for group_name, sigs in _group_signals_by_prefix(unplaced):
         if len(sigs) == 1:
@@ -422,8 +422,12 @@ def _chart_cells(charts: Charts, signals: EpisodeSignals, ep: Episode) -> list[r
 
 
 def _other_cell(signals: EpisodeSignals, placed: set[str]) -> rrb.Tabs | None:
-    """One group, Other, of the signals not in ``placed``, every text log, and the signals left unplotted."""
-    views = _signal_views(signals, placed)
+    """One group, Other, of the signals not in ``placed``, every text log, and the signals left unplotted.
+
+    A command's control mode stays out of Other: it shows only where a chart names it.
+    """
+    control_modes = {signal for signal in signals.plotted if keys.is_control_mode(signal)}
+    views = _signal_views(signals, placed | control_modes)
     return _titled_tabs('Other', views) if views else None
 
 
@@ -1090,7 +1094,7 @@ def stream_episode_rrd(
     Raw image streams and numeric signals with a recognized nanosecond clock are thinned to ``max_hz``; a stored
     video keeps every frame. ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
     Without a ``layout``, the replay shows the cameras and the 3D view in one grid, and on its right a column: the
-    charts of each arm, a chart of the progress marks, and Other, a group of every other signal. ``timeline`` selects
+    charts of each arm, a chart of the progress marks, and Other, a group of the other signals. ``timeline`` selects
     the initial view; all timelines are exported.
     """
 
