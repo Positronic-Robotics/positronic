@@ -80,13 +80,15 @@ positronic account register --alias="<team name>"
 ```
 
 - Keep the key file secret. If you lose it, run `positronic account register --rotate` to get a new key.
+  This stops the old key.
+- If your account already has a key, the command does not show the key again. Set
+  `POSITRONIC_PLATFORM_API_KEY` to the key that you have.
 
 ### Enter the competition
 
-The command shows the link to the [terms](https://competition.phail.ai/terms) and their version, and
-what becomes public. The section "Your data" of the terms tells how the organizers use your data. With
-`--yes`, your team enters. The entry asks for no terms: your team accepts them with its first submission
-(see [Submit](#submit)).
+The command shows what becomes public about your team. With `--yes`, your team enters. The entry asks
+for no terms: your team accepts the [terms](https://competition.phail.ai/terms) with its first submission
+(see [Submit](#submit)). The section "Your data" of the terms tells how the organizers use your data.
 
 ```bash
 competition-enter

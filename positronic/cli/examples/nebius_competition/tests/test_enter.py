@@ -17,14 +17,12 @@ from positronic.cli.examples.nebius_competition import enter
 from positronic.cli.examples.nebius_competition.enter import (
     COMPETITION_ACCEPT_TERMS,
     COMPETITION_ENTER,
-    COMPETITION_TERMS,
     CompetitionClient,
     CompetitionEntry,
-    CompetitionTerms,
 )
 
 BASE = 'http://gateway.test'
-TERMS = CompetitionTerms(version='2026-10-14', url='https://terms.example/terms')
+TERMS_VERSION = '2026-10-14'
 KEY = ApiKey('pk_live_team')
 
 
@@ -48,13 +46,11 @@ class StubGateway:
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        if request.url.path == COMPETITION_TERMS:
-            return httpx.Response(200, json=TERMS.model_dump(mode='json'))
         if request.url.path == COMPETITION_ENTER:
             return self.refusal or httpx.Response(200, json=self.entry.model_dump(mode='json'))
         if request.url.path == COMPETITION_ACCEPT_TERMS:
             accepted = self.entry.model_copy()
-            accepted.terms_version = TERMS.version
+            accepted.terms_version = TERMS_VERSION
             return httpx.Response(200, json=accepted.model_dump(mode='json'))
         raise AssertionError(f'the command reached a route it has no business at: {request.url.path}')
 
@@ -73,8 +69,19 @@ def test_without_the_flag_the_command_shows_what_becomes_public_and_enters_nothi
         enter.run(client, confirmed=False, accepted_version=None)
 
     shown = capsys.readouterr().out
-    assert TERMS.version in shown and TERMS.url in shown and 'Your data' in shown and 'videos of your runs' in shown
-    assert 'first submission' in shown and '--yes' in shown and gateway.paths() == [COMPETITION_TERMS]
+    assert 'videos of your runs' in shown and shown.endswith('To join, run: competition-enter --yes\n')
+    assert gateway.paths() == []
+
+
+def test_the_entry_leaves_the_terms_to_the_first_submission(capsys):
+    gateway = StubGateway()
+
+    with gateway.client() as client:
+        enter.run(client, confirmed=False, accepted_version=None)
+        enter.run(client, confirmed=True, accepted_version=None)
+
+    shown = capsys.readouterr().out.lower()
+    assert 'terms' not in shown and '--accept-terms' not in shown
 
 
 def test_the_flag_enters_with_no_terms(capsys):
@@ -83,11 +90,10 @@ def test_the_flag_enters_with_no_terms(capsys):
     with gateway.client() as client:
         enter.run(client, confirmed=True, accepted_version=None)
 
-    assert gateway.paths() == [COMPETITION_TERMS, COMPETITION_ENTER]
+    assert gateway.paths() == [COMPETITION_ENTER]
     # rules-allow: hardcoded-keys — the test pins the request's wire spelling.
-    assert json.loads(gateway.requests[1].content) == {}
-    assert gateway.requests[1].headers[AUTH_HEADER] == f'Bearer {KEY}'
-    assert AUTH_HEADER not in gateway.requests[0].headers
+    assert json.loads(gateway.requests[0].content) == {}
+    assert gateway.requests[0].headers[AUTH_HEADER] == f'Bearer {KEY}'
     assert capsys.readouterr().out.endswith('entered the competition on 2026-10-14\n')
 
 
@@ -95,32 +101,22 @@ def test_accept_terms_enters_and_sends_the_version_the_team_approved(capsys):
     gateway = StubGateway()
 
     with gateway.client() as client:
-        enter.run(client, confirmed=False, accepted_version=TERMS.version)
+        enter.run(client, confirmed=False, accepted_version=TERMS_VERSION)
 
-    assert gateway.paths() == [COMPETITION_TERMS, COMPETITION_ENTER, COMPETITION_ACCEPT_TERMS]
-    sent = enter.AcceptTermsRequest.model_validate_json(gateway.requests[2].content)
-    assert sent.terms_version == TERMS.version
-    assert gateway.requests[2].headers[AUTH_HEADER] == f'Bearer {KEY}'
-    assert f'accepted the terms version {TERMS.version}' in capsys.readouterr().out
+    assert gateway.paths() == [COMPETITION_ENTER, COMPETITION_ACCEPT_TERMS]
+    sent = enter.AcceptTermsRequest.model_validate_json(gateway.requests[1].content)
+    assert sent.terms_version == TERMS_VERSION
+    assert gateway.requests[1].headers[AUTH_HEADER] == f'Bearer {KEY}'
+    assert f'accepted the terms version {TERMS_VERSION}' in capsys.readouterr().out
 
 
 def test_accept_terms_without_a_key_stops_before_the_entry():
     gateway = StubGateway()
 
     with gateway.client(api_key=None) as client, pytest.raises(SystemExit):
-        enter.run(client, confirmed=False, accepted_version=TERMS.version)
+        enter.run(client, confirmed=False, accepted_version=TERMS_VERSION)
 
-    assert gateway.paths() == [COMPETITION_TERMS]
-
-
-def test_accept_terms_sends_the_approved_version_and_not_a_newer_current_one():
-    gateway = StubGateway()
-
-    with gateway.client() as client:
-        enter.run(client, confirmed=False, accepted_version='2026-01-01')
-
-    sent = enter.AcceptTermsRequest.model_validate_json(gateway.requests[2].content)
-    assert sent.terms_version == '2026-01-01' != TERMS.version
+    assert gateway.paths() == []
 
 
 def test_the_flag_without_a_key_stops_before_the_entry():
@@ -129,7 +125,7 @@ def test_the_flag_without_a_key_stops_before_the_entry():
     with gateway.client(api_key=None) as client, pytest.raises(SystemExit) as raised:
         enter.run(client, confirmed=True, accepted_version=None)
 
-    assert REGISTER_COMMAND in str(raised.value) and gateway.paths() == [COMPETITION_TERMS]
+    assert REGISTER_COMMAND in str(raised.value) and gateway.paths() == []
 
 
 def test_a_refusal_reaches_the_team(monkeypatch, capsys):
@@ -165,8 +161,8 @@ def test_the_flag_enters_with_the_key_and_platform_that_register_saved(monkeypat
 
     platforms = enter_from_the_command_line(monkeypatch, tmp_path, gateway, saved=ApiKey('pk_live_saved'))
 
-    assert gateway.paths() == [COMPETITION_TERMS, COMPETITION_ENTER]
-    assert gateway.requests[1].headers[AUTH_HEADER] == 'Bearer pk_live_saved' and platforms == [BASE]
+    assert gateway.paths() == [COMPETITION_ENTER]
+    assert gateway.requests[0].headers[AUTH_HEADER] == 'Bearer pk_live_saved' and platforms == [BASE]
 
 
 def test_a_key_in_the_environment_wins_over_the_saved_one(monkeypatch, tmp_path):
@@ -175,7 +171,7 @@ def test_a_key_in_the_environment_wins_over_the_saved_one(monkeypatch, tmp_path)
 
     enter_from_the_command_line(monkeypatch, tmp_path, gateway, saved=ApiKey('pk_live_saved'))
 
-    assert gateway.requests[1].headers[AUTH_HEADER] == f'Bearer {KEY}'
+    assert gateway.requests[0].headers[AUTH_HEADER] == f'Bearer {KEY}'
 
 
 def test_an_organizer_entry_says_so(capsys):
@@ -191,7 +187,6 @@ def test_an_organizer_entry_says_so(capsys):
 def test_the_models_keep_the_gateway_s_field_names():
     """The gateway declares its own copy of these models, so each field name is a contract."""
     # rules-allow: hardcoded-keys — these sets pin the wire names of the gateway's separate copy.
-    assert set(CompetitionTerms.model_fields) == {'version', 'url'}
     assert set(enter.EnterRequest.model_fields) == set()
     assert set(enter.AcceptTermsRequest.model_fields) == {'terms_version'}
     assert set(CompetitionEntry.model_fields) == {'entered_at', 'terms_version', 'organizer'}

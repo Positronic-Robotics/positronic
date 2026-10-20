@@ -6,8 +6,8 @@ from contextlib import contextmanager
 
 import configuronic as cfn
 import httpx
-from platform_client.client import PlatformClient
-from platform_client.config import CONFIG_FILENAME, Config, config_dir, write_config
+from platform_client.client import API_KEY_ENV, PlatformClient
+from platform_client.config import CONFIG_FILENAME, REGISTER_COMMAND, Config, config_dir, write_config
 from platform_client.device_flow import (
     ClientIds,
     DeviceFlowError,
@@ -103,7 +103,10 @@ def register(
         base_url = client.base_url
     print(f'user {response.user_id} ({response.key_status.name})')
     if response.api_key is None:
-        print('no key issued: one is minted on a first registration, or by --rotate')
+        print(
+            f'You already have an API key. Set {API_KEY_ENV} to it. '
+            f'Lost it? Run {REGISTER_COMMAND} --rotate. This stops the old key.'
+        )
         return
     try:
         write_config(directory, Config(platform_url=base_url, api_key=response.api_key))
