@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 
 import httpx
 import pytest
-from platform_client.client import AUTH_HEADER
+from platform_client.client import API_KEY_ENV, API_URL_ENV, AUTH_HEADER
+from platform_client.config import CONFIG_DIR_ENV, REGISTER_COMMAND, Config, write_config
 from platform_client.enums import ErrorCode
 from platform_client.errors import ApiErrorBody, ErrorEnvelope
 from platform_client.ids import ApiKey
@@ -25,6 +26,14 @@ from positronic.cli.examples.nebius_competition.enter import (
 BASE = 'http://gateway.test'
 TERMS = CompetitionTerms(version='2026-10-14', url='https://terms.example/terms')
 KEY = ApiKey('pk_live_team')
+
+
+@pytest.fixture(autouse=True)
+def no_saved_record(monkeypatch, tmp_path):
+    """A config directory with no record and no key in the environment, so the box's own never reach a test."""
+    monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(API_KEY_ENV, raising=False)
+    monkeypatch.delenv(API_URL_ENV, raising=False)
 
 
 @dataclass
@@ -120,20 +129,53 @@ def test_the_flag_without_a_key_stops_before_the_entry():
     with gateway.client(api_key=None) as client, pytest.raises(SystemExit) as raised:
         enter.run(client, confirmed=True, accepted_version=None)
 
-    assert 'platform-register' in str(raised.value) and gateway.paths() == [COMPETITION_TERMS]
+    assert REGISTER_COMMAND in str(raised.value) and gateway.paths() == [COMPETITION_TERMS]
 
 
 def test_a_refusal_reaches_the_team(monkeypatch, capsys):
     message = 'this gateway is not running'
     envelope = ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.bad_request, message=message))
     gateway = StubGateway(refusal=httpx.Response(400, json=envelope.model_dump(mode='json')))
-    monkeypatch.setattr(enter, 'CompetitionClient', lambda platform_url: gateway.client())
+    monkeypatch.setattr(enter, 'CompetitionClient', lambda platform_url, api_key: gateway.client())
     monkeypatch.setattr('sys.argv', ['competition-enter', '--yes'])
 
     with pytest.raises(SystemExit) as raised:
         enter.main()
 
     assert raised.value.code == 1 and message in capsys.readouterr().err
+
+
+def enter_from_the_command_line(monkeypatch, tmp_path, gateway: StubGateway, *, saved: ApiKey) -> list[str | None]:
+    """Run `main` with `--yes` and a record that `register` saved; return the platform the client got."""
+    write_config(tmp_path, Config(platform_url=BASE, api_key=saved))
+    platforms: list[str | None] = []
+
+    def client(platform_url: str | None, api_key: ApiKey | None) -> CompetitionClient:
+        platforms.append(platform_url)
+        return gateway.client(api_key=api_key)
+
+    monkeypatch.setattr(enter, 'CompetitionClient', client)
+    monkeypatch.setattr('sys.argv', ['competition-enter', '--yes'])
+    enter.main()
+    return platforms
+
+
+def test_the_flag_enters_with_the_key_and_platform_that_register_saved(monkeypatch, tmp_path):
+    gateway = StubGateway()
+
+    platforms = enter_from_the_command_line(monkeypatch, tmp_path, gateway, saved=ApiKey('pk_live_saved'))
+
+    assert gateway.paths() == [COMPETITION_TERMS, COMPETITION_ENTER]
+    assert gateway.requests[1].headers[AUTH_HEADER] == 'Bearer pk_live_saved' and platforms == [BASE]
+
+
+def test_a_key_in_the_environment_wins_over_the_saved_one(monkeypatch, tmp_path):
+    gateway = StubGateway()
+    monkeypatch.setenv(API_KEY_ENV, KEY)
+
+    enter_from_the_command_line(monkeypatch, tmp_path, gateway, saved=ApiKey('pk_live_saved'))
+
+    assert gateway.requests[1].headers[AUTH_HEADER] == f'Bearer {KEY}'
 
 
 def test_an_organizer_entry_says_so(capsys):
