@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import uuid
 from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager
@@ -25,6 +26,7 @@ from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
+from positronic.utils.credentials import CredentialInRunMetadata, check_command
 from positronic.utils.git import get_package_git_state
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,14 @@ logger = logging.getLogger(__name__)
 def _is_on_the_path_to(failed: str | None, directory: Path) -> bool:
     """Whether a failure names `directory`, a directory above it, or a file in it."""
     return failed is not None and (Path(failed).is_relative_to(directory) or directory.is_relative_to(failed))
+
+
+@contextmanager
+def _credential_refused_as_usage() -> Iterator[None]:
+    try:
+        yield
+    except CredentialInRunMetadata as exc:
+        raise CommandFailed(str(exc), Fault.USAGE) from exc
 
 
 def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
@@ -48,10 +58,13 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     if output_dir is None:
         os.environ.pop(ENV_TELEMETRY_DIR, None)
         return None
+    with _credential_refused_as_usage():
+        check_command(sys.argv)  # before the sync, so a refused run downloads and uploads nothing
     local_dir = sync_recording_dir(str(output_dir))
     try:
         local_dir.mkdir(parents=True, exist_ok=True)
-        utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
+        with _credential_refused_as_usage():
+            utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
     except OSError as exc:
         if not _is_on_the_path_to(exc.filename, local_dir):
             raise

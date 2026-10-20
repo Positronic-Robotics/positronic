@@ -445,6 +445,20 @@ def test_a_failure_outside_the_output_dir_is_not_reported_as_one(tmp_path, monke
             prepare_output_dir(tmp_path / 'episodes')
 
 
+def test_a_credential_on_the_command_line_is_a_usage_fault_before_the_output_dir_syncs(tmp_path, monkeypatch):
+    token = 'q7RfX2mKp9WzL4vNc8YbT3hJd'
+    monkeypatch.setattr(sys, 'argv', ['positronic', 'eval', 'run', f'--policy.headers={{"Modal-Key": "{token}"}}'])
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False), scoped_env_var(ENV_TELEMETRY_DIR):
+        with pytest.raises(CommandFailed, match=re.escape('argv[3]')) as exc:
+            prepare_output_dir(tmp_path / 'episodes')
+
+    assert exc.value.fault is Fault.USAGE
+    assert token not in str(exc.value)
+    assert not (tmp_path / 'episodes').exists()
+    assert not (tmp_path / 'mirror').exists()
+
+
 def test_a_recorded_run_leaves_no_telemetry_directory_behind(tmp_path, monkeypatch):
     """A destination that outlives its run reaches a later `Harness` in the same process."""
     monkeypatch.delenv(ENV_TELEMETRY_DIR, raising=False)

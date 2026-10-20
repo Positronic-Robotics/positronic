@@ -1,11 +1,15 @@
 import importlib.metadata
 import json
 import subprocess
+import sys
+import threading
+import traceback
 from pathlib import Path
 
 import pytest
 
 from positronic import utils
+from positronic.utils.credentials import CredentialInRunMetadata
 from positronic.utils.git import get_git_state, get_package_checkout, get_package_git_state
 
 WHEEL_COMMIT = '08b08698e11f081c5c8b3f82b44835be3f331a60'
@@ -108,3 +112,39 @@ def test_run_metadata_records_the_installed_revision_and_no_diff_for_a_wheel(cwd
     assert 'git.positronic.diff' not in metadata
     assert metadata['git.current']['commit'] == cwd_repo
     assert metadata['git.current']['dirty'] is True
+
+
+TOKEN = 'q7RfX2mKp9WzL4vNc8YbT3hJd'
+
+
+def test_run_metadata_with_a_credential_in_the_command_is_refused_and_not_written(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, 'argv', ['pos', '--policy.api_key', TOKEN])
+
+    with pytest.raises(CredentialInRunMetadata) as exc:
+        utils.save_run_metadata(tmp_path / 'out', add_uv_lock=False)
+
+    assert not (tmp_path / 'out').exists()
+    assert TOKEN not in ''.join(traceback.format_exception(exc.value))
+
+
+def test_run_metadata_with_a_credential_in_the_diff_is_refused_and_not_written(cwd_repo, tmp_path, monkeypatch):
+    install_as(monkeypatch, vcs_wheel())
+    monkeypatch.setattr(sys, 'argv', ['pos'])
+    Path('f').write_text(f'API_TOKEN = "{TOKEN}"\n')
+
+    with pytest.raises(CredentialInRunMetadata, match=r'^git\.current\.diff: line \d+ ') as exc:
+        utils.save_run_metadata(tmp_path / 'out', patterns=['f'], add_uv_lock=False)
+
+    assert not (tmp_path / 'out').exists()
+    assert TOKEN not in ''.join(traceback.format_exception(exc.value))
+
+
+def test_deferred_run_metadata_refuses_a_credential_before_it_starts_its_thread(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, 'argv', ['pos', f'--policy.api_key={TOKEN}'])
+    started = []
+    monkeypatch.setattr(threading.Thread, 'start', lambda self: started.append(self))
+
+    with pytest.raises(CredentialInRunMetadata):
+        utils.save_run_metadata_deferred(tmp_path / 'out')
+
+    assert started == []

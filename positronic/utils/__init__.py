@@ -14,6 +14,7 @@ import yaml
 
 from positronic import __file__ as pkg_init_file
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
+from positronic.utils.credentials import check_command, check_text
 from positronic.utils.frozen_dict import frozen_keys_dict, frozen_view
 from positronic.utils.git import get_git_diff, get_git_state, get_package_checkout, get_package_git_state
 
@@ -257,12 +258,19 @@ def save_run_metadata(
 
     Returns:
         Path to the saved metadata file.
+
+    Raises:
+        CredentialInRunMetadata: the command or a diff looks like it holds a credential. Nothing is written.
     """
+    metadata = run_metadata(patterns, add_git_diff, add_uv_lock)
+    check_command(metadata['command'])
+    for field, value in metadata.items():
+        if field.startswith('git.') and field.endswith('.diff'):
+            check_text(value, field)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
     output_path = output_dir / f'{prefix}_{timestamp}.yaml'
-    metadata = run_metadata(patterns, add_git_diff, add_uv_lock)
 
     # Custom dumper to format multiline strings (like git diffs) in readable YAML literal block style.
     # By default, PyYAML's emitter analyzes string content and may override the requested style
@@ -297,6 +305,7 @@ def save_run_metadata_deferred(
     Useful when the training framework (e.g. lerobot) rejects pre-existing output dirs.
     """
     output_path = Path(output_dir)
+    check_command(sys.argv)
 
     def _save():
         for _ in range(timeout // 5):
