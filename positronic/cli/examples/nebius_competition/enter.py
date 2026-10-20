@@ -59,13 +59,6 @@ class CompetitionClient(PlatformClient):
         return self._post(COMPETITION_ACCEPT_TERMS, request, CompetitionEntry)
 
 
-ENTRY_NOTICE = (
-    'The competition publishes your team name and the date you entered when you enter.\n'
-    'It publishes your scores and the videos of your runs when they are scored.\n'
-    'All of this stays public after the competition.'
-)
-
-
 def entry_line(entry: CompetitionEntry) -> str:
     day = f'{entry.entered_at:%Y-%m-%d}'
     if entry.organizer:
@@ -78,7 +71,11 @@ def entry_line(entry: CompetitionEntry) -> str:
 def run(client: CompetitionClient, *, confirmed: bool, accepted_version: str | None) -> None:
     """`accepted_version` is the terms version that the team approved, or None. The gateway refuses a version
     that is not current, so a version published after the approval is never accepted in its place."""
-    print(ENTRY_NOTICE)
+    print(
+        'The competition publishes your team name and the date you entered when you enter.\n'
+        'It publishes your scores and the videos of your runs when they are scored.\n'
+        'All of this stays public after the competition.'
+    )
     if not confirmed and accepted_version is None:
         print('To join, run: competition-enter --yes')
         return
