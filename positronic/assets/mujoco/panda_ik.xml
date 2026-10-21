@@ -42,6 +42,7 @@
                     <inertial mass="7.35522e-01" pos="1.0517e-2 -4.252e-3 6.1597e-2"
                       fullinertia="1.2516e-2 1.0027e-2 4.815e-3 -4.28e-4 -1.196e-3 -7.41e-4"/>
                     <joint name="joint7"/>
+                    <site name="flange" pos="0 0 0.107" group="4"/>
                     <body name="hand" pos="0 0 0.107" quat="0.9238795 0 0 -0.3826834">
                       <inertial mass="0.73" pos="-0.01 0 0.03" diaginertia="0.001 0.0025 0.0017"/>
                       <site name="end_effector" pos="0 0 0.0584"/>

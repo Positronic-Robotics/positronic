@@ -256,6 +256,24 @@ def test_default_frame_still_coincides_with_the_franka_tool_frame():
     np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-12)
 
 
+def test_panda_flange_sits_on_link7_as_on_the_fr3():
+    for urdf in (bundled_panda_model()[roboarm_keys.URDF], bundled_franka_model()[roboarm_keys.URDF]):
+        # rules-allow: hardcoded-keys — the wrist link is this test's input, not a name it shares with the code
+        transform = frame_transform(urdf, 'link7', FLANGE_LINK)
+        np.testing.assert_allclose(transform.translation, [0.0, 0.0, 0.107], atol=1e-12)
+        np.testing.assert_allclose(transform.rotation.as_rotation_matrix, np.eye(3), atol=1e-12)
+
+
+def test_panda_hand_frames_keep_their_offset_from_the_flange():
+    """The sim reports and solves at the hand point, 58.4 mm along the flange axis and -45deg about it."""
+    hand_point = geom.Transform3D(np.array([0.0, 0.0, 0.0584]), geom.Rotation.from_euler([0.0, 0.0, -np.pi / 4]))
+    urdf = bundled_panda_model()[roboarm_keys.URDF]
+    for frame in (EE_LINK, DEFAULT_FRAME):
+        np.testing.assert_allclose(frame_transform(urdf, FLANGE_LINK, frame).as_matrix, hand_point.as_matrix, atol=1e-9)
+    mjcf_flange = frame_transform(PANDA_URDF, 'flange', PANDA_FRAME)
+    np.testing.assert_allclose(mjcf_flange.as_matrix, hand_point.as_matrix, atol=1e-7)
+
+
 def test_pose_anchor_reads_a_stated_frame_and_falls_back_to_the_name():
     offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.identity)
     quat = geom.Rotation.Representation.QUAT

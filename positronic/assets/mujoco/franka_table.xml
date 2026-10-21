@@ -258,6 +258,7 @@
                       <geom class="visual_ph" material="white_ph" mesh="link7_7_ph"/>
                       <geom class="collision_ph" mesh="link7_c_ph"/>
                       <site name="site_joint7_ph" pos="0 0 0"/>
+                      <site name="flange_ph" pos="0 0 0.107" group="4"/>
                       <body name="hand_ph" pos="0 0 0.107" quat="0.92388 0 0 -0.382683">
                         <inertial pos="-0.01 0 0.03" mass="0.73" diaginertia="0.001 0.0025 0.0017"/>
                         <geom class="visual_ph" material="off_white_ph" mesh="hand_0_ph"/>

@@ -35,7 +35,7 @@ the placement moves.
 | Embodiment | `default` sits at | Note |
 | --- | --- | --- |
 | Franka FR3 (`franka.py`) | `end_effector` | The arm's `F_T_EE`, 103.4 mm and −45° off the flange. Moving it to the flange is [#550](https://github.com/Positronic-Robotics/positronic/issues/550). |
-| MuJoCo panda (`models.py`) | `end_effector` | The sim's grasp site. |
+| MuJoCo panda (`models.py`) | `end_effector` | The sim's grasp site, 58.4 mm and −45° off the flange (`link8`). |
 | RoboLab (`simulator/robolab/`) | `end_effector` | Ships the FR3 model unchanged. The env measures and drives at `droid_eef`; `RobolabAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
 | MolmoSpaces (`simulator/molmo_spaces/`) | `end_effector` | Ships the FR3 model unchanged. The env measures and drives at the 2F-85 grasp site, in the arm base `fr3_link0`; `MolmoAdapter` converts. MolmoSpaces' own robot base is at the bottom of the stand below it. |
 | YAM (`yam/driver.py`) | the `default` site in `yam.xml` | Coincident with the vendor's `grasp_site`. |
