@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.2] - 2026-10-21
+
+This release publishes `positronic-platform-client` 0.38.0. The other distributions keep their 0.3.1 versions.
+
+| Distribution | Version |
+|---|---|
+| `positronic-platform-client` | 0.38.0 |
+| `positronic-evals` | 0.1.0 |
+| `positronic-eval-vocabulary` | 0.4.0 |
+| `positronic-wire` | 0.12.0 |
+| `positronic-model-server` | 0.2.3 |
+
+### Platform client
+- `positronic account register` tells an account that already has a key to set `POSITRONIC_PLATFORM_API_KEY` to it, and says that `--rotate` stops the old key. `platform-register` says the same, and names `platform-register --rotate` ([#989](https://github.com/Positronic-Robotics/positronic/pull/989))
+- `competition-enter` shows what becomes public about the team and ends with `To join, run: competition-enter --yes`. It does not show the terms. The platform refuses the first submission until the team accepts the terms, and the refusal names `competition-enter --accept-terms=<version>` ([#989](https://github.com/Positronic-Robotics/positronic/pull/989))
+- `positronic account register` and `platform-register` print one sign-in line. When the identity provider sends a link that carries the code, the line gives that link, so you type no code. The line also gives the time until the code expires ([#991](https://github.com/Positronic-Robotics/positronic/pull/991))
+
+### Inference
+- On Linux x86_64, the `molmoact2`, `lerobot` and `lerobot_0_3_3` extras install the CUDA 12.8 build of `torch` 2.7.1, which runs on Blackwell GPUs. This build needs NVIDIA driver 570 or newer. macOS, aarch64 and Windows keep the PyPI build ([#978](https://github.com/Positronic-Robotics/positronic/pull/978))
+
+### Simulation
+- The MolmoSpaces server reports the end-effector pose relative to the arm base `fr3_link0`, as the real FR3 does. Before, `robot_state.ee_pose` was 0.58 m too high, and a `CartesianPosition` command moved the hand 0.58 m too low ([#972](https://github.com/Positronic-Robotics/positronic/pull/972))
+
+### Hardware
+- `DLSIKSolverWithLimits` solves one bounded, damped problem per command, as `positronic-franka` 0.9.0 does. Each joint stays within the model limits and within 0.5 rad of the current joints, and a move near a singular pose is damped. The `franka` extra requires `positronic-franka` 0.9.0 ([#980](https://github.com/Positronic-Robotics/positronic/pull/980))
+- The SO-101 and YAM data collection configs `so101cfg` and `yamcfg` are overrides of one `arm_as_gripper` config, which uses the arm driver as the gripper too ([#987](https://github.com/Positronic-Robotics/positronic/pull/987))
+
+### Docs
+- The competition guide installs `positronic` from the `main` branch, says that the sign-in link expires in 5 minutes, and tells a coding agent to run the register command in the background ([#991](https://github.com/Positronic-Robotics/positronic/pull/991))
+- The competition guide installs the released `positronic` package and registers with `positronic account register`, which saves the key on the computer ([#988](https://github.com/Positronic-Robotics/positronic/pull/988))
+- The competition guide links point at `https://competition.phail.ai` ([#986](https://github.com/Positronic-Robotics/positronic/pull/986))
+
+Full list: [v0.3.1...v0.3.2](https://github.com/Positronic-Robotics/positronic/compare/v0.3.1...v0.3.2)
+
 ## [0.3.1] - 2026-10-20
 
 This release publishes `positronic-model-server` 0.2.3. The other distributions keep their 0.3.0 versions.
