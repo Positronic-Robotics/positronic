@@ -266,7 +266,7 @@ def test_a_local_run_of_a_public_eval_without_an_output_dir_prints_no_score(run_
     with caplog.at_level(logging.WARNING, logger=run_module.logger.name):
         run_command(run_module.run, eval=SMOKE, policy='a policy')
 
-    assert 'score' not in capsys.readouterr().out
+    assert capsys.readouterr().out == ''
     assert 'pass --output_dir' in caplog.text
 
 
