@@ -2805,6 +2805,27 @@ def test_a_handle_that_fails_its_configuration_stops_its_control_loop_before_the
     assert tail == [Call.SET_CONTROL_MODE, Call.SET_LOAD, Call.STOP, Call.CLOSE_BRAKES]
 
 
+def test_a_handle_whose_robot_model_read_fails_stops_its_control_loop_and_is_dropped(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    desk.calls = arm.calls  # one log for both fakes, so the halt and the brakes are ordered
+
+    def refuse_model() -> str:
+        raise RuntimeError('libfranka: robot model unavailable')
+
+    monkeypatch.setattr(arm, 'get_robot_model', refuse_model)
+    driver = _driver(arm)
+    run = _start_run(world, driver)
+
+    tail = [c for c in arm.calls if c in (Call.SET_CONTROL_MODE, Call.STOP, Call.CLOSE_BRAKES)]
+    assert tail == [Call.SET_CONTROL_MODE, Call.STOP, Call.CLOSE_BRAKES]
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    answer = run.recover(None)
+    run.tick()
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert Call.SET_COLLISION_BEHAVIOR in reconnected.calls, 'the recover call reused the failed handle'
+
+
 def _one_error_line(caplog, text: str) -> logging.LogRecord:
     """The one record whose message carries ``text``, after checking that no record carries a traceback."""
     assert all(r.exc_info is None for r in caplog.records), 'a record carries a traceback'

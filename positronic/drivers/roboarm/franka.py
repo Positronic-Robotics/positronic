@@ -911,13 +911,14 @@ class Robot(pimm.ControlSystem):
         )
 
     def _connect(self, arm: _Arm) -> None:
-        """Configure the libfranka handle, and drive the arm over it. Only a configured handle drives the arm.
+        """Configure the libfranka handle, publish the model it reports, and drive the arm over it.
 
-        A handle that fails its configuration is dropped, so that the next connection opens a new one.
+        A handle that fails its configuration or its model read is dropped, so the next connection opens a new one.
         """
         robot = self._robot
         try:
             self._init_robot(robot)
+            self.robot_meta.emit(self._build_robot_meta(robot))
         except Exception:
             try:
                 robot.stop()  # the control loop that `set_control_mode` started
@@ -925,7 +926,6 @@ class Robot(pimm.ControlSystem):
                 self._forget_connection()
             raise
         arm.connect(robot)
-        self.robot_meta.emit(self._build_robot_meta(robot))
 
     def _start(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> None:
         """Prepare the arm through Desk and connect to it, as a run starts.
