@@ -954,7 +954,7 @@ class Robot(pimm.ControlSystem):
     def _lock_open_brakes(session: _DeskSession, brakes: _Brakes) -> None:
         """Lock the brakes a failed Desk step left open: with no connection nothing drives the arm."""
         if session.desk is None:
-            return  # the brakes are the session's that holds control
+            return  # the brakes belong to the session that holds control
         try:
             if _BrakeState.UNLOCKED in session.desk.safety_status()[BRAKE_STATE]:
                 brakes.close()
