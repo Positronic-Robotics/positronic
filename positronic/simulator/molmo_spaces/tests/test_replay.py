@@ -163,7 +163,7 @@ def _recorded_model_fk(q: np.ndarray) -> geom.Transform3D:
 
 
 def _adapter() -> MolmoAdapter:
-    return MolmoAdapter(camera_dict([ShoulderSide.LEFT]), _RECORDED_MODEL)
+    return MolmoAdapter(camera_dict([ShoulderSide.LEFT]))
 
 
 def _reported_ee_pose(obs: dict) -> geom.Transform3D:

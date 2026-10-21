@@ -9,7 +9,7 @@ from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import frame_transform
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, GRASP_SITE_LINK
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, GRASP_SITE_LINK, bundled_franka_model
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -43,9 +43,9 @@ def camera_dict(exterior_sides: Sequence[ShoulderSide]) -> dict[str, tuple[str, 
 class MolmoAdapter(WireCommandAdapter):
     _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
 
-    def __init__(self, cameras: Mapping[str, tuple[str, ...]], robot_model: Mapping[str, Any]):
-        """``robot_model`` is the model the embodiment declares; the env measures and drives at its grasp site."""
-        super().__init__(frame_transform(robot_model[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK))
+    def __init__(self, cameras: Mapping[str, tuple[str, ...]]):
+        # The env measures and drives at the 2F-85 grasp site of the FR3 the eval declares.
+        super().__init__(frame_transform(bundled_franka_model()[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK))
         self._cameras = cameras
         self._with_right_shoulder = SHOULDER_CAMERAS[ShoulderSide.RIGHT] in cameras.values()
 

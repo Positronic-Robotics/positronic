@@ -9,7 +9,6 @@ import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import keys as molmo_keys
@@ -31,7 +30,7 @@ def _payload() -> dict:
 
 
 def _adapter(exterior_sides=_LEFT_FIRST) -> MolmoAdapter:
-    return MolmoAdapter(camera_dict(exterior_sides), bundled_franka_model())
+    return MolmoAdapter(camera_dict(exterior_sides))
 
 
 def test_observations_assemble_robot_state():
