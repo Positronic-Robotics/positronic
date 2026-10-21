@@ -14,19 +14,23 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 
 FLANGE_LINK = 'link8'
 DROID_EEF_LINK = 'droid_eef'
-# The franka's own tool frame, ``F_T_EE`` off the flange. TODO(#550): move ``DEFAULT_FRAME`` to the flange.
+# The franka's own tool frame, ``F_T_EE`` off the flange.
 EE_LINK = 'end_effector'
 # The frame every embodiment publishes its poses in and every codec transform is measured from. Recommended at
 # the flange whenever the gripper can be swapped: recorded data outlives grippers, and an episode anchored to a
-# gripper frame becomes unplaceable once that gripper comes off.
+# gripper frame becomes unplaceable once that gripper comes off. Every Franka model puts it at ``FLANGE_LINK``.
 DEFAULT_FRAME = 'default'
 # ``DROID_EEF_LINK`` measured from ``DEFAULT_FRAME``: the Robotiq 2F-85 coupler, 18.17mm along the flange
 # approach axis and +90deg about it. DROID's checkpoints express poses here, and stating it as a transform is
 # what lets one declare its frame without any rig consulting a robot model to serve it.
-# TODO(#550): the awkward numbers are the FR3's ``F_T_EE`` offset riding along, because ``DEFAULT_FRAME`` is not
-# the flange yet. Moving it there turns this into the authored gripper geometry and makes the value portable —
-# as it stands it is right on a franka rig and 45mm off on the sim, whose ``DEFAULT_FRAME`` sits elsewhere again.
-DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.085225977]), geom.Rotation.from_euler([0.0, 0.0, 2.35619449]))
+DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, 0.01817402261]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 2]))
+# The FR3's ``F_T_EE`` under the Franka Hand setting in Desk, measured from the flange: 103.4mm along the approach
+# axis and -45deg about it. A real-Franka recording made while ``DEFAULT_FRAME`` sat there, and a checkpoint trained
+# on one, speaks poses here.
+FR3_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, 0.1034]), geom.Rotation.from_euler([0.0, 0.0, -np.pi / 4]))
+# The sim panda's ``EE_LINK`` measured from the flange: 58.4mm along the approach axis and -45deg about it. A sim
+# recording made while ``DEFAULT_FRAME`` sat there, and a checkpoint trained on one, speaks poses here.
+PANDA_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, 0.0584]), geom.Rotation.from_euler([0.0, 0.0, -np.pi / 4]))
 # Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
@@ -180,7 +184,7 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
 
 
 @cache
-def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
+def bundled_franka_model(default_frame_at: str = FLANGE_LINK) -> dict:
     """FR3 and Robotiq 2F-85 model metadata, with ``DEFAULT_FRAME`` attached at ``default_frame_at``."""
     here = Path(__file__).resolve()
     arm_root = ET.fromstring((here.parent / 'fr3.urdf').read_text())
@@ -197,19 +201,17 @@ def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
     }
 
 
-@lru_cache(maxsize=1)
-def bundled_panda_model() -> dict:
+@cache
+def bundled_panda_model(default_frame_at: str = FLANGE_LINK) -> dict:
     """The bundled simulated Franka panda (arm + hand) for the 3D viewer and offline IK: the panda
-    URDF, its collision meshes, the joint names, the ``DEFAULT_FRAME`` the sim measures
-    ``robot_state.ee_pose`` at, and the ``gripper`` spec that slides the fingers from the recorded
-    ``grip`` signal. Supplied to sim datasets by ``SIM_ROBOT_TRANSFORM``, mirroring how
-    ``bundled_franka_model`` backfills the real arm.
+    URDF, its collision meshes, the joint names, ``DEFAULT_FRAME`` attached at ``default_frame_at``, and the
+    ``gripper`` spec that slides the fingers from the recorded ``grip`` signal.
     """
     urdf_path = Path(__file__).resolve().parents[2] / 'assets' / 'mujoco' / 'panda.urdf'
     root = ET.fromstring(urdf_path.read_text())
     mesh_dir = urdf_path.parent / 'assets'
     mesh_files = {mesh.get('filename') for mesh in root.iter('mesh')}
-    add_default_frame(root, EE_LINK)
+    add_default_frame(root, default_frame_at)
     return {
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
         'meshes': {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},

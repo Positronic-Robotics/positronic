@@ -28,7 +28,9 @@ from positronic.drivers.roboarm.models import (
     DROID_EEF_LINK,
     EE_LINK,
     FLANGE_LINK,
+    FR3_EE_FRAME,
     GRASP_SITE_LINK,
+    PANDA_EE_FRAME,
     bundled_franka_model,
     bundled_panda_model,
 )
@@ -246,13 +248,9 @@ def test_declared_droid_frame_matches_the_model_geometry():
     np.testing.assert_allclose(DROID_EE_FRAME.as_matrix, measured.as_matrix, atol=1e-9)
 
 
-def test_default_frame_still_coincides_with_the_franka_tool_frame():
-    """Two things rest on this and neither is reachable from the data: recordings predating ``EE_FRAME`` are
-    solved at ``end_effector`` (see ``pose_anchor``), and ``DROID_EE_FRAME`` is stated from where
-    ``DEFAULT_FRAME`` sits. TODO(#550): moving it to the flange invalidates both, so re-express those
-    recordings and re-measure the constant in the same change.
-    """
-    transform = frame_transform(bundled_franka_model()[roboarm_keys.URDF], DEFAULT_FRAME, EE_LINK)
+@pytest.mark.parametrize('model', [bundled_franka_model(), bundled_panda_model()], ids=['franka', 'panda'])
+def test_default_frame_sits_at_the_flange(model):
+    transform = frame_transform(model[roboarm_keys.URDF], FLANGE_LINK, DEFAULT_FRAME)
     np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-12)
 
 
@@ -264,14 +262,20 @@ def test_panda_flange_sits_on_link7_as_on_the_fr3():
         np.testing.assert_allclose(transform.rotation.as_rotation_matrix, np.eye(3), atol=1e-12)
 
 
-def test_panda_hand_frames_keep_their_offset_from_the_flange():
-    """The sim reports and solves at the hand point, 58.4 mm along the flange axis and -45deg about it."""
-    hand_point = geom.Transform3D(np.array([0.0, 0.0, 0.0584]), geom.Rotation.from_euler([0.0, 0.0, -np.pi / 4]))
-    urdf = bundled_panda_model()[roboarm_keys.URDF]
-    for frame in (EE_LINK, DEFAULT_FRAME):
-        np.testing.assert_allclose(frame_transform(urdf, FLANGE_LINK, frame).as_matrix, hand_point.as_matrix, atol=1e-9)
+def test_the_mjcf_panda_puts_its_hand_point_at_the_declared_tool_frame():
     mjcf_flange = frame_transform(PANDA_URDF, FLANGE_LINK, PANDA_FRAME)
-    np.testing.assert_allclose(mjcf_flange.as_matrix, hand_point.as_matrix, atol=1e-7)
+    np.testing.assert_allclose(mjcf_flange.as_matrix, PANDA_EE_FRAME.as_matrix, atol=1e-7)
+
+
+@pytest.mark.parametrize(
+    ('model', 'tool_frame'),
+    [(bundled_franka_model(), FR3_EE_FRAME), (bundled_panda_model(), PANDA_EE_FRAME)],
+    ids=['franka', 'panda'],
+)
+def test_declared_tool_frame_matches_the_model_geometry(model, tool_frame):
+    """Recordings and checkpoints from before the flange speak poses at ``EE_LINK``; the constant states it."""
+    measured = frame_transform(model[roboarm_keys.URDF], FLANGE_LINK, EE_LINK)
+    np.testing.assert_allclose(tool_frame.as_matrix, measured.as_matrix, atol=1e-8)
 
 
 def test_pose_anchor_reads_a_stated_frame_and_falls_back_to_the_name():
