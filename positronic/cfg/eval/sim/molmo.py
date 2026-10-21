@@ -78,7 +78,10 @@ def benchmarks(
         trials = []
         for params in proxy.tasks(selection):
             deadline = timeout if timeout is not None else params[molmo_keys.TASK_HORIZON] + _TIMEOUT_MARGIN_SEC
-            task = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=deadline)
+            # The env ends a trial on its first successful step, so a trial that the policy ends has failed.
+            task = Task(
+                instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=deadline, policy_end_success=False
+            )
             scene = {**params, molmo_keys.EXTERIOR_SIDES: [side.value for side in exterior_sides]}
             trials += [
                 (task, {**scene, **({eval_keys.SEED: seed + t} if seed is not None else {})})

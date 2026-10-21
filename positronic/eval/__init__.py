@@ -82,6 +82,8 @@ class Task:
     meta: dict[str, Any] = field(default_factory=dict)
     # Charge the trial the wall time each model call takes. Only a sim states it off: a real rig pays it.
     charge_inference_time: bool = True
+    # The success a policy end records; ``None`` records none
+    policy_end_success: bool | None = None
 
     @property
     def instruction(self) -> str:

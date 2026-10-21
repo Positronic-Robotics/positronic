@@ -501,6 +501,14 @@ def test_a_return_inside_the_budget_ends_the_episode_and_records_the_policy_and_
     assert eval_keys.SUCCESS not in episode.static
 
 
+def test_a_return_records_the_success_that_the_task_gives_a_policy_end(episode_harness):
+    h = episode_harness
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 1.0, policy_end_success=False), EndAfter(calls=1), h.output_path))
+    assert _until_answered(h, answer)[eval_keys.SUCCESS] is False
+    assert h.dataset.episodes[0].static[eval_keys.SUCCESS] is False
+
+
 def test_an_env_done_in_the_iteration_of_a_return_ends_the_episode(episode_harness):
     h = episode_harness
     h.observation.emit(1)

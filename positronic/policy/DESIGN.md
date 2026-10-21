@@ -187,7 +187,9 @@ the run processes an observation and returns control to the framework.
   `COMPLETE` when it thinks that it did the task, and `GIVE_UP` when it stops
   before that. This is a claim, not a verdict. A return after the time limit
   counts as a timeout, and an env's own end in the same framework iteration
-  ends the episode in its place. A run around another run returns what that
+  ends the episode in its place. The verdict of a return comes from the task
+  (`Task.policy_end_success`): an env that ends the episode at its first
+  success makes a return a failure. A run around another run returns what that
   run returned.
 - Observations contain the latest available sensor values, task, and rig descriptor.
   They form a read-only snapshot: later sensor updates must not change an earlier

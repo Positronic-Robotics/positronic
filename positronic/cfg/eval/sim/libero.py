@@ -55,8 +55,9 @@ def _libero_eval(
         proxy, camera_dict, descriptor='remote.libero.franka', static_meta=bundled_panda_model()
     )
     privileged = {libero_keys.SIM_STATE: proxy.privileged[libero_keys.SIM_STATE]}
+    # The env ends a trial on its first successful step, so a trial that the policy ends has failed.
     # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
-    task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout)
+    task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout, policy_end_success=False)
 
     def tasks() -> list[Task]:
         scenes = [

@@ -72,8 +72,9 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_ser
             # RoboLab truncates an episode at its own budget, so the deadline sits above it and the env's verdict
             # ends a trial.
             deadline = timeout if timeout is not None else params[robolab_keys.EPISODE_LENGTH] + 10.0
+            # The env ends a trial on its first successful step, so a trial that the policy ends has failed.
             # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
-            trial = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=deadline)
+            trial = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=deadline, policy_end_success=False)
             trials += [(trial, {**params, robolab_keys.INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
         return number_trials(trials)
 

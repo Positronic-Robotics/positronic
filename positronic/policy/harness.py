@@ -337,7 +337,12 @@ class Harness(pimm.ControlSystem):
 
     @staticmethod
     def _trial_terminal(
-        done: pimm.Message[dict] | None, ended: _PolicyEnded | None, now_ns: int, deadline_ns: int | None, timeline: str
+        done: pimm.Message[dict] | None,
+        ended: _PolicyEnded | None,
+        policy_end_success: bool | None,
+        now_ns: int,
+        deadline_ns: int | None,
+        timeline: str,
     ) -> dict[str, Any] | None:
         """A done signal or a policy end after the deadline counts as a timeout, not a success.
 
@@ -346,9 +351,11 @@ class Harness(pimm.ControlSystem):
         if done is not None and done.data and (deadline_ns is None or done.time[timeline] <= deadline_ns):
             return {**done.data, eval_keys.TERMINATED: True}
         if ended is not None and (deadline_ns is None or ended.time_ns <= deadline_ns):
+            verdict = {} if policy_end_success is None else {eval_keys.SUCCESS: policy_end_success}
             return {
                 eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY,
                 eval_keys.POLICY_END: ended.end.value,
+                **verdict,
                 eval_keys.TERMINATED: True,
             }
         if deadline_ns is not None and now_ns >= deadline_ns:
@@ -433,6 +440,7 @@ class Harness(pimm.ControlSystem):
             payload = self._trial_terminal(
                 pimm.read_updated(self.done),
                 ended,
+                task.policy_end_success,
                 runtime.time_ns,
                 deadline_ns,
                 EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL,

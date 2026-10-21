@@ -70,7 +70,7 @@ Only the task instruction, measured hand pose/gripper, and selected labelled RGB
 
 The model must return exactly one tool call. Malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Oversized moves are clamped and accepted with the bounded target in the tool result. Three consecutive invalid replies raise an error. SDK retry defaults apply, and terminal API errors propagate. The overall timeout covers the invocation and its retry waits. The episode has a budget of 100 model invocations, including pictures and corrections; individual network attempts within an invocation do not consume additional budget. Exhaustion ends the episode with `PolicyEnd.GIVE_UP`.
 
-After `done`, `give_up`, or call-budget exhaustion, the run returns its `PolicyEnd`, and the harness ends the episode at once. The episode records `eval.ended_by = policy` and `eval.policy_end`. The `PolicyEnd` is the claim of the model, not a verdict. Each new episode gets a fresh conversation.
+After `done`, `give_up`, or call-budget exhaustion, the run returns its `PolicyEnd`, and the harness ends the episode at once. The episode records `eval.ended_by = policy` and `eval.policy_end`. The `PolicyEnd` is the claim of the model, not a verdict. A MolmoSpaces, LIBERO or RoboLab episode also records `eval.success = false`: the env ends the episode at its first success, so a policy end comes after none. Each new episode gets a fresh conversation.
 
 The policy's stop reason and hindsight are recorded for inspection, without setting a success label or carrying advice into other episodes. There are no code-execution, crop, VLA, or skill-selection tools.
 
