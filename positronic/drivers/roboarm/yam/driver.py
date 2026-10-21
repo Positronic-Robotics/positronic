@@ -23,6 +23,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
 from positronic.utils import package_assets_path
@@ -736,7 +737,7 @@ class Robot(pimm.ControlSystem):
 
         Return the ready calls, or none when the world stops first.
         """
-        error = pimm.SignalError(f'The YAM arm is lost: {lost}')
+        error = DeviceFault(f'The YAM arm is lost: {lost}', FaultKind.ARM)
         logger.error(f'{error}; it holds the error until a ready call opens the chain again')
         # The Message types do not name the SignalError that any message can carry.
         self.state.emit(cast(YamState, error))

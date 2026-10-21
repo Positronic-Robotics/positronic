@@ -8,6 +8,7 @@ from typing import cast
 
 import pimm
 from positronic.drivers import vendor_import
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.utils import DriverRun, Moves, RecoveryOutcome, grip_setpoint
 
 # pymodbus lives in the `hardware` extra, which the type-check environment does not install.
@@ -195,9 +196,9 @@ class _Gripper(DriverRun[float]):
     def _write(self, registers: list[int]) -> None:
         self._client.write_registers(_REG_CMD, registers, device_id=_SLAVE)
 
-    def hold_error(self, cause: Exception) -> pimm.SignalError:
+    def hold_error(self, cause: Exception) -> DeviceFault:
         """Put an error for ``cause`` on the width, answer the move in flight with it, and close the bus."""
-        error = pimm.SignalError(f'The Robotiq gripper is lost: {cause}')
+        error = DeviceFault(f'The Robotiq gripper is lost: {cause}', FaultKind.GRIPPER)
         logger.error(f'{error}; it holds the error until a ready call activates it again')
         # The Message types do not name the SignalError that any message can carry.
         self._out.emit(cast(float, error))
@@ -242,7 +243,7 @@ class Robotiq2F(pimm.ControlSystem):
             call.set_result(outcome)
 
     @staticmethod
-    def _start(gripper: _Gripper) -> Generator[pimm.Command, None, pimm.SignalError | None]:
+    def _start(gripper: _Gripper) -> Generator[pimm.Command, None, DeviceFault | None]:
         """Activate the gripper. None once the bus answers, else the error now on ``grip``."""
         try:
             yield from gripper.activate()
@@ -252,7 +253,7 @@ class Robotiq2F(pimm.ControlSystem):
 
     def _serve(
         self, gripper: _Gripper, moves: Moves[float], clock: pimm.Clock
-    ) -> Generator[pimm.Command, None, pimm.SignalError | None]:
+    ) -> Generator[pimm.Command, None, DeviceFault | None]:
         """Serve one tick of calls and moves. None while the bus answers, else the error now on ``grip``."""
         try:
             grip = gripper.observe().width
@@ -272,8 +273,8 @@ class Robotiq2F(pimm.ControlSystem):
         return None
 
     def _repair_when_asked(
-        self, gripper: _Gripper, moves: Moves[float], held: pimm.SignalError
-    ) -> Generator[pimm.Command, None, pimm.SignalError | None]:
+        self, gripper: _Gripper, moves: Moves[float], held: DeviceFault
+    ) -> Generator[pimm.Command, None, DeviceFault | None]:
         """Answer every move with ``held``, and activate the gripper again on a ready or a recover call.
 
         None once the activation completes with no fault, else the error now on ``grip``.

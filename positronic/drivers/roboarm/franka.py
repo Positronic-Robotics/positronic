@@ -15,6 +15,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveRefused, MoveStatus, RecoveryOutcome, log_failure
 
@@ -345,7 +346,7 @@ class _Arm(DriverRun[command.CommandType]):
             self.out.emit(self.state)
         elif not self._stop_emitted:
             # The Message types do not name the SignalError that any message can carry.
-            self.out.emit(cast(FrankaState, pimm.SignalError(EMERGENCY_STOP_PRESSED)))
+            self.out.emit(cast(FrankaState, DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP)))
             self._stop_emitted = True
 
     def hold_through_error(self, st: pf.State, entered: bool, outcome: 'RecoveryOutcome') -> None:
@@ -385,7 +386,7 @@ class _Arm(DriverRun[command.CommandType]):
         self.robot.stop()
         self.disconnect_cause = cause
         # The Message types do not name the SignalError that any message can carry.
-        self.out.emit(cast(FrankaState, pimm.SignalError(f'The driver has no control of the arm: {cause}')))
+        self.out.emit(cast(FrankaState, DeviceFault(f'The driver has no control of the arm: {cause}', FaultKind.ARM)))
 
     def refuse_moves(self) -> None:
         """Answer every waiting sync move with the failure that ended the connection, and drop a streamed one."""
@@ -580,7 +581,7 @@ class _Arm(DriverRun[command.CommandType]):
         Answer with the release instruction, and send no target, while the emergency stop is pressed.
         """
         if self.stop_pressed:
-            call.set_exception(pimm.SignalError(EMERGENCY_STOP_PRESSED))
+            call.set_exception(DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP))
             return
         cmd = call.request
         try:
@@ -908,7 +909,7 @@ class Robot(pimm.ControlSystem):
         """
         with pimm.calls.raise_to(call):
             if arm.stop_pressed:
-                raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
+                raise DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP)
             if (
                 (arm.disconnect_cause is not None or arm.robot.state().error != 0)
                 and arm.recover() is RecoveryOutcome.NOT_CLEARED

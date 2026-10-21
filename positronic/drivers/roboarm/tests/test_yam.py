@@ -17,6 +17,7 @@ from pimm.tests.testing import MockClock, wire_call
 from positronic import keys
 from positronic.cfg import video_encoder
 from positronic.cfg.eval.real import yam as yam_eval
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm import yam as yam_package
 from positronic.drivers.roboarm.tests.fakes import StopFlag
@@ -1194,7 +1195,8 @@ def test_a_chain_fault_parks_releases_and_puts_an_error_on_the_state_and_the_gri
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
     for emitter in (rig.states, rig.grips):
-        assert isinstance(_last(emitter), pimm.SignalError)
+        error = _last(emitter)
+        assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
         assert 'The YAM arm is lost: the chain failed: collaborator failed' in str(_last(emitter))
     rig.finish()
 
@@ -1205,8 +1207,9 @@ def test_a_move_on_a_lost_arm_is_answered_with_its_error(world, rig):
     answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
     rig.tick()
 
-    with pytest.raises(pimm.SignalError, match='The YAM arm is lost'):
+    with pytest.raises(DeviceFault, match='The YAM arm is lost') as raised:
         answer.result()
+    assert raised.value.kind is FaultKind.ARM
 
 
 def test_a_ready_call_on_a_lost_arm_opens_the_chain_again_and_moves_it_to_the_start_pose(world, rig):

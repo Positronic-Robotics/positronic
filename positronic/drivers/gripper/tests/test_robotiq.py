@@ -9,6 +9,7 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock, wire_call
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.gripper import robotiq
 from positronic.drivers.gripper.robotiq import Activation, Fingers
 from positronic.drivers.roboarm.tests.fakes import StopFlag
@@ -342,9 +343,11 @@ def test_a_lost_bus_puts_an_error_on_the_width_and_the_run_goes_on(monkeypatch, 
     _pump(loop, clock, 5)
 
     assert len(_errors(widths)) == 1
-    assert isinstance(_last(widths), pimm.SignalError)
-    with pytest.raises(pimm.SignalError, match='The Robotiq gripper is lost'):
+    error = _last(widths)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.GRIPPER
+    with pytest.raises(DeviceFault, match='The Robotiq gripper is lost') as raised:
         move.result()
+    assert raised.value.kind is FaultKind.GRIPPER
 
 
 def test_a_move_on_a_lost_gripper_is_answered_with_its_error_and_reaches_no_register(monkeypatch, world):

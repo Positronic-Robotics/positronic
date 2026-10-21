@@ -11,6 +11,7 @@ import pytest
 import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic import geom
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import RobotStatus, command, franka
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned, RecoveryOutcome
@@ -1307,8 +1308,9 @@ def test_a_sync_move_answers_the_release_instruction_while_the_emergency_stop_is
 
     _drive(driving.sync_move(asked), clock)
 
-    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+    with pytest.raises(DeviceFault, match=franka.EMERGENCY_STOP_PRESSED) as raised:
         answer.result()
+    assert raised.value.kind is FaultKind.E_STOP
     assert not arm.targets
 
 
@@ -1534,8 +1536,9 @@ def test_a_ready_call_answers_the_release_instruction_while_the_emergency_stop_i
     answer = ready(None)
     next(loop)
 
-    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+    with pytest.raises(DeviceFault, match=franka.EMERGENCY_STOP_PRESSED) as raised:
         answer.result()
+    assert raised.value.kind is FaultKind.E_STOP
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
 
 
@@ -1564,8 +1567,9 @@ def test_a_ready_call_runs_no_recovery_on_an_error_while_the_emergency_stop_is_p
     answer = ready(None)
     next(loop)
 
-    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+    with pytest.raises(DeviceFault, match=franka.EMERGENCY_STOP_PRESSED) as raised:
         answer.result()
+    assert raised.value.kind is FaultKind.E_STOP
     # The tick's own recovery of the error, which nobody asked for.
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1, 'the ready call ran a recovery'
 
@@ -1587,7 +1591,8 @@ def test_the_arm_state_carries_the_release_instruction_once_while_the_emergency_
     """A reader keeps the last value, and the link queues each error, so one per press is enough."""
     [error] = _shipped(desk, STOPPED)
 
-    assert isinstance(error, pimm.SignalError) and str(error) == franka.EMERGENCY_STOP_PRESSED
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.E_STOP
+    assert str(error) == franka.EMERGENCY_STOP_PRESSED
 
 
 @pytest.mark.parametrize('stop', ['AcknowledgeRequired', 'Invalid'])
@@ -1611,8 +1616,8 @@ def test_the_arm_state_comes_back_once_the_emergency_stop_is_released(desk):
     arm.safe_inputs.sample()
     arm.publish(arm.robot.state())
 
-    kinds = [type(data) for _, data in states.emitted]
-    assert kinds == [pimm.SignalError, franka.FrankaState, pimm.SignalError]
+    kinds = [data.kind if isinstance(data, DeviceFault) else type(data) for _, data in states.emitted]
+    assert kinds == [FaultKind.E_STOP, franka.FrankaState, FaultKind.E_STOP]
 
 
 def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):
@@ -2234,6 +2239,7 @@ def test_a_recovery_no_console_asked_for_puts_the_vendor_throw_on_the_state(desk
         next(loop)
 
     [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
     assert 'control command rejected' in str(error)
 
 
@@ -2433,6 +2439,7 @@ def test_a_libfranka_failure_puts_an_error_on_the_state_and_the_run_goes_on(desk
         next(loop)
 
     [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
     assert str(error) == 'The driver has no control of the arm: libfranka: UDP receive: Timeout'
     assert arm.calls[calls:].count(Call.STOP) == 1
     assert Call.SET_TARGET_JOINTS not in arm.calls[calls:]
@@ -2465,6 +2472,7 @@ def test_an_arm_that_fails_during_a_move_answers_the_move_and_the_run_goes_on(de
     with pytest.raises(RuntimeError, match='Connection reset by peer'):
         move.result()
     [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
     assert 'Connection reset by peer' in str(error)
 
 
