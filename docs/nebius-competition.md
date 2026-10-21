@@ -173,8 +173,9 @@ On a machine with a GPU, add `--gpu`. The script then gives the server 600 s:
 bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
-- The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
-  sure that your model uses less.
+- The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
+  sure that your model uses less. A memory setting that is a fraction of the GPU, such as
+  `XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB.
 - On the platform, machine boot, the image pull and the server's start share one deadline of 1800 s.
 
 ### Submit
@@ -240,7 +241,8 @@ eval against the server in the image.
 - The platform waits until `POST /api/v1/keepalive` answers on port 8000. Then it opens one WebSocket
   session for each episode at `/api/v1/session`.
 - If a route refuses the token of the run, the run fails with `policy_setup_crash`.
-- The GPU is one `3g.40gb` slice of an NVIDIA H100, with 40448 MiB of memory.
+- The GPU is one `1g.24gb` slice of an NVIDIA RTX PRO 6000, with 24192 MiB of memory and a quarter
+  of the card's compute.
 - The platform runs the image digest that it found when you submitted. It pulls that digest from your
   registry when the run starts, and it keeps no copy of the image.
 - The [rules](https://competition.phail.ai/rules#limits) give the other limits on
