@@ -206,6 +206,12 @@ class _Gripper(DriverRun[float]):
         self._client.close()
         return error
 
+    def hold_unless_cleared(self, outcome: RecoveryOutcome) -> DeviceFault | None:
+        """None for an activation that completed with no fault, else the error the gripper now holds."""
+        if outcome is RecoveryOutcome.CLEARED:
+            return None
+        return self.hold_error(RuntimeError('the gripper did not activate'))
+
 
 class Robotiq2F(pimm.ControlSystem):
     def __init__(self, port: str, tuning: RobotiqTuning = TUNING_2F85):
@@ -227,10 +233,11 @@ class Robotiq2F(pimm.ControlSystem):
 
     def _reactivate(
         self, gripper: _Gripper, asked: list[pimm.calls.Call[None, RecoveryOutcome]]
-    ) -> Iterator[pimm.Command]:
+    ) -> Generator[pimm.Command, None, DeviceFault | None]:
         """Activate the gripper again, then answer every call in ``asked`` with how the activation ended.
 
-        A throw reaches every call in ``asked`` before it leaves.
+        None once the activation completes with no fault, else the error now on ``grip``. A throw reaches every
+        call in ``asked`` before it leaves.
         """
         logger.info('A console asked to re-activate the Robotiq gripper')
         try:
@@ -241,15 +248,16 @@ class Robotiq2F(pimm.ControlSystem):
             raise
         for call in asked:
             call.set_result(outcome)
+        return gripper.hold_unless_cleared(outcome)
 
     @staticmethod
     def _activate_or_hold(gripper: _Gripper) -> Generator[pimm.Command, None, DeviceFault | None]:
-        """Activate the gripper. None once the bus answers, else the error now on ``grip``."""
+        """Activate the gripper. None once the activation completes with no fault, else the error now on ``grip``."""
         try:
-            yield from gripper.activate()
+            outcome = yield from gripper.activate()
         except _BUS_FAULTS as exc:
             return gripper.hold_error(exc)
-        return None
+        return gripper.hold_unless_cleared(outcome)
 
     def _serve(
         self, gripper: _Gripper, moves: Moves[float], clock: pimm.Clock
@@ -260,8 +268,7 @@ class Robotiq2F(pimm.ControlSystem):
             for call in self.ready.incoming():
                 call.set_result(None)
             if asked := list(self.recover.incoming()):
-                yield from self._reactivate(gripper, asked)
-                return None
+                return (yield from self._reactivate(gripper, asked))
 
             target = grip_setpoint(moves, grip, clock.now())
             if target is not None:
@@ -295,14 +302,13 @@ class Robotiq2F(pimm.ControlSystem):
             return held
         for call in recovers:
             call.set_result(outcome)
-        if outcome is RecoveryOutcome.NOT_CLEARED:
-            held = gripper.hold_error(RuntimeError('the gripper did not activate'))
-            for call in readies:
-                call.set_exception(held)
-            return held
+        lost = gripper.hold_unless_cleared(outcome)
         for call in readies:
-            call.set_result(None)
-        return None
+            if lost is None:
+                call.set_result(None)
+            else:
+                call.set_exception(lost)
+        return lost
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         client = ModbusClient.ModbusSerialClient(

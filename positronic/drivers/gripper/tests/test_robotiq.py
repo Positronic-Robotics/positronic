@@ -479,6 +479,67 @@ def test_a_recover_call_on_a_lost_gripper_activates_it(monkeypatch, world):
     assert not isinstance(_last(widths), pimm.SignalError)
 
 
+def test_a_gripper_that_activates_with_a_fault_at_start_holds_an_error_until_a_ready_call(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    bus.fault_after_activation = 0x0D
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+    move = _mover(world, driver)(1.0)
+    _pump(loop, clock, 2)
+
+    [error] = _errors(widths)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.GRIPPER
+    assert 'did not activate' in str(error)
+    with pytest.raises(DeviceFault, match='did not activate'):
+        move.result()
+
+    bus.fault_after_activation = 0
+    answer = _readier(world, driver)(None)
+    _pump(loop, clock, ACTIVATION_READS + 3)
+    assert answer.result() is None
+    assert not isinstance(_last(widths), pimm.SignalError)
+
+
+def test_a_gripper_whose_activation_does_not_complete_at_start_holds_an_error(monkeypatch):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    bus.completes = False
+    _, _, loop = _driven(monkeypatch, bus, clock, widths)
+    _pump(loop, clock, int(robotiq.TUNING_2F85.activation_timeout_s) + 1, seconds=1.0)
+
+    [error] = _errors(widths)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.GRIPPER
+    assert 'did not activate' in str(error)
+
+
+def test_a_recover_call_whose_activation_ends_in_a_fault_holds_an_error_until_a_ready_call(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+    bus.fault_after_activation = 0x0D
+
+    recovered = _recoverer(world, driver)(None)
+    _pump(loop, clock, ACTIVATION_READS + 2)
+
+    assert recovered.result() is RecoveryOutcome.NOT_CLEARED
+    [error] = _errors(widths)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.GRIPPER
+    assert 'did not activate' in str(error)
+
+    bus.fault_after_activation = 0
+    answer = _readier(world, driver)(None)
+    _pump(loop, clock, ACTIVATION_READS + 3)
+    assert answer.result() is None
+
+
+def test_a_recover_call_that_activates_a_gripper_that_answers_puts_no_error_on_the_width(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+
+    recovered = _recoverer(world, driver)(None)
+    _pump(loop, clock, ACTIVATION_READS + 2)
+
+    assert recovered.result() is RecoveryOutcome.CLEARED
+    assert _errors(widths) == []
+
+
 def test_a_fault_the_gripper_reports_puts_no_error_on_the_width(monkeypatch):
     """``gFLT`` is a status the gripper reports over a bus that answers, so the width stays a width."""
     bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
