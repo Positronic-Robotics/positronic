@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.1] - 2026-10-20
+
+This release publishes `positronic-model-server` 0.2.3. The other distributions keep their 0.3.0 versions.
+
+| Distribution | Version |
+|---|---|
+| `positronic-platform-client` | 0.37.1 |
+| `positronic-evals` | 0.1.0 |
+| `positronic-eval-vocabulary` | 0.4.0 |
+| `positronic-wire` | 0.12.0 |
+| `positronic-model-server` | 0.2.3 |
+
+### Platform client
+- `competition-enter` reads the key and the platform that `positronic account register` saves, after the environment, as every `positronic` command does. The checkout examples `submit_sample.py`, `walkthrough.py` and `standings.py` read them in the same order ([#979](https://github.com/Positronic-Robotics/positronic/pull/979))
+- `competition-enter --accept-terms <version>` accepts the version of the competition terms that the team approved, before the first submission ([#968](https://github.com/Positronic-Robotics/positronic/pull/968))
+- `docker/test_policy_image.sh` tests a policy image with one script, and the competition guide puts the image build in its main steps ([#956](https://github.com/Positronic-Robotics/positronic/pull/956))
+
+### Inference
+- Chunked inference replans after a robot error by default. A component description with no version asks for the latest version that the client supports, and `positronic-model-server` 0.2.3 writes that by default ([#963](https://github.com/Positronic-Robotics/positronic/pull/963))
+- `RestrictImageSize(resample=Resample.AREA)` scales frames with OpenCV `INTER_AREA` ([#948](https://github.com/Positronic-Robotics/positronic/pull/948))
+- FLUX 3 Action keeps its text encoder on the CPU until the DiT is packed, so it loads on a 32 GB GPU ([#967](https://github.com/Positronic-Robotics/positronic/pull/967))
+- The OpenPI server converts LIBERO units, apart from the command decoding ([#906](https://github.com/Positronic-Robotics/positronic/pull/906))
+
+### Hardware
+- `positronic-franka` moves from the `hardware` extra to a new `franka` extra, which requires 0.8.1 or later. A Franka station installs `positronic[hardware,franka]` ([#771](https://github.com/Positronic-Robotics/positronic/pull/771), [#973](https://github.com/Positronic-Robotics/positronic/pull/973))
+- `positronic[hardware]` installs on aarch64 Jetson stations, with the ZED SDK 5.4 `pyzed` wheels ([#771](https://github.com/Positronic-Robotics/positronic/pull/771))
+- The Franka arm reads AVAILABLE after a fault clear that a caller asked for ([#974](https://github.com/Positronic-Robotics/positronic/pull/974))
+- The Desk step of a recover call takes Desk control again when Desk dropped the run's token, and names the login that holds control ([#973](https://github.com/Positronic-Robotics/positronic/pull/973))
+
+### Datasets
+- An episode recording keeps every frame of a stored video. `positronic-server` moves its recording cache key to `v3`, so it does not serve a recording from an earlier build ([#977](https://github.com/Positronic-Robotics/positronic/pull/977))
+
+Full list: [v0.3.0...v0.3.1](https://github.com/Positronic-Robotics/positronic/compare/v0.3.0...v0.3.1)
+
 ## [0.3.0] - 2026-10-17
 
 This release publishes five more distributions to PyPI beside `positronic`. A `positronic` install pulls each one at the exact version it pins.

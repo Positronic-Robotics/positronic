@@ -29,7 +29,7 @@ import sys
 from positronic_model_server.spec import component, parallel, sequence
 
 description = sequence(
-    component('chunked_schedule', version=2, fps=20),
+    component('chunked_schedule', fps=20),
     parallel(
         component('restrict_image_size', width=320, height=180),
         component('metadata', values={'model': 'example'}),

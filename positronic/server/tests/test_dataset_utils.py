@@ -23,6 +23,7 @@ from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, Loc
 from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME, VALUE_COLUMN
+from positronic.dataset.video import VideoSignal
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -206,7 +207,7 @@ def _null_drainer() -> dataset_utils._BinaryStreamDrainer:
 
 
 @pytest.mark.parametrize('selected', [None, 'tick'])
-def test_numeric_pose_and_video_samples_keep_their_coordinates_after_thinning(tmp_path, monkeypatch, selected):
+def test_numeric_and_pose_samples_keep_their_coordinates_after_thinning(tmp_path, monkeypatch, selected):
     sent = {}
     send = dataset_utils.rr.send_columns
 
@@ -229,7 +230,11 @@ def test_numeric_pose_and_video_samples_keep_their_coordinates_after_thinning(tm
     kept = {RECEIVED_WORLD: [0, 40_000_000], RECEIVED_WALL: [2**53 + 1, 2**53 + 5], 'tick': [0, 4]}
     assert sent['/signals/pose/0'] == kept
     assert sent['/3d/pose'] == kept
-    assert sent['camera'] == kept
+    assert sent['camera'] == {
+        RECEIVED_WORLD: [i * 10_000_000 for i in range(6)],
+        RECEIVED_WALL: [2**53 + i + 1 for i in range(6)],
+        'tick': list(range(6)),
+    }
     assert sent['/signals/other'] == {'device': list(range(6))}
     schema = rr_recording.load_recording(str(rrd)).schema()
     assert {column.name for column in schema.index_columns()} == {*kept, 'device'}
@@ -784,17 +789,6 @@ def test_a_video_within_the_cap_is_embedded_as_recorded(tmp_path):
     assert _mp4_reduced_to(src, max_resolution=640) == src.read_bytes()
 
 
-def test_a_video_keeps_the_frames_named_at_their_own_times(tmp_path):
-    src = _write_mp4(tmp_path / 'small.mp4', width=320, height=240, frames=12)
-    kept = np.array([0, 3, 6, 9])
-
-    thinned = _mp4_reduced_to(src, max_resolution=640, kept=kept)
-
-    source_times = _frame_times(src.read_bytes())
-    assert _frame_times(thinned) == pytest.approx([source_times[index] for index in kept], abs=1e-4)
-    assert thinned != src.read_bytes()
-
-
 def test_a_larger_video_is_re_encoded_frame_for_frame(tmp_path):
     src = _write_mp4(tmp_path / 'big.mp4', width=1280, height=720, frames=12)
 
@@ -805,3 +799,60 @@ def test_a_larger_video_is_re_encoded_frame_for_frame(tmp_path):
         assert (stream.codec_context.width, stream.codec_context.height) == (640, 360)
     assert len(downscaled) < len(src.read_bytes())
     assert _frame_times(downscaled) == pytest.approx(_frame_times(src.read_bytes()), abs=1e-4)
+
+
+# Steps of 30 ms and 36.7 ms average 30 Hz, and every other step is shorter than a 30 Hz cap allows.
+_JITTERY_30HZ_NS = np.cumsum([0] + [30_000_000 if i % 2 else 36_666_667 for i in range(29)])
+
+
+def _jittery_episode(root: Path) -> DiskEpisode:
+    with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
+        for i, ts_ns in enumerate(_JITTERY_30HZ_NS):
+            ts = Time(**{RECEIVED_WORLD: int(ts_ns)})
+            writer.append('camera', np.full((48, 64, 3), i * 8, dtype=np.uint8), ts)
+            writer.append('value', float(i), ts)
+    return typing.cast(DiskEpisode, LocalDataset(root)[0])
+
+
+def _logged_video(monkeypatch, ep: DiskEpisode) -> tuple[bytes, list[int]]:
+    """The camera's embedded mp4, and the times its frame references are sent at."""
+    embedded: list[bytes] = []
+    asset_video = dataset_utils.rr.AssetVideo
+
+    def keep_contents(*, contents, media_type):
+        embedded.append(contents)
+        return asset_video(contents=contents, media_type=media_type)
+
+    monkeypatch.setattr(dataset_utils.rr, 'AssetVideo', keep_contents)
+    sent = _capture_indexes(monkeypatch)
+    signals = _collect_signal_groups(ep)
+    list(dataset_utils._log_video_signals(ep, signals, _null_drainer(), 640, 30, None))
+    return embedded[0], sent['camera'][RECEIVED_WORLD]
+
+
+def test_a_stored_video_on_a_jittery_timeline_keeps_every_frame(tmp_path, monkeypatch):
+    ep = _jittery_episode(tmp_path / 'ds')
+
+    mp4, times = _logged_video(monkeypatch, ep)
+
+    assert times == _JITTERY_30HZ_NS.tolist()
+    assert len(_frame_times(mp4)) == len(_JITTERY_30HZ_NS)
+
+
+def test_a_stored_video_that_fits_the_cap_is_embedded_byte_for_byte(tmp_path, monkeypatch):
+    ep = _jittery_episode(tmp_path / 'ds')
+
+    mp4, _ = _logged_video(monkeypatch, ep)
+
+    assert mp4 == typing.cast(VideoSignal, ep.signals['camera']).video_path.read_bytes()
+
+
+def test_a_numeric_signal_on_the_same_jittery_timeline_is_still_thinned(tmp_path, monkeypatch):
+    ep = _jittery_episode(tmp_path / 'ds')
+    sent = _capture_indexes(monkeypatch)
+
+    list(dataset_utils._log_numeric_signals(ep, _collect_signal_groups(ep), _null_drainer(), 30, None))
+
+    kept = _decimation_indices(_JITTERY_30HZ_NS.astype('datetime64[ns]'), max_hz=30)
+    assert 1 < len(kept) < len(_JITTERY_30HZ_NS)
+    assert sent['/signals/value'][RECEIVED_WORLD] == _JITTERY_30HZ_NS[kept].tolist()

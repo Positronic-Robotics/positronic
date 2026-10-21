@@ -5,9 +5,9 @@ The wrapper owns transport, sessions, serialization and cleanup. Vendor scripts 
 model directly in the same process and describe the client pipeline as plain data.
 
 ```bash
-uv pip install "positronic-model-server==0.2.2"
-uv pip install "positronic-model-server[websocket]==0.2.2"
-uv pip install "positronic-model-server[grpc]==0.2.2"
+uv pip install "positronic-model-server==0.2.3"
+uv pip install "positronic-model-server[websocket]==0.2.3"
+uv pip install "positronic-model-server[grpc]==0.2.3"
 ```
 
 The core depends on NumPy, Pillow, msgpack and `positronic-wire`'s dependency-free transport
@@ -28,7 +28,7 @@ from positronic_model_server.websocket_wire import WebsocketWire
 
 class EchoSession(Session):
     def __init__(self, fps):
-        super().__init__(component("chunked_schedule", version=2, fps=fps))
+        super().__init__(component("chunked_schedule", fps=fps))
 
     def infer(self, observation):
         return [observation]
@@ -120,7 +120,7 @@ and instantiates their implementations:
 from positronic_model_server.spec import component, parallel, sequence
 
 description = sequence(
-    component("chunked_schedule", version=2, fps=20),
+    component("chunked_schedule", fps=20),
     parallel(
         component("restrict_image_size", width=320, height=180),
         component("metadata", values={"model": "example"}),
@@ -128,9 +128,12 @@ description = sequence(
 )
 ```
 
-`component` accepts a name, explicit version and keyword arguments, normalizing arguments through
-JSON. `sequence` and `parallel` reject empty compositions. Component names and argument meanings
-belong to the client registry; these helpers do not resolve classes or validate model parameters.
+`component` accepts a name and JSON-compatible keyword arguments. By default it writes `version="latest"`,
+which selects the client's latest supported version. This can change after a client upgrade;
+pass `version=2`, for example, to pin a specific version. Legacy descriptions without a version mean v1.
+
+`sequence` and `parallel` reject empty compositions. The helpers check description structure;
+the client checks component names, supported versions and arguments when it builds the pipeline.
 The structural keys (`NAME`, `VERSION`, `ARGS`, `SEQ`, `PAR`) have one definition in `spec`.
 
 The wrapper defines only constants used by its own production code. Vendor settings belong to small

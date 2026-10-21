@@ -1,9 +1,10 @@
 import numpy as np
 import pytest
 from positronic_model_server import serialization
+from positronic_model_server.spec import LATEST, NAME, component
 
 from positronic.policy import spec
-from positronic.policy.codecs import EncodeImages, RestrictImageSize
+from positronic.policy.codecs import EncodeImages, Resample, RestrictImageSize
 
 
 def _image(h, w):
@@ -83,6 +84,71 @@ class TestRestrictImageSize:
         rebuilt = spec.from_spec(RestrictImageSize(64, 48).to_spec())
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
+
+    def test_a_spec_without_a_filter_uses_bilinear(self):
+        description = component(RestrictImageSize.WIRE_NAME, version=1, width=64, height=48)
+        restored = spec.from_spec(description)
+        assert isinstance(restored, RestrictImageSize)
+        assert restored.to_spec() == RestrictImageSize(64, 48).to_spec()
+
+    def test_a_v1_spec_without_bounds_takes_the_standard_bound(self):
+        restored = spec.from_spec({NAME: RestrictImageSize.WIRE_NAME})
+        assert isinstance(restored, RestrictImageSize)
+        assert restored.encode({'cam': _image(1080, 1920)})['cam'].shape == (360, 640, 3)
+
+    def test_area_survives_a_wire_round_trip(self):
+        description = RestrictImageSize(64, 48, resample=Resample.AREA).to_spec()
+        assert description == component(
+            RestrictImageSize.WIRE_NAME, version=1, width=64, height=48, resample=Resample.AREA.value
+        )
+        rebuilt = spec.from_spec(description)
+        assert isinstance(rebuilt, RestrictImageSize)
+        assert rebuilt.to_spec() == description
+
+    @staticmethod
+    def _textured(h, w):
+        y, x = np.mgrid[0:h, 0:w]
+        image = np.stack([127 + 100 * np.sin(x / 7.0) * np.cos(y / 11.0), 255 * x / w, 255 * y / h], axis=-1)
+        return np.clip(image, 0, 255).astype(np.uint8)
+
+    @pytest.mark.parametrize('version', [LATEST, 1])
+    @pytest.mark.parametrize('bounds', [{}, {'width': 64}, {'height': 48}, {'width': 64, 'height': 48}])
+    @pytest.mark.parametrize('resample', [None, *Resample])
+    def test_server_specs_preserve_defaults_and_explicit_filters(self, version, bounds, resample):
+        args = bounds if resample is None else {**bounds, 'resample': resample.value}
+        rebuilt = spec.from_spec(component(RestrictImageSize.WIRE_NAME, version=version, **args))
+        assert isinstance(rebuilt, RestrictImageSize)
+        expected = RestrictImageSize(**bounds, resample=Resample.BILINEAR if resample is None else resample)
+        assert rebuilt.to_spec() == expected.to_spec()
+        frame = self._textured(720, 960)
+        np.testing.assert_array_equal(rebuilt.encode({'cam': frame})['cam'], expected.encode({'cam': frame})['cam'])
+
+    @pytest.mark.parametrize('version', [LATEST, 1])
+    def test_an_unknown_resample_in_a_spec_is_refused(self, version):
+        description = component(RestrictImageSize.WIRE_NAME, version=version, resample='bicubic')
+        with pytest.raises(ValueError, match='bicubic'):
+            spec.from_spec(description)
+
+    @pytest.mark.parametrize('bound', [(320, 320), (160, 160), (64, 48)])
+    def test_area_gives_the_bilinear_shape_and_near_pixels(self, bound):
+        image = self._textured(480, 640)
+        bilinear = RestrictImageSize(*bound).encode({'cam': image})['cam']
+        area = RestrictImageSize(*bound, resample=Resample.AREA).encode({'cam': image})['cam']
+        assert area.shape == bilinear.shape and area.dtype == bilinear.dtype
+        assert np.abs(area.astype(int) - bilinear.astype(int)).mean() < 2
+
+    def test_area_scales_a_frame_that_is_not_contiguous(self):
+        image = self._textured(480, 640)[:, ::-1]
+        codec = RestrictImageSize(64, 48, resample=Resample.AREA)
+        expected = codec.encode({'cam': np.ascontiguousarray(image)})['cam']
+        np.testing.assert_array_equal(codec.encode({'cam': image})['cam'], expected)
+
+    def test_a_threaded_area_stack_scales_to_the_same_pixels_as_one_thread(self):
+        rng = np.random.default_rng(0)
+        stack = rng.integers(0, 256, size=(RestrictImageSize._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
+        codec = RestrictImageSize(64, 48, resample=Resample.AREA)
+        one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
+        np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
 
 
 class TestEncodeImages:

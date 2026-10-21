@@ -61,7 +61,7 @@ COPY model_server/ model_server/
 COPY vocabulary/ vocabulary/
 COPY evals/ evals/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --extra hardware --no-install-project
+    uv sync --locked --no-dev --extra hardware --extra franka --no-install-project
 
 WORKDIR /positronic
 

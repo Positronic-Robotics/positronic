@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 from positronic_model_server import protocol
+from positronic_model_server.spec import LATEST, component, sequence
 from positronic_wire import wire
 
 from positronic import keys
@@ -82,7 +83,7 @@ def controlled_runtime(monkeypatch):
 )
 def test_v1_timing_preserves_horizon_and_chunk_boundary(controlled_runtime, declared, handshake, answer):
     runtime, now, calls = controlled_runtime
-    run = runtime.start(from_v1_spec(declared, handshake), MagicMock(return_value=answer))
+    run = runtime.start(from_v1_spec(declared, handshake, spec.from_spec), MagicMock(return_value=answer))
     try:
         assert run.send({}).commands == {}
         future, obs, function = calls[0]
@@ -117,7 +118,7 @@ def test_stamped_observation_times_return_what_the_inner_run_returned(controlled
 
 def test_v1_server_without_action_fps_runs_at_the_default_rate_and_warns(caplog):
     with caplog.at_level(logging.WARNING, logger='positronic.policy.compatibility'):
-        stack = from_v1_spec({'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}, {})
+        stack = from_v1_spec({'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}, {}, spec.from_spec)
     assert flatten_dict(stack.meta())[ACTION_FPS] == V1_SERVER_DEFAULT_ACTION_FPS
     assert 'Rebuild the server on current positronic' in caplog.text
 
@@ -133,6 +134,7 @@ def test_v1_fault_pauses_and_keeps_the_pending_answer_and_history(controlled_run
             ]
         },
         {'action_fps': 10},
+        spec.from_spec,
     )
     run = runtime.start(stack, MagicMock(return_value=[{'value': 'kept', 'timestamp': 0}, {'timestamp': 0.1}]))
     try:
@@ -166,6 +168,7 @@ def test_v1_ticks_that_send_nothing_encode_no_image(controlled_runtime, monkeypa
             ]
         },
         {},
+        spec.from_spec,
     )
     run = runtime.start(stack, MagicMock(return_value=[{'value': 1}]))
     try:
@@ -193,6 +196,7 @@ def test_v1_codec_above_a_layer_still_encodes_on_every_tick(controlled_runtime, 
             ]
         },
         {},
+        spec.from_spec,
     )
     run = runtime.start(stack, MagicMock(return_value=[{'value': 1}]))
     try:
@@ -206,7 +210,9 @@ def test_v1_codec_above_a_layer_still_encodes_on_every_tick(controlled_runtime, 
 
 def test_v1_single_action_answer_holds_for_one_period(controlled_runtime):
     runtime, now, calls = controlled_runtime
-    stack = from_v1_spec({'seq': [{'name': 'chunked_schedule'}, {'name': 'action_timestamp', 'args': {'fps': 10}}]}, {})
+    stack = from_v1_spec(
+        {'seq': [{'name': 'chunked_schedule'}, {'name': 'action_timestamp', 'args': {'fps': 10}}]}, {}, spec.from_spec
+    )
     run = runtime.start(stack, MagicMock(return_value={'value': 1}))
     try:
         run.send({})
@@ -226,7 +232,9 @@ def test_v1_single_action_answer_holds_for_one_period(controlled_runtime):
 @pytest.mark.parametrize('answer', [None, []], ids=['absent', 'no-rows'])
 def test_v1_answer_without_rows_sends_no_commands_and_asks_again(controlled_runtime, answer):
     runtime, now, calls = controlled_runtime
-    stack = from_v1_spec({'seq': [{'name': 'chunked_schedule'}, {'name': 'action_timestamp', 'args': {'fps': 10}}]}, {})
+    stack = from_v1_spec(
+        {'seq': [{'name': 'chunked_schedule'}, {'name': 'action_timestamp', 'args': {'fps': 10}}]}, {}, spec.from_spec
+    )
     run = runtime.start(stack, MagicMock(return_value=answer))
     try:
         run.send({})
@@ -335,7 +343,7 @@ def test_deprecated_component_warns_once_per_stack_and_removed_one_fails(monkeyp
     notice = Deprecation(date(2020, 1, 1), date(2020, 7, 1), 'Serve flip_grip v2 instead.')
     monkeypatch.setitem(spec.COMPONENTS, 'flip_grip', {1: Version(current, notice)})
     with pytest.warns(FutureWarning, match='flip_grip.*2020-07-01') as warnings:
-        spec.from_spec({'seq': [{'name': 'flip_grip'}, {'name': 'flip_grip'}]})
+        spec.from_spec(sequence(component('flip_grip', version=LATEST), component('flip_grip', version=1)))
     assert len(warnings) == 1
     monkeypatch.setitem(spec.COMPONENTS, 'flip_grip', {1: Version(None, notice, removed_on=date(2020, 7, 1))})
     with pytest.raises(ValueError, match='has been removed.*flip_grip v2'):

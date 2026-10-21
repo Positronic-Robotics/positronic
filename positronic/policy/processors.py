@@ -75,7 +75,7 @@ class PauseOnUnavailable(Policy):
     TODO(#789): Define plan invalidation and recovery after robot unavailability.
     """
 
-    WIRE_NAME = 'stop_on_fault'  # Stable protocol identifier, independent of the Python class name.
+    WIRE_NAME = 'stop_on_fault'
     WIRE_VERSION = 2
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
@@ -218,8 +218,8 @@ class ChunkedSchedule(Policy):
     the answer is read. A zero lead starts the next request at step 13 instead.
 
     ``infer`` returns an ordered sequence of command sets and must not mutate episode state. The first
-    command is due when the completed answer is read, but not before the previous chunk's duration ends;
-    subsequent commands are spaced by ``1 / fps``. A chunk of K commands covers K periods, including the
+    command is due when the completed answer is read; regular playback waits for the previous chunk to end.
+    Subsequent commands are spaced by ``1 / fps``. A chunk of K commands covers K periods, including the
     final command's execution period. ``horizon_sec`` limits that duration and discards commands at or
     beyond the horizon.
 
@@ -230,14 +230,19 @@ class ChunkedSchedule(Policy):
     action. The observation is read at the request, before commands emitted in that same round.
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
+
+    ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
+    immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
+    until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
     """
 
     WIRE_NAME = 'chunked_schedule'
-    WIRE_VERSION = 2
+    WIRE_VERSION = 3
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
     RECORD_STATS_ARG = 'record_stats'
     INFERENCE_LEAD_ARG = 'inference_lead'
+    REPLAN_ON_ERROR_ARG = 'replan_on_error'
 
     @dataclass(frozen=True)
     class _Waypoint:
@@ -306,6 +311,7 @@ class ChunkedSchedule(Policy):
         horizon_sec: float | None = None,
         record_stats: bool = True,
         inference_lead: DurationEstimate | None = None,
+        replan_on_error: bool = True,
     ) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
@@ -315,6 +321,7 @@ class ChunkedSchedule(Policy):
         self._horizon_sec = horizon_sec
         self._record_stats = record_stats
         self._inference_lead = ConstantDuration() if inference_lead is None else inference_lead
+        self._replan_on_error = replan_on_error
 
     @staticmethod
     def _next_call_ns(start_ns: int, end_ns: int, lead_sec: float) -> int:
@@ -336,17 +343,25 @@ class ChunkedSchedule(Policy):
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         answer: Answer[Sequence[Commands]] | None = None
+        recovering = False
         trajectory: deque[ChunkedSchedule._Waypoint] = deque()
         end_ns = 0
         call_ns = 0
         called_at_ns = 0
         lead = self._inference_lead.run()
         stats = self._Stats(runtime) if self._record_stats else None
+
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 planned = None
+                statuses = (RobotStatus(obs[name]) for name in obs if _is_robot_status(name))
+                needs_recovery = self._replan_on_error and not recovering and RobotStatus.ERROR in statuses
+                if needs_recovery:
+                    trajectory.clear()
+                    end_ns = call_ns = now_ns
+                    planned, recovering = 0, True
                 if answer is None and now_ns >= call_ns:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
@@ -355,7 +370,7 @@ class ChunkedSchedule(Policy):
                     start_ns = max(now_ns, end_ns)
                     waypoints, end_ns = self._plan_chunk(chunk, start_ns)
                     call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
-                    # An answer that arrives before the chunk ends waits behind the commands that are still due.
+                    # A regular early answer waits behind the commands that are still due.
                     trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
                     planned = len(waypoints)
 
@@ -367,6 +382,7 @@ class ChunkedSchedule(Policy):
                     due_ns = waypoint.due_ns
                     starts_chunk |= waypoint.starts_chunk
                     commands.update(waypoint.commands)
+                recovering = recovering and not commands
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
                 resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
@@ -388,6 +404,8 @@ class ChunkedSchedule(Policy):
             args[self.HORIZON_SEC_ARG] = self._horizon_sec
         if not self._record_stats:
             args[self.RECORD_STATS_ARG] = False
+        if not self._replan_on_error:
+            args[self.REPLAN_ON_ERROR_ARG] = False
         lead = self._inference_lead.to_spec()
         if lead != 0:
             args[self.INFERENCE_LEAD_ARG] = lead
