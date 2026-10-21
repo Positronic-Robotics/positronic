@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 _SCOPE = 'positronic'
 
 _MISSING_EXTRA = (
-    '--timing needs the telemetry extra: `uv sync --extra telemetry` (or `pip install positronic[telemetry]`)'
+    'span recording needs the telemetry extra: `uv sync --extra telemetry` (or `pip install positronic[telemetry]`)'
 )
 
 # The subdirectory under a run's output dir where every process's sidecars live. The eval CLI writer, a
@@ -221,10 +221,10 @@ def bind_from_env(process: str) -> Iterator[None]:
     with ExitStack() as opened:
         try:
             opened.enter_context(_bind_to(path, process, run_id))
-        except Exception:
+        except Exception as error:
             # rules-allow: swallowed-error — the warning IS the report; there is no caller to raise to that
             # would not also lose the episodes.
-            logger.warning('recording no telemetry: the sidecar %s did not open', path, exc_info=True)
+            logger.warning('recording no telemetry: the sidecar %s did not open: %s', path, error)
         yield
 
 
