@@ -997,7 +997,7 @@ class Robot(pimm.ControlSystem):
         return arm.safe_inputs.confirmed_clear
 
     @staticmethod
-    def _reboot_clears(session: _DeskSession, exc: Exception) -> str | None:
+    def _why_only_a_reboot_clears(session: _DeskSession, exc: Exception) -> str | None:
         """Why only a control box reboot clears ``exc``, the failure of a Desk step; None where a reboot does not.
 
         A control token of the driver's own Desk login that the session cannot take is stranded. Every actor that
@@ -1034,7 +1034,7 @@ class Robot(pimm.ControlSystem):
         try:
             return self._prepare_and_connect(session, arm, brakes)
         except Exception as exc:
-            if (why := self._reboot_clears(session, exc)) is None:
+            if (why := self._why_only_a_reboot_clears(session, exc)) is None:
                 raise
             refused = exc
         logger.warning(f'Desk refused the step: {why}. Rebooting the control box, then preparing the arm again')
@@ -1074,12 +1074,14 @@ class Robot(pimm.ControlSystem):
             for call in asked:
                 call.set_exception(exc)
             return RecoveryOutcome.NOT_CLEARED
+        else:
+            for call in asked:
+                call.set_result(outcome)
+            return outcome
         finally:
+            # After the answers: a console reads IDLE as the end of the clear, and then reads the outcome.
             if asked:
                 self.recovery_step.emit(RecoveryStep.IDLE)
-        for call in asked:
-            call.set_result(outcome)
-        return outcome
 
     def _ready(self, arm: _Arm, call: pimm.calls.Call[None, None]) -> None:
         """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.

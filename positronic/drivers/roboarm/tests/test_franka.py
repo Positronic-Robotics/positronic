@@ -2834,6 +2834,27 @@ def _one_error_line(caplog, text: str) -> logging.LogRecord:
     return line
 
 
+@pytest.mark.parametrize('safety_error', [False, True], ids=['the recovery clears', 'Desk prepares the arm'])
+def test_a_recover_call_is_answered_before_the_driver_reports_idle(desk, world, safety_error):
+    """A console reads IDLE as the end of the clear, and then reads the outcome."""
+    desk.safety_error = safety_error
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    desk.safety_error = False
+    answer = run.recover(None)
+    answered_at_idle: list[bool] = []
+    record = run.steps._emit
+
+    def watch(data, time):
+        if data is RecoveryStep.IDLE:
+            answered_at_idle.append(answer.done())
+        record(data, time)
+
+    run.steps._emit = watch
+    run.tick()
+
+    assert answered_at_idle == [True]
+
+
 def test_a_recover_call_that_fails_logs_one_line_with_its_type_and_reason_and_no_traceback(desk, world, caplog):
     """A run log reads a traceback as a crash, and the run goes on after a failed recover call."""
     desk.safety_error = True

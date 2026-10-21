@@ -9,7 +9,8 @@
 
      This is the bare arm; roboarm.models.attach_robotiq_2f85 grafts the Robotiq 2F-85 gripper onto
      the flange at load time. roboarm.models.bundled_franka_model reads this file for the robot model
-     that the Franka driver sends and that backfills real-robot datasets. -->
+     that the simulators send and that backfills real-robot datasets. The Franka driver sends the model
+     that the connected arm reports. -->
 <robot name="fr3">
 
 
