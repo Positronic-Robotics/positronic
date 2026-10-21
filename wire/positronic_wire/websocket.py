@@ -3,6 +3,7 @@
 import abc
 import errno
 import json
+import logging
 import os
 import queue
 import socket
@@ -21,6 +22,8 @@ from positronic_wire import wire
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidMessage, InvalidStatus
 from websockets.sync.client import connect, unix_connect
 from websockets.sync.connection import Connection
+
+_logger = logging.getLogger(__name__)
 
 
 class WebsocketClientConnection(wire.ClientConnection):
@@ -354,6 +357,21 @@ class WebsocketTlsClientWire(WebsocketClientWire):
             raise
 
 
+def _dial_frame_channel(path: Path, timeout: float) -> socket.socket:
+    """A socket connected to the frame channel at ``path``. Raises ``ConnectionError`` where none answers."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    try:
+        sock.settimeout(timeout)
+        sock.connect(str(path))
+    except OSError as unreachable:
+        sock.close()
+        raise ConnectionError(f'No frame channel answers at {str(path)!r}: {unreachable}') from unreachable
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
 class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
     """The websocket wire over a Unix socket: the same session, reached on a path instead of a port.
 
@@ -390,6 +408,19 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
     def _api_connection(self, address: wire.UnixSocketAddress, deadline: float) -> HTTPConnection:
         """The HTTP API answers on the session's own socket, beside the sessions."""
         return _HTTPConnectionOn(self.STANDS_FOR_THE_SERVER, partial(self._open_socket, address), deadline)
+
+    def frame_channel_dialer(self, address: wire.UnixSocketAddress) -> Callable[[float], socket.socket] | None:
+        """The frame channel at ``wire.frame_channel_path``, beside the session socket.
+
+        A session that takes a frame ring sends its images raw through it and does not apply
+        ``compress_images``. So ``compress_images`` is not recommended on a server that takes frame rings on
+        this wire.
+        """
+        channel = wire.frame_channel_path(address.uds)
+        if channel is None:
+            _logger.error('No frame channel: the path beside %r is too long for a socket address', str(address.uds))
+            return None
+        return partial(_dial_frame_channel, channel)
 
     @staticmethod
     def _a_retry_can_reach_it(uds: Path, raised: OSError) -> bool:

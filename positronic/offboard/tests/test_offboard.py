@@ -9,7 +9,7 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
@@ -359,10 +359,25 @@ pytestmark_ring = pytest.mark.skipif(
 )
 
 
+def _bind_frame_channel(socket_path: str) -> socket.socket:
+    """The frame channel a websocket wire binds beside the Unix socket at ``socket_path``."""
+    channel = wire.frame_channel_path(Path(socket_path))
+    assert channel is not None
+    return websocket_wire.claim_socket_path(channel, socket.SOCK_SEQPACKET)
+
+
+def _frame_channel_dialer(socket_path: str) -> Callable[[float], socket.socket]:
+    """How the Unix websocket wire reaches the frame channel beside ``socket_path``."""
+    address = wire.UnixSocketAddress(Path(socket_path), wire.SESSION_PATH, '')
+    dial = websocket.WebsocketUnixClientWire().frame_channel_dialer(address)
+    assert dial is not None
+    return dial
+
+
 @pytest.fixture
 def frame_channel(socket_path: str) -> Generator[frame_ring.FrameChannel, None, None]:
-    channel = frame_ring.FrameChannel(frame_ring.channel_path(Path(socket_path)))
-    channel.start(websocket_wire.claim_socket_path(channel.path, socket.SOCK_SEQPACKET))
+    channel = frame_ring.FrameChannel()
+    channel.start(_bind_frame_channel(socket_path))
     channel.open_session(SESSION_ID)
     yield channel
     channel.close()
@@ -370,7 +385,7 @@ def frame_channel(socket_path: str) -> Generator[frame_ring.FrameChannel, None, 
 
 @pytest.fixture
 def frame_writer(socket_path: str, frame_channel) -> Generator[frame_ring.FrameWriter, None, None]:
-    writer = frame_ring.FrameWriter(frame_ring.channel_path(Path(socket_path)), SESSION_ID)
+    writer = frame_ring.FrameWriter(_frame_channel_dialer(socket_path), SESSION_ID)
     yield writer
     writer.close()
 
@@ -469,7 +484,7 @@ def test_a_sealed_ring_refuses_a_write_a_resize_and_a_hole():
 @pytestmark_ring
 def test_a_channel_that_answers_and_refuses_the_ring_still_raises(socket_path, frame_channel):
     """Only a path that reaches no channel turns the ring off. A channel that refuses the handover raises."""
-    writer = frame_ring.FrameWriter(frame_ring.channel_path(Path(socket_path)), 'a-session-not-open-here')
+    writer = frame_ring.FrameWriter(_frame_channel_dialer(socket_path), 'a-session-not-open-here')
     try:
         with pytest.raises(RuntimeError, match='did not map the frame ring'):
             writer.pack({'image.left': _image()})
@@ -478,9 +493,21 @@ def test_a_channel_that_answers_and_refuses_the_ring_still_raises(socket_path, f
 
 
 @pytestmark_ring
+def test_a_frame_view_keeps_its_pixels_for_the_calls_a_frame_stays_valid_and_no_longer(frame_channel, frame_writer):
+    first = _image()
+    view = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack({'image.left': first})))['image.left']
+    for _ in range(frame_ring.CALLS_A_FRAME_STAYS_VALID - 1):
+        frame_writer.pack({'image.left': _image()})
+
+    np.testing.assert_array_equal(view, first)
+    frame_writer.pack({'image.left': _image()})
+    assert not np.array_equal(view, first)
+
+
+@pytestmark_ring
 def test_a_slot_written_over_before_it_is_read_is_refused(frame_channel, frame_writer):
     stale = _over_the_wire(frame_writer.pack({'image.left': _image()}))
-    for _ in range(frame_ring.SLOTS):
+    for _ in range(frame_ring.CALLS_A_FRAME_STAYS_VALID):
         frame_writer.pack({'image.left': _image()})
 
     with pytest.raises(frame_ring.TornFrame):
@@ -598,8 +625,8 @@ def test_a_host_that_builds_no_ring_says_so_at_error_level(monkeypatch, caplog, 
 
 @pytestmark_ring
 def test_closing_a_channel_that_waits_for_a_handover_ends_its_thread(socket_path):
-    channel = frame_ring.FrameChannel(frame_ring.channel_path(Path(socket_path)))
-    channel.start(websocket_wire.claim_socket_path(channel.path, socket.SOCK_SEQPACKET))
+    channel = frame_ring.FrameChannel()
+    channel.start(_bind_frame_channel(socket_path))
     accepting = channel._thread
 
     channel.close()
@@ -619,8 +646,8 @@ def test_closing_a_channel_before_its_accept_thread_runs_raises_nothing_in_that_
     monkeypatch.setattr(frame_ring.FrameChannel, '_accept_forever', held_until_released)
     raised: list[BaseException | None] = []
     monkeypatch.setattr(threading, 'excepthook', lambda failure: raised.append(failure.exc_value))
-    channel = frame_ring.FrameChannel(frame_ring.channel_path(Path(socket_path)))
-    listener = websocket_wire.claim_socket_path(channel.path, socket.SOCK_SEQPACKET)
+    channel = frame_ring.FrameChannel()
+    listener = _bind_frame_channel(socket_path)
     channel.start(listener)
     accepting = channel._thread
     closing = threading.Thread(target=channel.close)

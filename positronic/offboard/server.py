@@ -5,7 +5,6 @@ import hmac
 import logging
 import math
 import os
-import socket
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -89,8 +88,9 @@ class PolicyServer:
     pipeline accepts session parameters as dotted configuration overrides. They build a new pipeline and
     never reach the model. An instantiated PolicyDeployment refuses session parameters.
 
-    ``frame_ring`` takes each observation's images through shared memory, which a Unix socket makes
-    possible; ``positronic.offboard.frame_ring`` states the contract.
+    ``frame_ring`` takes each observation's images through shared memory, on a wire with a frame channel.
+    A model then gets each image as a view that is valid for ``frame_ring.CALLS_A_FRAME_STAYS_VALID``
+    calls; a model that keeps an image longer copies it.
     """
 
     def __init__(
@@ -110,8 +110,8 @@ class PolicyServer:
         self._build_model = build_model
         # Set by ``serve`` before any wire binds, and closed when it returns.
         self._model: Model | None = None
-        # A ring needs a kernel that seals a memfd, and a Unix socket to ride beside. The socket belongs
-        # to a wire, so ``serve`` opens the channel once the wires have bound.
+        # A ring needs a kernel that seals a memfd, and a wire with a frame channel. A wire binds its
+        # channel once it has started, so ``serve`` opens it then.
         self._takes_rings = frame_ring and frames.SUPPORTED
         self._frames: frames.FrameChannel | None = None
 
@@ -304,21 +304,19 @@ class PolicyServer:
         self._model = self._build_model()
 
     def _open_frame_channel(self, started: Sequence[server_wire.Wire]) -> None:
-        """Serve frame rings beside the Unix socket a wire bound, where this server takes them at all.
+        """Serve frame rings on the frame channel of the first wire that has one, where this server takes rings.
 
-        A wire names its socket once it has started, so this runs after ``start`` and before the first
-        session. A server whose wires all bind a port takes no ring.
+        This runs after ``start`` and before the first session. A server whose wires have no frame channel
+        takes no ring.
         """
-        served = (w.served_address for w in started)
-        uds = next((a.uds for a in served if isinstance(a, websocket_wire.ServedUnixSocket)), None)
-        if not self._takes_rings or uds is None:
+        if not self._takes_rings:
             return
-        channel = frames.channel_path(uds)
-        if not frames.fits_a_socket_address(channel):
-            logger.error('No frame ring: the companion socket path %r is too long to bind', str(channel))
-            return
-        self._frames = frames.FrameChannel(channel)
-        self._frames.start(websocket_wire.claim_socket_path(self._frames.path, socket.SOCK_SEQPACKET))
+        for served in started:
+            listener = served.bind_frame_channel()
+            if listener is not None:
+                self._frames = frames.FrameChannel()
+                self._frames.start(listener)
+                return
 
     def serve(self, wires: Sequence[server_wire.Wire], on_ready: Callable[[], None] | None = None):
         """Serve sessions on every wire in ``wires``, until one of them ends or the server goes idle.
