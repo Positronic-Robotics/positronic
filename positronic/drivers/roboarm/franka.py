@@ -124,7 +124,7 @@ EMERGENCY_STOP_INPUT = 'x31'
 # The error the arm's state carries, and a ready call answers, while the emergency stop is pressed.
 EMERGENCY_STOP_PRESSED = 'Release the emergency stop button'
 # How the error the arm's state carries starts, and a ready call answers, while the driver has no connection to the
-# arm. The reason follows it. Only a recover call connects again.
+# arm. The error adds the reason after this text. Only a recover call connects again.
 NO_CONNECTION = 'The driver has no connection to the arm'
 # The recoverable error that Desk reports for a lost safety bus. Desk refuses to open the brakes until a reboot.
 FSOE_CONNECTION_ERROR = 'fsoeConnectionError'
