@@ -10,6 +10,7 @@ from positronic.utils.lazy import lazy_sequence
 
 from ..episode import Episode, EpisodeContainer
 from ..signal import Signal
+from ..time import Time
 
 
 class EpisodeTransform(ABC):
@@ -254,6 +255,24 @@ class Identity(EpisodeTransform):
                 continue
             container[k] = v
         return EpisodeContainer(container, episode.meta)
+
+
+class StartAt(EpisodeTransform):
+    """Start each signal of an episode at the time that ``start`` reads from it. ``None`` keeps the episode whole."""
+
+    def __init__(self, start: Callable[[Episode], Time | None]):
+        self._start = start
+
+    def __call__(self, episode: Episode) -> Episode:
+        start = self._start(episode)
+        if start is None:
+            return episode
+        return _LazyDeriveEpisode(episode, {name: partial(self._value_from, name, start) for name in episode})
+
+    @staticmethod
+    def _value_from(name: str, start: Time, episode: Episode) -> Any:
+        value = episode[name]
+        return value.time[start:] if isinstance(value, Signal) else value
 
 
 def map_signals(function: Callable[[Any], Any], fields: Sequence[str]) -> EpisodeTransform:
