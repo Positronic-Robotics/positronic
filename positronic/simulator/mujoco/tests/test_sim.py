@@ -260,3 +260,21 @@ def test_a_redraw_publishes_the_scene_before_it_answers():
                 assert pimm.value_updated(meta) is not None, 'the redraw answered before it published the scene'
                 return
         pytest.fail('the redraw never answered')
+
+
+def test_the_grip_reads_within_its_range_while_the_fingers_open_and_close():
+    sim = MujocoSim(MODEL, loaders=())
+
+    with pimm.World(virtual_time=True) as world:
+        target = world.pair(sim.target_grip)
+        grip = world.pair(sim.grip)
+        scheduler = world.start([sim])
+        readings = []
+        for value in (0.0, 1.0, 0.0):
+            target.emit(value)
+            for _ in range(_turns(sim, 2.0)):
+                next(scheduler)
+                if (reading := pimm.value_updated(grip)) is not None:
+                    readings.append(reading)
+
+        assert 0.0 <= min(readings) and max(readings) <= 1.0

@@ -424,7 +424,9 @@ class MujocoSim(pimm.ControlSystem):
     def _current_grip(self) -> float:
         """Convert the current grip joint position to [0, 1] (0 = open, 1 = closed)."""
         min_grip, max_grip = self._grip_range
-        return 1.0 - (self.data.joint(self._gripper_joint).qpos.item() - min_grip) / (max_grip - min_grip)
+        grip = 1.0 - (self.data.joint(self._gripper_joint).qpos.item() - min_grip) / (max_grip - min_grip)
+        # The joint limit is soft, so the finger can go a very small distance past it.
+        return float(np.clip(grip, 0.0, 1.0))
 
     @property
     def _q(self) -> np.ndarray:
