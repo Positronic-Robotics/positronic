@@ -57,6 +57,18 @@ def test_the_hand_pose_is_reported_at_the_franka_tool_point_not_the_grasp_site()
     np.testing.assert_allclose(reported.as_vector(_ROTMAT), (_GRASP_POSE * to_tool_point).as_vector(_ROTMAT), atol=1e-6)
 
 
+def test_a_delta_moves_the_hand_point_as_the_real_franka_driver_moves_it():
+    adapter = _adapter()
+    reported = adapter.observations(_with_grasp_pose(_payload(), _GRASP_POSE))[keys.ROBOT_STATE].ee_pose
+    delta = roboarm_command.CartesianDelta(
+        geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
+    )
+    wire = adapter.action({keys.ROBOT_COMMAND: pimm.Message(delta)})[keys.ROBOT_COMMAND]
+    assert wire[protocol.COMMAND_TYPE] == protocol.CARTESIAN
+    expected = delta.apply(reported) * adapter.env_control_frame
+    np.testing.assert_allclose(wire[protocol.COMMAND_POSE], expected.as_vector(_ROTMAT), atol=1e-9)
+
+
 def test_a_reported_hand_pose_commanded_back_reaches_the_env_at_its_grasp_site():
     adapter = _adapter()
     reported = adapter.observations(_with_grasp_pose(_payload(), _GRASP_POSE))[keys.ROBOT_STATE].ee_pose

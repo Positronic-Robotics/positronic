@@ -23,7 +23,7 @@ from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import _prepare_spec
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, bundled_franka_model
+from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
@@ -141,7 +141,7 @@ def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
 
 
 # The model the MolmoSpaces eval records beside every episode.
-_RECORDED_MODEL = bundled_franka_model()
+_RECORDED_MODEL = MolmoAdapter(camera_dict([ShoulderSide.LEFT])).robot_model
 # The MolmoSpaces FR3 and the recorded FR3 differ slightly: their grasp sites are less than 1 mm and 0.1 degrees apart.
 _FK_POS_ATOL = 1e-3  # metres
 _FK_ROT_ATOL = 5e-3  # radians

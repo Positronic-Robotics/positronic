@@ -44,8 +44,9 @@ class MolmoAdapter(WireCommandAdapter):
     _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
 
     def __init__(self, cameras: Mapping[str, tuple[str, ...]]):
-        # The env measures and drives at the 2F-85 grasp site of the FR3 the eval declares.
-        super().__init__(frame_transform(bundled_franka_model()[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK))
+        # The env measures and drives at the 2F-85 grasp site of this model, which the embodiment declares.
+        self.robot_model = bundled_franka_model()
+        super().__init__(frame_transform(self.robot_model[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK))
         self._cameras = cameras
         self._with_right_shoulder = SHOULDER_CAMERAS[ShoulderSide.RIGHT] in cameras.values()
 
@@ -72,7 +73,7 @@ class MolmoAdapter(WireCommandAdapter):
         grasp_pose = geom.Transform3D(
             raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT])
         )
-        ee_pose = grasp_pose * self.env_control_frame.inv
+        ee_pose = self._measure(grasp_pose)
         state = MujocoFrankaState()
         state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
         if raw_obs[protocol.OBS_ARM_ERROR]:
