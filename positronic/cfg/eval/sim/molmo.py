@@ -18,6 +18,13 @@ from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 _TIMEOUT_MARGIN_SEC = 1.0
 
 
+def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
+    bench, _, index = path.rpartition('/')
+    if not bench or not index.isdigit():
+        raise ValueError(f'an episode path is <benchmark path>/<episode index>, not {path!r}')
+    return mapping.BenchmarkPath.parse(bench), int(index)
+
+
 @cfn.config(
     suite=None,
     scene_dataset=None,
@@ -75,9 +82,26 @@ def benchmarks(
     )
     privileged = {mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE]}
 
+    def pinned_listing(pins: list[tuple[mapping.BenchmarkPath, int]]) -> list[dict]:
+        """The env's trial params of each pin, in pin order: one listing per benchmark."""
+        by_bench: dict[mapping.BenchmarkPath, list[int]] = {}
+        for bench, index in pins:
+            by_bench.setdefault(bench, []).append(index)
+        found = {}
+        for bench, indices in by_bench.items():
+            selection = {
+                **bench._asdict(),
+                mapping.SELECT_EPISODES: list(dict.fromkeys(indices)),
+                mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
+            }
+            for params in proxy.tasks(selection):
+                listed_bench = mapping.BenchmarkPath(*(params[key] for key in molmo_keys.BENCHMARK_DIMENSIONS))
+                found[listed_bench, params[molmo_keys.EPISODE_INDEX]] = params
+        return [found[pin] for pin in pins]
+
     def listed() -> list[dict]:
         if pins is not None:
-            return _pinned_tasks(proxy, pins, with_right_shoulder)
+            return pinned_listing(pins)
         selection = spec(
             suite=suite,
             scene_dataset=scene_dataset,
@@ -102,33 +126,6 @@ def benchmarks(
         return number_trials(trials)
 
     return Eval(embodiment, tasks, privileged=privileged, done=proxy.done)
-
-
-def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
-    bench, _, index = path.rpartition('/')
-    if not bench or not index.isdigit():
-        raise ValueError(f'an episode path is <benchmark path>/<episode index>, not {path!r}')
-    return mapping.BenchmarkPath.parse(bench), int(index)
-
-
-def _pinned_tasks(
-    proxy: RemoteEnvControlSystem, pins: list[tuple[mapping.BenchmarkPath, int]], with_right_shoulder: bool
-) -> list[dict]:
-    """The env's trial params of each pin, in pin order: one listing per benchmark."""
-    by_bench: dict[mapping.BenchmarkPath, list[int]] = {}
-    for bench, index in pins:
-        by_bench.setdefault(bench, []).append(index)
-    found = {}
-    for bench, indices in by_bench.items():
-        selection = {
-            **bench._asdict(),
-            mapping.SELECT_EPISODES: list(dict.fromkeys(indices)),
-            mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
-        }
-        for params in proxy.tasks(selection):
-            listed_bench = mapping.BenchmarkPath(*(params[key] for key in molmo_keys.BENCHMARK_DIMENSIONS))
-            found[listed_bench, params[molmo_keys.EPISODE_INDEX]] = params
-    return [found[pin] for pin in pins]
 
 
 bench_v1 = benchmarks.override(suite='molmospaces-bench-v1')
