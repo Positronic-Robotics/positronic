@@ -168,7 +168,8 @@ sending whole images, and so does a client whose wire has no frame channel.
   copies is unaffected.
 - **A ring session does not apply `compress_images`.** A session with a ring sends its images raw through the
   ring, whatever `compress_images` says. So `compress_images` is not recommended on a server that takes frame
-  rings over `websocket_unix`.
+  rings over `websocket_unix`. A session hands the server a ring with empty slots when it opens, so a session
+  whose channel does not answer has no ring, and applies `compress_images` from its first call.
 
 `--frame_ring=false` on the server keeps every image in the message. A server declares no ring where the
 kernel seals no `memfd` — a macOS server, or Linux before 5.1 — or where none of its wires has a frame channel.
