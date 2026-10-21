@@ -281,8 +281,10 @@ class _Arm(DriverRun[command.CommandType]):
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=2000)
         self.robot = robot
-        # The failure of a Desk step that turned FCI off and did not connect again; None while ``robot`` drives the arm.
+        # The failure that ended the driver's control of the arm; None while ``robot`` drives the arm.
         self.disconnect_cause: Exception | None = None
+        # Whether FCI is on. A libfranka failure leaves it on, and a Desk step that fails after FCI off leaves it off.
+        self.fci_active = True
         self.out = out
         self.state = FrankaState()
         self._dynamics_factor = dynamics_factor
@@ -376,6 +378,14 @@ class _Arm(DriverRun[command.CommandType]):
             held, self._held = self._held, None
             return held
         return self.moves.next_request()
+
+    def lose_control(self, cause: Exception) -> None:
+        """Stop the control loop, and put the error for ``cause`` on the state until a Desk step connects again."""
+        logger.error(f'The driver lost control of the arm: {cause}')
+        self.robot.stop()
+        self.disconnect_cause = cause
+        # The Message types do not name the SignalError that any message can carry.
+        self.out.emit(cast(FrankaState, pimm.SignalError(f'The driver has no control of the arm: {cause}')))
 
     def refuse_moves(self) -> None:
         """Answer every waiting sync move with the failure that ended the connection, and drop a streamed one."""
@@ -581,6 +591,8 @@ class _Arm(DriverRun[command.CommandType]):
         except Exception as exc:
             try:
                 self.publish(self.robot.state())
+            except RuntimeError as lost:  # pybind11 raises every libfranka failure as a RuntimeError
+                self.lose_control(lost)
             finally:
                 call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
 
@@ -839,16 +851,18 @@ class Robot(pimm.ControlSystem):
         # A self-test that Desk.prepare() runs needs locked brakes. A safety stop can lock them before the driver does.
         if _BrakeState.UNLOCKED in desk.safety_status()[BRAKE_STATE]:
             brakes.close()
-        # A failed step turned FCI off, and a box in Recovery refuses requests until prepare() acknowledges the error.
-        if arm.disconnect_cause is None:
+        # A box in Recovery refuses requests until prepare() acknowledges the error, so FCI goes off once.
+        if arm.fci_active:
             desk.deactivate_fci()
+            arm.fci_active = False
             del self._robot  # FCI off ended the connection this handle holds
         try:
             desk.prepare()
+            arm.fci_active = True
             brakes.record_opened()
             self._init_robot(self._robot)
         except Exception as exc:
-            arm.disconnect_cause = exc
+            arm.lose_control(exc)
             raise
         arm.robot, arm.disconnect_cause = self._robot, None  # only a configured handle drives the arm
         cleared = arm.robot.recover_from_errors()
@@ -862,7 +876,7 @@ class Robot(pimm.ControlSystem):
         what it did.
 
         When a caller asked and the recovery leaves the fault, ``_clear_with_desk_prepare`` runs. A throw reaches
-        the callers that asked and counts as NOT_CLEARED; one nobody asked for reaches no caller, so it ends the run.
+        the callers that asked and counts as NOT_CLEARED. One nobody asked for ends the driver's control of the arm.
         """
         try:
             outcome = arm.recover()
@@ -872,10 +886,11 @@ class Robot(pimm.ControlSystem):
                 outcome = self._clear_with_desk_prepare(desk, arm, brakes)
             if asked and outcome is RecoveryOutcome.CLEARED:
                 arm.forget_missed_target()
-        # rules-allow: swallowed-error — the throw is handed to every caller that asked
+        # rules-allow: swallowed-error — the throw is handed to every caller that asked, or held on the state
         except Exception as exc:
             if not asked:
-                raise
+                arm.lose_control(exc)
+                return RecoveryOutcome.NOT_CLEARED
             logger.exception('The recovery a console asked for failed')
             for call in asked:
                 call.set_exception(exc)
@@ -932,9 +947,12 @@ class Robot(pimm.ControlSystem):
                         self._recover(desk, arm, brakes, asked_to_recover)
                     yield arm.limiter.wait()
                     continue
-                st = arm.robot.state()
+                try:
+                    st, goal = arm.robot.state(), arm.robot.goal()
+                except RuntimeError as exc:  # pybind11 raises every libfranka failure as a RuntimeError
+                    arm.lose_control(exc)
+                    continue
                 arm.publish(st)
-                goal = arm.robot.goal()
                 arm.note_refusals(goal)
 
                 in_error, entered_error = _check_error(st.error != 0, in_error)

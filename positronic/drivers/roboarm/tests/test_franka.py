@@ -555,8 +555,10 @@ def test_a_control_fault_stops_the_arm_without_parking_it(desk):
     arm.q = JOGGED
     arm.raises_once = RuntimeError('libfranka: connection lost')  # the fault, not a dead arm — a park could move it
     mark = len(arm.calls)
-    with pytest.raises(RuntimeError):
-        _drive(loop, clock)
+    for _ in range(3):
+        next(loop)
+    stop.stopped = True
+    _drive(loop, clock)
 
     assert Call.SET_TARGET_JOINTS not in arm.calls[mark:]  # a fault is not answered with autonomous motion
     assert arm.calls[-1] == Call.STOP
@@ -2210,13 +2212,13 @@ def test_an_arm_in_error_recovers_with_no_console_asking(desk, world):
     assert desk.calls == [Call.PREPARE], 'a recovery no console asked for prepared the arm through Desk again'
 
 
-def test_a_recovery_no_console_asked_for_lets_the_vendor_throw_end_the_run(desk, world):
-    """A throw from the recovery the driver runs for itself has no caller to hand it to, so it ends the
-    run rather than going unreported."""
+def test_a_recovery_no_console_asked_for_puts_the_vendor_throw_on_the_state(desk, world):
+    """A throw from the recovery the driver runs for itself has no caller to hand it to, so the state carries it."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     clock = MockClock()
-    driver.state._bind(RecordingEmitter(), clock=clock)
+    states = RecordingEmitter()
+    driver.state._bind(states, clock=clock)
     _recoverer(world, driver)
     loop = driver.run(StopFlag(), clock)
 
@@ -2224,9 +2226,11 @@ def test_a_recovery_no_console_asked_for_lets_the_vendor_throw_end_the_run(desk,
         next(loop)
     arm.error = 1
     arm.recover_raises = RuntimeError('libfranka: control command rejected')
-
-    with pytest.raises(RuntimeError, match='control command rejected'):
+    for _ in range(3):
         next(loop)
+
+    [error] = _errors(states)
+    assert 'control command rejected' in str(error)
 
 
 def test_an_arm_with_no_fault_nobody_called_runs_no_recovery(desk, world):
@@ -2375,8 +2379,8 @@ def test_a_move_held_on_an_erroring_arm_is_answered_when_the_world_stops(desk, w
         answer.result()
 
 
-def test_a_move_held_on_an_erroring_arm_is_answered_when_a_throw_ends_the_run(desk, world):
-    """A recovery that throws ends the run with a move held, and the move's caller still gets an answer."""
+def test_a_move_held_on_an_erroring_arm_is_answered_when_the_driver_loses_control(desk, world):
+    """A recovery that throws ends the driver's control with a move held, and the move's caller gets an answer."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     clock = MockClock()
@@ -2390,8 +2394,168 @@ def test_a_move_held_on_an_erroring_arm_is_answered_when_a_throw_ends_the_run(de
     answer = move(command.JointPosition(JOGGED))
     next(loop)  # the call is held
     arm.recover_raises = RuntimeError('libfranka: control command rejected')
-
-    with pytest.raises(RuntimeError, match='control command rejected'):
+    for _ in range(2):
         next(loop)
-    with pytest.raises(MoveAbandoned):
+
+    with pytest.raises(RuntimeError, match='no connection to the arm: libfranka: control command rejected'):
         answer.result()
+
+
+def _errors(states: RecordingEmitter) -> list[pimm.SignalError]:
+    return [data for _, data in states.emitted if isinstance(data, pimm.SignalError)]
+
+
+def _running(
+    desk: FakeDesk, world: pimm.World, driver: franka.Robot
+) -> tuple[Iterator[pimm.Command], RecordingEmitter]:
+    """Run ``driver`` through init and the opening move. Returns the run and what its state emits."""
+    clock = MockClock()
+    states = RecordingEmitter()
+    driver.state._bind(states, clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    return loop, states
+
+
+@pytest.mark.parametrize('call', [Call.STATE, Call.GOAL])
+def test_a_libfranka_failure_puts_an_error_on_the_state_and_the_run_goes_on(desk, world, monkeypatch, call):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+    calls = len(arm.calls)
+
+    def fail(*_args):
+        raise RuntimeError('libfranka: UDP receive: Timeout')
+
+    monkeypatch.setattr(arm, call.value, fail)
+    for _ in range(5):
+        next(loop)
+
+    [error] = _errors(states)
+    assert str(error) == 'The driver has no control of the arm: libfranka: UDP receive: Timeout'
+    assert arm.calls[calls:].count(Call.STOP) == 1
+    assert Call.SET_TARGET_JOINTS not in arm.calls[calls:]
+
+
+def test_a_move_on_an_arm_the_driver_lost_is_refused(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, _states = _running(desk, world, driver)
+    arm.raises = RuntimeError('libfranka: UDP receive: Timeout')
+    next(loop)
+
+    move = _mover(world, driver)(command.JointPosition(JOGGED))
+    next(loop)
+
+    with pytest.raises(RuntimeError, match='no connection to the arm: libfranka: UDP receive: Timeout'):
+        move.result()
+
+
+def test_an_arm_that_fails_during_a_move_answers_the_move_and_the_run_goes_on(desk, world):
+    arm = FakeArm(PARK, polls_to_reach=10**9)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+
+    move = _mover(world, driver)(command.JointPosition(JOGGED))
+    next(loop)  # the move goes out and polls once
+    arm.raises = RuntimeError('libfranka: TCP receive: Connection reset by peer')
+    next(loop)
+
+    with pytest.raises(RuntimeError, match='Connection reset by peer'):
+        move.result()
+    [error] = _errors(states)
+    assert 'Connection reset by peer' in str(error)
+
+
+def test_a_ready_call_after_a_libfranka_failure_turns_fci_off_prepares_and_connects_again(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    ready = _readier(world, driver)
+    loop, states = _running(desk, world, driver)
+    arm.raises = RuntimeError('libfranka: UDP receive: Timeout')
+    next(loop)
+    reconnected = FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED)
+    _reconnect_to(monkeypatch, reconnected)
+
+    answer = ready(None)
+    next(loop)
+    next(loop)
+
+    assert answer.result() is None
+    assert desk.calls == [Call.PREPARE, Call.ENSURE_CONTROL, Call.CLOSE_BRAKES, Call.DEACTIVATE_FCI, Call.PREPARE]
+    assert Call.STATE in reconnected.calls
+    assert isinstance(states.emitted[-1][1], franka.FrankaState), 'the state did not come back'
+
+
+def test_a_ready_call_whose_desk_step_fails_answers_its_error_and_the_next_one_skips_the_second_fci_off(
+    desk, world, monkeypatch
+):
+    """The step that failed turned FCI off, so the next step sends no second FCI off."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    ready = _readier(world, driver)
+    loop, states = _running(desk, world, driver)
+    arm.raises = RuntimeError('libfranka: UDP receive: Timeout')
+    next(loop)
+    desk.raises[Call.PREPARE] = franka.SafetyControllerError(['safety error'])
+
+    first = ready(None)
+    next(loop)
+    with pytest.raises(franka.SafetyControllerError):
+        first.result()
+    assert isinstance(states.emitted[-1][1], pimm.SignalError)
+
+    del desk.raises[Call.PREPARE]
+    _reconnect_to(monkeypatch, FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED))
+    second = ready(None)
+    next(loop)
+
+    assert second.result() is None
+    assert desk.calls.count(Call.DEACTIVATE_FCI) == 1
+
+
+def test_a_driver_with_no_desk_session_holds_a_libfranka_failure(world):
+    """Only a Desk step connects again, so with no Desk session a ready call answers the error that stays."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, manage_desk=False)
+    ready = _readier(world, driver)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.raises = RuntimeError('libfranka: UDP receive: Timeout')
+    next(loop)
+
+    answer = ready(None)
+    next(loop)
+
+    with pytest.raises(RuntimeError, match='did not clear: libfranka: UDP receive: Timeout'):
+        answer.result()
+
+
+def test_an_arm_error_the_recovery_clears_puts_no_error_on_the_state(desk, world):
+    """An error the arm reports over a connection that answers is the driver's to recover, not a lost arm."""
+    arm = FakeArm(PARK)
+    arm.recover_clears = True
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+
+    arm.error, arm.error_message = 1, '[cartesian_reflex]'
+    for _ in range(5):
+        next(loop)
+
+    assert _errors(states) == []
+    assert arm.error == 0
+
+
+def test_a_failure_that_is_not_libfranka_ends_the_run(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, _states = _running(desk, world, driver)
+
+    arm.raises = ValueError('a bug in the driver')
+
+    with pytest.raises(ValueError, match='a bug in the driver'):
+        next(loop)

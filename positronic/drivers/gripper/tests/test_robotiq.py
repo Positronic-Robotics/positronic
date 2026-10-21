@@ -1,4 +1,5 @@
-"""What the Robotiq driver logs of the gripper's status, and how it re-activates the gripper when asked."""
+"""What the Robotiq driver logs of the gripper's status, how it re-activates the gripper when asked, and how it
+holds a lost gripper until a call activates it again."""
 
 import logging
 from types import SimpleNamespace
@@ -28,7 +29,8 @@ class FakeBus:
     leaves the fingers open, obeying again, and with the fault byte ``fault_after_activation``. With
     ``completes`` off the activation never ends. A position request moves the fingers ``STEP`` counts a read,
     to no more than ``SHUT``, and closing stops at ``object_at``. With ``obeying`` off the fingers stay where
-    they stand, and the gripper reports them at the request. A read raises ``raises`` once it is set.
+    they stand, and the gripper reports them at the request. A read raises ``raises`` once it is set, and
+    answers with an exception response while ``refuses`` is on. ``connect`` answers ``answers``.
     """
 
     def __init__(self, object_at: int | None = None):
@@ -41,6 +43,9 @@ class FakeBus:
         self.fault = 0
         self.position = 0
         self.raises: Exception | None = None
+        self.refuses = False
+        self.answers = True
+        self.connects = 0
         self._act = False
         self._go = False
         self._requested = 0
@@ -49,7 +54,8 @@ class FakeBus:
         self._fingers = Fingers.AT_REQUEST
 
     def connect(self) -> bool:
-        return True
+        self.connects += 1
+        return self.answers
 
     def close(self) -> None:
         pass
@@ -72,9 +78,12 @@ class FakeBus:
         assert (address, count, device_id) == (0x07D0, 3, 9)
         if self.raises is not None:
             raise self.raises
+        if self.refuses:
+            return SimpleNamespace(registers=[], isError=lambda: True)
         self._step()
         status = self._fingers.value << 6 | self._activation.value << 4 | self._go << 3 | self._act
-        return SimpleNamespace(registers=[status << 8, self.fault << 8 | self._requested, self.position << 8])
+        registers = [status << 8, self.fault << 8 | self._requested, self.position << 8]
+        return SimpleNamespace(registers=registers, isError=lambda: False)
 
     def _step(self) -> None:
         if self._activation is Activation.IN_PROGRESS:
@@ -107,11 +116,14 @@ def logs(caplog):
     return caplog
 
 
-def _driven(monkeypatch, bus: FakeBus, clock: MockClock):
-    """A driver over ``bus``, the receiver its grip requests arrive on, and its loop past the activation."""
+def _driven(monkeypatch, bus: FakeBus, clock: MockClock, widths: RecordingEmitter | None = None):
+    """A driver over ``bus``, the receiver its grip requests arrive on, and its loop past the activation.
+
+    The driver emits its widths to ``widths``.
+    """
     monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
     driver = robotiq.Robotiq2F(port='/dev/null')
-    driver.grip._bind(RecordingEmitter(), clock=clock)
+    driver.grip._bind(widths or RecordingEmitter(), clock=clock)
     requests = ManualCommandReceiver()
     driver.target_grip._bind(requests)
     loop = driver.run(StopFlag(), clock)
@@ -275,15 +287,207 @@ def test_speed_and_force_reach_their_own_bytes(monkeypatch):
     assert bus.writes[-1][2] == 10 << 8 | 200
 
 
-def test_a_bus_error_during_recover_reaches_the_caller_and_ends_the_run(monkeypatch, world):
-    bus, clock = FakeBus(), MockClock()
-    driver, _, loop = _driven(monkeypatch, bus, clock)
+def _readier(world: pimm.World, driver: robotiq.Robotiq2F) -> pimm.calls.Caller[None, None]:
+    """A caller on ``driver.ready``, wired for a test that pumps the driver's generator itself."""
+    caller = pimm.calls.ControlSystemCaller[None, None](driver)
+    wire_call(world, caller, driver.ready)
+    return caller
+
+
+def _mover(world: pimm.World, driver: robotiq.Robotiq2F) -> pimm.calls.Caller[float, None]:
+    """A caller on ``driver.sync_move``, wired for a test that pumps the driver's generator itself."""
+    caller = pimm.calls.ControlSystemCaller[float, None](driver)
+    wire_call(world, caller, driver.sync_move)
+    return caller
+
+
+def _last(widths: RecordingEmitter):
+    return widths.emitted[-1][1]
+
+
+def _errors(widths: RecordingEmitter) -> list[pimm.SignalError]:
+    return [data for _, data in widths.emitted if isinstance(data, pimm.SignalError)]
+
+
+def _lose(bus: FakeBus, fault: str) -> None:
+    """Make every read fail the way ``fault`` names."""
+    match fault:
+        case 'no answer':
+            bus.raises = robotiq.ModbusException('No response received after 3 retries')
+        case 'port gone':
+            bus.raises = OSError('[Errno 5] Input/output error')
+        case 'exception response':
+            bus.refuses = True
+
+
+def _restore(bus: FakeBus) -> None:
+    bus.raises, bus.refuses = None, False
+
+
+FAULTS = ['no answer', 'port gone', 'exception response']
+
+
+@pytest.mark.parametrize('fault', FAULTS)
+def test_a_lost_bus_puts_an_error_on_the_width_and_the_run_goes_on(monkeypatch, world, fault):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+    move = _mover(world, driver)(1.0)
+    _pump(loop, clock, 1)
+
+    _lose(bus, fault)
+    _pump(loop, clock, 5)
+
+    assert len(_errors(widths)) == 1
+    assert isinstance(_last(widths), pimm.SignalError)
+    with pytest.raises(pimm.SignalError, match='The Robotiq gripper is lost'):
+        move.result()
+
+
+def test_a_move_on_a_lost_gripper_is_answered_with_its_error_and_reaches_no_register(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, requests, loop = _driven(monkeypatch, bus, clock, widths)
+    _lose(bus, 'no answer')
+    _pump(loop, clock, 1)
+    before = len(bus.writes)
+
+    move = _mover(world, driver)(1.0)
+    requests.push(0.5)
+    _pump(loop, clock, 3)
+
+    with pytest.raises(pimm.SignalError, match='The Robotiq gripper is lost'):
+        move.result()
+    assert bus.writes[before:] == []
+
+
+@pytest.mark.parametrize('fault', FAULTS)
+def test_a_ready_call_activates_a_lost_gripper_and_the_width_comes_back(monkeypatch, world, fault):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, requests, loop = _driven(monkeypatch, bus, clock, widths)
+    _lose(bus, fault)
+    _pump(loop, clock, 3)
+    _restore(bus)
+
+    answer = _readier(world, driver)(None)
+    _pump(loop, clock, ACTIVATION_READS + 3)
+
+    assert answer.result() is None
+    assert not isinstance(_last(widths), pimm.SignalError)
+    requests.push(1.0)
+    _pump(loop, clock, 10)
+    assert bus.position == SHUT, 'the fingers do not move after the repair'
+
+
+def test_a_ready_call_on_a_bus_that_stays_down_answers_the_error_and_the_next_one_repairs(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+    _lose(bus, 'no answer')
+    _pump(loop, clock, 1)
+
+    ready = _readier(world, driver)
+    first = ready(None)
+    _pump(loop, clock, 2)
+
+    with pytest.raises(pimm.SignalError, match='No response received'):
+        first.result()
+    assert isinstance(_last(widths), pimm.SignalError)
+
+    _restore(bus)
+    second = ready(None)
+    _pump(loop, clock, ACTIVATION_READS + 3)
+    assert second.result() is None
+
+
+def test_a_ready_call_on_a_lost_gripper_that_activates_with_a_fault_answers_an_error(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+    _lose(bus, 'no answer')
+    _pump(loop, clock, 1)
+    _restore(bus)
+    bus.fault_after_activation = 0x0D
+
+    answer = _readier(world, driver)(None)
+    _pump(loop, clock, ACTIVATION_READS + 3)
+
+    with pytest.raises(pimm.SignalError, match='did not activate'):
+        answer.result()
+    assert isinstance(_last(widths), pimm.SignalError)
+
+
+def test_a_ready_call_on_a_gripper_that_answers_is_answered_at_once(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+    before = len(bus.writes)
+
+    answer = _readier(world, driver)(None)
+    _pump(loop, clock, 1)
+
+    assert answer.result() is None
+    assert bus.writes[before:] == [], 'a ready call re-activated a gripper that answers'
+
+
+def test_a_gripper_absent_at_start_holds_an_error_until_a_ready_call_opens_it(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    bus.answers = False
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    driver = robotiq.Robotiq2F(port='/dev/null')
+    driver.grip._bind(widths, clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    _pump(loop, clock, 3)
+
+    assert [str(error) for error in _errors(widths)] == [
+        'The Robotiq gripper is lost: no Robotiq gripper answers at /dev/null'
+    ]
+
+    bus.answers = True
+    answer = _readier(world, driver)(None)
+    _pump(loop, clock, ACTIVATION_READS + 3)
+    assert answer.result() is None
+
+
+def test_a_bus_error_during_recover_reaches_the_caller_and_the_gripper_holds_it(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
 
     answer = _recoverer(world, driver)(None)
     _pump(loop, clock, 1)
-    bus.raises = ConnectionError('the serial port is gone')
-    with pytest.raises(ConnectionError):
-        _pump(loop, clock, 1)
+    _lose(bus, 'port gone')
+    _pump(loop, clock, 2)
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(OSError):
         answer.result()
+    assert len(_errors(widths)) == 1
+
+
+def test_a_recover_call_on_a_lost_gripper_activates_it(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+    _lose(bus, 'no answer')
+    _pump(loop, clock, 1)
+    _restore(bus)
+
+    answer = _recoverer(world, driver)(None)
+    _pump(loop, clock, ACTIVATION_READS + 3)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert not isinstance(_last(widths), pimm.SignalError)
+
+
+def test_a_fault_the_gripper_reports_puts_no_error_on_the_width(monkeypatch):
+    """``gFLT`` is a status the gripper reports over a bus that answers, so the width stays a width."""
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+
+    bus.fault = 0x0E
+    _pump(loop, clock, 5)
+
+    assert _errors(widths) == []
+
+
+def test_an_error_that_is_not_the_bus_ends_the_run(monkeypatch):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    _, _, loop = _driven(monkeypatch, bus, clock, widths)
+
+    bus.raises = ValueError('a bug in the driver')
+
+    with pytest.raises(ValueError, match='a bug in the driver'):
+        _pump(loop, clock, 1)

@@ -15,7 +15,7 @@ import math
 from collections import deque
 from collections.abc import Callable, Generator, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import mujoco as mj
 import numpy as np
@@ -54,6 +54,19 @@ _OPEN_GRIP = 0.0  # positronic grip convention: 0 is open
 _CONTROL_HZ = 100
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
+
+
+class ChainFault(RuntimeError):
+    """A call into the i2rt chain that raised."""
+
+
+@contextlib.contextmanager
+def _chain_call() -> Iterator[None]:
+    """Raise what the block raises as a ``ChainFault``: i2rt names no exception of its own."""
+    try:
+        yield
+    except Exception as exc:
+        raise ChainFault(f'the chain failed: {exc}') from exc
 
 
 def _connect(channel: str, sim: bool, gravity_comp_factor: np.ndarray | None):
@@ -210,7 +223,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._sent_at = 0.0
 
     def observations(self) -> dict[str, np.ndarray]:
-        return self.vendor.get_observations()
+        with _chain_call():
+            return self.vendor.get_observations()
 
     @staticmethod
     def read_grip(obs: dict[str, np.ndarray]) -> float:
@@ -236,7 +250,8 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.exception('Publishing the arm state failed during shutdown; the park goes on without it')
 
     def _send(self, joints: np.ndarray, open_width: float) -> None:
-        self.vendor.command_joint_pos(np.append(joints, open_width))
+        with _chain_call():
+            self.vendor.command_joint_pos(np.append(joints, open_width))
         self._sent_joints = np.array(joints, dtype=np.float64)
         self._sent_at = self.clock.now()
 
@@ -499,14 +514,8 @@ class _Arm(DriverRun[command.CommandType]):
 
 
 @contextlib.contextmanager
-def _opened(
-    connect: Callable[[str, bool, np.ndarray | None], Any],
-    channel: str,
-    sim: bool,
-    gravity_comp_factor: np.ndarray | None,
-) -> Iterator[Any]:
-    """Open the chain. Release torque only on a normal exit, which follows a verified park."""
-    vendor = connect(channel, sim, gravity_comp_factor)
+def _opened(vendor: Any) -> Iterator[Any]:
+    """Hold the open chain. Release torque only on a normal exit, which follows a verified park."""
     try:
         yield vendor
     except BaseException:
@@ -632,6 +641,8 @@ class Robot(pimm.ControlSystem):
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
+        # Answers once the chain is open. On a lost chain it opens the chain again first.
+        self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
         return (
@@ -658,8 +669,37 @@ class Robot(pimm.ControlSystem):
             roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES),
             roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         }
-        fault = None
-        with _opened(self._connect, self._channel, self._sim, self._gravity_comp_factor) as vendor:
+        asked: list[pimm.calls.Call[None, None]] = []
+        while not should_stop.value:
+            lost = yield from self._drive_chain(kinematics, state, meta, asked, should_stop, clock)
+            if lost is None:
+                return
+            asked = yield from self._hold(lost, should_stop, clock)
+
+    def _drive_chain(
+        self,
+        kinematics: _Kinematics,
+        state: YamState,
+        meta: dict[str, Any],
+        asked: list[pimm.calls.Call[None, None]],
+        should_stop: pimm.SignalReceiver,
+        clock: pimm.Clock,
+    ) -> Generator[pimm.Command, None, ChainFault | None]:
+        """Open the chain, answer ``asked``, and serve the arm until ``should_stop``. Park and release it after.
+
+        A ``ChainFault`` comes back as the return value once the arm is parked. Any other fault is raised again.
+        """
+        try:
+            with _chain_call():
+                vendor = self._connect(self._channel, self._sim, self._gravity_comp_factor)
+        except ChainFault as exc:
+            for call in asked:
+                call.set_exception(exc)
+            return exc
+        for call in asked:
+            call.set_result(None)
+        fault, lost = None, None
+        with _opened(vendor):
             arm = _Arm(
                 vendor,
                 self.sync_move,
@@ -674,16 +714,46 @@ class Robot(pimm.ControlSystem):
                 kinematics,
                 state,
             )
-            # rules-allow: swallowed-error — the fault is raised again after the shutdown
+            # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 self.robot_meta.emit(meta)
                 yield from self._serve(arm, should_stop, clock)
+            except ChainFault as exc:
+                lost = exc
+                logger.exception('The chain failed during the run; parking the arm before it lets go')
             except Exception as exc:
                 fault = exc
                 logger.exception('The arm driver failed during the run; parking the arm before it lets go')
             yield from arm.shutdown()
         if fault is not None:
             raise fault
+        return lost
+
+    def _hold(
+        self, lost: ChainFault, should_stop: pimm.SignalReceiver, clock: pimm.Clock
+    ) -> Generator[pimm.Command, None, list[pimm.calls.Call[None, None]]]:
+        """Put an error for ``lost`` on the state and the grip, and answer every move with it, until a ready call.
+
+        Return the ready calls, or none when the world stops first.
+        """
+        error = pimm.SignalError(f'The YAM arm is lost: {lost}')
+        logger.error(f'{error}; it holds the error until a ready call opens the chain again')
+        # The Message types do not name the SignalError that any message can carry.
+        self.state.emit(cast(YamState, error))
+        self.grip.emit(cast(float, error))
+        limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
+        refused = (
+            Moves[command.CommandType](self.sync_move, self.commands),
+            Moves[float](self.sync_grip, self.target_grip),
+        )
+        while not should_stop.value:
+            for moves in refused:
+                while isinstance(move := moves.next_request(), pimm.calls.Call):
+                    move.set_exception(error)
+            if asked := list(self.ready.incoming()):
+                return asked
+            yield limiter.wait()
+        return []
 
     def _serve(
         self, arm: _Arm, should_stop: pimm.SignalReceiver, clock: pimm.Clock
@@ -694,6 +764,8 @@ class Robot(pimm.ControlSystem):
         try:
             with Moves[float](self.sync_grip, self.target_grip) as fingers:
                 while not should_stop.value:
+                    for call in self.ready.incoming():
+                        call.set_result(None)
                     asked, q = self._take_request(arm, fingers, serving, clock)
                     yield from self._dispatch(arm, serving, asked, q, clock)
                     if (step := self._advance_parking(serving)) is None:

@@ -132,7 +132,8 @@ class Rig:
             'target_grip': self.grip,
             'state': self.states,
         }
-        ports |= {'grip': RecordingEmitter(), 'robot_meta': RecordingEmitter()}
+        self.grips = RecordingEmitter()
+        ports |= {'grip': self.grips, 'robot_meta': RecordingEmitter()}
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
         self.driver = yam.Robot(
@@ -762,20 +763,20 @@ def test_world_exit_parks_a_foreground_yam_before_closing():
     assert vendor.closed
 
 
-def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it():
+def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it(monkeypatch):
     vendor = FakeYam()
     driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: vendor)
-    read = vendor.get_observations
+    fk = yam._Kinematics.fk
     armed = []
 
-    def read_once_failing():
+    def fk_once_failing(kinematics, q):
         if armed == [True]:
             armed.append(False)
-            raise OSError('CAN read failed')
-        return read()
+            raise ValueError('forward kinematics failed')
+        return fk(kinematics, q)
 
-    vendor.get_observations = read_once_failing
-    with pytest.raises(OSError, match='CAN read failed'):
+    monkeypatch.setattr(yam._Kinematics, 'fk', fk_once_failing)
+    with pytest.raises(ValueError, match='forward kinematics failed'):
         with pimm.World(virtual_time=True) as world:
             loop = world.start(driver)
             for _ in range(1000):  # past the start move, into the command loop
@@ -1087,12 +1088,11 @@ def test_sync_call_is_answered_when_idle_parking_setup_read_fails(world, parking
     monkeypatch.setattr(parking_rig.vendor, 'get_observations', fail_during_setup)
     parking_rig.tick()
     assert answer.done()
-    with pytest.raises(OSError, match='CAN read failed') as raised:
+    with pytest.raises(yam.ChainFault, match='CAN read failed') as raised:
         answer.result()
-    assert raised.value is error
+    assert raised.value.__cause__ is error
     assert not parking_rig.vendor.released_at
-    with pytest.raises(OSError, match='CAN read failed'):
-        parking_rig.finish()
+    parking_rig.finish()
     np.testing.assert_allclose(parking_rig.vendor.released_at[0][:6], PARK, atol=0.005)
 
 
@@ -1113,9 +1113,9 @@ def test_sync_call_is_answered_when_interrupting_idle_parking_cannot_hold(world,
     monkeypatch.setattr(parking_rig.vendor, 'command_joint_pos', fail_hold)
     parking_rig.tick()
     assert answer.done()
-    with pytest.raises(OSError, match='CAN write failed') as raised:
+    with pytest.raises(yam.ChainFault, match='CAN write failed') as raised:
         answer.result()
-    assert raised.value is error
+    assert raised.value.__cause__ is error
     parking_rig.tick(30)
     assert not parking_rig.vendor.released_at
     assert not parking_rig.vendor.closed
@@ -1135,8 +1135,11 @@ def test_every_call_the_driver_makes_while_the_motors_are_on_is_a_site(world):
     assert watch.seen == {site.value for site in Site} | TEARDOWN_CALLS
 
 
-@pytest.mark.parametrize('site', list(Site))
-def test_a_fault_at_any_site_parks_releases_and_is_raised_again(site):
+CHAIN_SITES = [Site.CHAIN_READ, Site.CHAIN_COMMAND]
+
+
+@pytest.mark.parametrize('site', [site for site in Site if site not in CHAIN_SITES])
+def test_a_fault_at_a_site_off_the_chain_parks_releases_and_is_raised_again(site):
     watch = Watch(site)
     rig = Rig(watch=watch)
     if site is not Site.META_EMIT:  # the metadata goes out once, as the run starts
@@ -1149,6 +1152,144 @@ def test_a_fault_at_any_site_parks_releases_and_is_raised_again(site):
     assert raised.value is watch.error
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
+
+
+def _last(emitter: RecordingEmitter):
+    return emitter.emitted[-1][1]
+
+
+def _readier(world, rig: Rig) -> pimm.calls.Caller[None, None]:
+    caller = pimm.calls.ControlSystemCaller[None, None](rig.driver)
+    wire_call(world, caller, rig.driver.ready)
+    return caller
+
+
+def _lose_the_chain(rig: Rig) -> FakeYam:
+    """Fail one chain read on a raised arm, and run past the park. Returns the chain the next open gets."""
+    chain = rig.vendor
+    read = chain.get_observations
+    failures = [OSError('CAN read failed')]
+
+    def read_once_failing():
+        if failures:
+            raise failures.pop()
+        return read()
+
+    rig.raise_arm()
+    chain.get_observations = read_once_failing
+    rig.tick(10)
+    reopened = FakeYam()
+    rig.driver._connect = lambda channel, sim, gravity_comp_factor: reopened
+    return reopened
+
+
+@pytest.mark.parametrize('site', CHAIN_SITES)
+def test_a_chain_fault_parks_releases_and_puts_an_error_on_the_state_and_the_grip(site):
+    watch = Watch(site)
+    rig = Rig(watch=watch)
+    rig.raise_arm()
+    watch.armed = True
+    rig.tick(10)
+
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+    for emitter in (rig.states, rig.grips):
+        assert isinstance(_last(emitter), pimm.SignalError)
+        assert 'The YAM arm is lost: the chain failed: collaborator failed' in str(_last(emitter))
+    rig.finish()
+
+
+def test_a_move_on_a_lost_arm_is_answered_with_its_error(world, rig):
+    _lose_the_chain(rig)
+
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    rig.tick()
+
+    with pytest.raises(pimm.SignalError, match='The YAM arm is lost'):
+        answer.result()
+
+
+def test_a_ready_call_on_a_lost_arm_opens_the_chain_again_and_moves_it_to_the_start_pose(world, rig):
+    reopened = _lose_the_chain(rig)
+
+    answer = _readier(world, rig)(None)
+    rig.tick(0.1)
+    rig.ready()
+
+    assert answer.result() is None
+    np.testing.assert_allclose(reopened._pos[:6], RAISED, atol=0.005)
+    rig.commands.push(command.JointPosition(PARK))
+    rig.tick(1)
+    np.testing.assert_allclose(reopened._pos[:6], PARK, atol=0.005)
+
+
+def test_a_ready_call_whose_chain_does_not_open_answers_its_error_and_the_next_one_opens_it(world, rig):
+    _lose_the_chain(rig)
+    reopened = FakeYam()
+
+    def refuse(channel, sim, gravity_comp_factor):
+        raise OSError('CAN interface can0 is down')
+
+    rig.driver._connect = refuse
+    ready = _readier(world, rig)
+    first = ready(None)
+    rig.tick()
+
+    with pytest.raises(yam.ChainFault, match='can0 is down'):
+        first.result()
+    assert isinstance(_last(rig.states), pimm.SignalError)
+
+    rig.driver._connect = lambda channel, sim, gravity_comp_factor: reopened
+    second = ready(None)
+    rig.tick(5)
+    assert second.result() is None
+
+
+def test_a_chain_that_does_not_open_at_start_holds_an_error_until_a_ready_call_opens_it(world):
+    rig = Rig()
+    reopened = FakeYam()
+    attempts = []
+
+    def connect(channel, sim, gravity_comp_factor):
+        attempts.append(channel)
+        if len(attempts) == 1:
+            raise OSError('CAN interface can0 is down')
+        return reopened
+
+    rig.driver._connect = connect
+    rig.tick()
+
+    assert 'can0 is down' in str(_last(rig.states))
+    answer = _readier(world, rig)(None)
+    rig.tick(0.1)
+    rig.ready()
+    assert answer.result() is None
+    np.testing.assert_allclose(reopened._pos[:6], RAISED, atol=0.005)
+    rig.loop.close()
+
+
+def test_a_ready_call_on_an_open_chain_is_answered_at_once(world, rig):
+    rig.ready()
+    connected = len(rig.vendor.targets)
+
+    answer = _readier(world, rig)(None)
+    rig.tick()
+
+    assert answer.result() is None
+    assert not rig.vendor.released_at
+    assert len(rig.vendor.targets) > connected, 'the arm stopped taking commands'
+
+
+def test_a_move_that_misses_its_target_puts_no_error_on_the_state(world, rig):
+    """A miss is an arm that reads ERROR over a chain that answers, and the arm takes the next command."""
+    rig.rest()
+    rig.vendor.stuck = True
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    _until_answered(rig, answer, within_s=120)
+
+    with pytest.raises(TimeoutError):
+        answer.result()
+    assert not any(isinstance(data, pimm.SignalError) for _, data in rig.states.emitted + rig.grips.emitted)
 
 
 @pytest.mark.parametrize('site', [Site.CHAIN_READ, Site.CHAIN_COMMAND])

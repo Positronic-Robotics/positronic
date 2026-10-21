@@ -4,13 +4,16 @@ import logging
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from enum import Enum
+from typing import cast
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, RecoveryOutcome, grip_setpoint
+from positronic.drivers.utils import DriverRun, Moves, RecoveryOutcome, grip_setpoint
 
+# pymodbus lives in the `hardware` extra, which the type-check environment does not install.
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
+    from pymodbus.exceptions import ConnectionException, ModbusException  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,8 @@ _BAUD_RATE = 115200
 _BYTESIZE = 8
 _PARITY = 'N'
 _STOPBITS = 1
+# What the bus raises when the gripper stops answering. pyserial raises an OSError when the port goes away.
+_BUS_FAULTS = (ModbusException, OSError)
 
 
 class Activation(Enum):
@@ -123,6 +128,7 @@ class _Gripper(DriverRun[float]):
     def __init__(
         self,
         client,
+        port: str,
         sync_move: pimm.calls.ControlSystemHandler[float, None],
         async_move: pimm.SignalReceiver[float],
         out: pimm.SignalEmitter[float],
@@ -132,6 +138,7 @@ class _Gripper(DriverRun[float]):
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=200)  # the manual allows 200 Hz
         self._client = client
+        self._port = port
         self._out = out
         self._tuning = tuning
         self._status: Status | None = None
@@ -139,7 +146,10 @@ class _Gripper(DriverRun[float]):
 
     def observe(self) -> Reading:
         """Read the gripper, publish how closed the fingers are, and log what changed."""
-        reading = Reading.decode(self._client.read_input_registers(_REG_IN, count=3, device_id=_SLAVE).registers)
+        response = self._client.read_input_registers(_REG_IN, count=3, device_id=_SLAVE)
+        if response.isError():
+            raise ModbusException(f'the gripper refused a read: {response}')
+        reading = Reading.decode(response.registers)
         if reading.status != self._status:
             self._status = reading.status
             level = logging.WARNING if reading.status.fault else logging.INFO
@@ -155,11 +165,13 @@ class _Gripper(DriverRun[float]):
         self._write([0x0900, int(grip * 255), (speed << 8) | force])
 
     def activate(self) -> Generator[pimm.Command, None, RecoveryOutcome]:
-        """Reset the gripper, activate it once it reports the reset, and yield until the activation ends.
+        """Open the bus, reset the gripper, activate it once it reports the reset, and yield until the activation ends.
 
         CLEARED once the activation completes with no fault. The rising edge of ``rACT`` clears a major fault,
         and the fingers stroke fully open and closed.
         """
+        if not self._client.connect():
+            raise ConnectionException(f'no Robotiq gripper answers at {self._port}')
         deadline = self.clock.now() + self._tuning.activation_timeout_s
         self._write([0x0000, 0x0000, 0x0000])
         outcome = RecoveryOutcome.NOT_CLEARED
@@ -183,6 +195,16 @@ class _Gripper(DriverRun[float]):
     def _write(self, registers: list[int]) -> None:
         self._client.write_registers(_REG_CMD, registers, device_id=_SLAVE)
 
+    def hold_error(self, cause: Exception) -> pimm.SignalError:
+        """Put an error for ``cause`` on the width, answer the move in flight with it, and close the bus."""
+        error = pimm.SignalError(f'The Robotiq gripper is lost: {cause}')
+        logger.error(f'{error}; it holds the error until a ready call activates it again')
+        # The Message types do not name the SignalError that any message can carry.
+        self._out.emit(cast(float, error))
+        self.moves.fail(error)
+        self._client.close()
+        return error
+
 
 class Robotiq2F(pimm.ControlSystem):
     def __init__(self, port: str, tuning: RobotiqTuning = TUNING_2F85):
@@ -191,6 +213,8 @@ class Robotiq2F(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
+        # Answers at once while the bus answers. On a lost gripper it activates the gripper again first.
+        self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         # Re-activates the gripper: the fingers stroke fully open and closed, and drop what they hold.
         self.recover = pimm.calls.ControlSystemHandler[None, RecoveryOutcome](self)
         self.force = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
@@ -205,7 +229,7 @@ class Robotiq2F(pimm.ControlSystem):
     ) -> Iterator[pimm.Command]:
         """Activate the gripper again, then answer every call in ``asked`` with how the activation ended.
 
-        A throw reaches every call in ``asked``, then ends the run.
+        A throw reaches every call in ``asked`` before it leaves.
         """
         logger.info('A console asked to re-activate the Robotiq gripper')
         try:
@@ -217,29 +241,83 @@ class Robotiq2F(pimm.ControlSystem):
         for call in asked:
             call.set_result(outcome)
 
+    @staticmethod
+    def _start(gripper: _Gripper) -> Generator[pimm.Command, None, pimm.SignalError | None]:
+        """Activate the gripper. None once the bus answers, else the error now on ``grip``."""
+        try:
+            yield from gripper.activate()
+        except _BUS_FAULTS as exc:
+            return gripper.hold_error(exc)
+        return None
+
+    def _serve(
+        self, gripper: _Gripper, moves: Moves[float], clock: pimm.Clock
+    ) -> Generator[pimm.Command, None, pimm.SignalError | None]:
+        """Serve one tick of calls and moves. None while the bus answers, else the error now on ``grip``."""
+        try:
+            grip = gripper.observe().width
+            for call in self.ready.incoming():
+                call.set_result(None)
+            if asked := list(self.recover.incoming()):
+                yield from self._reactivate(gripper, asked)
+                return None
+
+            target = grip_setpoint(moves, grip, clock.now())
+            if target is not None:
+                self._command(gripper, target)
+            moves.answer()  # the width a settled move is answered with is on the fingers
+        except _BUS_FAULTS as exc:
+            return gripper.hold_error(exc)
+        yield gripper.limiter.wait()
+        return None
+
+    def _repair_when_asked(
+        self, gripper: _Gripper, moves: Moves[float], held: pimm.SignalError
+    ) -> Generator[pimm.Command, None, pimm.SignalError | None]:
+        """Answer every move with ``held``, and activate the gripper again on a ready or a recover call.
+
+        None once the activation completes with no fault, else the error now on ``grip``.
+        """
+        while isinstance(asked := moves.next_request(), pimm.calls.Call):
+            asked.set_exception(held)
+        readies, recovers = list(self.ready.incoming()), list(self.recover.incoming())
+        if not readies and not recovers:
+            yield gripper.limiter.wait()
+            return held
+        logger.info('A call asked to activate the lost Robotiq gripper again')
+        try:
+            outcome = yield from gripper.activate()
+        except _BUS_FAULTS as exc:
+            held = gripper.hold_error(exc)
+            for call in [*readies, *recovers]:
+                call.set_exception(held)
+            return held
+        for call in recovers:
+            call.set_result(outcome)
+        if outcome is RecoveryOutcome.NOT_CLEARED:
+            held = gripper.hold_error(RuntimeError('the gripper did not activate'))
+            for call in readies:
+                call.set_exception(held)
+            return held
+        for call in readies:
+            call.set_result(None)
+        return None
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         client = ModbusClient.ModbusSerialClient(
             port=self._port, baudrate=_BAUD_RATE, bytesize=_BYTESIZE, parity=_PARITY, stopbits=_STOPBITS
         )
-        assert client.connect(), f'Failed to connect to Robotiq gripper at {self._port}'
-        gripper = _Gripper(client, self.sync_move, self.target_grip, self.grip, self._tuning, should_stop, clock)
-
+        gripper = _Gripper(
+            client, self._port, self.sync_move, self.target_grip, self.grip, self._tuning, should_stop, clock
+        )
         try:
-            yield from gripper.activate()
-
             with gripper.moves as moves:
+                held = yield from self._start(gripper)
                 while not should_stop.value:
-                    grip = gripper.observe().width
-                    if asked := list(self.recover.incoming()):
-                        yield from self._reactivate(gripper, asked)
-                        continue
-
-                    target = grip_setpoint(moves, grip, clock.now())
-                    if target is not None:
-                        self._command(gripper, target)
-                    moves.answer()  # the width a settled move is answered with is on the fingers
-
-                    yield gripper.limiter.wait()
+                    if held is None:
+                        held = yield from self._serve(gripper, moves, clock)
+                    else:
+                        held = yield from self._repair_when_asked(gripper, moves, held)
 
                 if moves.active:  # the fingers push at the last width written to them, run or no run
                     self._command(gripper, gripper.observe().width)
