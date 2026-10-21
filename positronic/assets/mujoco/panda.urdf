@@ -1,7 +1,7 @@
 <?xml version="1.0" ?>
 <!-- Franka Emika Panda (arm + hand) for the MuJoCo sim: the robot the 3D viewer renders and the
      IK action codec reconstructs joints against. Kinematics mirror panda.xml exactly; geometry uses
-     the panda collision meshes in assets/. `link8` is the wrist flange (the `flange` site of panda.xml),
+     the panda collision meshes in assets/. `link8` is the wrist flange (the `link8` site of panda.xml),
      and the hand mounts on it, as on drivers/roboarm/fr3.urdf. `end_effector` is the grasp frame the sim
      measures `robot_state.ee_pose` at (hand + 0.0584 m), so the viewer and `ik_joints_from_episode` share
      one consistent model. -->

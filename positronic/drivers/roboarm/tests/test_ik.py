@@ -37,8 +37,8 @@ from positronic.drivers.roboarm.so101.driver import Robot as So101Robot
 from positronic.utils import package_assets_path
 
 PANDA_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
-PANDA_JOINTS = [f'joint{i}' for i in range(1, 8)]
-PANDA_FRAME = 'end_effector'
+PANDA_JOINTS = bundled_panda_model()[roboarm_keys.JOINT_NAMES]
+PANDA_FRAME = EE_LINK
 
 # Reachable joint configs: home, stretched, and two arbitrary
 TEST_CONFIGS = [
@@ -274,7 +274,7 @@ def test_panda_hand_frames_keep_their_offset_from_the_flange():
     urdf = bundled_panda_model()[roboarm_keys.URDF]
     for frame in (EE_LINK, DEFAULT_FRAME):
         np.testing.assert_allclose(frame_transform(urdf, FLANGE_LINK, frame).as_matrix, hand_point.as_matrix, atol=1e-9)
-    mjcf_flange = frame_transform(PANDA_URDF, 'flange', PANDA_FRAME)
+    mjcf_flange = frame_transform(PANDA_URDF, FLANGE_LINK, PANDA_FRAME)
     np.testing.assert_allclose(mjcf_flange.as_matrix, hand_point.as_matrix, atol=1e-7)
 
 
