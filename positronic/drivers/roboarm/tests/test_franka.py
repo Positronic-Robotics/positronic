@@ -2212,6 +2212,10 @@ def test_an_arm_in_error_recovers_with_no_console_asking(desk, world):
     assert desk.calls == [Call.PREPARE], 'a recovery no console asked for prepared the arm through Desk again'
 
 
+def _errors(states: RecordingEmitter) -> list[pimm.SignalError]:
+    return [data for _, data in states.emitted if isinstance(data, pimm.SignalError)]
+
+
 def test_a_recovery_no_console_asked_for_puts_the_vendor_throw_on_the_state(desk, world):
     """A throw from the recovery the driver runs for itself has no caller to hand it to, so the state carries it."""
     arm = FakeArm(PARK)
@@ -2399,10 +2403,6 @@ def test_a_move_held_on_an_erroring_arm_is_answered_when_the_driver_loses_contro
 
     with pytest.raises(RuntimeError, match='no connection to the arm: libfranka: control command rejected'):
         answer.result()
-
-
-def _errors(states: RecordingEmitter) -> list[pimm.SignalError]:
-    return [data for _, data in states.emitted if isinstance(data, pimm.SignalError)]
 
 
 def _running(
