@@ -96,6 +96,59 @@ def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked)
     ]
 
 
+def _listing_of(selection: dict[str, Any]) -> list[dict[str, Any]]:
+    """What the env lists for a selection of one benchmark and pinned episodes."""
+    bench = {
+        key: selection[dimension]
+        for dimension, key in zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True)
+    }
+    return [
+        {**bench, eval_keys.TASK: 'pick it', molmo_keys.EPISODE_INDEX: i, molmo_keys.TASK_HORIZON: _PICK_HORIZON_SEC}
+        for i in selection[mapping.SELECT_EPISODES]
+    ]
+
+
+def test_episode_paths_list_each_benchmark_once_and_run_the_pins_in_their_order(monkeypatch):
+    specs: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        RemoteEnvControlSystem, 'tasks', lambda self, selection: specs.append(selection) or _listing_of(selection)
+    )
+    pick = 'molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/pick_20251231'
+    hard = 'molmospaces-bench-v1/holodeck-objaverse/FrankaPickHardBench/hard_20260206'
+    paths = [f'{pick}/11', f'{hard}/0', f'{pick}/49', f'{hard}/295']
+
+    trials = benchmarks.override(episode_paths=paths, trial_count=2).instantiate().tasks()
+
+    assert [s[mapping.SELECT_EPISODES] for s in specs] == [[11, 49], [0, 295]]
+    assert [s['scene_dataset'] for s in specs] == ['procthor-10k', 'holodeck-objaverse']
+    scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
+    assert [(scene[_SCENE_DATASET], scene[molmo_keys.EPISODE_INDEX]) for scene in scenes] == [
+        ('procthor-10k', 11),
+        ('procthor-10k', 11),
+        ('holodeck-objaverse', 0),
+        ('holodeck-objaverse', 0),
+        ('procthor-10k', 49),
+        ('procthor-10k', 49),
+        ('holodeck-objaverse', 295),
+        ('holodeck-objaverse', 295),
+    ]
+
+
+@pytest.mark.parametrize('bound', [{'suite': 'molmospaces-bench-v1'}, {'episodes': [0]}, {'task_config': 'A'}])
+def test_episode_paths_refuse_a_benchmark_dimension_or_episodes_beside_them(asked, bound):
+    path = 'molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/pick_20251231/11'
+    with pytest.raises(ValueError, match=f'--eval.{next(iter(bound))} must be unset'):
+        benchmarks.override(episode_paths=[path], **bound).instantiate()
+    assert asked == []
+
+
+@pytest.mark.parametrize('path', ['procthor-10k/FrankaPickDroidMiniBench/pick_20251231/11', 'a/b/c/d/x', 'a/b/c/d'])
+def test_a_malformed_episode_path_is_refused(asked, path):
+    with pytest.raises(ValueError):
+        benchmarks.override(episode_paths=[path]).instantiate()
+    assert asked == []
+
+
 def test_an_explicit_seed_sweeps_each_episode(asked):
     ev = benchmarks.override(seed=5, trial_count=2).instantiate()
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in ev.tasks()]
