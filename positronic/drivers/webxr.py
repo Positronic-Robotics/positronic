@@ -36,8 +36,8 @@ LEFT, RIGHT = 'left', 'right'
 
 
 def _parse_controller_data(data: dict):
-    controller_positions = {LEFT: None, RIGHT: None}
-    buttons_dict = {LEFT: None, RIGHT: None}
+    controller_positions: dict[str, geom.Transform3D | None] = {LEFT: None, RIGHT: None}
+    buttons_dict: dict[str, np.ndarray | None] = {LEFT: None, RIGHT: None}
     for side in [RIGHT, LEFT]:
         if data['controllers'][side] is not None:
             translation = np.array(data['controllers'][side]['position'], dtype=np.float64)
@@ -259,9 +259,9 @@ class WebXR(pimm.ControlSystem):
                         controller_positions, buttons = _parse_controller_data(data)
 
                         # apply scaling
-                        for side, transform in controller_positions.items():
+                        for transform in controller_positions.values():
                             if transform is not None:
-                                controller_positions[side].translation *= self.sensitivity
+                                transform.translation *= self.sensitivity
 
                         if controller_positions[LEFT] is not None or controller_positions[RIGHT] is not None:
                             self.controller_positions.emit(controller_positions)
