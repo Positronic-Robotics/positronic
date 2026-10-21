@@ -12,6 +12,7 @@ import os
 import socket
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -22,8 +23,8 @@ logger = logging.getLogger(__name__)
 # The ready handshake's metadata key, true when the server takes this session's images through a ring.
 HANDSHAKE_KEY = 'frame_ring'
 
-# A frame stays valid for the call that delivers it and the calls after it, up to this count. The ring has one
-# slot per call, so the call after the last of them writes the frame's slot again.
+# A frame stays valid for the call that delivers it and the calls that reach the server after it, up to this
+# count. The ring has one slot per call, so the call after the last of them writes the frame's slot again.
 CALLS_A_FRAME_STAYS_VALID = 4
 
 # The slot header: two sequence numbers, then padding that puts every payload on a 64-byte boundary.
@@ -107,29 +108,36 @@ class FrameRing:
             raise
         self._seq = 0
 
-    def write(self, arrays: Sequence[np.ndarray]) -> list[dict[bytes, Any]]:
-        """Copy ``arrays`` into the next slot and return one reference each."""
+    def next_references(self, arrays: Sequence[np.ndarray]) -> list[dict[bytes, Any]]:
+        """One reference to each of ``arrays``, in the slot that the next ``write`` fills. Nothing is written."""
+        seq = self._seq + 1
+        references = []
+        offset = 0
+        for array in arrays:
+            references.append({
+                _RING: True,
+                _SLOT: seq % self.slots,
+                _SEQ: seq,
+                _OFFSET: offset,
+                _SHAPE: list(array.shape),
+                _DTYPE: array.dtype.str,
+            })
+            offset += _aligned(array.nbytes)
+        return references
+
+    def write(self, arrays: Sequence[np.ndarray]) -> None:
+        """Copy ``arrays`` into the next slot, where ``next_references`` put them."""
         self._seq += 1
         slot = self._seq % self.slots
         counters = np.ndarray(2, dtype=np.uint64, buffer=self._map, offset=slot * self._stride)
         counters[0] = self._seq
         payload = slot * self._stride + _HEADER_BYTES
         offset = 0
-        references = []
         for array in arrays:
             destination = np.ndarray(array.shape, dtype=array.dtype, buffer=self._map, offset=payload + offset)
             np.copyto(destination, array)
-            references.append({
-                _RING: True,
-                _SLOT: slot,
-                _SEQ: self._seq,
-                _OFFSET: offset,
-                _SHAPE: list(array.shape),
-                _DTYPE: array.dtype.str,
-            })
             offset += _aligned(array.nbytes)
         counters[1] = self._seq
-        return references
 
     def close(self) -> None:
         self._map.close()
@@ -158,12 +166,16 @@ def _detach_images(value: Any, found: list[tuple[dict[bytes, Any], np.ndarray]])
 HANDOVER_TIMEOUT_SEC = 10.0
 
 
+def _no_write() -> None:
+    """The write of an observation that carries no image."""
+
+
 class FrameWriter:
     """The client's half: one ring per session, handed to the server and grown when a frame outgrows it.
 
     ``open`` hands the server a ring with empty slots, or returns None where no channel answers. ``pack``
-    puts every image into the ring and returns the observation with a reference in place of each. A channel
-    that stops answering raises, so the images of a session with a ring never move to the message.
+    returns the observation with a reference in place of every image, and the write that fills the slot.
+    A channel that stops answering raises, so the images of a session with a ring never move to the message.
     """
 
     def __init__(self, dial_channel: Callable[[float], socket.socket], session_id: str):
@@ -187,16 +199,21 @@ class FrameWriter:
         writer._hand_over_new_ring(sock, 0)
         return writer
 
-    def pack(self, obs: Mapping[str, Any]) -> dict[str, Any]:
+    def pack(self, obs: Mapping[str, Any]) -> tuple[dict[str, Any], Callable[[], None]]:
+        """``obs`` with a reference in place of every image, and the write that puts the images in the ring.
+
+        Call the write once the message is known good. A message refused before then leaves every slot as it
+        was, so a frame the server holds stays valid.
+        """
         found: list[tuple[dict[bytes, Any], np.ndarray]] = []
         packed = _detach_images(obs, found)
         if not found:
-            return packed
+            return packed, _no_write
         arrays = [array for _reference, array in found]
         ring = self._ring_for(sum(_aligned(array.nbytes) for array in arrays))
-        for (reference, _array), written in zip(found, ring.write(arrays), strict=True):
-            reference.update(written)
-        return packed
+        for (reference, _array), named in zip(found, ring.next_references(arrays), strict=True):
+            reference.update(named)
+        return packed, partial(ring.write, arrays)
 
     def _ring_for(self, slot_bytes: int) -> FrameRing:
         """A ring with slots of at least ``slot_bytes`` the server has mapped. A dial that fails raises."""
