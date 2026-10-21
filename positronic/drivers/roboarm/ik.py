@@ -3,8 +3,7 @@
 Three solvers for reconstructing joint-space targets from recorded EE targets:
 - LMIKSolver: Levenberg-Marquardt on the site pose with nullspace damping (for sim data)
 - DLSIKSolver: DLS with nullspace bias and line search (ports inverse_kinematics_q0)
-- DLSIKSolverWithLimits: DLS with joint limits via bounded least squares
-  (ports inverse_kinematics_with_limits, using scipy instead of OSQP)
+- DLSIKSolverWithLimits: one bounded, damped solve per command (ports inverse_kinematics_with_limits)
 """
 
 import xml.etree.ElementTree as ET
@@ -167,7 +166,8 @@ def pose_anchor(episode) -> tuple[str, geom.Transform3D]:
 def _parse_target(target_ee_pose_vec):
     """Parse [tx,ty,tz,w,x,y,z] into position and rotation matrix."""
     R = np.zeros(9)
-    mj.mju_quat2Mat(R, target_ee_pose_vec[3:7])
+    quat = np.asarray(target_ee_pose_vec[3:7], dtype=np.float64)
+    mj.mju_quat2Mat(R, quat / np.linalg.norm(quat))
     return target_ee_pose_vec[:3], R.reshape(3, 3)
 
 
@@ -416,59 +416,54 @@ class DLSIKSolver(_SolverBase):
         return q
 
 
-class DLSIKSolverWithLimits(_SolverBase):
-    """DLS IK with joint limits via bounded least squares.
+# Mirrors of the positronic-franka IK constants, in src/pose_ik.hpp.
+IK_DAMPING_SINGULAR_VALUE = 0.1
+IK_MAX_JOINT_STEP = 0.5
 
-    Ports inverse_kinematics_with_limits from positronic-franka robot.hpp,
-    replacing OSQP with scipy.optimize.lsq_linear.
+
+class DLSIKSolverWithLimits(_SolverBase):
+    """IK that puts the tool as close as the bounds allow to the target, in one solve per command.
+
+    Ports inverse_kinematics_with_limits from positronic-franka pose_ik.hpp: each joint stays within the model's
+    limits and within ``max_step`` of the current joints, and the move is damped near a singularity. The driver's
+    posture row is left out: it holds a seven-joint Franka pose, and it only moves the joints in the null space.
     """
 
-    def __init__(
-        self,
-        urdf_xml,
-        joint_names,
-        control_frame,
-        *,
-        tol=1e-4,
-        max_iters=150,
-        min_step=1e-8,
-        pinv_reg=0.03,
-        line_search_alpha=1.0,
-    ):
+    _ITERATIONS = 60
+    _STEP_TOLERANCE = 1e-9
+    _LEVENBERG = 1e-4
+
+    def __init__(self, urdf_xml, joint_names, control_frame, *, max_step=IK_MAX_JOINT_STEP):
         super().__init__(urdf_xml, joint_names, control_frame)
-        self.tol = tol
-        self.max_iters = max_iters
-        self.min_step = min_step
-        self.pinv_reg = pinv_reg
-        self.line_search_alpha = line_search_alpha
+        self.max_step = max_step
 
     def solve(self, current_q, target_ee_pose_vec):
         t_tgt, R_tgt = _parse_target(target_ee_pose_vec)
-        q = current_q.astype(np.float64).copy()
-        n = len(q)
-        sqrt_lam = np.sqrt(max(self.pinv_reg, 1e-6))
+        q0 = current_q.astype(np.float64)
+        n = len(q0)
 
-        for _ in range(self.max_iters):
+        s_min = np.linalg.svd(self._fk_jac(q0)[2], compute_uv=False)[-1]
+        # Chiaverini's law; mu_max = S0 / sqrt(2) keeps the weak-direction gain s / (s^2 + mu^2) at or below 1 / S0.
+        S0 = IK_DAMPING_SINGULAR_VALUE
+        mu = np.sqrt(0.5 * S0**2 * (1.0 - (s_min / S0) ** 2)) if s_min < S0 else 0.0
+
+        lower = np.maximum(q0 - self.max_step, self._joint_lower)
+        upper = np.minimum(q0 + self.max_step, self._joint_upper)
+        if not np.all(lower <= upper):
+            raise ValueError('No joints are within max_step of current_q and inside the joint limits')
+        q = np.clip(q0, lower, upper)
+
+        # min |e(q)|^2 + mu^2 |q - q0|^2 on the box, by Gauss-Newton on q.
+        damping_rows = np.vstack([mu * np.eye(n), np.sqrt(self._LEVENBERG) * np.eye(n)])
+        for _ in range(self._ITERATIONS):
             pos, R_cur, J = self._fk_jac(q)
             e = _cartesian_error(pos, R_cur, t_tgt, R_tgt)
-            if np.linalg.norm(e) < self.tol:
+            A = np.vstack([J, damping_rows])
+            b = np.concatenate([-e, -mu * (q - q0), np.zeros(n)])
+            d = lsq_linear(A, b, bounds=(lower - q - 1e-12, upper - q + 1e-12), method='bvls').x
+            q = np.clip(q + d, lower, upper)
+            if np.linalg.norm(d) < self._STEP_TOLERANCE:
                 break
-
-            # min ||[J; √λ I] dq - [-e; 0]||² s.t. joint_lower - q ≤ dq ≤ joint_upper - q
-            A = np.vstack([J, sqrt_lam * np.eye(n)])
-            b = np.concatenate([-e, np.zeros(n)])
-            dq = lsq_linear(A, b, bounds=(self._joint_lower - q, self._joint_upper - q)).x
-
-            dq_norm = np.linalg.norm(dq)
-            if dq_norm < self.min_step:
-                break
-
-            step_scale = min(1.0, self.line_search_alpha / dq_norm) if self.line_search_alpha > 0 else 1.0
-            q_next = np.clip(q + step_scale * dq, self._joint_lower, self._joint_upper)
-            if np.linalg.norm(q_next - q) < self.min_step:
-                break
-            q = q_next
-
         return q
 
 

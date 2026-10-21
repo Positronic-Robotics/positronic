@@ -13,6 +13,7 @@ from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import (
+    IK_DAMPING_SINGULAR_VALUE,
     DLSIKSolver,
     DLSIKSolverWithLimits,
     LMIKSolver,
@@ -31,6 +32,7 @@ from positronic.drivers.roboarm.models import (
     bundled_franka_model,
     bundled_panda_model,
 )
+from positronic.drivers.roboarm.so101.driver import Robot as So101Robot
 from positronic.utils import package_assets_path
 
 PANDA_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
@@ -95,6 +97,54 @@ def test_dls_solver_with_limits():
         # Verify joint limits respected
         assert np.all(q_result >= solver._joint_lower - 1e-6)
         assert np.all(q_result <= solver._joint_upper + 1e-6)
+
+
+def test_dls_solver_with_limits_moves_each_joint_at_most_max_step():
+    solver = DLSIKSolverWithLimits(PANDA_URDF, PANDA_JOINTS, PANDA_FRAME, max_step=0.2)
+    q_start = TEST_CONFIGS[0]
+    q_result = solver.solve(q_start, _fk(PANDA_URDF, TEST_CONFIGS[1]))
+    assert np.max(np.abs(q_result - q_start)) == pytest.approx(0.2)
+
+
+def test_dls_solver_with_limits_refuses_when_no_joints_are_in_reach():
+    solver = DLSIKSolverWithLimits(PANDA_URDF, PANDA_JOINTS, PANDA_FRAME)
+    q_start = TEST_CONFIGS[0].copy()
+    q_start[3] = 0.6  # joint4 limit is -0.0698, so q_start is more than max_step outside it
+    with pytest.raises(ValueError, match='max_step'):
+        solver.solve(q_start, _fk(PANDA_URDF, TEST_CONFIGS[0]))
+
+
+def test_dls_solver_with_limits_damps_joint_motion_at_a_singularity():
+    """Along the weak direction, the joints move at most the tool change over IK_DAMPING_SINGULAR_VALUE."""
+    solver = DLSIKSolverWithLimits(PANDA_URDF, PANDA_JOINTS, PANDA_FRAME)
+    q_start = np.array([0.0, -0.31, 0.0, -0.47, 0.0, 1.2886, 0.0])
+    pos, R, J = solver._fk_jac(q_start)
+    U, sv, _ = np.linalg.svd(J)
+    assert sv[-1] < 1e-3
+    tool_change = 0.005
+    weak = U[:, -1] * tool_change
+    quat = geom.Rotation.Representation.QUAT
+    rotation = geom.Rotation.from_rotvec(weak[3:]) * geom.Rotation.from_rotation_matrix(R)
+    target_pose = geom.Transform3D(pos + weak[:3], rotation).as_vector(quat)
+
+    q_result = solver.solve(q_start, target_pose)
+
+    assert np.linalg.norm(q_result - q_start) <= tool_change / IK_DAMPING_SINGULAR_VALUE + 1e-3
+
+
+def test_dls_solver_with_limits_solves_a_five_joint_arm():
+    meta = So101Robot._build_robot_meta()
+    solver = DLSIKSolverWithLimits(meta[roboarm_keys.URDF], meta[roboarm_keys.JOINT_NAMES], DEFAULT_FRAME)
+    q_start = np.array([0.1, -0.2, 0.3, 0.2, 0.1])
+    q_target = q_start + 0.05
+    pos, R, _ = solver._fk_jac(q_target)
+    target_pose = geom.Transform3D(pos, geom.Rotation.from_rotation_matrix(R)).as_vector(
+        geom.Rotation.Representation.QUAT
+    )
+
+    q_result = solver.solve(q_start, target_pose)
+
+    np.testing.assert_allclose(solver._fk_jac(q_result)[0], pos, atol=1e-3)
 
 
 @pytest.mark.parametrize('q_target', TEST_CONFIGS)
@@ -243,9 +293,7 @@ def test_pickle_roundtrip(solver_cls):
     restored = pickle.loads(pickle.dumps(solver))
     assert restored._mj is None  # cache cleared
 
-    # Solver params preserved
-    assert restored.tol == solver.tol
-    assert restored.max_iters == solver.max_iters
+    assert restored.__getstate__() == solver.__getstate__()
 
     # Still works after unpickling (start near target for limit-aware solver)
     q_start = TEST_CONFIGS[0] + 0.05
