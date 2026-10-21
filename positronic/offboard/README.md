@@ -159,8 +159,9 @@ sending whole images, and so does a client whose wire has no frame channel.
   must grow raises, and so does a reconnect to a session that has no ring.
 - **A server may keep a frame for four calls.** `frame_ring.CALLS_A_FRAME_STAYS_VALID` is that count, and the
   ring holds one slot per call. A frame the server gets is a view of the ring, not a copy. It is valid for the
-  call that delivers it and the three calls after it. The fifth call writes the same slot, and a view kept that
-  long shows the new pixels, with no error. A model that keeps an image longer copies it.
+  call that delivers it and the three calls after it that reach the server. The fifth call writes the same slot,
+  and a view kept that long shows the new pixels, with no error. A model that keeps an image longer copies it.
+  The client writes a slot only for a message that serialised, so a message it refuses changes no slot.
 - **A torn slot is refused.** One round trip is in flight at a time. Each slot carries a sequence number before
   its payload and one after it; a reader that finds either one different from the reference refuses that
   observation rather than serving other pixels under it.

@@ -195,8 +195,9 @@ class InferenceSession:
 
     def _round_trip(self, obs: dict[str, Any]) -> Any:
         self.served_timing = self.wire_timing = {}
+        write_frames = None
         if self._frames is not None:
-            obs = self._frames.pack(obs)
+            obs, write_frames = self._frames.pack(obs)
         request = (
             obs
             if self._protocol is protocol.ProtocolVersion.V1
@@ -206,6 +207,9 @@ class InferenceSession:
             serialization.serialise(request) if self._protocol is protocol.ProtocolVersion.V3 else serialise(request)
         )
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
+        # The ring changes a slot only for a message that serialised, so a refused one leaves held frames intact.
+        if write_frames is not None:
+            write_frames()
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
