@@ -2,11 +2,11 @@
 
 ## [0.3.2] - 2026-10-21
 
-This release publishes `positronic-platform-client` 0.38.0. The other distributions keep their 0.3.1 versions.
+This release publishes `positronic-platform-client` 0.39.0. The other distributions keep their 0.3.1 versions.
 
 | Distribution | Version |
 |---|---|
-| `positronic-platform-client` | 0.38.0 |
+| `positronic-platform-client` | 0.39.0 |
 | `positronic-evals` | 0.1.0 |
 | `positronic-eval-vocabulary` | 0.4.0 |
 | `positronic-wire` | 0.12.0 |
