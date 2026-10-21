@@ -91,8 +91,8 @@ entry asks for no terms: your team accepts the [terms](https://competition.phail
 submission (see [Submit](#submit)). The section "Your data" of the terms tells how the organizers use
 your data.
 
-- In your browser, open the [entry page](https://physical-ai-competition.positronic.ro/enter). Sign in
-  with the same account that you used for `platform-register`.
+- In your browser, open the [entry page](https://competition.phail.ai/enter). Sign in with the same
+  account that you used for `positronic account register`.
 - With the command, `competition-enter` shows what becomes public about your team. With `--yes`, your
   team enters.
 
@@ -196,9 +196,8 @@ positronic eval status --id=<submission id>
 positronic eval list
 ```
 
-Your submissions also show in your browser: the
-[account page](https://physical-ai-competition.positronic.ro/enter/account) shows the status of each one.
-Sign in with the same account that you used for `platform-register`.
+Your submissions also show in your browser: the [account page](https://competition.phail.ai/enter/account)
+shows the status of each one. Sign in with the same account that you used for `positronic account register`.
 
 - The platform refuses the first submission of your team until your team accepts the terms. Read the
   [terms](https://competition.phail.ai/terms), then run `competition-enter --accept-terms=<version>` with
