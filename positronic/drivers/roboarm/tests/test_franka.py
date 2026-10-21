@@ -5,6 +5,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import mujoco as mj
 import numpy as np
 import pytest
 
@@ -12,10 +13,14 @@ import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command, franka
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.ik import _prepare_spec
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, FLANGE_LINK
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned, RecoveryOutcome
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
+QUAT = geom.Rotation.Representation.QUAT
 PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = PARK + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 # Joint 4's upper soft limit in the bundled FR3 model, and the highest target the driver sends it.
@@ -94,7 +99,7 @@ ARRIVED = _Goal(franka.pf.GoalStatus.REACHED, None)
 class _ArmState:
     q: np.ndarray
     dq: np.ndarray
-    end_effector_pose: np.ndarray
+    flange_pose: np.ndarray
     ee_wrench: np.ndarray
     error: int
     error_message: str
@@ -107,6 +112,7 @@ class FakeArm:
     set, is what every call but ``stop`` raises, ``ik_raises`` what only the solver raises, and
     ``recover_raises`` what only ``recover_from_errors`` raises; ``error`` is the vendor fault flag every
     state carries beside ``error_message``, and ``recover_clears`` whether a recovery puts it back to 0.
+    ``flange_pose`` is the pose every state reports, and ``ik_targets`` keeps each pose the solver was asked for.
     """
 
     def __init__(self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None):
@@ -124,6 +130,8 @@ class FakeArm:
         self.polls_to_reach = polls_to_reach
         self._polls = 0
         self.goal_status = goal_status
+        self.flange_pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        self.ik_targets: list[np.ndarray] = []
 
     def _record(self, call: Call) -> None:
         self.calls.append(call)
@@ -135,8 +143,9 @@ class FakeArm:
 
     def state(self) -> _ArmState:
         self._record(Call.STATE)
-        pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-        return _ArmState(self.q.copy(), np.zeros(7), pose, np.zeros(6), self.error, self.error_message)
+        return _ArmState(
+            self.q.copy(), np.zeros(7), self.flange_pose.copy(), np.zeros(6), self.error, self.error_message
+        )
 
     def goal(self) -> _Goal:
         self._record(Call.GOAL)
@@ -172,6 +181,7 @@ class FakeArm:
 
     def inverse_kinematics_with_limits(self, pose) -> np.ndarray:
         self._record(Call.INVERSE_KINEMATICS)
+        self.ik_targets.append(np.asarray(pose, dtype=np.float64))
         if self.ik_raises is not None:
             raise self.ik_raises
         return self.q.copy()
@@ -494,6 +504,57 @@ def test_a_run_of_clamped_commands_logs_its_first_command_and_its_length(desk, c
         'A command asks for joints less than 0.05 rad inside their soft limits; clamping joint4 -0.0500 to -0.2018',
         'Clamped 3 commands in a row; the next command needed no clamp',
     ]
+
+
+def _fk(urdf: str, q: np.ndarray, frame: str) -> geom.Transform3D:
+    """The pose of ``frame`` at joints ``q`` in a URDF, in the arm base."""
+    model = _prepare_spec(urdf, frame).compile()
+    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
+    data.qpos[[model.joint(f'joint{i}').qposadr.item() for i in range(1, 8)]] = q
+    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    site = data.site(frame)
+    return geom.Transform3D(site.xpos.copy(), geom.Rotation.from_rotation_matrix(site.xmat.reshape(3, 3)))
+
+
+def test_the_published_pose_sits_at_default_in_the_published_model(desk):
+    """The arm reports its flange pose, so the model it publishes puts ``default`` at the flange."""
+    arm = FakeArm(JOGGED)
+    urdf = franka.Robot._build_robot_meta(arm)[roboarm_keys.URDF]
+    arm.flange_pose = _fk(urdf, JOGGED, FLANGE_LINK).as_vector(QUAT)
+    watching = _arm(_driver(arm), MockClock())
+
+    watching.state.encode(arm.state(), RobotStatus.AVAILABLE)
+
+    want = _fk(urdf, JOGGED, DEFAULT_FRAME)
+    np.testing.assert_allclose(watching.state.ee_pose.translation, want.translation, atol=1e-6)
+    assert (want.rotation.inv * watching.state.ee_pose.rotation).angle < 1e-6
+
+
+def test_a_cartesian_command_reaches_the_ik_as_the_flange_pose(desk):
+    arm = FakeArm(PARK)
+    pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([np.pi, 0.0, 0.3]))
+
+    _arm(_driver(arm), MockClock()).to_joints(command.CartesianPosition(pose=pose))
+
+    np.testing.assert_allclose(arm.ik_targets[-1], pose.as_vector(QUAT))
+
+
+def test_a_cartesian_delta_reaches_the_ik_composed_at_the_measured_flange_pose(desk):
+    arm = FakeArm(PARK)
+    measured = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([np.pi, 0.0, 0.3]))
+    arm.flange_pose = measured.as_vector(QUAT)
+    watching = _arm(_driver(arm), MockClock())
+    watching.state.encode(arm.state(), RobotStatus.AVAILABLE)
+    delta = command.CartesianDelta(
+        delta=geom.Transform3D(np.array([0.0, 0.0, 0.02]), geom.Rotation.from_euler([0.0, 0.0, 0.1])),
+        frame=geom.Transform3D(np.array([0.0, 0.0, 0.1]), geom.Rotation.from_euler([0.0, 0.0, -np.pi / 4])),
+    )
+
+    watching.to_joints(delta)
+
+    want = delta.apply(watching.state.ee_pose)
+    np.testing.assert_allclose(arm.ik_targets[-1][:3], want.translation, atol=1e-6)
+    assert (want.rotation.inv * geom.Rotation.from_quat(arm.ik_targets[-1][3:])).angle < 1e-6
 
 
 def test_park_puts_the_arm_under_its_native_law():

@@ -19,7 +19,7 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveRefused, MoveStatus, RecoveryOutcome, log_failure
 
 from . import RobotStatus, State, command
-from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
+from .models import DEFAULT_FRAME, FLANGE_LINK, add_default_frame, attach_robotiq_2f85
 
 with vendor_import(
     'positronic_franka',
@@ -95,7 +95,7 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def encode(self, state: pf.State, status: RobotStatus):
         self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7] = state.q
         self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7] = state.dq
-        self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = state.end_effector_pose
+        self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = state.flange_pose
         self.array[FrankaState.EE_WRENCH_OFFSET : FrankaState.EE_WRENCH_OFFSET + 6] = state.ee_wrench
         self.array[FrankaState.STATUS_OFFSET] = status.value
 
@@ -539,7 +539,7 @@ class _Arm(DriverRun[command.CommandType]):
         return clamped
 
     def _ik(self, pose: geom.Transform3D) -> np.ndarray:
-        """The joints that put the end effector at ``pose``, within the arm's limits."""
+        """The joints that put the flange at ``pose``, within the arm's limits."""
         return self.robot.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
 
     def to_joints(self, cmd: command.CommandType) -> np.ndarray:
@@ -739,7 +739,7 @@ class Robot(pimm.ControlSystem):
         # TODO: The arm driver should not own the gripper. Move the 2F-85 model to the gripper driver
         # (drivers/gripper) and compose the arm and gripper together at the embodiment level.
         gripper = attach_robotiq_2f85(root, meshes)
-        add_default_frame(root, EE_LINK)
+        add_default_frame(root, FLANGE_LINK)
         return {
             roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
             roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
