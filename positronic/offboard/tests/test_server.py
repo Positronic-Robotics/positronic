@@ -35,7 +35,7 @@ from positronic.offboard.server import AUTH_HEADER, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import Served
-from positronic.policy import Codec
+from positronic.policy import Codec, remote
 from positronic.policy import keys as policy_keys
 from positronic.policy.processors import ChunkedSchedule, TemporalStack
 from positronic.policy.remote import round_trip
@@ -1194,6 +1194,38 @@ def test_a_ring_session_sends_raw_frames_through_the_ring_when_the_server_asks_f
     # JPEG loses pixels, so an exact match says the frame crossed raw.
     np.testing.assert_array_equal(model.call_args.args[0]['image.left'], image)
     assert max(len(message) for message in sent) < image.nbytes // 100
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_session_whose_frame_channel_does_not_answer_compresses_its_first_images(
+    start_server, socket_path, make_mock_model, monkeypatch
+):
+    model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    deployment = PolicyDeployment(ChunkedSchedule(fps=10), compress_images=True)
+    start_server(model, deployment, uds=socket_path)
+    alias = pathlib.Path(socket_path).with_name('alias.sock')
+    # A hard link dials the session socket, and no frame channel sits beside the link's name.
+    os.link(socket_path, alias)
+    encoded: list[tuple[int, ...]] = []
+    encode = remote.encode_jpeg
+
+    def record(image, quality):
+        encoded.append(image.shape)
+        return encode(image, quality)
+
+    monkeypatch.setattr(remote, 'encode_jpeg', record)
+    image = _frame()
+
+    address = wire.UnixSocketAddress(alias, wire.SESSION_PATH, '')
+    session = InferenceClient(client_websocket.WebsocketUnixClientWire(), address).new_session()
+    try:
+        assert session.metadata[frame_ring.HANDSHAKE_KEY] is True
+        assert not session.sends_frames_through_ring
+        round_trip(session, {'image.left': image}, compress_images=True)
+    finally:
+        session.close()
+
+    assert encoded == [image.shape]
 
 
 def test_a_unix_session_with_the_ring_off_carries_its_frames_in_the_message(

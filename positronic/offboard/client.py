@@ -86,7 +86,8 @@ class InferenceSession:
         declared = self._metadata.get(frames.HANDSHAKE_KEY)
         if dial_channel is None or self._session_id is None or not declared or not frames.SUPPORTED:
             return None
-        return frames.FrameWriter(dial_channel, self._session_id)
+        writer = frames.FrameWriter(dial_channel, self._session_id)
+        return writer if writer.hand_over_empty_ring() else None
 
     @property
     def sends_frames_through_ring(self) -> bool:
