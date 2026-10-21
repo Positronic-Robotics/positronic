@@ -21,7 +21,8 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import bundled_panda_model
+from positronic.drivers.roboarm.ik import _prepare_spec
+from positronic.drivers.roboarm.models import FLANGE_LINK, bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
@@ -412,7 +413,7 @@ def test_sim_state_reconstructs_dynamics():
 
 def test_recorded_urdf_matches_sim_kinematics():
     """The model the sim records for the viewer and IK reproduces the MuJoCo model the sim runs:
-    the arm link frames and the ``end_effector`` control frame agree with ``panda.xml`` across joint
+    the arm link frames, the flange and the ``end_effector`` control frame agree with ``panda.xml`` across joint
     configurations, and the joint limits match. The control frame is the contract that keeps
     ``ik_joints_from_episode`` inverting ``robot_state.ee_pose`` against the grasp site the sim
     measured; the limits are what ``DLSIKSolverWithLimits`` constrains each solve to.
@@ -420,9 +421,11 @@ def test_recorded_urdf_matches_sim_kinematics():
     joints = [f'joint{i}' for i in range(1, 8)]
 
     def compiled(spec):
-        # A URDF carries ``end_effector`` as a frame-only body; resolve it to a readable site.
-        if 'end_effector' not in {site.name for body in spec.bodies for site in body.sites}:
-            spec.body('end_effector').add_site().name = 'end_effector'
+        # A URDF carries ``end_effector`` and the flange as frame-only bodies; resolve each to a readable site.
+        sites = {site.name for body in spec.bodies for site in body.sites}
+        for name in ('end_effector', FLANGE_LINK):
+            if name not in sites and spec.body(name) is not None:
+                spec.body(name).add_site().name = name
         model = spec.compile()
         return model, mj.MjData(model)
 
@@ -435,8 +438,10 @@ def test_recorded_urdf_matches_sim_kinematics():
 
     qadr_urdf = [m_urdf.joint(n).qposadr.item() for n in joints]
     qadr_mjcf = [m_mjcf.joint(n).qposadr.item() for n in joints]
-    ee_urdf = mj.mj_name2id(m_urdf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
-    ee_mjcf = mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
+    sites = [
+        (mj.mj_name2id(m_urdf, mj.mjtObj.mjOBJ_SITE, urdf_name), mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_SITE, mjcf_name))
+        for urdf_name, mjcf_name in (('end_effector', 'end_effector'), (FLANGE_LINK, 'flange'))
+    ]
     for n in joints:
         np.testing.assert_allclose(m_urdf.joint(n).range, m_mjcf.joint(n).range, atol=1e-6)
     rng = np.random.default_rng(0)
@@ -451,5 +456,31 @@ def test_recorded_urdf_matches_sim_kinematics():
             bm = mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_BODY, link)
             np.testing.assert_allclose(d_urdf.xpos[bu], d_mjcf.xpos[bm], atol=1e-6)
             assert abs(float(np.dot(d_urdf.xquat[bu], d_mjcf.xquat[bm]))) > 1 - 1e-6
-        np.testing.assert_allclose(d_urdf.site_xpos[ee_urdf], d_mjcf.site_xpos[ee_mjcf], atol=1e-6)
-        np.testing.assert_allclose(d_urdf.site_xmat[ee_urdf], d_mjcf.site_xmat[ee_mjcf], atol=1e-6)
+        for site_urdf, site_mjcf in sites:
+            np.testing.assert_allclose(d_urdf.site_xpos[site_urdf], d_mjcf.site_xpos[site_mjcf], atol=1e-6)
+            np.testing.assert_allclose(d_urdf.site_xmat[site_urdf], d_mjcf.site_xmat[site_mjcf], atol=1e-6)
+
+
+def test_scene_flange_matches_the_recorded_urdf_flange():
+    """The scene the sim runs carries the flange of the model it records, measured from the arm base."""
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+    m_urdf = _prepare_spec(bundled_panda_model()[roboarm_keys.URDF], FLANGE_LINK).compile()
+    d_urdf = mj.MjData(m_urdf)
+    joints = [f'joint{i}' for i in range(1, 8)]
+
+    def flange_from_base(data, base, flange):
+        base_rotation = data.body(base).xmat.reshape(3, 3)
+        offset = base_rotation.T @ (data.site(flange).xpos - data.body(base).xpos)
+        return offset, base_rotation.T @ data.site(flange).xmat.reshape(3, 3)
+
+    rng = np.random.default_rng(0)
+    for _ in range(10):
+        q = rng.uniform(-1.5, 1.5, len(joints))
+        d_urdf.qpos[[m_urdf.joint(n).qposadr.item() for n in joints]] = q
+        sim.data.qpos[[sim.model.joint(f'{n}_ph').qposadr.item() for n in joints]] = q
+        mj.mj_forward(m_urdf, d_urdf)
+        mj.mj_forward(sim.model, sim.data)
+        urdf_pos, urdf_rot = flange_from_base(d_urdf, 'world', FLANGE_LINK)
+        scene_pos, scene_rot = flange_from_base(sim.data, 'link0_ph', 'flange_ph')
+        np.testing.assert_allclose(scene_pos, urdf_pos, atol=1e-6)
+        np.testing.assert_allclose(scene_rot, urdf_rot, atol=1e-6)
