@@ -450,6 +450,11 @@ class LocalDataset(Dataset):
     def __len__(self) -> int:
         return len(self._episodes)
 
+    @property
+    def episode_paths(self) -> list[Path]:
+        """The directory of each episode, in episode order."""
+        return [path for _, path in self._episodes]
+
     def _get_episode(self, index: int) -> DiskEpisode:
         if not (0 <= index < len(self)):
             raise IndexError(f'Index {index} out of range for {self.root} dataset with {len(self)} episodes')
