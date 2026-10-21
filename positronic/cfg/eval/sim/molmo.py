@@ -70,8 +70,9 @@ def benchmarks(
         raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
     pins = None if episode_paths is None else [_parse_episode_path(path) for path in episode_paths]
     if pins is not None:
-        selection = {'suite': suite, 'scene_dataset': scene_dataset, 'task_config': task_config, 'benchmark': benchmark}
-        bound = [name for name, value in {**selection, 'episodes': episodes}.items() if value is not None]
+        names = (*mapping.BenchmarkPath._fields, mapping.SELECT_EPISODES)
+        values = (suite, scene_dataset, task_config, benchmark, episodes)
+        bound = [name for name, value in zip(names, values, strict=True) if value is not None]
         if bound:
             raise ValueError(f'--eval.episode_paths names its benchmarks, so --eval.{bound[0]} must be unset')
     exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if with_right_shoulder else [ShoulderSide.LEFT]

@@ -120,7 +120,10 @@ def test_episode_paths_list_each_benchmark_once_and_run_the_pins_in_their_order(
     trials = benchmarks.override(episode_paths=paths, trial_count=2).instantiate().tasks()
 
     assert [s[mapping.SELECT_EPISODES] for s in specs] == [[11, 49], [0, 295]]
-    assert [s['scene_dataset'] for s in specs] == ['procthor-10k', 'holodeck-objaverse']
+    assert [mapping.BenchmarkPath(*(s[f] for f in mapping.BenchmarkPath._fields)).scene_dataset for s in specs] == [
+        'procthor-10k',
+        'holodeck-objaverse',
+    ]
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
     assert [(scene[_SCENE_DATASET], scene[molmo_keys.EPISODE_INDEX]) for scene in scenes] == [
         ('procthor-10k', 11),
