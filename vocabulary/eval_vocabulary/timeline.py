@@ -1,7 +1,4 @@
-"""The timelines that a recording keeps as time columns, and the order in which a reader picks one.
-
-pimm and the harness write these names, and a labeler and a dataset reader read them, so all import them from here.
-"""
+"""The timelines that a recording keeps as time columns, and the order in which a reader picks one."""
 
 from collections.abc import Container
 

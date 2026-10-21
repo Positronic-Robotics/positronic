@@ -31,5 +31,5 @@ def test_a_reader_tries_the_harness_then_the_receipt_then_the_legacy_timeline():
         (('emitted.world', 'capture'), 'recorded'),
     ],
 )
-def test_a_reader_takes_the_first_timeline_of_the_order_that_the_recording_has(timelines, expected):
+def test_a_reader_takes_the_first_timeline_of_the_order_that_the_recording_has_else_the_legacy_one(timelines, expected):
     assert recording_timeline(timelines) == expected
