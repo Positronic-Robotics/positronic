@@ -5,8 +5,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from positronic import keys
+import pimm
+from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import keys as molmo_keys
@@ -37,9 +39,43 @@ def test_observations_assemble_robot_state():
     state = obs[keys.ROBOT_STATE]
     assert np.allclose(state.q, payload[mapping.OBS_JOINT_POS])
     assert np.allclose(state.dq, payload[mapping.OBS_JOINT_VEL])
-    assert np.allclose(state.ee_pose.translation, payload[mapping.OBS_EEF_POS])
-    assert np.allclose(state.ee_pose.rotation.as_quat, payload[mapping.OBS_EEF_QUAT])
     assert obs[keys.GRIP] == 0.5
+
+
+_GRASP_POSE = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+_ROTMAT = geom.Rotation.Representation.ROTATION_MATRIX
+
+
+def _with_grasp_pose(payload: dict, pose: geom.Transform3D) -> dict:
+    return {**payload, mapping.OBS_EEF_POS: pose.translation, mapping.OBS_EEF_QUAT: pose.rotation.as_quat}
+
+
+def test_the_hand_pose_is_reported_at_the_franka_tool_point_not_the_grasp_site():
+    # The FR3 tool point is 103.4 mm and -45 deg about the approach axis from the flange; the grasp site is 155 mm.
+    reported = _adapter().observations(_with_grasp_pose(_payload(), _GRASP_POSE))[keys.ROBOT_STATE].ee_pose
+    to_tool_point = geom.Transform3D(np.array([0.0, 0.0, -0.0516]), geom.Rotation.from_euler([0.0, 0.0, -np.pi / 4]))
+    np.testing.assert_allclose(reported.as_vector(_ROTMAT), (_GRASP_POSE * to_tool_point).as_vector(_ROTMAT), atol=1e-6)
+
+
+def test_a_delta_moves_the_hand_point_as_the_real_franka_driver_moves_it():
+    adapter = _adapter()
+    reported = adapter.observations(_with_grasp_pose(_payload(), _GRASP_POSE))[keys.ROBOT_STATE].ee_pose
+    delta = roboarm_command.CartesianDelta(
+        geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
+    )
+    wire = adapter.action({keys.ROBOT_COMMAND: pimm.Message(delta)})[keys.ROBOT_COMMAND]
+    assert wire[protocol.COMMAND_TYPE] == protocol.CARTESIAN
+    expected = delta.apply(reported) * adapter.env_control_frame
+    np.testing.assert_allclose(wire[protocol.COMMAND_POSE], expected.as_vector(_ROTMAT), atol=1e-9)
+
+
+def test_a_reported_hand_pose_commanded_back_reaches_the_env_at_its_grasp_site():
+    adapter = _adapter()
+    reported = adapter.observations(_with_grasp_pose(_payload(), _GRASP_POSE))[keys.ROBOT_STATE].ee_pose
+    wire = adapter.action({keys.ROBOT_COMMAND: pimm.Message(roboarm_command.CartesianPosition(reported))})
+    np.testing.assert_allclose(
+        wire[keys.ROBOT_COMMAND][protocol.COMMAND_POSE], _GRASP_POSE.as_vector(_ROTMAT), atol=1e-9
+    )
 
 
 @pytest.mark.parametrize('arm_error, status', [(True, RobotStatus.ERROR), (False, RobotStatus.AVAILABLE)])
