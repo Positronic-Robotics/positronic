@@ -150,10 +150,13 @@ sending whole images, and so does a client whose wire has no frame channel.
   `server_wire.Wire.bind_frame_channel`, and the client from `ClientWire.frame_channel_dialer`. On the websocket
   wire the channel sits beside the session socket, and each end builds its path from the socket path it already
   holds, so a bind mount that gives the two processes different names for one directory still lands them on the
-  same socket. A client whose path reaches no channel — a hard link to the session socket, or a bind mount of the
-  socket file alone — takes no ring, logs why, and sends whole images. The client sends the descriptor with
-  `SCM_RIGHTS`, names the session ID from the handshake, and waits for the server to map it.
-  A session that reconnects hands its ring over again, under the new session ID.
+  same socket. A session hands the server a ring with empty slots when it opens. A client whose path reaches no
+  channel — a hard link to the session socket, or a bind mount of the socket file alone — takes no ring, logs
+  why, and sends whole images. The client sends the descriptor with `SCM_RIGHTS`, names the session ID from the
+  handshake, and waits for the server to map it.
+  A session that reconnects hands a new ring over, under the new session ID.
+- **A session with a ring never moves its images to the message.** A channel that stops answering when the ring
+  must grow raises, and so does a reconnect to a session that has no ring.
 - **A server may keep a frame for four calls.** `frame_ring.CALLS_A_FRAME_STAYS_VALID` is that count, and the
   ring holds one slot per call. A frame the server gets is a view of the ring, not a copy. It is valid for the
   call that delivers it and the three calls after it. The fifth call writes the same slot, and a view kept that
@@ -168,8 +171,7 @@ sending whole images, and so does a client whose wire has no frame channel.
   copies is unaffected.
 - **A ring session does not apply `compress_images`.** A session with a ring sends its images raw through the
   ring, whatever `compress_images` says. So `compress_images` is not recommended on a server that takes frame
-  rings over `websocket_unix`. A session hands the server a ring with empty slots when it opens, so a session
-  whose channel does not answer has no ring, and applies `compress_images` from its first call.
+  rings over `websocket_unix`. A session without a ring applies `compress_images` from its first call.
 
 `--frame_ring=false` on the server keeps every image in the message. A server declares no ring where the
 kernel seals no `memfd` — a macOS server, or Linux before 5.1 — or where none of its wires has a frame channel.
