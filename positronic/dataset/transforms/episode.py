@@ -258,18 +258,13 @@ class Identity(EpisodeTransform):
 
 
 class StartAt(EpisodeTransform):
-    """Start each signal of an episode at the time that ``start`` reads from it, on the timelines of that time.
+    """Start each signal of an episode at the time that ``start`` reads from it, on the timelines of that time."""
 
-    ``None`` keeps the episode whole.
-    """
-
-    def __init__(self, start: Callable[[Episode], Time | None]):
+    def __init__(self, start: Callable[[Episode], Time]):
         self._start = start
 
     def __call__(self, episode: Episode) -> Episode:
         start = self._start(episode)
-        if start is None:
-            return episode
         return _LazyDeriveEpisode(episode, {name: partial(self._value_from, name, start) for name in episode})
 
     @staticmethod

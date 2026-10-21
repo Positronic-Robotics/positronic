@@ -322,8 +322,3 @@ def test_start_at_starts_each_signal_at_the_start_with_the_last_earlier_record(s
     assert started['task'] == 'pick'
     assert list(started['s'].values()) == [20, 30, 40, 50]
     assert list(started['s'].timestamps(RECORDED_TIME)) == [2500, 3000, 4000, 5000]
-
-
-def test_start_at_keeps_an_episode_with_no_start_whole(sig_simple):
-    episode = EpisodeContainer({'s': sig_simple})
-    assert StartAt(lambda ep: None)(episode) is episode
