@@ -22,7 +22,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import _prepare_spec
-from positronic.drivers.roboarm.models import FLANGE_LINK, bundled_panda_model
+from positronic.drivers.roboarm.models import EE_LINK, FLANGE_LINK, bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
@@ -423,7 +423,7 @@ def test_recorded_urdf_matches_sim_kinematics():
     def compiled(spec):
         # A URDF carries ``end_effector`` and the flange as frame-only bodies; resolve each to a readable site.
         sites = {site.name for body in spec.bodies for site in body.sites}
-        for name in ('end_effector', FLANGE_LINK):
+        for name in (EE_LINK, FLANGE_LINK):
             if name not in sites and spec.body(name) is not None:
                 spec.body(name).add_site().name = name
         model = spec.compile()
@@ -440,7 +440,7 @@ def test_recorded_urdf_matches_sim_kinematics():
     qadr_mjcf = [m_mjcf.joint(n).qposadr.item() for n in joints]
     sites = [
         (mj.mj_name2id(m_urdf, mj.mjtObj.mjOBJ_SITE, urdf_name), mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_SITE, mjcf_name))
-        for urdf_name, mjcf_name in (('end_effector', 'end_effector'), (FLANGE_LINK, 'flange'))
+        for urdf_name, mjcf_name in ((EE_LINK, 'end_effector'), (FLANGE_LINK, 'flange'))
     ]
     for n in joints:
         np.testing.assert_allclose(m_urdf.joint(n).range, m_mjcf.joint(n).range, atol=1e-6)
