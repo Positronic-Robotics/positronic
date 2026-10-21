@@ -5,7 +5,7 @@ import random
 import configuronic as cfn
 
 from positronic.cfg.eval import number_trials, spec
-from positronic.drivers.roboarm.models import GRASP_SITE_LINK, bundled_franka_model
+from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.eval import Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
@@ -59,10 +59,9 @@ def benchmarks(
         raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
     exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if with_right_shoulder else [ShoulderSide.LEFT]
     cameras = camera_dict(exterior_sides)
-    proxy = RemoteEnvControlSystem(MolmoAdapter(cameras), serve_molmo_spaces())
-    embodiment = remote_embodiment(
-        proxy, cameras, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
-    )
+    robot_model = bundled_franka_model()
+    proxy = RemoteEnvControlSystem(MolmoAdapter(cameras, robot_model), serve_molmo_spaces())
+    embodiment = remote_embodiment(proxy, cameras, descriptor='remote.molmo_spaces.droid', static_meta=robot_model)
     privileged = {mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE]}
 
     def tasks() -> list[Task]:

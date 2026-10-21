@@ -7,6 +7,9 @@ from typing import Any
 import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.ik import frame_transform
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, GRASP_SITE_LINK
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -40,8 +43,9 @@ def camera_dict(exterior_sides: Sequence[ShoulderSide]) -> dict[str, tuple[str, 
 class MolmoAdapter(WireCommandAdapter):
     _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
 
-    def __init__(self, cameras: Mapping[str, tuple[str, ...]]):
-        super().__init__()
+    def __init__(self, cameras: Mapping[str, tuple[str, ...]], robot_model: Mapping[str, Any]):
+        """``robot_model`` is the model the embodiment declares; the env measures and drives at its grasp site."""
+        super().__init__(frame_transform(robot_model[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK))
         self._cameras = cameras
         self._with_right_shoulder = SHOULDER_CAMERAS[ShoulderSide.RIGHT] in cameras.values()
 
@@ -65,7 +69,10 @@ class MolmoAdapter(WireCommandAdapter):
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        ee_pose = geom.Transform3D(raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT]))
+        grasp_pose = geom.Transform3D(
+            raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT])
+        )
+        ee_pose = grasp_pose * self.env_control_frame.inv
         state = MujocoFrankaState()
         state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
         if raw_obs[protocol.OBS_ARM_ERROR]:

@@ -13,6 +13,7 @@ import argparse
 import numpy as np
 
 from positronic import keys
+from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import mapping
@@ -33,7 +34,7 @@ def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
 def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 5) -> None:
     """Check the first ``episodes`` matching records over the socket, resetting and stepping each one."""
     cameras = camera_dict(list(ShoulderSide))
-    adapter = MolmoAdapter(cameras)
+    adapter = MolmoAdapter(cameras, bundled_franka_model())
     with serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
