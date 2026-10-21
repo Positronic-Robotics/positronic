@@ -1,6 +1,6 @@
 # Enter the Physical AI Competition
 
-The [competition site](https://physical-ai-competition.positronic.ro/index.html) has the rules, the dates
+The [competition site](https://competition.phail.ai/) has the rules, the dates
 and the leaderboard.
 
 A coding agent can do most of the work. You approve the sign-in, and you choose where to push your image.
@@ -22,7 +22,8 @@ Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
 - On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, and Docker.
 - Push access to a container registry, such as Docker Hub.
 
-You can install the commands, register and submit on any computer. Run the other steps, and your coding
+You can install the commands, register, enter and submit on any computer. Do these four steps on the same
+computer, because the API key stays on the computer that registered. Build and test, and run your coding
 agent, on the build machine.
 
 ## Use a coding agent
@@ -35,8 +36,10 @@ Follow this guide step by step:
 https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competition.md
 
 1. Install the commands and register me. Ask me for a team name first.
-   Show me the sign-in code and link, and wait while I approve it.
-   Keep the API key in my environment. Never print it again.
+   Run the register command in the background, and show me its
+   sign-in line at once. The link expires in 5 minutes.
+   Wait while I sign in.
+   The command saves my API key on this computer. Never print the key.
 2. Enter me in the competition. Show me what becomes public and
    where to read how my data is used, and ask whether to enter.
    Never enter without explicit human approval.
@@ -54,42 +57,44 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 
 ### Install the commands
 
-The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later, the first version with
-`--with-executables-from`. Run `uv --version` to check. To update uv, run `uv self update`, or use the
-tool that installed uv.
+The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later. Run `uv --version` to check. To update
+uv, run `uv self update`, or use the tool that installed uv.
 
-This command installs the commands from the positronic repository on GitHub. It uses about 2 GB of disk
+This command installs `positronic` from the `main` branch of its repository. It uses about 2.5 GB of disk
 space.
 
 ```bash
-uv tool install --managed-python --with-executables-from positronic-platform-client \
-    git+https://github.com/Positronic-Robotics/positronic
+uv tool install --managed-python --python 3.13 'positronic @ git+https://github.com/Positronic-Robotics/positronic'
 ```
 
-`--managed-python` makes uv use a Python that it installs. The Python of Ubuntu cannot build one of the
-dependencies.
+`--managed-python --python 3.13` makes uv install Python 3.13 and use it. The Python of Ubuntu cannot
+build one of the dependencies, and `positronic` does not run on Python 3.14 or later.
 
 To update the commands later, run `uv tool upgrade positronic`.
 
 ### Register
 
-Choose a team name. The command prints a code and a link. Open the link, sign in, and enter the code.
-The sign-in page shows the ways to sign in that the platform takes. The command then prints your API
-key one time.
+Choose a team name. The command prints a sign-in link and a code, and waits while you sign in. The link
+expires in 5 minutes. If it expires, run the command again. Open the link and sign in. The link carries the
+code, so the page shows it: make sure that it is the code that the command printed. If the page asks for
+the code, enter it. The sign-in page shows the ways to sign in that the platform takes. The command saves
+your API key on this computer, and prints the path of the file. The other commands read the key from that
+file.
 
 ```bash
-platform-register --alias="<team name>"
-export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
+positronic account register --alias="<team name>"
 ```
 
-- Keep the key secret. If you lose it, run `platform-register --rotate` to get a new key.
+- Keep the key file secret. If you lose it, run `positronic account register --rotate` to get a new key.
+  This stops the old key.
+- If your account already has a key, the command does not show the key again. Set
+  `POSITRONIC_PLATFORM_API_KEY` to the key that you have.
 
 ### Enter the competition
 
-The command shows the link to the [terms](https://competition.phail.ai/terms) and their version, and
-what becomes public. The section "Your data" of the terms tells how the organizers use your data. With
-`--yes`, your team enters. The entry asks for no terms: your team accepts them with its first submission
-(see [Submit](#submit)).
+The command shows what becomes public about your team. With `--yes`, your team enters. The entry asks
+for no terms: your team accepts the [terms](https://competition.phail.ai/terms) with its first submission
+(see [Submit](#submit)). The section "Your data" of the terms tells how the organizers use your data.
 
 ```bash
 competition-enter
@@ -168,8 +173,9 @@ On a machine with a GPU, add `--gpu`. The script then gives the server 600 s:
 bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
-- The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
-  sure that your model uses less.
+- The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
+  sure that your model uses less. A memory setting that is a fraction of the GPU, such as
+  `XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB.
 - On the platform, machine boot, the image pull and the server's start share one deadline of 1800 s.
 
 ### Submit
@@ -206,7 +212,7 @@ positronic eval list
 ### Choose your final entry
 
 Before submissions close, choose your final entry, as the
-[rules](https://physical-ai-competition.positronic.ro/rules.html#finale) say.
+[rules](https://competition.phail.ai/rules#finale) say.
 
 ### Ask for help
 
@@ -235,10 +241,11 @@ eval against the server in the image.
 - The platform waits until `POST /api/v1/keepalive` answers on port 8000. Then it opens one WebSocket
   session for each episode at `/api/v1/session`.
 - If a route refuses the token of the run, the run fails with `policy_setup_crash`.
-- The GPU is one `3g.40gb` slice of an NVIDIA H100, with 40448 MiB of memory.
+- The GPU is one `1g.24gb` slice of an NVIDIA RTX PRO 6000, with 24192 MiB of memory and a quarter
+  of the card's compute.
 - The platform runs the image digest that it found when you submitted. It pulls that digest from your
   registry when the run starts, and it keeps no copy of the image.
-- The [rules](https://physical-ai-competition.positronic.ro/rules.html#limits) give the other limits on
+- The [rules](https://competition.phail.ai/rules#limits) give the other limits on
   the image.
 
 ### Start from an example image
@@ -345,7 +352,7 @@ You can make one submission per day. The count starts again at 00:00 UTC each da
 - A retry with the same `--transaction-key` returns the first submission, and it does not count again.
 - The platform refuses a submission over the limit with `quota_exceeded`.
 - The competition can change the limit during the season. It announces each change on the
-  [competition site](https://physical-ai-competition.positronic.ro/index.html).
+  [competition site](https://competition.phail.ai/).
 
 ## Read the outcome
 

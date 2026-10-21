@@ -138,6 +138,15 @@ Install hardware extras only when you need physical robot drivers (Linux only):
 uv sync --locked --extra hardware
 ```
 
+Two arms carry their vendor package in an extra of their own, because each one needs more than a `pip`
+install: `franka` builds against a libfranka that the machine must already carry, and `yam` installs the i2rt
+package from git. Name the extra of the arm the station has:
+
+```bash
+uv sync --locked --extra hardware --extra franka   # a Franka station
+uv sync --locked --extra hardware --extra yam      # a YAM station
+```
+
 After installation, the following command-line scripts will be available:
 - `positronic-data-collection`: Collect demonstrations in simulation or on hardware
 - `positronic-server`: Browse and inspect datasets
@@ -146,6 +155,8 @@ After installation, the following command-line scripts will be available:
 - `positronic-inference`: Run an attended session on hardware, from the keyboard or from a browser console
 
 All commands work both inside an activated virtual environment and with `uv run --locked` prefix (e.g., `uv run --locked positronic-server`). Use `--locked` so the installed environment matches the committed `uv.lock` — uv errors loudly if you edited `pyproject.toml` without re-running `uv lock`.
+
+On Linux x86_64, the extras that pull torch (`molmoact2`, `lerobot`, `lerobot_0_3_3`) install its CUDA 12.8 build. That build needs NVIDIA driver 570 or newer.
 
 For training and inference servers, use vendor-specific Docker services (see [Training Workflow](docs/training-workflow.md)).
 

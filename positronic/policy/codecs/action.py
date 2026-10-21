@@ -3,16 +3,14 @@ from dataclasses import replace
 from typing import Any
 
 import numpy as np
+from eval_vocabulary.timeline import recording_timeline
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
-from pimm.time import RECEIVED_WORLD
 from positronic import geom, keys
 from positronic.dataset import transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
-from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
 
@@ -169,9 +167,7 @@ class AbsolutePositionAction(Codec):
         pose = episode[self.tgt_ee_pose_key]
         pose = transforms.recode_transform(RotRep.QUAT, self.rot_rep, pose)
         grip = episode[self.tgt_grip_key]
-        timelines = pose.timelines + grip.timelines
-        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+        timeline = recording_timeline(pose.timelines + grip.timelines)
         return transforms.concat(pose, grip, dtype=np.float32, timelines=(timeline,))
 
     @property
@@ -214,9 +210,7 @@ class AbsoluteJointsAction(Codec):
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         joints, grip = episode[self.tgt_joints_key], episode[self.tgt_grip_key]
-        timelines = joints.timelines + grip.timelines
-        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+        timeline = recording_timeline(joints.timelines + grip.timelines)
         return transforms.concat(joints, grip, dtype=np.float32, timelines=(timeline,))
 
     @property

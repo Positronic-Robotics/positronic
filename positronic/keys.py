@@ -24,6 +24,8 @@ JOINT_TARGETS_SUFFIX = '.joints'
 JOINT_DELTAS_SUFFIX = '.joint_deltas'
 POSE_DELTA_SUFFIX = '.pose_delta'
 POSE_DELTA_FRAME_SUFFIX = '.pose_delta_frame'
+# A command's control mode unfolds into signals under this suffix, for example ``robot_command.mode.impedance.kq``.
+CONTROL_MODE_SUFFIX = '.mode'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}{POSE_SUFFIX}'
 TARGET_JOINTS = f'{ROBOT_COMMAND}{JOINT_TARGETS_SUFFIX}'
 TARGET_JOINT_DELTAS = f'{ROBOT_COMMAND}{JOINT_DELTAS_SUFFIX}'
@@ -40,6 +42,13 @@ def is_robot_command(name: str) -> bool:
     The ``TARGET_*`` signals are in the family by name while carrying a vector.
     """
     return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
+
+
+def is_control_mode(name: str) -> bool:
+    """Whether ``name`` records a command's control mode: ``robot_command.mode.…``, or an arm's
+    ``robot_command.{arm}.mode.…``."""
+    channel, _, rest = name.partition('.')
+    return channel == ROBOT_COMMAND and CONTROL_MODE_SUFFIX.removeprefix('.') in rest.split('.')[:2]
 
 
 def arm_channel(channel: str, arm: str | None) -> str:

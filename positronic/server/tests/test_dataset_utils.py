@@ -14,15 +14,16 @@ import pytest
 import rerun.blueprint as rrb
 import rerun.recording as rr_recording
 from eval_vocabulary.episode import LEGACY_TIME_COLUMN
+from eval_vocabulary.progress import STATE_SIGNAL
 
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys
-from positronic.cfg.server import single_arm_replay_layout
 from positronic.dataset import Time
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME, VALUE_COLUMN
+from positronic.dataset.video import VideoSignal
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -30,6 +31,7 @@ from positronic.eval import keys as eval_keys
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
+    ARM_CHARTS,
     ReplayLayout,
     _build_blueprint,
     _collect_signal_groups,
@@ -119,6 +121,8 @@ def test_notice_names_every_unplotted_signal_and_its_width():
 
 
 _STATES = ['floating', 'floating', 'reaching', 'contact', 'reaching', 'reaching', 'at-target']
+_STATE_LEGEND = '0 floating, 1 reaching, 2 contact, 3 at-target'
+_DELIVERED = f'{STATE_SIGNAL.partition(".")[0]}.delivered'
 
 
 def _text_episode(ep_dir, texts: dict[str, list[Any]]) -> DiskEpisode:
@@ -206,7 +210,7 @@ def _null_drainer() -> dataset_utils._BinaryStreamDrainer:
 
 
 @pytest.mark.parametrize('selected', [None, 'tick'])
-def test_numeric_pose_and_video_samples_keep_their_coordinates_after_thinning(tmp_path, monkeypatch, selected):
+def test_numeric_and_pose_samples_keep_their_coordinates_after_thinning(tmp_path, monkeypatch, selected):
     sent = {}
     send = dataset_utils.rr.send_columns
 
@@ -229,7 +233,11 @@ def test_numeric_pose_and_video_samples_keep_their_coordinates_after_thinning(tm
     kept = {RECEIVED_WORLD: [0, 40_000_000], RECEIVED_WALL: [2**53 + 1, 2**53 + 5], 'tick': [0, 4]}
     assert sent['/signals/pose/0'] == kept
     assert sent['/3d/pose'] == kept
-    assert sent['camera'] == kept
+    assert sent['camera'] == {
+        RECEIVED_WORLD: [i * 10_000_000 for i in range(6)],
+        RECEIVED_WALL: [2**53 + i + 1 for i in range(6)],
+        'tick': list(range(6)),
+    }
     assert sent['/signals/other'] == {'device': list(range(6))}
     schema = rr_recording.load_recording(str(rrd)).schema()
     assert {column.name for column in schema.index_columns()} == {*kept, 'device'}
@@ -419,45 +427,16 @@ def test_a_text_log_displays_all_timelines():
     assert isinstance(columns, rrb.TextLogColumns) and columns.timeline_columns is None
 
 
-def _signals_with_cameras(aspects: list[float], with_3d: bool) -> dataset_utils.EpisodeSignals:
-    cameras = {f'camera_{i}': aspect for i, aspect in enumerate(aspects)}
-    poses = ['pose'] if with_3d else []
-    return dataset_utils.EpisodeSignals(
-        videos=list(cameras), numerics=[], dims={}, poses=poses, joints=[], camera_aspects=cameras
-    )
-
-
-@pytest.mark.parametrize('aspects', [[16 / 9] * 3, [4 / 3] * 3, [16 / 9] * 4, [4 / 3, 16 / 9, 16 / 9]])
-@pytest.mark.parametrize('with_3d', [True, False])
-def test_the_camera_row_is_as_tall_as_its_frames(aspects, with_3d):
-    share = dataset_utils._camera_row_share(_signals_with_cameras(aspects, with_3d))
-
-    row_width = dataset_utils._VIEWER_ASPECT * (0.75 if with_3d else 1.0)
-    for aspect in aspects:
-        assert row_width * aspect / sum(aspects) / share == pytest.approx(aspect)
-
-
-def test_one_camera_leaves_the_signals_a_quarter_of_the_height():
-    assert dataset_utils._camera_row_share(_signals_with_cameras([16 / 9], with_3d=False)) == 0.75
-
-
-def test_eight_signal_cells_under_three_cameras_wrap_to_two_rows_of_four():
-    share = dataset_utils._camera_row_share(_signals_with_cameras([16 / 9] * 3, with_3d=True))
-
-    assert dataset_utils._series_columns(8, 1 - share) == 4
-
-
 def _tabs(container: Any) -> list[rrb.Tabs]:
-    if isinstance(container, rrb.Tabs):
-        return [container]
-    return [tabs for child in getattr(container, 'contents', None) or [] for tabs in _tabs(child)]
+    found = [container] if isinstance(container, rrb.Tabs) else []
+    return found + [tabs for child in getattr(container, 'contents', None) or [] for tabs in _tabs(child)]
 
 
 def test_a_tab_group_opens_on_its_text_signal(tmp_path):
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for i, state in enumerate(_STATES):
-            writer.append('progress.delivered', float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
-            writer.append('progress.state', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append('device.level', float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append('device.state', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
             writer.append('robot.q', np.zeros(2), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
             writer.append('robot.dq', np.zeros(2), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
     ep = DiskEpisode(tmp_path / 'ep')
@@ -465,7 +444,7 @@ def test_a_tab_group_opens_on_its_text_signal(tmp_path):
     blueprint = _build_blueprint(_collect_signal_groups(ep), ep, None)
     tabs = {tab.name: tab.active_tab for tab in _tabs(blueprint.root_container)}
 
-    assert tabs == {'progress': 1, 'robot': None}
+    assert (tabs['device'], tabs['robot']) == (1, None)
 
 
 def _layout(charts: dict[str, list[str] | dict[str, str]], show_unnamed_signals: bool = True) -> ReplayLayout:
@@ -474,7 +453,7 @@ def _layout(charts: dict[str, list[str] | dict[str, str]], show_unnamed_signals:
     )
 
 
-def _root(signals: dataset_utils.EpisodeSignals, ep: DiskEpisode, layout: ReplayLayout) -> Any:
+def _root(signals: dataset_utils.EpisodeSignals, ep: DiskEpisode, layout: ReplayLayout | None) -> Any:
     return _build_blueprint(signals, ep, layout).root_container
 
 
@@ -487,7 +466,7 @@ _GRIP: dict[str, list[str] | dict[str, str]] = {'Grip': {'Target': keys.TARGET_G
 
 def test_a_layout_puts_the_3d_view_left_of_the_cameras_at_its_shares_over_the_charts(tmp_path):
     ep = _episode(tmp_path / 'ep', {keys.EE_POSE: 7, keys.GRIP: 1}, {eval_keys.POSE_SIGNALS: [keys.EE_POSE]})
-    signals = replace(_collect_signal_groups(ep), videos=['camera'], camera_aspects={'camera': 16 / 9})
+    signals = replace(_collect_signal_groups(ep), videos=['camera'])
 
     root = _root(signals, ep, _layout(_GRIP))
 
@@ -501,8 +480,7 @@ def test_a_layout_puts_the_3d_view_left_of_the_cameras_at_its_shares_over_the_ch
 
 def test_a_layout_with_the_3d_view_in_the_camera_grid_puts_it_after_the_cameras(tmp_path):
     ep = _episode(tmp_path / 'ep', {keys.EE_POSE: 7, keys.GRIP: 1}, {eval_keys.POSE_SIGNALS: [keys.EE_POSE]})
-    cameras = {'left': 16 / 9, 'right': 16 / 9}
-    signals = replace(_collect_signal_groups(ep), videos=list(cameras), camera_aspects=cameras)
+    signals = replace(_collect_signal_groups(ep), videos=['left', 'right'])
 
     root = _root(signals, ep, replace(_layout(_GRIP), trajectory_in_camera_grid=True))
 
@@ -521,8 +499,7 @@ def test_a_layout_with_the_charts_beside_stacks_them_right_of_the_views_at_its_s
     ep = _episode(
         tmp_path / 'ep', {keys.EE_POSE: 7, keys.JOINTS: 7, keys.GRIP: 1}, {eval_keys.POSE_SIGNALS: [keys.EE_POSE]}
     )
-    cameras = {'left': 16 / 9, 'right': 16 / 9}
-    signals = replace(_collect_signal_groups(ep), videos=list(cameras), camera_aspects=cameras)
+    signals = replace(_collect_signal_groups(ep), videos=['left', 'right'])
     charts = {'Robot State/Joints': [keys.JOINTS], **_GRIP}
     layout = replace(_layout(charts, False), trajectory_in_camera_grid=True, charts_beside=True)
 
@@ -559,6 +536,10 @@ def _line_names(view: Any) -> dict[str, list[str]]:
     return {str(path): lines.names.as_arrow_array().to_pylist() for path, lines in view.visualizer_overrides.items()}
 
 
+def _legend_visible(view: Any) -> bool:
+    return view.properties['PlotLegend'].visible.as_arrow_array().to_pylist() == [True]
+
+
 def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):
     static = {eval_keys.JOINT_SIGNALS: [keys.JOINTS], roboarm_keys.JOINT_NAMES: ['j1', 'j2']}
     widths = {keys.GRIP: 1, keys.TARGET_GRIP: 1, keys.JOINTS: 2, keys.TARGET_JOINTS: 2}
@@ -578,7 +559,7 @@ def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):
     assert _line_names(listed) == {f'/signals/{keys.TARGET_GRIP}': [keys.TARGET_GRIP]}
 
 
-def test_the_single_arm_layout_charts_the_motion_signals_of_each_kind_of_arm_command():
+def test_the_arm_charts_plot_the_motion_signals_of_each_kind_of_arm_command():
     one_of_each_kind = (
         command.CartesianPosition(geom.Transform3D.identity),
         command.CartesianDelta(geom.Transform3D.identity),
@@ -593,7 +574,7 @@ def test_the_single_arm_layout_charts_the_motion_signals_of_each_kind_of_arm_com
     }
     charted = {
         signal
-        for signals in single_arm_replay_layout.instantiate().charts.values()
+        for signals in ARM_CHARTS.values()
         for signal in (signals.values() if isinstance(signals, dict) else signals)
     }
 
@@ -607,27 +588,174 @@ def test_a_chart_plots_the_signals_the_episode_records_and_a_chart_with_none_is_
     (view,) = _bottom_row(ep, _layout(charts, show_unnamed_signals=False))
 
     assert view.contents == [f'/signals/{keys.GRIP}/**']
+    assert not _legend_visible(view)
 
 
-def test_the_signals_no_chart_plots_follow_the_charts_by_prefix(tmp_path):
-    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.TARGET_GRIP: 1, 'progress.delivered': 1, 'progress.placed': 1})
+def test_the_signals_no_chart_plots_follow_the_charts_in_one_group(tmp_path):
+    widths = {keys.GRIP: 1, keys.TARGET_GRIP: 1, _DELIVERED: 1, 'progress.placed': 1, 'device.level': 1}
+    ep = _episode(tmp_path / 'ep', widths)
 
-    assert [view.name for view in _bottom_row(ep, _layout(_GRIP))] == ['Grip', 'progress']
+    grip, other = _bottom_row(ep, _layout(_GRIP))
+
+    (group,) = other.contents
+    assert grip.name == 'Grip'
+    assert group.name == 'Other'
+    assert [view.name for view in group.contents] == ['device.level', 'progress']
+
+
+def test_other_lists_its_signals_by_name_in_any_order_the_recording_holds_them(tmp_path):
+    ep = _episode(tmp_path / 'ep', {'b.level': 1, 'a.speed': 1, 'c.load': 1, 'a.level': 1})
+    signals = _collect_signal_groups(ep)
+
+    for numerics in (sorted(signals.numerics), sorted(signals.numerics, reverse=True)):
+        other: Any = dataset_utils._other_cell(replace(signals, numerics=numerics), set())
+        (group,) = other.contents
+        assert [view.name for view in group.contents] == ['a', 'b.level', 'c.load']
+        assert [view.name for view in group.contents[0].contents] == ['a.level', 'a.speed']
 
 
 def test_with_unnamed_signals_off_only_the_charts_show(tmp_path):
-    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.TARGET_GRIP: 1, 'progress.delivered': 1, 'wide': 33})
+    ep = _episode(tmp_path / 'ep', {keys.GRIP: 1, keys.TARGET_GRIP: 1, _DELIVERED: 1, 'wide': 33})
 
     assert [view.name for view in _bottom_row(ep, _layout(_GRIP, show_unnamed_signals=False))] == ['Grip']
 
 
-def test_a_text_signal_a_chart_names_still_shows_as_without_a_layout(tmp_path):
-    ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
+def test_a_chart_plots_a_text_signal_by_the_index_of_its_value_and_shows_the_legend_that_names_each_value(tmp_path):
+    ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: _STATES})
 
-    views = _bottom_row(ep, _layout({'Progress/State': ['progress.state']}))
+    (view,) = _bottom_row(ep, _layout({'Progress': [STATE_SIGNAL]}, show_unnamed_signals=False))
 
-    assert [type(view) for view in views] == [rrb.TimeSeriesView, rrb.TextLogView]
-    assert views[0].origin == '/signals/progress.state'
+    assert view.contents == [f'/signals/{STATE_SIGNAL}/**']
+    assert _line_names(view) == {f'/signals/{STATE_SIGNAL}': [f'{STATE_SIGNAL}: {_STATE_LEGEND}']}
+    assert _legend_visible(view)
+
+
+def test_a_dict_names_a_text_line_by_its_key_and_keeps_the_names_of_its_values(tmp_path):
+    ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: _STATES})
+
+    (view,) = _bottom_row(ep, _layout({'Progress': {'State': STATE_SIGNAL}}, show_unnamed_signals=False))
+
+    assert _line_names(view) == {f'/signals/{STATE_SIGNAL}': [f'State: {_STATE_LEGEND}']}
+
+
+def test_the_text_log_of_a_charted_text_signal_follows_in_other(tmp_path):
+    ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: _STATES})
+
+    chart, other = _bottom_row(ep, _layout({'Progress': [STATE_SIGNAL]}))
+
+    (group,) = other.contents
+    assert chart.name == 'Progress'
+    assert [(type(view), view.name) for view in group.contents] == [(rrb.TextLogView, STATE_SIGNAL)]
+
+
+def _default_column(ep: DiskEpisode) -> Any:
+    return _root(_collect_signal_groups(ep), ep, None).contents[-1]
+
+
+def _title(cell: Any) -> str:
+    """The name on a cell: its group's, where it is a group of tabs."""
+    named = next(iter(cell.contents)) if isinstance(cell, rrb.Tabs) else cell
+    return str(named.name)
+
+
+def test_the_default_puts_the_views_in_one_grid_and_the_arm_charts_in_a_column_on_its_right(tmp_path):
+    widths = {keys.EE_POSE: 7, keys.JOINTS: 7, keys.GRIP: 1, keys.TARGET_GRIP: 1, keys.TARGET_EE_POSE: 7}
+    ep = _episode(tmp_path / 'ep', widths, {eval_keys.POSE_SIGNALS: [keys.EE_POSE]})
+    signals = replace(_collect_signal_groups(ep), videos=['wrist'])
+
+    root = _root(signals, ep, None)
+
+    grid, column = root.contents
+    assert isinstance(root, rrb.Horizontal)
+    assert np.asarray(root.column_shares).tolist() == [3, 1]
+    assert [(type(view), view.name) for view in grid.contents] == [
+        (rrb.Spatial2DView, 'wrist'),
+        (rrb.Spatial3DView, '3D Trajectory'),
+    ]
+    assert [_title(cell) for cell in column.contents] == ['Robot State', 'Grip', 'Robot Commands – End Effector']
+
+
+def test_the_default_gives_each_arm_of_a_two_arm_robot_its_charts_as_a_tab(tmp_path):
+    widths = {f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}': 6 for arm in keys.BIMANUAL_ARMS}
+    widths |= {keys.arm_channel(grip, arm): 1 for grip in (keys.GRIP, keys.TARGET_GRIP) for arm in keys.BIMANUAL_ARMS}
+    ep = _episode(tmp_path / 'ep', {**widths, 'device.level': 1})
+
+    column = _default_column(ep)
+
+    arms, other = column.contents
+    assert list(column.row_shares) == [2, 1]
+    assert [arm.name for arm in arms.contents] == ['Left', 'Right']
+    assert [[_title(cell) for cell in arm.contents] for arm in arms.contents] == [['Robot State', 'Grip']] * 2
+    assert [arm.contents[1].contents for arm in arms.contents] == [
+        [f'/signals/{keys.arm_channel(keys.TARGET_GRIP, arm)}/**', f'/signals/{keys.arm_channel(keys.GRIP, arm)}/**']
+        for arm in keys.BIMANUAL_ARMS
+    ]
+    assert _title(other) == 'Other'
+
+
+def test_an_arm_is_found_by_its_state_and_no_other_signal_makes_one():
+    left, right = keys.BIMANUAL_ARMS
+    names = [keys.JOINTS, f'{keys.arm_channel(keys.ROBOT_STATE, right)}{keys.EE_POSE_SUFFIX}', keys.ROBOT_STATUS]
+    names += [
+        f'{keys.arm_channel(keys.ROBOT_STATE, left)}{suffix}' for suffix in (keys.JOINT_VEL_SUFFIX, keys.STATUS_SUFFIX)
+    ]
+    names += [f'{keys.arm_channel(keys.ROBOT_COMMAND, "mid")}{keys.POSE_SUFFIX}', keys.arm_channel(keys.GRIP, 'wrist')]
+
+    assert dataset_utils._recorded_arms(names) == [None, left, right]
+
+
+def test_the_default_shows_the_signals_of_a_recording_with_no_arm_in_other(tmp_path):
+    ep = _episode(tmp_path / 'ep', {'wide': _MAX_PLOTTED_WIDTH + 1, 'device.level': 1, 'device.speed': 1})
+
+    (other,) = _default_column(ep).contents
+
+    (group,) = other.contents
+    assert group.name == 'Other'
+    assert [view.name for view in group.contents] == ['device', 'Not plotted']
+
+
+def test_the_default_charts_the_progress_marks_and_keeps_only_their_text_log_in_other(tmp_path):
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        for i, state in enumerate(_STATES):
+            writer.append(STATE_SIGNAL, state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append(_DELIVERED, float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append('device.level', float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+    ep = DiskEpisode(tmp_path / 'ep')
+
+    progress, other = _default_column(ep).contents
+
+    assert progress.name == 'Progress'
+    assert progress.contents == [f'/signals/{_DELIVERED}/**', f'/signals/{STATE_SIGNAL}/**']
+    assert _line_names(progress) == {
+        f'/signals/{_DELIVERED}': [_DELIVERED],
+        f'/signals/{STATE_SIGNAL}': [f'{STATE_SIGNAL}: {_STATE_LEGEND}'],
+    }
+    assert [(type(view), view.name) for view in other.contents[0].contents] == [
+        (rrb.TimeSeriesView, 'device.level'),
+        (rrb.TextLogView, STATE_SIGNAL),
+    ]
+
+
+def _control_mode(arm: str | None, entry: str) -> str:
+    return f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.CONTROL_MODE_SUFFIX}.{entry}'
+
+
+def test_the_default_leaves_the_control_mode_of_each_arms_commands_out_of_other(tmp_path):
+    modes = {_control_mode(None, 'impedance.kq'): 7, _control_mode(keys.LEFT_ARM, 'position_control'): 1}
+    ep = _episode(tmp_path / 'ep', {**modes, 'device.level': 1})
+
+    (other,) = _default_column(ep).contents
+
+    assert [view.name for view in other.contents[0].contents] == ['device.level']
+
+
+def test_a_chart_that_names_a_control_mode_plots_it(tmp_path):
+    kq = _control_mode(None, 'impedance.kq')
+    ep = _episode(tmp_path / 'ep', {kq: 7})
+
+    (chart,) = _bottom_row(ep, _layout({'Stiffness': [kq]}))
+
+    assert chart.contents == [f'/signals/{kq}/**']
 
 
 def test_a_text_signal_holds_its_last_value_to_the_last_sample(tmp_path, monkeypatch):
@@ -784,17 +912,6 @@ def test_a_video_within_the_cap_is_embedded_as_recorded(tmp_path):
     assert _mp4_reduced_to(src, max_resolution=640) == src.read_bytes()
 
 
-def test_a_video_keeps_the_frames_named_at_their_own_times(tmp_path):
-    src = _write_mp4(tmp_path / 'small.mp4', width=320, height=240, frames=12)
-    kept = np.array([0, 3, 6, 9])
-
-    thinned = _mp4_reduced_to(src, max_resolution=640, kept=kept)
-
-    source_times = _frame_times(src.read_bytes())
-    assert _frame_times(thinned) == pytest.approx([source_times[index] for index in kept], abs=1e-4)
-    assert thinned != src.read_bytes()
-
-
 def test_a_larger_video_is_re_encoded_frame_for_frame(tmp_path):
     src = _write_mp4(tmp_path / 'big.mp4', width=1280, height=720, frames=12)
 
@@ -805,3 +922,60 @@ def test_a_larger_video_is_re_encoded_frame_for_frame(tmp_path):
         assert (stream.codec_context.width, stream.codec_context.height) == (640, 360)
     assert len(downscaled) < len(src.read_bytes())
     assert _frame_times(downscaled) == pytest.approx(_frame_times(src.read_bytes()), abs=1e-4)
+
+
+# Steps of 30 ms and 36.7 ms average 30 Hz, and every other step is shorter than a 30 Hz cap allows.
+_JITTERY_30HZ_NS = np.cumsum([0] + [30_000_000 if i % 2 else 36_666_667 for i in range(29)])
+
+
+def _jittery_episode(root: Path) -> DiskEpisode:
+    with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
+        for i, ts_ns in enumerate(_JITTERY_30HZ_NS):
+            ts = Time(**{RECEIVED_WORLD: int(ts_ns)})
+            writer.append('camera', np.full((48, 64, 3), i * 8, dtype=np.uint8), ts)
+            writer.append('value', float(i), ts)
+    return typing.cast(DiskEpisode, LocalDataset(root)[0])
+
+
+def _logged_video(monkeypatch, ep: DiskEpisode) -> tuple[bytes, list[int]]:
+    """The camera's embedded mp4, and the times its frame references are sent at."""
+    embedded: list[bytes] = []
+    asset_video = dataset_utils.rr.AssetVideo
+
+    def keep_contents(*, contents, media_type):
+        embedded.append(contents)
+        return asset_video(contents=contents, media_type=media_type)
+
+    monkeypatch.setattr(dataset_utils.rr, 'AssetVideo', keep_contents)
+    sent = _capture_indexes(monkeypatch)
+    signals = _collect_signal_groups(ep)
+    list(dataset_utils._log_video_signals(ep, signals, _null_drainer(), 640, 30, None))
+    return embedded[0], sent['camera'][RECEIVED_WORLD]
+
+
+def test_a_stored_video_on_a_jittery_timeline_keeps_every_frame(tmp_path, monkeypatch):
+    ep = _jittery_episode(tmp_path / 'ds')
+
+    mp4, times = _logged_video(monkeypatch, ep)
+
+    assert times == _JITTERY_30HZ_NS.tolist()
+    assert len(_frame_times(mp4)) == len(_JITTERY_30HZ_NS)
+
+
+def test_a_stored_video_that_fits_the_cap_is_embedded_byte_for_byte(tmp_path, monkeypatch):
+    ep = _jittery_episode(tmp_path / 'ds')
+
+    mp4, _ = _logged_video(monkeypatch, ep)
+
+    assert mp4 == typing.cast(VideoSignal, ep.signals['camera']).video_path.read_bytes()
+
+
+def test_a_numeric_signal_on_the_same_jittery_timeline_is_still_thinned(tmp_path, monkeypatch):
+    ep = _jittery_episode(tmp_path / 'ds')
+    sent = _capture_indexes(monkeypatch)
+
+    list(dataset_utils._log_numeric_signals(ep, _collect_signal_groups(ep), _null_drainer(), 30, None))
+
+    kept = _decimation_indices(_JITTERY_30HZ_NS.astype('datetime64[ns]'), max_hz=30)
+    assert 1 < len(kept) < len(_JITTERY_30HZ_NS)
+    assert sent['/signals/value'][RECEIVED_WORLD] == _JITTERY_30HZ_NS[kept].tolist()

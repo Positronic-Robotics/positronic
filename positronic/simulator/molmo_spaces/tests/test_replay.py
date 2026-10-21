@@ -13,13 +13,21 @@ Run on a box with the asset packs (a GPU-less one uses mesa software EGL)::
 import os
 from pathlib import Path
 
+import mujoco as mj
 import numpy as np
 import pytest
 from positronic_evals.molmo_spaces import RIGHT_VIEW_BLOCKED_PATH
 
+import pimm
+from positronic import geom, keys
+from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.ik import _prepare_spec
+from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
+from positronic.simulator.molmo_spaces.adapter import MolmoAdapter, ShoulderSide, camera_dict
 from positronic.simulator.molmo_spaces.tests import make_replay_fixture as fixture_fields
 from positronic.simulator.molmo_spaces.tests.make_replay_fixture import replay_commands
 
@@ -130,3 +138,82 @@ def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
             conn.close()
     assert [r[mapping.TOKEN_EPISODE_INDEX] for r in records] == blocked
     assert len(open_records) == 200
+
+
+# The model the MolmoSpaces eval records beside every episode.
+_RECORDED_MODEL = MolmoAdapter(camera_dict([ShoulderSide.LEFT])).robot_model
+# The MolmoSpaces FR3 and the recorded FR3 differ slightly: their grasp sites are less than 1 mm and 0.1 degrees apart.
+_FK_POS_ATOL = 1e-3  # metres
+_FK_ROT_ATOL = 5e-3  # radians
+_JOINT_STEP = 0.05  # radians on every joint, a reachable move from the start pose
+_REACH_POS_ATOL = 5e-3  # metres
+_REACH_STEPS = 30
+
+
+def _recorded_model_fk(q: np.ndarray) -> geom.Transform3D:
+    """The pose of ``DEFAULT_FRAME`` at joints ``q`` on the recorded model, in the model's root frame."""
+    model = _prepare_spec(_RECORDED_MODEL[roboarm_keys.URDF], DEFAULT_FRAME).compile()
+    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
+    data.qpos[[model.joint(n).qposadr.item() for n in _RECORDED_MODEL[roboarm_keys.JOINT_NAMES]]] = q
+    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, DEFAULT_FRAME)  # pyright: ignore[reportAttributeAccessIssue]
+    return geom.Transform3D(
+        data.site_xpos[site].copy(), geom.Rotation.from_rotation_matrix(data.site_xmat[site].reshape(3, 3))
+    )
+
+
+def _adapter() -> MolmoAdapter:
+    return MolmoAdapter(camera_dict([ShoulderSide.LEFT]))
+
+
+def _reported_ee_pose(obs: dict) -> geom.Transform3D:
+    return _adapter().observations(obs)[keys.ROBOT_STATE].ee_pose
+
+
+def _joint_pos_action(q: np.ndarray) -> dict:
+    return protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q}, 0.0)
+
+
+def _cartesian_action(pose: geom.Transform3D) -> dict:
+    command = roboarm_command.CartesianPosition(pose)
+    wire = _adapter().action({keys.ROBOT_COMMAND: pimm.Message(command)})[keys.ROBOT_COMMAND]
+    return protocol.single_arm_action(wire, 0.0)
+
+
+def _episode_token(bench: mapping.BenchmarkPath) -> dict:
+    return {**bench._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: False}
+
+
+def test_the_reported_ee_pose_is_forward_kinematics_of_the_joints_on_the_recorded_model():
+    _skip_unless_present(_OPEN_BENCHMARK)
+    with launcher.serve_molmo_spaces() as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            observations = [conn.reset(_episode_token(_OPEN_BENCHMARK))[protocol.FRAME_OBS]]
+            start = np.asarray(observations[0][mapping.OBS_JOINT_POS], dtype=np.float64)
+            for sign in (1.0, -1.0):
+                observations.append(conn.step(_joint_pos_action(start + sign * _JOINT_STEP))[protocol.FRAME_OBS])
+        finally:
+            conn.close()
+    for obs in observations:
+        reported = _reported_ee_pose(obs)
+        expected = _recorded_model_fk(np.asarray(obs[mapping.OBS_JOINT_POS], dtype=np.float64))
+        np.testing.assert_allclose(reported.translation, expected.translation, atol=_FK_POS_ATOL)
+        assert (reported.rotation * expected.rotation.inv).angle < _FK_ROT_ATOL
+
+
+def test_a_cartesian_target_on_the_recorded_model_drives_the_joints_to_it():
+    _skip_unless_present(_OPEN_BENCHMARK)
+    with launcher.serve_molmo_spaces() as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            start = conn.reset(_episode_token(_OPEN_BENCHMARK))[protocol.FRAME_OBS][mapping.OBS_JOINT_POS]
+            target = _recorded_model_fk(np.asarray(start, dtype=np.float64) + _JOINT_STEP)
+            steps = [conn.step(_cartesian_action(target))[protocol.FRAME_OBS] for _ in range(_REACH_STEPS)]
+        finally:
+            conn.close()
+    assert not any(obs[protocol.OBS_ARM_ERROR] for obs in steps), (
+        'the server found no IK solution for a reachable target'
+    )
+    reached = _recorded_model_fk(np.asarray(steps[-1][mapping.OBS_JOINT_POS], dtype=np.float64))
+    np.testing.assert_allclose(reached.translation, target.translation, atol=_REACH_POS_ATOL)

@@ -149,7 +149,7 @@ def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int, lay
     # The uid, because an episode's position is view-dependent.
     uid = _path_component(str(cast(Episode, ds[episode_id]).meta[META_UID]))
     layout_suffix = '' if layout is None else '-' + hashlib.sha256(json.dumps(asdict(layout)).encode()).hexdigest()[:16]
-    return episode_cache_dir / f'v2-{uid}-{max_hz!r}hz-{max_resolution}px{layout_suffix}.rrd'
+    return episode_cache_dir / f'v4-{uid}-{max_hz!r}hz-{max_resolution}px{layout_suffix}.rrd'
 
 
 @asynccontextmanager
@@ -1068,9 +1068,9 @@ def configure_tables(
 
     `ep_table_cfg` maps an episode's static keys to the columns of the episode table. `group_tables` holds
     each grouped table by name, and `home_page` names the one served at the root, or None for the episodes.
-    A recording's videos are re-encoded down to `max_resolution` on the long side, and its videos and its
-    numeric signals with a known nanosecond clock are thinned to `max_hz`; 0 disables thinning. It shows its views as
-    `layout` places them, or as `stream_episode_rrd` places them without one. `root` is the dataset
+    A recording's videos are re-encoded down to `max_resolution` on the long side, and its raw image streams and
+    its numeric signals with a known nanosecond clock are thinned to `max_hz`; 0 disables thinning. It shows its
+    views as `layout` places them, or as `stream_episode_rrd` places them without one. `root` is the dataset
     path the pages report, and the recordings are cached under `cache_dir`. A table response cached under
     the previous settings is dropped.
     """
@@ -1138,7 +1138,7 @@ def main(
     Args:
         dataset: Dataset to visualize
         max_resolution: Long side an episode RRD's videos are re-encoded down to
-        max_hz: Rate cap for videos and numeric signals with a known nanosecond clock; 0 disables thinning
+        max_hz: Rate cap for raw image streams and numeric signals with a known nanosecond clock; 0 disables thinning
         cache_dir: Directory to cache generated RRD files
         host: Server host
         port: Server port
