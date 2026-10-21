@@ -248,9 +248,9 @@ def check_run_metadata(metadata: dict) -> None:
     check_command(metadata['command'])
 
 
-def write_run_metadata(output_dir: str | Path, metadata: dict, prefix: str = 'run_metadata') -> Path:
-    """Write ``metadata`` to ``{output_dir}/{prefix}_{timestamp}.yaml`` and return that path."""
-    output_dir = Path(output_dir)
+def write_run_metadata(output_dir: Path, metadata: dict, prefix: str = 'run_metadata') -> Path:
+    """Check ``metadata``, write it to ``{output_dir}/{prefix}_{timestamp}.yaml`` and return that path."""
+    check_run_metadata(metadata)
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
     output_path = output_dir / f'{prefix}_{timestamp}.yaml'
@@ -304,9 +304,7 @@ def save_run_metadata(
     Raises:
         CredentialInRunMetadata: the command looks like it holds a credential. Nothing is written.
     """
-    metadata = run_metadata(patterns, add_git_diff, add_uv_lock)
-    check_run_metadata(metadata)
-    return write_run_metadata(output_dir, metadata, prefix)
+    return write_run_metadata(Path(output_dir), run_metadata(patterns, add_git_diff, add_uv_lock), prefix)
 
 
 def save_run_metadata_deferred(

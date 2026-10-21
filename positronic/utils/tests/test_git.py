@@ -129,6 +129,13 @@ def test_run_metadata_with_a_credential_in_the_command_is_refused_and_not_writte
     assert TOKEN not in ''.join(traceback.format_exception(exc.value))
 
 
+def test_writing_run_metadata_with_a_credential_in_the_command_is_refused(tmp_path):
+    with pytest.raises(CredentialInRunMetadata):
+        utils.write_run_metadata(tmp_path / 'out', {'command': ['pos', '--policy.api_key', TOKEN]})
+
+    assert not (tmp_path / 'out').exists()
+
+
 def test_run_metadata_writes_a_marker_in_place_of_a_diff_line_with_a_credential(cwd_repo, tmp_path, monkeypatch):
     install_as(monkeypatch, vcs_wheel())
     monkeypatch.setattr(sys, 'argv', ['pos'])
