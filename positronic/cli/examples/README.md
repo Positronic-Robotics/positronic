@@ -64,7 +64,7 @@ uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<refe
 `--eval` takes one of the evals `standings.py` prints; with no `--eval`, the walkthrough prints them
 and stops. `--policy-image` names an image the platform can pull; there is no public one to default
 to. [Submit a policy image](../../../docs/submit-a-policy-image.md) says what the platform requires
-of an image and how to build one from a `positro/<vendor>` base. The key comes from `POSITRONIC_PLATFORM_API_KEY`, which `platform-register` prints. A caller who
+of an image and how to build one from a `positro/<vendor>` base. The key comes from `POSITRONIC_PLATFORM_API_KEY`, else from the record `positronic account register` saves. A caller who
 holds a token of the platform's identity provider sets `POSITRONIC_PLATFORM_CREDENTIAL` instead,
 and the walkthrough registers with it. Every script talks to `https://platform.positronic.ro` unless
 `--platform-url` says otherwise.

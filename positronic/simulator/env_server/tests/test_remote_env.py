@@ -453,32 +453,46 @@ class TestEnvControlFrame:
     """Commands must target the frame the environment measures, even when it differs from the default."""
 
     frame = geom.Transform3D(np.array([0.0, 0.0, 0.1]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 2]))
+    measured = geom.Transform3D(np.array([0.5, 0.0, 0.4]), geom.Rotation.from_euler([np.pi, 0.1, 0.0]))
     rotmat = geom.Rotation.Representation.ROTATION_MATRIX
 
     def test_an_absolute_pose_arrives_in_the_env_frame(self):
         pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
-        wired = _wire_command(_in_env_control_frame(roboarm_command.CartesianPosition(pose), self.frame))
+        wired = _wire_command(_in_env_control_frame(roboarm_command.CartesianPosition(pose), self.frame, None))
         np.testing.assert_allclose(wired[protocol.COMMAND_POSE], (pose * self.frame).as_vector(self.rotmat), atol=1e-12)
 
     def test_a_delta_already_in_the_env_frame_wires_bare(self):
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         cmd = roboarm_command.CartesianDelta(delta, frame=self.frame)
-        wired = _wire_command(_in_env_control_frame(cmd, self.frame))
+        wired = _wire_command(_in_env_control_frame(cmd, self.frame, None))
         np.testing.assert_allclose(wired[protocol.COMMAND_DELTA], delta.as_vector(self.rotmat), atol=1e-12)
 
     def test_a_command_re_expressed_for_the_env_keeps_its_mode(self):
         mode = roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
         pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.identity)
-        moved = _in_env_control_frame(roboarm_command.CartesianPosition(pose, mode=mode), self.frame)
+        moved = _in_env_control_frame(roboarm_command.CartesianPosition(pose, mode=mode), self.frame, None)
         assert moved.mode == mode
-        delta = _in_env_control_frame(roboarm_command.CartesianDelta(pose, mode=mode), self.frame)
+        delta = _in_env_control_frame(roboarm_command.CartesianDelta(pose, mode=mode), self.frame, self.measured)
         assert delta.mode == mode
 
-    def test_a_delta_outside_the_env_frame_is_refused(self):
+    def test_a_delta_outside_the_env_frame_is_refused_on_the_wire(self):
         """A delta needs the measured pose in its own frame, which the wire does not supply."""
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         with pytest.raises(ValueError, match='control frame'):
-            _wire_command(_in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame))
+            _wire_command(roboarm_command.CartesianDelta(delta, frame=self.frame))
+
+    def test_a_delta_at_default_arrives_as_the_target_it_composes_at_the_measured_pose(self):
+        delta = geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
+        cmd = roboarm_command.CartesianDelta(delta)
+        wired = _wire_command(_in_env_control_frame(cmd, self.frame, self.measured))
+        expected = cmd.apply(self.measured * self.frame.inv) * self.frame
+        assert wired[protocol.COMMAND_TYPE] == protocol.CARTESIAN
+        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], expected.as_vector(self.rotmat), atol=1e-12)
+
+    def test_a_delta_at_default_before_any_measurement_is_refused(self):
+        delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
+        with pytest.raises(ValueError, match='measured pose'):
+            _in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame, None)
 
     def test_robolab_reports_and_drives_the_same_frame(self):
         adapter = RobolabAdapter(camera_dict={})
@@ -491,7 +505,9 @@ class TestEnvControlFrame:
             'grip': 0.0,
         }
         reported = adapter.observations(raw)[keys.ROBOT_STATE].ee_pose
-        commanded = _in_env_control_frame(roboarm_command.CartesianPosition(reported), adapter.env_control_frame).pose
+        commanded = _in_env_control_frame(
+            roboarm_command.CartesianPosition(reported), adapter.env_control_frame, None
+        ).pose
         np.testing.assert_allclose(commanded.as_vector(self.rotmat), eef.as_vector(self.rotmat), atol=1e-6)
 
 

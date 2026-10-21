@@ -63,13 +63,24 @@ class EnvAdapter(ABC):
         """
 
 
-def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D) -> Any:
-    """A command against the embodiment's ``default``, re-expressed in the frame the env measures and drives."""
+def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D, measured: geom.Transform3D | None) -> Any:
+    """A command against the embodiment's ``default``, re-expressed in the frame the env measures and drives.
+
+    ``measured`` is the env's last measured pose in that frame, or None before the first observation.
+    """
     match cmd:
         case roboarm_command.CartesianPosition(pose, mode):
             return roboarm_command.CartesianPosition(pose=pose * env_control_frame, mode=mode)
         case roboarm_command.CartesianDelta(delta, frame, mode):
-            return roboarm_command.CartesianDelta(delta, env_control_frame.inv * frame, mode)
+            env_frame = env_control_frame.inv * frame
+            if np.allclose(env_frame.as_matrix, np.eye(4)):
+                return roboarm_command.CartesianDelta(delta, env_frame, mode)
+            # The wire carries a delta only at the env frame, so compose it here at the pose the env measured.
+            # The env moves only when stepped, so that pose is where the arm is when the command applies.
+            if measured is None:
+                raise ValueError('a CartesianDelta outside the env control frame needs a measured pose first')
+            target = cmd.apply(measured * env_control_frame.inv)
+            return roboarm_command.CartesianPosition(pose=target * env_control_frame, mode=mode)
         case _:
             return cmd
 
@@ -117,7 +128,13 @@ class WireCommandAdapter(EnvAdapter):
         """``env_control_frame`` places the frame the env measures and drives relative to the embodiment's
         ``default``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
         self.env_control_frame = env_control_frame if env_control_frame is not None else geom.Transform3D.identity
+        self._measured: geom.Transform3D | None = None
         self._reset_command_state()
+
+    def _measure(self, env_pose: geom.Transform3D) -> geom.Transform3D:
+        """The pose the env measures, at ``default``. It also anchors the next Cartesian delta."""
+        self._measured = env_pose
+        return env_pose * self.env_control_frame.inv
 
     def _reset_command_state(self) -> None:
         self._held: dict[str, Any] = {}  # last command per channel — re-sent until the next one arrives
@@ -147,4 +164,4 @@ class WireCommandAdapter(EnvAdapter):
         cmd = self._held.get(name)
         if isinstance(cmd, roboarm_command.CartesianDelta | roboarm_command.JointDelta):
             self._held.pop(name)
-        return _wire_command(_in_env_control_frame(cmd, self.env_control_frame))
+        return _wire_command(_in_env_control_frame(cmd, self.env_control_frame, self._measured))

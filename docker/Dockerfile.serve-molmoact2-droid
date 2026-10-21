@@ -13,7 +13,7 @@
 # builds one new layer and pulls no cached layer.
 #
 # The base is a Python 3.13 image with a compiler and uv: MolmoAct2 has no vendor stack. The CUDA
-# runtime comes in with the PyPI torch wheels.
+# runtime comes in with the CUDA 12.8 torch wheels, which need NVIDIA driver 570 or newer on the host.
 
 ARG BASE_IMAGE=ghcr.io/astral-sh/uv:python3.13-bookworm
 ARG MODEL=allenai/MolmoAct2-DROID

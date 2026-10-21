@@ -30,9 +30,11 @@ package.
 
 ## Registering
 
-`platform-register` mints the API key that every other call needs. It runs a device flow: it
-prints a short code and a URL, waits while you sign in and approve the code in a browser, and
-registers the account that signed in. The package install above puts the command on your path.
+`platform-register` mints the API key that every other call needs. It runs a device flow: it prints
+a sign-in link, a short code and the time that the code stays valid, waits while you sign in and
+approve the code in a browser, and registers the account that signed in. When the identity provider
+sends a link that carries the code, the command prints that link, and you type no code. The package
+install above puts the command on your path.
 
 ```bash
 platform-register --alias=<display name>

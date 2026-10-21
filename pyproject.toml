@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "positronic"
-version = "0.3.0"
+version = "0.3.1"
 description = "Positronic robotics project"
 requires-python = ">=3.11, <3.14"
 readme = { file = "README.md", content-type = "text/markdown" }
@@ -42,7 +42,7 @@ dependencies = [
     # (.github/workflows/release.yaml). Pinned exactly, because that package guarantees no
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
-    "positronic-platform-client==0.37.1",
+    "positronic-platform-client==0.38.0",
     # The client side of every wire and the facts both ends share. A workspace member in a clone;
     # a released `positronic` resolves it from the index, so it is published first, and it is pinned
     # exactly for the same reason the client is (wire/README.md).
@@ -95,7 +95,7 @@ hardware = [
 # The Franka arm, apart from `hardware`, because `positronic-franka` ships no wheel: it builds against a
 # libfranka that the machine must already carry. A station with no Franka installs `hardware` without it.
 franka = [
-    "positronic-franka>=0.8.1; sys_platform == 'linux'",
+    "positronic-franka>=0.9.0; sys_platform == 'linux'",
 ]
 lerobot_0_3_3 = [
     "lerobot==0.3.3",
@@ -226,6 +226,15 @@ pyzed = [
 ]
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
 i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb30c65e397f2ece506550a0db4594" }
+# Linux x86_64 takes the CUDA 12.8 build: the PyPI build has no Blackwell (sm_120) kernels.
+# The README install section states the driver that this build needs.
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.pytest.ini_options]
 # Search roots, not a list of suites, so a new `tests/` directory is collected without being registered

@@ -7,17 +7,22 @@ No key is needed: a public board is readable by anyone. With no `--board`, the s
 boards `rankings.list` returns, with the eval each one ranks. With a slug, it prints every row of
 that board: rank, display name, tag, primary score and submission id.
 
+The platform is `--platform-url`, else POSITRONIC_PLATFORM_URL, else the one that
+`positronic account register` saved, as in `submit_sample.py`.
+
 The platform owns the set of boards and evals. Read the names here; do not copy them from a document.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import httpx
 from platform_client.boards import BoardRef
 from platform_client.client import PlatformClient
+from platform_client.config import platform_url_from, record_if_needed
 from platform_client.enums import ErrorCode
 from platform_client.errors import PlatformError
 
@@ -76,7 +81,8 @@ def main(argv: list[str] | None = None) -> None:
     # Every value the wire types refuse — a slug, a platform URL — is refused here, before any request.
     try:
         board = BoardRef(args.board) if args.board is not None else None
-        client = anonymous_client(args.platform_url)
+        record = record_if_needed(os.environ, args.platform_url, key_required=False)
+        client = anonymous_client(platform_url_from(os.environ, args.platform_url, record))
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 

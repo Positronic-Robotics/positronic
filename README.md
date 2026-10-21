@@ -156,6 +156,8 @@ After installation, the following command-line scripts will be available:
 
 All commands work both inside an activated virtual environment and with `uv run --locked` prefix (e.g., `uv run --locked positronic-server`). Use `--locked` so the installed environment matches the committed `uv.lock` — uv errors loudly if you edited `pyproject.toml` without re-running `uv lock`.
 
+On Linux x86_64, the extras that pull torch (`molmoact2`, `lerobot`, `lerobot_0_3_3`) install its CUDA 12.8 build. That build needs NVIDIA driver 570 or newer.
+
 For training and inference servers, use vendor-specific Docker services (see [Training Workflow](docs/training-workflow.md)).
 
 ## Quick Start — 30 Seconds to Data Collection
