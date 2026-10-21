@@ -177,6 +177,14 @@ class FrameWriter:
         """False once a dial found no frame channel, after which every image stays in the message."""
         return self._channel_answers
 
+    def hand_over_empty_ring(self) -> bool:
+        """Hand the server a ring with empty slots, and return whether the channel answered.
+
+        A session calls this when it opens, so it knows from its first call whether its images take the ring.
+        The first image grows the ring to its size.
+        """
+        return self._ring_for(0) is not None
+
     def pack(self, obs: Mapping[str, Any]) -> dict[str, Any]:
         if not self._channel_answers:
             return dict(obs)
