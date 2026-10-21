@@ -423,7 +423,7 @@ class _Arm(DriverRun[command.CommandType]):
         self, grip: float, *, interrupt_on_stop: bool = True
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float, MoveStatus]]:
         """Settle onto the parking pose; return the joints and grip to hold, and how the park ended: ARRIVED
-        parked, or GAVE_UP held where it stopped."""
+        parked, or GAVE_UP held where it stopped. A ``ChainFault`` is raised."""
         logger.info('Moving the arm to the parking pose')
         try:
             reference = yield from self._settle_onto(
@@ -433,6 +433,8 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.info('Arm parked')
                 self._report_parked()
                 return reference, grip, MoveStatus.ARRIVED
+        except ChainFault:
+            raise
         # rules-allow: swallowed-error — an arm that will not park reads ERROR; the run goes on
         except Exception as exc:
             self.moves.errored = True
@@ -441,13 +443,15 @@ class _Arm(DriverRun[command.CommandType]):
 
     def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Settle onto the start pose with the gripper open, and return the joints and grip to hold. On a failure
-        or a stop, hold where the arm stopped."""
+        or a stop, hold where the arm stopped. A ``ChainFault`` is raised."""
         logger.info('Moving the arm to the start pose')
         # rules-allow: swallowed-error — an arm that will not reach its start pose reads ERROR; the run goes on
         try:
             reference = yield from self._settle_onto(
                 _START_JOINTS, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
             )
+        except ChainFault:
+            raise
         except Exception as exc:
             logger.error(f'The arm did not reach the start pose: {exc}')
             return self.hold_where_it_stopped()
@@ -493,7 +497,8 @@ class _Arm(DriverRun[command.CommandType]):
         self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Settle onto the call's target with the gripper open, then answer the call. On a failure or a stop, hold
-        where the arm stopped. A blocking move is the episode reset, so each episode starts with the gripper open."""
+        where the arm stopped. A ``ChainFault`` answers the call and is raised. A blocking move is the episode reset, so
+        each episode starts with the gripper open."""
         try:
             target = self.to_joints(call.request, q)
             reference = yield from self._settle_onto(
@@ -503,6 +508,9 @@ class _Arm(DriverRun[command.CommandType]):
                 self.publish(self.observations())
                 call.set_result(None)
                 return reference, _OPEN_GRIP
+        except ChainFault as exc:
+            call.set_exception(exc)
+            raise
         except Exception as exc:
             try:
                 held = self.hold_where_it_stopped()
@@ -672,10 +680,10 @@ class Robot(pimm.ControlSystem):
         }
         asked: list[pimm.calls.Call[None, None]] = []
         while not should_stop.value:
-            lost = yield from self._drive_chain(kinematics, state, meta, asked, should_stop, clock)
-            if lost is None:
+            error = yield from self._drive_chain(kinematics, state, meta, asked, should_stop, clock)
+            if error is None:
                 return
-            asked = yield from self._hold(lost, should_stop, clock)
+            asked = yield from self._hold(error, should_stop, clock)
 
     def _drive_chain(
         self,
@@ -685,10 +693,11 @@ class Robot(pimm.ControlSystem):
         asked: list[pimm.calls.Call[None, None]],
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
-    ) -> Generator[pimm.Command, None, ChainFault | None]:
+    ) -> Generator[pimm.Command, None, DeviceFault | None]:
         """Open the chain, answer ``asked``, and serve the arm until ``should_stop``. Park and release it after.
 
-        A ``ChainFault`` comes back as the return value once the arm is parked. Any other fault is raised again.
+        A ``ChainFault`` goes on the state and the grip before the park, and comes back as the return value once the
+        arm is parked. Any other fault is raised again.
         """
         try:
             with _chain_call():
@@ -696,7 +705,7 @@ class Robot(pimm.ControlSystem):
         except ChainFault as exc:
             for call in asked:
                 call.set_exception(exc)
-            return exc
+            return self._report_lost(exc)
         for call in asked:
             call.set_result(None)
         fault, lost = None, None
@@ -720,8 +729,8 @@ class Robot(pimm.ControlSystem):
                 self.robot_meta.emit(meta)
                 yield from self._serve(arm, should_stop, clock)
             except ChainFault as exc:
-                lost = exc
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
+                lost = self._report_lost(exc)
             except Exception as exc:
                 fault = exc
                 logger.exception('The arm driver failed during the run; parking the arm before it lets go')
@@ -730,18 +739,27 @@ class Robot(pimm.ControlSystem):
             raise fault
         return lost
 
-    def _hold(
-        self, lost: ChainFault, should_stop: pimm.SignalReceiver, clock: pimm.Clock
-    ) -> Generator[pimm.Command, None, list[pimm.calls.Call[None, None]]]:
-        """Put an error for ``lost`` on the state and the grip, and answer every move with it, until a ready call.
-
-        Return the ready calls, or none when the world stops first.
-        """
+    def _report_lost(self, lost: ChainFault) -> DeviceFault:
+        """Put an error for ``lost`` on the state and the grip, and return it."""
         error = DeviceFault(f'The YAM arm is lost: {lost}', FaultKind.ARM)
         logger.error(f'{error}; it holds the error until a ready call opens the chain again')
+        self._emit_error(error)
+        return error
+
+    def _emit_error(self, error: DeviceFault) -> None:
         # The Message types do not name the SignalError that any message can carry.
         self.state.emit(cast(YamState, error))
         self.grip.emit(cast(float, error))
+
+    def _hold(
+        self, error: DeviceFault, should_stop: pimm.SignalReceiver, clock: pimm.Clock
+    ) -> Generator[pimm.Command, None, list[pimm.calls.Call[None, None]]]:
+        """Put ``error`` on the state and the grip again, over what the park published, and answer every move with it,
+        until a ready call.
+
+        Return the ready calls, or none when the world stops first.
+        """
+        self._emit_error(error)
         limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
         refused = (
             Moves[command.CommandType](self.sync_move, self.commands),

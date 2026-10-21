@@ -1201,6 +1201,60 @@ def test_a_chain_fault_parks_releases_and_puts_an_error_on_the_state_and_the_gri
     rig.finish()
 
 
+def _fail_the_first_move(chain: FakeYam) -> None:
+    """Fail the first command that moves the chain off the target it holds now, once."""
+    send = chain.command_joint_pos
+    held = chain.targets[-1] if chain.targets else None
+    failures = [OSError('CAN write failed')]
+
+    def command_once_failing(joint_pos):
+        if failures and (held is None or not np.array_equal(joint_pos, held)):
+            raise failures.pop()
+        send(joint_pos)
+
+    chain.command_joint_pos = command_once_failing
+
+
+def _assert_held_as_a_lost_arm(rig: Rig, chain: FakeYam) -> None:
+    assert chain.released_at and chain.closed
+    for emitter in (rig.states, rig.grips):
+        error = _last(emitter)
+        assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+        assert 'CAN write failed' in str(error)
+
+
+def test_a_chain_fault_during_a_blocking_move_answers_the_move_and_holds_the_arm_as_lost(world, rig):
+    rig.raise_arm()
+    _fail_the_first_move(rig.vendor)
+
+    answer = _sync_caller(world, rig)(command.JointPosition(PARK))
+    _until_answered(rig, answer)
+    rig.tick(10)
+
+    with pytest.raises(yam.ChainFault, match='CAN write failed'):
+        answer.result()
+    _assert_held_as_a_lost_arm(rig, rig.vendor)
+
+
+def test_a_chain_fault_during_the_start_move_after_a_ready_call_holds_the_arm_as_lost(world, rig):
+    reopened = _lose_the_chain(rig)
+    _fail_the_first_move(reopened)
+
+    _readier(world, rig)(None)
+    rig.tick(10)
+
+    _assert_held_as_a_lost_arm(rig, reopened)
+
+
+def test_a_chain_fault_during_an_idle_park_holds_the_arm_as_lost(rig):
+    rig.raise_arm()
+    _fail_the_first_move(rig.vendor)
+
+    rig.tick(10)
+
+    _assert_held_as_a_lost_arm(rig, rig.vendor)
+
+
 def test_a_move_on_a_lost_arm_is_answered_with_its_error(world, rig):
     _lose_the_chain(rig)
 
@@ -1305,6 +1359,21 @@ def test_a_fault_that_prevents_a_verified_park_keeps_the_arm_powered(caplog, sit
     assert 'Shutdown blocked' in caplog.text
     assert not rig.vendor.released_at
     assert not rig.vendor.closed
+    rig.loop.close()
+
+
+@pytest.mark.parametrize('site', CHAIN_SITES)
+def test_a_chain_outage_that_blocks_the_shutdown_leaves_the_error_on_the_state_and_the_grip(site):
+    watch = Watch(site, persistent=True)
+    rig = Rig(watch=watch)
+    rig.raise_arm()
+    watch.armed = True
+    rig.tick(30)
+
+    assert not rig.vendor.released_at
+    for emitter in (rig.states, rig.grips):
+        error = _last(emitter)
+        assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
     rig.loop.close()
 
 
