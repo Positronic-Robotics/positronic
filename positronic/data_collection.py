@@ -429,30 +429,26 @@ main_cfg = cfn.Config(
 
 
 @cfn.config(
-    robot_arm=positronic.cfg.hardware.roboarm.so101,
-    webxr=positronic.cfg.webxr.oculus,
-    sound=positronic.cfg.sound.sound,
-    operator_position=OperatorPosition.BACK,
-    cameras={'image.right': positronic.cfg.hardware.camera.arducam_right},
-    nominal_joints=positronic.cfg.hardware.roboarm.SO101_NOMINAL_JOINTS,
+    webxr=positronic.cfg.webxr.oculus, sound=positronic.cfg.sound.sound, operator_position=OperatorPosition.BACK
 )
-def so101cfg(robot_arm, **kwargs):
-    """Runs data collection on SO101 robot"""
+def arm_as_gripper(robot_arm, **kwargs):
+    """Runs data collection in real hardware."""
+    # One object fills both slots: a separate gripper instance would open the arm's bus a second time.
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
-@cfn.config(
+so101cfg = arm_as_gripper.override(
+    robot_arm=positronic.cfg.hardware.roboarm.so101,
+    cameras={'image.right': positronic.cfg.hardware.camera.arducam_right},
+    nominal_joints=positronic.cfg.hardware.roboarm.SO101_NOMINAL_JOINTS,
+)
+
+yamcfg = arm_as_gripper.override(
     robot_arm=positronic.cfg.hardware.roboarm.yam,
-    webxr=positronic.cfg.webxr.oculus,
-    sound=positronic.cfg.sound.sound,
-    operator_position=OperatorPosition.BACK,
     cameras={},
     nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
     video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
-def yamcfg(robot_arm, **kwargs):
-    """Runs data collection on a real i2rt YAM arm (the arm driver carries the gripper)."""
-    main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
 droid = cfn.Config(
