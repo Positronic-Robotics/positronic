@@ -288,12 +288,16 @@ def test_an_auth_config_lost_in_transit_does_not_name_rotate(platform, workos, r
     assert '--rotate' not in str(raised.value) and raised.value.fault is Fault.PLATFORM
 
 
-def test_register_says_no_key_came_back_for_an_existing_registration(platform, run_command, capsys):
+def test_register_tells_an_existing_account_to_set_its_key_and_that_rotate_stops_it(platform, run_command, capsys):
     platform.answer(EXISTING)
 
     run_command(register)
 
-    assert 'no key issued' in capsys.readouterr().out
+    # rules-allow: hardcoded-keys — the test pins the exact text that a person reads.
+    assert capsys.readouterr().out.endswith(
+        'You already have an API key. Set POSITRONIC_PLATFORM_API_KEY to it. '
+        'Lost it? Run positronic account register --rotate. This stops the old key.\n'
+    )
     # A repeat registration mints no key, so no record is written.
     assert read_config(config_dir(os.environ)) is None
 
