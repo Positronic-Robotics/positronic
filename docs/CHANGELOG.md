@@ -29,7 +29,7 @@ This release publishes `positronic-platform-client` 0.39.0. The other distributi
 
 ### Docs
 - The competition guide installs `positronic` from the `main` branch, says that the sign-in link expires in 5 minutes, and tells a coding agent to run the register command in the background ([#991](https://github.com/Positronic-Robotics/positronic/pull/991))
-- The competition guide installs the released `positronic` package and registers with `positronic account register`, which saves the key on the computer ([#988](https://github.com/Positronic-Robotics/positronic/pull/988))
+- The competition guide registers with `positronic account register`, which saves the key on the computer ([#988](https://github.com/Positronic-Robotics/positronic/pull/988))
 - The competition guide links point at `https://competition.phail.ai` ([#986](https://github.com/Positronic-Robotics/positronic/pull/986))
 
 Full list: [v0.3.1...v0.3.2](https://github.com/Positronic-Robotics/positronic/compare/v0.3.1...v0.3.2)
