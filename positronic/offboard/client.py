@@ -108,13 +108,12 @@ class InferenceSession:
         declared = self._metadata.get(frames.HANDSHAKE_KEY)
         if dial_channel is None or self._session_id is None or not declared or not frames.SUPPORTED:
             return None
-        writer = frames.FrameWriter(dial_channel, self._session_id)
-        return writer if writer.hand_over_empty_ring() else None
+        return frames.FrameWriter.open(dial_channel, self._session_id)
 
     @property
     def sends_frames_through_ring(self) -> bool:
-        """True while this session sends its images raw through a frame ring, in place of the message."""
-        return self._frames is not None and self._frames.channel_answers
+        """True when this session holds a frame ring: every image goes through it raw, or the call raises."""
+        return self._frames is not None
 
     def _handshake(self, ready_by: float, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -224,6 +223,10 @@ class InferenceSession:
         ):
             reopened.close()
             raise wire.PeerDisconnected('The server this session reconnected to declares other session settings')
+        # The caller prepared the observation for this session's transport, so a ring cannot fall away here.
+        if self._frames is not None and reopened._frames is None:
+            reopened.close()
+            raise wire.PeerDisconnected('The session this one reconnected to has no frame ring')
         with self._send_lock:
             if not self._closing:
                 # A ring is handed over under one session id, so the new session's ring replaces this one's.
