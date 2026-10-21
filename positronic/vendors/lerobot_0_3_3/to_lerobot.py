@@ -36,6 +36,7 @@ from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
 from positronic.policy.codecs.metadata import MODEL_SETTINGS, MODEL_SETTINGS_PATH
 from positronic.policy.keys import ACTION_FPS
+from positronic.utils.lazy import LazySequence
 
 
 def _raise_fd_limit(min_soft_limit: int = 4096) -> None:
@@ -77,7 +78,9 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
         timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in episode.timelines), RECORDED_TIME)
         start, finish = episode.bounds(timeline)
         timestamps = [Time(**{timeline: ts}) for ts in np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)]
-        return episode.time[timestamps]
+        sampled = episode.time[timestamps]
+        # A DataLoader worker pickles its result, and a lazy sequence can hold a video decoder or a local function.
+        return {name: list(value) if isinstance(value, LazySequence) else value for name, value in sampled.items()}
 
 
 # This function needs to be serialisable for PyTorch DataLoader

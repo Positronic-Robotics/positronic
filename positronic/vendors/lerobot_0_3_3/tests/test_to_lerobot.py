@@ -1,9 +1,13 @@
+import pickle
+
 import numpy as np
 import pytest
 
 from pimm.time import RECEIVED_WORLD
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.time import Time
+from positronic.dataset.transforms import Elementwise, TransformedDataset, lazy_sequence
+from positronic.dataset.transforms.episode import Derive
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 
@@ -22,3 +26,13 @@ def test_export_uses_the_preferred_clock(tmp_path, preferred, other):
             writer.append('value', i, Time(**{preferred: i * 100_000_000, other: i * 1_000_000_000}))
     rows = EpisodeDictDataset(LocalDataset(tmp_path), fps=20)[0]
     np.testing.assert_array_equal(rows['value'], [0, 0, 1, 1])
+
+
+def test_export_rows_survive_the_pickle_of_a_dataloader_worker(tmp_path):
+    with LocalDatasetWriter(tmp_path) as dataset, dataset.new_episode() as writer:
+        for i in range(3):
+            writer.append('value', i, Time(**{HARNESS_WORLD: i * 100_000_000}))
+    offset = 10
+    shifted = Derive(value=lambda episode: Elementwise(episode['value'], lazy_sequence(lambda value: value + offset)))
+    rows = EpisodeDictDataset(TransformedDataset(LocalDataset(tmp_path), shifted), fps=20)[0]
+    np.testing.assert_array_equal(pickle.loads(pickle.dumps(rows))['value'], [10, 10, 11, 11])

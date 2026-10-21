@@ -1,5 +1,6 @@
 import json
 import os
+import pickle
 
 import numpy as np
 import pytest
@@ -8,7 +9,8 @@ from pimm.time import EMITTED_WORLD, RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.time import Time, TimeBounds
-from positronic.dataset.transforms import TransformedDataset
+from positronic.dataset.transforms import Elementwise, TransformedDataset, lazy_sequence
+from positronic.dataset.transforms.episode import Derive
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, AbsoluteJointsAction, ObservationCodec
@@ -121,6 +123,16 @@ class _MockDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         return self.episodes[idx]
+
+
+def test_export_rows_survive_the_pickle_of_a_dataloader_worker(tmp_path):
+    with LocalDatasetWriter(tmp_path) as dataset, dataset.new_episode() as writer:
+        for i in range(3):
+            writer.append('value', i, Time(**{HARNESS_WORLD: i * 100_000_000}))
+    offset = 10
+    shifted = Derive(value=lambda episode: Elementwise(episode['value'], lazy_sequence(lambda value: value + offset)))
+    rows = EpisodeDictDataset(TransformedDataset(LocalDataset(tmp_path), shifted), fps=20)[0]
+    np.testing.assert_array_equal(pickle.loads(pickle.dumps(rows))['value'], [10, 10, 11, 11])
 
 
 def test_convert_to_lerobot_e2e(tmp_path):
