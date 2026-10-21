@@ -1079,7 +1079,7 @@ class Robot(pimm.ControlSystem):
                 call.set_result(outcome)
             return outcome
         finally:
-            # After the answers: a console reads IDLE as the end of the clear, and then reads the outcome.
+            # Every call that asked holds its answer before IDLE goes out.
             if asked:
                 self.recovery_step.emit(RecoveryStep.IDLE)
 
