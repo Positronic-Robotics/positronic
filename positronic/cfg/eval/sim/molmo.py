@@ -68,6 +68,8 @@ def benchmarks(
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
     if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
         raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
+    if episode_paths is not None and not episode_paths:
+        raise ValueError('--eval.episode_paths must name at least one episode')
     pins = None if episode_paths is None else [_parse_episode_path(path) for path in episode_paths]
     if pins is not None:
         names = (*mapping.BenchmarkPath._fields, mapping.SELECT_EPISODES)

@@ -152,6 +152,12 @@ def test_a_malformed_episode_path_is_refused(asked, path):
     assert asked == []
 
 
+def test_an_empty_episode_path_list_is_refused(asked):
+    with pytest.raises(ValueError, match='--eval.episode_paths must name at least one episode'):
+        benchmarks.override(episode_paths=[]).instantiate()
+    assert asked == []
+
+
 def test_an_explicit_seed_sweeps_each_episode(asked):
     ev = benchmarks.override(seed=5, trial_count=2).instantiate()
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in ev.tasks()]
