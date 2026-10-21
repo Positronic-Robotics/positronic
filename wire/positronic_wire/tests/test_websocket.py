@@ -6,6 +6,7 @@ import json
 import socket
 import ssl
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -252,34 +253,41 @@ def test_a_refusal_from_a_path_that_is_not_a_socket_is_final(tmp_path):
     assert refused.value.refusal is wire.Refusal.FINAL
 
 
-def test_the_frame_channel_sits_beside_the_socket_a_symlink_names(tmp_path):
-    """The server binds the channel beside the socket it bound, so a client that dials a symlink follows it."""
-    alias = tmp_path / 'alias.sock'
-    alias.symlink_to(tmp_path / 'policy.sock')
+@pytest.fixture
+def socket_directory() -> Iterator[Path]:
+    """A directory short enough for a socket path: ``tmp_path`` on macOS is longer than a socket address."""
+    with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+        yield Path(directory)
 
-    assert wire.frame_channel_path(alias) == tmp_path / f'policy.sock{wire.FRAME_CHANNEL_SUFFIX}'
+
+def test_the_frame_channel_sits_beside_the_socket_a_symlink_names(socket_directory):
+    """The server binds the channel beside the socket it bound, so a client that dials a symlink follows it."""
+    alias = socket_directory / 'alias.sock'
+    alias.symlink_to(socket_directory / 'policy.sock')
+
+    assert wire.frame_channel_path(alias) == socket_directory / f'policy.sock{wire.FRAME_CHANNEL_SUFFIX}'
 
 
 @pytest.mark.parametrize(('spare', 'fits'), [(0, True), (1, False)])
-def test_a_frame_channel_path_that_no_socket_address_carries_is_none(tmp_path, spare, fits):
-    name_bytes = wire.MAX_SOCKET_PATH_BYTES - len(str(tmp_path)) - 1 - len(wire.FRAME_CHANNEL_SUFFIX) + spare
-    socket_path = tmp_path / ('p' * name_bytes)
+def test_a_frame_channel_path_that_no_socket_address_carries_is_none(socket_directory, spare, fits):
+    name_bytes = wire.MAX_SOCKET_PATH_BYTES - len(str(socket_directory)) - 1 - len(wire.FRAME_CHANNEL_SUFFIX) + spare
+    socket_path = socket_directory / ('p' * name_bytes)
 
     assert (wire.frame_channel_path(socket_path) is not None) is fits
 
 
-def test_only_the_socket_member_has_a_frame_channel(tmp_path):
+def test_only_the_socket_member_has_a_frame_channel(socket_directory):
     host_port = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 
     assert websocket.WebsocketClientWire().frame_channel_dialer(host_port) is None
     assert websocket.WebsocketTlsClientWire().frame_channel_dialer(host_port) is None
-    unix = wire.UnixSocketAddress(tmp_path / 'policy.sock', wire.SESSION_PATH, '')
+    unix = wire.UnixSocketAddress(socket_directory / 'policy.sock', wire.SESSION_PATH, '')
     assert websocket.WebsocketUnixClientWire().frame_channel_dialer(unix) is not None
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='a frame channel is a SOCK_SEQPACKET socket, which macOS has not')
-def test_a_frame_channel_dial_that_reaches_no_channel_names_the_path(tmp_path):
-    unix = wire.UnixSocketAddress(tmp_path / 'policy.sock', wire.SESSION_PATH, '')
+def test_a_frame_channel_dial_that_reaches_no_channel_names_the_path(socket_directory):
+    unix = wire.UnixSocketAddress(socket_directory / 'policy.sock', wire.SESSION_PATH, '')
     dial = websocket.WebsocketUnixClientWire().frame_channel_dialer(unix)
     assert dial is not None
 
