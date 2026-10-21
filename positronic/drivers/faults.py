@@ -13,7 +13,7 @@ class FaultKind(Enum):
 
 
 class DeviceFault(pimm.SignalError):
-    """A ``pimm.SignalError`` that names the kind of device that failed, so a consumer reads ``kind``, not the text.
+    """A ``pimm.SignalError`` whose ``kind`` names the kind of device that failed.
 
     The arguments are ``(message, kind)``: the error crosses a process boundary, and pickle builds it again from them.
     """
