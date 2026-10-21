@@ -64,15 +64,15 @@ Other models:
 ### What the example images use
 
 Approximate values, from one run of each image in October 2026. A later build of an image can use
-different values. The platform gives each image 40 GB of GPU memory.
+different values. The platform gives each image 24 GB of GPU memory, so the last two images do not fit.
 
 | Image | Disk, pulled image | Memory, test without a GPU | GPU memory |
 |---|---|---|---|
 | `positro/pi05-droid` | 50 GB | 20 GB | 10 GB |
 | `positro/gr00t-n17-droid` | 40 GB | needs a GPU | 10 GB |
 | `positro/molmoact2-droid` | 35 GB | 12 GB | 15 GB |
-| `positro/flux3-action` | 40 GB | needs a GPU | 35 GB |
-| `positro/cosmos3-nano` | 55 GB | needs a GPU | 35 GB |
+| `positro/flux3-action` | 40 GB | needs a GPU | 35 GB, over the 24 GB |
+| `positro/cosmos3-nano` | 55 GB | needs a GPU | 35 GB, over the 24 GB |
 
 ### Three traps in the `positro/*` bases
 
@@ -213,7 +213,8 @@ What the platform does with the credential:
 6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token.
 7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
    servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
-8. The GPU is one `3g.40gb` slice of an H100: 40448 MiB of VRAM. The container runs under the
+8. The GPU is one `1g.24gb` slice of an RTX PRO 6000: 24192 MiB of VRAM and a quarter of the card's
+   compute. The container runs under the
    limits in [The container](#the-container).
 
 ## The container
@@ -226,8 +227,8 @@ holds each value below. The platform runs every image under them.
 | The port the server listens on | 8000 | `POLICY_PORT` |
 | The one variable the platform sets | `AUTH_TOKEN` | `AUTH_TOKEN_ENV` |
 | The deadline for VM boot, the pull and the server's start | 1800 s | `PROVISIONING_DEADLINE_S` |
-| The GPU slice | `3g.40gb` | `MIG_PROFILE` |
-| VRAM | 40448 MiB | `VRAM_MIB` |
+| The GPU slice | `1g.24gb` | `MIG_PROFILE` |
+| VRAM | 24192 MiB | `VRAM_MIB` |
 | The compressed image | 50 GB | `COMPRESSED_IMAGE_BYTES` |
 | The unpacked image | 55 GB | `UNPACKED_IMAGE_BYTES` |
 | The files in the image | 3,300,000 | `IMAGE_FILES` |
@@ -302,8 +303,9 @@ The script then waits up to 600 s: FLUX 3 Action binds port 8000 after about 140
 about 151 s. `no answer in 600 s` means a hung server, or one too slow for the provisioning deadline,
 which it shares with VM boot and the pull.
 
-The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
-sure that your model uses less.
+The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
+sure that your model uses less. A memory setting that is a fraction of the GPU, such as
+`XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB.
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
@@ -396,14 +398,14 @@ log cannot:
 ```json
 {
   "reason_code": "policy_setup_crash",
-  "reason": "the policy container exited with 25 MiB of its 40448 MiB slice in use, before it served",
+  "reason": "the policy container exited with 25 MiB of its 24192 MiB slice in use, before it served",
   "egress_probe": "denied",
   "pull": "pulled",
   "container_started": true,
   "container_exit_code": 1,
   "container_oom_killed": false,
   "vram_peak_mib": 25,
-  "vram_capacity_mib": 40448,
+  "vram_capacity_mib": 24192,
   "serving": false,
   "served_on_boot": 0,
   "token_rejected": false,
@@ -445,7 +447,7 @@ fault is not.
 | `image_too_large` | caller | the compressed size, against 50 GB |
 | `policy_setup_crash` | caller | `policy_log`: the server did not come up, or refused the run's own token |
 | `policy_inference_crash` | caller | `policy_log`: the server died after it served |
-| `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against the 40448 MiB slice |
+| `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against the 24192 MiB slice |
 | `latency_budget_exceeded` | caller | inference time per step |
 | `wall_clock_exceeded` | caller | the run passed its ceiling |
 | `invalid_flags` | caller | the plan the platform recorded |
