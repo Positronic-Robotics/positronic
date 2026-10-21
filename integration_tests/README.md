@@ -102,7 +102,8 @@ uv run --locked pytest integration_tests/tests -n0
 
 `molmo_local_eval.py` runs the eval step of [Score a policy on MolmoSpaces on your
 machine](../docs/local-molmospaces-eval.md) and checks its result. It needs the guide's two asset variables
-and a policy server, as the guide starts them. From the repository root:
+and a policy server, as the guide starts them. The locked environment builds `ruckig` from source, so it also
+needs a C++ compiler (`build-essential` on Ubuntu). From the repository root:
 
 ```bash
 uv run --locked python integration_tests/molmo_local_eval.py run --output_dir=/tmp/molmo-local-eval

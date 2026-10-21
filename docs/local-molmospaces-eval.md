@@ -97,7 +97,7 @@ The dataset viewer shows the video, the robot state and the result of each episo
 positronic-server --dataset.path=~/evals/molmo_smoke --ep_table_cfg=@positronic.cfg.server.eval_table
 ```
 
-Open http://localhost:8400.
+Open https://localhost:8400. The server makes a self-signed certificate, so the browser asks you to accept it.
 
 ## Test this guide
 
