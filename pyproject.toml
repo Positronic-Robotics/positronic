@@ -226,9 +226,8 @@ pyzed = [
 ]
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
 i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb30c65e397f2ece506550a0db4594" }
-# Linux x86_64 takes the CUDA 12.8 build of torch, which carries kernels for Blackwell (sm_120) GPUs. The PyPI
-# build is CUDA 12.6 and stops at sm_90. A CUDA 12.8 build needs NVIDIA driver 570 or newer. macOS and aarch64
-# keep the PyPI build.
+# Linux x86_64 takes the CUDA 12.8 build: the PyPI build has no Blackwell (sm_120) kernels.
+# The README install section states the driver that this build needs.
 torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }]
 torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }]
 
