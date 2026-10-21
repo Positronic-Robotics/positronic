@@ -2,6 +2,7 @@
 holds a lost gripper until a call activates it again."""
 
 import logging
+from enum import Enum, auto
 from types import SimpleNamespace
 
 import pytest
@@ -45,7 +46,6 @@ class FakeBus:
         self.raises: Exception | None = None
         self.refuses = False
         self.answers = True
-        self.connects = 0
         self._act = False
         self._go = False
         self._requested = 0
@@ -54,7 +54,6 @@ class FakeBus:
         self._fingers = Fingers.AT_REQUEST
 
     def connect(self) -> bool:
-        self.connects += 1
         return self.answers
 
     def close(self) -> None:
@@ -309,14 +308,22 @@ def _errors(widths: RecordingEmitter) -> list[pimm.SignalError]:
     return [data for _, data in widths.emitted if isinstance(data, pimm.SignalError)]
 
 
-def _lose(bus: FakeBus, fault: str) -> None:
+class BusFault(Enum):
+    """How the bus fails the driver."""
+
+    NO_ANSWER = auto()
+    PORT_GONE = auto()
+    EXCEPTION_RESPONSE = auto()
+
+
+def _lose(bus: FakeBus, fault: BusFault) -> None:
     """Make every read fail the way ``fault`` names."""
     match fault:
-        case 'no answer':
+        case BusFault.NO_ANSWER:
             bus.raises = robotiq.ModbusException('No response received after 3 retries')
-        case 'port gone':
+        case BusFault.PORT_GONE:
             bus.raises = OSError('[Errno 5] Input/output error')
-        case 'exception response':
+        case BusFault.EXCEPTION_RESPONSE:
             bus.refuses = True
 
 
@@ -324,10 +331,7 @@ def _restore(bus: FakeBus) -> None:
     bus.raises, bus.refuses = None, False
 
 
-FAULTS = ['no answer', 'port gone', 'exception response']
-
-
-@pytest.mark.parametrize('fault', FAULTS)
+@pytest.mark.parametrize('fault', list(BusFault))
 def test_a_lost_bus_puts_an_error_on_the_width_and_the_run_goes_on(monkeypatch, world, fault):
     bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
     driver, _, loop = _driven(monkeypatch, bus, clock, widths)
@@ -346,7 +350,7 @@ def test_a_lost_bus_puts_an_error_on_the_width_and_the_run_goes_on(monkeypatch, 
 def test_a_move_on_a_lost_gripper_is_answered_with_its_error_and_reaches_no_register(monkeypatch, world):
     bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
     driver, requests, loop = _driven(monkeypatch, bus, clock, widths)
-    _lose(bus, 'no answer')
+    _lose(bus, BusFault.NO_ANSWER)
     _pump(loop, clock, 1)
     before = len(bus.writes)
 
@@ -359,7 +363,7 @@ def test_a_move_on_a_lost_gripper_is_answered_with_its_error_and_reaches_no_regi
     assert bus.writes[before:] == []
 
 
-@pytest.mark.parametrize('fault', FAULTS)
+@pytest.mark.parametrize('fault', list(BusFault))
 def test_a_ready_call_activates_a_lost_gripper_and_the_width_comes_back(monkeypatch, world, fault):
     bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
     driver, requests, loop = _driven(monkeypatch, bus, clock, widths)
@@ -380,7 +384,7 @@ def test_a_ready_call_activates_a_lost_gripper_and_the_width_comes_back(monkeypa
 def test_a_ready_call_on_a_bus_that_stays_down_answers_the_error_and_the_next_one_repairs(monkeypatch, world):
     bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
     driver, _, loop = _driven(monkeypatch, bus, clock, widths)
-    _lose(bus, 'no answer')
+    _lose(bus, BusFault.NO_ANSWER)
     _pump(loop, clock, 1)
 
     ready = _readier(world, driver)
@@ -400,7 +404,7 @@ def test_a_ready_call_on_a_bus_that_stays_down_answers_the_error_and_the_next_on
 def test_a_ready_call_on_a_lost_gripper_that_activates_with_a_fault_answers_an_error(monkeypatch, world):
     bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
     driver, _, loop = _driven(monkeypatch, bus, clock, widths)
-    _lose(bus, 'no answer')
+    _lose(bus, BusFault.NO_ANSWER)
     _pump(loop, clock, 1)
     _restore(bus)
     bus.fault_after_activation = 0x0D
@@ -450,7 +454,7 @@ def test_a_bus_error_during_recover_reaches_the_caller_and_the_gripper_holds_it(
 
     answer = _recoverer(world, driver)(None)
     _pump(loop, clock, 1)
-    _lose(bus, 'port gone')
+    _lose(bus, BusFault.PORT_GONE)
     _pump(loop, clock, 2)
 
     with pytest.raises(OSError):
@@ -461,7 +465,7 @@ def test_a_bus_error_during_recover_reaches_the_caller_and_the_gripper_holds_it(
 def test_a_recover_call_on_a_lost_gripper_activates_it(monkeypatch, world):
     bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
     driver, _, loop = _driven(monkeypatch, bus, clock, widths)
-    _lose(bus, 'no answer')
+    _lose(bus, BusFault.NO_ANSWER)
     _pump(loop, clock, 1)
     _restore(bus)
 
