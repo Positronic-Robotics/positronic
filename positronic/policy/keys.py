@@ -22,6 +22,7 @@ TRANSCRIPT = 'transcript'
 STOP_REASON = 'stop_reason'
 HINDSIGHT = 'hindsight'
 # The episode time, in ns, at which a teleoperator started the real attempt. The moves before it are trial moves.
+# The value is a coordinate on the `harness.world` timeline: the world clock of the episode.
 ATTEMPT_START_NS = 'attempt_start_ns'
 
 POLICY_META = 'inference.policy'

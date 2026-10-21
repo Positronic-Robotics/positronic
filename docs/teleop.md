@@ -196,7 +196,8 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
 
 For training, read the recordings through `@positronic.cfg.ds.teleop_demos`. It keeps the episodes that did the task:
 `eval.policy_end = complete`, or `eval.success = True` when the env ended the trial. It starts each episode at Start
-task. In the conversion of the [GR00T README](../positronic/vendors/gr00t/README.md), set
+task, on `harness.world`. It drops an episode with no Start task, because all of its moves are trial moves. In the
+conversion of the [GR00T README](../positronic/vendors/gr00t/README.md), set
 `--dataset.base=@positronic.cfg.ds.teleop_demos` and `--dataset.base.dataset.path=/data/recordings`.
 
 At its first step the policy sends a stay command: the pose and the grip that the robot has. So every command signal

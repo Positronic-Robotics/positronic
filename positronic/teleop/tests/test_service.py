@@ -515,9 +515,11 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
     assert episode.static[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
     assert episode.static[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
     start_ns = episode.static[f'{policy_meta}.{policy_keys.ATTEMPT_START_NS}']
-    assert episode.bounds(HARNESS_WORLD).start < start_ns
+    recorded = episode.bounds(HARNESS_WORLD)
+    assert recorded.start < start_ns < recorded.finish
     [demo] = teleop_demos(dataset=LocalDataset(tmp_path))
-    assert demo.bounds(HARNESS_WORLD).start == start_ns
+    assert demo.bounds(HARNESS_WORLD) == (start_ns, recorded.finish)
+    assert len(demo[keys.TARGET_EE_POSE]) > 1
     assert episode.static[f'{policy_meta}.{policy_keys.TYPE}'] == 'remote'
     assert episode.static[f'{policy_meta}.{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
     assert keys.TARGET_EE_POSE in episode.signals

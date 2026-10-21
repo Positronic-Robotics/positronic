@@ -40,19 +40,24 @@ def filter_ds(dataset: Dataset, predicate):
     return FilterDataset(dataset, predicate)
 
 
-def _did_the_task(episode: Episode) -> bool:
-    return bool(episode.get(eval_keys.SUCCESS, False)) or episode.get(eval_keys.POLICY_END) == PolicyEnd.COMPLETE
+_ATTEMPT_START = f'{policy_keys.POLICY_META}.{policy_keys.ATTEMPT_START_NS}'
 
 
-def _attempt_start(episode: Episode) -> Time | None:
-    start_ns = episode.get(f'{policy_keys.POLICY_META}.{policy_keys.ATTEMPT_START_NS}')
-    return None if start_ns is None else Time(**{HARNESS_WORLD: start_ns})
+def _is_demo(episode: Episode) -> bool:
+    did_the_task = (
+        bool(episode.get(eval_keys.SUCCESS, False)) or episode.get(eval_keys.POLICY_END) == PolicyEnd.COMPLETE
+    )
+    return did_the_task and _ATTEMPT_START in episode
+
+
+def _attempt_start(episode: Episode) -> Time:
+    return Time(**{HARNESS_WORLD: episode[_ATTEMPT_START]})
 
 
 @cfn.config(dataset=local)
 def teleop_demos(dataset: Dataset):
-    """The teleop episodes that did the task, each from its Start task."""
-    return TransformedDataset(FilterDataset(dataset, _did_the_task), StartAt(_attempt_start))
+    """The teleop episodes that did the task after Start task, each from its Start task."""
+    return TransformedDataset(FilterDataset(dataset, _is_demo), StartAt(_attempt_start))
 
 
 @cfn.config(transforms=[])

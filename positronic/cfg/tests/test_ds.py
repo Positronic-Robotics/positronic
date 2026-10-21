@@ -25,21 +25,22 @@ def _record(root: Path, *statics: dict[str, Any]) -> LocalDataset:
     return LocalDataset(root)
 
 
-def test_teleop_demos_keep_the_episodes_that_did_the_task(tmp_path):
+def test_teleop_demos_keep_the_episodes_that_did_the_task_after_start_task(tmp_path):
     recorded = _record(
         tmp_path,
-        {keys.TASK: 'complete', eval_keys.POLICY_END: PolicyEnd.COMPLETE.value},
-        {keys.TASK: 'give up', eval_keys.POLICY_END: PolicyEnd.GIVE_UP.value},
-        {keys.TASK: 'success', eval_keys.SUCCESS: True},
-        {keys.TASK: 'failure', eval_keys.SUCCESS: False},
-        {keys.TASK: 'time limit', eval_keys.TERMINATED: False},
+        {keys.TASK: 'complete', eval_keys.POLICY_END: PolicyEnd.COMPLETE.value, ATTEMPT_START: 1500},
+        {keys.TASK: 'give up', eval_keys.POLICY_END: PolicyEnd.GIVE_UP.value, ATTEMPT_START: 1500},
+        {keys.TASK: 'success', eval_keys.SUCCESS: True, ATTEMPT_START: 1500},
+        {keys.TASK: 'failure', eval_keys.SUCCESS: False, ATTEMPT_START: 1500},
+        {keys.TASK: 'time limit', eval_keys.TERMINATED: False, ATTEMPT_START: 1500},
+        {keys.TASK: 'success before start task', eval_keys.SUCCESS: True},
+        {keys.TASK: 'complete before start task', eval_keys.POLICY_END: PolicyEnd.COMPLETE.value},
     )
     assert [episode[keys.TASK] for episode in teleop_demos(dataset=recorded)] == ['complete', 'success']
 
 
 def test_teleop_demos_start_at_start_task(tmp_path):
-    recorded = _record(tmp_path, {eval_keys.SUCCESS: True, ATTEMPT_START: 2500}, {eval_keys.SUCCESS: True})
-    started, whole = teleop_demos(dataset=recorded)
-    assert started.bounds(HARNESS_WORLD).start == 2500
+    recorded = _record(tmp_path, {eval_keys.SUCCESS: True, ATTEMPT_START: 2500})
+    [started] = teleop_demos(dataset=recorded)
+    assert started.bounds(HARNESS_WORLD) == (2500, 3000)
     assert list(started[keys.GRIP].values()) == [2000.0, 3000.0]
-    assert whole.bounds(HARNESS_WORLD).start == 1000

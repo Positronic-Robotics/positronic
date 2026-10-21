@@ -258,7 +258,10 @@ class Identity(EpisodeTransform):
 
 
 class StartAt(EpisodeTransform):
-    """Start each signal of an episode at the time that ``start`` reads from it. ``None`` keeps the episode whole."""
+    """Start each signal of an episode at the time that ``start`` reads from it, on the timelines of that time.
+
+    ``None`` keeps the episode whole.
+    """
 
     def __init__(self, start: Callable[[Episode], Time | None]):
         self._start = start
