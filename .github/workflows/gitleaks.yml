@@ -17,4 +17,4 @@ jobs:
   gitleaks:
     # Commit of Positronic-Robotics/secret-scanning to run; .gitleaks.toml is a copy of its gitleaks.toml. Public, not a secret.
     # To move it, follow "Upgrading the rules or gitleaks" in that repository's README.
-    uses: Positronic-Robotics/secret-scanning/.github/workflows/gitleaks.yml@02467588d0db3bbe7c890d2b52d8a10d108a058b # owner-free: allow
+    uses: Positronic-Robotics/secret-scanning/.github/workflows/gitleaks.yml@17271b2ddeb36438a2650e53a6e0f335832dc87e # owner-free: allow
