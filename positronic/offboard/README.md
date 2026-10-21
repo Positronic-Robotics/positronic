@@ -225,7 +225,8 @@ This metadata tells the client:
   Processor and codec names and versions resolve only through `COMPONENTS` in
   `positronic.policy.spec`; an unsupported declaration fails before the policy emits commands.
 - `compress_images` — whether the client JPEG-encodes frames before
-  sending. It is true unless the deployment sets it false.
+  sending. It is true unless the deployment sets it false. A session with a frame ring sends raw frames
+  whatever it says (see above).
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
   each run records it in the episode metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
@@ -293,7 +294,7 @@ After handshake, the client streams observations and receives actions:
 
 **Client → Server (Observation):**
 
-Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64. Each image frame travels as JPEG unless the deployment sets `compress_images` false (see above). `deserialise()` decodes each frame to the uint8 array below. `docs/connect-your-model.md` carries the full key table and the JPEG envelope.
+Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64. Each image frame travels as JPEG unless the deployment sets `compress_images` false, or the session has a frame ring (see above). `deserialise()` decodes each frame to the uint8 array below. `docs/connect-your-model.md` carries the full key table and the JPEG envelope.
 
 ```json
 {
