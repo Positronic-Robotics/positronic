@@ -49,10 +49,12 @@ def round_trip(
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
-    Image preparation has its own span; the inference span covers only the server round trip.
+    Image preparation has its own span; the inference span covers only the server round trip. A session
+    with a frame ring sends its images raw through the ring and does not apply ``compress_images``.
     """
     with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
-        prepared = prepare_obs(obs, compress_images, jpeg_quality)
+        compress = compress_images and not session.sends_frames_through_ring
+        prepared = prepare_obs(obs, compress, jpeg_quality)
     with telemetry.span(telemetry_keys.SPAN_POLICY_INFER) as span:
         try:
             return session.infer(prepared)

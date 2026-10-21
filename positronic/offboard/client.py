@@ -1,10 +1,10 @@
 import logging
 import math
+import socket
 import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from enum import Enum
-from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -46,9 +46,9 @@ class InferenceSession:
     answer reconnects through it, once, and sends the observation again. ``ready_by`` is the
     ``time.monotonic()`` instant past which the status handshake waits for no further update.
 
-    ``uds`` is the Unix socket the session was dialled over, which says the server runs on this host.
-    A server that also declares a frame ring then gets every image through shared memory, and the
-    message carries a reference in place of each one.
+    ``dial_frame_channel`` is the wire's ``frame_channel_dialer``, where the wire has one. A server that
+    also declares a frame ring then gets every image through shared memory, and the message carries a
+    reference in place of each one.
     """
 
     # The timing block of the last decoded inference response; empty when the server sent none, and
@@ -65,7 +65,7 @@ class InferenceSession:
         *,
         ready_by: float = math.inf,
         reopen: Callable[[], 'InferenceSession'] | None = None,
-        uds: Path | None = None,
+        dial_frame_channel: Callable[[float], socket.socket] | None = None,
     ):
         self._conn = conn
         self._infer_timeout = infer_timeout
@@ -80,17 +80,18 @@ class InferenceSession:
         self._session_id = None if self._protocol is protocol.ProtocolVersion.V1 else ready[protocol.SESSION_ID]
         self._closed = False
         self._answered = False
-        self._frames = self._frame_writer(uds)
+        self._frames = self._frame_writer(dial_frame_channel)
 
-    def _frame_writer(self, uds: Path | None) -> frames.FrameWriter | None:
+    def _frame_writer(self, dial_channel: Callable[[float], socket.socket] | None) -> frames.FrameWriter | None:
         declared = self._metadata.get(frames.HANDSHAKE_KEY)
-        if uds is None or self._session_id is None or not declared or not frames.SUPPORTED:
+        if dial_channel is None or self._session_id is None or not declared or not frames.SUPPORTED:
             return None
-        channel = frames.channel_path(uds)
-        if not frames.fits_a_socket_address(channel):
-            logger.error('No frame ring: the companion socket path %r is too long to dial', str(channel))
-            return None
-        return frames.FrameWriter(channel, self._session_id)
+        return frames.FrameWriter(dial_channel, self._session_id)
+
+    @property
+    def sends_frames_through_ring(self) -> bool:
+        """True while this session sends its images raw through a frame ring, in place of the message."""
+        return self._frames is not None and self._frames.channel_answers
 
     def _handshake(self, ready_by: float, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -348,9 +349,14 @@ class InferenceClient:
         transport handler, and a connection may hold a reader thread until it is closed.
         """
         conn = self._wire.dial(self._address, self.headers, self.open_timeout)
-        uds = self._address.uds if isinstance(self._address, wire.UnixSocketAddress) else None
         try:
-            return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen, uds=uds)
+            return InferenceSession(
+                conn,
+                infer_timeout=self.infer_timeout,
+                ready_by=ready_by,
+                reopen=reopen,
+                dial_frame_channel=self._wire.frame_channel_dialer(self._address),
+            )
         except BaseException:
             conn.close()
             raise

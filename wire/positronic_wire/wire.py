@@ -8,7 +8,9 @@ spells whatever its library takes.
 
 import abc
 import dataclasses
-from collections.abc import Mapping
+import os
+import socket
+from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
 from typing import ClassVar, Generic, Self, TypeVar
@@ -77,6 +79,25 @@ class UnixSocketAddress(SessionAddress):
 
 
 AddressT = TypeVar('AddressT', bound=SessionAddress)
+
+
+# The suffix of a frame channel's socket, which sits beside the session socket it serves.
+FRAME_CHANNEL_SUFFIX = '.frames'
+# The longest path ``sockaddr_un`` carries, in bytes: ``sun_path`` is 108 on Linux, and one holds the NUL.
+MAX_SOCKET_PATH_BYTES = 107
+
+
+def frame_channel_path(uds: Path) -> Path | None:
+    """The frame channel's socket beside the session socket at ``uds``, or None where no socket address carries it.
+
+    A symlink at ``uds`` dials the socket it points to, and the server bound the channel beside that socket,
+    so the channel follows the link. A directory keeps the name given: a bind mount gives one directory two
+    names, so each end asks this of its own path, and the end that gets None has no frame channel.
+    """
+    while uds.is_symlink():
+        uds = uds.parent / uds.readlink()
+    channel = uds.with_name(uds.name + FRAME_CHANNEL_SUFFIX)
+    return channel if len(os.fsencode(channel)) <= MAX_SOCKET_PATH_BYTES else None
 
 
 # The largest frame a wire may carry. An observation is a stack of camera frames, and the gRPC default
@@ -158,6 +179,15 @@ class ClientWire(abc.ABC, Generic[AddressT]):
         ``SILENT`` for a port nothing answers on, ``FORBIDDEN`` for a credential the edge refused, ``FINAL`` for
         a refusal no retry reaches.
         """
+
+    def frame_channel_dialer(self, address: AddressT) -> Callable[[float], socket.socket] | None:
+        """How to reach the frame channel of the server at ``address``, or None where this wire has no frame channel.
+
+        A frame channel carries file descriptors, so a client on the server's host hands over shared memory in
+        place of image bytes. The function takes a timeout in seconds, opens a new socket on each call, and
+        raises ``OSError`` where no channel answers.
+        """
+        return None
 
 
 class ClientConnection(abc.ABC):

@@ -1,8 +1,8 @@
 """A shared-memory ring that carries an observation's frames to a server on the same host.
 
-The client creates the ring, seals it, and hands its descriptor over an ``AF_UNIX`` socket beside the
-session socket. Each inference writes the images into a slot and sends a reference for each, which
-the server reads through a mapping the seals let it neither write nor resize.
+The client seals the ring and hands its descriptor over the wire's frame channel, and each inference sends
+a reference in place of each image. The server reads a frame through a mapping, not a copy, so a frame stays
+valid for ``CALLS_A_FRAME_STAYS_VALID`` calls: a server that keeps it longer reads other pixels, with no error.
 """
 
 import fcntl
@@ -11,8 +11,7 @@ import mmap
 import os
 import socket
 import threading
-from collections.abc import Iterable, Mapping, Sequence
-from pathlib import Path
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -20,17 +19,12 @@ from positronic_model_server import serialization
 
 logger = logging.getLogger(__name__)
 
-# The longest path ``sockaddr_un`` carries, in bytes: ``sun_path`` is 108 on Linux, and one holds the NUL.
-MAX_SOCKET_PATH = 107
-
-# The suffix of the descriptor socket, which each side derives from its own session socket path.
-SOCKET_SUFFIX = '.frames'
-
 # The ready handshake's metadata key, true when the server takes this session's images through a ring.
 HANDSHAKE_KEY = 'frame_ring'
 
-# Slots per ring, so the writer never takes a slot the server may still read.
-SLOTS = 4
+# A frame stays valid for the call that delivers it and the calls after it, up to this count. The ring has one
+# slot per call, so the call after the last of them writes the frame's slot again.
+CALLS_A_FRAME_STAYS_VALID = 4
 
 # The slot header: two sequence numbers, then padding that puts every payload on a 64-byte boundary.
 _HEADER_BYTES = 64
@@ -55,28 +49,6 @@ _ACK = b'\x01'
 
 class TornFrame(RuntimeError):
     """The slot a reference names holds another write, so the pixels under it belong elsewhere."""
-
-
-def channel_path(socket_path: Path) -> Path:
-    """The descriptor socket that belongs to the session socket at ``socket_path``.
-
-    A symlink at ``socket_path`` dials the socket it points to, and the server bound the channel beside
-    that socket, so the channel follows the link. A directory keeps the name given: a bind mount gives
-    one directory two names, and each end reaches the channel through its own.
-    """
-    while socket_path.is_symlink():
-        socket_path = socket_path.parent / socket_path.readlink()
-    return socket_path.with_name(socket_path.name + SOCKET_SUFFIX)
-
-
-def fits_a_socket_address(channel: Path) -> bool:
-    """Whether a socket address carries ``channel``.
-
-    Each end derives the companion path from the session socket path it holds itself, and a bind
-    mount can give the two ends names of different lengths for one directory. So each end asks this
-    of its own path, and the one that cannot carry it takes no ring.
-    """
-    return len(os.fsencode(channel)) <= MAX_SOCKET_PATH
 
 
 def _aligned(nbytes: int) -> int:
@@ -121,7 +93,7 @@ class FrameRing:
     The constructor maps it writable before it seals it, which is the only order the seals allow.
     """
 
-    def __init__(self, slot_bytes: int, slots: int = SLOTS):
+    def __init__(self, slot_bytes: int, slots: int = CALLS_A_FRAME_STAYS_VALID):
         self.slots = slots
         self.slot_bytes = slot_bytes
         self._stride = _HEADER_BYTES + _aligned(slot_bytes)
@@ -189,15 +161,21 @@ HANDOVER_TIMEOUT_SEC = 10.0
 class FrameWriter:
     """The client's half: one ring per session, handed to the server and grown when a frame outgrows it.
 
-    ``pack`` returns the observation with a reference in place of every image. Where no channel answers
-    at ``channel``, the session takes no ring, and ``pack`` returns every image whole from then on.
+    ``pack`` returns the observation with a reference in place of every image. ``dial_channel`` is the
+    wire's ``frame_channel_dialer``. Where no channel answers, the session takes no ring, and ``pack``
+    returns every image whole from then on.
     """
 
-    def __init__(self, channel: Path, session_id: str):
-        self._channel = channel
+    def __init__(self, dial_channel: Callable[[float], socket.socket], session_id: str):
+        self._dial_channel = dial_channel
         self._session_id = session_id
         self._ring: FrameRing | None = None
         self._channel_answers = True
+
+    @property
+    def channel_answers(self) -> bool:
+        """False once a dial found no frame channel, after which every image stays in the message."""
+        return self._channel_answers
 
     def pack(self, obs: Mapping[str, Any]) -> dict[str, Any]:
         if not self._channel_answers:
@@ -218,7 +196,7 @@ class FrameWriter:
         """A ring with slots of at least ``slot_bytes`` the server has mapped, or None where no channel answers."""
         if self._ring is not None and self._ring.slot_bytes >= slot_bytes:
             return self._ring
-        sock = self._dial_channel()
+        sock = self._dial()
         if sock is None:
             return None
         ring = FrameRing(slot_bytes)
@@ -234,29 +212,24 @@ class FrameWriter:
         self._ring = ring
         return ring
 
-    def _dial_channel(self) -> socket.socket | None:
-        """A socket connected to the channel, or None where no channel answers at ``channel``.
+    def _dial(self) -> socket.socket | None:
+        """A socket connected to the channel, or None where no channel answers.
 
-        Each end derives the channel from its own name for the session socket. A hard link to the
-        socket, or a bind mount of the socket file alone, dials the session and reaches no channel.
+        A hard link to the session socket, or a bind mount of the socket file alone, reaches no channel.
         """
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-        sock.settimeout(HANDOVER_TIMEOUT_SEC)
         try:
-            sock.connect(str(self._channel))
+            return self._dial_channel(HANDOVER_TIMEOUT_SEC)
         # The ring is optional: the session sends whole images, as on a server that declares none.
         except OSError as unreachable:
-            sock.close()
             self._channel_answers = False
-            logger.error('No frame ring: no channel answers at %r (%s)', str(self._channel), unreachable)
+            logger.error('No frame ring: %s', unreachable)
             return None
-        return sock
 
     def _hand_over(self, sock: socket.socket, ring: FrameRing) -> None:
         header = serialization.serialise({_SESSION: self._session_id, _SLOTS: ring.slots, _SLOT_BYTES: ring.slot_bytes})
         socket.send_fds(sock, [header], [ring.fd])
         if sock.recv(len(_ACK)) != _ACK:
-            raise RuntimeError(f'The server at {self._channel} did not map the frame ring it was handed')
+            raise RuntimeError('The server did not map the frame ring it was handed')
 
     def close(self) -> None:
         if self._ring is not None:
@@ -293,7 +266,11 @@ class MappedRing:
         self._map = mmap.mmap(fd, self._stride * slots, mmap.MAP_SHARED, mmap.PROT_READ)
 
     def array(self, reference: Mapping[bytes, Any]) -> np.ndarray:
-        """A read-only view of the image ``reference`` names, over the ring's own pages."""
+        """A read-only view of the image ``reference`` names, over the ring's own pages.
+
+        The view is valid for ``CALLS_A_FRAME_STAYS_VALID`` calls. After that the client writes the slot
+        again, and the view shows the new frame with no error. Copy the array to keep it longer.
+        """
         slot, seq, offset = reference[_SLOT], reference[_SEQ], reference[_OFFSET]
         dtype = np.dtype(reference[_DTYPE])
         # The peer names the dtype, and an object dtype reads the ring's bytes as pointers into this
@@ -320,11 +297,10 @@ class FrameChannel:
     """The socket that carries ring descriptors to this server, and the rings each session holds.
 
     A thread accepts each handover, maps the ring read-only and answers, under the session id the
-    server put in its ready handshake. The caller claims ``path`` and hands the socket to ``start``.
+    server put in its ready handshake. The caller binds the socket, with the wire's ``bind_frame_channel``.
     """
 
-    def __init__(self, path: Path):
-        self.path = path
+    def __init__(self):
         self._rings: dict[str, MappedRing | None] = {}
         self._lock = threading.Lock()
         self._socket: socket.socket | None = None
@@ -332,12 +308,12 @@ class FrameChannel:
         self._closing = False
 
     def start(self, sock: socket.socket) -> None:
-        """Serve handovers on ``sock``, which the caller already bound to ``path`` and listened on."""
+        """Serve handovers on ``sock``, which the caller already bound and listened on."""
         sock.settimeout(_ACCEPT_POLL_SEC)
         self._socket = sock
         self._thread = threading.Thread(target=self._accept_forever, args=(sock,), name='frame-channel', daemon=True)
         self._thread.start()
-        logger.info('Frame ring channel listening on %s', self.path)
+        logger.info('Frame ring channel listening on %s', sock.getsockname())
 
     def open_session(self, session_id: str) -> None:
         with self._lock:
@@ -348,7 +324,11 @@ class FrameChannel:
             self._rings.pop(session_id, None)
 
     def resolve(self, session_id: str, obs: Any) -> Any:
-        """``obs`` with a read-only view in place of every frame reference it carries."""
+        """``obs`` with a read-only view in place of every frame reference it carries.
+
+        Each view is valid for ``CALLS_A_FRAME_STAYS_VALID`` calls, the call that delivers it included. A
+        server that keeps a frame longer reads the pixels of a later call, with no error, so it copies the frame.
+        """
         if isinstance(obs, Mapping):
             if _RING in obs:
                 return self._ring(session_id).array(obs)

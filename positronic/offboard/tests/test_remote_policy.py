@@ -106,6 +106,9 @@ class _FakeUnixWire(wire.ClientWire[wire.UnixSocketAddress]):
     def dial(self, address: wire.UnixSocketAddress, headers: Mapping[str, str] | None, open_timeout: float):
         return self._conns.pop(0)
 
+    def frame_channel_dialer(self, address: wire.UnixSocketAddress):
+        return websocket.WebsocketUnixClientWire().frame_channel_dialer(address)
+
 
 def _address(host: str, port: int, query: str = '') -> wire.HostPortAddress:
     """Where a network wire opens a session."""
@@ -119,6 +122,7 @@ def _mock_session(metadata=None):
     session = MagicMock()
     session.metadata = metadata or {}
     session.infer.return_value = {'action': 'test'}
+    session.sends_frames_through_ring = False
     return session
 
 
@@ -184,7 +188,7 @@ class TestInferenceClientHeaders:
         assert fake.dials == [(_ADDRESS, headers, DEFAULT_OPEN_TIMEOUT)]
         assert mock_session_cls.call_args.args[0] is conn
         assert mock_session_cls.call_args.kwargs['infer_timeout'] == DEFAULT_INFER_TIMEOUT
-        assert mock_session_cls.call_args.kwargs['uds'] is None, 'a network address names no socket'
+        assert mock_session_cls.call_args.kwargs['dial_frame_channel'] is None, 'a network wire has no frame channel'
 
     def test_new_session_without_headers_dials_with_none(self):
         fake = _FakeWire(MagicMock())
@@ -457,8 +461,10 @@ class TestADroppedConnectionReconnects:
     @pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
     def test_a_reconnected_session_sends_its_frames_through_a_ring_of_its_own(self, socket_path):
         """A ring is handed over under one session ID, so the new session hands over a ring of its own."""
-        channel = frame_ring.FrameChannel(frame_ring.channel_path(pathlib.Path(socket_path)))
-        channel.start(websocket_wire.claim_socket_path(channel.path, socket.SOCK_SEQPACKET))
+        channel_path = wire.frame_channel_path(pathlib.Path(socket_path))
+        assert channel_path is not None
+        channel = frame_ring.FrameChannel()
+        channel.start(websocket_wire.claim_socket_path(channel_path, socket.SOCK_SEQPACKET))
         channel.open_session('first')
         channel.open_session('second')
         meta = {'model_name': 'test', frame_ring.HANDSHAKE_KEY: True}
@@ -477,6 +483,20 @@ class TestADroppedConnectionReconnects:
                 session.close()
         finally:
             channel.close()
+
+    @pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+    def test_a_wire_with_no_frame_channel_keeps_the_frames_in_the_message(self):
+        """A server that declares a ring gets whole images from a client whose wire has no frame channel."""
+        meta = {'model_name': 'test', frame_ring.HANDSHAKE_KEY: True}
+        conn = _connection(_ready('first', meta), _answer({'action_data': [1, 2, 3]}))
+        image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+
+        session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
+        assert session.infer({'image': image}) == {'action_data': [1, 2, 3]}
+
+        assert not session.sends_frames_through_ring
+        (sent,) = _observations_sent(conn)
+        np.testing.assert_array_equal(sent['image'], image)
 
     def test_a_reconnect_retries_a_refused_connect(self):
         """A restarted backend refuses connects for a moment, and the reconnect waits it out."""

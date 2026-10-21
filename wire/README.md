@@ -9,7 +9,7 @@ install `grpcio` and `websockets` independently.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire[websocket,grpc]==0.12.0"
+uv add "positronic-wire[websocket,grpc]==0.13.0"
 uv add "positronic-wire[websocket,grpc] @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -38,7 +38,7 @@ client end alone.
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, the frame channel's `FRAME_CHANNEL_SUFFIX`, `MAX_SOCKET_PATH_BYTES` and `frame_channel_path(uds)`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, `refusal_of(raised)`, which reads a failed handshake as a `Refusal`, and `connected_socket(host, port, timeout)`, a TCP connect whose timeout covers the name lookup and every address |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
@@ -84,6 +84,9 @@ leaves out on the members that carry one.
   otherwise, in the terms `probe` uses: a 200 that does not carry the keepalive answer is `FINAL`.
   `roboarena` always raises `KeepaliveUnsupported`, and dials nothing.
 
+- `frame_channel_dialer(address)` — how to reach the server's frame channel, or `None` where the wire
+  has none. The section below describes it.
+
 `registry.client_wire(name)` selects an installed transport. `CLIENT_WIRES` includes only families
 whose libraries are installed; requesting an unavailable transport raises with installation guidance.
 Use `[websocket]` for WebSocket and Roboarena, `[grpc]` for gRPC, or `[websocket,grpc]` for all wires.
@@ -122,6 +125,28 @@ in the terms the websocket members already read.
 Typing carries the split: a wire handed the other wire's address is a type error at the call site.
 `registry.client_wire(name)` answers by name and cannot, so `InferenceClient` checks `ADDRESS` once,
 before it dials, and names both in the refusal.
+
+## The frame channel
+
+A frame channel is a socket beside a session that carries file descriptors. A client on the server's
+host hands the server shared memory over it, in place of image bytes. Each end asks its wire for it, so
+the session code on both ends holds no transport detail:
+
+- `ClientWire.frame_channel_dialer(address) -> Callable[[float], socket.socket] | None` — a function
+  that takes a timeout in seconds and opens a new socket to the channel on each call. It raises
+  `OSError` where no channel answers.
+- `server_wire.Wire.bind_frame_channel() -> socket.socket | None`, in `positronic_model_server` — a
+  listening socket for the channel, after `start`. The caller serves and closes it.
+
+Both return `None` on a wire with no frame channel, which is the default. Only the websocket wire on a
+Unix socket has one: `websocket_unix` on the client, and `WebsocketWire` on a `ServedUnixSocket` on the
+server. Its channel is a `SOCK_SEQPACKET` socket at `frame_channel_path(uds)`: the session socket's path
+plus `FRAME_CHANNEL_SUFFIX`, after a symlink at that path. Each end builds the path from the socket path
+it holds. A path longer than `MAX_SOCKET_PATH_BYTES` gives that end no frame channel, and it logs why.
+
+A session that takes a frame ring sends its images raw through it and does not apply `compress_images`.
+So `compress_images` is not recommended on a server that takes frame rings over `websocket_unix`.
+`positronic/offboard/README.md` states the ring's contract.
 
 ## Whether a policy server is up
 

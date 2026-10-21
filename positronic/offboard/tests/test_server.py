@@ -38,6 +38,7 @@ from positronic.offboard.tests.conftest import Served
 from positronic.policy import Codec
 from positronic.policy import keys as policy_keys
 from positronic.policy.processors import ChunkedSchedule, TemporalStack
+from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
 
 # Short enough for a quick test, long enough that a loaded box reaches the first poll.
@@ -1172,6 +1173,29 @@ def test_a_ring_hands_the_server_a_view_it_cannot_write(unix_stub_server):
     assert not model.call_args.args[0]['image.left'].flags.writeable
 
 
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_ring_session_sends_raw_frames_through_the_ring_when_the_server_asks_for_compressed_images(
+    start_server, socket_path, make_mock_model, monkeypatch
+):
+    model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    deployment = PolicyDeployment(ChunkedSchedule(fps=10), compress_images=True)
+    served = start_server(model, deployment, uds=socket_path)
+    image = _frame()
+    sent = _messages_the_client_sends(monkeypatch)
+
+    session = InferenceClient(*served.unix()).new_session()
+    try:
+        assert session.metadata[policy_keys.COMPRESS_IMAGES] is True
+        round_trip(session, {'image.left': image}, compress_images=True)
+        assert session.sends_frames_through_ring
+    finally:
+        session.close()
+
+    # JPEG loses pixels, so an exact match says the frame crossed raw.
+    np.testing.assert_array_equal(model.call_args.args[0]['image.left'], image)
+    assert max(len(message) for message in sent) < image.nbytes // 100
+
+
 def test_a_unix_session_with_the_ring_off_carries_its_frames_in_the_message(
     start_server, socket_path, make_mock_model, monkeypatch
 ):
@@ -1206,7 +1230,7 @@ def test_a_server_on_a_port_declares_no_frame_ring(stub_server):
 def test_a_companion_path_too_long_to_bind_declares_no_frame_ring(start_server, socket_path, make_mock_model):
     model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     directory = pathlib.Path(socket_path).parent
-    longest = str(directory / ('p' * (frame_ring.MAX_SOCKET_PATH - len(str(directory)) - 1)))
+    longest = str(directory / ('p' * (wire.MAX_SOCKET_PATH_BYTES - len(str(directory)) - 1)))
 
     served = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), uds=longest)
 
@@ -1220,7 +1244,7 @@ def test_a_companion_path_too_long_to_dial_carries_the_frames_in_the_message(
     served, model = unix_stub_server
     directory = pathlib.Path(socket_path).parent
     socket_name = pathlib.Path(socket_path).name
-    alias = directory / ('a' * (frame_ring.MAX_SOCKET_PATH - len(str(directory)) - len(socket_name) - 2))
+    alias = directory / ('a' * (wire.MAX_SOCKET_PATH_BYTES - len(str(directory)) - len(socket_name) - 2))
     # A bind mount can give one directory two names of different lengths, and a directory symlink gives the
     # test the same asymmetry: the client dials the socket, and the companion path is one suffix too long.
     alias.symlink_to(directory, target_is_directory=True)
