@@ -139,6 +139,7 @@ WORKOS_DEVICE = {
     'device_code': 'device-1',
     'user_code': 'BCDF-GHJK',
     'verification_uri': 'https://a.authkit.app/device',
+    'verification_uri_complete': 'https://a.authkit.app/device?user_code=BCDF-GHJK',
     'interval': 0.001,
     'expires_in': 60,
 }
@@ -176,7 +177,7 @@ def test_register_without_a_credential_signs_in_through_the_provider_the_platfor
     saved = read_config(config_dir(os.environ))
     assert saved is not None and saved.api_key == 'pk_new'
     captured = capsys.readouterr()
-    assert 'BCDF-GHJK' in captured.err
+    assert WORKOS_DEVICE['verification_uri_complete'] in captured.err and 'expires in 1 minute' in captured.err
     assert 'refresh' not in captured.out + captured.err
 
 

@@ -36,7 +36,9 @@ Follow this guide step by step:
 https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competition.md
 
 1. Install the commands and register me. Ask me for a team name first.
-   Show me the sign-in code and link, and wait while I approve it.
+   Run the register command in the background, and show me its
+   sign-in line at once. The link expires in 5 minutes.
+   Wait while I sign in.
    The command saves my API key on this computer. Never print the key.
 2. Enter me in the competition. Show me what becomes public and
    where to read how my data is used, and ask whether to enter.
@@ -58,10 +60,11 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later. Run `uv --version` to check. To update
 uv, run `uv self update`, or use the tool that installed uv.
 
-This command installs the released `positronic` package. It uses about 2.5 GB of disk space.
+This command installs `positronic` from the `main` branch of its repository. It uses about 2.5 GB of disk
+space.
 
 ```bash
-uv tool install --managed-python --python 3.13 'positronic>=0.3.1'
+uv tool install --managed-python --python 3.13 'positronic @ git+https://github.com/Positronic-Robotics/positronic'
 ```
 
 `--managed-python --python 3.13` makes uv install Python 3.13 and use it. The Python of Ubuntu cannot
@@ -71,9 +74,12 @@ To update the commands later, run `uv tool upgrade positronic`.
 
 ### Register
 
-Choose a team name. The command prints a code and a link. Open the link, sign in, and enter the code.
-The sign-in page shows the ways to sign in that the platform takes. The command saves your API key on
-this computer, and prints the path of the file. The other commands read the key from that file.
+Choose a team name. The command prints a sign-in link and a code, and waits while you sign in. The link
+expires in 5 minutes. If it expires, run the command again. Open the link and sign in. The link carries the
+code, so the page shows it: make sure that it is the code that the command printed. If the page asks for
+the code, enter it. The sign-in page shows the ways to sign in that the platform takes. The command saves
+your API key on this computer, and prints the path of the file. The other commands read the key from that
+file.
 
 ```bash
 positronic account register --alias="<team name>"
