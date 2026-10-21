@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
+from enum import Enum
 from unittest.mock import MagicMock, patch
 
 import mujoco as mj
@@ -616,24 +617,36 @@ _RING_META = {'model_name': 'test', frame_ring.HANDSHAKE_KEY: True}
 _NO_RING_META = {'model_name': 'test'}
 
 
+class _RingCase(Enum):
+    """Each way a session reaches its transport, and so decides whether its images take the ring."""
+
+    NO_FRAME_CHANNEL_ON_THE_WIRE = 'a wire with no frame channel'
+    SERVER_DECLARES_NO_RING = 'a server that declares no ring'
+    CHANNEL_SILENT_AT_OPEN = 'a channel that does not answer at open'
+    RING = 'a ring'
+    CHANNEL_STOPS_BEFORE_THE_RING_GROWS = 'a channel that stops answering before the ring grows'
+    RECONNECT_LOSES_THE_RING = 'a reconnect to a session whose channel does not answer'
+    RECONNECT_GAINS_A_RING = 'a reconnect from a session with no ring to one with a ring'
+
+
 def _ring_case(
-    case: str, channel: _Channel, unix: wire.UnixSocketAddress
+    case: _RingCase, channel: _Channel, unix: wire.UnixSocketAddress
 ) -> tuple[Callable[[], InferenceSession], bool]:
     """How a case opens its session, and whether its round trip raises. ``channel`` is stopped when this is called."""
     answer = _answer({'action_data': [1]})
-    if case == 'a wire with no frame channel':
+    if case is _RingCase.NO_FRAME_CHANNEL_ON_THE_WIRE:
         channel.start('first')
         return InferenceClient(_FakeWire(_connection(_ready('first', _RING_META), answer)), _ADDRESS).new_session, False
-    if case == 'a server that declares no ring':
+    if case is _RingCase.SERVER_DECLARES_NO_RING:
         channel.start('first')
         conn = _connection(_ready('first', _NO_RING_META), answer)
         return InferenceClient(_FakeUnixWire(conn), unix).new_session, False
-    if case == 'a channel that does not answer at open':
+    if case is _RingCase.CHANNEL_SILENT_AT_OPEN:
         return InferenceClient(_FakeUnixWire(_connection(_ready('first', _RING_META), answer)), unix).new_session, False
-    if case == 'a ring':
+    if case is _RingCase.RING:
         channel.start('first')
         return InferenceClient(_FakeUnixWire(_connection(_ready('first', _RING_META), answer)), unix).new_session, False
-    if case == 'a channel that stops answering before the ring grows':
+    if case is _RingCase.CHANNEL_STOPS_BEFORE_THE_RING_GROWS:
         channel.start('first')
         client = InferenceClient(_FakeUnixWire(_connection(_ready('first', _RING_META), answer)), unix)
 
@@ -643,14 +656,14 @@ def _ring_case(
             return session
 
         return open_then_stop, True
-    if case == 'a reconnect to a session whose channel does not answer':
+    if case is _RingCase.RECONNECT_LOSES_THE_RING:
         channel.start('first', 'second')
         dropped = _connection(_ready('first', _RING_META), wire.PeerDisconnected('dropped'))
         dropped.send.side_effect = lambda _message: channel.stop()
         end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
         reopened = _connection(_ready('second', _RING_META), end_ack)
         return InferenceClient(_FakeUnixWire(dropped, reopened), unix).new_session, True
-    if case == 'a reconnect from a session with no ring to one with a ring':
+    if case is _RingCase.RECONNECT_GAINS_A_RING:
         dropped = _connection(_ready('first', _RING_META), wire.PeerDisconnected('dropped'))
         dropped.send.side_effect = lambda _message: channel.start('second')
         reopened = _connection(_ready('second', _RING_META), answer)
@@ -659,18 +672,7 @@ def _ring_case(
 
 
 @pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
-@pytest.mark.parametrize(
-    'case',
-    [
-        'a wire with no frame channel',
-        'a server that declares no ring',
-        'a channel that does not answer at open',
-        'a ring',
-        'a channel that stops answering before the ring grows',
-        'a reconnect to a session whose channel does not answer',
-        'a reconnect from a session with no ring to one with a ring',
-    ],
-)
+@pytest.mark.parametrize('case', list(_RingCase), ids=lambda case: case.value)
 def test_compression_is_skipped_exactly_for_images_that_go_through_the_ring(case, socket_path, monkeypatch):
     """Every image a session sends is a ring reference or a JPEG, never a raw frame in the message."""
     encode = remote.encode_jpeg
