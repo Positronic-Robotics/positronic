@@ -82,7 +82,8 @@ Conversion for training picks its own keys from the recording.
 1. In terminal 1, start the service. For an iPhone:
 
    ```bash
-   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop --operator_position=.BACK
+   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop \
+     --operator_position=@positronic.teleop.clutch.OperatorPosition.BACK
    ```
 
 2. In terminal 2, start a run of 20 trials:
@@ -103,7 +104,7 @@ Conversion for training picks its own keys from the recording.
      on by the trial count (1, 21, 41, ...), or leave out `--eval.seed` to get a random scene for each trial. Use a new
      `--output_dir` for each session too.
 
-3. On the phone, open the page, tap **Enter AR**, and allow the camera and the motion sensors. Hold the phone upright.
+3. On the phone, open the page, tap **ENTER VR**, and allow the camera and the motion sensors. Hold the phone upright.
 4. For each trial:
    1. When the phase line says "Human trial: tap Ready", hold the phone in a working pose and tap
       **Ready**.
@@ -134,14 +135,16 @@ uv run positronic eval run \
   the config selects.
 - `teleop_molmo` shows `image.exterior`, `image.exterior_2` and `image.wrist`. The eval puts each shoulder camera in
   one exterior slot at random, so the person sees both.
-- Start the service with `--operator_position=.BACK` if the arm moves the wrong way.
+- Start the service with `--operator_position=@positronic.teleop.clutch.OperatorPosition.BACK` if the arm moves the
+  wrong way.
 
 Start `positronic teleop` first, as in MuJoCo.
 
 ## Session parameters
 
-The service CLI sets the defaults: `--operator_position` (`.FRONT`, `.BACK`, or `None` for UMI mode, where control is
-always on and the hand pose is the robot pose), `--cameras` (a list, empty by default) and `--image_fps`.
+The service CLI sets the defaults: `--operator_position` (a member of `positronic.teleop.clutch.OperatorPosition`,
+for example `@positronic.teleop.clutch.OperatorPosition.BACK`, or `None` for UMI mode, where control is always on and
+the hand pose is the robot pose), `--cameras` (a list, empty by default) and `--image_fps`.
 A run sets its own in the query of its address, each value a JSON literal, for example
 `--policy.address.query='operator_position="BACK"'`. `positronic.teleop.protocol.session_query` builds such a query:
 `teleop_collect` and `teleop_molmo` use it. The episode records the values in `inference.policy.server.effective_params`.
