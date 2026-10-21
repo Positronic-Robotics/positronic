@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import errno
 import json
+import logging
 import os
 import socket
 import stat
@@ -19,6 +20,8 @@ from positronic_wire.wire import KEEPALIVE_PATH, SESSION_PATH
 from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent, HTTPScope, Scope, WebSocketScope
 
 from . import keys, server_wire
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -332,6 +335,20 @@ class WebsocketWire(server_wire.Wire):
             timeout_graceful_shutdown=self.STOP_GRACE_SEC,
         )
         self._server = uvicorn.Server(config)
+
+    def bind_frame_channel(self) -> socket.socket | None:
+        """The frame channel at ``wire.frame_channel_path``, beside the Unix socket this wire serves on.
+
+        A wire on a port has none.
+        """
+        served = self.served_address
+        if not isinstance(served, ServedUnixSocket):
+            return None
+        channel = wire.frame_channel_path(served.uds)
+        if channel is None:
+            logger.error('No frame channel: the path beside %r is too long for a socket address', str(served.uds))
+            return None
+        return claim_socket_path(channel, socket.SOCK_SEQPACKET)
 
     async def serve(self) -> None:
         assert self._server is not None and self._sockets, 'The websocket wire has not started'
