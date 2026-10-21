@@ -7,7 +7,7 @@ import re
 import socket
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from unittest.mock import MagicMock, patch
 
@@ -40,6 +40,7 @@ from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
+from positronic.offboard import client as offboard_client
 from positronic.offboard import frame_ring
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
@@ -51,6 +52,7 @@ from positronic.offboard.client import (
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
+from positronic.policy import remote
 from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, PolicyCommandError, ResizeMode, TransformImages
 from positronic.policy.executor import Executor, WaitStatus
@@ -587,6 +589,130 @@ class TestWaitForServer:
 
         assert refused.value.refusal is wire.Refusal.FINAL
         assert fake.probes == 1
+
+
+class _Channel:
+    """The server's frame channel beside ``socket_path``, which a case starts and stops at will."""
+
+    def __init__(self, socket_path: str):
+        path = wire.frame_channel_path(pathlib.Path(socket_path))
+        assert path is not None
+        self._path = path
+        self._channel: frame_ring.FrameChannel | None = None
+
+    def start(self, *session_ids: str) -> None:
+        self._channel = frame_ring.FrameChannel()
+        self._channel.start(websocket_wire.claim_socket_path(self._path, socket.SOCK_SEQPACKET))
+        for session_id in session_ids:
+            self._channel.open_session(session_id)
+
+    def stop(self) -> None:
+        if self._channel is not None:
+            self._channel.close()
+            self._channel = None
+
+
+_RING_META = {'model_name': 'test', frame_ring.HANDSHAKE_KEY: True}
+_NO_RING_META = {'model_name': 'test'}
+
+
+def _ring_case(
+    case: str, channel: _Channel, unix: wire.UnixSocketAddress
+) -> tuple[Callable[[], InferenceSession], bool]:
+    """How a case opens its session, and whether its round trip raises. ``channel`` is stopped when this is called."""
+    answer = _answer({'action_data': [1]})
+    if case == 'a wire with no frame channel':
+        channel.start('first')
+        return InferenceClient(_FakeWire(_connection(_ready('first', _RING_META), answer)), _ADDRESS).new_session, False
+    if case == 'a server that declares no ring':
+        channel.start('first')
+        conn = _connection(_ready('first', _NO_RING_META), answer)
+        return InferenceClient(_FakeUnixWire(conn), unix).new_session, False
+    if case == 'a channel that does not answer at open':
+        return InferenceClient(_FakeUnixWire(_connection(_ready('first', _RING_META), answer)), unix).new_session, False
+    if case == 'a ring':
+        channel.start('first')
+        return InferenceClient(_FakeUnixWire(_connection(_ready('first', _RING_META), answer)), unix).new_session, False
+    if case == 'a channel that stops answering before the ring grows':
+        channel.start('first')
+        client = InferenceClient(_FakeUnixWire(_connection(_ready('first', _RING_META), answer)), unix)
+
+        def open_then_stop() -> InferenceSession:
+            session = client.new_session()
+            channel.stop()
+            return session
+
+        return open_then_stop, True
+    if case == 'a reconnect to a session whose channel does not answer':
+        channel.start('first', 'second')
+        dropped = _connection(_ready('first', _RING_META), wire.PeerDisconnected('dropped'))
+        dropped.send.side_effect = lambda _message: channel.stop()
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        reopened = _connection(_ready('second', _RING_META), end_ack)
+        return InferenceClient(_FakeUnixWire(dropped, reopened), unix).new_session, True
+    if case == 'a reconnect from a session with no ring to one with a ring':
+        dropped = _connection(_ready('first', _RING_META), wire.PeerDisconnected('dropped'))
+        dropped.send.side_effect = lambda _message: channel.start('second')
+        reopened = _connection(_ready('second', _RING_META), answer)
+        return InferenceClient(_FakeUnixWire(dropped, reopened), unix).new_session, False
+    raise AssertionError(case)
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+@pytest.mark.parametrize(
+    'case',
+    [
+        'a wire with no frame channel',
+        'a server that declares no ring',
+        'a channel that does not answer at open',
+        'a ring',
+        'a channel that stops answering before the ring grows',
+        'a reconnect to a session whose channel does not answer',
+        'a reconnect from a session with no ring to one with a ring',
+    ],
+)
+def test_compression_is_skipped_exactly_for_images_that_go_through_the_ring(case, socket_path, monkeypatch):
+    """Every image a session sends is a ring reference or a JPEG, never a raw frame in the message."""
+    encode = remote.encode_jpeg
+    encoded: list[object] = []
+
+    def record_encode(image, quality):
+        encoded.append(encode(image, quality))
+        return encoded[-1]
+
+    sent: list = []
+    serialise = offboard_client.serialise
+
+    def record_send(request):
+        if isinstance(request, dict) and protocol.OBSERVATION in request:
+            sent.append(request[protocol.OBSERVATION]['image'])
+        return serialise(request)
+
+    monkeypatch.setattr(remote, 'encode_jpeg', record_encode)
+    monkeypatch.setattr(offboard_client, 'serialise', record_send)
+    channel = _Channel(socket_path)
+    unix = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.SESSION_PATH, '')
+    image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+    try:
+        open_session, raises = _ring_case(case, channel, unix)
+        session = open_session()
+        try:
+            if raises:
+                with pytest.raises((OSError, wire.PeerDisconnected)):
+                    round_trip(session, {'image': image}, compress_images=True)
+            else:
+                round_trip(session, {'image': image}, compress_images=True)
+        finally:
+            with suppress(Exception):
+                session.close()
+    finally:
+        channel.stop()
+
+    assert sent or raises
+    for value in sent:
+        assert not isinstance(value, np.ndarray), 'a raw frame went into the message'
+        through_ring = isinstance(value, dict) and frame_ring._RING in value
+        assert through_ring is not any(value == jpeg for jpeg in encoded), 'a ring frame was compressed, or the reverse'
 
 
 def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():

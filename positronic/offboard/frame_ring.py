@@ -161,77 +161,62 @@ HANDOVER_TIMEOUT_SEC = 10.0
 class FrameWriter:
     """The client's half: one ring per session, handed to the server and grown when a frame outgrows it.
 
-    ``pack`` returns the observation with a reference in place of every image. ``dial_channel`` is the
-    wire's ``frame_channel_dialer``. Where no channel answers, the session takes no ring, and ``pack``
-    returns every image whole from then on.
+    ``open`` hands the server a ring with empty slots, or returns None where no channel answers. ``pack``
+    puts every image into the ring and returns the observation with a reference in place of each. A channel
+    that stops answering raises, so the images of a session with a ring never move to the message.
     """
 
     def __init__(self, dial_channel: Callable[[float], socket.socket], session_id: str):
         self._dial_channel = dial_channel
         self._session_id = session_id
         self._ring: FrameRing | None = None
-        self._channel_answers = True
 
-    @property
-    def channel_answers(self) -> bool:
-        """False once a dial found no frame channel, after which every image stays in the message."""
-        return self._channel_answers
+    @classmethod
+    def open(cls, dial_channel: Callable[[float], socket.socket], session_id: str) -> 'FrameWriter | None':
+        """A writer whose ring the server has mapped, or None where no channel answers at ``dial_channel``.
 
-    def hand_over_empty_ring(self) -> bool:
-        """Hand the server a ring with empty slots, and return whether the channel answered.
-
-        A session calls this when it opens, so it knows from its first call whether its images take the ring.
-        The first image grows the ring to its size.
+        A hard link to the session socket, or a bind mount of the socket file alone, reaches no channel.
         """
-        return self._ring_for(0) is not None
+        try:
+            sock = dial_channel(HANDOVER_TIMEOUT_SEC)
+        # The ring is optional: the session sends whole images, as on a server that declares none.
+        except OSError as unreachable:
+            logger.error('No frame ring: %s', unreachable)
+            return None
+        writer = cls(dial_channel, session_id)
+        writer._hand_over_new_ring(sock, 0)
+        return writer
 
     def pack(self, obs: Mapping[str, Any]) -> dict[str, Any]:
-        if not self._channel_answers:
-            return dict(obs)
         found: list[tuple[dict[bytes, Any], np.ndarray]] = []
         packed = _detach_images(obs, found)
         if not found:
             return packed
         arrays = [array for _reference, array in found]
         ring = self._ring_for(sum(_aligned(array.nbytes) for array in arrays))
-        if ring is None:
-            return dict(obs)
         for (reference, _array), written in zip(found, ring.write(arrays), strict=True):
             reference.update(written)
         return packed
 
-    def _ring_for(self, slot_bytes: int) -> FrameRing | None:
-        """A ring with slots of at least ``slot_bytes`` the server has mapped, or None where no channel answers."""
+    def _ring_for(self, slot_bytes: int) -> FrameRing:
+        """A ring with slots of at least ``slot_bytes`` the server has mapped. A dial that fails raises."""
         if self._ring is not None and self._ring.slot_bytes >= slot_bytes:
             return self._ring
-        sock = self._dial()
-        if sock is None:
-            return None
-        ring = FrameRing(slot_bytes)
-        try:
-            with sock:
+        return self._hand_over_new_ring(self._dial_channel(HANDOVER_TIMEOUT_SEC), slot_bytes)
+
+    def _hand_over_new_ring(self, sock: socket.socket, slot_bytes: int) -> FrameRing:
+        with sock:
+            ring = FrameRing(slot_bytes)
+            try:
                 self._hand_over(sock, ring)
-        except Exception:
-            ring.close()
-            raise
+            except BaseException:
+                ring.close()
+                raise
         if self._ring is not None:
             # A mapping outlives the descriptor it was made from, so this frees the ring only here.
             self._ring.close()
         self._ring = ring
         return ring
-
-    def _dial(self) -> socket.socket | None:
-        """A socket connected to the channel, or None where no channel answers.
-
-        A hard link to the session socket, or a bind mount of the socket file alone, reaches no channel.
-        """
-        try:
-            return self._dial_channel(HANDOVER_TIMEOUT_SEC)
-        # The ring is optional: the session sends whole images, as on a server that declares none.
-        except OSError as unreachable:
-            self._channel_answers = False
-            logger.error('No frame ring: %s', unreachable)
-            return None
 
     def _hand_over(self, sock: socket.socket, ring: FrameRing) -> None:
         header = serialization.serialise({_SESSION: self._session_id, _SLOTS: ring.slots, _SLOT_BYTES: ring.slot_bytes})
