@@ -4,10 +4,11 @@ A person controls the robot through the teleop service, `positronic teleop`. For
 ordinary `RemotePolicy`: `cfg.policy.teleop` dials the socket of the service, as a model policy dials a model server.
 A human trial runs through the same eval and records the same data as a model trial.
 
-The service runs on the same machine as the run. It serves three things:
+The service runs on the same machine as the run, or on another machine (see
+[Run the service on another machine](#run-the-service-on-another-machine)). It serves three things:
 - the WebXR page for the phone or the headset, on port 5005;
 - a window on the laptop screen, on `http://127.0.0.1:5006/`;
-- one session at a time, as a model server on a Unix socket.
+- one session at a time, as a model server on a Unix socket, or on a host and a port.
 
 Each session declares `TeleopClient` (`positronic.policy.teleop`) in its client stack. The service keeps the state of
 the trial and the clutch. Its replies carry only the target pose, the grip, Start task and the end. So the input of the
@@ -147,7 +148,38 @@ for example `@positronic.teleop.clutch.OperatorPosition.BACK`, or `None` for UMI
 the hand pose is the robot pose), `--cameras` (a list, empty by default) and `--image_fps`.
 A run sets its own in the query of its address, each value a JSON literal, for example
 `--policy.address.query='operator_position="BACK"'`. `positronic.teleop.protocol.session_query` builds such a query:
-`teleop_collect` and `teleop_molmo` use it. The episode records the values in `inference.policy.server.effective_params`.
+`TELEOP_COLLECT_QUERY` and `TELEOP_MOLMO_QUERY` in `positronic.cfg.policy` are the queries of `teleop_collect` and
+`teleop_molmo`. The episode records the values in `inference.policy.server.effective_params`.
+
+## Run the service on another machine
+
+The service can run on the laptop of the person, and the run on a rig or a VM. Then the phone and the window need no
+tunnel. The machine of the run must reach the laptop on port 5007, for example on a tailnet.
+
+1. On the laptop, start the service on a host and a port, with a token:
+
+   ```bash
+   export AUTH_TOKEN=<a long random string>
+   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop \
+     --served_address=@positronic.teleop.command.network
+   ```
+
+2. On the machine of the run, set the same token, and dial the laptop:
+
+   ```bash
+   export AUTH_TOKEN=<the same string>
+   uv run positronic eval run \
+     --eval=@positronic.cfg.eval.sim.positronic.stack_cubes_collect \
+     --policy=@positronic.cfg.policy.teleop_network --policy.address.host=<laptop> \
+     --policy.address.query=@positronic.cfg.policy.TELEOP_COLLECT_QUERY \
+     --output_dir=~/datasets/stack_cubes_demos
+   ```
+
+- The service does not start on a host and a port with no token. A session with no token or a wrong one gets HTTP 403.
+- The sessions have no TLS. Use a private network, such as a tailnet.
+- Each frame waits for one round trip of the network.
+- `--served_address.port` changes the port. Give `--policy.address.port` the same value.
+- On the Unix socket, the service takes no token, and `AUTH_TOKEN` has no effect.
 
 ## What a trial records
 

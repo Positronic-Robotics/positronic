@@ -2,19 +2,22 @@
 
 import logging
 import math
+import os
 import webbrowser
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
 import configuronic as cfn
+from platform_client.policy_container import AUTH_TOKEN_ENV
+from positronic_model_server.server_wire import ServedAddress, ServedHostPort
 
 import pimm
 import positronic.cfg.webxr
 from positronic.drivers.webxr import RIGHT, WebXR
+from positronic.offboard.server import socket_at
 
 from .clutch import OperatorPosition
-from .protocol import SessionParams, camera_names, default_socket_path
+from .protocol import DEFAULT_PORT, SessionParams, camera_names, default_socket_path
 from .service import Phase, TeleopService
 from .window import Window, window_app
 
@@ -57,10 +60,19 @@ class _Headset(pimm.ControlSystem):
             yield pimm.Sleep(self._view_period_sec)
 
 
-@cfn.config(webxr=positronic.cfg.webxr.oculus, socket=str(default_socket_path()), ready_limit=120.0, window_port=5006)
+# The teleop service on a host and a port, for a run on another machine.
+network = cfn.Config(ServedHostPort, host='0.0.0.0', port=DEFAULT_PORT)
+
+
+@cfn.config(
+    webxr=positronic.cfg.webxr.oculus,
+    served_address=socket_at.override(uds=str(default_socket_path())),
+    ready_limit=120.0,
+    window_port=5006,
+)
 def serve(
     webxr: WebXR,
-    socket: str,
+    served_address: ServedAddress,
     ready_limit: float,
     window_port: int,
     silence_limit: float = 0.5,
@@ -75,13 +87,26 @@ def serve(
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
+    ``served_address`` is the Unix socket of this user by default.
+    ``--served_address=@positronic.teleop.command.network`` serves on a host and a port, and needs the bearer token in
+    ``AUTH_TOKEN_ENV``.
     ``operator_position``, ``cameras`` and ``image_fps`` are the defaults of the session
     parameters (``SessionParams``). A run can set others in the query of its address.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
     defaults = SessionParams(operator_position, camera_names(cameras), image_fps)
+    # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
+    # lock out `cfg.policy.teleop`, which sends none.
+    auth_token = os.environ.get(AUTH_TOKEN_ENV) if isinstance(served_address, ServedHostPort) else None
     service = TeleopService(
-        Path(socket), ready_limit, silence_limit, hold_sec, press_threshold, headset_camera, session_defaults=defaults
+        served_address,
+        ready_limit,
+        silence_limit,
+        hold_sec,
+        press_threshold,
+        headset_camera,
+        session_defaults=defaults,
+        auth_token=auth_token,
     )
     headset = _Headset(service, view_fps)
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:
@@ -89,7 +114,7 @@ def serve(
         world.connect(webxr.buttons, headset.buttons)
         world.connect(headset.view, webxr.frame)
         world.connect(headset.page_state, webxr.page_state)
-        logger.info('The teleop service serves on %s. Its window is %s', socket, window.url)
+        logger.info('The teleop service serves on %s. Its window is %s', service.served_address, window.url)
         if open_window:
             webbrowser.open(window.url)
         world.run(headset, [webxr])

@@ -9,6 +9,7 @@ import PIL.Image
 import pytest
 from fastapi.testclient import TestClient
 from positronic_model_server.serialization import encode_jpeg
+from positronic_model_server.websocket_wire import ServedUnixSocket
 
 from positronic import geom, keys
 from positronic.policy.base import PolicyEnd
@@ -22,7 +23,7 @@ from positronic.tests.testing_inference import free_port
 
 @pytest.fixture
 def service(socket_path):
-    with TeleopService(socket_path, ready_limit=5.0, silence_limit=0.1, hold_sec=0.2) as served:
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=0.1, hold_sec=0.2) as served:
         yield served
 
 

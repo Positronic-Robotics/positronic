@@ -12,9 +12,11 @@ import numpy as np
 import pos3
 import pytest
 from positronic_model_server import keys as server_keys
-from positronic_model_server.protocol import OBSERVATION, RESULT, SESSION_ID, STATUS, ServerStatus
+from positronic_model_server.protocol import AUTH_HEADER, OBSERVATION, RESULT, SESSION_ID, STATUS, ServerStatus, bearer
 from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
-from positronic_wire.wire import SESSION_PATH, UnixSocketAddress
+from positronic_model_server.server_wire import ServedHostPort
+from positronic_model_server.websocket_wire import ServedUnixSocket
+from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 from websockets.sync.client import unix_connect
 
 import pimm
@@ -117,7 +119,7 @@ class TestButtonMap:
 
 @pytest.fixture
 def service(socket_path):
-    with TeleopService(socket_path, ready_limit=2.0, silence_limit=0.1, hold_sec=HOLD_SEC) as served:
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=2.0, silence_limit=0.1, hold_sec=HOLD_SEC) as served:
         yield served
 
 
@@ -357,7 +359,7 @@ def test_a_cancel_fails_the_run_before_its_first_step(service, socket_path, runt
 
 
 def test_no_ready_within_the_ready_limit_fails_the_run(socket_path, runtime):
-    with TeleopService(socket_path, ready_limit=0.3, silence_limit=0.1, hold_sec=HOLD_SEC) as service:
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=0.3, silence_limit=0.1, hold_sec=HOLD_SEC) as service:
         started = time.monotonic()
         with pytest.raises(TrialNotStarted, match='ready limit'):
             runtime.start(_policy(socket_path))
@@ -367,7 +369,9 @@ def test_no_ready_within_the_ready_limit_fails_the_run(socket_path, runtime):
 
 def test_a_ready_wait_longer_than_the_infer_timeout_still_ends_with_ready(socket_path, runtime):
     """Each ready request ends within a slice, so the infer timeout bounds a slice, not the whole wait."""
-    with TeleopService(socket_path, ready_limit=10.0, silence_limit=0.1, hold_sec=HOLD_SEC) as service:
+    with TeleopService(
+        ServedUnixSocket(socket_path), ready_limit=10.0, silence_limit=0.1, hold_sec=HOLD_SEC
+    ) as service:
         policy = RemotePolicy('websocket_unix', UnixSocketAddress(socket_path, SESSION_PATH, ''), infer_timeout=1.5)
         with _Headset(service) as headset:
 
@@ -407,7 +411,9 @@ def test_the_service_refuses_a_second_session_while_a_trial_runs(service, socket
 
 def test_the_service_refuses_a_second_session_in_the_ready_wait_long_before_the_ready_limit(socket_path, connect):
     """The worker thread takes the second preparation after the current ready slice, not after the whole wait."""
-    with TeleopService(socket_path, ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC) as service:
+    with TeleopService(
+        ServedUnixSocket(socket_path), ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC
+    ) as service:
         waiting = connect(socket_path)
         try:
             answer = waiting.ready_in_background()
@@ -497,7 +503,7 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
         time.sleep(0.3)
         headset.buttons = _buttons(b=1.0)
 
-    service = TeleopService(socket_path, ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC)
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC)
     with service, _Headset(service) as headset, pos3.mirror():
         threading.Thread(target=teleoperate, args=(service, headset), daemon=True).start()
         main(policy=_policy(socket_path), evals=[ev], output_dir=str(tmp_path))
@@ -556,7 +562,7 @@ def _drop(websocket) -> None:
 
 
 def test_a_stop_of_the_service_ends_its_waits(socket_path):
-    service = TeleopService(socket_path, ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC)
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=60.0, silence_limit=0.1, hold_sec=HOLD_SEC)
     with service:
         websocket, session_id = _raw_session(socket_path)
         websocket.send(serialise({SESSION_ID: session_id, OBSERVATION: {protocol.KIND: Request.READY}}))
@@ -569,7 +575,7 @@ def test_a_stop_of_the_service_ends_its_waits(socket_path):
 def test_a_service_that_cannot_bind_raises_the_cause_at_once(tmp_path):
     started_at = time.monotonic()
     with pytest.raises(OSError, match='too long'):
-        with TeleopService(tmp_path / ('x' * 120) / 'teleop.sock', 1.0, 0.1, HOLD_SEC):
+        with TeleopService(ServedUnixSocket(tmp_path / ('x' * 120) / 'teleop.sock'), 1.0, 0.1, HOLD_SEC):
             pass
     assert time.monotonic() - started_at < 5
 
@@ -583,7 +589,7 @@ def test_a_model_server_that_fails_after_its_start_stops_the_process(socket_path
     monkeypatch.setattr(service_module.ModelServer, 'serve', serve_then_fail)
     monkeypatch.setattr(service_module._thread, 'interrupt_main', interrupted.set)
     monkeypatch.setattr(service_module.ModelServer, 'shutdown', lambda self: None)
-    with TeleopService(socket_path, 1.0, 0.1, HOLD_SEC):
+    with TeleopService(ServedUnixSocket(socket_path), 1.0, 0.1, HOLD_SEC):
         assert interrupted.wait(timeout=5)
 
 
@@ -592,7 +598,7 @@ def test_a_model_server_that_fails_after_its_start_stops_the_process(socket_path
 def test_a_time_limit_that_is_not_finite_and_positive_is_refused(socket_path, name, value):
     limits = {'ready_limit': 1.0, 'silence_limit': 0.05, name: value}
     with pytest.raises(ValueError, match=f'{name} must be finite and positive'):
-        TeleopService(socket_path, hold_sec=HOLD_SEC, **limits)
+        TeleopService(ServedUnixSocket(socket_path), hold_sec=HOLD_SEC, **limits)
 
 
 def test_a_socket_directory_that_others_can_open_is_refused(tmp_path):
@@ -600,8 +606,25 @@ def test_a_socket_directory_that_others_can_open_is_refused(tmp_path):
     shared.mkdir(mode=0o755)
     shared.chmod(0o755)
     with pytest.raises(PermissionError, match='mode 700'):
-        with TeleopService(shared / 'teleop.sock', 1.0, 0.1, HOLD_SEC):
+        with TeleopService(ServedUnixSocket(shared / 'teleop.sock'), 1.0, 0.1, HOLD_SEC):
             pass
+
+
+def test_a_service_on_a_host_and_a_port_needs_a_token():
+    with pytest.raises(ValueError, match='needs an auth token'):
+        TeleopService(ServedHostPort('127.0.0.1', 0), 1.0, 0.1, HOLD_SEC)
+
+
+def test_a_service_on_a_host_and_a_port_opens_a_session_only_with_its_token():
+    with TeleopService(ServedHostPort('127.0.0.1', 0), 1.0, 0.1, HOLD_SEC, auth_token='secret') as service:
+        served = service.served_address
+        assert isinstance(served, ServedHostPort)
+        address = HostPortAddress(served.host, served.port, SESSION_PATH, '')
+        token = {AUTH_HEADER: bearer('secret')}
+        meta = RemotePolicy('websocket', address, headers=token, infer_timeout=10.0).meta()
+        assert meta[f'{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
+        with pytest.raises(OSError, match='HTTP 403'):
+            RemotePolicy('websocket', address, infer_timeout=10.0, connect_deadline=1.0).meta()
 
 
 def test_the_default_socket_with_no_runtime_directory_is_in_a_directory_of_the_user(monkeypatch):
@@ -657,7 +680,7 @@ def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, con
         keys.WRIST_IMAGE: np.full((24, 32, 3), 50, np.uint8),
         keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 200, np.uint8),
     }
-    with TeleopService(socket_path, 5.0, 0.05, HOLD_SEC, headset_camera=headset_camera) as service:
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, headset_camera=headset_camera) as service:
         connection = _readied_connection(service, socket_path, connect)
         encoded = {name: encode_jpeg(image) for name, image in images.items()}
         connection.ask({**FRAME_REQUEST, protocol.IMAGES: encoded})
@@ -670,7 +693,7 @@ def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, con
 @pytest.mark.parametrize('view_fps', [0.0, -1.0, float('nan'), float('inf')])
 def test_a_view_rate_that_is_not_finite_and_positive_is_refused(socket_path, view_fps):
     with pytest.raises(ValueError, match='view_fps must be finite and positive'):
-        command._Headset(TeleopService(socket_path, 1.0, 0.05, HOLD_SEC), view_fps)
+        command._Headset(TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC), view_fps)
 
 
 def test_the_phone_page_reads_the_fields_of_the_page_state():
@@ -680,7 +703,7 @@ def test_the_phone_page_reads_the_fields_of_the_page_state():
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
-    service = TeleopService(socket_path, 1.0, 0.05, HOLD_SEC)
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
     bridge = command._Headset(service)
     sent, views = RecordingEmitter[dict](), RecordingEmitter[np.ndarray]()
     bridge.page_state._bind(sent, clock=SystemClock())
@@ -754,5 +777,5 @@ def test_a_symlink_in_place_of_the_socket_directory_is_refused(tmp_path):
     link = tmp_path / 'link'
     link.symlink_to(own)
     with pytest.raises(PermissionError, match='not a link'):
-        with TeleopService(link / 'teleop.sock', 1.0, 0.1, HOLD_SEC):
+        with TeleopService(ServedUnixSocket(link / 'teleop.sock'), 1.0, 0.1, HOLD_SEC):
             pass

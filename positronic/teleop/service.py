@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 from positronic_model_server import spec
 from positronic_model_server.server import Model, ModelServer, Session
+from positronic_model_server.server_wire import ServedAddress, ServedHostPort
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
 
 from positronic import geom
@@ -180,7 +181,10 @@ _DEFAULT_SESSION_PARAMS = SessionParams()
 
 
 class TeleopService:
-    """Serve one teleop session at a time on the Unix socket ``uds``, as a model server.
+    """Serve one teleop session at a time at ``served_address``, as a model server.
+
+    A host and a port need ``auth_token``, because the input of the service drives the robot. The Unix socket is in a
+    directory of this user only.
 
     ``take_sample`` takes each sample of the right controller. A frame request waits for the next sample. When none
     comes within ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. A ready request waits
@@ -194,18 +198,22 @@ class TeleopService:
 
     def __init__(
         self,
-        uds: Path,
+        served_address: ServedAddress,
         ready_limit: float,
         silence_limit: float,
         hold_sec: float,
         press_threshold: float = 0.6,
         headset_camera: str | None = None,
         session_defaults: SessionParams = _DEFAULT_SESSION_PARAMS,
+        auth_token: str | None = None,
     ):
         for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
             if not 0 < value < math.inf:
                 raise ValueError(f'{name} must be finite and positive, got {value}')
-        self._uds = uds
+        if isinstance(served_address, ServedHostPort) and auth_token is None:
+            raise ValueError('a teleop service on a host and a port needs an auth token')
+        self._binds = served_address
+        self._auth_token = auth_token
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit
         self._session_defaults = session_defaults
@@ -225,6 +233,7 @@ class TeleopService:
         self._headset_camera = headset_camera
         # A wait ends at once when the service stops.
         self._stopping = False
+        self._wire: WebsocketWire | None = None
         self._server: ModelServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -242,10 +251,18 @@ class TeleopService:
         if mode.st_uid != os.getuid() or stat.S_IMODE(mode.st_mode) & 0o077:
             raise PermissionError(f'{directory} must belong to this user, with no access for others (mode 700)')
 
+    @property
+    def served_address(self) -> ServedAddress:
+        """Where the running service serves: for a port of 0, the port that it bound."""
+        assert self._wire is not None, 'The teleop service has not started'
+        return self._wire.served_address
+
     def __enter__(self) -> 'TeleopService':
-        self._prepare_private_directory(self._uds.parent)
-        server = ModelServer(lambda: TeleopModel(self, self._session_defaults))
-        wires = [WebsocketWire(ServedUnixSocket(self._uds))]
+        if isinstance(self._binds, ServedUnixSocket):
+            self._prepare_private_directory(self._binds.uds.parent)
+        server = ModelServer(lambda: TeleopModel(self, self._session_defaults), auth_token=self._auth_token)
+        self._wire = WebsocketWire(self._binds)
+        wires = [self._wire]
         started: Future[None] = Future()
 
         def serve() -> None:

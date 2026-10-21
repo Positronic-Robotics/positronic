@@ -9,7 +9,7 @@ from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddres
 
 from positronic import keys
 from positronic.policy import RemotePolicy
-from positronic.teleop.protocol import default_socket_path, session_query
+from positronic.teleop.protocol import DEFAULT_PORT, default_socket_path, session_query
 from positronic.utils import nebius
 
 
@@ -54,12 +54,14 @@ teleop = remote.override(
 
 # The views of `cfg.eval.sim.positronic.stack_cubes_collect` that a person teleoperates with, the most useful first.
 TELEOP_COLLECT_CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_UPRIGHT_IMAGE, keys.HANDCAM_RIGHT_IMAGE, keys.WRIST_IMAGE)
-teleop_collect = teleop.override(**{'address.query': session_query(cameras=list(TELEOP_COLLECT_CAMERAS))})
+TELEOP_COLLECT_QUERY = session_query(cameras=list(TELEOP_COLLECT_CAMERAS))
+teleop_collect = teleop.override(**{'address.query': TELEOP_COLLECT_QUERY})
 
 # A person on MolmoSpaces. The eval puts each shoulder camera in one exterior slot at random, so the person sees both
 # exteriors.
 TELEOP_MOLMO_CAMERAS = (keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2, keys.WRIST_IMAGE)
-teleop_molmo = teleop.override(**{'address.query': session_query(cameras=list(TELEOP_MOLMO_CAMERAS))})
+TELEOP_MOLMO_QUERY = session_query(cameras=list(TELEOP_MOLMO_CAMERAS))
+teleop_molmo = teleop.override(**{'address.query': TELEOP_MOLMO_QUERY})
 
 
 @cfn.config()
@@ -101,3 +103,9 @@ def file_headers(path: str) -> dict[str, str]:
 authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=bearer_headers)
 nebius_remote = cfn.Config(RemotePolicy, address=network_address, headers=nebius_bearer_headers)
 file_authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=file_headers)
+
+# A person, through a teleop service on another machine: `--policy.address.host` names it. The token in `AUTH_TOKEN_ENV`
+# is the token of the service. `--policy.address.query=@positronic.cfg.policy.TELEOP_MOLMO_QUERY` sets the cameras.
+teleop_network = teleop.override(
+    wire='websocket', address=network_address.override(port=DEFAULT_PORT), headers=bearer_headers
+)

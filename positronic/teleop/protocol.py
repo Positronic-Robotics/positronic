@@ -61,6 +61,9 @@ START_TASK = 'start_task'
 # A `PolicyEnd` value, present in the reply after a Complete or a Give up.
 END = 'end'
 
+# The port of the sessions of a teleop service on a host and a port. The WebXR page is on 5005 and the window on 5006.
+DEFAULT_PORT = 5007
+
 
 def default_socket_path() -> Path:
     """The socket of the teleop service: in the runtime directory of the user, or in a directory of the user under
