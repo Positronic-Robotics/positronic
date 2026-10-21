@@ -1,7 +1,7 @@
 # Score a policy on MolmoSpaces on your machine
 
-This guide takes you from a clean machine to a local score on a public MolmoSpaces eval. The platform
-runs the same episodes under the same name, and scores them with the same rule.
+Run a public MolmoSpaces eval on your own machine, and get its score. The platform runs the same episodes
+under the same name, and scores them with the same rule.
 
 | Eval | Episodes | What it is for |
 |---|---|---|
