@@ -15,7 +15,8 @@ scores other episodes, and its episodes are not public.
 
 - Linux on amd64, with an NVIDIA GPU for the policy server and the
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
-- git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, and Docker.
+- git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, Docker, and a C compiler. On Ubuntu, install the
+  compiler with `sudo apt install build-essential`. The install builds one dependency, `evdev`, from source.
 - About 40 GB of free disk space: 13 GB for the MolmoSpaces assets, and the rest for the policy image,
   `positronic` and the simulator's Python environment.
 
