@@ -71,6 +71,21 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
     main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, ()))])
 
 
+def _record(output_dir, successes: list[bool]) -> list:
+    """Record one MolmoSpaces episode per entry of `successes`, and return their directories."""
+    paths = []
+    with LocalDatasetWriter(output_dir) as writer:
+        for success in successes:
+            with writer.new_episode() as episode:
+                episode.set_static(keys.TASK, 'pick up the cup.')
+                episode.set_static(eval_keys.SUCCESS, success)
+                episode.set_static(eval_keys.TERMINATED, True)
+                for world_ns in (0, 1_000_000_000):
+                    episode.append(keys.GRIP, 0.0, Time(**{EMITTED_WORLD: world_ns, EMITTED_WALL: world_ns}))
+            paths.append(episode.path)
+    return paths
+
+
 def test_a_sweep_returns_the_episodes_it_recorded_and_not_the_earlier_ones(tmp_path, monkeypatch):
     dataset_dir = tmp_path / 'run'
     earlier = _record(dataset_dir, [False])
@@ -229,21 +244,6 @@ def test_a_local_run_of_a_public_eval_runs_the_config_its_definition_names(run_c
     run_command(run_module.run, eval=SMOKE, policy='a policy')
 
     assert [ev.embodiment.descriptor for ev in seen] == ['remote.molmo_spaces.droid']
-
-
-def _record(output_dir, successes: list[bool]) -> list:
-    """Record one MolmoSpaces episode per entry of `successes`, and return their directories."""
-    paths = []
-    with LocalDatasetWriter(output_dir) as writer:
-        for success in successes:
-            with writer.new_episode() as episode:
-                episode.set_static(keys.TASK, 'pick up the cup.')
-                episode.set_static(eval_keys.SUCCESS, success)
-                episode.set_static(eval_keys.TERMINATED, True)
-                for world_ns in (0, 1_000_000_000):
-                    episode.append(keys.GRIP, 0.0, Time(**{EMITTED_WORLD: world_ns, EMITTED_WALL: world_ns}))
-            paths.append(episode.path)
-    return paths
 
 
 def test_a_local_run_of_a_public_eval_prints_the_score_of_the_episodes_it_recorded(

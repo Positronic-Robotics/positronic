@@ -294,7 +294,6 @@ def _public_eval_config(definition: EvalDefinition) -> cfn.Config:
     return _eval_at.override(eval=definition.config).override_data(**overrides)
 
 
-# The line a local run of a public eval prints last. `integration_tests/molmo_local_eval.py` checks it.
 SCORE_LINE = 'score {primary:.3f} over {episodes} episodes, {unscored} unscored'
 
 
