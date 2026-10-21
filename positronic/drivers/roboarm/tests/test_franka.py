@@ -2516,7 +2516,7 @@ def test_a_ready_call_whose_desk_step_fails_answers_its_error_and_the_next_one_s
 
 
 def test_a_driver_with_no_desk_session_holds_a_libfranka_failure(world):
-    """Only a Desk step connects again, so with no Desk session a ready call answers the error that stays."""
+    """With no Desk session, a ready call answers the error, and the error stays: only a Desk step connects again."""
     arm = FakeArm(PARK)
     driver = _driver(arm, manage_desk=False)
     ready = _readier(world, driver)
@@ -2536,7 +2536,7 @@ def test_a_driver_with_no_desk_session_holds_a_libfranka_failure(world):
 
 
 def test_an_arm_error_the_recovery_clears_puts_no_error_on_the_state(desk, world):
-    """An error the arm reports over a connection that answers is the driver's to recover, not a lost arm."""
+    """The driver recovers an error that the arm reports over a connection that answers."""
     arm = FakeArm(PARK)
     arm.recover_clears = True
     driver = _driver(arm)
