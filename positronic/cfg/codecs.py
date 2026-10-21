@@ -10,13 +10,20 @@ from positronic.policy.codecs import (
     BinarizeGripTraining,
     ChangeEEFrame,
     FlipGrip,
+    ImageObservationCodec,
     Metadata,
     SetControlMode,
 )
-from positronic.policy.codecs.observation import ObservationCodec
+from positronic.policy.codecs.observation import TASK_FIELD, StateObservationCodec
 from positronic.policy.keys import ACTION_FPS
 
 RotRep = geom.Rotation.Representation
+
+
+@cfn.config(task_field=TASK_FIELD)
+def observation(state: dict[str, dict[str, int]], images: dict[str, tuple[str, tuple[int, int]]], task_field: str):
+    """Prepare state, prompt and images independently from the same observation."""
+    return StateObservationCodec(state, task_field) & ImageObservationCodec(images)
 
 
 @cfn.config()
@@ -26,7 +33,7 @@ def general_obs(
     """General observation encoder for non-GR00T policies (OpenPI, ACT, etc.)."""
     state_dict = {state_name: state_features}
     images = {k: (v, image_size) for k, v in image_mappings.items()}
-    return ObservationCodec(state=state_dict, images=images)
+    return observation(state=state_dict, images=images)
 
 
 eepose_grip_obs = general_obs.override(

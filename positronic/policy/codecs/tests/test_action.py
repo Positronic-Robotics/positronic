@@ -20,8 +20,8 @@ from positronic.policy.codecs import (
     CartesianDeltaAction,
     Codec,
     JointPositionAction,
-    ObservationCodec,
     SetControlMode,
+    StateObservationCodec,
     UnpackActionChunk,
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
@@ -51,7 +51,7 @@ def test_training_rows_align_observations_and_commands_on_the_recording_clock(po
             timelines=(EMITTED_WORLD, timeline, RECORDED_TIME),
         ),
     })
-    observation = ObservationCodec(state={'state': {obs_keys.JOINTS: 1}}, images={})
+    observation = StateObservationCodec(state={'state': {obs_keys.JOINTS: 1}})
     action = (
         AbsolutePositionAction(target, obs_keys.TARGET_GRIP)
         if positions

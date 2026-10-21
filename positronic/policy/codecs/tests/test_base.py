@@ -17,10 +17,11 @@ from positronic.policy.codecs import (
     ChangeEEFrame,
     Codec,
     FlipGrip,
+    ImageObservationCodec,
     Metadata,
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction
-from positronic.policy.codecs.observation import ObservationCodec
+from positronic.policy.codecs.observation import StateObservationCodec
 
 
 class _TaggingCodec(Codec):
@@ -59,10 +60,9 @@ def test_composed_training_encoder_uses_parallel():
         obs_keys.TASK: 'test',
     })
 
-    obs = ObservationCodec(
-        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
-        images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
-    )
+    obs = StateObservationCodec(
+        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}}
+    ) & ImageObservationCodec(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))})
     action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7)
     metadata = Metadata({'action_fps': 15.0})
     composed = metadata | (obs & action)
@@ -90,7 +90,7 @@ def test_composed_training_encoder_uses_parallel():
 
 def test_parallel_codec_encode_merges_outputs():
     """``obs & action`` encode produces only obs keys (action returns {})."""
-    obs = ObservationCodec(state={'observation.state': {'a': 1}}, images={})
+    obs = StateObservationCodec(state={'observation.state': {'a': 1}})
     action = AbsolutePositionAction('x', 'y')
     composed = obs & action
     result = composed.encode({'a': 1.0})
@@ -100,7 +100,7 @@ def test_parallel_codec_encode_merges_outputs():
 
 def test_parallel_codec_decode_merges_outputs():
     """``obs & action`` decode produces only action-decoded keys (obs returns {})."""
-    obs = ObservationCodec(state={'observation.state': {'a': 1}}, images={})
+    obs = StateObservationCodec(state={'observation.state': {'a': 1}})
     action = AbsolutePositionAction('x', 'y')
     composed = obs & action
 
@@ -128,10 +128,9 @@ def test_sequential_into_parallel_training():
         obs_keys.EXTERIOR_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
     })
 
-    obs = ObservationCodec(
-        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
-        images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
-    )
+    obs = StateObservationCodec(
+        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}}
+    ) & ImageObservationCodec(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))})
     action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7)
     binarize = BinarizeGripTraining((obs_keys.GRIP, obs_keys.TARGET_GRIP))
     composed = binarize | (obs & action)
@@ -163,10 +162,8 @@ def test_compose_training_encoder_produces_only_derived_keys():
     })
 
     codec = compose(
-        obs=ObservationCodec(
-            state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
-            images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
-        ),
+        obs=StateObservationCodec(state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}})
+        & ImageObservationCodec(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))}),
         action=AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7),
     )
 
@@ -258,7 +255,7 @@ class TestCodecComposition:
 @pytest.mark.parametrize(
     'definition',
     [
-        ObservationCodec(state={'state': {'grip': 1}}, images={}) & AbsolutePositionAction('pose', 'grip'),
+        StateObservationCodec(state={'state': {'grip': 1}}) & AbsolutePositionAction('pose', 'grip'),
         FlipGrip() | (BinarizeGripInference() & AbsoluteJointsAction('joints', 'grip')),
     ],
 )
