@@ -109,8 +109,8 @@ MOLMO_OBS_QPOS = 'qpos'  # MolmoSpaces joint positions, grouped by robot move gr
 
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'
-OBS_EEF_POS = 'eef_pos'  # Position in the robot base frame, metres.
-OBS_EEF_QUAT = 'eef_quat'  # Orientation in the robot base frame, wxyz.
+OBS_EEF_POS = 'eef_pos'  # Position in the arm base frame, metres.
+OBS_EEF_QUAT = 'eef_quat'  # Orientation in the arm base frame, wxyz.
 OBS_GRIP = 'grip'  # Closure in [0, 1].
 OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
 
@@ -168,7 +168,7 @@ def wire_command_to_arm_action(
 ) -> np.ndarray | None:
     """Absolute arm joint targets, or None where ``ik`` finds no solution.
 
-    ``ik`` and ``current_eef`` use robot-frame grasp-site poses.
+    ``ik`` and ``current_eef`` use arm-base grasp-site poses.
     """
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
     match command[protocol.COMMAND_TYPE]:
