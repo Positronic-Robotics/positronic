@@ -141,8 +141,10 @@ def test_export_rows_of_a_video_survive_the_pickle_of_a_dataloader_worker(tmp_pa
         for i in range(3):
             image = np.full((16, 16, 3), 40 * i, dtype=np.uint8)
             writer.append('image', image, Time(**{HARNESS_WORLD: i * 100_000_000}))
-    rows = pickle.loads(pickle.dumps(EpisodeDictDataset(LocalDataset(tmp_path), fps=20)[0]))
-    np.testing.assert_allclose([np.median(frame) for frame in rows['image']], [0, 0, 40, 40], atol=5)
+    rows = EpisodeDictDataset(LocalDataset(tmp_path), fps=20)[0]
+    assert isinstance(rows['image'], list)
+    frames = pickle.loads(pickle.dumps(rows))['image']
+    np.testing.assert_allclose([np.median(frame) for frame in frames], [0, 0, 40, 40], atol=5)
 
 
 def test_export_raises_the_error_of_a_frame_that_does_not_decode(tmp_path):
