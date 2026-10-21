@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +63,7 @@ GRANTED = {'access_token': TOKEN, 'token_type': 'bearer', 'scope': IDENTITY_SCOP
 # rules-allow: hardcoded-keys — `positronic/cli/conftest.py` holds the same value, and this package
 # may not import from `positronic`: the dependency runs the other way, and the client installs alone.
 MINTED_KEY = 'pk_live_secret'
+COMPLETE_URI = 'https://a.authkit.app/device?user_code=WDJB-MJHT'
 
 
 @dataclass
@@ -133,6 +134,7 @@ def _authorization(*, interval: float = 5.0, expires_in: float = 900.0) -> Devic
         device_code=DEVICE_CODE,
         user_code=str(DEVICE_ANSWER['user_code']),
         verification_uri=str(DEVICE_ANSWER['verification_uri']),
+        verification_uri_complete=None,
         interval=interval,
         expires_in=expires_in,
     )
@@ -151,16 +153,65 @@ def test_the_device_code_request_asks_for_identity_scope_only():
     assert authorization.device_code == DEVICE_CODE
     assert authorization.user_code == DEVICE_ANSWER['user_code']
     assert authorization.verification_uri == DEVICE_ANSWER['verification_uri']
+    assert authorization.verification_uri_complete is None
     assert authorization.interval == 5.0 and authorization.expires_in == 900.0
 
 
 def test_a_device_code_answer_without_an_interval_polls_at_the_default_rate():
-    github = ScriptedProvider(device={k: v for k, v in DEVICE_ANSWER.items() if k not in ('interval', 'expires_in')})
+    github = ScriptedProvider(device={k: v for k, v in DEVICE_ANSWER.items() if k != 'interval'})
     flow, _ = _flow(github)
 
     authorization = flow.start_device_authorization()
 
     assert authorization.interval == 5.0 and authorization.expires_in == 900.0
+
+
+def test_a_device_code_answer_without_expires_in_is_a_bad_answer():
+    """RFC 8628 §3.2 requires the field, and the prompt tells the user the time that the provider gave."""
+    flow, _ = _flow(ScriptedProvider(device={k: v for k, v in DEVICE_ANSWER.items() if k != 'expires_in'}))
+
+    with pytest.raises(ProviderFailed, match='without expires_in'):
+        flow.start_device_authorization()
+
+
+def test_the_device_code_answer_keeps_the_link_that_carries_the_user_code():
+    flow, _ = _flow(_workos(device=dict(DEVICE_ANSWER) | {'verification_uri_complete': COMPLETE_URI}))
+
+    authorization = flow.start_device_authorization()
+
+    assert authorization.verification_uri_complete == COMPLETE_URI
+
+
+@pytest.mark.parametrize('value', ['', 7, None])
+def test_an_unreadable_link_with_the_user_code_is_a_bad_answer(value: object):
+    flow, _ = _flow(_workos(device=dict(DEVICE_ANSWER) | {'verification_uri_complete': value}))
+
+    with pytest.raises(ProviderFailed, match='without verification_uri_complete'):
+        flow.start_device_authorization()
+
+
+def test_the_prompt_gives_the_link_with_the_user_code_and_its_lifetime():
+    authorization = replace(_authorization(expires_in=300.0), verification_uri_complete=COMPLETE_URI)
+
+    assert authorization.sign_in_prompt() == (
+        f'open {COMPLETE_URI} and check that the page shows {DEVICE_ANSWER["user_code"]}; the link expires in 5 minutes'
+    )
+
+
+def test_the_prompt_without_a_complete_link_gives_the_link_the_code_and_its_lifetime():
+    assert _authorization(expires_in=900.0).sign_in_prompt() == (
+        f'open {DEVICE_ANSWER["verification_uri"]} and enter {DEVICE_ANSWER["user_code"]}; '
+        'the code expires in 15 minutes'
+    )
+
+
+@pytest.mark.parametrize(
+    ('expires_in', 'lifetime'),
+    [(300.0, '5 minutes'), (299.0, '4 minutes'), (60.0, '1 minute'), (59.5, '59 seconds'), (1.0, '1 second')],
+)
+def test_the_prompt_rounds_the_lifetime_down(expires_in: float, lifetime: str):
+    """A user told too much time comes back to a code that has expired."""
+    assert _authorization(expires_in=expires_in).sign_in_prompt().endswith(f'expires in {lifetime}')
 
 
 def test_an_unreadable_interval_is_a_bad_answer_rather_than_the_default():
@@ -1006,6 +1057,18 @@ def test_the_user_is_shown_the_code_on_stderr_before_the_poll_starts(capsys):
     captured = capsys.readouterr()
     assert str(DEVICE_ANSWER['user_code']) in captured.err and str(DEVICE_ANSWER['verification_uri']) in captured.err
     assert captured.out == ''
+
+
+def test_the_user_is_shown_the_link_that_carries_the_code_when_the_provider_sends_one(capsys):
+    """The user opens one link and types nothing, and the line says how long the link stays valid."""
+    device = dict(DEVICE_ANSWER) | {'verification_uri_complete': COMPLETE_URI, 'expires_in': 300}
+    flow, _ = _flow(_workos(device=device, polls=[dict(WORKOS_GRANTED)]))
+
+    with PlatformClient(client=ScriptedGateway().client()) as platform:
+        register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT))
+
+    err = capsys.readouterr().err
+    assert COMPLETE_URI in err and 'expires in 5 minutes' in err
 
 
 def test_the_registration_keeps_the_key_the_gateway_minted():
