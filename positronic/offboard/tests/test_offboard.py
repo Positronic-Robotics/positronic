@@ -379,6 +379,13 @@ def _image(height: int = 48, width: int = 64) -> np.ndarray:
     return _PIXELS.integers(0, 256, (height, width, 3), dtype=np.uint8)
 
 
+def _packed(writer: frame_ring.FrameWriter, obs) -> dict:
+    """``obs`` as ``writer`` packs it, with its images written into the ring."""
+    packed, write = writer.pack(obs)
+    write()
+    return packed
+
+
 def _over_the_wire(obs):
     """``obs`` as the server reads it, after a msgpack round trip."""
     return deserialise(serialise(obs))
@@ -389,7 +396,7 @@ def test_a_ring_carries_every_image_of_an_observation_byte_identical(frame_chann
     image, stack = _image(), np.stack([_image(), _image()])
     obs = {'image.left': image, keys.GRIP: 0.5, 'nested': {'frames': [image, stack]}}
 
-    served = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack(obs)))
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, obs)))
 
     np.testing.assert_array_equal(served['image.left'], image)
     np.testing.assert_array_equal(served['nested']['frames'][0], image)
@@ -420,7 +427,7 @@ def test_every_container_the_wire_carries_reaches_the_server_as_the_message_path
         keys.TASK: 'pick',
     }
 
-    served = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack(obs)))
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, obs)))
 
     for key in ('pair', 'tuple', 'frames'):
         assert type(served[key]) is list, key
@@ -434,14 +441,14 @@ def test_every_container_the_wire_carries_reaches_the_server_as_the_message_path
 def test_a_packed_observation_leaves_the_pixels_out_of_the_message(frame_writer):
     image = _image(720, 1280)
 
-    message = serialise(frame_writer.pack({'image.left': image}))
+    message = serialise(_packed(frame_writer, {'image.left': image}))
 
     assert len(message) < image.nbytes // 100
 
 
 @pytestmark_ring
 def test_an_observation_with_no_image_creates_no_ring(frame_writer):
-    assert frame_writer.pack({keys.GRIP: 0.5}) == {keys.GRIP: 0.5}
+    assert _packed(frame_writer, {keys.GRIP: 0.5}) == {keys.GRIP: 0.5}
     assert frame_writer._ring is None
 
 
@@ -469,7 +476,7 @@ def test_a_channel_that_answers_and_refuses_the_ring_still_raises(socket_path, f
     writer = frame_ring.FrameWriter(_frame_channel_dialer(socket_path), 'a-session-not-open-here')
     try:
         with pytest.raises(RuntimeError, match='did not map the frame ring'):
-            writer.pack({'image.left': _image()})
+            _packed(writer, {'image.left': _image()})
     finally:
         writer.close()
 
@@ -477,20 +484,20 @@ def test_a_channel_that_answers_and_refuses_the_ring_still_raises(socket_path, f
 @pytestmark_ring
 def test_a_frame_view_keeps_its_pixels_for_the_calls_a_frame_stays_valid_and_no_longer(frame_channel, frame_writer):
     first = _image()
-    view = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack({'image.left': first})))['image.left']
+    view = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, {'image.left': first})))['image.left']
     for _ in range(frame_ring.CALLS_A_FRAME_STAYS_VALID - 1):
-        frame_writer.pack({'image.left': _image()})
+        _packed(frame_writer, {'image.left': _image()})
 
     np.testing.assert_array_equal(view, first)
-    frame_writer.pack({'image.left': _image()})
+    _packed(frame_writer, {'image.left': _image()})
     assert not np.array_equal(view, first)
 
 
 @pytestmark_ring
 def test_a_slot_written_over_before_it_is_read_is_refused(frame_channel, frame_writer):
-    stale = _over_the_wire(frame_writer.pack({'image.left': _image()}))
+    stale = _over_the_wire(_packed(frame_writer, {'image.left': _image()}))
     for _ in range(frame_ring.CALLS_A_FRAME_STAYS_VALID):
-        frame_writer.pack({'image.left': _image()})
+        _packed(frame_writer, {'image.left': _image()})
 
     with pytest.raises(frame_ring.TornFrame):
         frame_channel.resolve(SESSION_ID, stale)
@@ -498,7 +505,7 @@ def test_a_slot_written_over_before_it_is_read_is_refused(frame_channel, frame_w
 
 @pytestmark_ring
 def test_a_reference_that_points_outside_the_ring_is_refused(frame_channel, frame_writer):
-    packed = _over_the_wire(frame_writer.pack({'image.left': _image()}))
+    packed = _over_the_wire(_packed(frame_writer, {'image.left': _image()}))
     packed['image.left'][frame_ring._OFFSET] = 1 << 30
 
     with pytest.raises(ValueError, match='outside the ring'):
@@ -517,8 +524,8 @@ def test_a_reference_from_a_session_that_handed_over_no_ring_is_refused(frame_ch
 def test_a_larger_frame_grows_the_ring_and_leaves_the_earlier_view_readable(frame_channel, frame_writer):
     small, large = _image(8, 8), _image(64, 64)
 
-    first = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack({'image.left': small})))
-    second = frame_channel.resolve(SESSION_ID, _over_the_wire(frame_writer.pack({'image.left': large})))
+    first = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, {'image.left': small})))
+    second = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, {'image.left': large})))
 
     np.testing.assert_array_equal(second['image.left'], large)
     np.testing.assert_array_equal(first['image.left'], small)
@@ -552,7 +559,7 @@ def test_a_descriptor_sealed_beyond_what_the_server_needs_is_accepted():
 @pytestmark_ring
 def test_a_reference_naming_a_dtype_the_wire_refuses_is_refused(frame_channel, frame_writer):
     """An object dtype reads the ring's bytes as pointers into this process, and touching one segfaults."""
-    packed = _over_the_wire(frame_writer.pack({'image.left': _image()}))
+    packed = _over_the_wire(_packed(frame_writer, {'image.left': _image()}))
     packed['image.left'][frame_ring._DTYPE] = '|O'
 
     with pytest.raises(ValueError, match='which the wire does not carry'):
@@ -565,7 +572,7 @@ def test_an_image_whose_dtype_the_wire_refuses_never_reaches_the_ring(frame_writ
     forgeable = np.empty((4, 4, 3), dtype=object)
     forgeable[:] = 'not pixels'
 
-    packed = frame_writer.pack({'image.left': forgeable})
+    packed = _packed(frame_writer, {'image.left': forgeable})
 
     assert packed['image.left'] is forgeable
     assert frame_writer._ring is None
@@ -578,7 +585,7 @@ def test_a_float_image_travels_through_the_ring(frame_channel, frame_writer):
     """The ring carries every dtype the wire carries, not the uint8 frames alone."""
     depth = _PIXELS.random((8, 8, 3)).astype(np.float32)
 
-    packed = frame_writer.pack({'image.left': depth})
+    packed = _packed(frame_writer, {'image.left': depth})
 
     # The message path carries a float image too, so only the reference proves the ring took this one.
     assert isinstance(packed['image.left'], dict) and frame_ring._RING in packed['image.left']

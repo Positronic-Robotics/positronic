@@ -562,6 +562,10 @@ class _Channel:
             self._channel.close()
             self._channel = None
 
+    def resolve(self, session_id: str, obs):
+        assert self._channel is not None
+        return self._channel.resolve(session_id, obs)
+
 
 _RING_META = {'model_name': 'test', frame_ring.HANDSHAKE_KEY: True}
 _NO_RING_META = {'model_name': 'test'}
@@ -665,6 +669,31 @@ def test_compression_is_skipped_exactly_for_images_that_go_through_the_ring(case
         assert not isinstance(value, np.ndarray), 'a raw frame went into the message'
         through_ring = isinstance(value, dict) and frame_ring._RING in value
         assert through_ring is not any(value == jpeg for jpeg in encoded), 'a ring frame was compressed, or the reverse'
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_message_the_client_refuses_changes_no_slot_of_the_ring(socket_path):
+    """A frame stays valid for a count of calls the server gets, so a message that never leaves counts for none."""
+    channel = _Channel(socket_path)
+    channel.start('first')
+    conn = _connection(_ready('first', _RING_META), _answer({'action_data': [1]}))
+    unix = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.SESSION_PATH, '')
+    pixels = np.random.default_rng(0)
+    first = pixels.integers(0, 256, (48, 64, 3), dtype=np.uint8)
+    unserialisable = np.empty(2, dtype=object)
+    try:
+        session = InferenceClient(_FakeUnixWire(conn), unix).new_session()
+        session.infer({'image': first})
+        (sent,) = _observations_sent(conn)
+        held = channel.resolve('first', sent)['image']
+        for _ in range(frame_ring.CALLS_A_FRAME_STAYS_VALID):
+            image = pixels.integers(0, 256, (48, 64, 3), dtype=np.uint8)
+            with pytest.raises(ValueError, match='Unsupported dtype'):
+                session.infer({'image': image, 'note': unserialisable})
+
+        np.testing.assert_array_equal(held, first)
+    finally:
+        channel.stop()
 
 
 def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
