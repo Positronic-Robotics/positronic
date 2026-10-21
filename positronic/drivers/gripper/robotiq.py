@@ -243,7 +243,7 @@ class Robotiq2F(pimm.ControlSystem):
             call.set_result(outcome)
 
     @staticmethod
-    def _start(gripper: _Gripper) -> Generator[pimm.Command, None, DeviceFault | None]:
+    def _activate_or_hold(gripper: _Gripper) -> Generator[pimm.Command, None, DeviceFault | None]:
         """Activate the gripper. None once the bus answers, else the error now on ``grip``."""
         try:
             yield from gripper.activate()
@@ -313,7 +313,7 @@ class Robotiq2F(pimm.ControlSystem):
         )
         try:
             with gripper.moves as moves:
-                held = yield from self._start(gripper)
+                held = yield from self._activate_or_hold(gripper)
                 while not should_stop.value:
                     if held is None:
                         held = yield from self._serve(gripper, moves, clock)
