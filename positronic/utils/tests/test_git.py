@@ -1,5 +1,6 @@
 import importlib.metadata
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -128,16 +129,16 @@ def test_run_metadata_with_a_credential_in_the_command_is_refused_and_not_writte
     assert TOKEN not in ''.join(traceback.format_exception(exc.value))
 
 
-def test_run_metadata_with_a_credential_in_the_diff_is_refused_and_not_written(cwd_repo, tmp_path, monkeypatch):
+def test_run_metadata_writes_a_marker_in_place_of_a_diff_line_with_a_credential(cwd_repo, tmp_path, monkeypatch):
     install_as(monkeypatch, vcs_wheel())
     monkeypatch.setattr(sys, 'argv', ['pos'])
-    Path('f').write_text(f'API_TOKEN = "{TOKEN}"\n')
+    Path('f').write_text(f'API_TOKEN = "{TOKEN}"\nx = 1\n')
 
-    with pytest.raises(CredentialInRunMetadata, match=r'^git\.current\.diff: line \d+ ') as exc:
-        utils.save_run_metadata(tmp_path / 'out', patterns=['f'], add_uv_lock=False)
+    written = utils.save_run_metadata(tmp_path / 'out', patterns=['f'], add_uv_lock=False).read_text()
 
-    assert not (tmp_path / 'out').exists()
-    assert TOKEN not in ''.join(traceback.format_exception(exc.value))
+    assert TOKEN not in written
+    assert re.search(r'\+<git\.current\.diff: line \d+ removed, it looks like a credential>', written)
+    assert '+x = 1' in written
 
 
 def test_deferred_run_metadata_refuses_a_credential_before_it_starts_its_thread(tmp_path, monkeypatch):
@@ -147,18 +148,5 @@ def test_deferred_run_metadata_refuses_a_credential_before_it_starts_its_thread(
 
     with pytest.raises(CredentialInRunMetadata):
         utils.save_run_metadata_deferred(tmp_path / 'out')
-
-    assert started == []
-
-
-def test_deferred_run_metadata_refuses_a_credential_in_the_diff_before_it_starts_its_thread(cwd_repo, monkeypatch):
-    install_as(monkeypatch, vcs_wheel())
-    monkeypatch.setattr(sys, 'argv', ['pos'])
-    Path('f').write_text(f'API_TOKEN = "{TOKEN}"\n')
-    started = []
-    monkeypatch.setattr(threading.Thread, 'start', lambda self: started.append(self))
-
-    with pytest.raises(CredentialInRunMetadata, match=r'^git\.current\.diff: '):
-        utils.save_run_metadata_deferred(Path('out'), patterns=['f'])
 
     assert started == []

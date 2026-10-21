@@ -33,7 +33,6 @@ from positronic.policy import Policy, PolicyRun, Runtime, Step
 from positronic.policy.harness import Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 from positronic.simulator.molmo_spaces import keys as molmo_keys
-from positronic.utils import CURRENT_DIFF
 
 
 def _eval(simulated: bool) -> Eval:
@@ -452,21 +451,6 @@ def test_a_credential_on_the_command_line_is_a_usage_fault_before_the_output_dir
 
     with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False), scoped_env_var(ENV_TELEMETRY_DIR):
         with pytest.raises(CommandFailed, match=re.escape('argv[3]')) as exc:
-            prepare_output_dir(tmp_path / 'episodes')
-
-    assert exc.value.fault is Fault.USAGE
-    assert token not in str(exc.value)
-    assert not (tmp_path / 'episodes').exists()
-    assert not (tmp_path / 'mirror').exists()
-
-
-def test_a_credential_in_the_diff_is_a_usage_fault_before_the_output_dir_syncs(tmp_path, monkeypatch):
-    token = 'q7RfX2mKp' + '9WzL4vNc8' + 'YbT3hJd'  # split, so a diff that holds this line passes the check
-    diff = f'+++ b/cfg.py\n+API_TOKEN = "{token}"'
-    monkeypatch.setattr('positronic.utils.run_metadata', lambda patterns: {'command': ['pos'], CURRENT_DIFF: diff})
-
-    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False), scoped_env_var(ENV_TELEMETRY_DIR):
-        with pytest.raises(CommandFailed, match=re.escape(CURRENT_DIFF)) as exc:
             prepare_output_dir(tmp_path / 'episodes')
 
     assert exc.value.fault is Fault.USAGE

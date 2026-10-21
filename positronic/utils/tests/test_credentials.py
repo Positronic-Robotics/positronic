@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from positronic.utils.credentials import CredentialInRunMetadata, check_command, check_text
+from positronic.utils.credentials import CredentialInRunMetadata, check_command, redact_diff
 
 # Split, so that a diff which holds this line does not look like it holds a credential.
 TOKEN = 'q7RfX2mKp' + '9WzL4vNc8' + 'YbT3hJd'
@@ -93,20 +93,19 @@ def test_the_refusal_names_the_argument_and_not_the_value():
     assert TOKEN not in str(exc.value)
 
 
-def test_a_diff_line_with_a_credential_is_refused_by_field_and_line():
-    diff = f'--- a/cfg.py\n+++ b/cfg.py\n@@ -1 +1 @@\n-API_TOKEN = None\n+API_TOKEN = "{TOKEN}"'
+def test_a_diff_line_with_a_credential_becomes_a_marker_that_names_the_field_and_line():
+    diff = f'--- a/cfg.py\n+++ b/cfg.py\n@@ -1,2 +1,2 @@\n-API_TOKEN = None\n+API_TOKEN = "{TOKEN}"\n x = 1\n'
 
-    with pytest.raises(CredentialInRunMetadata, match=r'^git\.current\.diff: line 5 ') as exc:
-        check_text(diff, 'git.current.diff')
-
-    assert TOKEN not in str(exc.value)
-
-
-def test_a_diff_with_no_credential_passes():
-    check_text(
-        '+    image_key = "image.wrist_2"\n+    api_version = "v1"\n+    token = os.environ[TOKEN_ENV]\n',
-        'git.current.diff',
+    assert redact_diff(diff, 'git.current.diff') == (
+        '--- a/cfg.py\n+++ b/cfg.py\n@@ -1,2 +1,2 @@\n-API_TOKEN = None\n'
+        '+<git.current.diff: line 5 removed, it looks like a credential>\n x = 1\n'
     )
+
+
+def test_a_diff_with_no_credential_stays_as_it_is():
+    diff = '+    image_key = "image.wrist_2"\n+    api_version = "v1"\n+    token = os.environ[TOKEN_ENV]\n'
+
+    assert redact_diff(diff, 'git.current.diff') == diff
 
 
 @pytest.mark.parametrize('flag', ['--policy.headers', '--policy.headers.Modal-Key', '--policy.base.headers'])

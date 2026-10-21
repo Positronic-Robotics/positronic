@@ -1,10 +1,12 @@
-"""A check that refuses text that looks like a credential before run metadata stores it.
+"""Checks that keep text that looks like a credential out of run metadata.
 
-It recognizes a key word next to a random value, an ``Authorization`` value, and an inline header set on the
+A command with such an argument is refused. A diff line with such text is replaced by a marker. The checks
+recognize a key word next to a random value, an ``Authorization`` value, and an inline header set on the
 command line. A credential under a header name with no key word, or with a low-entropy value, passes on any
 flag except a ``headers`` one.
 """
 
+import logging
 import math
 import re
 from collections import Counter
@@ -131,14 +133,13 @@ def check_command(argv: Sequence[str]) -> None:
                 )
 
 
-def check_text(text: str, field: str) -> None:
-    """Raise `CredentialInRunMetadata` when a line of ``text`` looks like a credential.
-
-    The error names ``field`` and the line number, never the value.
-    """
-    for number, line in enumerate(text.splitlines(), start=1):
+def redact_diff(diff: str, field: str) -> str:
+    """``diff`` with a marker that names ``field`` and the line in place of each line that looks like a credential."""
+    lines = diff.split('\n')
+    for i, line in enumerate(lines):
         if _holds_credential(line):
-            raise CredentialInRunMetadata(
-                f'{field}: line {number} looks like a credential, and run metadata stores {field}; '
-                'remove it from the uncommitted changes'
-            )
+            # The marker keeps the `+`, `-` or space prefix of the line, so the hunk line counts stay true.
+            prefix = line[:1] if line[:1] in ('+', '-', ' ') else ''
+            lines[i] = f'{prefix}<{field}: line {i + 1} removed, it looks like a credential>'
+            logging.warning(f'{field}: line {i + 1} looks like a credential; run metadata stores a marker in its place')
+    return '\n'.join(lines)

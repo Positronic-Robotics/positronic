@@ -14,7 +14,7 @@ import yaml
 
 from positronic import __file__ as pkg_init_file
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
-from positronic.utils.credentials import check_command, check_text
+from positronic.utils.credentials import check_command, redact_diff
 from positronic.utils.frozen_dict import frozen_keys_dict, frozen_view
 from positronic.utils.git import get_git_diff, get_git_state, get_package_checkout, get_package_git_state
 
@@ -176,7 +176,8 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
         - git.positronic: the installed positronic revision (a wheel names the commit it was built
           from; an editable install names its checkout)
         - git.current: the git state of the working directory, where it differs
-        - git.*.diff: Git diff for uncommitted changes matching patterns
+        - git.*.diff: Git diff for uncommitted changes matching patterns, with a marker in place of each line
+          that looks like a credential
         - environment: Environment information (VIRTUAL_ENV, uv.lock presence, docker info)
     """
 
@@ -200,7 +201,7 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
         if add_git_diff and pkg_checkout is not None:
             git_diff = get_git_diff(workdir=pkg_checkout, patterns=patterns)
             if git_diff:
-                metadata[POSITRONIC_DIFF] = git_diff
+                metadata[POSITRONIC_DIFF] = redact_diff(git_diff, POSITRONIC_DIFF)
 
     git_state = get_git_state()
     if git_state and git_state != pkg_git_state:
@@ -208,7 +209,7 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
         if add_git_diff:
             git_diff = get_git_diff(patterns=patterns)
             if git_diff:
-                metadata[CURRENT_DIFF] = git_diff
+                metadata[CURRENT_DIFF] = redact_diff(git_diff, CURRENT_DIFF)
 
     # Environment information
     environment = {}
@@ -243,11 +244,8 @@ def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, a
 
 
 def check_run_metadata(metadata: dict) -> None:
-    """Raise `CredentialInRunMetadata` when the command or a diff of ``metadata`` looks like it holds a credential."""
+    """Raise `CredentialInRunMetadata` when the command of ``metadata`` looks like it holds a credential."""
     check_command(metadata['command'])
-    for field in (POSITRONIC_DIFF, CURRENT_DIFF):
-        if field in metadata:
-            check_text(metadata[field], field)
 
 
 def write_run_metadata(output_dir: str | Path, metadata: dict, prefix: str = 'run_metadata') -> Path:
@@ -304,7 +302,7 @@ def save_run_metadata(
         Path to the saved metadata file.
 
     Raises:
-        CredentialInRunMetadata: the command or a diff looks like it holds a credential. Nothing is written.
+        CredentialInRunMetadata: the command looks like it holds a credential. Nothing is written.
     """
     metadata = run_metadata(patterns, add_git_diff, add_uv_lock)
     check_run_metadata(metadata)
