@@ -12,6 +12,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
+from positronic.drivers.roboarm.models import PANDA_EE_FRAME
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -21,7 +22,9 @@ from positronic.simulator.mujoco.sim import MujocoFrankaState
 
 class LiberoAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
-        super().__init__()
+        # TODO(#557): LIBERO's eef site is 38.1 mm and 90 deg from ``PANDA_EE_FRAME``. This frame keeps the LIBERO
+        # recordings and the checkpoints served on them paired as they were recorded and trained.
+        super().__init__(PANDA_EE_FRAME)
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -48,7 +51,7 @@ class LiberoAdapter(WireCommandAdapter):
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env reports the eef pose in the grip-site frame it controls; ``eef_quat`` is scalar-last (xyzw,
         # from ``mat2quat``), so ``from_quat_xyzw`` is the matching decode.
-        ee_pose = geom.Transform3D(raw_obs['eef_pos'], geom.Rotation.from_quat_xyzw(raw_obs['eef_quat']))
+        ee_pose = self._measure(geom.Transform3D(raw_obs['eef_pos'], geom.Rotation.from_quat_xyzw(raw_obs['eef_quat'])))
         state = MujocoFrankaState()
         state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
         obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs['grip'])}
