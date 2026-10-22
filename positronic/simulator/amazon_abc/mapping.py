@@ -30,7 +30,7 @@ ABC_OBS_PROMPT = 'prompt'
 ABC_INFO_SUCCESS = 'task_success'
 ABC_INFO_TASK_EVAL = 'task_eval'
 
-# The raw observation this server reports. Every name but the physics state is per arm.
+# The raw observation this server reports. Every name but the physics state and the task metrics is per arm.
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'
 OBS_EEF_POS = 'eef_pos'  # ABC world coordinates, metres.
