@@ -8,6 +8,7 @@ from lerobot.policies.act.modeling_act import ACTPolicy
 from pimm.logging import init_logging
 from positronic import geom, keys
 from positronic.cfg import codecs
+from positronic.drivers.roboarm import models
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
@@ -47,8 +48,8 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
     return model
 
 
-# No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
-# so none has a transform to declare.
+# ``ee_frame`` places the end-effector frame a checkpoint's poses live in relative to ``DEFAULT_FRAME``; ``None``
+# for a checkpoint trained in ``default``.
 @cfn.config(**{
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
@@ -102,7 +103,12 @@ joints_ik_sim = pipeline.override(**{
 ee_flip = pipeline.override(flip_grip=True)
 
 
-phail = pipeline.override(**{'action': codecs.phail_v1_execution, 'action.action': codecs.absolute_pos_action})
+# Trained on phail recordings, whose poses sit at the FR3's Desk tool frame.
+phail = pipeline.override(**{
+    'action': codecs.phail_v1_execution,
+    'action.action': codecs.absolute_pos_action,
+    'ee_frame': models.FR3_EE_FRAME,
+})
 demo = pipeline.override(**{
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
@@ -113,11 +119,13 @@ demo = pipeline.override(**{
     'flip_grip': True,
     'fps': 15.0,
     'horizon_sec': 1.0,
+    'ee_frame': models.PANDA_EE_FRAME,
 })
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline and the checkpoints it pairs with.
-# The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence the flipped pipeline.
+# The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence the flipped pipeline,
+# and their poses sit at the sim panda's old ``default``.
 COMMANDS = {
     'serve': serve.override(model=act_model, pipeline=ee),
     'ee': serve.override(model=act_model, pipeline=ee),
@@ -131,7 +139,8 @@ COMMANDS = {
         model=act_model.override(checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/'), pipeline=phail
     ),
     'sim_stack': serve.override(
-        model=act_model.override(checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/'), pipeline=ee_flip
+        model=act_model.override(checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/'),
+        pipeline=ee_flip.override(ee_frame=models.PANDA_EE_FRAME),
     ),
     'demo': serve.override(
         model=act_model.override(checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'),

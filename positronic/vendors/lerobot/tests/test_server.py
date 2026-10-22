@@ -1,5 +1,6 @@
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 
 pytest.importorskip('lerobot', minversion='0.4')
@@ -7,6 +8,9 @@ pytest.importorskip('lerobot', minversion='0.4')
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.act.configuration_act import ACTConfig
 
+from positronic import geom
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm import models
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs.observation import TASK_FIELD
 from positronic.vendors.lerobot import server
@@ -65,3 +69,9 @@ def test_session_owner_isolated_from_probes_and_other_episodes():
     model.end_session('episode')
     model._policy.reset.assert_called_once()
     assert model._session_id is None
+
+
+def test_the_phail_checkpoint_declares_the_fr3_tool_frame_it_was_trained_at():
+    deployment = server.COMMANDS['phail'].kwargs['pipeline'].instantiate()
+    declared = deployment.local.meta()[roboarm_keys.EE_FRAME]
+    np.testing.assert_allclose(declared, models.FR3_EE_FRAME.as_vector(geom.Rotation.Representation.QUAT))

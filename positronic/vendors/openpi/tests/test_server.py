@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 
 from positronic import geom, keys
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm import models
 from positronic.drivers.roboarm.command import CartesianDelta
 from positronic.policy.codecs import ACTION
 from positronic.policy.spec import from_spec
@@ -83,3 +85,13 @@ def test_other_server_presets_preserve_native_predictions(preset):
         chunk = model({}, session_id='test')
 
     np.testing.assert_array_equal(np.stack([record[ACTION] for record in chunk]), predictions, strict=True)
+
+
+@pytest.mark.parametrize(
+    ('preset', 'frame'),
+    [('phail', models.FR3_EE_FRAME), ('sim_stack', models.PANDA_EE_FRAME), ('libero', models.PANDA_EE_FRAME)],
+)
+def test_a_checkpoint_trained_before_the_flange_declares_its_old_tool_frame(preset, frame):
+    deployment = COMMANDS[preset].kwargs['pipeline'].instantiate()
+    declared = deployment.local.meta()[roboarm_keys.EE_FRAME]
+    np.testing.assert_allclose(declared, frame.as_vector(geom.Rotation.Representation.QUAT))

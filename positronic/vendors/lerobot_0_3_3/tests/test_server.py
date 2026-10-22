@@ -1,9 +1,13 @@
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 from positronic_model_server import server_wire
 from positronic_wire import wire
 
+from positronic import geom
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm import models
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import keys as policy_keys
@@ -119,3 +123,13 @@ def test_warmup_observation_matches_the_features_the_policy_declares():
     # The model callable accepts channels-last images.
     assert obs[CAMERA_FEATURE].shape == (224, 320, 3)
     assert obs[TASK_FIELD] == ''
+
+
+@pytest.mark.parametrize(
+    ('preset', 'frame'),
+    [('phail', models.FR3_EE_FRAME), ('sim_stack', models.PANDA_EE_FRAME), ('demo', models.PANDA_EE_FRAME)],
+)
+def test_a_checkpoint_trained_before_the_flange_declares_its_old_tool_frame(preset, frame):
+    deployment = lerobot_server.COMMANDS[preset].kwargs['pipeline'].instantiate()
+    declared = deployment.codec.meta[roboarm_keys.EE_FRAME]
+    np.testing.assert_allclose(declared, frame.as_vector(geom.Rotation.Representation.QUAT))
