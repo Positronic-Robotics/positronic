@@ -770,22 +770,6 @@
             {
                 "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 23,
-                    "endColumn": 95,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 22,
-                    "endColumn": 93,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
                     "startColumn": 33,
                     "endColumn": 88,
                     "lineCount": 1

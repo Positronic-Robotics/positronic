@@ -17,6 +17,7 @@ from positronic.drivers.roboarm.ik import (
     DLSIKSolver,
     DLSIKSolverWithLimits,
     LMIKSolver,
+    MoveDefaultFrame,
     _prepare_spec,
     frame_transform,
     ik_joints_from_episode,
@@ -336,3 +337,87 @@ def test_grasp_site_model_declares_the_frame_it_reports_in():
     assert model[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
     transform = frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK)
     np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-9)
+
+
+_QUAT = geom.Rotation.Representation.QUAT
+_FRANKA_JOINTS = [f'joint{i}' for i in range(1, 8)]
+
+
+def _recorded(urdf: str, frame: str, **statics) -> EpisodeContainer:
+    """Three steps of an episode recorded with poses and targets at ``frame`` of ``urdf``."""
+    ts = np.arange(3, dtype=np.int64) * 100_000_000
+    poses = np.array([_fk_site(urdf, q, frame) for q in TEST_CONFIGS])
+    return EpisodeContainer(
+        data={
+            keys.EE_POSE: DummySignal(ts, poses),
+            keys.TARGET_EE_POSE: DummySignal(ts, poses),
+            roboarm_keys.URDF: urdf,
+            roboarm_keys.JOINT_NAMES: _FRANKA_JOINTS,
+            **statics,
+        }
+    )
+
+
+def _assert_at_flange(episode, signal: str = keys.EE_POSE) -> None:
+    for i, q in enumerate(TEST_CONFIGS):
+        got = geom.Transform3D.from_vector(np.asarray(episode[signal][i][0]), _QUAT)
+        want = geom.Transform3D.from_vector(_fk_site(episode[roboarm_keys.URDF], q, DEFAULT_FRAME), _QUAT)
+        np.testing.assert_allclose(got.translation, want.translation, atol=1e-9)
+        assert (want.rotation.inv * got.rotation).angle < 1e-9
+        np.testing.assert_allclose(
+            _fk_site(episode[roboarm_keys.URDF], q, DEFAULT_FRAME), _fk_site(episode[roboarm_keys.URDF], q, FLANGE_LINK)
+        )
+
+
+def test_an_episode_recorded_at_the_old_default_moves_its_poses_to_the_flange():
+    urdf = bundled_franka_model(EE_LINK)[roboarm_keys.URDF]
+    moved = MoveDefaultFrame(FLANGE_LINK)(_recorded(urdf, EE_LINK, **{roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME}))
+
+    _assert_at_flange(moved)
+    _assert_at_flange(moved, keys.TARGET_EE_POSE)
+    assert moved[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
+
+
+def test_an_episode_that_names_its_frame_and_has_no_default_moves_to_the_flange():
+    """Recordings predating ``DEFAULT_FRAME`` name the link their poses sit at."""
+    urdf = Path(package_assets_path('drivers/roboarm/fr3.urdf')).read_text()
+    moved = MoveDefaultFrame(FLANGE_LINK)(_recorded(urdf, EE_LINK, **{roboarm_keys.CONTROL_FRAME: EE_LINK}))
+
+    _assert_at_flange(moved)
+    assert moved[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
+
+
+def test_an_episode_with_a_stated_ee_frame_moves_to_the_flange_and_states_none():
+    urdf = bundled_franka_model(EE_LINK)[roboarm_keys.URDF]
+    episode = _recorded(
+        urdf, DROID_EEF_LINK, **{roboarm_keys.EE_FRAME: frame_transform(urdf, EE_LINK, DROID_EEF_LINK).as_vector(_QUAT)}
+    )
+
+    moved = MoveDefaultFrame(FLANGE_LINK)(episode)
+
+    _assert_at_flange(moved)
+    np.testing.assert_allclose(moved[roboarm_keys.EE_FRAME], geom.Transform3D.identity.as_vector(_QUAT))
+
+
+def test_an_episode_already_at_the_flange_passes_unchanged():
+    episode = _recorded(
+        bundled_franka_model()[roboarm_keys.URDF], FLANGE_LINK, **{roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME}
+    )
+
+    assert MoveDefaultFrame(FLANGE_LINK)(episode) is episode
+
+
+def test_a_recorded_delta_frame_keeps_its_place_when_default_moves():
+    urdf = bundled_franka_model(EE_LINK)[roboarm_keys.URDF]
+    ts = np.arange(1, dtype=np.int64)
+    frame = geom.Transform3D(np.array([0.0, 0.0, 0.02]), geom.Rotation.from_euler([0.0, 0.0, 0.3]))
+    episode = _recorded(urdf, EE_LINK, **{roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME})
+    episode = EpisodeContainer(
+        data={**dict(episode.items()), keys.TARGET_EE_POSE_DELTA_FRAME: DummySignal(ts, frame.as_vector(_QUAT)[None])}
+    )
+
+    moved = MoveDefaultFrame(FLANGE_LINK)(episode)
+
+    got = geom.Transform3D.from_vector(np.asarray(moved[keys.TARGET_EE_POSE_DELTA_FRAME][0][0]), _QUAT)
+    want = FR3_EE_FRAME * frame
+    np.testing.assert_allclose(got.as_matrix, want.as_matrix, atol=1e-8)

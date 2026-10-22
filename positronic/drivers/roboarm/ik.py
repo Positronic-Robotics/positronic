@@ -7,6 +7,7 @@ Three solvers for reconstructing joint-space targets from recorded EE targets:
 """
 
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from functools import lru_cache, partial
 from typing import Any
 
@@ -16,11 +17,13 @@ from eval_vocabulary.timeline import recording_timeline
 from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation as ScipyRotation
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.dataset import transforms
+from positronic.dataset.episode import Episode
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
 
 _QUAT = geom.Rotation.Representation.QUAT
 
@@ -159,6 +162,67 @@ def pose_anchor(episode) -> tuple[str, geom.Transform3D]:
     if roboarm_keys.EE_FRAME in episode:
         return DEFAULT_FRAME, ee_frame(episode)
     return episode[roboarm_keys.CONTROL_FRAME], geom.Transform3D.identity
+
+
+class MoveDefaultFrame(EpisodeTransform):
+    """Move an episode's ``DEFAULT_FRAME`` onto ``frame`` of its own model, and re-express its poses there.
+
+    ``pose_anchor`` reads where the poses sit. ``fields`` hold poses; a recorded ``CartesianDelta`` frame moves with
+    ``DEFAULT_FRAME``. An episode whose ``DEFAULT_FRAME`` already sits at ``frame``, with its poses there, is
+    returned as it is.
+    """
+
+    def __init__(self, frame: str, fields: Sequence[str] = (keys.EE_POSE, keys.TARGET_EE_POSE, keys.ROBOT_COMMAND)):
+        self._frame = frame
+        self._fields = tuple(fields)
+
+    def __call__(self, episode: Episode) -> Episode:
+        urdf = episode[roboarm_keys.URDF]
+        anchor, offset = pose_anchor(episode)
+        anchor_from_frame = frame_transform(urdf, self._frame, anchor)
+        poses_from_frame = anchor_from_frame * offset
+        if _default_frame_sits_at(urdf, self._frame) and np.allclose(poses_from_frame.as_matrix, np.eye(4)):
+            return episode
+        move_pose = transforms.lazy_sequence(partial(change_frame, transform=poses_from_frame.inv))
+
+        def move_delta_frame(vector):
+            return (anchor_from_frame * geom.Transform3D.from_vector(np.asarray(vector), _QUAT)).as_vector(_QUAT)
+
+        moved = {key: partial(_elementwise, key=key, function=move_pose) for key in self._fields if key in episode}
+        if keys.TARGET_EE_POSE_DELTA_FRAME in episode:
+            moved[keys.TARGET_EE_POSE_DELTA_FRAME] = partial(
+                _elementwise, key=keys.TARGET_EE_POSE_DELTA_FRAME, function=transforms.lazy_sequence(move_delta_frame)
+            )
+        statics = {
+            roboarm_keys.URDF: FromValue(_with_default_frame_at(urdf, self._frame)),
+            roboarm_keys.CONTROL_FRAME: FromValue(DEFAULT_FRAME),
+        }
+        if roboarm_keys.EE_FRAME in episode:
+            statics[roboarm_keys.EE_FRAME] = FromValue(geom.Transform3D.identity.as_vector(_QUAT))
+        return Group(Derive(meta=None, **statics, **moved), Identity())(episode)
+
+
+def _elementwise(episode: Episode, key: str, function) -> Any:
+    return transforms.Elementwise(episode[key], function)
+
+
+def _default_frame_sits_at(urdf_xml: str, frame: str) -> bool:
+    if ET.fromstring(urdf_xml).find(f"link[@name='{DEFAULT_FRAME}']") is None:
+        return False
+    return np.allclose(frame_transform(urdf_xml, frame, DEFAULT_FRAME).as_matrix, np.eye(4))
+
+
+def _with_default_frame_at(urdf_xml: str, frame: str) -> str:
+    """The URDF with ``DEFAULT_FRAME`` coincident with the ``frame`` link."""
+    root = ET.fromstring(urdf_xml)
+    joint = next((j for j in root.findall('joint') if j.find(f"child[@link='{DEFAULT_FRAME}']") is not None), None)
+    if joint is None:
+        add_default_frame(root, frame)
+    else:
+        joint.set('name', f'{frame}_to_{DEFAULT_FRAME}')
+        joint.find('parent').set('link', frame)  # pyright: ignore[reportOptionalMemberAccess]
+        joint.find('origin').attrib.update(xyz='0 0 0', rpy='0 0 0')  # pyright: ignore[reportOptionalMemberAccess]
+    return ET.tostring(root, encoding='unicode')
 
 
 def _parse_target(target_ee_pose_vec):

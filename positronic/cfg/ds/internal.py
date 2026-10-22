@@ -9,6 +9,7 @@ These datasets remain on the private s3://raw/ bucket and include:
 - Full combined datasets for multi-task training
 """
 
+import xml.etree.ElementTree as ET
 from typing import Any
 
 import configuronic as cfn
@@ -24,7 +25,9 @@ from positronic.dataset.transforms import Elementwise, TransformedDataset, agg_f
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.roboarm.models import bundled_franka_model, bundled_panda_model
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.ik import MoveDefaultFrame
+from positronic.drivers.roboarm.models import EE_LINK, FLANGE_LINK, bundled_franka_model, bundled_panda_model
 from positronic.eval import keys as eval_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
@@ -45,10 +48,31 @@ _POINTER_VALUES: dict[str, Any] = {
 }
 ROBOT_SIGNAL_POINTERS = Derive(**_POINTER_VALUES)
 
-# The bundled model (URDF + collision meshes + joint names + control frame + gripper) for the real
-# arm and the MuJoCo sim.
-_REAL_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_franka_model().items()})
-_SIM_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_panda_model().items()})
+# A recording carries the model it was recorded on (URDF + collision meshes + joint names + control frame +
+# gripper). One that carries none was recorded before `default` moved to the flange, so the bundled model it gets
+# puts `default` where it was then.
+_LEGACY_REAL_MODEL = Derive(
+    meta=None, **{key: FromValue(value) for key, value in bundled_franka_model(EE_LINK).items()}
+)
+
+
+def _recorded_or_legacy_sim_model(key: str, legacy: Any):
+    """The recording's own model value, or the legacy panda one where the recording stores MuJoCo XML as its model."""
+
+    def pick(episode):
+        recorded = episode.get(roboarm_keys.URDF)
+        if recorded is not None and ET.fromstring(recorded).tag == 'robot' and key in episode:
+            return episode[key]
+        return legacy
+
+    return pick
+
+
+_SIM_MODEL = Derive(
+    meta=None, **{key: _recorded_or_legacy_sim_model(key, value) for key, value in bundled_panda_model(EE_LINK).items()}
+)
+# Every pose comes out at the flange, re-expressed from the model the recording carries.
+_AT_THE_FLANGE = MoveDefaultFrame(FLANGE_LINK)
 
 # Backfill the canonical `robot_command.pose` from the plural name older recordings stored on
 # disk. Recordings already using the canonical name pass through the Identity, which wins on the
@@ -56,13 +80,16 @@ _SIM_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_panda_mod
 _RENAME_ROBOT_COMMAND = Derive(**{keys.TARGET_EE_POSE: Get('robot_commands.pose', None)})
 
 # Signal pointers always come from the transform (first in each Group, so they win). Real recordings
-# carry the arm's own driver-emitted model, so the bundled one only backfills it (Identity before
-# `_REAL_MODEL`). The sim's model always comes from the transform — older sim recordings store raw
-# MuJoCo XML under `urdf` — so the bundled panda overwrites (`_SIM_MODEL` before Identity).
-REAL_ROBOT_TRANSFORM = Group(
-    ROBOT_SIGNAL_POINTERS, Identity(remove=_REMOVE_SIGNALS), _REAL_MODEL, _RENAME_ROBOT_COMMAND
+# carry the arm's own driver-emitted model, so the legacy one only backfills it (Identity before
+# `_LEGACY_REAL_MODEL`). Older sim recordings store raw MuJoCo XML under `urdf`, so `_SIM_MODEL` replaces
+# that with the legacy panda, and keeps a URDF a recording carries.
+REAL_ROBOT_TRANSFORM = (
+    Group(ROBOT_SIGNAL_POINTERS, Identity(remove=_REMOVE_SIGNALS), _LEGACY_REAL_MODEL, _RENAME_ROBOT_COMMAND)
+    | _AT_THE_FLANGE
 )
-SIM_ROBOT_TRANSFORM = Group(ROBOT_SIGNAL_POINTERS, _SIM_MODEL, Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
+SIM_ROBOT_TRANSFORM = (
+    Group(ROBOT_SIGNAL_POINTERS, _SIM_MODEL, Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND) | _AT_THE_FLANGE
+)
 
 RECOVERY_TASK = 'Recovery cases.'
 
