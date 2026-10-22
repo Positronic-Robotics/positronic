@@ -195,12 +195,21 @@ def test_a_new_chunk_keeps_the_markers_of_the_due_elements_it_replaces(execution
         run.close()
 
 
+@pytest.mark.parametrize(
+    'schedule',
+    [
+        lambda: ChunkedSchedule(fps=10, record_stats=False),
+        lambda: RTCSchedule(fps=10, call_after_sec=10, prefix_duration=ConstantDuration()),
+    ],
+    ids=['chunked', 'rtc'],
+)
 @pytest.mark.parametrize('marker', [{END: 'done'}, {MARKS: 'grasp'}, {MARKS: ['server.label']}, {MARKS: [1]}])
-def test_the_schedule_refuses_a_malformed_marker_when_the_answer_arrives(execution, marker):
+def test_a_schedule_refuses_a_malformed_marker_when_the_answer_arrives(execution, schedule, marker):
     runtime, _ = execution
-    run = runtime.start(ChunkedSchedule(fps=10, record_stats=False), lambda obs: [{MOTOR: 1, **marker}])
+    run = runtime.start(schedule(), lambda obs, *prefix: [{MOTOR: 1, **marker}])
     try:
         with pytest.raises(ValueError):
+            run.send({})
             run.send({})
     finally:
         run.close()

@@ -503,7 +503,7 @@ class _TimedChunk:
     """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
 
     def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
-        self._actions = actions
+        self._actions = [{**action, **checked_markers(action)} for action in actions]
         self._start_ns = start_ns
         self._fps = fps
         self._next_index = self._running_index(now_ns)
