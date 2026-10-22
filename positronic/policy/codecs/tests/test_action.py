@@ -25,7 +25,7 @@ from positronic.policy.codecs import (
     UnpackActionChunk,
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
-from positronic.policy.keys import END, MARKS
+from positronic.policy.keys import END
 from positronic.policy.spec import from_spec
 
 
@@ -143,16 +143,14 @@ def test_unpack_action_chunk_rejects_invalid_field_paths(fields):
         UnpackActionChunk(fields)
 
 
-@pytest.mark.parametrize('marker', [{END: 'complete'}, {MARKS: ['grasp']}])
-def test_unpack_action_chunk_refuses_reserved_fields_that_it_cannot_place(marker):
+def test_unpack_action_chunk_refuses_an_end_that_it_cannot_place():
     with pytest.raises(ValueError, match='cannot place'):
-        UnpackActionChunk({'value': ['prediction']}).decode({'prediction': np.zeros((3, 2)), **marker})
+        UnpackActionChunk({'value': ['prediction']}).decode({'prediction': np.zeros((3, 2)), END: 'complete'})
 
 
-@pytest.mark.parametrize('name', [END, MARKS])
-def test_unpack_action_chunk_refuses_a_reserved_field_as_an_output_name(name):
+def test_unpack_action_chunk_refuses_end_as_an_output_name():
     with pytest.raises(ValueError, match='cannot place'):
-        UnpackActionChunk({name: ['prediction']})
+        UnpackActionChunk({END: ['prediction']})
 
 
 def test_unpack_action_chunk_preserves_observations_and_training_columns():

@@ -164,22 +164,16 @@ decoder; `codecs.droid_execution` and `codecs.phail_v1_execution` wrap an action
 
 Which command your model produces is decided by its codec.
 
-An element can also carry two reserved fields. The client acts on them when the element plays:
+An element can also carry the reserved field `end`, with the value `complete` or `give_up`. The round that plays
+the element sends its other commands, and then the run ends with this claim. An element can hold only `end`, for
+example `{"end": "complete"}`. The codecs keep the field and refuse a malformed value when the answer arrives.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `end` | str | `complete` or `give_up`. The client sends the commands of the round, then the run ends with this claim |
-| `marks` | list of str | The names of moments, each a Python identifier. The episode records the time of the first play of each name as `inference.policy.<name>_ns` |
-
-An element can hold only reserved fields, for example `{"end": "complete"}`. The codecs keep the two fields and refuse
-a malformed value when the answer arrives. The schedule of the client stack acts on the fields.
-
-`ChunkedSchedule` plays the fields of every element that falls due, also when one round plays several elements or a
-new chunk replaces them. A round stops at the first element with `end`. A field is lost when its element never falls
-due: past `horizon_sec`, or in the elements that `RTCSchedule` skips when a new chunk starts. A replan after an arm
-error clears the fields of the elements that are due in its round. `RTCSchedule` leaves the fields out of the prefix
-that it sends to the model. A codec that builds elements from arrays, such as `UnpackActionChunk`, refuses an answer
-with reserved fields.
+The schedule of the client stack acts on `end`. `ChunkedSchedule` plays the `end` of an element that falls due,
+also when one round plays several elements or a new chunk replaces them. A round stops at the first element with
+`end`, and makes no further call. An `end` is lost when its element never falls due: past `horizon_sec`, or in the
+elements that `RTCSchedule` skips when a new chunk starts. A replan after an arm error clears an `end` that is due
+in its round. `RTCSchedule` leaves `end` out of the prefix that it sends to the model. A codec that builds elements
+from arrays, such as `UnpackActionChunk`, refuses an answer with `end`.
 
 A rig with more than one arm names every channel after the arm that owns it: observations arrive as
 `robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left` alongside

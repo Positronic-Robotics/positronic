@@ -46,9 +46,8 @@ from positronic.policy.base import (
     ReturnT,
     Runtime,
     Step,
-    checked_markers,
 )
-from positronic.policy.keys import ACTION_FPS, END, MARKS, mark_time_key
+from positronic.policy.keys import ACTION_FPS, END
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -196,24 +195,9 @@ class DelayEstimate(DurationEstimate):
         return cls(cls.Statistic.MAX, last, max_sec)
 
 
-def _merge_due(commands: dict[str, Any], element: Commands) -> None:
-    """Add ``element`` to the ``commands`` of a round: the last value wins on each channel, and the ``MARKS`` join."""
-    marks = (*commands.get(MARKS, ()), *element.get(MARKS, ()))
-    commands.update(element)
-    if marks:
-        commands[MARKS] = marks
-
-
-def _apply_markers(runtime: Runtime, commands: dict[str, Any], marked: set[str]) -> PolicyEnd | None:
-    """Take the reserved fields out of the ``commands`` of a round, and stamp each mark not in ``marked`` yet.
-
-    Returns the ``PolicyEnd`` of an ``END``, or ``None``.
-    """
-    for name in commands.pop(MARKS, ()):
-        if name not in marked:
-            marked.add(name)
-            runtime.set_metadata(mark_time_key(name), runtime.time_ns)
-    return commands.pop(END, None)
+def _with_checked_end(element: Commands) -> Commands:
+    """``element`` with its ``END`` read as a ``PolicyEnd``. A value that is no ``PolicyEnd`` raises ``ValueError``."""
+    return {**element, END: PolicyEnd(element[END])} if END in element else element
 
 
 class ChunkedSchedule(Policy):
@@ -254,10 +238,10 @@ class ChunkedSchedule(Policy):
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
 
-    The schedule acts on the reserved fields ``END`` and ``MARKS`` of every due waypoint, also when a new chunk
-    replaces the waypoint. A mark writes the episode time of its first play under ``mark_time_key``. A round stops at
-    the first waypoint with ``END``, sends its other commands, and the run ends at the next observation. A replan
-    after an arm error clears the plan, and with it the reserved fields of the waypoints that are due in that round.
+    A waypoint with the reserved field ``END`` ends the run. The round that plays it stops at it, sends its other
+    commands, and the run returns the ``PolicyEnd`` at the next observation. A round with a due ``END`` makes no call.
+    The ``END`` of a due waypoint that a new chunk replaces ends the run too, before any waypoint of the new chunk. A
+    replan after an arm error clears the plan, and with it an ``END`` that is due in that round.
 
     ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
     immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
@@ -277,15 +261,13 @@ class ChunkedSchedule(Policy):
         commands: Commands
         due_ns: int
         starts_chunk: bool
-        counted: bool = True
 
     class _Stats:
         """How the schedule played its waypoints.
 
         A round sends the commands of every due waypoint, and on each channel the last one wins. The due
         waypoints before the last one count as dropped, also when one of their channels went out. The due
-        waypoints that a new chunk replaces count as dropped too. The reserved fields that the round keeps from
-        them are not counted.
+        waypoints that a new chunk replaces count as dropped too, also when their ``END`` ends the run.
         """
 
         def __init__(self, runtime: Runtime) -> None:
@@ -364,23 +346,18 @@ class ChunkedSchedule(Policy):
         duration_sec = len(chunk) * period_sec
         if self._horizon_sec is not None:
             duration_sec = min(duration_sec, self._horizon_sec)
-        checked = [{**element, **checked_markers(element)} for element in chunk]
+        checked = [_with_checked_end(waypoint) for waypoint in chunk]
         waypoints = [
-            self._Waypoint(element, start_ns + round(i * period_sec * 1e9), i == 0)
-            for i, element in enumerate(checked)
+            self._Waypoint(waypoint, start_ns + round(i * period_sec * 1e9), starts_chunk=i == 0)
+            for i, waypoint in enumerate(checked)
             if i * period_sec < duration_sec
         ]
         return waypoints, start_ns + round(duration_sec * 1e9)
 
-    @classmethod
-    def _replaced_markers(cls, trajectory: deque[_Waypoint], now_ns: int) -> list[_Waypoint]:
-        """The reserved fields of the due waypoints that a new chunk replaces, so that the round still plays them."""
-        replaced = []
-        for waypoint in trajectory:
-            markers = {name: waypoint.commands[name] for name in (END, MARKS) if name in waypoint.commands}
-            if waypoint.due_ns <= now_ns and markers:
-                replaced.append(cls._Waypoint(markers, waypoint.due_ns, starts_chunk=False, counted=False))
-        return replaced
+    @staticmethod
+    def _due_end(trajectory: deque[_Waypoint], now_ns: int) -> PolicyEnd | None:
+        """The ``END`` of the first waypoint that is due by ``now_ns`` and holds one, or ``None``."""
+        return next((w.commands[END] for w in trajectory if w.due_ns <= now_ns and END in w.commands), None)
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         answer: Answer[Sequence[Commands]] | None = None
@@ -391,7 +368,6 @@ class ChunkedSchedule(Policy):
         called_at_ns = 0
         lead = self._inference_lead.run()
         stats = self._Stats(runtime) if self._record_stats else None
-        marked: set[str] = set()
 
         obs = yield
         try:
@@ -404,7 +380,9 @@ class ChunkedSchedule(Policy):
                     trajectory.clear()
                     end_ns = call_ns = now_ns
                     planned, recovering = 0, True
-                if answer is None and now_ns >= call_ns:
+                due_end = self._due_end(trajectory, now_ns)
+                end = None
+                if answer is None and now_ns >= call_ns and due_end is None:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
@@ -414,7 +392,7 @@ class ChunkedSchedule(Policy):
                     call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
                     # A regular early answer waits behind the commands that are still due.
                     if start_ns == now_ns:
-                        trajectory = deque([*self._replaced_markers(trajectory, now_ns), *waypoints])
+                        end, trajectory = due_end, deque(waypoints)
                     else:
                         trajectory.extend(waypoints)
                     planned = len(waypoints)
@@ -422,17 +400,15 @@ class ChunkedSchedule(Policy):
                 commands: dict[str, Any] = {}
                 due_ns = None
                 starts_chunk = False
-                while trajectory and trajectory[0].due_ns <= now_ns and END not in commands:
+                while end is None and trajectory and trajectory[0].due_ns <= now_ns:
                     waypoint = trajectory.popleft()
-                    if waypoint.counted:
-                        due_ns = waypoint.due_ns
+                    due_ns = waypoint.due_ns
                     starts_chunk |= waypoint.starts_chunk
-                    _merge_due(commands, waypoint.commands)
-                end = _apply_markers(runtime, commands, marked)
+                    commands.update(waypoint.commands)
+                    end = commands.pop(END, None)
                 recovering = recovering and not commands
                 if stats is not None:
-                    queued = sum(waypoint.counted for waypoint in trajectory)
-                    stats.count_round(planned, due_ns, now_ns, queued=queued, starts_chunk=starts_chunk)
+                    stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
                 if end is not None:
                     yield Step(commands, now_ns)
                     return end
@@ -491,7 +467,7 @@ class _TimedChunk:
     """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
 
     def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
-        self._actions = [{**action, **checked_markers(action)} for action in actions]
+        self._actions = [_with_checked_end(action) for action in actions]
         self._start_ns = start_ns
         self._fps = fps
         self._next_index = self._running_index(now_ns)
@@ -514,7 +490,7 @@ class _TimedChunk:
             action = self._sample(slot_ns, sampling)
             if action is None:
                 break
-            prefix.append({name: value for name, value in action.items() if name not in (END, MARKS)})
+            prefix.append({name: value for name, value in action.items() if name != END})
         return prefix
 
     def _sample(self, time_ns: int, sampling: PrefixSampling) -> Commands | None:
@@ -540,9 +516,17 @@ class _TimedChunk:
         while (
             self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns and END not in commands
         ):
-            _merge_due(commands, self._actions[self._next_index])
+            commands.update(self._actions[self._next_index])
             self._next_index += 1
         return commands
+
+    def ends_by(self, now_ns: int) -> bool:
+        """Whether an action due by ``now_ns`` and not taken yet holds ``END``."""
+        return any(
+            END in self._actions[index]
+            for index in range(self._next_index, len(self._actions))
+            if self._due_ns(index) <= now_ns
+        )
 
     def next_due_ns(self) -> int | None:
         """When the next action not taken yet is due, or ``None`` after the last one."""
@@ -592,8 +576,8 @@ class RTCSchedule(Policy):
     `infer` gets the observation and the prefix, in the command format that `infer`
     returns, and converts both to the model's format.
 
-    The policy acts on the reserved fields ``END`` and ``MARKS`` of the actions it executes, as
-    `ChunkedSchedule` does. The prefix holds no reserved fields.
+    An action with the reserved field ``END`` ends the run, as in `ChunkedSchedule`. A round with a due ``END``
+    makes no call. The prefix holds no ``END``.
 
     Only a model with absolute actions works with this policy. No codec converts a
     command back to a relative model action, so the prefix cannot be given to a
@@ -623,7 +607,6 @@ class RTCSchedule(Policy):
         called_at_ns = 0
         chunk: _TimedChunk | None = None
         next_call_ns = 0
-        marked: set[str] = set()
         obs = yield
         try:
             while True:
@@ -636,7 +619,7 @@ class RTCSchedule(Policy):
                     answer = None
                     next_call_ns = start_ns + self._call_after_ns
 
-                if answer is None and now_ns >= next_call_ns:
+                if answer is None and now_ns >= next_call_ns and (chunk is None or not chunk.ends_by(now_ns)):
                     prefix = []
                     if chunk is not None:
                         prefix = chunk.prefix(now_ns, prefix_sec, self._prefix_sampling)
@@ -644,7 +627,7 @@ class RTCSchedule(Policy):
                     answer = runtime.submit(infer, obs, prefix)
 
                 commands = {} if chunk is None else chunk.take_due(now_ns)
-                end = _apply_markers(runtime, commands, marked)
+                end = commands.pop(END, None)
                 if end is not None:
                     yield Step(commands, now_ns)
                     return end

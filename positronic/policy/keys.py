@@ -22,16 +22,8 @@ TRANSCRIPT = 'transcript'
 STOP_REASON = 'stop_reason'
 HINDSIGHT = 'hindsight'
 
-# Reserved fields of a result element. ``END`` holds the ``PolicyEnd`` that ends the run. ``MARKS`` holds the names of
-# the moments that the element marks.
+# The reserved field of a result element that holds the ``PolicyEnd`` that ends the run.
 END = 'end'
-MARKS = 'marks'
-
-
-def mark_time_key(name: str) -> str:
-    """The episode metadata name of the time of the moment ``name``."""
-    return f'{name}_ns'
-
 
 POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'
