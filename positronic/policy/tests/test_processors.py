@@ -52,7 +52,6 @@ from positronic.policy.processors import (
     DurationEstimateRun,
     PauseOnUnavailable,
     PrefixSampling,
-    RequireRunningClock,
     RTCSchedule,
     TemporalStack,
 )
@@ -87,9 +86,9 @@ def test_unavailability_withholds_commands_and_resumes_on_recovery(execution, st
         run.close()
 
 
-@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,)), RequireRunningClock()])
-def test_a_wrapper_returns_what_its_inner_run_returned(wrapper):
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=True)
+@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,))])
+def test_a_wrapper_returns_what_its_inner_run_returned(execution, wrapper):
+    runtime, _ = execution
 
     def inner():
         yield
@@ -97,13 +96,10 @@ def test_a_wrapper_returns_what_its_inner_run_returned(wrapper):
 
     child = inner()
     next(child)
-    try:
-        run = runtime.start(wrapper, child)
-        with pytest.raises(StopIteration) as end:
-            run.send({MOTOR: 1})
-        assert end.value.value is PolicyEnd.COMPLETE
-    finally:
-        runtime.close()
+    run = runtime.start(wrapper, child)
+    with pytest.raises(StopIteration) as end:
+        run.send({MOTOR: 1})
+    assert end.value.value is PolicyEnd.COMPLETE
 
 
 def test_a_declared_stack_ends_the_run_when_the_end_element_plays(execution):
@@ -255,12 +251,6 @@ def test_the_schedule_refuses_a_malformed_end_past_its_horizon(execution):
             run.send({})
     finally:
         run.close()
-
-
-def test_require_running_clock_refuses_a_clock_that_stands_still_during_calls(execution):
-    runtime, _ = execution
-    with pytest.raises(RuntimeError, match='charged inference time'):
-        runtime.start(RequireRunningClock(), Mock())
 
 
 @pytest.mark.parametrize('pad_start', [True, False])
@@ -1449,7 +1439,6 @@ def test_wire_names_match_the_registered_components():
         'unpack_action_chunk': UnpackActionChunk({'action': ['prediction']}),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         'convert_pose': ConvertPose('rot6d'),
-        'require_running_clock': RequireRunningClock(),
     }
     registered = spec.COMPONENTS
     assert set(instances) == set(registered)

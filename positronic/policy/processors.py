@@ -36,7 +36,6 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     Answer,
     Commands,
-    InputT,
     Obs,
     Policy,
     PolicyEnd,
@@ -757,27 +756,3 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
             VERSION: self.WIRE_VERSION,
             ARGS: {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
         }
-
-
-class RequireRunningClock(Processor[InputT, OutputT, ReturnT]):
-    """Refuse a runtime whose clock stands still while a call runs, and pass the inputs and outputs through."""
-
-    WIRE_NAME = 'require_running_clock'
-
-    def run(
-        self, runtime: Runtime, inner: ProcessorRun[InputT, OutputT, ReturnT]
-    ) -> ProcessorRun[InputT, OutputT, ReturnT]:
-        if runtime.calls_hold_clock:
-            raise RuntimeError(
-                'the stack needs a clock that runs during calls: run the sim with charged inference time'
-            )
-        value = yield
-        while True:
-            try:
-                output = inner.send(value)
-            except StopIteration as end:
-                return end.value
-            value = yield output
-
-    def to_spec(self) -> dict[str, Any]:
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}

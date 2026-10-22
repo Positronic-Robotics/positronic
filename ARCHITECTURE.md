@@ -129,8 +129,7 @@ processor stack. Empty commands leave the driver's last target in place.
 ordinary functions through its runtime. A simulated task can request
 `charge_inference_time=False`; otherwise answer availability includes queueing and
 execution time. The runtime exposes one clock to the policy, without revealing whether
-that clock is simulated. Scheduling processors read it when they anchor a chunk. A policy can
-learn one more fact: whether the clock stands still while a call runs (`calls_hold_clock`).
+that clock is simulated. Scheduling processors read it when they anchor a chunk.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every
