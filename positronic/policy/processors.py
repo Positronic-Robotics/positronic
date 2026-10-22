@@ -364,9 +364,10 @@ class ChunkedSchedule(Policy):
         duration_sec = len(chunk) * period_sec
         if self._horizon_sec is not None:
             duration_sec = min(duration_sec, self._horizon_sec)
+        checked = [{**element, **checked_markers(element)} for element in chunk]
         waypoints = [
-            self._Waypoint({**element, **checked_markers(element)}, start_ns + round(i * period_sec * 1e9), i == 0)
-            for i, element in enumerate(chunk)
+            self._Waypoint(element, start_ns + round(i * period_sec * 1e9), i == 0)
+            for i, element in enumerate(checked)
             if i * period_sec < duration_sec
         ]
         return waypoints, start_ns + round(duration_sec * 1e9)

@@ -225,6 +225,17 @@ def test_a_schedule_refuses_a_malformed_marker_when_the_answer_arrives(execution
         run.close()
 
 
+def test_the_schedule_refuses_a_malformed_marker_past_its_horizon(execution):
+    runtime, _ = execution
+    schedule = ChunkedSchedule(fps=10, horizon_sec=0.1, record_stats=False)
+    run = runtime.start(schedule, lambda obs: [{MOTOR: 1}, {MOTOR: 2, MARKS: 'grasp'}])
+    try:
+        with pytest.raises(ValueError):
+            run.send({})
+    finally:
+        run.close()
+
+
 def test_require_running_clock_refuses_a_clock_that_stands_still_during_calls(execution):
     runtime, _ = execution
     with pytest.raises(RuntimeError, match='charged inference time'):
