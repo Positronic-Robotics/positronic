@@ -83,17 +83,23 @@ class InferenceSession:
     def _handshake(self, ready_by: float, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
 
-        The server must send an update at least every ``timeout_per_message`` seconds. No wait for a further
-        update begins past ``ready_by``, so a server that reports loading for ever is left there.
+        The server must send an update at least every ``timeout_per_message`` seconds. No wait runs past
+        ``ready_by``, so a server that reports loading for ever is left there.
         """
-        wait = timeout_per_message
+        last = 'no status'
         while True:
+            left = ready_by - time.monotonic()
+            if left <= 0:
+                raise ReadyDeadlinePassed(f'Server was not ready in the time the client waits for: {last}')
+            wait = min(timeout_per_message, left)
             try:
                 raw = self._conn.recv(timeout=wait)
                 response = serialization.deserialise(raw)
             except TimeoutError:
                 if wait < timeout_per_message:
-                    raise ReadyDeadlinePassed('Server was not ready in the time the client waits for') from None
+                    raise ReadyDeadlinePassed(
+                        f'Server was not ready in the time the client waits for: {last}'
+                    ) from None
                 raise TimeoutError(
                     f'Server did not send status update within {timeout_per_message}s. '
                     f'Server may have crashed or model loading is taking too long without progress updates.'
@@ -112,12 +118,7 @@ class InferenceSession:
 
             message = response.get(legacy_protocol.MESSAGE, status)
             logger.info(f'Server status: [{status}] {message}')
-            left = ready_by - time.monotonic()
-            if left <= 0:
-                raise ReadyDeadlinePassed(
-                    f'Server was not ready in the time the client waits for: [{status}] {message}'
-                )
-            wait = min(timeout_per_message, left)
+            last = f'[{status}] {message}'
 
     @property
     def protocol_version(self) -> protocol.ProtocolVersion:

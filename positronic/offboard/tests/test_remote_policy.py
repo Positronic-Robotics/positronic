@@ -506,6 +506,27 @@ class TestTheReadyDeadline:
         assert len(fake.dials) == 1
         waits_for_ever.close.assert_called_once()
 
+    def test_the_ready_deadline_bounds_the_wait_for_the_first_status(self):
+        clock = [0.0]
+
+        def recv(timeout: float | None = None) -> bytes:
+            assert timeout is not None
+            clock[0] += timeout
+            raise TimeoutError
+
+        silent = MagicMock(spec=wire.ClientConnection)
+        silent.recv.side_effect = recv
+        fake = _FakeWire(silent, _connection(_ready('second')))
+        with (
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch('positronic.offboard.client.time.sleep', side_effect=lambda s: clock.__setitem__(0, clock[0] + s)),
+            pytest.raises(ReadyDeadlinePassed),
+        ):
+            InferenceClient(fake, _ADDRESS, ready_deadline=1.0).new_session()
+
+        assert clock[0] <= 1.0
+        assert len(fake.dials) == 1
+
 
 class TestWaitForServer:
     """Waiting for a server opens no session."""
