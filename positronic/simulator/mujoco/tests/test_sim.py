@@ -1,13 +1,21 @@
 """The sim's arm under a synchronous move: it travels through the physics, and answers once it is there."""
 
+import re
+
+import mujoco as mj
 import numpy as np
 import pytest
 
 import pimm
+from positronic import geom
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.ik import _prepare_spec
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, FLANGE_LINK, bundled_panda_model
 from positronic.geom import Transform3D
-from positronic.simulator.mujoco.sim import MujocoSim
+from positronic.simulator.mujoco.sim import SCENE_XML, MujocoSim
+from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.tests.testing_coutils import drive_scheduler
 
 MODEL = 'positronic/assets/mujoco/franka_table.xml'
@@ -260,3 +268,54 @@ def test_a_redraw_publishes_the_scene_before_it_answers():
                 assert pimm.value_updated(meta) is not None, 'the redraw answered before it published the scene'
                 return
         pytest.fail('the redraw never answered')
+
+
+JOINT_SETS = [
+    np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]),
+    np.array([0.5, 0.3, -0.4, -1.2, 0.8, 1.0, -0.3]),
+    np.array([-0.8, -1.0, 0.6, -2.5, -0.3, 2.5, 0.9]),
+]
+
+
+class _MoveTheArmBase(MujocoSceneTransform):
+    def apply(self, spec):
+        base = spec.body('world_ph')
+        base.pos = np.array([0.3, -0.2, 0.1])
+        base.quat = np.array([np.cos(0.35), 0.0, 0.0, np.sin(0.35)])
+        return spec
+
+
+def _model_pose(urdf: str, q: np.ndarray, frame: str) -> geom.Transform3D:
+    """The pose of ``frame`` at joints ``q`` in a URDF, in the arm base."""
+    model = _prepare_spec(urdf, frame).compile()
+    data = mj.MjData(model)
+    data.qpos[[model.joint(f'joint{i}').qposadr.item() for i in range(1, 8)]] = q
+    mj.mj_forward(model, data)
+    site = data.site(frame)
+    return geom.Transform3D(site.xpos.copy(), geom.Rotation.from_rotation_matrix(site.xmat.reshape(3, 3)))
+
+
+def _assert_reports_default_of_the_recorded_model(sim: MujocoSim) -> None:
+    urdf = bundled_panda_model()[roboarm_keys.URDF]
+    for q in JOINT_SETS:
+        sim.data.qpos[[sim.model.joint(f'joint{i}_ph').qposadr.item() for i in range(1, 8)]] = q
+        mj.mj_forward(sim.model, sim.data)
+        base = sim.data.body('link0_ph')
+        base_pose = geom.Transform3D(base.xpos.copy(), geom.Rotation.from_rotation_matrix(base.xmat.reshape(3, 3)))
+        got = base_pose.inv * sim._ee_pose
+        want = _model_pose(urdf, q, DEFAULT_FRAME)
+        np.testing.assert_allclose(got.translation, want.translation, atol=1e-6)
+        assert (want.rotation.inv * got.rotation).angle < 1e-6
+
+
+@pytest.mark.parametrize('loaders', [(), (_MoveTheArmBase(),)], ids=['scene-base', 'moved-base'])
+def test_the_reported_pose_is_default_of_the_recorded_model(loaders):
+    _assert_reports_default_of_the_recorded_model(MujocoSim(MODEL, loaders=loaders))
+
+
+def test_a_recorded_scene_with_no_flange_site_reports_at_the_flange():
+    sim = MujocoSim(MODEL, loaders=())
+    unnamed = re.sub(f'<site name="{FLANGE_LINK}_ph"[^>]*/>', '', sim.scene_xml)
+    assert unnamed != sim.scene_xml, 'the scene carries no flange site to delete'
+    sim.load_state({**sim.save_state(), SCENE_XML: unnamed})
+    _assert_reports_default_of_the_recorded_model(sim)
