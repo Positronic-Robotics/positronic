@@ -491,6 +491,15 @@ def test_scene_frames_match_the_recorded_urdf_frames():
             np.testing.assert_allclose(scene_rot, urdf_rot, atol=1e-6)
 
 
+def test_scene_frame_sites_stay_out_of_the_camera_images():
+    """The sim renders the default site groups, and the frame sites sit outside them."""
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+    rendered_groups = mj.MjvOption().sitegroup
+    for frame in (FLANGE_LINK, GRIPPER_SITE):
+        # rules-allow: hardcoded-keys — the scene's name suffix is this test's input, not a name it shares
+        assert not rendered_groups[sim.model.site(f'{frame}_ph').group.item()]
+
+
 def test_scene_gripper_sits_midway_between_the_fingertip_pads():
     """The grip point is the midpoint of the two fingertip pads at every arm pose and every opening."""
     sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
