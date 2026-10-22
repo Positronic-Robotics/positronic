@@ -395,8 +395,8 @@ class _Arm(DriverRun[command.CommandType]):
 
     @contextlib.contextmanager
     def lose_control_on_failure(self) -> Iterator[None]:
-        """End the driver's control of the arm when a ``state()`` or ``goal()`` read in the block fails, and raise
-        the failure again.
+        """End the driver's control of the arm when a libfranka read or send in the block fails, and raise the
+        failure again.
 
         Not once the world stops: the teardown stops the arm itself.
         """
@@ -426,8 +426,9 @@ class _Arm(DriverRun[command.CommandType]):
 
     def command_target(self, target: np.ndarray, mode: command.ControlModeType | None) -> None:
         """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between."""
-        self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
-        self.robot.set_target_joints(target)
+        with self.lose_control_on_failure():
+            self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
+            self.robot.set_target_joints(target)
         self._refused = False  # the goal just dispatched is not the one the last reading found refused
 
     def await_goal(
@@ -564,7 +565,7 @@ class _Arm(DriverRun[command.CommandType]):
         # The robot still tracks the goal it missed, and would resume the move once the arm comes free.
         with self.lose_control_on_failure():
             q = self.robot.state().q
-        self.robot.set_target_joints(q)
+            self.robot.set_target_joints(q)
         raise TimeoutError(f'the arm stopped short of {target}')
 
     def _clamp(self, target: np.ndarray) -> np.ndarray:

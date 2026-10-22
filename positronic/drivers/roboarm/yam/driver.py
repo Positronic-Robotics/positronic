@@ -446,9 +446,10 @@ class _Arm(DriverRun[command.CommandType]):
             logger.error(f'The arm did not reach the parking pose: {exc}')
         return *self.hold_where_it_stopped(), MoveStatus.GAVE_UP
 
-    def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
-        """Settle onto the start pose with the gripper open, and return the joints and grip to hold. On a failure
-        or a stop, hold where the arm stopped. A ``ChainFault`` is raised."""
+    def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
+        """Settle onto the start pose with the gripper open, and return the joints and grip to hold, with the failure
+        that stopped the settle or None. On a failure or a stop, hold where the arm stopped. A ``ChainFault`` is
+        raised."""
         logger.info('Moving the arm to the start pose')
         # rules-allow: swallowed-error — an arm that will not reach its start pose reads ERROR; the run goes on
         try:
@@ -459,10 +460,10 @@ class _Arm(DriverRun[command.CommandType]):
             raise
         except Exception as exc:
             logger.error(f'The arm did not reach the start pose: {exc}')
-            return self.hold_where_it_stopped()
+            return *self.hold_where_it_stopped(), exc
         if reference is None:
-            return self.hold_where_it_stopped()
-        return reference, _OPEN_GRIP
+            return *self.hold_where_it_stopped(), None
+        return reference, _OPEN_GRIP, None
 
     def _report_parked(self) -> None:
         """Publish the parked state; a failure is logged, because the park is verified already."""
@@ -658,7 +659,7 @@ class Robot(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
         # Answers once the chain is open. On a lost chain it opens the chain again and moves the arm to the start
-        # pose first.
+        # pose first, and answers with the fault when the arm misses that pose.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
@@ -739,11 +740,14 @@ class Robot(pimm.ControlSystem):
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 self.robot_meta.emit(meta)
-                start = yield from arm.go_to_start()
+                joints, grip, missed = yield from arm.go_to_start()
                 for call in asked:
-                    call.set_result(None)
+                    if missed is None:
+                        call.set_result(None)
+                    else:
+                        call.set_exception(_arm_fault(missed))
                 asked = []
-                yield from self._serve(arm, start, should_stop, clock)
+                yield from self._serve(arm, (joints, grip), should_stop, clock)
             except ChainFault as exc:
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
                 lost = self._report_lost(exc)

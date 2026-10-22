@@ -1331,6 +1331,20 @@ def test_a_ready_call_whose_chain_does_not_open_answers_its_error_and_the_next_o
     assert second.result() is None
 
 
+def test_a_ready_call_whose_reopened_arm_misses_its_start_pose_answers_the_miss(world, rig):
+    _lose_the_chain(rig)
+    reopened = FakeYam()
+    reopened.stuck = True
+    rig.driver._connect = lambda channel, sim, gravity_comp_factor: reopened
+    answer = _readier(world, rig)(None)
+    _until_answered(rig, answer, within_s=120)
+
+    with pytest.raises(DeviceFault) as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, TimeoutError)
+
+
 def test_a_chain_that_does_not_open_at_start_holds_an_error_until_a_ready_call_opens_it(world):
     rig = Rig()
     reopened = FakeYam()

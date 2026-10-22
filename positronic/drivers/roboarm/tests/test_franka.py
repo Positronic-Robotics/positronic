@@ -2606,6 +2606,58 @@ def test_a_libfranka_failure_in_a_move_that_the_next_read_does_not_repeat_still_
     assert isinstance(answered.value.__cause__, RuntimeError)
 
 
+@pytest.mark.parametrize('send', ['set_control_mode', 'set_target_joints'])
+def test_a_libfranka_failure_sending_a_move_loses_the_arm(desk, world, monkeypatch, send):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+    sent = getattr(arm, send)
+    failures = [RuntimeError('libfranka: TCP send: Broken pipe')]
+
+    def send_once_failing(*args):
+        if failures:
+            raise failures.pop()
+        return sent(*args)
+
+    monkeypatch.setattr(arm, send, send_once_failing)
+    mover = _mover(world, driver)
+    move = mover(command.JointPosition(JOGGED))
+    next(loop)
+
+    with pytest.raises(DeviceFault, match='Broken pipe') as answered:
+        move.result()
+    assert isinstance(answered.value.__cause__, RuntimeError)
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    refused = mover(command.JointPosition(PARK))
+    next(loop)
+    with pytest.raises(DeviceFault, match='no connection to the arm'):
+        refused.result()
+
+
+def test_a_libfranka_failure_sending_a_streamed_target_loses_the_arm(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    loop, states = _running(desk, world, driver)
+    sent = arm.set_target_joints
+    failures = [RuntimeError('libfranka: TCP send: Broken pipe')]
+
+    def send_once_failing(*args):
+        if failures:
+            raise failures.pop()
+        return sent(*args)
+
+    monkeypatch.setattr(arm, 'set_target_joints', send_once_failing)
+    feed.push(command.JointPosition(JOGGED))
+    next(loop)
+
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    assert isinstance(error.__cause__, RuntimeError)
+
+
 def test_a_move_the_arm_refuses_puts_no_error_on_the_state(desk, world):
     arm = FakeArm(PARK)
     driver = _driver(arm)
