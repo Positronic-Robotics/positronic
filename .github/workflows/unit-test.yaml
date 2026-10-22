@@ -47,11 +47,37 @@ jobs:
         with:
           enable-cache: true
 
+      # The runner's Ubuntu mirror is slow at times, and 127 archive fetches then outlast the job.
+      - name: List the GStreamer packages
+        id: gst-packages
+        run: |
+          # The job needs nothing from the Microsoft source, and its fetch can fail the update.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.*
+          sudo apt-get update
+          mkdir -p "$RUNNER_TEMP/apt-archives/partial" "$RUNNER_TEMP/apt-empty/partial"
+          echo "names=$GST_PACKAGES" >> "$GITHUB_OUTPUT"
+          # The key hashes archive names and sizes; the mirror host in each URI changes per run.
+          echo "versions=$(apt-get install --print-uris -qq --no-install-recommends \
+            -o Dir::Cache::Archives="$RUNNER_TEMP/apt-empty" $GST_PACKAGES \
+            | awk '{print $2, $3}' | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+        env:
+          GST_PACKAGES: >-
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+
+      - name: Restore the GStreamer archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: gstreamer-apt-${{ runner.os }}-${{ steps.gst-packages.outputs.versions }}
+          restore-keys: gstreamer-apt-${{ runner.os }}-
+
       - name: Install GStreamer
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gstreamer1.0-tools gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
+            -o Dir::Cache::Archives="$RUNNER_TEMP/apt-archives" -o APT::Keep-Downloaded-Packages=true \
+            ${{ steps.gst-packages.outputs.names }}
+          sudo chown -R "$USER" "$RUNNER_TEMP/apt-archives"
 
       - name: Set up Python
         run: uv venv --python 3.13
