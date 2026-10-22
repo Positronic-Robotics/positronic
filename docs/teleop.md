@@ -77,6 +77,8 @@ Conversion for training picks its own keys from the recording.
 - The window shows the cameras of the policy in a grid, each with its name.
 - The headset video shows one camera: the first one, or the one that `positronic teleop --headset_camera=<name>`
   names. The phone page shows no video.
+- `positronic teleop` sends the headset video at JPEG quality 90; `--webxr.jpeg_quality=<0..100>` changes it. Lower
+  it if the video stutters on a slow Wi-Fi.
 
 ## Collect demonstrations in MuJoCo
 
