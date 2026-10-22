@@ -9,7 +9,9 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 import pos3
+from openpi_client import msgpack_numpy
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
+from websockets.sync.client import ClientConnection, connect
 
 from pimm.logging import init_logging
 from positronic import geom
@@ -30,6 +32,18 @@ logger = logging.getLogger(__name__)
 PREALLOCATE_ENV = 'XLA_PYTHON_CLIENT_PREALLOCATE'
 
 
+class SubprocessClient(WebsocketClientPolicy):
+    """A client to the openpi subprocess on the loopback, with no keepalive pings.
+
+    The subprocess runs ``infer`` on its event loop, so it answers no ping until the inference returns. A first
+    inference compiles the model and can take longer than a keepalive window. A dead subprocess closes the socket.
+    """
+
+    def _wait_for_server(self) -> tuple[ClientConnection, dict]:
+        connection = connect(self._uri, compression=None, max_size=None, ping_interval=None)
+        return connection, msgpack_numpy.unpackb(connection.recv())
+
+
 class OpenpiSubprocess:
     """Manages the OpenPI serve_policy.py subprocess."""
 
@@ -47,7 +61,7 @@ class OpenpiSubprocess:
         self.ws_port = ws_port
         self.uv_path = uv_path or 'uv'
         self.process: subprocess.Popen | None = None
-        self._client: WebsocketClientPolicy | None = None
+        self._client: SubprocessClient | None = None
 
     def _build_command(self) -> list[str]:
         return [
@@ -94,11 +108,11 @@ class OpenpiSubprocess:
         )
 
     @property
-    def client(self) -> WebsocketClientPolicy:
+    def client(self) -> SubprocessClient:
         """Get or create WebSocket client for inference."""
         if self._client is None:
             logger.info(f'Creating WebSocket client to OpenPI subprocess on port {self.ws_port}...')
-            self._client = WebsocketClientPolicy(host='127.0.0.1', port=self.ws_port)
+            self._client = SubprocessClient(host='127.0.0.1', port=self.ws_port)
             logger.info('WebSocket client created successfully')
         return self._client
 

@@ -1,4 +1,5 @@
 import json
+import threading
 from unittest import mock
 
 import numpy as np
@@ -13,7 +14,10 @@ from positronic.vendors.openpi import codecs
 
 pytest.importorskip('openpi_client')
 
-from positronic.vendors.openpi.server import COMMANDS, PREALLOCATE_ENV, OpenpiSubprocess
+from openpi_client import msgpack_numpy
+from websockets.sync.server import ServerConnection, serve
+
+from positronic.vendors.openpi.server import COMMANDS, PREALLOCATE_ENV, OpenpiSubprocess, SubprocessClient
 
 
 def _subprocess_env(monkeypatch) -> dict[str, str]:
@@ -34,6 +38,24 @@ def test_the_preallocation_setting_of_the_environment_reaches_the_subprocess(mon
     monkeypatch.setenv(PREALLOCATE_ENV, 'true')
 
     assert _subprocess_env(monkeypatch)[PREALLOCATE_ENV] == 'true'
+
+
+def _send_metadata_and_wait(connection: ServerConnection) -> None:
+    connection.send(msgpack_numpy.Packer().pack({}))
+    for _ in connection:
+        pass
+
+
+def test_the_subprocess_client_sends_no_keepalive_pings():
+    with serve(_send_metadata_and_wait, '127.0.0.1', 0) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        client = SubprocessClient(host='127.0.0.1', port=server.socket.getsockname()[1])
+        try:
+            assert client._ws.ping_interval is None
+            assert client._ws.keepalive_thread is None
+        finally:
+            client._ws.close()
+            server.shutdown()
 
 
 @pytest.mark.parametrize('dtype', [np.float32, np.float64])
