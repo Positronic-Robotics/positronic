@@ -444,6 +444,18 @@ def test_the_end_of_a_replaced_waypoint_is_not_counted_as_emitted(execution, mon
     assert (stats[eval_keys.DROPPED], stats[eval_keys.LATE_MAX_MS], stats[eval_keys.GAP_MAX_MS]) == (1, 0, 0)
 
 
+def test_the_elements_after_an_end_are_not_scheduled(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}, {MOTOR: 3}])
+    run.send({})
+    clock.advance_to_ns(100_000_000)
+    run.send({})
+    with pytest.raises(StopIteration):
+        run.send({})
+    stats = {name.removeprefix(f'{eval_keys.SCHEDULE}.'): value for name, value in runtime.metadata_snapshot().items()}
+    assert (stats[eval_keys.SCHEDULED], stats[eval_keys.EMITTED], stats[eval_keys.DROPPED]) == (2, 2, 0)
+
+
 def test_a_new_chunk_excludes_the_gap_from_the_previous_chunk(execution):
     runtime, clock = execution
     run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: i} for i in range(3)])

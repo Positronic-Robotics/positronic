@@ -342,10 +342,13 @@ class ChunkedSchedule(Policy):
 
     def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[list[_Waypoint], int]:
         period_sec = 1 / self._fps
-        duration_sec = len(chunk) * period_sec
+        checked = [_with_checked_end(waypoint) for waypoint in chunk]
+        # The run ends at the first end, so the elements after it are not part of the plan.
+        last = next((i for i, waypoint in enumerate(checked) if END in waypoint), len(checked) - 1)
+        checked = checked[: last + 1]
+        duration_sec = len(checked) * period_sec
         if self._horizon_sec is not None:
             duration_sec = min(duration_sec, self._horizon_sec)
-        checked = [_with_checked_end(waypoint) for waypoint in chunk]
         waypoints = [
             self._Waypoint(waypoint, start_ns + round(i * period_sec * 1e9), starts_chunk=i == 0)
             for i, waypoint in enumerate(checked)
