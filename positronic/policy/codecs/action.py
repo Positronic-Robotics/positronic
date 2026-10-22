@@ -46,6 +46,8 @@ class UnpackActionChunk(Codec):
                 or any(type(part) not in (str, int) for part in path)
             ):
                 raise ValueError('Prediction fields require string names and paths of string keys or integer indices')
+            if name in (END, MARKS):
+                raise ValueError(f'{type(self).__name__} cannot place {END!r} or {MARKS!r} on the elements it makes')
         self._fields = {name: tuple(path) for name, path in fields.items()}
         self._squeeze_dims = squeeze_dims
 

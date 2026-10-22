@@ -149,6 +149,12 @@ def test_unpack_action_chunk_refuses_reserved_fields_that_it_cannot_place(marker
         UnpackActionChunk({'value': ['prediction']}).decode({'prediction': np.zeros((3, 2)), **marker})
 
 
+@pytest.mark.parametrize('name', [END, MARKS])
+def test_unpack_action_chunk_refuses_a_reserved_field_as_an_output_name(name):
+    with pytest.raises(ValueError, match='cannot place'):
+        UnpackActionChunk({name: ['prediction']})
+
+
 def test_unpack_action_chunk_preserves_observations_and_training_columns():
     codec = UnpackActionChunk({'value': ['prediction']})
     observation = {'image': np.zeros((2, 3, 3), dtype=np.uint8), 'state': np.zeros(7)}
