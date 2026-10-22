@@ -32,7 +32,8 @@ class FakeBus:
     ``completes`` off the activation never ends. A position request moves the fingers ``STEP`` counts a read,
     to no more than ``SHUT``, and closing stops at ``object_at``. With ``obeying`` off the fingers stay where
     they stand, and the gripper reports them at the request. A read raises ``raises`` once it is set, and
-    answers with an exception response while ``refuses`` is on. ``connect`` answers ``answers``.
+    answers with an exception response while ``refuses`` is on, and a write while ``refuses_writes`` is on.
+    ``connect`` answers ``answers``.
     """
 
     def __init__(self, object_at: int | None = None):
@@ -46,6 +47,7 @@ class FakeBus:
         self.position = 0
         self.raises: Exception | None = None
         self.refuses = False
+        self.refuses_writes = False
         self.answers = True
         self._act = False
         self._go = False
@@ -60,8 +62,10 @@ class FakeBus:
     def close(self) -> None:
         pass
 
-    def write_registers(self, address: int, values: list[int], device_id: int) -> None:
+    def write_registers(self, address: int, values: list[int], device_id: int) -> SimpleNamespace:
         assert (address, device_id) == (0x03E8, 9)
+        if self.refuses_writes:
+            return SimpleNamespace(isError=lambda: True)
         self.writes.append(list(values))
         action = values[0] >> 8
         act, self._go = bool(action & 0x01), bool(action & 0x08)
@@ -73,6 +77,7 @@ class FakeBus:
         if self._go:
             self._requested = values[1] & 0xFF
             self._fingers = Fingers.MOVING
+        return SimpleNamespace(isError=lambda: False)
 
     def read_input_registers(self, address: int, count: int, device_id: int) -> SimpleNamespace:
         assert (address, count, device_id) == (0x07D0, 3, 9)
@@ -346,6 +351,23 @@ def test_a_lost_bus_puts_an_error_on_the_width_and_the_run_goes_on(monkeypatch, 
     error = _last(widths)
     assert isinstance(error, DeviceFault) and error.kind is FaultKind.GRIPPER
     with pytest.raises(DeviceFault, match='The Robotiq gripper is lost') as raised:
+        move.result()
+    assert raised.value.kind is FaultKind.GRIPPER
+
+
+def test_a_write_the_gripper_refuses_puts_an_error_on_the_width_and_answers_the_move(monkeypatch, world):
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
+    _pump(loop, clock, 1)
+
+    bus.refuses_writes = True
+    move = _mover(world, driver)(1.0)
+    _pump(loop, clock, 3)
+
+    assert len(_errors(widths)) == 1
+    error = _last(widths)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.GRIPPER
+    with pytest.raises(DeviceFault, match='refused a write') as raised:
         move.result()
     assert raised.value.kind is FaultKind.GRIPPER
 

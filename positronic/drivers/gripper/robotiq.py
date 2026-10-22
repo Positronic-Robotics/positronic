@@ -194,7 +194,9 @@ class _Gripper(DriverRun[float]):
         return None
 
     def _write(self, registers: list[int]) -> None:
-        self._client.write_registers(_REG_CMD, registers, device_id=_SLAVE)
+        response = self._client.write_registers(_REG_CMD, registers, device_id=_SLAVE)
+        if response.isError():
+            raise ModbusException(f'the gripper refused a write: {response}')
 
     def hold_error(self, cause: Exception) -> DeviceFault:
         """Put an error for ``cause`` on the width, answer the move in flight with it, and close the bus."""
