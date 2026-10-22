@@ -23,9 +23,11 @@ import pimm
 import positronic.cfg.simulator
 from pimm.world import SystemClock
 from positronic import geom, keys, telemetry, telemetry_keys
+from positronic.cfg.ds import teleop_demos
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.drivers.recording import HARNESS_WORLD
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step
@@ -520,7 +522,12 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
     policy_meta = policy_keys.POLICY_META
     assert episode.static[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
     assert episode.static[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
-    assert f'{policy_meta}.{policy_keys.ATTEMPT_START_NS}' in episode.static
+    start_ns = episode.static[f'{policy_meta}.{policy_keys.ATTEMPT_START_NS}']
+    recorded = episode.bounds(HARNESS_WORLD)
+    assert recorded.start < start_ns < recorded.finish
+    [demo] = teleop_demos(dataset=LocalDataset(tmp_path))
+    assert demo.bounds(HARNESS_WORLD) == (start_ns, recorded.finish)
+    assert len(demo[keys.TARGET_EE_POSE]) > 1
     assert episode.static[f'{policy_meta}.{policy_keys.TYPE}'] == 'remote'
     assert episode.static[f'{policy_meta}.{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
     assert keys.TARGET_EE_POSE in episode.signals

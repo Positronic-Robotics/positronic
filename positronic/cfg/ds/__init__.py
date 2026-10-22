@@ -9,10 +9,15 @@ import pos3
 from pos3 import Profile
 
 import positronic.utils  # noqa: F401  -- registers the 'PUBLIC' S3 profile that these loaders' s3://PUBLIC@ URLs use
+from positronic.dataset import Episode, Time
 from positronic.dataset.dataset import ConcatDataset, Dataset, FilterDataset
 from positronic.dataset.local_dataset import load_all_datasets, load_dataset
 from positronic.dataset.transforms import TransformedDataset
-from positronic.dataset.transforms.episode import EpisodeTransform, Group
+from positronic.dataset.transforms.episode import EpisodeTransform, Group, StartAt
+from positronic.drivers.recording import HARNESS_WORLD
+from positronic.eval import keys as eval_keys
+from positronic.policy import keys as policy_keys
+from positronic.policy.base import PolicyEnd
 
 
 @cfn.config()
@@ -33,6 +38,26 @@ def concat_ds(datasets: list[Dataset]):
 @cfn.config()
 def filter_ds(dataset: Dataset, predicate):
     return FilterDataset(dataset, predicate)
+
+
+_ATTEMPT_START = f'{policy_keys.POLICY_META}.{policy_keys.ATTEMPT_START_NS}'
+
+
+def _is_demo(episode: Episode) -> bool:
+    did_the_task = (
+        bool(episode.get(eval_keys.SUCCESS, False)) or episode.get(eval_keys.POLICY_END) == PolicyEnd.COMPLETE
+    )
+    return did_the_task and _ATTEMPT_START in episode
+
+
+def _attempt_start(episode: Episode) -> Time:
+    return Time(**{HARNESS_WORLD: episode[_ATTEMPT_START]})
+
+
+@cfn.config(dataset=local)
+def teleop_demos(dataset: Dataset):
+    """The teleop episodes that did the task after Start task, each from its Start task."""
+    return TransformedDataset(FilterDataset(dataset, _is_demo), StartAt(_attempt_start))
 
 
 @cfn.config(transforms=[])

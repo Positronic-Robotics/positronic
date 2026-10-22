@@ -2,8 +2,9 @@ import numpy as np
 import pytest
 
 from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.time import Time
 from positronic.dataset.transforms import Elementwise, TransformedEpisode
-from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, Rename, map_signals
+from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, Rename, StartAt, map_signals
 from positronic.dataset.vector import RECORDED_TIME
 
 from ...tests.utils import DummySignal, DummyTransform
@@ -312,3 +313,12 @@ def test_identity_transform_remove(sig_simple):
         _ = selected['note']
     with pytest.raises(KeyError):
         _ = selected['extra']
+
+
+def test_start_at_starts_each_signal_at_the_start_with_the_last_earlier_record(sig_simple):
+    episode = EpisodeContainer({'s': sig_simple, 'task': 'pick'}, meta={'uid': 'fixture'})
+    started = StartAt(lambda ep: Time(**{RECORDED_TIME: 2500}))(episode)
+    assert started.meta == episode.meta
+    assert started['task'] == 'pick'
+    assert list(started['s'].values()) == [20, 30, 40, 50]
+    assert list(started['s'].timestamps(RECORDED_TIME)) == [2500, 3000, 4000, 5000]
