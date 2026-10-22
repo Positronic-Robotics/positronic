@@ -243,9 +243,9 @@ class ChunkedSchedule(Policy):
     episode metadata.
 
     A waypoint with the reserved field ``END`` ends the run. The round that plays it stops at it, sends its other
-    commands, and the run returns the ``PolicyEnd`` at the next observation. A round with a due ``END`` makes no call.
-    The ``END`` of a due waypoint that a new chunk replaces ends the run too, before any waypoint of the new chunk. A
-    replan after an arm error clears the plan, and with it an ``END`` that is due in that round.
+    commands, and the run returns the ``PolicyEnd`` at the next observation. The plan ends at the first ``END``, so
+    the schedule makes no call while a waypoint with ``END`` is queued. A replan after an arm error clears the plan,
+    and with it an ``END`` that is due in that round.
 
     ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
     immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
@@ -271,7 +271,7 @@ class ChunkedSchedule(Policy):
 
         A round sends the commands of every due waypoint, and on each channel the last one wins. The due
         waypoints before the last one count as dropped, also when one of their channels went out. The due
-        waypoints that a new chunk replaces count as dropped too, also when their ``END`` ends the run.
+        waypoints that a new chunk replaces count as dropped too.
         """
 
         def __init__(self, runtime: Runtime) -> None:
@@ -358,11 +358,6 @@ class ChunkedSchedule(Policy):
         ]
         return waypoints, start_ns + round(duration_sec * 1e9)
 
-    @staticmethod
-    def _due_end(trajectory: deque[_Waypoint], now_ns: int) -> PolicyEnd | None:
-        """The ``END`` of the first waypoint that is due by ``now_ns`` and holds one, or ``None``."""
-        return next((w.commands[END] for w in trajectory if w.due_ns <= now_ns and END in w.commands), None)
-
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         answer: Answer[Sequence[Commands]] | None = None
         recovering = False
@@ -384,20 +379,19 @@ class ChunkedSchedule(Policy):
                     trajectory.clear()
                     end_ns = call_ns = now_ns
                     planned, recovering = 0, True
-                due_end = self._due_end(trajectory, now_ns)
-                end = None
-                if answer is None and now_ns >= call_ns and due_end is None:
+                # The plan ends at a queued end, so no further chunk can play.
+                ends = any(END in waypoint.commands for waypoint in trajectory)
+                if answer is None and now_ns >= call_ns and not ends:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
                     lead_sec = lead.update((now_ns - called_at_ns) / 1e9)
                     start_ns = max(now_ns, end_ns)
-                    # A due end ends the run in this round, so the answer is not planned.
-                    waypoints, end_ns = ([], end_ns) if due_end is not None else self._plan_chunk(chunk, start_ns)
+                    waypoints, end_ns = self._plan_chunk(chunk, start_ns)
                     call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
                     # A regular early answer waits behind the commands that are still due.
                     if start_ns == now_ns:
-                        end, trajectory = due_end, deque(waypoints)
+                        trajectory = deque(waypoints)
                     else:
                         trajectory.extend(waypoints)
                     planned = len(waypoints)
@@ -405,6 +399,7 @@ class ChunkedSchedule(Policy):
                 commands: dict[str, Any] = {}
                 due_ns = None
                 starts_chunk = False
+                end = None
                 while end is None and trajectory and trajectory[0].due_ns <= now_ns:
                     waypoint = trajectory.popleft()
                     due_ns = waypoint.due_ns

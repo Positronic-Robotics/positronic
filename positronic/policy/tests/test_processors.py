@@ -156,51 +156,23 @@ def test_a_late_round_stops_at_an_end(execution):
         run.close()
 
 
-def _replace_a_due_element(execution, monkeypatch, element: dict, record_stats: bool = False):
-    """A run whose second answer comes at 250 ms and replaces ``element``, due at 100 ms.
-
-    The second call goes out at 50 ms, before ``element`` falls due.
-    """
-    runtime, clock = execution
-    model = SlowModel(runtime)
-    monkeypatch.setattr(runtime, 'submit', model.submit)
-    schedule = ChunkedSchedule(fps=10, record_stats=record_stats, inference_lead=ConstantDuration(0.15))
-    run = runtime.start(schedule, Mock())
-    run.send({})
-    model.answer_with([{MOTOR: 1}, {MOTOR: 2, **element}])
-    assert run.send({}).commands == {MOTOR: 1}
-    clock.advance_to_ns(50_000_000)
-    run.send({})
-    assert len(model.calls) == 2
-    clock.advance_to_ns(250_000_000)
-    model.answer_with([{MOTOR: 10}, {MOTOR: 11}])
-    return run
-
-
-def test_a_new_chunk_keeps_the_end_of_a_due_element_it_replaces(execution, monkeypatch):
-    run = _replace_a_due_element(execution, monkeypatch, {END: 'complete'})
-    try:
-        assert run.send({}) == Step({}, 250_000_000)
-        with pytest.raises(StopIteration) as end:
-            run.send({})
-        assert end.value.value is PolicyEnd.COMPLETE
-    finally:
-        run.close()
-
-
-# Each schedule plays the end at the time when it would ask for its next chunk.
+# Each schedule would ask for its next chunk at or before the end.
 @pytest.mark.parametrize(
     ('schedule', 'times_ns'),
     [
         (lambda: ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.1), record_stats=False), (0, 100_000_000)),
         (
+            lambda: ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.15), record_stats=False),
+            (0, 50_000_000, 100_000_000),
+        ),
+        (
             lambda: RTCSchedule(fps=10, call_after_sec=0.1, prefix_duration=ConstantDuration()),
             (0, 100_000_000, 200_000_000),
         ),
     ],
-    ids=['chunked', 'rtc'],
+    ids=['chunked', 'chunked-early-call', 'rtc'],
 )
-def test_a_due_end_asks_for_no_further_chunk(execution, schedule, times_ns):
+def test_a_queued_end_asks_for_no_further_chunk(execution, schedule, times_ns):
     runtime, clock = execution
     calls = []
 
@@ -430,18 +402,6 @@ def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.SCHEDULED}'] == 10
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.EMITTED}'] == 2
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.DROPPED}'] == 4
-
-
-# A due end ends the run in the round that reads the new chunk, so that chunk is not planned.
-@pytest.mark.parametrize(('element', 'scheduled', 'emitted'), [({}, 4, 2), ({END: 'complete'}, 2, 1)])
-def test_the_end_of_a_replaced_waypoint_is_not_counted_as_emitted(execution, monkeypatch, element, scheduled, emitted):
-    runtime, _ = execution
-    run = _replace_a_due_element(execution, monkeypatch, element, record_stats=True)
-    run.send({})
-    run.close()
-    stats = {name.removeprefix(f'{eval_keys.SCHEDULE}.'): value for name, value in runtime.metadata_snapshot().items()}
-    assert (stats[eval_keys.SCHEDULED], stats[eval_keys.EMITTED]) == (scheduled, emitted)
-    assert (stats[eval_keys.DROPPED], stats[eval_keys.LATE_MAX_MS], stats[eval_keys.GAP_MAX_MS]) == (1, 0, 0)
 
 
 def test_the_elements_after_an_end_are_not_scheduled(execution):
