@@ -801,7 +801,7 @@ class _JointposChunks(Policy):
     def run(self, runtime):
         return (yield from ChunkedSchedule(self.fps).run(runtime, self.infer))
 
-    def infer(self, obs):
+    def infer(self, obs, *, context_only=False):
         self.chunks += 1
         return [
             {keys.ROBOT_COMMAND: self.command, keys.TARGET_GRIP: self.chunks * 100.0 + i} for i in range(self.chunk_len)

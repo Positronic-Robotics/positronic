@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 from positronic_model_server import server_wire, websocket_wire
-from positronic_model_server.serialization import encode_jpeg
+from positronic_model_server.serialization import UnknownFrame, encode_jpeg, frame_digests, reference_frames
 from positronic_wire import websocket, wire
 
 from positronic import keys
@@ -19,7 +19,7 @@ from positronic.drivers.roboarm.command import (
 )
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceClient
-from positronic.offboard.protocol import deserialise, serialise, typed_commands
+from positronic.offboard.protocol import CONTEXT, deserialise, deserialise_with_frames, serialise, typed_commands
 
 
 def test_inference_client_connect_and_infer(inference_server, mock_model):
@@ -144,6 +144,21 @@ def test_a_lower_jpeg_quality_gives_smaller_frames():
     image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
     low, high = (len(serialise({keys.WRIST_IMAGE: encode_jpeg(image, quality)})) for quality in (30, 90))
     assert low < high
+
+
+def test_a_legacy_message_decodes_held_frames_and_records_the_frames_it_decodes():
+    stack = np.random.default_rng(0).integers(0, 256, (3, 16, 24, 3), dtype=np.uint8)
+    held: dict[bytes, np.ndarray] = {}
+    deserialise_with_frames(serialise({CONTEXT: {keys.WRIST_IMAGE: encode_jpeg(stack[:2])}}), {}, held)
+    assert len(held) == 2
+    referenced, count = reference_frames(encode_jpeg(stack), frame_digests(encode_jpeg(stack[:2])))
+    assert count == 2
+    restored = deserialise_with_frames(serialise({keys.WRIST_IMAGE: referenced}), held, {})[keys.WRIST_IMAGE]
+    np.testing.assert_array_equal(
+        restored, deserialise(serialise({keys.WRIST_IMAGE: encode_jpeg(stack)}))[keys.WRIST_IMAGE]
+    )
+    with pytest.raises(UnknownFrame):
+        deserialise_with_frames(serialise({keys.WRIST_IMAGE: referenced}), {}, {})
 
 
 class TestCommandEnvelope:

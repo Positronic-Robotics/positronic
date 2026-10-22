@@ -1,5 +1,5 @@
 import collections.abc as cabc
-from typing import Any, ClassVar, Self, final, overload
+from typing import Any, ClassVar, Self, cast, final, overload
 
 import numpy as np
 from positronic_model_server.spec import PAR, SEQ
@@ -7,7 +7,7 @@ from positronic_model_server.spec import PAR, SEQ
 from positronic import telemetry, telemetry_keys
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.policy.base import Obs, ProcessorRun, Step
+from positronic.policy.base import Infer, Obs, ProcessorRun, Step
 from positronic.utils import merge_dicts
 
 
@@ -50,18 +50,22 @@ class Codec:
         return {}
 
     @overload
+    def wrap(self, function: Infer) -> Infer: ...
+
+    @overload
     def wrap(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]: ...
 
     @overload
     def wrap(self, function: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]: ...
 
     def wrap(
-        self, function: cabc.Callable[[dict], Any] | ProcessorRun[Obs, Any]
-    ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
+        self, function: Infer | cabc.Callable[[dict], Any] | ProcessorRun[Obs, Any]
+    ) -> Infer | cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
-        Steps retain their wake-up time; only nonempty commands are decoded. The caller owns the
-        wrapped dependency, including closing it when it is a generator.
+        Steps retain their wake-up time; only nonempty commands are decoded. Around an ``Infer``, a call with
+        ``context_only=True`` passes it on with the encoded input and returns its upload outcome. The caller owns
+        the wrapped dependency, including closing it when it is a generator.
         """
         if isinstance(function, cabc.Generator):
             run = self._wrap_run(function)
@@ -73,8 +77,10 @@ class Codec:
         )(self.encode)
 
         @telemetry.traced(telemetry.component_name(self))
-        def call(obs: Obs) -> Any:
+        def call(obs: Obs, /, *, context_only: bool = False) -> Any:
             encoded = encode(dict(obs))
+            if context_only:
+                return cast(Infer, function)(encoded, context_only=True)
             result = function(encoded)
             if isinstance(result, Step):
                 return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result

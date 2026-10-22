@@ -8,7 +8,7 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import PolicyEnd, spec
-from positronic.policy.base import Step
+from positronic.policy.base import ContextPushResult, Step
 from positronic.policy.codecs import (
     ACTION,
     LEROBOT_FEATURES,
@@ -214,6 +214,19 @@ def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned(
     with pytest.raises(StopIteration) as end:
         wrapped.send({})
     assert end.value.value is PolicyEnd.GIVE_UP
+
+
+class _HalvingCodec(Codec):
+    def encode(self, data):
+        return {name: value // 2 for name, value in data.items()}
+
+
+@pytest.mark.parametrize('outcome', list(ContextPushResult))
+def test_a_wrapped_context_push_preserves_its_outcome(outcome):
+    calls = []
+    wrapped = _HalvingCodec().wrap(lambda obs, **kwargs: calls.append((obs, kwargs)) or outcome)
+    assert wrapped({'image': 8}, context_only=True) is outcome
+    assert calls == [({'image': 4}, {'context_only': True})]
 
 
 class TestCodecComposition:

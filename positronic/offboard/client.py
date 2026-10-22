@@ -43,6 +43,8 @@ class InferenceSession:
     ``reopen`` returns a new session on the same server. A connection that drops before the server's first
     answer reconnects through it, once, and sends the observation again. ``ready_by`` is the
     ``time.monotonic()`` instant past which the status handshake waits for no further update.
+
+    After ``push_context``, a request sends each frame of the push as its digest, except the last frame of a stack.
     """
 
     # The timing block of the last decoded inference response; empty when the server sent none, and
@@ -73,6 +75,8 @@ class InferenceSession:
         self._session_id = None if self._protocol is protocol.ProtocolVersion.V1 else ready[protocol.SESSION_ID]
         self._closed = False
         self._answered = False
+        # The digests of the frames the server holds for this session: the frames of the last context push.
+        self._held: frozenset[bytes] = frozenset()
 
     def _handshake(self, ready_by: float, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -165,6 +169,28 @@ class InferenceSession:
             reopened.close()
             raise wire.PeerDisconnected('The server this session reconnected to declares other metadata')
         self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
+        # A new server session holds no frames.
+        self._held = frozenset()
+
+    def push_context(self, images: Mapping[str, Any]) -> None:
+        """Send JPEG image stacks for the server to hold until the next push, so requests can send their frames as
+        digests. An acknowledgment must give the number of unique frames sent, or the connection closes."""
+        if self._closed:
+            raise wire.PeerDisconnected('The inference session is closed')
+        if self._protocol is not protocol.ProtocolVersion.V2:
+            raise ValueError(f'A {self._protocol.name} server takes no context push')
+        self._held = frozenset()
+        held = frozenset(serialization.frame_digests(images))
+        response = self._exchange({protocol.SESSION_ID: self._session_id, legacy_protocol.CONTEXT: dict(images)})
+        if (
+            not isinstance(response, dict)
+            or type(response.get(legacy_protocol.CONTEXT)) is not int
+            or response[legacy_protocol.CONTEXT] != len(held)
+        ):
+            self._closed = True
+            self._conn.close()
+            raise RuntimeError(f'Unexpected context push response: {response}')
+        self._held = held
 
     def _round_trip(self, obs: dict[str, Any]) -> Any:
         self.served_timing = self.wire_timing = {}
@@ -173,6 +199,26 @@ class InferenceSession:
             if self._protocol is protocol.ProtocolVersion.V1
             else {protocol.SESSION_ID: self._session_id, protocol.OBSERVATION: obs}
         )
+        referenced, count = serialization.reference_frames(obs, self._held) if self._held else (obs, 0)
+        if count:
+            response = self._exchange({**request, protocol.OBSERVATION: referenced}, referenced=count)
+            if isinstance(response, dict) and response.get(legacy_protocol.REFERENCE_MISS) is True:
+                # The server lost the frames: send them all, once.
+                logger.warning('The server does not hold the frames of the context push; sending them again')
+                self._held = frozenset()
+                response = self._exchange(request)
+        else:
+            response = self._exchange(request)
+        if isinstance(response, dict) and legacy_protocol.REFERENCE_MISS in response:
+            self._closed = True
+            self._conn.close()
+            raise RuntimeError('The server reports a reference miss for a request that sends no reference')
+        logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
+        result = response[protocol.RESULT]
+        return result if self._protocol is protocol.ProtocolVersion.V3 else typed_commands(result)
+
+    def _exchange(self, request: Any, referenced: int = 0) -> Any:
+        """Send one message and receive its answer, which must not be an error."""
         serialised = (
             serialization.serialise(request) if self._protocol is protocol.ProtocolVersion.V3 else serialise(request)
         )
@@ -180,6 +226,8 @@ class InferenceSession:
         # The pair reads as the uplink and then the wait the server's own time sits inside: each span
         # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
+        if referenced:
+            wire_bytes[telemetry_keys.ATTR_WIRE_REFERENCED] = referenced
         send_started = time.time_ns()
         try:
             try:
@@ -214,16 +262,13 @@ class InferenceSession:
             else deserialise(received)
         )
         self.served_timing = response.get(protocol.TIMING) or {} if isinstance(response, dict) else {}
-        logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
         if isinstance(response, dict) and protocol.ERROR in response:
             if response.get(protocol.STATUS) == protocol.ServerStatus.ERROR:
                 self._closed = True
                 self._conn.close()
             raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
-
-        result = response[protocol.RESULT]
-        return result if self._protocol is protocol.ProtocolVersion.V3 else typed_commands(result)
+        return response
 
     def close(self) -> None:
         """End the server session and wait for its cleanup before closing the connection."""

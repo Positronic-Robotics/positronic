@@ -185,6 +185,8 @@ This metadata tells the client:
   sending. It is true unless the deployment sets it false.
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
   records it in the policy metadata.
+- `context_push` — the version of the context push the server takes (see **Context push** below). A
+  server declares `1` when it compresses images, and no `context_push` otherwise.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### Compatibility and deprecation
@@ -294,6 +296,44 @@ Every command may carry a `mode`, itself a tagged mapping naming the control law
 The server passes the encoded observation to `model(obs, session_id=...)`; codecs receive only the
 observation. An ID from another connection returns an error and closes the requesting session
 before invoking the model. The other session stays open; no replacement session is created automatically.
+
+#### Context push
+
+A request holds the frames of its `TemporalStack`. A schedule with `context_lead_sec` uploads the historical
+frames before the next inference call, so the request uploads only the newer frames. The upload is timed
+from that call's deadline, including when `inference_lead` starts inference before the next call:
+
+```json
+{"name": "chunked_schedule", "version": 3, "args": {"fps": 15.0, "context_lead_sec": 0.5}}
+```
+
+1. `context_lead_sec` before the next call, `ChunkedSchedule` takes each offset of the stack whose time,
+   counted from the next call's deadline, has passed. It samples these offsets from the next call's deadline, and sends the
+   frames as a push, with the client codecs applied and each frame as JPEG:
+
+   ```json
+   {"session_id": "<server-issued ID>", "context": {"image.wrist": "<JPEG stack>"}}
+   ```
+
+2. The server decodes the frames, holds them for the session in place of the frames of an earlier push, and
+   answers with their count: `{"context": 4, "timing": {...}}`. The model does not run.
+3. The inference request samples the same offsets from the next call's deadline, so it holds the same frames.
+   It samples the other offsets from its own time, so its newest frames are fresh. The client sends each frame
+   that the server holds as a digest: in the JPEG envelope, `refs` holds the 16-byte BLAKE2b digest of the
+   frame's JPEG bytes in place of those bytes, and `null` for a frame sent in full. The last frame of a stack
+   always goes in full.
+4. The server builds every stack from its frames and the frames it holds, so the model gets the same
+   observation as from a request in full.
+
+A server that does not hold a frame of a request answers `{"reference_miss": true}` before the model runs. The
+client then sends the request again in full, once. A second miss is an error. A new session holds no frames.
+
+When no offset has passed `context_lead_sec` before the next call, there is no push, and the request is the
+same as without `context_lead_sec`. The setting is an optional argument of the current scheduler version.
+A server without `context_push` gets no push. The push needs a
+`TemporalStack` directly around the schedule; `RTCSchedule` makes no push. Only `PolicyServer` (protocol v2)
+takes a push. A lead between the time that the frames of the push take to upload and the time that the oldest
+offsets have passed gives the most overlap.
 
 #### 4. End the session
 
