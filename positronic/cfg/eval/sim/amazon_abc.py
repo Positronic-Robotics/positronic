@@ -14,8 +14,9 @@ from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote
     camera_dict=CAMERAS,
     camera_height=260,
     camera_width=416,
-    # ABC's own sim-eval budget: 3540 actions of 34 ms.
-    timeout=3540 * 0.034,
+    # ABC's own sim-eval budget is 3540 actions of 34 ms. One more period lets the last action's verdict
+    # arrive before the deadline.
+    timeout=(3540 + 1) * 0.034,
     seed=None,
     task=None,
     trial_count=1,
