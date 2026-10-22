@@ -18,6 +18,7 @@ from positronic.policy.codecs import (
     Codec,
     FlipGrip,
     Metadata,
+    PolicyCommandError,
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction
 from positronic.policy.codecs.observation import ObservationCodec
@@ -214,6 +215,41 @@ def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned(
     with pytest.raises(StopIteration) as end:
         wrapped.send({})
     assert end.value.value is PolicyEnd.GIVE_UP
+
+
+def _joints_codec() -> AbsoluteJointsAction:
+    return AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7)
+
+
+def test_a_command_of_the_wrong_size_raises_a_policy_command_error_with_the_codec_error_as_cause():
+    wrapped = _joints_codec().wrap(lambda _obs: {ACTION: np.zeros(3)})
+
+    with pytest.raises(PolicyCommandError, match='AbsoluteJointsAction') as raised:
+        wrapped({})
+    assert type(raised.value.__cause__) is ValueError
+
+
+def test_a_command_with_no_action_field_raises_a_policy_command_error_with_the_key_error_as_cause():
+    wrapped = _joints_codec().wrap(lambda _obs: {'other': np.zeros(8)})
+
+    with pytest.raises(PolicyCommandError) as raised:
+        wrapped({})
+    assert isinstance(raised.value.__cause__, KeyError)
+
+
+def test_a_value_error_from_the_wrapped_policy_stays_a_plain_value_error():
+    def policy(_obs):
+        raise ValueError('model failed')
+
+    with pytest.raises(ValueError, match='model failed') as raised:
+        _joints_codec().wrap(policy)({})
+    assert type(raised.value) is ValueError
+
+
+def test_a_command_the_codec_decodes_reaches_the_caller():
+    [decoded] = _joints_codec().wrap(lambda _obs: [{ACTION: np.arange(8.0)}])({})
+
+    assert decoded[obs_keys.TARGET_GRIP] == 7.0
 
 
 class TestCodecComposition:

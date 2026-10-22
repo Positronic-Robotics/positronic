@@ -15,7 +15,7 @@ import math
 from collections import deque
 from collections.abc import Callable, Generator, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import mujoco as mj
 import numpy as np
@@ -23,6 +23,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
+from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
 from positronic.utils import package_assets_path
@@ -54,6 +55,24 @@ _OPEN_GRIP = 0.0  # positronic grip convention: 0 is open
 _CONTROL_HZ = 100
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
+
+
+class ChainFault(RuntimeError):
+    """A call into the i2rt chain that raised."""
+
+
+def _arm_fault(exc: Exception) -> DeviceFault:
+    """The ARM ``DeviceFault`` for ``exc``; a ``ChainFault`` reads as the arm lost."""
+    return device_fault(exc, FaultKind.ARM, f'The YAM arm is lost: {exc}' if isinstance(exc, ChainFault) else '')
+
+
+@contextlib.contextmanager
+def _chain_call() -> Iterator[None]:
+    """Raise what the block raises as a ``ChainFault``: i2rt names no exception of its own."""
+    try:
+        yield
+    except Exception as exc:
+        raise ChainFault(f'the chain failed: {exc}') from exc
 
 
 def _connect(channel: str, sim: bool, gravity_comp_factor: np.ndarray | None):
@@ -205,12 +224,14 @@ class _Arm(DriverRun[command.CommandType]):
         self._base_pose = base_pose
         self._kin = kinematics
         self._shutting_down = False
+        self._readings_withheld = False
         self._publish_failure_logged = False
         self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
         self._sent_at = 0.0
 
     def observations(self) -> dict[str, np.ndarray]:
-        return self.vendor.get_observations()
+        with _chain_call():
+            return self.vendor.get_observations()
 
     @staticmethod
     def read_grip(obs: dict[str, np.ndarray]) -> float:
@@ -219,7 +240,9 @@ class _Arm(DriverRun[command.CommandType]):
 
     def publish(self, obs: dict[str, np.ndarray], status: RobotStatus | None = None) -> None:
         """Publish the measured state: ERROR after a failed move, else AVAILABLE. In shutdown a failed publish is
-        logged, not raised."""
+        logged, not raised. A shutdown that withholds readings publishes nothing."""
+        if self._readings_withheld:
+            return
         if status is None:
             status = RobotStatus.ERROR if self.moves.errored else RobotStatus.AVAILABLE
         q = obs[_JOINT_POS]
@@ -236,7 +259,8 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.exception('Publishing the arm state failed during shutdown; the park goes on without it')
 
     def _send(self, joints: np.ndarray, open_width: float) -> None:
-        self.vendor.command_joint_pos(np.append(joints, open_width))
+        with _chain_call():
+            self.vendor.command_joint_pos(np.append(joints, open_width))
         self._sent_joints = np.array(joints, dtype=np.float64)
         self._sent_at = self.clock.now()
 
@@ -407,7 +431,7 @@ class _Arm(DriverRun[command.CommandType]):
         self, grip: float, *, interrupt_on_stop: bool = True
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float, MoveStatus]]:
         """Settle onto the parking pose; return the joints and grip to hold, and how the park ended: ARRIVED
-        parked, or GAVE_UP held where it stopped."""
+        parked, or GAVE_UP held where it stopped. A ``ChainFault`` is raised."""
         logger.info('Moving the arm to the parking pose')
         try:
             reference = yield from self._settle_onto(
@@ -417,27 +441,32 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.info('Arm parked')
                 self._report_parked()
                 return reference, grip, MoveStatus.ARRIVED
+        except ChainFault:
+            raise
         # rules-allow: swallowed-error — an arm that will not park reads ERROR; the run goes on
         except Exception as exc:
             self.moves.errored = True
             logger.error(f'The arm did not reach the parking pose: {exc}')
         return *self.hold_where_it_stopped(), MoveStatus.GAVE_UP
 
-    def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
-        """Settle onto the start pose with the gripper open, and return the joints and grip to hold. On a failure
-        or a stop, hold where the arm stopped."""
+    def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
+        """Settle onto the start pose with the gripper open, and return the joints and grip to hold, with the failure
+        that stopped the settle or None. On a failure or a stop, hold where the arm stopped. A ``ChainFault`` is
+        raised."""
         logger.info('Moving the arm to the start pose')
         # rules-allow: swallowed-error — an arm that will not reach its start pose reads ERROR; the run goes on
         try:
             reference = yield from self._settle_onto(
                 _START_JOINTS, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
             )
+        except ChainFault:
+            raise
         except Exception as exc:
             logger.error(f'The arm did not reach the start pose: {exc}')
-            return self.hold_where_it_stopped()
+            return *self.hold_where_it_stopped(), exc
         if reference is None:
-            return self.hold_where_it_stopped()
-        return reference, _OPEN_GRIP
+            return *self.hold_where_it_stopped(), None
+        return reference, _OPEN_GRIP, None
 
     def _report_parked(self) -> None:
         """Publish the parked state; a failure is logged, because the park is verified already."""
@@ -447,8 +476,10 @@ class _Arm(DriverRun[command.CommandType]):
         except Exception:
             logger.exception('The arm is parked, but its state could not be published')
 
-    def shutdown(self) -> Generator[pimm.Command, None, None]:
+    def shutdown(self, *, withhold_readings: bool) -> Generator[pimm.Command, None, None]:
+        """Park and release the arm. ``withhold_readings`` keeps a fault already on the state and the grip there."""
         self._shutting_down = True
+        self._readings_withheld = withhold_readings
         hold_target = None
         try:
             joints, grip, ended = yield from self.park(self.read_grip(self.observations()), interrupt_on_stop=False)
@@ -477,7 +508,10 @@ class _Arm(DriverRun[command.CommandType]):
         self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Settle onto the call's target with the gripper open, then answer the call. On a failure or a stop, hold
-        where the arm stopped. A blocking move is the episode reset, so each episode starts with the gripper open."""
+        where the arm stopped. A ``ChainFault`` answers the call and is raised. A blocking move is the episode reset, so
+        each episode starts with the gripper open. A move that fails answers with an ARM ``DeviceFault``, and a
+        malformed command with its own error."""
+        target: np.ndarray | None = None  # stays None for a malformed command, which the arm never sees
         try:
             target = self.to_joints(call.request, q)
             reference = yield from self._settle_onto(
@@ -487,11 +521,14 @@ class _Arm(DriverRun[command.CommandType]):
                 self.publish(self.observations())
                 call.set_result(None)
                 return reference, _OPEN_GRIP
+        except ChainFault as exc:
+            call.set_exception(_arm_fault(exc))
+            raise
         except Exception as exc:
             try:
                 held = self.hold_where_it_stopped()
-            finally:
-                call.set_exception(exc)  # Answer even if reading the hold position fails.
+            finally:  # Answer even if reading the hold position fails.
+                call.set_exception(exc if target is None else _arm_fault(exc))
             return held
         held = self.hold_where_it_stopped()
         call.set_exception(MoveAbandoned())
@@ -499,14 +536,8 @@ class _Arm(DriverRun[command.CommandType]):
 
 
 @contextlib.contextmanager
-def _opened(
-    connect: Callable[[str, bool, np.ndarray | None], Any],
-    channel: str,
-    sim: bool,
-    gravity_comp_factor: np.ndarray | None,
-) -> Iterator[Any]:
-    """Open the chain. Release torque only on a normal exit, which follows a verified park."""
-    vendor = connect(channel, sim, gravity_comp_factor)
+def _opened(vendor: Any) -> Iterator[Any]:
+    """Hold the open chain. Release torque only on a normal exit, which follows a verified park."""
     try:
         yield vendor
     except BaseException:
@@ -573,6 +604,7 @@ class _Serving:
 
     q_target: np.ndarray
     grip_target: float
+    start_missed: Exception | None
     idle_since: float | None = None
     parking: Generator[pimm.Command, None, tuple[np.ndarray, float, MoveStatus]] | None = None
 
@@ -632,6 +664,9 @@ class Robot(pimm.ControlSystem):
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
+        # Answers once the arm is at the start pose, and opens a lost chain first. After a miss, each call moves the
+        # arm to that pose again and fails until it arrives.
+        self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
         return (
@@ -645,6 +680,10 @@ class Robot(pimm.ControlSystem):
     def _answer_failed_setup(asked: pimm.calls.Call | command.CommandType | None) -> Iterator[None]:
         try:
             yield
+        except Exception as exc:
+            if isinstance(asked, pimm.calls.Call):
+                asked.set_exception(_arm_fault(exc))
+            raise
         except BaseException as exc:
             if isinstance(asked, pimm.calls.Call):
                 asked.set_exception(exc)
@@ -658,8 +697,39 @@ class Robot(pimm.ControlSystem):
             roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES),
             roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         }
-        fault = None
-        with _opened(self._connect, self._channel, self._sim, self._gravity_comp_factor) as vendor:
+        asked: list[pimm.calls.Call[None, None]] = []
+        while not should_stop.value:
+            error = yield from self._drive_chain(kinematics, state, meta, asked, should_stop, clock)
+            if error is None:
+                return
+            asked = yield from self._hold(error, should_stop, clock)
+
+    def _drive_chain(
+        self,
+        kinematics: _Kinematics,
+        state: YamState,
+        meta: dict[str, Any],
+        asked: list[pimm.calls.Call[None, None]],
+        should_stop: pimm.SignalReceiver,
+        clock: pimm.Clock,
+    ) -> Generator[pimm.Command, None, DeviceFault | None]:
+        """Open the chain, move the arm to the start pose, answer ``asked``, and serve the arm until ``should_stop``.
+        Park and release it after.
+
+        A ``ChainFault`` goes on the state and the grip once, before a park that publishes no readings. It answers
+        ``asked`` if the start move has not ended, and comes back as the return value once the arm is parked. Any other
+        fault is raised again.
+        """
+        try:
+            with _chain_call():
+                vendor = self._connect(self._channel, self._sim, self._gravity_comp_factor)
+        except ChainFault as exc:
+            lost = self._report_lost(exc)
+            for call in asked:
+                call.set_exception(lost)
+            return lost
+        fault, lost = None, None
+        with _opened(vendor):
             arm = _Arm(
                 vendor,
                 self.sync_move,
@@ -674,26 +744,78 @@ class Robot(pimm.ControlSystem):
                 kinematics,
                 state,
             )
-            # rules-allow: swallowed-error — the fault is raised again after the shutdown
+            # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 self.robot_meta.emit(meta)
-                yield from self._serve(arm, should_stop, clock)
+                joints, grip, missed = yield from arm.go_to_start()
+                self._answer_ready(asked, missed)
+                asked = []
+                yield from self._serve(arm, _Serving(joints, grip, missed, idle_since=clock.now()), should_stop, clock)
+            except ChainFault as exc:
+                logger.exception('The chain failed during the run; parking the arm before it lets go')
+                lost = self._report_lost(exc)
+                for call in asked:
+                    call.set_exception(lost)
             except Exception as exc:
                 fault = exc
                 logger.exception('The arm driver failed during the run; parking the arm before it lets go')
-            yield from arm.shutdown()
+                for call in asked:
+                    call.set_exception(_arm_fault(exc))
+            yield from arm.shutdown(withhold_readings=lost is not None)
         if fault is not None:
             raise fault
+        return lost
+
+    @staticmethod
+    def _answer_ready(asked: list[pimm.calls.Call[None, None]], missed: Exception | None) -> None:
+        for call in asked:
+            if missed is None:
+                call.set_result(None)
+            else:
+                call.set_exception(_arm_fault(missed))
+
+    def _report_lost(self, lost: ChainFault) -> DeviceFault:
+        """Put an error for ``lost`` on the state and the grip, and return it."""
+        error = _arm_fault(lost)
+        logger.error(f'{error}; it holds the error until a ready call opens the chain again')
+        self._emit_error(error)
+        return error
+
+    def _emit_error(self, error: DeviceFault) -> None:
+        # The Message types do not name the SignalError that any message can carry.
+        self.state.emit(cast(YamState, error))
+        self.grip.emit(cast(float, error))
+
+    def _hold(
+        self, error: DeviceFault, should_stop: pimm.SignalReceiver, clock: pimm.Clock
+    ) -> Generator[pimm.Command, None, list[pimm.calls.Call[None, None]]]:
+        """Answer every move with ``error``, which is on the state and the grip already, until a ready call.
+
+        Return the ready calls, or none when the world stops first.
+        """
+        limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
+        refused = (
+            Moves[command.CommandType](self.sync_move, self.commands),
+            Moves[float](self.sync_grip, self.target_grip),
+        )
+        while not should_stop.value:
+            for moves in refused:
+                while isinstance(move := moves.next_request(), pimm.calls.Call):
+                    move.set_exception(error)
+            if asked := list(self.ready.incoming()):
+                return asked
+            yield limiter.wait()
+        return []
 
     def _serve(
-        self, arm: _Arm, should_stop: pimm.SignalReceiver, clock: pimm.Clock
+        self, arm: _Arm, serving: _Serving, should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, None]:
-        """Move to the start pose, then answer commands and park when idle until ``should_stop``."""
-        joints, grip = yield from arm.go_to_start()
-        serving = _Serving(joints, grip, idle_since=clock.now())
+        """Hold the targets of ``serving``, then answer calls and commands and park when idle until ``should_stop``."""
         try:
-            with Moves[float](self.sync_grip, self.target_grip) as fingers:
+            with Moves[float](self.sync_grip, self.target_grip) as fingers, self._answer_failed_grip_move(fingers):
                 while not should_stop.value:
+                    if ready := list(self.ready.incoming()):
+                        yield from self._serve_ready(arm, serving, ready, clock)
                     asked, q = self._take_request(arm, fingers, serving, clock)
                     yield from self._dispatch(arm, serving, asked, q, clock)
                     if (step := self._advance_parking(serving)) is None:
@@ -706,6 +828,30 @@ class Robot(pimm.ControlSystem):
         finally:
             if serving.parking is not None:
                 serving.parking.close()
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _answer_failed_grip_move(fingers: Moves[float]) -> Iterator[None]:
+        try:
+            yield
+        except Exception as exc:
+            fingers.fail(_arm_fault(exc))
+            raise
+
+    def _serve_ready(
+        self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock
+    ) -> Generator[pimm.Command, None, None]:
+        """Answer ``asked``. After a missed start, move the arm to the start pose again first."""
+        if serving.start_missed is not None:
+            if serving.parking is not None:
+                serving.parking.close()
+                serving.parking = None
+            with contextlib.ExitStack() as answers:
+                for call in asked:
+                    answers.enter_context(self._answer_failed_setup(call))
+                serving.q_target, serving.grip_target, serving.start_missed = yield from arm.go_to_start()
+            serving.idle_since = clock.now()
+        self._answer_ready(asked, serving.start_missed)
 
     def _take_request(
         self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock

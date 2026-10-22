@@ -10,6 +10,7 @@ class FakeRobotiq2F(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
+        self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         while not should_stop.value:

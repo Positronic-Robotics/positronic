@@ -25,6 +25,7 @@ from positronic.dataset.episode import Episode, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.video import LibavEncoder
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -1130,7 +1131,14 @@ def test_every_device_is_asked_to_be_ready_before_each_episode_and_before_its_pr
         assert answer.result() == {eval_keys.TERMINATED: False}
 
 
-@pytest.mark.parametrize('error', [pimm.SignalError('camera lost'), RuntimeError('the arm holds a fault')])
+@pytest.mark.parametrize(
+    'error',
+    [
+        pimm.SignalError('camera lost'),
+        DeviceFault('camera lost', FaultKind.CAMERA),
+        RuntimeError('the arm holds a fault'),
+    ],
+)
 def test_a_device_that_answers_ready_with_an_error_fails_the_ask_and_is_asked_again(ready_harness, error):
     h = ready_harness
     task = Task('move', None, prepare_args={RESET: 'home'})
