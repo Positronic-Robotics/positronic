@@ -1,5 +1,6 @@
 import logging
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -12,8 +13,9 @@ import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command, franka
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.tests.fakes import StopFlag
-from positronic.drivers.utils import MoveAbandoned, RecoveryOutcome
+from positronic.drivers.utils import MoveAbandoned, RecoveryOutcome, RecoveryStep
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
@@ -51,6 +53,7 @@ class Call(StrEnum):
     DEACTIVATE_FCI = 'deactivate_fci'
     PREPARE = 'prepare'
     ENSURE_CONTROL = 'ensure_control'
+    REBOOT = 'reboot'
 
 
 class _StatusFromCpp:
@@ -189,10 +192,12 @@ MOVING = {'guidingEnableButton': 'Inactive', 'x31': 'Active', 'x32': 'Inactive',
 
 
 class FakeDesk:
-    """In-memory ``Desk``: records every prepare, brake and FCI operation the driver asked for, records that the
-    session released control, and reports whatever ``safe_inputs`` holds.
+    """In-memory ``Desk``: records every prepare, brake, FCI and reboot operation the driver asked for, records that
+    the session released control, and reports whatever ``safe_inputs`` holds.
 
-    An operation named in ``raises`` raises the exception it maps to.
+    An operation named in ``raises`` raises the exception it maps to. ``safety_error``, ``fsoe_error`` and ``holder``
+    script the control box states that only a reboot clears, where ``reboot_clears`` is set. A reboot ends the
+    session: a later call on it raises until a new ``with Desk(...)`` enters it again.
     """
 
     def __init__(self):
@@ -204,8 +209,21 @@ class FakeDesk:
         self.raises: dict[Call, Exception] = {}
         # Each joint brake as Desk reports it; a run starts with them open.
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
+        self.safety_error = False
+        self.fsoe_error = False
+        # The Desk login that holds robot control, where a session of the driver does not.
+        self.holder: str | None = None
+        self.reboot_clears = True
+        # What a reboot does to the box beside clearing it, as a test scripts it.
+        self.on_reboot: Callable[[], None] = lambda: None
+        self.entries = 0
+        self._ended = False
 
     def __enter__(self) -> 'FakeDesk':
+        if self.holder is not None:
+            raise franka.ControlHeldElsewhere('192.0.2.1', self.holder)
+        self.entries += 1
+        self._ended = False
         return self
 
     def __exit__(self, *exc_info) -> bool:
@@ -214,8 +232,20 @@ class FakeDesk:
 
     def _record(self, call: Call) -> None:
         self.calls.append(call)
+        if self._ended:
+            raise ConnectionError('a reboot ended this Desk session')
         if call in self.raises:
             raise self.raises[call]
+
+    def reboot(self, wait: bool = False) -> None:
+        assert wait, 'the driver goes on before the control box is back'
+        self.calls.append(Call.REBOOT)
+        self.on_reboot()
+        if self.reboot_clears:
+            self.safety_error = self.fsoe_error = False
+            self.holder = None
+        self.brakes = [franka._BrakeState.LOCKED] * 7
+        self._ended = True
 
     def open_brakes(self) -> None:
         self._record(Call.OPEN_BRAKES)
@@ -230,10 +260,16 @@ class FakeDesk:
 
     def prepare(self) -> None:
         self._record(Call.PREPARE)
+        if self.safety_error:
+            raise franka.SafetyControllerError(['scripted'])
+        if self.fsoe_error:
+            raise RuntimeError('424 Client Error: Failed Dependency for url: /desk/api/joints/unlock')
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
 
     def ensure_control(self) -> None:
         self._record(Call.ENSURE_CONTROL)
+        if self.holder is not None:
+            raise franka.ControlHeldElsewhere('192.0.2.1', self.holder)
 
     def _authenticate(self) -> None:
         pass
@@ -243,7 +279,11 @@ class FakeDesk:
             raise ConnectionError('the control box is not answering')
         # Desk sends each brake state as a plain string.
         brakes = [str(brake) for brake in self.brakes]
-        return {franka.SAFE_INPUT_STATE: dict(self.safe_inputs), franka.BRAKE_STATE: brakes}
+        return {
+            franka.SAFE_INPUT_STATE: dict(self.safe_inputs),
+            franka.BRAKE_STATE: brakes,
+            franka.RECOVERABLE_ERRORS: {franka.FSOE_CONNECTION_ERROR: self.fsoe_error},
+        }
 
 
 @pytest.fixture
@@ -282,7 +322,14 @@ def _arm(driver: franka.Robot, clock: MockClock) -> franka._Arm:
     """
     watch = _safe_inputs(driver)
     watch.sample()
-    return driver._arm(StopFlag(), clock, watch)
+    return _connected_arm(driver, clock, watch)
+
+
+def _connected_arm(driver: franka.Robot, clock: MockClock, watch: franka._SafeInputs) -> franka._Arm:
+    """The driver's arm, driven over the handle the driver holds, as a run that came up clean drives it."""
+    arm = driver._arm(StopFlag(), clock, watch)
+    arm.connect(driver._robot)
+    return arm
 
 
 def _drive_park(driver: franka.Robot, arm: FakeArm) -> MockClock:
@@ -1065,7 +1112,7 @@ def test_the_refusal_the_arm_logs_names_the_safe_input_that_prohibits_motion(des
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
 
-    driver._arm(StopFlag(), MockClock(), watch).note_refusals(REFUSED)
+    _connected_arm(driver, MockClock(), watch).note_refusals(REFUSED)
 
     assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
 
@@ -1091,7 +1138,7 @@ def test_a_refusal_names_no_safe_input_the_control_box_has_stopped_confirming(de
 
     desk.safety_status = unreachable
     watch.sample()
-    driver._arm(StopFlag(), MockClock(), watch).note_refusals(REFUSED)
+    _connected_arm(driver, MockClock(), watch).note_refusals(REFUSED)
 
     assert _refusals(caplog) == ['The arm refused a move: scripted']
 
@@ -1195,7 +1242,7 @@ def test_a_fault_is_left_alone_while_the_safe_inputs_have_never_been_read(desk):
     clock = MockClock()
     driver.state._bind(RecordingEmitter(), clock=clock)
     unread = franka._SafeInputs(driver._ip, None)  # no credentials: `sample` returns without reading
-    driving = driver._arm(StopFlag(), clock, unread)
+    driving = _connected_arm(driver, clock, unread)
     driving.note_refusals(REFUSED)
 
     assert not unread.triggered, 'the flattened view is what made this look clear'
@@ -1218,7 +1265,7 @@ def test_a_fault_is_left_alone_when_the_last_reading_failed_over_a_triggered_inp
     watch.sample()
     desk.unreachable = True  # the box stops answering, so the next sample keeps the reading and unsets `sampled`
     watch.sample()
-    driving = driver._arm(StopFlag(), clock, watch)
+    driving = _connected_arm(driver, clock, watch)
     driving.note_refusals(REFUSED)
 
     assert not watch.triggered, 'an unsampled reading names no input, which is what hid the trip'
@@ -1238,7 +1285,7 @@ def test_a_fault_is_cleared_on_a_reading_that_found_every_safe_input_clear(desk)
     driver.state._bind(RecordingEmitter(), clock=clock)
     watch = _safe_inputs(driver)
     watch.sample()
-    driving = driver._arm(StopFlag(), clock, watch)
+    driving = _connected_arm(driver, clock, watch)
     driving.note_refusals(REFUSED)
 
     assert watch.confirmed_clear
@@ -1257,7 +1304,7 @@ def test_a_fault_a_triggered_safe_input_holds_is_left_for_the_person_to_clear(de
     watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
-    driving = driver._arm(StopFlag(), clock, watch)
+    driving = _connected_arm(driver, clock, watch)
     driving.note_refusals(REFUSED)
 
     with pytest.raises(RuntimeError, match='stopped short'):
@@ -1276,7 +1323,7 @@ def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
     watch = _safe_inputs(driver)
     desk.safe_inputs['x4'] = 'Active'  # a held enabling device; a pressed emergency stop refuses before the arm
     watch.sample()
-    driving = driver._arm(StopFlag(), clock, watch)
+    driving = _connected_arm(driver, clock, watch)
     answer = move(command.JointPosition(JOGGED))
     asked = driving.moves.next_request()
     assert isinstance(asked, pimm.calls.Call)
@@ -1298,7 +1345,7 @@ def test_a_sync_move_answers_the_release_instruction_while_the_emergency_stop_is
     watch = _safe_inputs(driver)
     desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
     watch.sample()
-    driving = driver._arm(StopFlag(), clock, watch)
+    driving = _connected_arm(driver, clock, watch)
     answer = move(command.JointPosition(JOGGED))
     asked = driving.moves.next_request()
     assert isinstance(asked, pimm.calls.Call)
@@ -1320,7 +1367,7 @@ def test_the_teardown_park_logs_the_move_the_arm_refused(desk, caplog):
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
 
-    _drive(driver._arm(StopFlag(), clock, watch).park(at_teardown=True), clock)
+    _drive(_connected_arm(driver, clock, watch).park(at_teardown=True), clock)
 
     assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x31'] are triggered"]
 
@@ -1334,7 +1381,7 @@ def test_a_move_the_arm_refused_as_its_deadline_expired_is_still_logged(desk, ca
     watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
-    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+    travel = _connected_arm(driver, clock, watch).move_to(JOGGED, None)
 
     next(travel)  # the first poll: the goal is in flight
     clock.advance(60.0)  # the deadline expires
@@ -1355,7 +1402,7 @@ def test_a_move_that_merely_ran_out_of_time_is_no_refusal(desk, caplog):
     watch = _safe_inputs(driver)
     desk.safe_inputs['x31'] = STOPPED
     watch.sample()
-    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+    travel = _connected_arm(driver, clock, watch).move_to(JOGGED, None)
 
     next(travel)  # the first poll: the goal is in flight
     clock.advance(60.0)  # the deadline expires, and the goal is still in flight
@@ -1766,22 +1813,18 @@ def test_desk_prepare_leaves_alone_the_brakes_a_safety_stop_locked(desk, world, 
 
 
 def test_desk_prepare_waits_for_every_safe_input_to_read_clear(desk, world):
-    """A person may hold the arm, and only they release it."""
+    """A person may hold the arm, and only they release it. The recovery step never says it connects."""
     arm = FakeArm(PARK)
     arm.error = 1
     desk.safe_inputs['x4'] = 'Active'  # a person holds the enabling device
-    driver = _driver(arm)
-    clock = MockClock()
-    driver.state._bind(RecordingEmitter(), clock=clock)
-    loop = driver.run(StopFlag(), clock)
+    run = _start_run(world, _driver(arm), ticks=3)
 
-    for _ in range(3):  # init + the opening move
-        next(loop)
-    answer = _recoverer(world, driver)(None)
-    next(loop)
+    answer = run.recover(None)
+    run.tick()
 
     assert answer.result() is RecoveryOutcome.NOT_CLEARED
     assert desk.calls == [Call.PREPARE]
+    assert run.step_names == [RecoveryStep.IDLE, RecoveryStep.IDLE]
 
 
 def test_a_driver_with_no_desk_session_answers_without_desk_prepare(world, monkeypatch):
@@ -1929,24 +1972,20 @@ def test_a_move_with_no_connection_is_refused_and_reaches_no_arm(desk, world, mo
     assert arm.calls[mark:] == []
 
 
-def test_a_ready_call_with_no_connection_runs_the_desk_step_and_answers_once_connected(desk, world, monkeypatch):
+def test_a_ready_call_with_no_connection_answers_the_error_and_runs_no_desk_step(desk, world, monkeypatch):
+    """Only a recover call connects: the harness asks a device that streams an error to get ready again and again."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     ready = _readier(world, driver)
     loop, _stop, _recover = _run_with_no_connection(desk, world, monkeypatch, driver, arm)
-    reconnected = FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED)
-    _reconnect_to(monkeypatch, reconnected)
+    mark = len(desk.calls)
 
     answer = ready(None)
     next(loop)
 
-    assert answer.result() is None
-    assert reconnected.calls[:4] == [
-        Call.SET_COLLISION_BEHAVIOR,
-        Call.SET_CONTROL_MODE,
-        Call.SET_LOAD,
-        Call.RECOVER_FROM_ERRORS,
-    ]
+    with pytest.raises(RuntimeError, match='no connection to the arm: 500 Server Error: OneClientError'):
+        answer.result()
+    assert desk.calls[mark:] == []
 
 
 def test_a_run_with_no_connection_ends_without_a_park_or_a_brake_release(desk, world, monkeypatch):
@@ -1958,7 +1997,7 @@ def test_a_run_with_no_connection_ends_without_a_park_or_a_brake_release(desk, w
     stop.stopped = True
     _drive(loop)
 
-    assert arm.calls[mark:] == [Call.STOP]
+    assert arm.calls[mark:] == [], 'the teardown reached the connection FCI ended'
     assert desk.calls[desk_mark:] == []
     assert desk.released
 
@@ -1987,7 +2026,7 @@ def test_a_new_connection_that_fails_its_configuration_never_drives_the_arm(desk
     for _ in range(3):
         next(loop)
     assert arm.calls[mark:] == []
-    assert reconnected.calls == [Call.SET_COLLISION_BEHAVIOR]
+    assert reconnected.calls == [Call.SET_COLLISION_BEHAVIOR, Call.STOP], 'the failed handle drives the arm'
 
 
 def test_the_next_command_opens_the_brakes_the_driver_locked_when_fci_stays_on(desk, world):
@@ -2056,72 +2095,39 @@ def test_a_ready_call_clears_an_error_the_recovery_clears_without_desk_prepare(d
     assert desk.calls == [Call.PREPARE], 'a ready call prepared the arm through Desk again'
 
 
-def test_a_ready_call_on_an_error_the_recovery_leaves_is_answered_after_desk_prepare(desk, world, monkeypatch):
-    """An error the recovery leaves sends Start through Desk preparation; the run goes on over the new connection."""
-    arm = FakeArm(PARK)
-    desk.calls = arm.calls  # one log for both fakes, so the halt, the brakes, FCI and prepare are ordered
-    reconnected = FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED)
-    _reconnect_to(monkeypatch, reconnected)
-    loop, ready = _started_with_error(arm, world)
-    mark = len(arm.calls)
-
-    answer = ready(None)
-    next(loop)
-
-    assert answer.result() is None
-    assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
-        Call.RECOVER_FROM_ERRORS,
-        Call.ENSURE_CONTROL,
-        Call.STOP,
-        Call.STOP,  # the brakes halt the control loop again before they lock
-        Call.CLOSE_BRAKES,
-        Call.DEACTIVATE_FCI,
-        Call.PREPARE,
-    ]
-    assert reconnected.calls[:4] == [
-        Call.SET_COLLISION_BEHAVIOR,
-        Call.SET_CONTROL_MODE,
-        Call.SET_LOAD,
-        Call.RECOVER_FROM_ERRORS,
-    ]
-    mark = len(arm.calls)
-    next(loop)
-    assert arm.calls[mark:] == [], 'the run still drives the connection FCI ended'
-
-
-def test_a_ready_call_answers_the_error_that_desk_prepare_leaves(desk, world, monkeypatch):
-    arm = FakeArm(PARK)
-    arm.error_message = 'the error on the connection FCI ended'
-    reconnected = FakeArm(PARK)
-    reconnected.error = 1  # Desk.prepare() does not clear it either
-    reconnected.error_message = 'the error on the new connection'
-    _reconnect_to(monkeypatch, reconnected)
-    loop, ready = _started_with_error(arm, world)
-
-    answer = ready(None)
-    next(loop)
-
-    with pytest.raises(RuntimeError, match='recovery did not clear: the error on the new connection'):
-        answer.result()
-    assert desk.calls.count(Call.PREPARE) == 2
-
-
-def test_a_ready_call_answers_a_failed_desk_prepare_and_the_run_goes_on_with_no_connection(desk, world, monkeypatch):
-    arm = FakeArm(PARK)
+def test_a_ready_call_on_an_error_the_recovery_leaves_answers_it_and_takes_no_desk_control(desk, world, monkeypatch):
+    """The harness asks again and again between episodes: a ready call takes no control and opens no brakes."""
     monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
+    arm = FakeArm(PARK)
+    arm.error_message = 'a fault the recovery leaves'
     loop, ready = _started_with_error(arm, world)
-    desk.raises[Call.PREPARE] = RuntimeError('TD2 self-test did not complete')
+    desk.safety_error = True  # a box that a recover call would reboot
+    mark = len(desk.calls)
 
-    answer = ready(None)
-    next(loop)
-
-    with pytest.raises(RuntimeError, match='TD2 self-test'):
-        answer.result()
-    arm.raises = ConnectionError('libfranka: TCP send bytes: Connection reset by peer')  # the connection FCI off ended
-    mark = len(arm.calls)
     for _ in range(3):
+        answer = ready(None)
         next(loop)
-    assert arm.calls[mark:] == [], 'the run drives the connection FCI ended'
+        with pytest.raises(RuntimeError, match='recovery did not clear: a fault the recovery leaves'):
+            answer.result()
+
+    assert desk.calls[mark:] == []
+
+
+def test_a_recover_call_on_an_error_the_recovery_leaves_runs_the_desk_step_and_clears_it(desk, world, monkeypatch):
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    arm.error = 1  # a fault recover_from_errors does not clear
+    mark = len(desk.calls)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert desk.calls[mark:] == [Call.ENSURE_CONTROL, Call.CLOSE_BRAKES, Call.DEACTIVATE_FCI, Call.PREPARE]
+    assert Call.RECOVER_FROM_ERRORS in reconnected.calls
 
 
 def test_a_ready_call_on_a_driver_with_no_desk_session_answers_the_error_without_desk(world, monkeypatch, caplog):
@@ -2395,3 +2401,503 @@ def test_a_move_held_on_an_erroring_arm_is_answered_when_a_throw_ends_the_run(de
         next(loop)
     with pytest.raises(MoveAbandoned):
         answer.result()
+
+
+@dataclass
+class _Run:
+    """A driver run under the test's hand: its generator and stop, what it streams, and callers on its ports."""
+
+    loop: Iterator[pimm.Command]
+    stop: StopFlag
+    states: RecordingEmitter
+    steps: RecordingEmitter
+    meta: RecordingEmitter
+    recover: pimm.calls.Caller[None, RecoveryOutcome]
+    ready: pimm.calls.Caller[None, None]
+
+    def tick(self) -> None:
+        next(self.loop)
+
+    @property
+    def streamed(self) -> list[Any]:
+        return [data for _, data in self.states.emitted]
+
+    @property
+    def step_names(self) -> list[RecoveryStep]:
+        return [data for _, data in self.steps.emitted]
+
+
+def _start_run(world: pimm.World, driver: franka.Robot, ticks: int = 2) -> _Run:
+    """Run ``driver`` for ``ticks`` steps of its generator, with every port it streams on recorded."""
+    clock = MockClock()
+    states, steps, meta = RecordingEmitter(), RecordingEmitter(), RecordingEmitter()
+    driver.state._bind(states, clock=clock)
+    driver.recovery_step._bind(steps, clock=clock)
+    driver.robot_meta._bind(meta, clock=clock)
+    stop = StopFlag()
+    run = _Run(driver.run(stop, clock), stop, states, steps, meta, _recoverer(world, driver), _readier(world, driver))
+    for _ in range(ticks):
+        run.tick()
+    return run
+
+
+class StartFailure(StrEnum):
+    """Each way Desk or libfranka refuses a start. ``reason`` is the text the streamed error carries."""
+
+    SAFETY_ERROR = 'safety error'
+    STRANDED_TOKEN = 'stranded token'
+    ANOTHER_LOGIN = 'another login'
+    JOINT_RECOVERY = 'joint recovery'
+    BRAKES = 'brakes'
+    FCI = 'fci'
+    FSOE = 'fsoe'
+    CONNECT = 'connect'
+    CONFIGURATION = 'configuration'
+
+    @property
+    def reason(self) -> str:
+        return _START_FAILURE_REASONS[self]
+
+    def script(self, desk: FakeDesk, driver: franka.Robot, arm: FakeArm, monkeypatch) -> None:
+        """Script this failure into the next start of ``driver`` on ``arm``."""
+        match self:
+            case StartFailure.SAFETY_ERROR:
+                desk.safety_error = True
+            case StartFailure.STRANDED_TOKEN:
+                desk.holder = 'user'  # the Desk login the fixture gives the driver
+            case StartFailure.ANOTHER_LOGIN:
+                desk.holder = 'safe'
+            case StartFailure.JOINT_RECOVERY | StartFailure.BRAKES | StartFailure.FCI:
+                desk.raises[Call.PREPARE] = RuntimeError(self.reason)
+            case StartFailure.FSOE:
+                desk.fsoe_error = True
+            case StartFailure.CONNECT:
+                del driver._robot
+
+                def refuse(*_args, **_kwargs):
+                    raise RuntimeError(self.reason)
+
+                monkeypatch.setattr(franka.pf, 'Robot', refuse)
+            case StartFailure.CONFIGURATION:
+                arm.raises_once = RuntimeError(self.reason)
+
+
+_START_FAILURE_REASONS = {
+    StartFailure.SAFETY_ERROR: 'scripted',
+    StartFailure.STRANDED_TOKEN: 'user',
+    StartFailure.ANOTHER_LOGIN: 'safe',
+    StartFailure.JOINT_RECOVERY: 'Desk demands a recovery at the robot: joint 4',
+    StartFailure.BRAKES: "Brakes did not reach 'Unlocked' within 20.0s",
+    StartFailure.FCI: 'FCI did not activate within 15.0s',
+    StartFailure.FSOE: 'Failed Dependency',
+    StartFailure.CONNECT: 'libfranka: Connection timeout',
+    StartFailure.CONFIGURATION: 'libfranka: set_collision_behavior rejected',
+}
+
+
+@pytest.mark.parametrize('failure', StartFailure)
+def test_a_start_that_desk_or_libfranka_refuses_comes_up_with_no_connection_and_streams_why(
+    desk, world, monkeypatch, failure
+):
+    arm = FakeArm(JOGGED)
+    driver = _driver(arm)
+    failure.script(desk, driver, arm, monkeypatch)
+
+    run = _start_run(world, driver)
+    for _ in range(3):
+        run.tick()
+
+    [error] = run.streamed
+    assert isinstance(error, pimm.SignalError)
+    assert str(error).startswith(franka.NO_CONNECTION) and failure.reason in str(error)
+    assert arm.targets == [], 'the arm parked with no connection'
+    assert not run.meta.emitted, 'a run with no connection sent a robot model'
+
+
+def test_a_clean_start_connects_once_parks_and_streams_the_arm_state(desk, world):
+    arm = FakeArm(JOGGED)
+    run = _start_run(world, _driver(arm), ticks=3)
+
+    np.testing.assert_allclose(arm.targets, [PARK])
+    assert arm.calls.count(Call.SET_COLLISION_BEHAVIOR) == 1
+    assert run.streamed and all(isinstance(data, franka.FrankaState) for data in run.streamed)
+    assert desk.calls == [Call.PREPARE]
+    assert run.step_names == [RecoveryStep.IDLE]
+    assert len(run.meta.emitted) == 1, 'a clean start sends the robot model once'
+
+
+def test_the_run_streams_the_release_instruction_over_the_missing_connection_while_the_stop_is_pressed(
+    desk, world, monkeypatch
+):
+    monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 0.01)
+    desk.safety_error = True
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = STOPPED
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    desk.safe_inputs[franka.EMERGENCY_STOP_INPUT] = CLEAR
+    deadline = time.monotonic() + 5.0
+    while len(run.streamed) < 2 and time.monotonic() < deadline:  # until the watch thread reads the release
+        run.tick()
+        time.sleep(0.001)
+
+    first, second = run.streamed
+    assert str(first) == franka.EMERGENCY_STOP_PRESSED
+    assert str(second).startswith(franka.NO_CONNECTION)
+
+
+def test_ready_calls_on_an_arm_with_no_connection_answer_the_error_and_run_no_desk_step(desk, world):
+    """The harness asks a device that streams an error to get ready again and again, with nobody at the rig."""
+    desk.safety_error = True
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    mark = len(desk.calls)
+
+    for _ in range(3):
+        answer = run.ready(None)
+        run.tick()
+        with pytest.raises(RuntimeError, match=franka.NO_CONNECTION):
+            answer.result()
+
+    assert desk.calls[mark:] == []
+    assert run.step_names == [RecoveryStep.IDLE]
+
+
+@pytest.mark.parametrize('failure', [StartFailure.SAFETY_ERROR, StartFailure.STRANDED_TOKEN, StartFailure.FSOE])
+def test_a_recover_call_on_a_box_only_a_reboot_clears_reboots_it_once_and_connects(desk, world, monkeypatch, failure):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    failure.script(desk, driver, arm, monkeypatch)
+    run = _start_run(world, driver)
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    mark, entered = len(desk.calls), desk.entries
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert desk.calls[mark:].count(Call.REBOOT) == 1
+    assert desk.calls[-2:] == [Call.REBOOT, Call.PREPARE]
+    assert desk.entries == entered + 1, 'the step prepared the arm over the session the reboot ended'
+    assert run.step_names == [
+        RecoveryStep.IDLE,
+        RecoveryStep.CONNECTING,
+        RecoveryStep.REBOOTING,
+        RecoveryStep.CONNECTING,
+        RecoveryStep.IDLE,
+    ]
+    mark = len(reconnected.calls)
+    run.tick()
+    assert Call.STATE in reconnected.calls[mark:], 'the run does not read the new connection'
+    assert isinstance(run.streamed[-1], franka.FrankaState)
+
+
+def test_a_reboot_that_does_not_clear_the_box_answers_the_error_and_each_press_reboots_once(desk, world, monkeypatch):
+    desk.safety_error = True
+    desk.reboot_clears = False
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected'))
+    run = _start_run(world, _driver(FakeArm(PARK)))
+
+    for presses in (1, 2):
+        answer = run.recover(None)
+        run.tick()
+        with pytest.raises(franka.SafetyControllerError):
+            answer.result()
+        assert desk.calls.count(Call.REBOOT) == presses
+    assert isinstance(run.streamed[-1], pimm.SignalError)
+
+
+def test_a_recover_call_that_a_held_safe_input_stops_names_that_input_as_the_reason(desk, world, monkeypatch):
+    """The start failure clears meanwhile, so only the safe input stops the reconnect. The boundary is the reboot
+    path below, which names the input the same way."""
+    desk.safety_error = True
+    desk.safe_inputs['x4'] = 'Active'  # a person holds the enabling device
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected'))
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    desk.safety_error = False
+    mark = len(desk.calls)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.NOT_CLEARED
+    assert Call.PREPARE not in desk.calls[mark:] and Call.REBOOT not in desk.calls[mark:]
+    reason = str(run.streamed[-1])
+    assert reason.startswith(franka.NO_CONNECTION) and "safe inputs ['x4'] are triggered" in reason, reason
+
+
+def test_the_safe_inputs_are_read_again_after_a_reboot_before_the_brakes_open(desk, world, monkeypatch):
+    desk.safety_error = True
+    desk.on_reboot = lambda: desk.safe_inputs.update(x4='Active')  # a person takes the enabling device meanwhile
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected'))
+    run = _start_run(world, _driver(FakeArm(PARK)))
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.NOT_CLEARED
+    assert desk.calls[-1] == Call.REBOOT, 'Desk prepared the arm while a person held the enabling device'
+    assert run.step_names[-1] is RecoveryStep.IDLE
+    reason = str(run.streamed[-1])
+    assert reason.startswith(franka.NO_CONNECTION) and "safe inputs ['x4'] are triggered" in reason, reason
+
+
+@pytest.mark.parametrize('failure', [StartFailure.ANOTHER_LOGIN, StartFailure.JOINT_RECOVERY, StartFailure.BRAKES])
+def test_a_recover_call_on_a_failure_a_reboot_does_not_clear_answers_it_and_reboots_nothing(
+    desk, world, monkeypatch, failure
+):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    failure.script(desk, driver, arm, monkeypatch)
+    run = _start_run(world, driver)
+
+    answer = run.recover(None)
+    run.tick()
+
+    with pytest.raises(Exception, match=failure.reason):
+        answer.result()
+    assert Call.REBOOT not in desk.calls
+    assert RecoveryStep.REBOOTING not in run.step_names
+
+
+def test_a_run_sends_the_model_the_arm_reports_when_a_recover_call_connects_it(desk, world, monkeypatch):
+    desk.holder = 'safe'
+    arm = FakeArm(PARK)
+    fr3 = arm.get_robot_model()
+    longer_tool = fr3.replace('xyz="0 0 0.1033999994"', 'xyz="0 0 0.2"')
+    assert longer_tool != fr3
+    arm.get_robot_model = lambda: longer_tool  # an arm whose end-effector frame in Desk is not the bundled one
+    run = _start_run(world, _driver(arm))
+    assert not run.meta.emitted, 'a run with no connection sent a robot model'
+    desk.holder = None
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    [meta] = [data for _, data in run.meta.emitted]
+    assert 'xyz="0 0 0.2"' in meta[roboarm_keys.URDF]
+    assert meta[roboarm_keys.JOINT_NAMES] == [f'joint{i}' for i in range(1, 8)]
+
+
+def test_a_recover_call_after_another_login_releases_control_connects_with_no_reboot(desk, world, monkeypatch):
+    desk.holder = 'safe'
+    arm = FakeArm(PARK)
+    run = _start_run(world, _driver(arm))
+    desk.holder = None  # the operator releases control in the Desk tab
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert Call.REBOOT not in desk.calls and desk.calls[-1] == Call.PREPARE
+    assert Call.SET_COLLISION_BEHAVIOR in arm.calls
+
+
+def test_a_recover_call_on_a_connected_arm_that_meets_a_safety_error_reboots_and_connects(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    desk.calls = arm.calls  # one log for both fakes, so the halt, FCI and the reboot are ordered
+    run = _start_run(world, _driver(arm), ticks=3)
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    arm.error = 1  # a fault recover_from_errors does not clear
+    desk.safety_error = True
+    mark = len(arm.calls)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
+        Call.RECOVER_FROM_ERRORS,
+        Call.ENSURE_CONTROL,
+        Call.STOP,
+        Call.STOP,  # the brakes halt the control loop again before they lock
+        Call.CLOSE_BRAKES,
+        Call.DEACTIVATE_FCI,
+        Call.PREPARE,
+        Call.REBOOT,
+        Call.PREPARE,
+    ]
+    assert Call.RECOVER_FROM_ERRORS in reconnected.calls
+
+
+def test_a_driver_that_does_not_manage_desk_ends_the_run_on_a_failed_connection(monkeypatch):
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError('libfranka: Connection timeout')
+
+    monkeypatch.setattr(franka.pf, 'Robot', refuse)
+    loop = franka.Robot('192.0.2.1', manage_desk=False).run(StopFlag(), MockClock())
+
+    with pytest.raises(RuntimeError, match='Connection timeout'):
+        next(loop)
+
+
+def test_a_recover_call_after_a_failed_configuration_connects_over_a_new_handle(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    StartFailure.CONFIGURATION.script(desk, driver, arm, monkeypatch)
+    run = _start_run(world, driver)
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert arm.calls.count(Call.SET_COLLISION_BEHAVIOR) == 1, 'the driver configured the handle that failed again'
+    assert Call.SET_COLLISION_BEHAVIOR in reconnected.calls
+
+
+@pytest.mark.parametrize('failure', [StartFailure.CONNECT, StartFailure.CONFIGURATION])
+def test_a_start_that_fails_after_desk_opened_the_brakes_locks_them(desk, world, monkeypatch, failure):
+    """Nothing drives the arm with no connection, so no brake stays open for it."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    failure.script(desk, driver, arm, monkeypatch)
+
+    _start_run(world, driver)
+
+    assert desk.calls == [Call.PREPARE, Call.CLOSE_BRAKES]
+    assert set(desk.brakes) == {franka._BrakeState.LOCKED}
+
+
+def test_a_start_that_another_login_refuses_leaves_its_brakes_alone(desk, world, monkeypatch):
+    """The brakes belong to the session that holds control."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    StartFailure.ANOTHER_LOGIN.script(desk, driver, arm, monkeypatch)
+
+    _start_run(world, driver)
+
+    assert Call.CLOSE_BRAKES not in desk.calls
+
+
+def test_a_recover_call_whose_connection_fails_after_desk_prepare_locks_the_brakes(desk, world, monkeypatch):
+    desk.safety_error = True
+    driver = _driver(FakeArm(PARK))
+    run = _start_run(world, driver)
+    desk.safety_error = False
+
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError('libfranka: Connection timeout')
+
+    monkeypatch.setattr(franka.pf, 'Robot', refuse)
+    del driver._robot
+    answer = run.recover(None)
+    run.tick()
+
+    with pytest.raises(RuntimeError, match='Connection timeout'):
+        answer.result()
+    assert desk.calls[-2:] == [Call.PREPARE, Call.CLOSE_BRAKES]
+
+
+@pytest.mark.parametrize('failure', [StartFailure.SAFETY_ERROR, StartFailure.CONNECT])
+def test_a_start_failure_logs_one_line_with_its_type_and_reason_and_no_traceback(
+    desk, world, monkeypatch, caplog, failure
+):
+    """A run log reads a traceback as a crash, and this run goes on."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    failure.script(desk, driver, arm, monkeypatch)
+    desk.raises[Call.CLOSE_BRAKES] = ConnectionError('the control box is not answering')  # the brake lock fails too
+
+    with caplog.at_level(logging.INFO, logger=franka.__name__):
+        _start_run(world, driver)
+
+    [line] = [r for r in caplog.records if 'did not come up' in r.getMessage()]
+    assert line.levelno == logging.ERROR
+    assert failure.reason in line.getMessage()
+    assert 'Error' in line.getMessage(), 'the line does not name the exception type'
+    assert all(r.exc_info is None for r in caplog.records), 'a record carries a traceback'
+
+
+def test_a_handle_that_fails_its_configuration_stops_its_control_loop_before_the_brakes_lock(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    desk.calls = arm.calls  # one log for both fakes, so the halt and the brakes are ordered
+
+    def refuse_load(*_load) -> None:
+        arm.calls.append(Call.SET_LOAD)
+        raise RuntimeError('libfranka: set_load rejected')
+
+    monkeypatch.setattr(arm, 'set_load', refuse_load)
+
+    _start_run(world, _driver(arm))
+
+    tail = [c for c in arm.calls if c in (Call.SET_CONTROL_MODE, Call.SET_LOAD, Call.STOP, Call.CLOSE_BRAKES)]
+    assert tail == [Call.SET_CONTROL_MODE, Call.SET_LOAD, Call.STOP, Call.CLOSE_BRAKES]
+
+
+def test_a_handle_whose_robot_model_read_fails_stops_its_control_loop_and_is_dropped(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    desk.calls = arm.calls  # one log for both fakes, so the halt and the brakes are ordered
+
+    def refuse_model() -> str:
+        raise RuntimeError('libfranka: robot model unavailable')
+
+    monkeypatch.setattr(arm, 'get_robot_model', refuse_model)
+    driver = _driver(arm)
+    run = _start_run(world, driver)
+
+    tail = [c for c in arm.calls if c in (Call.SET_CONTROL_MODE, Call.STOP, Call.CLOSE_BRAKES)]
+    assert tail == [Call.SET_CONTROL_MODE, Call.STOP, Call.CLOSE_BRAKES]
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    answer = run.recover(None)
+    run.tick()
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert Call.SET_COLLISION_BEHAVIOR in reconnected.calls, 'the recover call reused the failed handle'
+
+
+def _one_error_line(caplog, text: str) -> logging.LogRecord:
+    """The one record whose message carries ``text``, after checking that no record carries a traceback."""
+    assert all(r.exc_info is None for r in caplog.records), 'a record carries a traceback'
+    [line] = [r for r in caplog.records if text in r.getMessage()]
+    assert line.levelno == logging.ERROR
+    return line
+
+
+@pytest.mark.parametrize('safety_error', [False, True], ids=['the recovery clears', 'Desk prepares the arm'])
+def test_a_recover_call_is_answered_before_the_driver_reports_idle(desk, world, safety_error):
+    """A console reads IDLE as the end of the clear, and then reads the outcome."""
+    desk.safety_error = safety_error
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    desk.safety_error = False
+    answer = run.recover(None)
+    answered_at_idle: list[bool] = []
+    record = run.steps._emit
+
+    def watch(data, time):
+        if data is RecoveryStep.IDLE:
+            answered_at_idle.append(answer.done())
+        record(data, time)
+
+    run.steps._emit = watch
+    run.tick()
+
+    assert answered_at_idle == [True]
+
+
+def test_a_recover_call_that_fails_logs_one_line_with_its_type_and_reason_and_no_traceback(desk, world, caplog):
+    """A run log reads a traceback as a crash, and the run goes on after a failed recover call."""
+    desk.safety_error = True
+    desk.reboot_clears = False
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO, logger=franka.__name__):
+        answer = run.recover(None)
+        run.tick()
+
+    with pytest.raises(franka.SafetyControllerError):
+        answer.result()
+    line = _one_error_line(caplog, 'The recovery a console asked for failed')
+    assert 'SafetyControllerError' in line.getMessage() and 'scripted' in line.getMessage()
+
+
+def test_a_park_that_fails_at_start_logs_one_line_with_its_type_and_reason_and_no_traceback(desk, world, caplog):
+    arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)  # the arm refuses the move to the park pose
+
+    with caplog.at_level(logging.INFO, logger=franka.__name__):
+        _start_run(world, _driver(arm), ticks=3)
+
+    line = _one_error_line(caplog, 'did not reach the park pose')
+    assert 'RuntimeError' in line.getMessage() and 'stopped short' in line.getMessage()
