@@ -329,7 +329,7 @@ def test_pickle_roundtrip(solver_cls):
     [
         # The closed 2F-85 pads, where MolmoSpaces puts its ``gripper/grasp_site``.
         (bundled_franka_model()[roboarm_keys.URDF], 0.155),
-        # The midpoint of the fingertip pads in the sim scene, pinned by the scene test of ``GRIPPER_SITE``.
+        # The midpoint of the fingertip pads in the sim scene.
         (bundled_panda_model()[roboarm_keys.URDF], 0.10365),
         (PANDA_URDF, 0.10365),
     ],
