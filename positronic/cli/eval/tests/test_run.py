@@ -492,11 +492,25 @@ def test_a_failure_outside_the_output_dir_is_not_reported_as_one(tmp_path, monke
     def unreadable_lockfile(*_args, **_kwargs):
         raise PermissionError(13, 'Permission denied', str(tmp_path / 'elsewhere' / 'uv.lock'))
 
-    monkeypatch.setattr('positronic.utils.save_run_metadata', unreadable_lockfile)
+    monkeypatch.setattr('positronic.utils.write_run_metadata', unreadable_lockfile)
 
     with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False), scoped_env_var(ENV_TELEMETRY_DIR):
         with pytest.raises(PermissionError):
             prepare_output_dir(tmp_path / 'episodes')
+
+
+def test_a_credential_on_the_command_line_is_a_usage_fault_before_the_output_dir_syncs(tmp_path, monkeypatch):
+    token = 'q7RfX2mKp' + '9WzL4vNc8' + 'YbT3hJd'  # split, so a diff that holds this line passes the check
+    monkeypatch.setattr(sys, 'argv', ['positronic', 'eval', 'run', f'--policy.headers={{"Modal-Key": "{token}"}}'])
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False), scoped_env_var(ENV_TELEMETRY_DIR):
+        with pytest.raises(CommandFailed, match=re.escape('argv[3]')) as exc:
+            prepare_output_dir(tmp_path / 'episodes')
+
+    assert exc.value.fault is Fault.USAGE
+    assert token not in str(exc.value)
+    assert not (tmp_path / 'episodes').exists()
+    assert not (tmp_path / 'mirror').exists()
 
 
 def test_a_recorded_run_leaves_no_telemetry_directory_behind(tmp_path, monkeypatch):
