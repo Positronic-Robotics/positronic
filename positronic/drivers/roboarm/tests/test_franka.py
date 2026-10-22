@@ -105,9 +105,10 @@ class FakeArm:
     """In-memory ``pf.Robot``: a commanded joint target is reached after ``polls_to_reach`` reads of ``goal``.
 
     ``goal_status`` pins the reported status, so a move that never lands can be scripted; ``raises``, once
-    set, is what every call but ``stop`` raises, ``ik_raises`` what only the solver raises, and
-    ``recover_raises`` what only ``recover_from_errors`` raises; ``error`` is the vendor fault flag every
-    state carries beside ``error_message``, and ``recover_clears`` whether a recovery puts it back to 0.
+    set, is what every call but ``stop`` raises, ``ik_raises`` what only the solver raises,
+    ``recover_raises`` what only ``recover_from_errors`` raises, and ``stop_raises`` what only ``stop``
+    raises; ``error`` is the vendor fault flag every state carries beside ``error_message``, and
+    ``recover_clears`` whether a recovery puts it back to 0.
     """
 
     def __init__(self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None):
@@ -121,6 +122,7 @@ class FakeArm:
         self.raises_once: Exception | None = None
         self.ik_raises: Exception | None = None
         self.recover_raises: Exception | None = None
+        self.stop_raises: Exception | None = None
         self.recover_clears = False
         self.polls_to_reach = polls_to_reach
         self._polls = 0
@@ -164,6 +166,8 @@ class FakeArm:
 
     def stop(self) -> None:
         self.calls.append(Call.STOP)
+        if self.stop_raises is not None:
+            raise self.stop_raises
 
     def get_robot_model(self) -> str:
         return (Path(franka.__file__).parent / 'fr3.urdf').read_text()
@@ -2032,6 +2036,42 @@ def test_a_new_connection_that_fails_its_configuration_never_drives_the_arm(desk
         next(loop)
     assert arm.calls[mark:] == []
     assert reconnected.calls == [Call.SET_COLLISION_BEHAVIOR]
+
+
+def test_a_failed_reconnection_holds_its_own_error_and_stops_no_handle_that_fci_off_ended(desk, world, monkeypatch):
+    """The old handle stopped before FCI went off. A second stop on it can raise, and must not hide the failure."""
+    arm = FakeArm(PARK)
+    arm.error = 1
+    reconnected = FakeArm(PARK)
+    reconnected.raises_once = RuntimeError('libfranka: set_collision_behavior rejected')
+    _reconnect_to(monkeypatch, reconnected)
+    fci_off = desk.deactivate_fci
+    after_fci_off: list[int] = []
+
+    def deactivate_fci() -> None:
+        fci_off()
+        after_fci_off.append(len(arm.calls))
+        arm.stop_raises = RuntimeError('libfranka: TCP connection got interrupted')
+
+    monkeypatch.setattr(desk, 'deactivate_fci', deactivate_fci)
+    driver = _driver(arm)
+    clock = MockClock()
+    states = RecordingEmitter()
+    driver.state._bind(states, clock=clock)
+    recover = _recoverer(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    answer = recover(None)
+    next(loop)
+
+    with pytest.raises(DeviceFault, match='set_collision_behavior rejected'):
+        answer.result()
+    held = states.emitted[-1][1]
+    assert isinstance(held, DeviceFault) and held.kind is FaultKind.ARM
+    assert str(held.__cause__) == 'libfranka: set_collision_behavior rejected'
+    assert Call.STOP not in arm.calls[after_fci_off[0] :], 'the driver stopped the handle FCI off ended'
 
 
 def test_the_next_command_opens_the_brakes_the_driver_locked_when_fci_stays_on(desk, world):

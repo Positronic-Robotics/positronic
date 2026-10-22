@@ -384,9 +384,14 @@ class _Arm(DriverRun[command.CommandType]):
         """Stop the control loop, and put the error for ``cause`` on the state until a Desk step connects again."""
         logger.error(f'The driver lost control of the arm: {cause}')
         self.robot.stop()
+        self.hold_lost_control(cause)
+
+    def hold_lost_control(self, cause: Exception) -> None:
+        """Put the error for ``cause`` on the state until a Desk step connects again. The control loop is stopped."""
         self.disconnect_cause = cause
+        fault = device_fault(cause, FaultKind.ARM, f'The driver has no control of the arm: {cause}')
         # The Message types do not name the SignalError that any message can carry.
-        self.out.emit(cast(FrankaState, DeviceFault(f'The driver has no control of the arm: {cause}', FaultKind.ARM)))
+        self.out.emit(cast(FrankaState, fault))
 
     @contextlib.contextmanager
     def lose_control_on_failure(self) -> Iterator[None]:
@@ -901,7 +906,8 @@ class Robot(pimm.ControlSystem):
             brakes.record_opened()
             self._init_robot(self._robot)
         except Exception as exc:
-            arm.lose_control(exc)
+            logger.error(f'The driver lost control of the arm: {exc}')
+            arm.hold_lost_control(exc)  # its handle stopped before FCI went off, and FCI off ended that connection
             raise
         arm.robot, arm.disconnect_cause = self._robot, None  # only a configured handle drives the arm
         cleared = arm.robot.recover_from_errors()
