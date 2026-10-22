@@ -23,7 +23,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
-from positronic.drivers.faults import DeviceFault, FaultKind
+from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
 from positronic.utils import package_assets_path
@@ -59,6 +59,11 @@ _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
 class ChainFault(RuntimeError):
     """A call into the i2rt chain that raised."""
+
+
+def _arm_fault(exc: Exception) -> DeviceFault:
+    """The ARM ``DeviceFault`` for ``exc``; a ``ChainFault`` reads as the arm lost."""
+    return device_fault(exc, FaultKind.ARM, f'The YAM arm is lost: {exc}' if isinstance(exc, ChainFault) else '')
 
 
 @contextlib.contextmanager
@@ -498,7 +503,9 @@ class _Arm(DriverRun[command.CommandType]):
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Settle onto the call's target with the gripper open, then answer the call. On a failure or a stop, hold
         where the arm stopped. A ``ChainFault`` answers the call and is raised. A blocking move is the episode reset, so
-        each episode starts with the gripper open."""
+        each episode starts with the gripper open. A move that fails answers with an ARM ``DeviceFault``, and a
+        malformed command with its own error."""
+        target: np.ndarray | None = None  # stays None for a malformed command, which the arm never sees
         try:
             target = self.to_joints(call.request, q)
             reference = yield from self._settle_onto(
@@ -509,13 +516,13 @@ class _Arm(DriverRun[command.CommandType]):
                 call.set_result(None)
                 return reference, _OPEN_GRIP
         except ChainFault as exc:
-            call.set_exception(exc)
+            call.set_exception(_arm_fault(exc))
             raise
         except Exception as exc:
             try:
                 held = self.hold_where_it_stopped()
-            finally:
-                call.set_exception(exc)  # Answer even if reading the hold position fails.
+            finally:  # Answer even if reading the hold position fails.
+                call.set_exception(exc if target is None else _arm_fault(exc))
             return held
         held = self.hold_where_it_stopped()
         call.set_exception(MoveAbandoned())
@@ -666,6 +673,10 @@ class Robot(pimm.ControlSystem):
     def _answer_failed_setup(asked: pimm.calls.Call | command.CommandType | None) -> Iterator[None]:
         try:
             yield
+        except Exception as exc:
+            if isinstance(asked, pimm.calls.Call):
+                asked.set_exception(_arm_fault(exc))
+            raise
         except BaseException as exc:
             if isinstance(asked, pimm.calls.Call):
                 asked.set_exception(exc)
@@ -705,9 +716,10 @@ class Robot(pimm.ControlSystem):
             with _chain_call():
                 vendor = self._connect(self._channel, self._sim, self._gravity_comp_factor)
         except ChainFault as exc:
+            lost = self._report_lost(exc)
             for call in asked:
-                call.set_exception(exc)
-            return self._report_lost(exc)
+                call.set_exception(lost)
+            return lost
         fault, lost = None, None
         with _opened(vendor):
             arm = _Arm(
@@ -741,7 +753,7 @@ class Robot(pimm.ControlSystem):
                 fault = exc
                 logger.exception('The arm driver failed during the run; parking the arm before it lets go')
                 for call in asked:
-                    call.set_exception(exc)
+                    call.set_exception(_arm_fault(exc))
             yield from arm.shutdown()
         if fault is not None:
             raise fault
@@ -749,7 +761,7 @@ class Robot(pimm.ControlSystem):
 
     def _report_lost(self, lost: ChainFault) -> DeviceFault:
         """Put an error for ``lost`` on the state and the grip, and return it."""
-        error = DeviceFault(f'The YAM arm is lost: {lost}', FaultKind.ARM)
+        error = _arm_fault(lost)
         logger.error(f'{error}; it holds the error until a ready call opens the chain again')
         self._emit_error(error)
         return error

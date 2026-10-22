@@ -8,7 +8,7 @@ from typing import cast
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.faults import DeviceFault, FaultKind
+from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.utils import DriverRun, Moves, RecoveryOutcome, grip_setpoint
 
 # pymodbus lives in the `hardware` extra, which the type-check environment does not install.
@@ -198,7 +198,7 @@ class _Gripper(DriverRun[float]):
 
     def hold_error(self, cause: Exception) -> DeviceFault:
         """Put an error for ``cause`` on the width, answer the move in flight with it, and close the bus."""
-        error = DeviceFault(f'The Robotiq gripper is lost: {cause}', FaultKind.GRIPPER)
+        error = device_fault(cause, FaultKind.GRIPPER, f'The Robotiq gripper is lost: {cause}')
         logger.error(f'{error}; it holds the error until a ready call activates it again')
         # The Message types do not name the SignalError that any message can carry.
         self._out.emit(cast(float, error))
@@ -236,15 +236,20 @@ class Robotiq2F(pimm.ControlSystem):
     ) -> Generator[pimm.Command, None, DeviceFault | None]:
         """Activate the gripper again, then answer every call in ``asked`` with how the activation ended.
 
-        None once the activation completes with no fault, else the error now on ``grip``. A throw reaches every
-        call in ``asked`` before it leaves.
+        None once the activation completes with no fault, else the error now on ``grip``, which answers every call in
+        ``asked``. Any other throw reaches every call in ``asked`` as a GRIPPER ``DeviceFault`` before it leaves.
         """
         logger.info('A console asked to re-activate the Robotiq gripper')
         try:
             outcome = yield from gripper.activate()
+        except _BUS_FAULTS as exc:
+            held = gripper.hold_error(exc)
+            for call in asked:
+                call.set_exception(held)
+            return held
         except Exception as exc:
             for call in asked:
-                call.set_exception(exc)
+                call.set_exception(device_fault(exc, FaultKind.GRIPPER))
             raise
         for call in asked:
             call.set_result(outcome)

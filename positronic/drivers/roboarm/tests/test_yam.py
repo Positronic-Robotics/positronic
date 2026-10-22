@@ -14,7 +14,7 @@ import pimm
 import positronic.cfg.embodiment as embodiment_cfg
 import positronic.cfg.hardware.roboarm as roboarm_cfg
 from pimm.tests.testing import MockClock, wire_call
-from positronic import keys
+from positronic import geom, keys
 from positronic.cfg import video_encoder
 from positronic.cfg.eval.real import yam as yam_eval
 from positronic.drivers.faults import DeviceFault, FaultKind
@@ -444,8 +444,10 @@ def test_an_arm_whose_fingers_read_off_is_tuned_not_edited(world, monkeypatch, g
     if arrives:
         answer.result()
     else:
-        with pytest.raises(TimeoutError):
+        with pytest.raises(DeviceFault) as answered:
             answer.result()
+        assert answered.value.kind is FaultKind.ARM
+        assert isinstance(answered.value.__cause__, TimeoutError)
     rig.loop.close()
 
 
@@ -585,8 +587,10 @@ def test_a_blocking_move_never_corrects_past_a_joint_limit(world, rig):
     sent = len(rig.vendor.targets)
     answer = _sync_caller(world, rig)(command.JointPosition(near_the_stop))
     _until_answered(rig, answer)
-    with pytest.raises(TimeoutError):
+    with pytest.raises(DeviceFault) as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, TimeoutError)
     assert min(target[1] for target in rig.vendor.targets[sent:]) >= 0.0
 
 
@@ -747,8 +751,10 @@ def test_a_move_that_cannot_reach_its_target_fails_within_its_bound(world, rig):
     tuning = yam.MOVE_SETTLE
     pass_s = float(np.max(RAISED)) / tuning.max_speed_rad_s + tuning.settle_timeout_s
     _until_answered(rig, answer, within_s=tuning.attempts * pass_s)
-    with pytest.raises(TimeoutError, match='rests'):
+    with pytest.raises(DeviceFault, match='rests') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, TimeoutError)
     assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
 
 
@@ -1089,9 +1095,11 @@ def test_sync_call_is_answered_when_idle_parking_setup_read_fails(world, parking
     monkeypatch.setattr(parking_rig.vendor, 'get_observations', fail_during_setup)
     parking_rig.tick()
     assert answer.done()
-    with pytest.raises(yam.ChainFault, match='CAN read failed') as raised:
+    with pytest.raises(DeviceFault, match='CAN read failed') as raised:
         answer.result()
-    assert raised.value.__cause__ is error
+    assert raised.value.kind is FaultKind.ARM
+    assert isinstance(raised.value.__cause__, yam.ChainFault)
+    assert raised.value.__cause__.__cause__ is error
     assert not parking_rig.vendor.released_at
     parking_rig.finish()
     np.testing.assert_allclose(parking_rig.vendor.released_at[0][:6], PARK, atol=0.005)
@@ -1114,9 +1122,11 @@ def test_sync_call_is_answered_when_interrupting_idle_parking_cannot_hold(world,
     monkeypatch.setattr(parking_rig.vendor, 'command_joint_pos', fail_hold)
     parking_rig.tick()
     assert answer.done()
-    with pytest.raises(yam.ChainFault, match='CAN write failed') as raised:
+    with pytest.raises(DeviceFault, match='CAN write failed') as raised:
         answer.result()
-    assert raised.value.__cause__ is error
+    assert raised.value.kind is FaultKind.ARM
+    assert isinstance(raised.value.__cause__, yam.ChainFault)
+    assert raised.value.__cause__.__cause__ is error
     parking_rig.tick(30)
     assert not parking_rig.vendor.released_at
     assert not parking_rig.vendor.closed
@@ -1231,8 +1241,10 @@ def test_a_chain_fault_during_a_blocking_move_answers_the_move_and_holds_the_arm
     _until_answered(rig, answer)
     rig.tick(10)
 
-    with pytest.raises(yam.ChainFault, match='CAN write failed'):
+    with pytest.raises(DeviceFault, match='CAN write failed') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, yam.ChainFault)
     _assert_held_as_a_lost_arm(rig, rig.vendor)
 
 
@@ -1307,8 +1319,10 @@ def test_a_ready_call_whose_chain_does_not_open_answers_its_error_and_the_next_o
     first = ready(None)
     rig.tick()
 
-    with pytest.raises(yam.ChainFault, match='can0 is down'):
+    with pytest.raises(DeviceFault, match='can0 is down') as answered:
         first.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, yam.ChainFault)
     assert isinstance(_last(rig.states), pimm.SignalError)
 
     rig.driver._connect = lambda channel, sim, gravity_comp_factor: reopened
@@ -1359,9 +1373,22 @@ def test_a_move_that_misses_its_target_puts_no_error_on_the_state(world, rig):
     answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
     _until_answered(rig, answer, within_s=120)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(DeviceFault) as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, TimeoutError)
     assert not any(isinstance(data, pimm.SignalError) for _, data in rig.states.emitted + rig.grips.emitted)
+
+
+def test_a_blocking_move_with_a_malformed_command_answers_its_own_error_and_not_a_device_fault(world, rig):
+    """A command the driver cannot turn into a target is the asker's error, and the arm never sees it."""
+    rig.rest()
+    far = geom.Transform3D(translation=np.array([10.0, 0.0, 0.0]), rotation=geom.Rotation.identity)
+    answer = _sync_caller(world, rig)(command.CartesianPosition(pose=far))
+    _until_answered(rig, answer, within_s=5)
+
+    with pytest.raises(ValueError, match='out of reach'):
+        answer.result()
 
 
 @pytest.mark.parametrize('site', [Site.CHAIN_READ, Site.CHAIN_COMMAND])

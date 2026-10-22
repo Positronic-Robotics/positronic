@@ -10,7 +10,7 @@ from pimm.shared_memory import NumpySMAdapter
 from positronic.drivers import vendor_import
 from positronic.drivers.camera import CAPTURE_TIME
 from positronic.drivers.camera.device_open_lock import device_open_lock
-from positronic.drivers.faults import DeviceFault, FaultKind
+from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 
 with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
     import pyzed.sl as sl
@@ -186,7 +186,7 @@ class SLCamera(pimm.ControlSystem):
         try:
             self._camera = yield from self._open_camera(should_stop)
         except CameraOpenError as e:
-            self._hold(DeviceFault(f'Camera {self._serial_number} did not open: {e}', FaultKind.CAMERA))
+            self._hold(device_fault(e, FaultKind.CAMERA, f'Camera {self._serial_number} did not open: {e}'))
             return
         self._error = None
 

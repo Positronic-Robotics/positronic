@@ -460,8 +460,10 @@ def test_a_bus_error_during_recover_reaches_the_caller_and_the_gripper_holds_it(
     _lose(bus, BusFault.PORT_GONE)
     _pump(loop, clock, 2)
 
-    with pytest.raises(OSError):
+    with pytest.raises(DeviceFault) as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.GRIPPER
+    assert isinstance(answered.value.__cause__, OSError)
     assert len(_errors(widths)) == 1
 
 

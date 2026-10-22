@@ -15,7 +15,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
-from positronic.drivers.faults import DeviceFault, FaultKind
+from positronic.drivers.faults import DeviceFault, FaultKind, device_fault, raise_as_device_fault
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveRefused, MoveStatus, RecoveryOutcome, log_failure
 
@@ -370,7 +370,7 @@ class _Arm(DriverRun[command.CommandType]):
                 f'The arm error persists after {self._RECOVERY_GRACE_S}s; refusing the waiting move: '
                 f'{st.error_message}, moved {self._moved_in_error:.3f} rad'
             )
-            self._held.set_exception(MoveRefused(st.error_message, self._moved_in_error))
+            self._held.set_exception(device_fault(MoveRefused(st.error_message, self._moved_in_error), FaultKind.ARM))
             self._held = None
 
     def next_request(self) -> pimm.calls.Call[command.CommandType, None] | command.CommandType | None:
@@ -402,10 +402,11 @@ class _Arm(DriverRun[command.CommandType]):
                 self.lose_control(exc)
             raise
 
-    def refuse_moves(self) -> None:
-        """Answer every waiting sync move with the failure that ended the connection, and drop a streamed one."""
+    def refuse_moves(self, cause: Exception) -> None:
+        """Answer every waiting sync move with ``cause``, the failure that ended the connection, and drop a streamed
+        one."""
         while isinstance(asked := self.next_request(), pimm.calls.Call):
-            asked.set_exception(RuntimeError(f'the driver has no connection to the arm: {self.disconnect_cause}'))
+            asked.set_exception(device_fault(cause, FaultKind.ARM, f'the driver has no connection to the arm: {cause}'))
 
     @staticmethod
     def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
@@ -608,14 +609,20 @@ class _Arm(DriverRun[command.CommandType]):
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once the state saying so is out.
 
-        Answer with the release instruction, and send no target, while the emergency stop is pressed.
+        Answer with the release instruction, and send no target, while the emergency stop is pressed. Answer a move
+        that fails with an ARM ``DeviceFault``, and a malformed command with its own error.
         """
         if self.stop_pressed:
             call.set_exception(DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP))
             return
         cmd = call.request
         try:
-            if (yield from self.move_to(self.to_joints(cmd), cmd.mode)) is MoveStatus.ARRIVED:
+            target = self.to_joints(cmd)
+        except Exception as exc:  # a malformed command, which the arm never sees
+            call.set_exception(exc)
+            return
+        try:
+            if (yield from self.move_to(target, cmd.mode)) is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
                 call.set_exception(MoveAbandoned())
@@ -625,8 +632,8 @@ class _Arm(DriverRun[command.CommandType]):
                     self.publish(self.robot.state())
             except RuntimeError as lost:  # pybind11 raises every libfranka failure as a RuntimeError
                 self.lose_control(lost)
-            finally:
-                call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
+            finally:  # an arm the driver cannot read still leaves nobody waiting
+                call.set_exception(device_fault(exc, FaultKind.ARM))
 
     def park(self, *, at_teardown: bool = False) -> Iterator[pimm.Command]:
         """Move the arm to ``_PARK_JOINTS``, logging a failure rather than raising it."""
@@ -925,7 +932,7 @@ class Robot(pimm.ControlSystem):
                 return RecoveryOutcome.NOT_CLEARED
             logger.exception('The recovery a console asked for failed')
             for call in asked:
-                call.set_exception(exc)
+                call.set_exception(device_fault(exc, FaultKind.ARM))
             return RecoveryOutcome.NOT_CLEARED
         for call in asked:
             call.set_result(outcome)
@@ -938,7 +945,7 @@ class Robot(pimm.ControlSystem):
         runs. Answer with the error instead when it stays. A pressed emergency stop gets the release instruction, and
         no recovery.
         """
-        with pimm.calls.raise_to(call):
+        with pimm.calls.raise_to(call), raise_as_device_fault(FaultKind.ARM):
             if arm.stop_pressed:
                 raise DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP)
             with arm.lose_control_on_failure():
@@ -977,7 +984,7 @@ class Robot(pimm.ControlSystem):
                 for call in self.ready.incoming():
                     self._ready(desk, arm, brakes, call)
                 if arm.disconnect_cause is not None:
-                    arm.refuse_moves()
+                    arm.refuse_moves(arm.disconnect_cause)
                     if asked_to_recover := list(self.recover.incoming()):
                         self._recover(desk, arm, brakes, asked_to_recover)
                     yield arm.limiter.wait()
