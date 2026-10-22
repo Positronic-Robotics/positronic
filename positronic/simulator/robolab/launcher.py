@@ -107,7 +107,7 @@ def _spawn(host: str, port: int, cameras: str, num_envs: int) -> subprocess.Pope
     # interpreter and cannot build it, so it is serialized here (wire codec) and env.py emits it as
     # ``robot_meta``. A fresh temp file per spawn, in the container-local tmpdir — never the shared cache
     # filesystem, where a concurrent eval's rewrite could tear a reader mid-decode.
-    # The rig's own model, unaltered: RoboLab measures and drives at ``droid_eef``, and ``RobolabAdapter``
+    # The rig's own model, unaltered: RoboLab measures and drives at ``robolab_eef``, and ``RobolabAdapter``
     # converts between that and the model's ``default`` frame on both the observation and command paths.
     robot_meta = bundled_franka_model()
     fd, meta_path = tempfile.mkstemp(prefix='robolab_robot_meta_', suffix='.bin')

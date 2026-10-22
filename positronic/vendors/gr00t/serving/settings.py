@@ -49,7 +49,7 @@ def droid() -> dict[str, Any]:
         },
         IMAGE_SIZE: [320, 180],
         IMAGE_MAPPINGS: {EXTERIOR_IMAGE: obs_keys.EXTERIOR_IMAGE, WRIST_IMAGE: obs_keys.WRIST_IMAGE},
-        EE_FRAME: [0.0, 0.0, -0.085225977, 0.38268343245394154, 0.0, 0.0, 0.9238795324744832],
+        EE_FRAME: [0.0, 0.0, -0.1033999994, 0.9238795325107985, 0.0, 0.0, 0.3826834323662685],
         ROTATION_OFFSET: [0.5, 0.5, -0.5, -0.5],
         CONTROL_MODE: {
             'type': 'impedance',
