@@ -7,7 +7,6 @@ Three solvers for reconstructing joint-space targets from recorded EE targets:
 """
 
 import xml.etree.ElementTree as ET
-from collections.abc import Sequence
 from functools import lru_cache, partial
 from typing import Any
 
@@ -167,14 +166,13 @@ def pose_anchor(episode) -> tuple[str, geom.Transform3D]:
 class MoveDefaultFrame(EpisodeTransform):
     """Move an episode's ``DEFAULT_FRAME`` onto ``frame`` of its own model, and re-express its poses there.
 
-    ``pose_anchor`` reads where the poses sit. ``fields`` hold poses; a recorded ``CartesianDelta`` frame moves with
-    ``DEFAULT_FRAME``. An episode whose ``DEFAULT_FRAME`` already sits at ``frame``, with its poses there, is
+    ``pose_anchor`` reads where the poses sit. The pose fields move to ``frame``; a recorded ``CartesianDelta`` frame
+    moves with ``DEFAULT_FRAME``. An episode whose ``DEFAULT_FRAME`` already sits at ``frame``, with its poses there, is
     returned as it is.
     """
 
-    def __init__(self, frame: str, fields: Sequence[str] = (keys.EE_POSE, keys.TARGET_EE_POSE, keys.ROBOT_COMMAND)):
+    def __init__(self, frame: str):
         self._frame = frame
-        self._fields = tuple(fields)
 
     def __call__(self, episode: Episode) -> Episode:
         urdf = episode[roboarm_keys.URDF]
@@ -188,7 +186,11 @@ class MoveDefaultFrame(EpisodeTransform):
         def move_delta_frame(vector):
             return (anchor_from_frame * geom.Transform3D.from_vector(np.asarray(vector), _QUAT)).as_vector(_QUAT)
 
-        moved = {key: partial(_elementwise, key=key, function=move_pose) for key in self._fields if key in episode}
+        moved = {
+            key: partial(_elementwise, key=key, function=move_pose)
+            for key in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.ROBOT_COMMAND)
+            if key in episode
+        }
         if keys.TARGET_EE_POSE_DELTA_FRAME in episode:
             moved[keys.TARGET_EE_POSE_DELTA_FRAME] = partial(
                 _elementwise, key=keys.TARGET_EE_POSE_DELTA_FRAME, function=transforms.lazy_sequence(move_delta_frame)
@@ -220,8 +222,10 @@ def _with_default_frame_at(urdf_xml: str, frame: str) -> str:
         add_default_frame(root, frame)
     else:
         joint.set('name', f'{frame}_to_{DEFAULT_FRAME}')
-        joint.find('parent').set('link', frame)  # pyright: ignore[reportOptionalMemberAccess]
-        joint.find('origin').attrib.update(xyz='0 0 0', rpy='0 0 0')  # pyright: ignore[reportOptionalMemberAccess]
+        parent, origin = joint.find('parent'), joint.find('origin')
+        assert parent is not None and origin is not None, f'joint {joint.get("name")} lacks a parent or an origin'
+        parent.set('link', frame)
+        origin.attrib.update(xyz='0 0 0', rpy='0 0 0')
     return ET.tostring(root, encoding='unicode')
 
 

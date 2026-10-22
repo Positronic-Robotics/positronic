@@ -99,10 +99,6 @@ class _Cadence:
         return True
 
 
-# The panda's wrist flange on ``link7``: 0.107 m along its axis, with no rotation, as in ``panda.urdf``.
-_FLANGE_ON_LINK7 = (0.0, 0.0, 0.107)
-
-
 class MujocoSim(pimm.ControlSystem):
     """The MuJoCo embodiment in one control system: scene, Franka arm, gripper, and cameras.
 
@@ -276,7 +272,8 @@ class MujocoSim(pimm.ControlSystem):
     def _name_the_flange(self, spec: mj.MjSpec) -> None:  # pyright: ignore[reportAttributeAccessIssue]
         """Add the flange site where ``bundled_panda_model`` puts ``FLANGE_LINK``, unless the scene has one."""
         if spec.site(self._flange_site) is None:
-            spec.body(self._flange_body).add_site(name=self._flange_site, pos=_FLANGE_ON_LINK7, group=4)
+            # The panda's wrist flange on ``link7``: 0.107 m along its axis, with no rotation, as in ``panda.urdf``.
+            spec.body(self._flange_body).add_site(name=self._flange_site, pos=(0.0, 0.0, 0.107), group=4)
 
     def _emit_robot_meta(self):
         # Emit the full robot model (URDF + meshes + frames + gripper) at record time, like franka.py,
