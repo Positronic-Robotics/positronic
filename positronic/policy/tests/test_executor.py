@@ -203,6 +203,15 @@ def test_charged_wait_is_bounded_by_the_time_still_owed(executors, monkeypatch):
         release.set()
 
 
+@pytest.mark.parametrize(
+    ('simulated', 'charged', 'holds'),
+    [(True, False, True), (True, True, False), (False, False, False), (False, True, False)],
+)
+def test_only_uncharged_simulated_calls_hold_the_clock(executors, simulated, charged, holds):
+    runtime, _ = executors(simulated=simulated, charged=charged)
+    assert runtime.calls_hold_clock is holds
+
+
 @pytest.mark.parametrize('charged', [False, True])
 def test_real_execution_never_waits_for_simulated_time(executors, charged, monkeypatch):
     runtime, now = executors(simulated=False, charged=charged)

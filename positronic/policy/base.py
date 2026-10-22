@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, Self
 
@@ -12,6 +12,7 @@ from eval_vocabulary.episode import PolicyEnd
 from typing_extensions import TypeAliasType, TypeVar
 
 from positronic import telemetry
+from positronic.policy.keys import END, MARKS
 
 
 class NotAnswered(RuntimeError):
@@ -55,6 +56,23 @@ class Step:
     resume_at_ns: int
 
 
+def checked_markers(element: Commands) -> dict[str, Any]:
+    """The reserved fields of a result element: ``END`` as a ``PolicyEnd``, ``MARKS`` as a tuple of identifiers."""
+    markers: dict[str, Any] = {}
+    if END in element:
+        markers[END] = PolicyEnd(element[END])
+    if MARKS in element:
+        marks = element[MARKS]
+        if (
+            isinstance(marks, str)
+            or not isinstance(marks, Sequence)
+            or not all(isinstance(name, str) and name.isidentifier() for name in marks)
+        ):
+            raise ValueError(f'{MARKS!r} must be a list of identifiers, got {marks!r}')
+        markers[MARKS] = tuple(marks)
+    return markers
+
+
 P = ParamSpec('P')
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
@@ -86,6 +104,11 @@ class Runtime(ABC):
     def tick(self) -> int:
         """The current tick number."""
         pass
+
+    @property
+    @abstractmethod
+    def calls_hold_clock(self) -> bool:
+        """Whether the clock stands still while a submitted call runs."""
 
     @staticmethod
     def _timed_run(run: ProcessorRun[InputT, OutputT, ReturnT], name: str) -> ProcessorRun[InputT, OutputT, ReturnT]:

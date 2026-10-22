@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component
+from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component, sequence
 
 import pimm
 from pimm.world import VirtualClock
@@ -21,6 +21,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.base import Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
+    ACTION,
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
@@ -42,7 +43,9 @@ from positronic.policy.codecs.action import (
 from positronic.policy.codecs.geometry import ConvertPose
 from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
 from positronic.policy.executor import Executor, _UnchargedAnswer
+from positronic.policy.keys import END, MARKS, mark_time_key
 from positronic.policy.processors import (
+    ApplyMarkers,
     ChunkedSchedule,
     ConstantDuration,
     DelayEstimate,
@@ -50,6 +53,7 @@ from positronic.policy.processors import (
     DurationEstimateRun,
     PauseOnUnavailable,
     PrefixSampling,
+    RequireRunningClock,
     RTCSchedule,
     TemporalStack,
 )
@@ -84,9 +88,11 @@ def test_unavailability_withholds_commands_and_resumes_on_recovery(execution, st
         run.close()
 
 
-@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,))])
-def test_a_wrapper_returns_what_its_inner_run_returned(execution, wrapper):
-    runtime, _ = execution
+@pytest.mark.parametrize(
+    'wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,)), ApplyMarkers(), RequireRunningClock()]
+)
+def test_a_wrapper_returns_what_its_inner_run_returned(wrapper):
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=True)
 
     def inner():
         yield
@@ -94,10 +100,116 @@ def test_a_wrapper_returns_what_its_inner_run_returned(execution, wrapper):
 
     child = inner()
     next(child)
-    run = runtime.start(wrapper, child)
-    with pytest.raises(StopIteration) as end:
-        run.send({MOTOR: 1})
-    assert end.value.value is PolicyEnd.COMPLETE
+    try:
+        run = runtime.start(wrapper, child)
+        with pytest.raises(StopIteration) as end:
+            run.send({MOTOR: 1})
+        assert end.value.value is PolicyEnd.COMPLETE
+    finally:
+        runtime.close()
+
+
+def test_declared_markers_act_when_their_elements_play(execution):
+    runtime, clock = execution
+    pose = np.array([0.1, -0.2, 0.3, 1.0, 0.0, 0.0, 0.0, 0.5])
+    chunk = [
+        {ACTION: pose},
+        {ACTION: pose, MARKS: ['attempt_start']},
+        {ACTION: pose, MARKS: ['attempt_start']},
+        {END: 'give_up'},
+    ]
+    stack = spec.from_spec(
+        sequence(
+            component(ApplyMarkers.WIRE_NAME),
+            component(ChunkedSchedule.WIRE_NAME, fps=10),
+            component(AbsolutePositionAction.WIRE_NAME, tgt_ee_pose_key='pose', tgt_grip_key='grip'),
+        )
+    )
+    run = runtime.start(cast(Policy, stack), lambda obs: chunk)
+    try:
+        for now_ns, start_ns in ((0, None), (100_000_000, 100_000_000), (200_000_000, 100_000_000)):
+            clock.advance_to_ns(now_ns)
+            assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
+            assert runtime.metadata_snapshot().get('attempt_start_ns') == start_ns
+        clock.advance_to_ns(300_000_000)
+        assert run.send({}) == Step({}, 300_000_000)
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.GIVE_UP
+    finally:
+        run.close()
+
+
+def test_a_round_with_an_end_sends_its_commands_before_the_run_ends(execution):
+    runtime, clock = execution
+    chunk = [{MOTOR: 1, MARKS: ['grasp', 'lift']}, {MOTOR: 2, END: 'complete'}]
+    run = runtime.start(Sequential(ApplyMarkers(), ChunkedSchedule(fps=10, record_stats=False)), lambda obs: chunk)
+    try:
+        assert run.send({}).commands == {MOTOR: 1}
+        assert runtime.metadata_snapshot() == {mark_time_key('grasp'): 0, mark_time_key('lift'): 0}
+        clock.advance_to_ns(100_000_000)
+        assert run.send({}).commands == {MOTOR: 2}
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.COMPLETE
+    finally:
+        run.close()
+
+
+def test_a_late_round_keeps_the_marks_of_every_due_element_and_stops_at_an_end(execution):
+    runtime, clock = execution
+    chunk = [
+        {MOTOR: 1},
+        {MOTOR: 2, MARKS: ['grasp']},
+        {MOTOR: 3, MARKS: ['lift']},
+        {MOTOR: 4, END: 'complete'},
+        {MOTOR: 5},
+    ]
+    run = runtime.start(Sequential(ApplyMarkers(), ChunkedSchedule(fps=10, record_stats=False)), lambda obs: chunk)
+    try:
+        assert run.send({}).commands == {MOTOR: 1}
+        clock.advance_to_ns(400_000_000)
+        assert run.send({}).commands == {MOTOR: 4}
+        assert runtime.metadata_snapshot() == {mark_time_key('grasp'): 400_000_000, mark_time_key('lift'): 400_000_000}
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.COMPLETE
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize(
+    ('marker', 'played'),
+    [({MARKS: ['grasp']}, {MOTOR: 10, MARKS: ('grasp',)}), ({END: 'complete'}, {END: PolicyEnd.COMPLETE})],
+)
+def test_a_new_chunk_keeps_the_markers_of_the_due_elements_it_replaces(execution, marker, played):
+    runtime, clock = execution
+    answers = iter([[{MOTOR: 1}, {MOTOR: 2, **marker}], [{MOTOR: 10}, {MOTOR: 11}]])
+    schedule = ChunkedSchedule(fps=10, record_stats=False, inference_lead=ConstantDuration(0.1))
+    run = runtime.start(schedule, lambda obs: next(answers))
+    try:
+        assert run.send({}).commands == {MOTOR: 1}
+        clock.advance_to_ns(250_000_000)
+        assert run.send({}).commands == played
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('marker', [{END: 'done'}, {MARKS: 'grasp'}, {MARKS: ['server.label']}, {MARKS: [1]}])
+def test_the_schedule_refuses_a_malformed_marker_when_the_answer_arrives(execution, marker):
+    runtime, _ = execution
+    run = runtime.start(ChunkedSchedule(fps=10, record_stats=False), lambda obs: [{MOTOR: 1, **marker}])
+    try:
+        with pytest.raises(ValueError):
+            run.send({})
+    finally:
+        run.close()
+
+
+def test_require_running_clock_refuses_a_clock_that_stands_still_during_calls(execution):
+    runtime, _ = execution
+    with pytest.raises(RuntimeError, match='charged inference time'):
+        runtime.start(RequireRunningClock(), Mock())
 
 
 @pytest.mark.parametrize('pad_start', [True, False])
@@ -277,6 +389,21 @@ def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.SCHEDULED}'] == 10
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.EMITTED}'] == 2
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.DROPPED}'] == 4
+
+
+# An end stops the round before the first waypoint of the new chunk, which stays queued.
+@pytest.mark.parametrize(('marker', 'emitted'), [({}, 2), ({MARKS: ['grasp']}, 2), ({END: 'complete'}, 1)])
+def test_the_markers_of_a_replaced_waypoint_are_not_counted_as_emitted(execution, marker, emitted):
+    runtime, clock = execution
+    answers = iter([[{MOTOR: 1}, {MOTOR: 2, **marker}], [{MOTOR: 10}, {MOTOR: 11}]])
+    run = runtime.start(ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.1)), lambda obs: next(answers))
+    run.send({})
+    clock.advance_to_ns(250_000_000)
+    run.send({})
+    run.close()
+    stats = {name.removeprefix(f'{eval_keys.SCHEDULE}.'): value for name, value in runtime.metadata_snapshot().items()}
+    assert stats[eval_keys.EMITTED] == emitted
+    assert (stats[eval_keys.DROPPED], stats[eval_keys.LATE_MAX_MS], stats[eval_keys.GAP_MAX_MS]) == (1, 0, 0)
 
 
 def test_a_new_chunk_excludes_the_gap_from_the_previous_chunk(execution):
@@ -902,6 +1029,43 @@ def test_rtc_follows_the_drawing(execution, monkeypatch):
     assert model.calls == [(0, []), (8 * PERIOD_NS, ['o5', 'o6', 'o7']), (13 * PERIOD_NS, ['n5', 'n6', 'n7'])]
 
 
+def test_a_late_rtc_round_keeps_the_marks_of_every_due_action_and_stops_at_an_end(execution):
+    runtime, clock = execution
+    chunk = [{MOTOR: 1}, {MOTOR: 2, MARKS: ['grasp']}, {MOTOR: 3, END: 'complete'}, {MOTOR: 4, MARKS: ['lift']}]
+    schedule = RTCSchedule(fps=10, call_after_sec=10, prefix_duration=ConstantDuration())
+    run = runtime.start(Sequential(ApplyMarkers(), schedule), lambda obs, prefix: chunk)
+    try:
+        run.send({})
+        assert run.send({}).commands == {MOTOR: 1}
+        clock.advance_to_ns(300_000_000)
+        assert run.send({}).commands == {MOTOR: 3}
+        assert runtime.metadata_snapshot() == {mark_time_key('grasp'): 300_000_000}
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.COMPLETE
+    finally:
+        run.close()
+
+
+def test_the_rtc_prefix_holds_no_reserved_fields(execution):
+    runtime, clock = execution
+    calls = []
+
+    def infer(obs, prefix):
+        calls.append(prefix)
+        return [{MOTOR: 1, MARKS: ['grasp']}, {MOTOR: 2, END: 'complete'}]
+
+    schedule = RTCSchedule(fps=10, call_after_sec=0, prefix_duration=ConstantDuration(0.2))
+    run = runtime.start(schedule, infer)
+    try:
+        run.send({})
+        clock.advance_to_ns(PERIOD_NS // 2)
+        run.send({})
+    finally:
+        run.close()
+    assert calls == [[], [{MOTOR: 1}, {MOTOR: 2}]]
+
+
 def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execution, monkeypatch):
     model, run, step = _rtc(execution, monkeypatch, 0.2, DelayEstimate.mean())
     answers = {1: ('o', 4), 8: ('n', 10)}
@@ -1238,6 +1402,8 @@ def test_wire_names_match_the_registered_components():
         'unpack_action_chunk': UnpackActionChunk({'action': ['prediction']}),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         'convert_pose': ConvertPose('rot6d'),
+        'apply_markers': ApplyMarkers(),
+        'require_running_clock': RequireRunningClock(),
     }
     registered = spec.COMPONENTS
     assert set(instances) == set(registered)

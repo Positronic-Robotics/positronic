@@ -7,7 +7,7 @@ from positronic_model_server.spec import PAR, SEQ
 from positronic import telemetry, telemetry_keys
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.policy.base import Obs, ProcessorRun, Step
+from positronic.policy.base import Obs, ProcessorRun, Step, checked_markers
 from positronic.utils import merge_dicts
 
 
@@ -17,6 +17,8 @@ class Codec:
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
     (action decoding). The ``training_encoder`` property
     returns an ``EpisodeTransform`` used by the training pipeline to derive dataset columns.
+    ``decode`` checks the reserved fields ``END`` and ``MARKS`` of each result element and keeps them beside what
+    ``_decode_single`` returns. An element of reserved fields only skips ``_decode_single``.
 
     Reserved ``meta`` key:
 
@@ -35,7 +37,11 @@ class Codec:
     def decode(self, data: Any) -> Any:
         if isinstance(data, list):
             return [self.decode(d) for d in data]
-        return self._decode_single(data)
+        markers = checked_markers(data)
+        if not markers:
+            return self._decode_single(data)
+        rest = {name: value for name, value in data.items() if name not in markers}
+        return {**self._decode_single(rest), **markers} if rest else markers
 
     def _decode_single(self, data: dict) -> dict:
         return {}

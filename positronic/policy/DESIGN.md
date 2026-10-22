@@ -310,6 +310,11 @@ several sessions without keeping episode history. Stateful models must keep
 each session's history separate or reject overlapping sessions. Ending a session
 releases its episode state, not the shared loaded model.
 
+A remote model ends the run, or marks a moment, through reserved fields of a result element. `ApplyMarkers` acts on
+them in the round that plays the element, so the end and the time of a mark follow the schedule, not the call. The
+`Codec` base checks the fields and keeps them through each codec that decodes one element at a time. A codec that
+makes elements from arrays, such as `UnpackActionChunk`, refuses an answer with the fields.
+
 A server deployment brings together the model to load, the client stack, and
 any data conversion performed on the server. Loading and serving models belong
 to the server; the policy run sees an ordinary function call. See the
@@ -404,6 +409,10 @@ class Runtime(ABC):
 
     @property
     def tick(self) -> int: ...
+
+    # Whether the clock stands still while a submitted call runs: an uncharged call in a sim.
+    @property
+    def calls_hold_clock(self) -> bool: ...
 
     def start(
         self, processor: Processor[InputT, OutputT, ReturnT], /, *args: Any, **kwargs: Any

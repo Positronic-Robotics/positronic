@@ -21,6 +21,7 @@ from positronic.policy.codecs import (
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction
 from positronic.policy.codecs.observation import ObservationCodec
+from positronic.policy.keys import END, MARKS
 
 
 class _TaggingCodec(Codec):
@@ -214,6 +215,23 @@ def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned(
     with pytest.raises(StopIteration) as end:
         wrapped.send({})
     assert end.value.value is PolicyEnd.GIVE_UP
+
+
+@pytest.mark.parametrize(
+    ('codec', 'factor'),
+    [(_DoublingCodec(), 2), (_DoublingCodec() | _DoublingCodec(), 4), (_DoublingCodec() & ObservationCodec({}, {}), 2)],
+)
+def test_decode_keeps_the_checked_markers_of_each_element_beside_its_commands(codec, factor):
+    plain, marked, last = codec.decode([{'value': 1}, {'value': 1, MARKS: ['grasp', 'lift']}, {END: 'complete'}])
+    assert plain == {'value': factor}
+    assert marked == {'value': factor, MARKS: ('grasp', 'lift')}
+    assert last == {END: PolicyEnd.COMPLETE}
+
+
+@pytest.mark.parametrize('marker', [{END: 'done'}, {MARKS: 'grasp'}, {MARKS: ['server.label']}, {MARKS: [1]}])
+def test_decode_refuses_a_malformed_marker(marker):
+    with pytest.raises(ValueError):
+        _DoublingCodec().decode([{'value': 1, **marker}])
 
 
 class TestCodecComposition:

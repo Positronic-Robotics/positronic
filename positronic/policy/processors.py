@@ -1,4 +1,4 @@
-"""Policy processors for scheduling, fault handling, and temporal frame stacking.
+"""Policy processors for scheduling, fault handling, temporal frame stacking, markers, and clock checks.
 
 Constructors hold configuration. ``run(runtime, *dependencies)`` creates an episode generator whose
 locals hold its state. Control processors yield a ``Step`` with commands and the next wake-up time.
@@ -36,6 +36,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     Answer,
     Commands,
+    InputT,
     Obs,
     Policy,
     PolicyRun,
@@ -44,8 +45,9 @@ from positronic.policy.base import (
     ReturnT,
     Runtime,
     Step,
+    checked_markers,
 )
-from positronic.policy.keys import ACTION_FPS
+from positronic.policy.keys import ACTION_FPS, END, MARKS, mark_time_key
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -89,6 +91,39 @@ class PauseOnUnavailable(Policy):
                 obs = yield step
             else:
                 obs = yield Step({}, runtime.time_ns + MILLISECOND_NS)
+
+    def to_spec(self) -> dict[str, Any]:
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
+
+
+class ApplyMarkers(Policy):
+    """The processor that acts on the reserved fields ``END`` and ``MARKS`` of the commands of each round.
+
+    A mark writes the episode time of its first play to the episode metadata, under ``mark_time_key``. A round with an
+    end sends its other commands, and the run then ends with the ``PolicyEnd`` at the next observation.
+    """
+
+    WIRE_NAME = 'apply_markers'
+
+    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
+        marked: set[str] = set()
+        obs = yield
+        while True:
+            try:
+                step = inner.send(obs)
+            except StopIteration as end:
+                return end.value
+            assert step is not None, 'a policy must yield a Step for each observation'
+            markers = checked_markers(step.commands)
+            commands = {name: value for name, value in step.commands.items() if name not in markers}
+            for name in markers.get(MARKS, ()):
+                if name not in marked:
+                    marked.add(name)
+                    runtime.set_metadata(mark_time_key(name), runtime.time_ns)
+            if END in markers:
+                yield Step(commands, runtime.time_ns)
+                return markers[END]
+            obs = yield Step(commands, step.resume_at_ns)
 
     def to_spec(self) -> dict[str, Any]:
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
@@ -193,6 +228,14 @@ class DelayEstimate(DurationEstimate):
         return cls(cls.Statistic.MAX, last, max_sec)
 
 
+def _merge_due(commands: dict[str, Any], element: Commands) -> None:
+    """Add ``element`` to the ``commands`` of a round: the last value wins on each channel, and the ``MARKS`` join."""
+    marks = (*commands.get(MARKS, ()), *element.get(MARKS, ()))
+    commands.update(element)
+    if marks:
+        commands[MARKS] = marks
+
+
 class ChunkedSchedule(Policy):
     """Request action chunks asynchronously and emit their commands at a fixed cadence.
 
@@ -231,6 +274,10 @@ class ChunkedSchedule(Policy):
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
 
+    The reserved fields ``END`` and ``MARKS`` of every due waypoint reach the round, also when a new chunk replaces
+    the waypoint. A round stops at the first waypoint with ``END``. A replan after an arm error clears the plan, and
+    with it the reserved fields of the waypoints that are due in that round.
+
     ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
     immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
     until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
@@ -249,13 +296,15 @@ class ChunkedSchedule(Policy):
         commands: Commands
         due_ns: int
         starts_chunk: bool
+        counted: bool = True
 
     class _Stats:
         """How the schedule played its waypoints.
 
         A round sends the commands of every due waypoint, and on each channel the last one wins. The due
         waypoints before the last one count as dropped, also when one of their channels went out. The due
-        waypoints that a new chunk replaces count as dropped too.
+        waypoints that a new chunk replaces count as dropped too. The reserved fields that the round keeps from
+        them are not counted.
         """
 
         def __init__(self, runtime: Runtime) -> None:
@@ -335,11 +384,21 @@ class ChunkedSchedule(Policy):
         if self._horizon_sec is not None:
             duration_sec = min(duration_sec, self._horizon_sec)
         waypoints = [
-            self._Waypoint(waypoint, start_ns + round(i * period_sec * 1e9), starts_chunk=i == 0)
-            for i, waypoint in enumerate(chunk)
+            self._Waypoint({**element, **checked_markers(element)}, start_ns + round(i * period_sec * 1e9), i == 0)
+            for i, element in enumerate(chunk)
             if i * period_sec < duration_sec
         ]
         return waypoints, start_ns + round(duration_sec * 1e9)
+
+    @classmethod
+    def _replaced_markers(cls, trajectory: deque[_Waypoint], now_ns: int) -> list[_Waypoint]:
+        """The reserved fields of the due waypoints that a new chunk replaces, so that the round still plays them."""
+        replaced = []
+        for waypoint in trajectory:
+            markers = {name: waypoint.commands[name] for name in (END, MARKS) if name in waypoint.commands}
+            if waypoint.due_ns <= now_ns and markers:
+                replaced.append(cls._Waypoint(markers, waypoint.due_ns, starts_chunk=False, counted=False))
+        return replaced
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         answer: Answer[Sequence[Commands]] | None = None
@@ -371,17 +430,21 @@ class ChunkedSchedule(Policy):
                     waypoints, end_ns = self._plan_chunk(chunk, start_ns)
                     call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
                     # A regular early answer waits behind the commands that are still due.
-                    trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
+                    if start_ns == now_ns:
+                        trajectory = deque([*self._replaced_markers(trajectory, now_ns), *waypoints])
+                    else:
+                        trajectory.extend(waypoints)
                     planned = len(waypoints)
 
                 commands: dict[str, Any] = {}
                 due_ns = None
                 starts_chunk = False
-                while trajectory and trajectory[0].due_ns <= now_ns:
+                while trajectory and trajectory[0].due_ns <= now_ns and END not in commands:
                     waypoint = trajectory.popleft()
-                    due_ns = waypoint.due_ns
+                    if waypoint.counted:
+                        due_ns = waypoint.due_ns
                     starts_chunk |= waypoint.starts_chunk
-                    commands.update(waypoint.commands)
+                    _merge_due(commands, waypoint.commands)
                 recovering = recovering and not commands
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
@@ -463,7 +526,7 @@ class _TimedChunk:
             action = self._sample(slot_ns, sampling)
             if action is None:
                 break
-            prefix.append(action)
+            prefix.append({name: value for name, value in action.items() if name not in (END, MARKS)})
         return prefix
 
     def _sample(self, time_ns: int, sampling: PrefixSampling) -> Commands | None:
@@ -484,10 +547,12 @@ class _TimedChunk:
         return interpolate_commands(self._actions[running], self._actions[running + 1], fraction)
 
     def take_due(self, now_ns: int) -> dict[str, Any]:
-        """The merged commands of every action due by ``now_ns`` and not taken yet."""
+        """The merged commands of every action due by ``now_ns`` and not taken yet, up to the first with ``END``."""
         commands: dict[str, Any] = {}
-        while self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns:
-            commands.update(self._actions[self._next_index])
+        while (
+            self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns and END not in commands
+        ):
+            _merge_due(commands, self._actions[self._next_index])
             self._next_index += 1
         return commands
 
@@ -713,3 +778,31 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
             VERSION: self.WIRE_VERSION,
             ARGS: {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
         }
+
+
+class RequireRunningClock(Processor[InputT, OutputT, ReturnT]):
+    """Refuse a runtime whose clock stands still while a call runs, and pass the inputs and outputs through.
+
+    A server declares it when its answers must see the time that passes during a call, as for a person who controls
+    the robot.
+    """
+
+    WIRE_NAME = 'require_running_clock'
+
+    def run(
+        self, runtime: Runtime, inner: ProcessorRun[InputT, OutputT, ReturnT]
+    ) -> ProcessorRun[InputT, OutputT, ReturnT]:
+        if runtime.calls_hold_clock:
+            raise RuntimeError(
+                'the stack needs a clock that runs during calls: run the sim with charged inference time'
+            )
+        value = yield
+        while True:
+            try:
+                output = inner.send(value)
+            except StopIteration as end:
+                return end.value
+            value = yield output
+
+    def to_spec(self) -> dict[str, Any]:
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}

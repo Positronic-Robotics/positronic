@@ -127,6 +127,10 @@ class Executor(Runtime):
         """The zero-based control-tick index, unchanged when calls occur at the same clock time."""
         return self._tick
 
+    @property
+    def calls_hold_clock(self) -> bool:
+        return self._simulated and not self._charge_inference_time
+
     def start_tick(self) -> None:
         """Count a new tick if the episode clock has advanced since the previous call."""
         now_ns = self.time_ns
