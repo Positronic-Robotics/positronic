@@ -21,7 +21,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.ik import assert_default_frame
-from positronic.eval import Embodiment, Task
+from positronic.eval import Embodiment, Task, only_keep_written_signals
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun
@@ -141,6 +141,7 @@ class Harness(pimm.ControlSystem):
         )
         self._recording_period_ns = round(1e9 / recording_hz)
         self._writer: EpisodeWriter | None = None
+        self._recorded_signals: set[str] = set()
         self._recorded_privileged: set[str] = set()
         self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
         self._telemetry = _EpisodeTelemetry()
@@ -228,6 +229,7 @@ class Harness(pimm.ControlSystem):
         with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
             for name, value in values.items():
                 self._writer.append(name, value.copy() if isinstance(value, np.ndarray) else value, timestamps)
+                self._recorded_signals.add(name)
 
     def _convert_and_record(
         self, name: str, message: pimm.Message, serializer: Serializer | None, step_ms: dict[str, float] | None = None
@@ -390,6 +392,7 @@ class Harness(pimm.ControlSystem):
                 yield
         finally:
             self._writer = None
+            self._recorded_signals.clear()
             self._recorded_privileged.clear()
             self._obs_by_signal.clear()
 
@@ -465,7 +468,10 @@ class Harness(pimm.ControlSystem):
                 with self._recording(rollout.output_path):
                     payload = yield from self._rollout(should_stop, task, runtime, policy_run, deadline_ns)
                     if self._writer is not None:
-                        for name, value in (self._build_episode_meta(rollout, runtime) | (payload or {})).items():
+                        static = only_keep_written_signals(
+                            self._build_episode_meta(rollout, runtime) | (payload or {}), self._recorded_signals
+                        )
+                        for name, value in static.items():
                             self._writer.set_static(name, value)
             finally:
                 self.deadline_ns.emit(None)
