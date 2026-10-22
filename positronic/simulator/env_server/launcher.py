@@ -80,15 +80,40 @@ def _await_bind(proc: subprocess.Popen, host: str, port: int, deadline: float) -
         time.sleep(_BIND_POLL_INTERVAL)
 
 
+# One lock file per port that a launcher holds for its server. Do not remove a lock file: a launcher that
+# opened it before the removal and a launcher that opens it after can both hold the port.
+_PORT_LOCKS = Path.home() / '.cache' / 'positronic' / 'env_server_ports'
+
+
+@contextmanager
+def _reserved_port() -> Iterator[int]:
+    """Yield a free port that no other launcher on this machine holds, and hold it for the context.
+
+    A server binds its port only after its imports, and until then the kernel can give the port again.
+    """
+    _PORT_LOCKS.mkdir(parents=True, exist_ok=True)
+    while True:
+        port = free_port()
+        lock = open(_PORT_LOCKS / f'{port}.lock', 'w')
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock.close()
+            continue
+        with lock:
+            yield port
+        return
+
+
 @contextmanager
 def serve_subprocess(
     spawn: Callable[[str, int], subprocess.Popen], host: str, bind_deadline: float = _BIND_DEADLINE
 ) -> Iterator[tuple[str, int]]:
     """Yield the server's (host, port) once it accepts TCP connections; terminate the process on exit."""
-    port = free_port()
-    proc = spawn(host, port)
-    try:
-        _await_bind(proc, host, port, bind_deadline)
-        yield host, port
-    finally:
-        terminate(proc)
+    with _reserved_port() as port:
+        proc = spawn(host, port)
+        try:
+            _await_bind(proc, host, port, bind_deadline)
+            yield host, port
+        finally:
+            terminate(proc)

@@ -18,13 +18,16 @@ import numpy as np
 import pytest
 from positronic_evals.molmo_spaces import RIGHT_VIEW_BLOCKED_PATH
 
-from positronic import geom
+import pimm
+from positronic import geom, keys
+from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import _prepare_spec
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, GRASP_SITE_LINK, bundled_franka_model
+from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
+from positronic.simulator.molmo_spaces.adapter import MolmoAdapter, ShoulderSide, camera_dict
 from positronic.simulator.molmo_spaces.tests import make_replay_fixture as fixture_fields
 from positronic.simulator.molmo_spaces.tests.make_replay_fixture import replay_commands
 
@@ -138,7 +141,7 @@ def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
 
 
 # The model the MolmoSpaces eval records beside every episode.
-_RECORDED_MODEL = bundled_franka_model(GRASP_SITE_LINK)
+_RECORDED_MODEL = MolmoAdapter(camera_dict([ShoulderSide.LEFT])).robot_model
 # The MolmoSpaces FR3 and the recorded FR3 differ slightly: their grasp sites are less than 1 mm and 0.1 degrees apart.
 _FK_POS_ATOL = 1e-3  # metres
 _FK_ROT_ATOL = 5e-3  # radians
@@ -159,8 +162,12 @@ def _recorded_model_fk(q: np.ndarray) -> geom.Transform3D:
     )
 
 
+def _adapter() -> MolmoAdapter:
+    return MolmoAdapter(camera_dict([ShoulderSide.LEFT]))
+
+
 def _reported_ee_pose(obs: dict) -> geom.Transform3D:
-    return geom.Transform3D(obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(obs[mapping.OBS_EEF_QUAT]))
+    return _adapter().observations(obs)[keys.ROBOT_STATE].ee_pose
 
 
 def _joint_pos_action(q: np.ndarray) -> dict:
@@ -168,8 +175,9 @@ def _joint_pos_action(q: np.ndarray) -> dict:
 
 
 def _cartesian_action(pose: geom.Transform3D) -> dict:
-    vector = pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)
-    return protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: vector}, 0.0)
+    command = roboarm_command.CartesianPosition(pose)
+    wire = _adapter().action({keys.ROBOT_COMMAND: pimm.Message(command)})[keys.ROBOT_COMMAND]
+    return protocol.single_arm_action(wire, 0.0)
 
 
 def _episode_token(bench: mapping.BenchmarkPath) -> dict:
