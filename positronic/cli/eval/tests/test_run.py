@@ -16,7 +16,7 @@ import pytest
 from eval_vocabulary.episode import SUBTASK_SIGNAL
 from positronic_evals.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
 from positronic_evals.labels import MOLMO_LABELER, ROBOLAB_LABELER, Fail, Label, SubtaskAchieved, Success, label
-from positronic_evals.scoring import score
+from positronic_evals.scoring import Scores, score
 
 import pimm
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time
@@ -69,6 +69,36 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
         simulated=True,
     )
     main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, ()))])
+
+
+def _record(output_dir, successes: list[bool]) -> list:
+    """Record one MolmoSpaces episode per entry of `successes`, and return their directories."""
+    paths = []
+    with LocalDatasetWriter(output_dir) as writer:
+        for success in successes:
+            with writer.new_episode() as episode:
+                episode.set_static(keys.TASK, 'pick up the cup.')
+                episode.set_static(eval_keys.SUCCESS, success)
+                episode.set_static(eval_keys.TERMINATED, True)
+                for world_ns in (0, 1_000_000_000):
+                    episode.append(keys.GRIP, 0.0, Time(**{EMITTED_WORLD: world_ns, EMITTED_WALL: world_ns}))
+            paths.append(episode.path)
+    return paths
+
+
+def test_a_sweep_returns_the_episodes_it_recorded_and_not_the_earlier_ones(tmp_path, monkeypatch):
+    dataset_dir = tmp_path / 'run'
+    earlier = _record(dataset_dir, [False])
+    swept: list = []
+    monkeypatch.setattr(
+        run_module, 'run_world', lambda *args, **kwargs: swept.extend(_record(dataset_dir, [True, True]))
+    )
+
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
+        recorded = main(policy=_IdlePolicy(), evals=[_eval(True)], output_dir=dataset_dir)
+
+    assert recorded == swept
+    assert not set(earlier) & set(recorded)
 
 
 class _ArmThatStopsShort(pimm.ControlSystem):
@@ -216,11 +246,35 @@ def test_a_local_run_of_a_public_eval_runs_the_config_its_definition_names(run_c
     assert [ev.embodiment.descriptor for ev in seen] == ['remote.molmo_spaces.droid']
 
 
+def test_a_local_run_of_a_public_eval_prints_the_score_of_the_episodes_it_recorded(
+    run_command, monkeypatch, capsys, tmp_path
+):
+    _record(tmp_path, [False, False])  # an earlier run's episodes, which the sweep does not return
+    monkeypatch.setattr(
+        run_module, 'main', lambda policy, evals, output_dir, timing: _record(output_dir, [True, False, True, True])
+    )
+
+    run_command(run_module.run, eval=SMOKE, policy='a policy', output_dir=tmp_path)
+
+    expected = run_module.score_line(Scores(primary=0.75, episodes=4, unscored=0))
+    assert capsys.readouterr().out.splitlines()[-1] == expected == 'score 0.750 over 4 episodes, 0 unscored'
+
+
+def test_a_local_run_of_a_public_eval_without_an_output_dir_prints_no_score(run_command, monkeypatch, capsys, caplog):
+    monkeypatch.setattr(run_module, 'main', lambda policy, evals, output_dir, timing: [])
+
+    with caplog.at_level(logging.WARNING, logger=run_module.logger.name):
+        run_command(run_module.run, eval=SMOKE, policy='a policy')
+
+    assert capsys.readouterr().out == ''
+    assert 'pass --output_dir' in caplog.text
+
+
 @pytest.mark.parametrize('name', PUBLIC_EVALS)
 def test_a_public_eval_binds_its_arguments_on_the_installed_positronic(name: str):
     definition = public_eval(EvalRef(name))
 
-    config = run_module._public_eval_config(name)
+    config = run_module._public_eval_config(definition)
 
     eval_config = config.kwargs['eval']
     assert set(definition.args) <= set(inspect.signature(eval_config.target).parameters)
@@ -310,7 +364,7 @@ def test_a_public_eval_warns_unless_the_installed_positronic_is_the_platforms(
     monkeypatch.setattr(run_module, 'get_package_git_state', lambda: installed)
 
     with caplog.at_level(logging.WARNING, logger=run_module.logger.name):
-        run_module._public_eval_config(SMOKE)
+        run_module._public_eval_definition(SMOKE)
 
     assert (PINNED in caplog.text) is warns
 

@@ -19,7 +19,9 @@ Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
     Nebius also has the GPUs to train your policy.
   - Do not use a Mac with Apple silicon, or another ARM machine. Docker emulates amd64 there, and the test
     is very slow and can fail.
-- On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, and Docker.
+- On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, Docker, and a C compiler. On Ubuntu,
+  install the compiler with `sudo apt install build-essential`. The install builds one dependency, `evdev`,
+  from source.
 - Push access to a container registry, such as Docker Hub.
 
 You can install the commands, register, enter and submit on any computer. Do these four steps on the same
