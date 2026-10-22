@@ -236,6 +236,40 @@ def test_the_schedule_refuses_a_malformed_marker_past_its_horizon(execution):
         run.close()
 
 
+# Each schedule plays the end at its last time, which is also when it would ask for its next chunk.
+@pytest.mark.parametrize(
+    ('schedule', 'times_ns'),
+    [
+        (lambda: ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.1), record_stats=False), (0, 100_000_000)),
+        (
+            lambda: RTCSchedule(fps=10, call_after_sec=0.1, prefix_duration=ConstantDuration()),
+            (0, 100_000_000, 200_000_000),
+        ),
+    ],
+    ids=['chunked', 'rtc'],
+)
+def test_a_due_end_asks_for_no_further_chunk(execution, schedule, times_ns):
+    runtime, clock = execution
+    calls = []
+
+    def infer(obs, *prefix):
+        calls.append(runtime.time_ns)
+        return [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}]
+
+    run = runtime.start(schedule(), infer)
+    try:
+        for time_ns in times_ns:
+            clock.advance_to_ns(time_ns)
+            step = run.send({})
+        assert step.commands == {MOTOR: 2}
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.COMPLETE
+    finally:
+        run.close()
+    assert calls == [0]
+
+
 def test_require_running_clock_refuses_a_clock_that_stands_still_during_calls(execution):
     runtime, _ = execution
     with pytest.raises(RuntimeError, match='charged inference time'):

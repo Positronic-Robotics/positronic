@@ -404,7 +404,9 @@ class ChunkedSchedule(Policy):
                     trajectory.clear()
                     end_ns = call_ns = now_ns
                     planned, recovering = 0, True
-                if answer is None and now_ns >= call_ns:
+                # A due end plays in this round whatever answer comes, so a call now would only delay the end.
+                ends = any(waypoint.due_ns <= now_ns and END in waypoint.commands for waypoint in trajectory)
+                if answer is None and now_ns >= call_ns and not ends:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
@@ -544,6 +546,14 @@ class _TimedChunk:
             self._next_index += 1
         return commands
 
+    def ends_by(self, now_ns: int) -> bool:
+        """Whether an action due by ``now_ns`` and not taken yet holds ``END``."""
+        return any(
+            END in self._actions[index]
+            for index in range(self._next_index, len(self._actions))
+            if self._due_ns(index) <= now_ns
+        )
+
     def next_due_ns(self) -> int | None:
         """When the next action not taken yet is due, or ``None`` after the last one."""
         return self._due_ns(self._next_index) if self._next_index < len(self._actions) else None
@@ -636,7 +646,7 @@ class RTCSchedule(Policy):
                     answer = None
                     next_call_ns = start_ns + self._call_after_ns
 
-                if answer is None and now_ns >= next_call_ns:
+                if answer is None and now_ns >= next_call_ns and (chunk is None or not chunk.ends_by(now_ns)):
                     prefix = []
                     if chunk is not None:
                         prefix = chunk.prefix(now_ns, prefix_sec, self._prefix_sampling)
