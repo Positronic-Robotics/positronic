@@ -392,7 +392,8 @@ class ChunkedSchedule(Policy):
                     chunk, answer = answer.result(), None
                     lead_sec = lead.update((now_ns - called_at_ns) / 1e9)
                     start_ns = max(now_ns, end_ns)
-                    waypoints, end_ns = self._plan_chunk(chunk, start_ns)
+                    # A due end ends the run in this round, so the answer is not planned.
+                    waypoints, end_ns = ([], end_ns) if due_end is not None else self._plan_chunk(chunk, start_ns)
                     call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
                     # A regular early answer waits behind the commands that are still due.
                     if start_ns == now_ns:

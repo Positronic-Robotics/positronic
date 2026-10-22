@@ -432,15 +432,15 @@ def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.DROPPED}'] == 4
 
 
-# An end stops the round before the first waypoint of the new chunk, which stays queued.
-@pytest.mark.parametrize(('element', 'emitted'), [({}, 2), ({END: 'complete'}, 1)])
-def test_the_end_of_a_replaced_waypoint_is_not_counted_as_emitted(execution, monkeypatch, element, emitted):
+# A due end ends the run in the round that reads the new chunk, so that chunk is not planned.
+@pytest.mark.parametrize(('element', 'scheduled', 'emitted'), [({}, 4, 2), ({END: 'complete'}, 2, 1)])
+def test_the_end_of_a_replaced_waypoint_is_not_counted_as_emitted(execution, monkeypatch, element, scheduled, emitted):
     runtime, _ = execution
     run = _replace_a_due_element(execution, monkeypatch, element, record_stats=True)
     run.send({})
     run.close()
     stats = {name.removeprefix(f'{eval_keys.SCHEDULE}.'): value for name, value in runtime.metadata_snapshot().items()}
-    assert stats[eval_keys.EMITTED] == emitted
+    assert (stats[eval_keys.SCHEDULED], stats[eval_keys.EMITTED]) == (scheduled, emitted)
     assert (stats[eval_keys.DROPPED], stats[eval_keys.LATE_MAX_MS], stats[eval_keys.GAP_MAX_MS]) == (1, 0, 0)
 
 
