@@ -47,8 +47,9 @@ bash docker/test_policy_image_serverless.sh --registry-username=<user> \
 The script reads the password from the file. It removes one line ending from the end of the file.
 The Nebius CLI takes the password as an argument of `nebius ai job create`.
 
-With no `--gpu`, the job is `cpu-d3` and `8vcpu-32gb`, and the disk is 250 GiB.
+With no `--gpu`, the job is `cpu-d3` and `8vcpu-32gb`.
 With `--gpu`, the job is `gpu-l40s-a` and `1gpu-8vcpu-32gb`.
+The disk is 500 GiB.
 `NEBIUS_JOB_NAME`, `NEBIUS_PLATFORM`, `NEBIUS_PRESET`, `NEBIUS_DISK_SIZE` and `NEBIUS_SSH_KEY` override these.
 The header of the script lists each default.
 

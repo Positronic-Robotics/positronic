@@ -20,7 +20,7 @@
 #   NEBIUS_JOB_NAME   name of the job, default policy-image-test
 #   NEBIUS_PLATFORM   default cpu-d3
 #   NEBIUS_PRESET     default 8vcpu-32gb
-#   NEBIUS_DISK_SIZE  disk of the job, default 250Gi
+#   NEBIUS_DISK_SIZE  disk of the job, default 500Gi
 #   NEBIUS_SSH_KEY    private key, default ~/.ssh/id_ed25519. A key with a passphrase must be in ssh-agent.
 set -euo pipefail
 
@@ -79,7 +79,7 @@ if [ -z "$registry_user" ] && [ -n "$password_file" ]; then
 fi
 
 name="${NEBIUS_JOB_NAME:-policy-image-test}"
-disk_size="${NEBIUS_DISK_SIZE:-250Gi}"
+disk_size="${NEBIUS_DISK_SIZE:-500Gi}"
 ssh_key="${NEBIUS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 # The policy contract, as positronic names it: `policy_container.POLICY_PORT` and `AUTH_TOKEN_ENV`,
 # `positronic_model_server.protocol.AUTH_HEADER` and `bearer`, `positronic_wire.wire.KEEPALIVE_PATH` and
