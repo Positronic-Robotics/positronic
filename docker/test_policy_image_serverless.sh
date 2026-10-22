@@ -13,7 +13,7 @@
 # and exits with 0 only when the server answers 200 with the keepalive answer.
 # The job has a network. A failure that appears only with no egress does not appear here.
 # docker/test_policy_image.sh is that test.
-# The script deletes the job when it exits. The job costs money until that delete.
+# The script deletes the job when it exits. The job costs money until it completes or is canceled.
 # Needs the nebius CLI with a profile, ssh, curl, python3 and jq.
 #
 # Settings, as environment variables. With --gpu, the defaults are gpu-l40s-a and 1gpu-8vcpu-32gb.
@@ -117,7 +117,7 @@ cleanup() {
   ssh "${ssh_opts[@]}" -O exit "nebius@${host_ip:-none}" >/dev/null 2>&1 || true
   rm -f "$body" "$curl_errors" "$create_log" "$create_err" "$control_path"
   if [ -n "$job_id" ]; then
-    echo "The job costs money until Nebius deletes it."
+    echo "The job costs money until it completes or is canceled."
     nebius ai job delete "$job_id" >/dev/null || echo "Nebius could not delete the job $job_id." >&2
     echo "Deleted the job $name."
     job_id=""
@@ -278,7 +278,7 @@ sys.stdout.buffer.write(p)' "$password_file")
 fi
 
 echo "Creating the job $name for $image ($platform $preset, disk $disk_size)."
-echo "The job costs money until this script deletes it."
+echo "The job costs money until it completes or is canceled."
 # Bash 3.2 treats an empty "${array[@]}" as unset under `set -u`, and an `if` then exits 0.
 create_args=(--parent-id "$project" --name "$name" --image "$image" --env "$token_env=$token"
   --timeout 1h --platform "$platform" --preset "$preset" --disk-size "$disk_size" --ssh-key "$pub")
