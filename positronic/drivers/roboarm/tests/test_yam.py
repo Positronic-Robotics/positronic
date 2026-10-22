@@ -1478,6 +1478,36 @@ def test_a_fault_that_prevents_a_verified_park_keeps_the_arm_powered(caplog, sit
     rig.loop.close()
 
 
+def _after_the_first_fault(emitter: RecordingEmitter) -> list:
+    values = [data for _, data in emitter.emitted]
+    first = next(i for i, data in enumerate(values) if isinstance(data, DeviceFault))
+    return values[first:]
+
+
+def test_a_chain_fault_is_published_once_and_the_park_after_it_publishes_no_readings(rig):
+    _lose_the_chain(rig)
+
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    for emitter in (rig.states, rig.grips):
+        after = _after_the_first_fault(emitter)
+        assert len(after) == 1, f'{len(after) - 1} values replaced the fault during or after the park'
+        assert isinstance(after[0], DeviceFault) and after[0].kind is FaultKind.ARM
+
+
+def test_a_shutdown_with_no_fault_publishes_the_parked_readings(rig):
+    rig.raise_arm()
+    published = len(rig.states.emitted)
+
+    rig.finish()
+
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert len(rig.states.emitted) > published
+    parked = _last(rig.states)
+    assert isinstance(parked, yam.YamState) and parked.status == RobotStatus.AVAILABLE
+    np.testing.assert_allclose(parked.q, PARK, atol=0.005)
+    assert not any(isinstance(data, pimm.SignalError) for _, data in rig.states.emitted + rig.grips.emitted)
+
+
 @pytest.mark.parametrize('site', CHAIN_SITES)
 def test_a_chain_outage_that_blocks_the_shutdown_leaves_the_error_on_the_state_and_the_grip(site):
     watch = Watch(site, persistent=True)

@@ -224,6 +224,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._base_pose = base_pose
         self._kin = kinematics
         self._shutting_down = False
+        self._readings_withheld = False
         self._publish_failure_logged = False
         self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
         self._sent_at = 0.0
@@ -239,7 +240,9 @@ class _Arm(DriverRun[command.CommandType]):
 
     def publish(self, obs: dict[str, np.ndarray], status: RobotStatus | None = None) -> None:
         """Publish the measured state: ERROR after a failed move, else AVAILABLE. In shutdown a failed publish is
-        logged, not raised."""
+        logged, not raised. A shutdown that withholds readings publishes nothing."""
+        if self._readings_withheld:
+            return
         if status is None:
             status = RobotStatus.ERROR if self.moves.errored else RobotStatus.AVAILABLE
         q = obs[_JOINT_POS]
@@ -473,8 +476,10 @@ class _Arm(DriverRun[command.CommandType]):
         except Exception:
             logger.exception('The arm is parked, but its state could not be published')
 
-    def shutdown(self) -> Generator[pimm.Command, None, None]:
+    def shutdown(self, *, withhold_readings: bool) -> Generator[pimm.Command, None, None]:
+        """Park and release the arm. ``withhold_readings`` keeps a fault already on the state and the grip there."""
         self._shutting_down = True
+        self._readings_withheld = withhold_readings
         hold_target = None
         try:
             joints, grip, ended = yield from self.park(self.read_grip(self.observations()), interrupt_on_stop=False)
@@ -711,8 +716,9 @@ class Robot(pimm.ControlSystem):
         """Open the chain, move the arm to the start pose, answer ``asked``, and serve the arm until ``should_stop``.
         Park and release it after.
 
-        A ``ChainFault`` goes on the state and the grip before the park, answers ``asked`` if the start move has not
-        ended, and comes back as the return value once the arm is parked. Any other fault is raised again.
+        A ``ChainFault`` goes on the state and the grip once, before a park that publishes no readings. It answers
+        ``asked`` if the start move has not ended, and comes back as the return value once the arm is parked. Any other
+        fault is raised again.
         """
         try:
             with _chain_call():
@@ -755,7 +761,7 @@ class Robot(pimm.ControlSystem):
                 logger.exception('The arm driver failed during the run; parking the arm before it lets go')
                 for call in asked:
                     call.set_exception(_arm_fault(exc))
-            yield from arm.shutdown()
+            yield from arm.shutdown(withhold_readings=lost is not None)
         if fault is not None:
             raise fault
         return lost
@@ -783,12 +789,10 @@ class Robot(pimm.ControlSystem):
     def _hold(
         self, error: DeviceFault, should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, list[pimm.calls.Call[None, None]]]:
-        """Put ``error`` on the state and the grip again, over what the park published, and answer every move with it,
-        until a ready call.
+        """Answer every move with ``error``, which is on the state and the grip already, until a ready call.
 
         Return the ready calls, or none when the world stops first.
         """
-        self._emit_error(error)
         limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
         refused = (
             Moves[command.CommandType](self.sync_move, self.commands),
