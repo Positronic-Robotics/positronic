@@ -599,6 +599,7 @@ class _Serving:
 
     q_target: np.ndarray
     grip_target: float
+    start_missed: Exception | None
     idle_since: float | None = None
     parking: Generator[pimm.Command, None, tuple[np.ndarray, float, MoveStatus]] | None = None
 
@@ -658,8 +659,8 @@ class Robot(pimm.ControlSystem):
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
-        # Answers once the chain is open. On a lost chain it opens the chain again and moves the arm to the start
-        # pose first, and answers with the fault when the arm misses that pose.
+        # Answers once the arm is at the start pose. On a lost chain it opens the chain again first. While the arm
+        # misses the start pose, each call moves it there again, and answers with the fault while the arm misses.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
@@ -741,13 +742,9 @@ class Robot(pimm.ControlSystem):
             try:
                 self.robot_meta.emit(meta)
                 joints, grip, missed = yield from arm.go_to_start()
-                for call in asked:
-                    if missed is None:
-                        call.set_result(None)
-                    else:
-                        call.set_exception(_arm_fault(missed))
+                self._answer_ready(asked, missed)
                 asked = []
-                yield from self._serve(arm, (joints, grip), should_stop, clock)
+                yield from self._serve(arm, _Serving(joints, grip, missed, idle_since=clock.now()), should_stop, clock)
             except ChainFault as exc:
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
                 lost = self._report_lost(exc)
@@ -762,6 +759,14 @@ class Robot(pimm.ControlSystem):
         if fault is not None:
             raise fault
         return lost
+
+    @staticmethod
+    def _answer_ready(asked: list[pimm.calls.Call[None, None]], missed: Exception | None) -> None:
+        for call in asked:
+            if missed is None:
+                call.set_result(None)
+            else:
+                call.set_exception(_arm_fault(missed))
 
     def _report_lost(self, lost: ChainFault) -> DeviceFault:
         """Put an error for ``lost`` on the state and the grip, and return it."""
@@ -799,16 +804,14 @@ class Robot(pimm.ControlSystem):
         return []
 
     def _serve(
-        self, arm: _Arm, start: tuple[np.ndarray, float], should_stop: pimm.SignalReceiver, clock: pimm.Clock
+        self, arm: _Arm, serving: _Serving, should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, None]:
-        """Hold the joints and grip ``start``, then answer commands and park when idle until ``should_stop``."""
-        joints, grip = start
-        serving = _Serving(joints, grip, idle_since=clock.now())
+        """Hold the targets of ``serving``, then answer calls and commands and park when idle until ``should_stop``."""
         try:
             with Moves[float](self.sync_grip, self.target_grip) as fingers:
                 while not should_stop.value:
-                    for call in self.ready.incoming():
-                        call.set_result(None)
+                    if ready := list(self.ready.incoming()):
+                        yield from self._serve_ready(arm, serving, ready, clock)
                     asked, q = self._take_request(arm, fingers, serving, clock)
                     yield from self._dispatch(arm, serving, asked, q, clock)
                     if (step := self._advance_parking(serving)) is None:
@@ -821,6 +824,21 @@ class Robot(pimm.ControlSystem):
         finally:
             if serving.parking is not None:
                 serving.parking.close()
+
+    def _serve_ready(
+        self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock
+    ) -> Generator[pimm.Command, None, None]:
+        """Answer ``asked``. After a missed start, move the arm to the start pose again first."""
+        if serving.start_missed is not None:
+            if serving.parking is not None:
+                serving.parking.close()
+                serving.parking = None
+            with contextlib.ExitStack() as answers:
+                for call in asked:
+                    answers.enter_context(self._answer_failed_setup(call))
+                serving.q_target, serving.grip_target, serving.start_missed = yield from arm.go_to_start()
+            serving.idle_since = clock.now()
+        self._answer_ready(asked, serving.start_missed)
 
     def _take_request(
         self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock

@@ -1380,6 +1380,66 @@ def test_a_ready_call_on_an_open_chain_is_answered_at_once(world, rig):
     assert len(rig.vendor.targets) > connected, 'the arm stopped taking commands'
 
 
+_START_MOVE_LOG = 'Moving the arm to the start pose'
+
+
+def test_a_ready_call_after_a_missed_start_moves_the_arm_to_the_start_pose_again(world, rig, caplog):
+    caplog.set_level(logging.INFO)
+    rig.vendor.stuck = True
+    rig.ready()
+    ready = _readier(world, rig)
+
+    missed = ready(None)
+    _until_answered(rig, missed, within_s=120)
+    with pytest.raises(DeviceFault) as answered:
+        missed.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, TimeoutError)
+    assert caplog.text.count(_START_MOVE_LOG) == 2
+
+    rig.vendor.stuck = False
+    reached = ready(None)
+    _until_answered(rig, reached, within_s=120)
+    assert reached.result() is None
+    assert caplog.text.count(_START_MOVE_LOG) == 3
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+
+    after = ready(None)
+    rig.tick()
+    assert after.result() is None
+    assert caplog.text.count(_START_MOVE_LOG) == 3
+
+
+def test_a_chain_fault_while_a_ready_call_retries_a_missed_start_answers_it_and_holds_the_arm_as_lost(world, rig):
+    rig.vendor.stuck = True
+    rig.ready()
+    rig.vendor.stuck = False
+    _fail_the_first_move(rig.vendor)
+
+    answer = _readier(world, rig)(None)
+    _until_answered(rig, answer)
+    rig.tick(10)
+
+    with pytest.raises(DeviceFault, match='CAN write failed') as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    _assert_held_as_a_lost_arm(rig, rig.vendor)
+
+
+def test_a_ready_call_after_a_reached_start_does_not_move_the_arm_to_the_start_pose(world, rig, caplog):
+    caplog.set_level(logging.INFO)
+    rig.ready()
+    rig.commands.push(command.JointPosition(PARK))
+    rig.tick(0.5)
+
+    answer = _readier(world, rig)(None)
+    rig.tick()
+
+    assert answer.result() is None
+    assert caplog.text.count(_START_MOVE_LOG) == 1
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
 def test_a_move_that_misses_its_target_puts_no_error_on_the_state(world, rig):
     """A miss is an arm that reads ERROR over a chain that answers, and the arm takes the next command."""
     rig.rest()
