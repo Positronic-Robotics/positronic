@@ -5817,7 +5817,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/1a/35/2fdfb01be020f4374
 
 [[package]]
 name = "positronic-model-server"
-version = "0.2.3"
+version = "0.3.0"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },
