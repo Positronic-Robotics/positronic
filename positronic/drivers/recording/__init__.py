@@ -1,4 +1,4 @@
 """Recording agents and Harness timeline names."""
 
-HARNESS_WORLD = 'harness.world'
-HARNESS_WALL = 'harness.wall'
+from eval_vocabulary.timeline import HARNESS_WALL as HARNESS_WALL
+from eval_vocabulary.timeline import HARNESS_WORLD as HARNESS_WORLD

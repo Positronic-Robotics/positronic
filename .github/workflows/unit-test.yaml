@@ -11,6 +11,7 @@ on:
 jobs:
   core:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +39,7 @@ jobs:
 
   gstreamer:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -70,6 +72,7 @@ jobs:
 
   packaging:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +90,7 @@ jobs:
   # The evals install with no positronic and no client, and their tests pass in that environment.
   evals-packaging:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -107,6 +111,7 @@ jobs:
 
   model-server-packaging:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -136,6 +141,7 @@ jobs:
 
   lerobot:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -156,6 +162,7 @@ jobs:
 
   lerobot-latest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -176,6 +183,7 @@ jobs:
 
   llm:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
         extra: [llm, llm-openai]
@@ -190,6 +198,7 @@ jobs:
 
   openpi:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -215,6 +224,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python: ['3.11', '3.12', '3.13']
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

@@ -6,18 +6,16 @@ import configuronic as cfn
 import pos3
 from eval_vocabulary.outcome import ABSENT, OUTCOME, SUCCESSFUL_ITEMS, TOTAL_ITEMS, Outcome, is_scored
 from eval_vocabulary.progress import LADDER, STATE_SIGNAL, Stage
+from eval_vocabulary.timeline import recording_timeline
 
 from pimm.logging import init_logging
-from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
-from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.recording import HARNESS_WORLD
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.server.dataset_utils import ReplayLayout
+from positronic.server.dataset_utils import ARM_CHARTS, ReplayLayout
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
@@ -52,33 +50,14 @@ def eval_table():
     }
 
 
-# The arm's state as tabs, the target grip beside the grip, and each kind of arm command.
-single_arm_replay_layout = cfn.Config(
-    ReplayLayout,
-    split_shares=(3, 1),
-    view_shares=(1, 3),
-    charts={
-        'Robot State/Joints': [keys.JOINTS],
-        'Robot State/End Effector': [keys.EE_POSE],
-        'Robot State/Joints Vel': [keys.JOINT_VEL],
-        'Grip': {'Target': keys.TARGET_GRIP, 'Current': keys.GRIP},
-        'Robot Commands – Joints': [keys.TARGET_JOINTS],
-        'Robot Commands – Joint Deltas': [keys.TARGET_JOINT_DELTAS],
-        'Robot Commands – End Effector': [keys.TARGET_EE_POSE],
-        'Robot Commands – End Effector Delta': {
-            'Delta': keys.TARGET_EE_POSE_DELTA,
-            'Frame': keys.TARGET_EE_POSE_DELTA_FRAME,
-        },
-    },
-)
+single_arm_replay_layout = cfn.Config(ReplayLayout, split_shares=(3, 1), view_shares=(1, 3), charts=ARM_CHARTS)
 
 
 def uph(ep: Episode) -> float | None:
     items = ep['units']
     if items == 0:
         return None
-    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in ep.timelines), RECORDED_TIME)
+    timeline = recording_timeline(ep.timelines)
     first, last = ep.bounds(timeline)
     return items / ((last - first) / 1e9 / 3600)
 
@@ -142,8 +121,7 @@ def finetune_group_by_task():
     def group_fn(episodes: list[Episode]):
         duration, units = 0, 0
         for ep in episodes:
-            # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-            timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in ep.timelines), RECORDED_TIME)
+            timeline = recording_timeline(ep.timelines)
             first, last = ep.bounds(timeline)
             duration += (last - first) / 1e9 / 3600
             units += ep['units']

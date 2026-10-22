@@ -31,7 +31,7 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
 from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server import launcher, protocol
 from positronic.simulator.env_server.adapter import EnvAdapter, WireCommandAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import _CLOSE_ACK_TIMEOUT, EnvConnection
 from positronic.simulator.env_server.launcher import free_port, serve_subprocess
@@ -97,18 +97,76 @@ def test_serve_subprocess_reports_a_server_that_dies_before_binding():
         pass
 
 
+# Binds its port once it reads a line on stdin, then listens until it is terminated.
+_LISTEN_SCRIPT = (
+    'import socket,sys,time\nsys.stdin.readline()\ns=socket.socket()\ns.bind(("localhost",int(sys.argv[1])))\n'
+    's.listen()\ntime.sleep(30)'
+)
+
+
+def _spawn_unbound(host, port):
+    return subprocess.Popen([sys.executable, '-c', _LISTEN_SCRIPT, str(port)], stdin=subprocess.PIPE, text=True)
+
+
+def _let_bind(proc: subprocess.Popen) -> None:
+    assert proc.stdin is not None
+    proc.stdin.write('\n')
+    proc.stdin.flush()
+
+
+def _listening_spawn(host, port):
+    proc = _spawn_unbound(host, port)
+    _let_bind(proc)
+    return proc
+
+
 @pytest.mark.timeout(30.0)
 def test_serve_subprocess_yields_once_the_port_accepts():
-    script = (
-        'import socket,sys,time\ns=socket.socket()\ns.bind(("localhost",int(sys.argv[1])))\ns.listen()\ntime.sleep(30)'
-    )
-
-    def spawn(host, port):
-        return subprocess.Popen([sys.executable, '-c', script, str(port)])
-
-    with serve_subprocess(spawn, 'localhost') as (host, port):
+    with serve_subprocess(_listening_spawn, 'localhost') as (host, port):
         with socket.create_connection((host, port), timeout=1.0):
             pass
+
+
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_never_gives_the_port_of_a_server_that_has_not_bound_yet(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, '_PORT_LOCKS', tmp_path)
+    starting: list[tuple[int, subprocess.Popen]] = []
+    spawned, finished = threading.Event(), threading.Event()
+
+    def spawn_unbound(host, port):
+        proc = _spawn_unbound(host, port)
+        starting.append((port, proc))
+        spawned.set()
+        return proc
+
+    def first_launcher():
+        with serve_subprocess(spawn_unbound, 'localhost'):
+            finished.wait()
+
+    first = threading.Thread(target=first_launcher, daemon=True)
+    first.start()
+    assert spawned.wait(10.0)
+    first_port, first_server = starting[0]
+    try:
+        # The kernel gives the same free port again, as it can while the first server is still in its imports.
+        given = iter([first_port])
+        monkeypatch.setattr(launcher, 'free_port', lambda: next(given, None) or free_port())
+        with serve_subprocess(_listening_spawn, 'localhost') as (_, port):
+            assert port != first_port
+    finally:
+        finished.set()
+        _let_bind(first_server)
+        first.join(10.0)
+
+
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_gives_again_the_port_of_a_launcher_that_exited(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, '_PORT_LOCKS', tmp_path)
+    port = free_port()
+    monkeypatch.setattr(launcher, 'free_port', lambda: port)
+    for _ in range(2):
+        with serve_subprocess(_listening_spawn, 'localhost') as (_, given):
+            assert given == port
 
 
 @pytest.mark.timeout(60.0)
@@ -453,32 +511,46 @@ class TestEnvControlFrame:
     """Commands must target the frame the environment measures, even when it differs from the default."""
 
     frame = geom.Transform3D(np.array([0.0, 0.0, 0.1]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 2]))
+    measured = geom.Transform3D(np.array([0.5, 0.0, 0.4]), geom.Rotation.from_euler([np.pi, 0.1, 0.0]))
     rotmat = geom.Rotation.Representation.ROTATION_MATRIX
 
     def test_an_absolute_pose_arrives_in_the_env_frame(self):
         pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
-        wired = _wire_command(_in_env_control_frame(roboarm_command.CartesianPosition(pose), self.frame))
+        wired = _wire_command(_in_env_control_frame(roboarm_command.CartesianPosition(pose), self.frame, None))
         np.testing.assert_allclose(wired[protocol.COMMAND_POSE], (pose * self.frame).as_vector(self.rotmat), atol=1e-12)
 
     def test_a_delta_already_in_the_env_frame_wires_bare(self):
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         cmd = roboarm_command.CartesianDelta(delta, frame=self.frame)
-        wired = _wire_command(_in_env_control_frame(cmd, self.frame))
+        wired = _wire_command(_in_env_control_frame(cmd, self.frame, None))
         np.testing.assert_allclose(wired[protocol.COMMAND_DELTA], delta.as_vector(self.rotmat), atol=1e-12)
 
     def test_a_command_re_expressed_for_the_env_keeps_its_mode(self):
         mode = roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
         pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.identity)
-        moved = _in_env_control_frame(roboarm_command.CartesianPosition(pose, mode=mode), self.frame)
+        moved = _in_env_control_frame(roboarm_command.CartesianPosition(pose, mode=mode), self.frame, None)
         assert moved.mode == mode
-        delta = _in_env_control_frame(roboarm_command.CartesianDelta(pose, mode=mode), self.frame)
+        delta = _in_env_control_frame(roboarm_command.CartesianDelta(pose, mode=mode), self.frame, self.measured)
         assert delta.mode == mode
 
-    def test_a_delta_outside_the_env_frame_is_refused(self):
+    def test_a_delta_outside_the_env_frame_is_refused_on_the_wire(self):
         """A delta needs the measured pose in its own frame, which the wire does not supply."""
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         with pytest.raises(ValueError, match='control frame'):
-            _wire_command(_in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame))
+            _wire_command(roboarm_command.CartesianDelta(delta, frame=self.frame))
+
+    def test_a_delta_at_default_arrives_as_the_target_it_composes_at_the_measured_pose(self):
+        delta = geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
+        cmd = roboarm_command.CartesianDelta(delta)
+        wired = _wire_command(_in_env_control_frame(cmd, self.frame, self.measured))
+        expected = cmd.apply(self.measured * self.frame.inv) * self.frame
+        assert wired[protocol.COMMAND_TYPE] == protocol.CARTESIAN
+        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], expected.as_vector(self.rotmat), atol=1e-12)
+
+    def test_a_delta_at_default_before_any_measurement_is_refused(self):
+        delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
+        with pytest.raises(ValueError, match='measured pose'):
+            _in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame, None)
 
     def test_robolab_reports_and_drives_the_same_frame(self):
         adapter = RobolabAdapter(camera_dict={})
@@ -491,7 +563,9 @@ class TestEnvControlFrame:
             'grip': 0.0,
         }
         reported = adapter.observations(raw)[keys.ROBOT_STATE].ee_pose
-        commanded = _in_env_control_frame(roboarm_command.CartesianPosition(reported), adapter.env_control_frame).pose
+        commanded = _in_env_control_frame(
+            roboarm_command.CartesianPosition(reported), adapter.env_control_frame, None
+        ).pose
         np.testing.assert_allclose(commanded.as_vector(self.rotmat), eef.as_vector(self.rotmat), atol=1e-6)
 
 

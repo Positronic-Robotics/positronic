@@ -56,8 +56,18 @@ def _install_vendor_stub() -> None:
         SoftwareImpedance=SoftwareImpedance,
     )
 
+    class ControlHeldElsewhere(RuntimeError):
+        def __init__(self, host: str, holder: str | None):
+            super().__init__(host, holder)
+            self.host = host
+            self.holder = holder
+
     desk = types.ModuleType(DESK)
-    desk.__dict__.update(Desk=object, SafetyControllerError=type('SafetyControllerError', (Exception,), {}))
+    desk.__dict__.update(
+        Desk=object,
+        SafetyControllerError=type('SafetyControllerError', (RuntimeError,), {}),
+        ControlHeldElsewhere=ControlHeldElsewhere,
+    )
 
     package = types.ModuleType(PACKAGE)
     package.__dict__.update(_franka=vendor, desk=desk)

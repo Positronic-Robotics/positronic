@@ -19,7 +19,9 @@ Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
     Nebius also has the GPUs to train your policy.
   - Do not use a Mac with Apple silicon, or another ARM machine. Docker emulates amd64 there, and the test
     is very slow and can fail.
-- On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, and Docker.
+- On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, Docker, and a C compiler. On Ubuntu,
+  install the compiler with `sudo apt install build-essential`. The install builds one dependency, `evdev`,
+  from source.
 - Push access to a container registry, such as Docker Hub.
 
 You can install the commands, register, enter and submit on any computer. Do these four steps on the same
@@ -36,7 +38,9 @@ Follow this guide step by step:
 https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competition.md
 
 1. Install the commands and register me. Ask me for a team name first.
-   Show me the sign-in code and link, and wait while I approve it.
+   Run the register command in the background, and show me its
+   sign-in line at once. The link expires in 5 minutes.
+   Wait while I sign in.
    The command saves my API key on this computer. Never print the key.
 2. Enter me in the competition. Show me what becomes public and
    where to read how my data is used, and ask whether to enter.
@@ -58,10 +62,11 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later. Run `uv --version` to check. To update
 uv, run `uv self update`, or use the tool that installed uv.
 
-This command installs the released `positronic` package. It uses about 2.5 GB of disk space.
+This command installs `positronic` from the `main` branch of its repository. It uses about 2.5 GB of disk
+space.
 
 ```bash
-uv tool install --managed-python --python 3.13 'positronic>=0.3.1'
+uv tool install --managed-python --python 3.13 'positronic @ git+https://github.com/Positronic-Robotics/positronic'
 ```
 
 `--managed-python --python 3.13` makes uv install Python 3.13 and use it. The Python of Ubuntu cannot
@@ -71,9 +76,12 @@ To update the commands later, run `uv tool upgrade positronic`.
 
 ### Register
 
-Choose a team name. The command prints a code and a link. Open the link, sign in, and enter the code.
-The sign-in page shows the ways to sign in that the platform takes. The command saves your API key on
-this computer, and prints the path of the file. The other commands read the key from that file.
+Choose a team name. The command prints a sign-in link and a code, and waits while you sign in. The link
+expires in 5 minutes. If it expires, run the command again. Open the link and sign in. The link carries the
+code, so the page shows it: make sure that it is the code that the command printed. If the page asks for
+the code, enter it. The sign-in page shows the ways to sign in that the platform takes. The command saves
+your API key on this computer, and prints the path of the file. The other commands read the key from that
+file.
 
 ```bash
 positronic account register --alias="<team name>"
@@ -167,8 +175,9 @@ On a machine with a GPU, add `--gpu`. The script then gives the server 600 s:
 bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
-- The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
-  sure that your model uses less.
+- The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
+  sure that your model uses less. A memory setting that is a fraction of the GPU, such as
+  `XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB.
 - On the platform, machine boot, the image pull and the server's start share one deadline of 1800 s.
 
 ### Submit
@@ -234,7 +243,8 @@ eval against the server in the image.
 - The platform waits until `POST /api/v1/keepalive` answers on port 8000. Then it opens one WebSocket
   session for each episode at `/api/v1/session`.
 - If a route refuses the token of the run, the run fails with `policy_setup_crash`.
-- The GPU is one `3g.40gb` slice of an NVIDIA H100, with 40448 MiB of memory.
+- The GPU is one `1g.24gb` slice of an NVIDIA RTX PRO 6000, with 24192 MiB of memory and a quarter
+  of the card's compute.
 - The platform runs the image digest that it found when you submitted. It pulls that digest from your
   registry when the run starts, and it keeps no copy of the image.
 - The [rules](https://competition.phail.ai/rules#limits) give the other limits on

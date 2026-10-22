@@ -31,7 +31,6 @@ DROID_IMPEDANCE = command.Impedance(
     load=None,
     collision_coeff=2.0,
     manage_desk=True,
-    reboot_on_safety_error=False,
     brake_after_idle_s=None,
 )
 def franka(
@@ -40,7 +39,6 @@ def franka(
     load: tuple | None = None,
     collision_coeff: float = 2.0,
     manage_desk: bool = True,
-    reboot_on_safety_error: bool = False,
     brake_after_idle_s: float | None = None,
 ):
     from positronic.drivers.roboarm import franka  # noqa: F401
@@ -51,7 +49,6 @@ def franka(
         load=load,
         collision_coeff=collision_coeff,
         manage_desk=manage_desk,
-        reboot_on_safety_error=reboot_on_safety_error,
         brake_after_idle_s=brake_after_idle_s,
     )
 

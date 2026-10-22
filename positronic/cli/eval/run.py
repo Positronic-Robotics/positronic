@@ -11,7 +11,9 @@ from typing import Any
 import configuronic as cfn
 from platform_client.eval_plan import Sample
 from platform_client.responses import SubmissionCreateResponse
-from positronic_evals.evals import EvalRef, public_eval
+from positronic_evals.evals import EvalDefinition, EvalRef, public_eval
+from positronic_evals.labels import label
+from positronic_evals.scoring import Scores, Scoring, score
 
 import pimm
 import positronic.cfg.policy as policy_cfg
@@ -20,7 +22,8 @@ from positronic.cfg.eval import unset
 from positronic.cli.account.gateway import CommandFailed, Fault, refusing_bad_input
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
-from positronic.dataset.local_dataset import sync_recording_dir
+from positronic.dataset.episode import META_PATH
+from positronic.dataset.local_dataset import LocalDataset, sync_recording_dir
 from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy
 from positronic.policy.harness import Harness, Rollout
@@ -200,10 +203,15 @@ def timed_pass(output_dir: str | Path | None, timing: bool, policy):
             yield
 
 
-def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, timing: bool = False):
+def _episode_paths(dataset_dir: Path) -> set[Path]:
+    return {Path(episode.meta[META_PATH]) for episode in LocalDataset(dataset_dir)}
+
+
+def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, timing: bool = False) -> list[Path]:
     """Run an unattended sweep: a driver walks each eval's tasks, rebuilding the World per eval.
 
-    A sweep reuses the policy definition; each harness owns its episode's runtime and generator.
+    A sweep reuses the policy definition; each harness owns its episode's runtime and generator. Returns the
+    directories of the episodes that the sweep recorded, in recording order.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + a machine-load stats
     stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
@@ -218,10 +226,14 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     policy.meta()
     with scoped_env_var(ENV_TELEMETRY_DIR):
         output_path = prepare_output_dir(output_dir)
+        earlier = set() if output_path is None else _episode_paths(output_path)
         with timed_pass(output_path, timing, policy):
             for ev in evals:
                 driver = TaskDriver(ev.tasks, policy, output_path)
                 run_world(ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done)
+    if output_path is None:
+        return []
+    return sorted(_episode_paths(output_path) - earlier)
 
 
 def _refuse(inapplicable: dict[str, object], where: str) -> None:
@@ -266,15 +278,35 @@ def _eval_at(eval: Eval) -> Eval:
     return eval
 
 
-def _public_eval_config(name: str) -> cfn.Config:
-    """The config of the public eval `name`, on the installed positronic."""
+def _public_eval_definition(name: str) -> EvalDefinition:
+    """The definition of the public eval `name`, with a warning when the installed positronic is not its commit."""
     try:
         definition = public_eval(EvalRef(name))
     except (ValueError, LookupError) as e:
         raise CommandFailed(f'--eval={name!r}: {e}. --policy-image runs an eval on the platform', Fault.USAGE) from None
     _warn_on_revision_mismatch(definition.positronic_revision)
+    return definition
+
+
+def _public_eval_config(definition: EvalDefinition) -> cfn.Config:
+    """The config of a public eval, on the installed positronic."""
     overrides = {f'eval.{arg}': value for arg, value in definition.args.items()}
     return _eval_at.override(eval=definition.config).override_data(**overrides)
+
+
+SCORE_LINE_PREFIX = 'score '
+
+
+def score_line(scores: Scores) -> str:
+    """The line that a local run prints for its `scores`."""
+    return f'{SCORE_LINE_PREFIX}{scores.primary:.3f} over {scores.episodes} episodes, {scores.unscored} unscored'
+
+
+def _print_score(scoring: Scoring, episodes: list[Path]) -> None:
+    """Print the score that the platform gives the recorded `episodes`, under the eval's `scoring`."""
+    labelled = [label(episode, scoring.labelers) for episode in episodes]
+    scores = score(scoring, [None if given is None else given[1] for given in labelled])
+    print(score_line(scores))
 
 
 def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:
@@ -316,6 +348,7 @@ def run(
     Here by default: ``--eval`` is an eval config, or the name of a public eval, and ``--policy`` the
     policy that drives it. A public eval runs the config, the arguments and the trials the platform runs
     under that name, on the installed positronic, and warns when that is not the commit the platform runs.
+    With ``--output_dir`` it then prints the score that the platform gives the episodes it recorded.
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
     eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
     since the platform owns the evals it offers. ``--from-file`` files an eval plan for the lab rig,
@@ -368,8 +401,10 @@ def run(
         )
         if policy is None:
             raise CommandFailed(_NO_POLICY_NAMED, Fault.USAGE)
+        definition = None
         if isinstance(eval, str):
-            chosen: Eval = _public_eval_config(eval).instantiate()
+            definition = _public_eval_definition(eval)
+            chosen: Eval = _public_eval_config(definition).instantiate()
         elif isinstance(eval, Eval):
             chosen = eval
         else:
@@ -377,7 +412,12 @@ def run(
                 f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval', Fault.USAGE
             )
         chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge_inference_time))
-        main(policy=policy, evals=[chosen], output_dir=output_dir, timing=timing)
+        recorded = main(policy=policy, evals=[chosen], output_dir=output_dir, timing=timing)
+        if definition is not None:
+            if output_dir is None:
+                logger.warning('The run has no score: pass --output_dir to record the episodes that a score reads.')
+            else:
+                _print_score(definition.scoring, recorded)
         return None
 
     if policy_image is not None:

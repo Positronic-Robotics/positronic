@@ -42,7 +42,7 @@ class RobolabAdapter(WireCommandAdapter):
         eef_pose = geom.Transform3D(
             raw_obs[robolab_keys.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[robolab_keys.OBS_EEF_QUAT])
         )
-        ee_pose = eef_pose * self.env_control_frame.inv
+        ee_pose = self._measure(eef_pose)
         state = MujocoFrankaState()
         state.encode(raw_obs[robolab_keys.OBS_JOINT_POS], raw_obs[robolab_keys.OBS_JOINT_VEL], ee_pose)
         obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[robolab_keys.OBS_GRIP])}

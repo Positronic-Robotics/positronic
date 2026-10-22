@@ -31,6 +31,14 @@ class RecoveryOutcome(Enum):
     NOT_CLEARED = auto()
 
 
+class RecoveryStep(Enum):
+    """The step a recover call is at. The answer to the call says how it ended."""
+
+    IDLE = auto()  # no recover call runs
+    CONNECTING = auto()  # the arm is prepared through Desk, and the driver connects to it
+    REBOOTING = auto()  # the control box reboots, which takes minutes
+
+
 class MoveAbandoned(RuntimeError):
     """A move the world came down under."""
 
