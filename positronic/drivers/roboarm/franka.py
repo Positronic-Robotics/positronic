@@ -1003,6 +1003,13 @@ class Robot(pimm.ControlSystem):
         return arm.safe_inputs.confirmed_clear
 
     @staticmethod
+    def _held_by_the_safe_inputs(arm: _Arm) -> RecoveryOutcome:
+        """NOT_CLEARED. An arm with no connection streams the safe inputs as the reason, not an earlier failure."""
+        if not arm.connected:
+            arm.disconnect(RuntimeError(f'the safe inputs stop the reconnect: {arm.safe_inputs.why_not_clear}'))
+        return RecoveryOutcome.NOT_CLEARED
+
+    @staticmethod
     def _why_only_a_reboot_clears(session: _DeskSession, exc: Exception) -> str | None:
         """Why only a control box reboot clears ``exc``, the failure of a Desk step; None where a reboot does not.
 
@@ -1033,8 +1040,10 @@ class Robot(pimm.ControlSystem):
         A failure that only a reboot clears reboots the control box once, and ``recovery_step`` says so. The step then
         reads the safe inputs again and runs once more.
         """
-        if not session.managed or not self._safe_to_prepare(arm):
+        if not session.managed:
             return RecoveryOutcome.NOT_CLEARED
+        if not self._safe_to_prepare(arm):
+            return self._held_by_the_safe_inputs(arm)
         logger.warning('The recovery did not clear the fault; preparing the arm through Desk as a run starts')
         self.recovery_step.emit(RecoveryStep.CONNECTING)
         try:
@@ -1051,8 +1060,7 @@ class Robot(pimm.ControlSystem):
         session.reboot()
         arm.safe_inputs.renew()
         if not self._safe_to_prepare(arm):
-            arm.disconnect(RuntimeError(f'the control box rebooted, and {arm.safe_inputs.why_not_clear}'))
-            return RecoveryOutcome.NOT_CLEARED
+            return self._held_by_the_safe_inputs(arm)
         self.recovery_step.emit(RecoveryStep.CONNECTING)
         return self._prepare_and_connect(session, arm, brakes)
 

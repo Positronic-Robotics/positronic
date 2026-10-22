@@ -2605,6 +2605,25 @@ def test_a_reboot_that_does_not_clear_the_box_answers_the_error_and_each_press_r
     assert isinstance(run.streamed[-1], pimm.SignalError)
 
 
+def test_a_recover_call_that_a_held_safe_input_stops_names_that_input_as_the_reason(desk, world, monkeypatch):
+    """The start failure clears meanwhile, so only the safe input stops the reconnect. The boundary is the reboot
+    path below, which names the input the same way."""
+    desk.safety_error = True
+    desk.safe_inputs['x4'] = 'Active'  # a person holds the enabling device
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected'))
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    desk.safety_error = False
+    mark = len(desk.calls)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.NOT_CLEARED
+    assert Call.PREPARE not in desk.calls[mark:] and Call.REBOOT not in desk.calls[mark:]
+    reason = str(run.streamed[-1])
+    assert reason.startswith(franka.NO_CONNECTION) and "safe inputs ['x4'] are triggered" in reason, reason
+
+
 def test_the_safe_inputs_are_read_again_after_a_reboot_before_the_brakes_open(desk, world, monkeypatch):
     desk.safety_error = True
     desk.on_reboot = lambda: desk.safe_inputs.update(x4='Active')  # a person takes the enabling device meanwhile
