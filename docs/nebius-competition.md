@@ -299,6 +299,8 @@ What the platform does with your credential:
 [`docker/nebius_vm.sh`](https://github.com/Positronic-Robotics/positronic/blob/main/docker/nebius_vm.sh)
 creates a Nebius virtual machine for the build and the tests, and deletes it. The VM has 32 GB of memory,
 a 200 GB disk, one NVIDIA L40S GPU with 48 GB of GPU memory, Docker with GPU access, and uv.
+To build and test on a Serverless job instead, read
+[Build and test on Serverless AI](nebius-competition-serverless.md).
 
 Before you start:
 
