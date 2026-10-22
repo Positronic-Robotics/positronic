@@ -90,7 +90,6 @@ def _reserved_port() -> Iterator[int]:
     """Yield a free port that no other launcher on this machine holds, and hold it for the context.
 
     A server binds its port only after its imports, and until then the kernel can give the port again.
-    Without the hold, two launchers get one port and both connect to the server that binds it first.
     """
     _PORT_LOCKS.mkdir(parents=True, exist_ok=True)
     while True:
