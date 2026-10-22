@@ -2617,6 +2617,8 @@ def test_the_safe_inputs_are_read_again_after_a_reboot_before_the_brakes_open(de
     assert answer.result() is RecoveryOutcome.NOT_CLEARED
     assert desk.calls[-1] == Call.REBOOT, 'Desk prepared the arm while a person held the enabling device'
     assert run.step_names[-1] is RecoveryStep.IDLE
+    reason = str(run.streamed[-1])
+    assert reason.startswith(franka.NO_CONNECTION) and "safe inputs ['x4'] are triggered" in reason, reason
 
 
 @pytest.mark.parametrize('failure', [StartFailure.ANOTHER_LOGIN, StartFailure.JOINT_RECOVERY, StartFailure.BRAKES])

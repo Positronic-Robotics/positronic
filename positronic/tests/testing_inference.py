@@ -75,10 +75,13 @@ def make_trial(instruction: str = 'stub') -> Callable[[], Task]:
 _FIRST_PORT = 20000
 _PORTS_PER_WORKER = 400
 _WORKER_BLOCKS = 30
+# pytest-xdist names each worker process in this variable, as `gw<N>`.
+_XDIST_WORKER_ENV = 'PYTEST_XDIST_WORKER'
+_XDIST_WORKER_PREFIX = 'gw'
 
 
 def free_port() -> int:
-    worker = os.environ.get('PYTEST_XDIST_WORKER', '').removeprefix('gw')
+    worker = os.environ.get(_XDIST_WORKER_ENV, '').removeprefix(_XDIST_WORKER_PREFIX)
     first = _FIRST_PORT + (int(worker) % _WORKER_BLOCKS if worker.isdigit() else 0) * _PORTS_PER_WORKER
     for port in random.sample(range(first, first + _PORTS_PER_WORKER), _PORTS_PER_WORKER):
         with socket.socket() as probe:

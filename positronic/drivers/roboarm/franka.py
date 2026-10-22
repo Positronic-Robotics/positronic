@@ -194,6 +194,12 @@ class _SafeInputs:
         reading = self._reading
         return reading.sampled and not reading.triggered
 
+    @property
+    def why_not_clear(self) -> str:
+        """Why no reading shows every safe input clear: the inputs it found triggered, or no reading in hand."""
+        triggered = self.triggered
+        return f'safe inputs {triggered} are triggered' if triggered else 'no reading shows every safe input clear'
+
     def level(self, name: str) -> _SafeInputLevel | None:
         """The level the last reading found for the safe input ``name``; None where no reading is in hand."""
         reading = self._reading
@@ -1045,6 +1051,7 @@ class Robot(pimm.ControlSystem):
         session.reboot()
         arm.safe_inputs.renew()
         if not self._safe_to_prepare(arm):
+            arm.disconnect(RuntimeError(f'the control box rebooted, and {arm.safe_inputs.why_not_clear}'))
             return RecoveryOutcome.NOT_CLEARED
         self.recovery_step.emit(RecoveryStep.CONNECTING)
         return self._prepare_and_connect(session, arm, brakes)
@@ -1100,11 +1107,7 @@ class Robot(pimm.ControlSystem):
                 raise RuntimeError(f'the arm holds an error that the recovery did not clear: {remaining}')
             arm.clear_held_fault()
             if arm.rejects_moves and not arm.safe_inputs.confirmed_clear:
-                triggered = arm.safe_inputs.triggered
-                cause = (
-                    f'safe inputs {triggered} are triggered' if triggered else 'no reading shows every safe input clear'
-                )
-                raise RuntimeError(f'the arm rejects every move, and its fault stays: {cause}')
+                raise RuntimeError(f'the arm rejects every move, and its fault stays: {arm.safe_inputs.why_not_clear}')
             call.set_result(None)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
