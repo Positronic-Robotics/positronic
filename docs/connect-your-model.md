@@ -170,11 +170,11 @@ example `{"end": "complete"}`. The codecs keep the field and refuse a malformed 
 
 The schedule of the client stack acts on `end`. `ChunkedSchedule` plays the `end` of an element that falls due, also
 when one round plays several elements or a new chunk replaces them. A round stops at the first element with `end`,
-and makes no further call. `ChunkedSchedule` does not plan the elements after the first `end` of a chunk. An `end`
-is lost when its element never falls due: past `horizon_sec`, or in the elements that `RTCSchedule` skips when a new
-chunk starts. A replan after an arm error clears an `end` that is due in its round. `RTCSchedule` leaves `end` out
-of the prefix that it sends to the model. A codec that builds elements from arrays, such as `UnpackActionChunk`,
-refuses an answer with `end`.
+and makes no further call. Neither schedule plans the elements after the first `end` of a chunk. An `end` is lost
+when its element never falls due: past `horizon_sec`, or in the elements that `RTCSchedule` skips when a new chunk
+starts. A replan after an arm error clears an `end` that is due in its round. `RTCSchedule` leaves `end` out of the
+prefix that it sends to the model. A codec that builds elements from arrays, such as `UnpackActionChunk`, refuses an
+answer with `end`.
 
 A rig with more than one arm names every channel after the arm that owns it: observations arrive as
 `robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left` alongside

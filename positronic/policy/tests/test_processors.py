@@ -1096,15 +1096,15 @@ def test_a_late_rtc_round_stops_at_an_end(execution):
         run.close()
 
 
-def test_the_rtc_prefix_holds_no_end(execution):
+def test_the_rtc_prefix_stops_at_the_end_and_holds_no_end(execution):
     runtime, clock = execution
     calls = []
 
     def infer(obs, prefix):
         calls.append(prefix)
-        return [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}]
+        return [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}, {MOTOR: 3}]
 
-    schedule = RTCSchedule(fps=10, call_after_sec=0, prefix_duration=ConstantDuration(0.2))
+    schedule = RTCSchedule(fps=10, call_after_sec=0, prefix_duration=ConstantDuration(0.3))
     run = runtime.start(schedule, infer)
     try:
         run.send({})

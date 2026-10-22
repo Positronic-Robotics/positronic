@@ -194,9 +194,14 @@ class DelayEstimate(DurationEstimate):
         return cls(cls.Statistic.MAX, last, max_sec)
 
 
-def _with_checked_end(element: Commands) -> Commands:
-    """``element`` with its ``END`` read as a ``PolicyEnd``. A value that is no ``PolicyEnd`` raises ``ValueError``."""
-    return {**element, END: PolicyEnd(element[END])} if END in element else element
+def _up_to_first_end(chunk: Sequence[Commands]) -> list[Commands]:
+    """The elements of ``chunk`` up to its first ``END``, with each ``END`` read as a ``PolicyEnd``.
+
+    The run ends at the first ``END``, so the rest never plays. A value that is no ``PolicyEnd`` raises ``ValueError``.
+    """
+    checked = [{**element, END: PolicyEnd(element[END])} if END in element else element for element in chunk]
+    last = next((i for i, element in enumerate(checked) if END in element), len(checked) - 1)
+    return checked[: last + 1]
 
 
 class ChunkedSchedule(Policy):
@@ -342,10 +347,7 @@ class ChunkedSchedule(Policy):
 
     def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[list[_Waypoint], int]:
         period_sec = 1 / self._fps
-        checked = [_with_checked_end(waypoint) for waypoint in chunk]
-        # The run ends at the first end, so the elements after it are not part of the plan.
-        last = next((i for i, waypoint in enumerate(checked) if END in waypoint), len(checked) - 1)
-        checked = checked[: last + 1]
+        checked = _up_to_first_end(chunk)
         duration_sec = len(checked) * period_sec
         if self._horizon_sec is not None:
             duration_sec = min(duration_sec, self._horizon_sec)
@@ -469,7 +471,7 @@ class _TimedChunk:
     """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
 
     def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
-        self._actions = [_with_checked_end(action) for action in actions]
+        self._actions = _up_to_first_end(actions)
         self._start_ns = start_ns
         self._fps = fps
         self._next_index = self._running_index(now_ns)
