@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.2] - 2026-10-21
+## [0.3.2] - 2026-10-22
 
 This release publishes `positronic-platform-client` 0.39.2, `positronic-evals` 0.1.1 and `positronic-eval-vocabulary` 0.5.0. The other distributions keep their 0.3.1 versions.
 
@@ -24,10 +24,16 @@ This release publishes `positronic-platform-client` 0.39.2, `positronic-evals` 0
 ### Simulation
 - The MolmoSpaces server reports the end-effector pose relative to the arm base `fr3_link0`, as the real FR3 does. Before, `robot_state.ee_pose` was 0.58 m too high, and a `CartesianPosition` command moved the hand 0.58 m too low ([#972](https://github.com/Positronic-Robotics/positronic/pull/972))
 - The MolmoSpaces `benchmarks` eval takes `episode_paths`: episodes from several benchmarks, each as `<suite>/<scene_dataset>/<task_config>/<benchmark>/<episode index>`, run in list order ([#992](https://github.com/Positronic-Robotics/positronic/pull/992))
+- The MolmoSpaces eval reports the hand pose at the FR3 tool point, 103.4 mm from the flange, as the real FR3 does. Before, the pose was 51.6 mm further out and turned 45 deg about the approach axis. A Cartesian delta command at `default` works in the MolmoSpaces and RoboLab evals. Before, it failed on the first step ([#994](https://github.com/Positronic-Robotics/positronic/pull/994))
+- Two env server launchers on one computer do not get the same port. `serve_subprocess` holds a lock on its port until the launcher exits. Before, two evals could connect to one server, and one of them failed ([#1000](https://github.com/Positronic-Robotics/positronic/pull/1000))
 
 ### Hardware
+- The Franka driver with `manage_desk=True` starts when Desk or libfranka refuses the start, and streams the reason as an error in place of the arm state. A recover call connects again. It reboots the control box one time when only a reboot clears the failure. `reboot_on_safety_error` is removed from `franka.Robot` and `cfg.hardware.roboarm.franka` ([#976](https://github.com/Positronic-Robotics/positronic/pull/976))
 - `DLSIKSolverWithLimits` solves one bounded, damped problem per command, as `positronic-franka` 0.9.0 does. Each joint stays within the model limits and within 0.5 rad of the current joints, and a move near a singular pose is damped. The `franka` extra requires `positronic-franka` 0.9.0 ([#980](https://github.com/Positronic-Robotics/positronic/pull/980))
 - The SO-101 and YAM data collection configs `so101cfg` and `yamcfg` are overrides of one `arm_as_gripper` config, which uses the arm driver as the gripper too ([#987](https://github.com/Positronic-Robotics/positronic/pull/987))
+
+### Datasets
+- With no layout, a `positronic-server` replay shows the cameras and the 3D view in one grid, with the charts of each arm in a column on its right. A robot with more than one arm shows the charts of each arm as a tab. The Other group holds each signal that no chart plots ([#877](https://github.com/Positronic-Robotics/positronic/pull/877))
 
 ### Docs
 - The policy image guides state the 24 GB slice. A memory setting that is a fraction of the GPU, such as `XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB ([#996](https://github.com/Positronic-Robotics/positronic/pull/996))
