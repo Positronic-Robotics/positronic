@@ -812,7 +812,7 @@ class Robot(pimm.ControlSystem):
     ) -> Generator[pimm.Command, None, None]:
         """Hold the targets of ``serving``, then answer calls and commands and park when idle until ``should_stop``."""
         try:
-            with Moves[float](self.sync_grip, self.target_grip) as fingers:
+            with Moves[float](self.sync_grip, self.target_grip) as fingers, self._answer_failed_grip_move(fingers):
                 while not should_stop.value:
                     if ready := list(self.ready.incoming()):
                         yield from self._serve_ready(arm, serving, ready, clock)
@@ -828,6 +828,15 @@ class Robot(pimm.ControlSystem):
         finally:
             if serving.parking is not None:
                 serving.parking.close()
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _answer_failed_grip_move(fingers: Moves[float]) -> Iterator[None]:
+        try:
+            yield
+        except Exception as exc:
+            fingers.fail(_arm_fault(exc))
+            raise
 
     def _serve_ready(
         self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock

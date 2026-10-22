@@ -1478,6 +1478,43 @@ def test_a_fault_that_prevents_a_verified_park_keeps_the_arm_powered(caplog, sit
     rig.loop.close()
 
 
+def _gripper(world, rig: Rig) -> pimm.calls.Caller[float, None]:
+    caller = pimm.calls.ControlSystemCaller[float, None](rig.driver)
+    wire_call(world, caller, rig.driver.sync_grip)
+    return caller
+
+
+def test_a_chain_fault_during_a_grip_move_answers_it_with_an_arm_fault(world, rig):
+    rig.raise_arm()
+    answer = _gripper(world, rig)(0.8)
+    rig.tick()
+    assert not answer.done(), 'the grip move ended before the chain failed'
+    read = rig.vendor.get_observations
+    failures = [OSError('CAN read failed')]
+
+    def read_once_failing():
+        if failures:
+            raise failures.pop()
+        return read()
+
+    rig.vendor.get_observations = read_once_failing
+    _until_answered(rig, answer)
+
+    with pytest.raises(DeviceFault, match='CAN read failed') as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, yam.ChainFault)
+
+
+def test_a_grip_move_with_no_fault_answers_once_the_fingers_arrive(world, rig):
+    rig.raise_arm()
+    answer = _gripper(world, rig)(0.8)
+    _until_answered(rig, answer)
+
+    assert answer.result() is None
+    assert rig.vendor._pos[6] == pytest.approx(0.2, abs=0.05)
+
+
 def _after_the_first_fault(emitter: RecordingEmitter) -> list:
     values = [data for _, data in emitter.emitted]
     first = next(i for i, data in enumerate(values) if isinstance(data, DeviceFault))
