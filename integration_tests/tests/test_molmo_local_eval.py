@@ -1,12 +1,15 @@
+import subprocess
+
 import pytest
 from positronic_evals.evals import MOLMO_EPISODE_INDEX_KEY, EvalRef, public_eval
 from positronic_evals.scoring import Scores
 from pydantic import JsonValue
 
+import integration_tests.molmo_local_eval as molmo_local_eval
 from integration_tests.molmo_local_eval import LOG_NAME, RECORDING_DIR, SMOKE, check_log, check_run, recorded_score
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time
 from positronic import keys
-from positronic.cli.eval.run import SCORE_LINE
+from positronic.cli.eval.run import score_line
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import keys as eval_keys
 
@@ -57,7 +60,7 @@ def test_a_run_with_an_episode_that_no_labeler_labels_fails(tmp_path):
 
 def test_a_log_that_printed_the_recorded_score_passes(tmp_path, capsys):
     _record(tmp_path / RECORDING_DIR, [(trial, True) for trial in TRIALS])
-    _write_log(tmp_path, 'INFO an earlier line', SCORE_LINE.format(primary=1.0, episodes=5, unscored=0), 'INFO closed')
+    _write_log(tmp_path, 'INFO an earlier line', score_line(Scores(primary=1.0, episodes=5, unscored=0)), 'INFO closed')
 
     check_run(tmp_path, SMOKE)
 
@@ -68,8 +71,8 @@ def test_a_log_that_printed_the_recorded_score_passes(tmp_path, capsys):
     'lines',
     [
         (),
-        (SCORE_LINE.format(primary=0.8, episodes=5, unscored=0),),
-        (SCORE_LINE.format(primary=1.0, episodes=5, unscored=0),) * 2,
+        (score_line(Scores(primary=0.8, episodes=5, unscored=0)),),
+        (score_line(Scores(primary=1.0, episodes=5, unscored=0)),) * 2,
     ],
 )
 def test_a_log_without_the_recorded_score_fails(tmp_path, lines: tuple[str, ...]):
@@ -77,3 +80,14 @@ def test_a_log_without_the_recorded_score_fails(tmp_path, lines: tuple[str, ...]
 
     with pytest.raises(ValueError, match='the recorded episodes score'):
         check_log(tmp_path / LOG_NAME, Scores(primary=1.0, episodes=5, unscored=0))
+
+
+def test_a_relative_output_dir_reaches_the_eval_as_the_same_absolute_directory(tmp_path, monkeypatch):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: commands.append(command))
+    monkeypatch.setattr(molmo_local_eval, 'check_run', lambda output, eval_name: None)
+    monkeypatch.chdir(tmp_path)
+
+    molmo_local_eval.run.override(output_dir='out').instantiate()
+
+    assert f'--output_dir={tmp_path / "out" / RECORDING_DIR}' in commands[0]

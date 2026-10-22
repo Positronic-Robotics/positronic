@@ -16,7 +16,7 @@ import pytest
 from eval_vocabulary.episode import SUBTASK_SIGNAL
 from positronic_evals.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
 from positronic_evals.labels import MOLMO_LABELER, ROBOLAB_LABELER, Fail, Label, SubtaskAchieved, Success, label
-from positronic_evals.scoring import score
+from positronic_evals.scoring import Scores, score
 
 import pimm
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time
@@ -256,7 +256,7 @@ def test_a_local_run_of_a_public_eval_prints_the_score_of_the_episodes_it_record
 
     run_command(run_module.run, eval=SMOKE, policy='a policy', output_dir=tmp_path)
 
-    expected = run_module.SCORE_LINE.format(primary=0.75, episodes=4, unscored=0)
+    expected = run_module.score_line(Scores(primary=0.75, episodes=4, unscored=0))
     assert capsys.readouterr().out.splitlines()[-1] == expected == 'score 0.750 over 4 episodes, 0 unscored'
 
 

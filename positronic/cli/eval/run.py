@@ -14,7 +14,7 @@ from platform_client.eval_plan import Sample
 from platform_client.responses import SubmissionCreateResponse
 from positronic_evals.evals import EvalDefinition, EvalRef, public_eval
 from positronic_evals.labels import label
-from positronic_evals.scoring import Scoring, score
+from positronic_evals.scoring import Scores, Scoring, score
 
 import pimm
 import positronic.cfg.policy as policy_cfg
@@ -23,6 +23,7 @@ from positronic.cfg.eval import unset
 from positronic.cli.account.gateway import CommandFailed, Fault, refusing_bad_input
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
+from positronic.dataset.episode import META_PATH
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy
@@ -204,7 +205,7 @@ def timed_pass(output_dir: str | Path | None, timing: bool, policy):
 
 
 def _episode_paths(dataset_dir: Path) -> set[Path]:
-    return set(LocalDataset(dataset_dir).episode_paths)
+    return {Path(episode.meta[META_PATH]) for episode in LocalDataset(dataset_dir)}
 
 
 def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, timing: bool = False) -> list[Path]:
@@ -294,14 +295,19 @@ def _public_eval_config(definition: EvalDefinition) -> cfn.Config:
     return _eval_at.override(eval=definition.config).override_data(**overrides)
 
 
-SCORE_LINE = 'score {primary:.3f} over {episodes} episodes, {unscored} unscored'
+SCORE_LINE_PREFIX = 'score '
+
+
+def score_line(scores: Scores) -> str:
+    """The line that a local run prints for its `scores`."""
+    return f'{SCORE_LINE_PREFIX}{scores.primary:.3f} over {scores.episodes} episodes, {scores.unscored} unscored'
 
 
 def _print_score(scoring: Scoring, episodes: list[Path]) -> None:
     """Print the score that the platform gives the recorded `episodes`, under the eval's `scoring`."""
     labelled = [label(episode, scoring.labelers) for episode in episodes]
     scores = score(scoring, [None if given is None else given[1] for given in labelled])
-    print(SCORE_LINE.format(**scores.model_dump()))
+    print(score_line(scores))
 
 
 def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:

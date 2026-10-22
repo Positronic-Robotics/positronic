@@ -10,7 +10,8 @@ from positronic_evals.evals import MOLMO_EPISODE_INDEX_KEY, EvalDefinition, Eval
 from positronic_evals.labels import label
 from positronic_evals.scoring import Scores, score
 
-from positronic.cli.eval.run import SCORE_LINE
+from positronic.cli.eval.run import SCORE_LINE_PREFIX, score_line
+from positronic.dataset.episode import META_PATH
 from positronic.dataset.local_dataset import LocalDataset
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +37,7 @@ def eval_command(eval_name: str, host: str, port: int, output: Path) -> list[str
 def recorded_score(definition: EvalDefinition, recording: Path) -> Scores:
     """Check that `recording` holds each trial of `definition` once, each labelled, and return its score."""
     dataset = LocalDataset(recording)
-    episodes = dataset.episode_paths
+    episodes = [Path(episode.meta[META_PATH]) for episode in dataset]
     trials = Counter(trial[MOLMO_EPISODE_INDEX_KEY] for task in definition.tasks for trial in task.trials)
     recorded = Counter(episode.static.get(MOLMO_EPISODE_INDEX_KEY) for episode in dataset)
     if recorded != trials:
@@ -50,8 +51,8 @@ def recorded_score(definition: EvalDefinition, recording: Path) -> Scores:
 
 def check_log(log: Path, expected: Scores) -> None:
     """Check that the run printed one score, and that it is `expected`."""
-    want = SCORE_LINE.format(**expected.model_dump())
-    printed = [line for line in log.read_text().splitlines() if line.startswith(SCORE_LINE.split(' ', 1)[0] + ' ')]
+    want = score_line(expected)
+    printed = [line for line in log.read_text().splitlines() if line.startswith(SCORE_LINE_PREFIX)]
     if printed != [want]:
         raise ValueError(f'{log}: the run printed {printed}, the recorded episodes score {want!r}')
 
@@ -59,7 +60,7 @@ def check_log(log: Path, expected: Scores) -> None:
 def check_run(output: Path, eval_name: str) -> None:
     expected = recorded_score(public_eval(EvalRef(eval_name)), output / RECORDING_DIR)
     check_log(output / LOG_NAME, expected)
-    print(f'PASS: {SCORE_LINE.format(**expected.model_dump())}')
+    print(f'PASS: {score_line(expected)}')
 
 
 @cfn.config(eval_name=SMOKE)
@@ -69,7 +70,8 @@ def check(output_dir: str, eval_name: str):
 
 @cfn.config(eval_name=SMOKE, host='localhost', port=8000, wall_timeout=3600.0)
 def run(output_dir: str, eval_name: str, host: str, port: int, wall_timeout: float):
-    output = Path(output_dir).expanduser()
+    # The eval runs with `cwd=REPO_ROOT`, so a relative path would name a second directory there.
+    output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True)
     log = output / LOG_NAME
     print(f'Running {eval_name}; log: {log}', flush=True)
