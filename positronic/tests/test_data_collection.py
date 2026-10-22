@@ -12,9 +12,10 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.models import FR3_EE_FRAME
 from positronic.drivers.webxr import WebXR
 from positronic.geom import Rotation, Transform3D
-from positronic.simulator.mujoco.sim import MujocoSim
+from positronic.simulator.mujoco.sim import MujocoFrankaState, MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
@@ -300,6 +301,31 @@ def test_an_arm_state_that_carries_a_signal_error_is_sounded_and_the_session_goe
 
     assert [path.name for _, path in sounds.emitted] == ['error-occurred.wav']
     assert marks['after'] > marks['pressed']
+
+
+def test_turning_the_controller_turns_the_hand_about_the_teleop_frame(world):
+    """The arm reports its flange; the operator still turns the hand about the tool point they hold."""
+    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, teleop_frame=FR3_EE_FRAME)
+    commands = RecordingEmitter()
+    dc.robot_commands._bind(commands, clock=world.clock)
+    state, buttons = world.pair(dc.robot_state), world.pair(dc.buttons_receiver)
+    controller = world.pair(dc.controller_positions)
+    flange = Transform3D(np.array([0.4, 0.0, 0.3]), Rotation.from_euler([np.pi, 0.0, 0.0]))
+    reported = MujocoFrankaState()
+    reported.encode(np.zeros(7), np.zeros(7), flange)
+
+    driver = ManualDriver([
+        (lambda: state.emit(reported), 0.01),
+        (lambda: controller.emit({'right': Transform3D()}), 0.01),
+        (lambda: buttons.emit(make_buttons(A=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(A=True)), 0.01),
+        (lambda: controller.emit({'right': Transform3D(rotation=Rotation.from_euler([0.3, 0.2, 0.0]))}), 0.01),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    target = commands.emitted[-1][1].pose
+    np.testing.assert_allclose((target * FR3_EE_FRAME).translation, (flange * FR3_EE_FRAME).translation, atol=1e-6)
+    assert np.linalg.norm(target.translation - flange.translation) > 0.01
 
 
 def test_a_station_that_measured_no_spread_puts_the_arm_at_its_nominal(world):

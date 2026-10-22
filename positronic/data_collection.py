@@ -26,6 +26,7 @@ from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers import roboarm
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import State as RoboarmState
+from positronic.drivers.roboarm.models import FR3_EE_FRAME, PANDA_EE_FRAME
 from positronic.drivers.webxr import WebXR
 from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
@@ -111,8 +112,12 @@ class DataCollectionController(pimm.ControlSystem):
         output_path: Path | None = None,
         static_meta: dict | None = None,
         metadata_getter: Callable[[], dict] | None = None,
+        teleop_frame: geom.Transform3D | None = None,
     ):
+        """``teleop_frame`` places the point the operator's hand turns the arm about, relative to the arm's
+        ``default``; ``None`` turns it about ``default``."""
         self.operator_position = operator_position
+        self._teleop_frame = teleop_frame if teleop_frame is not None else geom.Transform3D.identity
         self._output_path = output_path
         self._nominal_joints = np.asarray(nominal_joints, dtype=np.float64)
         # A station that measured no jitter sends the arm exactly to its nominal.
@@ -193,7 +198,7 @@ class DataCollectionController(pimm.ControlSystem):
                     if tracker.on:
                         tracker.turn_off()
                     else:
-                        tracker.turn_on(self.robot_state.value.ee_pose)
+                        tracker.turn_on(self.robot_state.value.ee_pose * self._teleop_frame)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
@@ -209,8 +214,7 @@ class DataCollectionController(pimm.ControlSystem):
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
-                if cp_msg.updated:
-                    target_robot_pos = tracker.update(cp_msg.data['right'])
+                target_robot_pos = tracker.update(cp_msg.data['right']) if cp_msg.updated else None
 
                 if tracker.on:
                     in_error, entered_error = _check_error(
@@ -218,8 +222,8 @@ class DataCollectionController(pimm.ControlSystem):
                     )
                     if entered_error:
                         self.sound.emit(error_wav_path)
-                    if not in_error and cp_msg.updated:
-                        cmd = roboarm.command.CartesianPosition(target_robot_pos)
+                    if not in_error and target_robot_pos is not None:
+                        cmd = roboarm.command.CartesianPosition(target_robot_pos * self._teleop_frame.inv)
                         self.robot_commands.emit(cmd)
 
                 yield pimm.Sleep(0.001)
@@ -291,6 +295,7 @@ def main(
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
     video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
+    teleop_frame: geom.Transform3D | None = None,
 ):
     """Runs data collection in real hardware."""
     if (robot_arm is not None) != (len(nominal_joints) > 0):
@@ -321,7 +326,12 @@ def main(
         output_path = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
-        operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
+        operator_position.value,
+        nominal_joints,
+        joints_spread,
+        output_path=output_path,
+        static_meta=static_meta,
+        teleop_frame=teleop_frame,
     )
 
     dataset_factory = partial(LocalDatasetWriter, video_encoder=video_encoder) if output_path is not None else None
@@ -387,6 +397,7 @@ def main_sim(
         output_path=output_path,
         static_meta=static_meta,
         metadata_getter=lambda: {k: v.tolist() for k, v in sim.save_state().items()},
+        teleop_frame=PANDA_EE_FRAME,  # the operator turns the hand about the sim's old ``default``
     )
 
     dataset_factory = LocalDatasetWriter if output_path is not None else None
@@ -461,6 +472,8 @@ droid = cfn.Config(
     sound=positronic.cfg.sound.sound,
     cameras=positronic.cfg.hardware.camera.droid,
     operator_position=OperatorPosition.BACK,
+    # The operator turns the hand about the FR3's Desk tool frame, as before ``default`` moved to the flange.
+    teleop_frame=FR3_EE_FRAME,
 )
 
 
