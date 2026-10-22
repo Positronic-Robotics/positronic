@@ -891,6 +891,8 @@ class Robot(pimm.ControlSystem):
         self._relative_dynamics_factor = relative_dynamics_factor
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        # Answers once the arm takes moves. A failed libfranka call holds an ARM fault on ``state``; a ready call
+        # answers with it, and only a recover call reconnects, through Desk.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
