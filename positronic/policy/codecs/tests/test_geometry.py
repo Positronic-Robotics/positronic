@@ -122,12 +122,12 @@ def test_encode_maps_obs_to_policy_frame():
 
 def test_decode_maps_action_back_to_canonical():
     pose_c = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
-    action = {obs_keys.ROBOT_COMMAND: cmd_module.CartesianPosition(pose=pose_c * TO_ROBOLAB), 'target_grip': 1.0}
+    action = {obs_keys.ROBOT_COMMAND: cmd_module.CartesianPosition(pose=pose_c * TO_ROBOLAB), obs_keys.TARGET_GRIP: 1.0}
 
     decoded = ChangeEEFrame(TO_ROBOLAB)._decode_single(dict(action))
 
     np.testing.assert_allclose(decoded[obs_keys.ROBOT_COMMAND].pose.as_vector(QUAT), pose_c.as_vector(QUAT), atol=1e-9)
-    assert decoded['target_grip'] == 1.0
+    assert decoded[obs_keys.TARGET_GRIP] == 1.0
 
 
 def test_decode_keeps_the_control_mode_a_command_pinned():
@@ -173,7 +173,7 @@ def test_a_delta_moves_the_arm_where_the_policy_meant():
 
 
 def test_decode_passes_non_cartesian_commands_through():
-    action = {obs_keys.ROBOT_COMMAND: cmd_module.JointPosition(positions=np.zeros(7)), 'target_grip': 0.0}
+    action = {obs_keys.ROBOT_COMMAND: cmd_module.JointPosition(positions=np.zeros(7)), obs_keys.TARGET_GRIP: 0.0}
     decoded = ChangeEEFrame(TO_ROBOLAB)._decode_single(dict(action))
     assert isinstance(decoded[obs_keys.ROBOT_COMMAND], cmd_module.JointPosition)
 
