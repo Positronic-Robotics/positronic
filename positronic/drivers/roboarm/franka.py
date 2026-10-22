@@ -388,6 +388,20 @@ class _Arm(DriverRun[command.CommandType]):
         # The Message types do not name the SignalError that any message can carry.
         self.out.emit(cast(FrankaState, DeviceFault(f'The driver has no control of the arm: {cause}', FaultKind.ARM)))
 
+    @contextlib.contextmanager
+    def lose_control_on_failure(self) -> Iterator[None]:
+        """End the driver's control of the arm when a ``state()`` or ``goal()`` read in the block fails, and raise
+        the failure again.
+
+        Not once the world stops: the teardown stops the arm itself.
+        """
+        try:
+            yield
+        except RuntimeError as exc:  # pybind11 raises every libfranka failure as a RuntimeError
+            if self.disconnect_cause is None and not self.should_stop.value:
+                self.lose_control(exc)
+            raise
+
     def refuse_moves(self) -> None:
         """Answer every waiting sync move with the failure that ended the connection, and drop a streamed one."""
         while isinstance(asked := self.next_request(), pimm.calls.Call):
@@ -418,7 +432,8 @@ class _Arm(DriverRun[command.CommandType]):
         ``pace`` is what to wait between polls, and so how often the goal is asked about.
         """
         while not should_stop():
-            goal = self.robot.goal()
+            with self.lose_control_on_failure():
+                goal = self.robot.goal()
             if goal.status == pf.GoalStatus.REACHED:
                 return MoveStatus.ARRIVED
             if goal.status != pf.GoalStatus.IN_FLIGHT:
@@ -490,7 +505,9 @@ class _Arm(DriverRun[command.CommandType]):
         heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
         """
         # The first emit must not ship an unfilled state.
-        self.state.encode(self.robot.state(), RobotStatus.BUSY)
+        with self.lose_control_on_failure():
+            first = self.robot.state()
+        self.state.encode(first, RobotStatus.BUSY)
         self.emit_state()
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
@@ -508,18 +525,16 @@ class _Arm(DriverRun[command.CommandType]):
             self.clear_held_fault()
             self.command_target(target, mode)
             for wait in self.await_goal(should_stop, self.limiter.wait):
-                st = self.robot.state()
+                with self.lose_control_on_failure():
+                    st = self.robot.state()
                 self.state.encode(st, RobotStatus.BUSY)
                 self.emit_state()
                 if st.error != 0 and not at_teardown:
                     self.robot.recover_from_errors()
                 yield wait
             # The loop exits before it polls again, so a goal that landed as the deadline passed is unseen.
-            if expired() and (missed := self.robot.goal()).status != pf.GoalStatus.REACHED:
-                self.note_refusals(missed)  # the hold target below replaces it, and any refusal it carries
-                # The robot still tracks the goal it missed, and would resume the move once the arm comes free.
-                self.robot.set_target_joints(self.robot.state().q)
-                raise TimeoutError(f'the arm stopped short of {target}')
+            if expired():
+                self._hold_a_missed_goal(target)
         except Exception:
             self.moves.errored = True
             raise
@@ -528,8 +543,23 @@ class _Arm(DriverRun[command.CommandType]):
             return MoveStatus.GAVE_UP
         self.moves.errored = False
         # The poll that reports arrival ends the loop, so the sample before it was taken mid-travel
-        self.publish(self.robot.state())
+        with self.lose_control_on_failure():
+            arrived = self.robot.state()
+        self.publish(arrived)
         return MoveStatus.ARRIVED
+
+    def _hold_a_missed_goal(self, target: np.ndarray) -> None:
+        """Hold the arm where it stands, and raise ``TimeoutError``, when the goal ``target`` is not reached."""
+        with self.lose_control_on_failure():
+            missed = self.robot.goal()
+        if missed.status == pf.GoalStatus.REACHED:
+            return
+        self.note_refusals(missed)  # the hold target below replaces it, and any refusal it carries
+        # The robot still tracks the goal it missed, and would resume the move once the arm comes free.
+        with self.lose_control_on_failure():
+            q = self.robot.state().q
+        self.robot.set_target_joints(q)
+        raise TimeoutError(f'the arm stopped short of {target}')
 
     def _clamp(self, target: np.ndarray) -> np.ndarray:
         """``target`` a margin inside the soft limits; logs the first of a run of clamped commands, and its length."""
@@ -591,7 +621,8 @@ class _Arm(DriverRun[command.CommandType]):
                 call.set_exception(MoveAbandoned())
         except Exception as exc:
             try:
-                self.publish(self.robot.state())
+                if self.disconnect_cause is None:
+                    self.publish(self.robot.state())
             except RuntimeError as lost:  # pybind11 raises every libfranka failure as a RuntimeError
                 self.lose_control(lost)
             finally:
@@ -910,13 +941,16 @@ class Robot(pimm.ControlSystem):
         with pimm.calls.raise_to(call):
             if arm.stop_pressed:
                 raise DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP)
+            with arm.lose_control_on_failure():
+                faulted = arm.disconnect_cause is not None or arm.robot.state().error != 0
             if (
-                (arm.disconnect_cause is not None or arm.robot.state().error != 0)
+                faulted
                 and arm.recover() is RecoveryOutcome.NOT_CLEARED
                 and self._clear_with_desk_prepare(desk, arm, brakes) is RecoveryOutcome.NOT_CLEARED
             ):
                 # Desk's step may have replaced the connection, or left none
-                remaining = arm.disconnect_cause or arm.robot.state().error_message
+                with arm.lose_control_on_failure():
+                    remaining = arm.disconnect_cause or arm.robot.state().error_message
                 raise RuntimeError(f'the arm holds an error that the recovery did not clear: {remaining}')
             arm.clear_held_fault()
             if arm.rejects_moves and not arm.safe_inputs.confirmed_clear:

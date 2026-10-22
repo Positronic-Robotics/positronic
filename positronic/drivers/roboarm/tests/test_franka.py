@@ -2476,6 +2476,49 @@ def test_an_arm_that_fails_during_a_move_answers_the_move_and_the_run_goes_on(de
     assert 'Connection reset by peer' in str(error)
 
 
+def test_a_libfranka_failure_in_a_move_that_the_next_read_does_not_repeat_still_loses_the_arm(desk, world, monkeypatch):
+    arm = FakeArm(PARK, polls_to_reach=10**9)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+    poll = arm.goal
+    failures = [RuntimeError('libfranka: UDP receive: Timeout')]
+
+    def goal_once_failing():
+        if failures:
+            raise failures.pop()
+        return poll()
+
+    mover = _mover(world, driver)
+    move = mover(command.JointPosition(JOGGED))
+    next(loop)  # the move goes out and polls once
+    monkeypatch.setattr(arm, 'goal', goal_once_failing)
+    next(loop)
+
+    with pytest.raises(RuntimeError, match='UDP receive: Timeout'):
+        move.result()
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    refused = mover(command.JointPosition(PARK))
+    next(loop)
+    with pytest.raises(RuntimeError, match='no connection to the arm'):
+        refused.result()
+
+
+def test_a_move_the_arm_refuses_puts_no_error_on_the_state(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+    arm.goal_status = franka.pf.GoalStatus.ABORTED
+
+    move = _mover(world, driver)(command.JointPosition(JOGGED))
+    for _ in range(5):
+        next(loop)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        move.result()
+    assert _errors(states) == []
+
+
 def test_a_ready_call_after_a_libfranka_failure_turns_fci_off_prepares_and_connects_again(desk, world, monkeypatch):
     arm = FakeArm(PARK)
     driver = _driver(arm)
