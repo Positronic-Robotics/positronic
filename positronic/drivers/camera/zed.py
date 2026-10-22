@@ -10,6 +10,7 @@ from pimm.shared_memory import NumpySMAdapter
 from positronic.drivers import vendor_import
 from positronic.drivers.camera import CAPTURE_TIME
 from positronic.drivers.camera.device_open_lock import device_open_lock
+from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 
 with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
     import pyzed.sl as sl
@@ -89,7 +90,7 @@ class SLCamera(pimm.ControlSystem):
         # The camera a run holds open, the error it keeps until a ready call repairs the camera, and the time of
         # its last frame
         self._camera: sl.Camera | sl.CameraOne | None = None
-        self._error: pimm.SignalError | None = None
+        self._error: DeviceFault | None = None
         self._frame_at: float | None = None
 
     DEVICE_LIST_POLL_SEC = 0.5
@@ -172,7 +173,7 @@ class SLCamera(pimm.ControlSystem):
             raise
         return zed
 
-    def _hold(self, error: pimm.SignalError) -> pimm.SignalError:
+    def _hold(self, error: DeviceFault) -> DeviceFault:
         """Keep ``error`` until a ready call repairs the camera, and send it on every channel in place of data."""
         logger.error('Camera %s holds an error until it is asked to be ready: %s', self._serial_number, error)
         self._error = error
@@ -185,7 +186,7 @@ class SLCamera(pimm.ControlSystem):
         try:
             self._camera = yield from self._open_camera(should_stop)
         except CameraOpenError as e:
-            self._hold(pimm.SignalError(f'Camera {self._serial_number} did not open: {e}'))
+            self._hold(device_fault(e, FaultKind.CAMERA, f'Camera {self._serial_number} did not open: {e}'))
             return
         self._error = None
 
@@ -209,7 +210,7 @@ class SLCamera(pimm.ControlSystem):
             return
         error = self._error
         if error is None:
-            error = self._hold(pimm.SignalError(f'Camera {self._serial_number} opened and sent no frame'))
+            error = self._hold(DeviceFault(f'Camera {self._serial_number} opened and sent no frame', FaultKind.CAMERA))
         call.set_exception(error)
 
     def _init_params(self):
@@ -266,7 +267,7 @@ class SLCamera(pimm.ControlSystem):
         assert camera is not None, 'a camera that holds no error is open'
         result = camera.grab()
         if result != sl.ERROR_CODE.SUCCESS:
-            self._hold(pimm.SignalError(f'Camera {self._serial_number} is lost: {result}'))
+            self._hold(DeviceFault(f'Camera {self._serial_number} is lost: {result}', FaultKind.CAMERA))
             return GrabOutcome.LOST
         image = sl.Mat()
         capture_time = pimm.Time(**{CAPTURE_TIME: camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()})

@@ -12,10 +12,19 @@ import types
 
 PACKAGE = 'pymodbus'
 CLIENT = f'{PACKAGE}.client'
+EXCEPTIONS = f'{PACKAGE}.exceptions'
 
 if importlib.util.find_spec(PACKAGE) is None:
     client = types.ModuleType(CLIENT)
+    exceptions = types.ModuleType(EXCEPTIONS)
+    modbus_exception = type('ModbusException', (Exception,), {})
+    exceptions.__dict__.update(
+        ModbusException=modbus_exception,
+        ModbusIOException=type('ModbusIOException', (modbus_exception,), {}),
+        ConnectionException=type('ConnectionException', (modbus_exception,), {}),
+    )
     package = types.ModuleType(PACKAGE)
-    package.__dict__.update(client=client)
+    package.__dict__.update(client=client, exceptions=exceptions)
     sys.modules[PACKAGE] = package
     sys.modules[CLIENT] = client
+    sys.modules[EXCEPTIONS] = exceptions

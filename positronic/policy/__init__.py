@@ -1,5 +1,5 @@
 from .base import Answer, Obs, Policy, PolicyEnd, PolicyRun, Processor, ProcessorRun, Runtime, Step
-from .codecs import Codec
+from .codecs import Codec, PolicyCommandError
 from .remote import RemotePolicy
 from .sequential import Sequential
 
@@ -15,5 +15,6 @@ __all__ = [
     'Answer',
     'Obs',
     'Codec',
+    'PolicyCommandError',
     'RemotePolicy',
 ]

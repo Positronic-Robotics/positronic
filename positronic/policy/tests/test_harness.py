@@ -25,13 +25,14 @@ from positronic.dataset.episode import Episode, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.video import LibavEncoder
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, from_wire, to_wire
+from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import Command, Embodiment, Observation, Task
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
@@ -1130,7 +1131,14 @@ def test_every_device_is_asked_to_be_ready_before_each_episode_and_before_its_pr
         assert answer.result() == {eval_keys.TERMINATED: False}
 
 
-@pytest.mark.parametrize('error', [pimm.SignalError('camera lost'), RuntimeError('the arm holds a fault')])
+@pytest.mark.parametrize(
+    'error',
+    [
+        pimm.SignalError('camera lost'),
+        DeviceFault('camera lost', FaultKind.CAMERA),
+        RuntimeError('the arm holds a fault'),
+    ],
+)
 def test_a_device_that_answers_ready_with_an_error_fails_the_ask_and_is_asked_again(ready_harness, error):
     h = ready_harness
     task = Task('move', None, prepare_args={RESET: 'home'})
@@ -1833,6 +1841,54 @@ def test_robot_observation_serialization_and_typed_command_emission():
         assert obs[keys.DESCRIPTOR] == 'robot'
         assert 'obs_time_ns' not in obs and 'wall_time_ns' not in obs
         assert emitted.values == [(0, policy.command)]
+
+
+@pytest.mark.parametrize(
+    'command, expected_pose_signals',
+    [
+        (
+            CartesianPosition(pose=Transform3D(translation=np.array([0.4, 0.5, 0.6]), rotation=Rotation.identity)),
+            [keys.EE_POSE, keys.TARGET_EE_POSE],
+        ),
+        (JointPosition(positions=np.zeros(7)), [keys.EE_POSE]),
+    ],
+)
+def test_episode_statics_keep_only_written_viewer_signals(command, expected_pose_signals):
+    with pimm.World(virtual_time=True) as world:
+        device = Passive()
+        state_out = pimm.ControlSystemEmitter(device)
+        embodiment = Embodiment(
+            descriptor='robot',
+            observations={keys.ROBOT_STATE: Observation(state_out, Serializers.robot_state)},
+            commands={
+                keys.ROBOT_COMMAND: Command(pimm.FakeReceiver(device), Serializers.robot_command),
+                keys.TARGET_GRIP: Command(pimm.FakeReceiver(device), None),
+            },
+            prepare_handlers={},
+            static_meta=dict(ROBOT_STATIC_META),
+            meta_source=None,
+            simulated=True,
+        )
+        dataset = MemoryDataset()
+        harness = Harness(embodiment, dataset_factory=Mock(return_value=dataset))
+        wire.wire_embodiment(world, harness, embodiment)
+        caller = world.pair(harness.perform_task)
+        done = world.pair(harness.done)
+        loop = world.start([harness, device])
+        try:
+            state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
+            answer = caller(Rollout(Task('move', None), StubPolicy(command=command), Path('recording')))
+            next(loop)
+            done.emit({eval_keys.SUCCESS: True})
+            while not answer.done():
+                next(loop)
+            assert answer.result()[eval_keys.TERMINATED] is True
+        finally:
+            world.request_stop()
+            list(loop)
+    static = dataset.episodes[-1].static
+    assert static[eval_keys.JOINT_SIGNALS] == [keys.JOINTS]
+    assert static[eval_keys.POSE_SIGNALS] == expected_pose_signals
 
 
 def test_real_sleep_stops_at_episode_deadline(episode_harness):

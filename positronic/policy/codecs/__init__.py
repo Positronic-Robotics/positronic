@@ -10,7 +10,7 @@ from .action import (
     SetControlMode,
     UnpackActionChunk,
 )
-from .base import Codec
+from .base import Codec, PolicyCommandError
 from .geometry import ChangeEEFrame, ConvertPose
 from .gripper import BinarizeGripInference, BinarizeGripTraining, FlipGrip
 from .image import EncodeImages, Resample, RestrictImageSize
