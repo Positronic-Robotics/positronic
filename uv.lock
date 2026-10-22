@@ -5716,7 +5716,7 @@ requires-dist = [
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
     { name = "positronic-eval-vocabulary", editable = "vocabulary" },
     { name = "positronic-evals", editable = "evals" },
-    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'franka'", specifier = ">=0.9.0" },
+    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'franka'", specifier = ">=0.10.0" },
     { name = "positronic-model-server", extras = ["websocket", "grpc"], editable = "model_server" },
     { name = "positronic-platform-client", editable = "client" },
     { name = "positronic-wire", extras = ["websocket", "grpc"], editable = "wire" },
@@ -5806,14 +5806,14 @@ requires-dist = [
 
 [[package]]
 name = "positronic-franka"
-version = "0.9.0"
+version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam')" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'linux' and extra == 'extra-10-positronic-molmoact2') or (sys_platform == 'linux' and extra != 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
     { name = "requests", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1a/35/2fdfb01be020f43742ad0d64e5093c042d60fa1d3fe12cae5368f5a40342/positronic_franka-0.9.0.tar.gz", hash = "sha256:f42ab8a09fb99e8b5220804fbe68dc69811be089626aba3be2e6ea59f2613b5b", size = 1826803, upload-time = "2026-10-20T11:57:44.866Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/4f/238b840275be97cb39f4328a71849de94daff871be1e044bd92c85b23ab6/positronic_franka-0.10.0.tar.gz", hash = "sha256:d3e3284d29f3888f30e4a0e437c0165bb4eef7e1d24e1d61c2a12ac791e05fee", size = 1827835, upload-time = "2026-10-22T07:56:06.142Z" }
 
 [[package]]
 name = "positronic-model-server"
