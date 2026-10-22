@@ -2,7 +2,7 @@ import configuronic as cfn
 
 from positronic.cfg.eval import build_tasks, spec
 from positronic.drivers.roboarm.models import bundled_yam_model
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import Eval, Task
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
@@ -30,9 +30,7 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()
     )
-    privileged = {
-        name: Observation(proxy.privileged[name], None) for name in (mapping.OBS_SIM_STATE, mapping.OBS_TASK_EVAL)
-    }
+    privileged = {name: proxy.privileged[name] for name in (mapping.OBS_SIM_STATE, mapping.OBS_TASK_EVAL)}
     task_spec = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=timeout)
 
     def tasks() -> list[Task]:
