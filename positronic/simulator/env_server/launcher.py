@@ -20,6 +20,32 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
+# One lock file per port that a launcher holds for its server. Do not remove a lock file: a launcher that
+# opened it before the removal and a launcher that opens it after can both hold the port.
+_PORT_LOCKS = Path.home() / '.cache' / 'positronic' / 'env_server_ports'
+
+
+@contextmanager
+def _reserved_port() -> Iterator[int]:
+    """Yield a free port that no other launcher on this machine holds, and hold it for the context.
+
+    A server binds its port only after its imports, and until then the kernel can give the port again.
+    Without the hold, two launchers get one port and both connect to the server that binds it first.
+    """
+    _PORT_LOCKS.mkdir(parents=True, exist_ok=True)
+    while True:
+        port = free_port()
+        lock = open(_PORT_LOCKS / f'{port}.lock', 'w')
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock.close()
+            continue
+        with lock:
+            yield port
+        return
+
+
 def ensure_pinned_checkout(repo_url: str, commit: str, dest: Path, *, lfs: bool = False) -> Path:
     """Clone ``repo_url`` into ``dest``, force it onto ``commit``, and return ``dest``.
 
@@ -85,10 +111,10 @@ def serve_subprocess(
     spawn: Callable[[str, int], subprocess.Popen], host: str, bind_deadline: float = _BIND_DEADLINE
 ) -> Iterator[tuple[str, int]]:
     """Yield the server's (host, port) once it accepts TCP connections; terminate the process on exit."""
-    port = free_port()
-    proc = spawn(host, port)
-    try:
-        _await_bind(proc, host, port, bind_deadline)
-        yield host, port
-    finally:
-        terminate(proc)
+    with _reserved_port() as port:
+        proc = spawn(host, port)
+        try:
+            _await_bind(proc, host, port, bind_deadline)
+            yield host, port
+        finally:
+            terminate(proc)
