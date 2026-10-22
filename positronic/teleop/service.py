@@ -339,9 +339,9 @@ class TeleopService:
         # A copy: the text goes on the view, not on the image that the service holds.
         view = np.zeros(blank, dtype=np.uint8) if image is None else np.array(image, dtype=np.uint8, order='C')
         for row, line in enumerate(lines):
-            origin = (10, 30 + 30 * row)
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+            origin = (10, 30 + 36 * row)
+            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 5, cv2.LINE_AA)
+            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
         if banner is not None:
             height, width = view.shape[:2]
             top = height - max(1, round(0.12 * height))
