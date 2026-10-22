@@ -658,7 +658,7 @@ def test_serialized_error_replanning_preserves_the_behavior(execution, replan_on
     runtime, clock = execution
     definition = ChunkedSchedule(fps=10, replan_on_error=replan_on_error)
     encoded = json.loads(json.dumps(definition.to_spec()))
-    assert encoded[VERSION] == 3
+    assert encoded[VERSION] == ChunkedSchedule.WIRE_VERSION
     rebuilt = spec.from_spec(encoded)
     assert rebuilt.to_spec() == encoded
     infer = Mock(return_value=[{MOTOR: 1}] * 5)
@@ -1336,7 +1336,11 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 3, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
+    declared = {
+        NAME: ChunkedSchedule.WIRE_NAME,
+        VERSION: ChunkedSchedule.WIRE_VERSION,
+        ARGS: {ChunkedSchedule.FPS_ARG: 10},
+    }
     schedule = spec.from_spec(declared)
     assert type(schedule) is ChunkedSchedule
     assert schedule.to_spec() == declared

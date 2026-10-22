@@ -253,7 +253,7 @@ class ChunkedSchedule(Policy):
     """
 
     WIRE_NAME = 'chunked_schedule'
-    WIRE_VERSION = 3
+    WIRE_VERSION = 4
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
     RECORD_STATS_ARG = 'record_stats'

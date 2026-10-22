@@ -5,15 +5,15 @@ The offboard README states the translation and what the client refuses.
 
 import logging
 import time
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Mapping, Sequence
 from typing import Any, overload
 
 from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION
 
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
+from positronic.policy.base import Commands, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
 from positronic.policy.codecs import Codec
-from positronic.policy.keys import ACTION_FPS
+from positronic.policy.keys import ACTION_FPS, END
 from positronic.policy.processors import ChunkedSchedule, DurationEstimate, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 
@@ -29,7 +29,20 @@ V1_SERVER_DEFAULT_ACTION_FPS = 15.0
 logger = logging.getLogger(__name__)
 
 
-class ChunkedScheduleV2(ChunkedSchedule):
+class ChunkedScheduleV3(ChunkedSchedule):
+    """The schedule of a declaration that predates ``END``: an answer with one is refused, not played."""
+
+    WIRE_VERSION = 3
+
+    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[list[ChunkedSchedule._Waypoint], int]:
+        if any(END in element for element in chunk):
+            raise ValueError(
+                f'{self.WIRE_NAME} v{self.WIRE_VERSION} cannot end a run; declare v{ChunkedSchedule.WIRE_VERSION}'
+            )
+        return super()._plan_chunk(chunk, start_ns)
+
+
+class ChunkedScheduleV2(ChunkedScheduleV3):
     WIRE_VERSION = 2
 
     def __init__(
