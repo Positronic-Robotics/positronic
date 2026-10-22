@@ -24,20 +24,21 @@ in a dataset says where a gripper frame was. Inside the gripper is fine for an a
 fixed, or whose vendor frame is already the convention everybody uses.
 
 A checkpoint's transform is portable only while every embodiment puts `default` at the same physical place.
-Today's placements do not — the FR3 and the sim panda sit 45 mm apart along the approach axis — which is what
-[#550](https://github.com/Positronic-Robotics/positronic/issues/550) closes.
+Every Franka model puts it at the flange, `link8` (`models.FLANGE_LINK`), so one transform means the same point
+on the real arm and in each simulator.
 
-Two things are pinned to the Franka's FR3's current placement: recordings predating this contract state a frame name
-rather than an `ee_frame` transform and `ik.pose_anchor` solves at that name, and `models.DROID_EE_FRAME` is
-measured from where `default` sits. `test_default_frame_still_coincides_with_the_franka_tool_frame` fails when
-the placement moves.
+A recording or a checkpoint made while `default` sat at the Franka tool frame speaks poses there. The two old
+points are constants from the flange: `models.FR3_EE_FRAME` for the real arm and `models.PANDA_EE_FRAME` for the
+sim panda. `cfg.ds.internal`'s robot transforms read an old recording at the flange, from the model it carries
+(`ik.MoveDefaultFrame`), and a checkpoint trained before the move states its old frame with `ee_frame`.
 
 | Embodiment | `default` sits at | Note |
 | --- | --- | --- |
-| Franka FR3 (`franka.py`) | `end_effector` | The arm's `F_T_EE`, 103.4 mm and −45° off the flange. Moving it to the flange is [#550](https://github.com/Positronic-Robotics/positronic/issues/550). |
-| MuJoCo panda (`models.py`) | `end_effector` | The sim's grasp site, 58.4 mm and −45° off the flange (`link8`). |
-| RoboLab (`simulator/robolab/`) | `end_effector` | Ships the FR3 model unchanged. The env measures and drives at `droid_eef`; `RobolabAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
-| MolmoSpaces (`simulator/molmo_spaces/`) | `end_effector` | Ships the FR3 model unchanged. The env measures and drives at the 2F-85 grasp site, in the arm base `fr3_link0`; `MolmoAdapter` converts. MolmoSpaces' own robot base is at the bottom of the stand below it. |
+| Franka FR3 (`franka.py`) | `link8`, the flange | positronic-franka publishes the flange pose and solves the IK there. The Desk tool frame `F_T_EE` does not move it. |
+| MuJoCo panda (`models.py`) | `link8`, the flange | The sim reports and solves at its `link8` site. |
+| RoboLab (`simulator/robolab/`) | `link8`, the flange | Ships the FR3 model. The env measures and drives at `droid_eef`; `RobolabAdapter` converts with `models.DROID_EE_FRAME`, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
+| MolmoSpaces (`simulator/molmo_spaces/`) | `link8`, the flange | Ships the FR3 model. The env measures and drives at the 2F-85 grasp site, in the arm base `fr3_link0`; `MolmoAdapter` converts. MolmoSpaces' own robot base is at the bottom of the stand below it. |
+| LIBERO (`simulator/libero/`) | `link8`, the flange | Ships the panda model. `LiberoAdapter` converts with `models.PANDA_EE_FRAME`, the old panda point, which is 38.1 mm and 90° off the eef site LIBERO drives ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)). |
 | YAM (`yam/driver.py`) | the `default` site in `yam.xml` | Coincident with the vendor's `grasp_site`. |
 | SO-101 (`so101/driver.py`) | `gripper_frame_link` | |
 

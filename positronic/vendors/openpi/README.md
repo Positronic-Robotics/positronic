@@ -141,7 +141,9 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
   `ee_joints_traj`, `joints_traj`, `ee_flip_grip`, `droid`, `droid_jointpos`, `libero`
 - `--model.checkpoints_dir`: Full path to the experiment directory containing checkpoints
 - `--pipeline.ee_frame`: The end-effector frame the checkpoint speaks, relative to the rig's `default`
-  (`@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the one we ship). Required on the EE pipelines — pass
+  (`@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the one we ship). A checkpoint trained on recordings
+  made before `default` moved to the flange, and not read through the `cfg.ds` robot transforms, speaks
+  `@positronic.drivers.roboarm.models.FR3_EE_FRAME` (real Franka) or `PANDA_EE_FRAME` (MuJoCo panda). Required on the EE pipelines — pass
   `None` for a checkpoint trained in `default`. The joint-space pipelines set it themselves: no pose crosses the wire
 - `--model.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
 - `--model.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)

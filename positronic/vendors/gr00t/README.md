@@ -13,7 +13,7 @@ The adapter follows [upstream's DROID robot client](https://github.com/NVIDIA/Is
   resizes the shortest edge to **256**, crops **95%**, resizes the shortest edge again, then runs
   its vision processor. Positronic does not apply an additional square crop.
 - State is absolute tool position + row-based 6D rotation, gripper position and seven joint positions.
-  Poses move from Positronic's default tool frame to `DROID_EE_FRAME`, then receive upstream's
+  Poses move from Positronic's `default` frame, the flange, to `DROID_EE_FRAME`, then receive upstream's
   DROID rotation correction. Gripper convention is **1 = closed**.
 - Conversion writes recorded state trajectories as absolute action labels. The checkpoint processor
   computes pose-relative EEF actions and joint offsets for training, then restores absolute actions
@@ -25,12 +25,16 @@ The published two-camera checkpoint does not consume an extra exterior view. Sel
 `droid_three_cameras` for both conversion and serving when fine-tuning with three views.
 N1.6 checkpoints require an N1.6 image; their custom action schemas are incompatible with this adapter.
 
-The default pose transform matches Franka rigs and the RoboLab adapter. The bundled MuJoCo
-Panda reports poses at a different tool frame; using the default transform on its recordings
-(including `sim_stack_cubes`) introduces a 45 mm offset. That frame alignment is tracked in
-[#550](https://github.com/Positronic-Robotics/positronic/issues/550). Such datasets and their
-serving codec require a matching simulator-specific `ee_frame`; the default is not a validated
-native-checkpoint configuration for that simulator.
+The default pose transform is stated from the flange, where every Franka model puts `default`, so it
+means the same point on the real arm, the MuJoCo panda, RoboLab and MolmoSpaces. The dataset
+transforms in `cfg.ds` read recordings made before that move at the flange too.
+
+A checkpoint fine-tuned before the move records the old `ee_frame` in
+`meta/positronic_model_settings.json`. The old and the new value name the same coupler point, from
+the old and the new `default`, and the launch refuses on the difference: write the new value into
+that file before you serve the checkpoint. The server image carries the value in
+[`serving/settings.py`](serving/settings.py), so a robot that reports the flange needs an image built
+with the new value.
 
 ## Docker
 
