@@ -16,8 +16,7 @@ import positronic.cfg.webxr
 from positronic.drivers.webxr import RIGHT, WebXR
 from positronic.offboard.server import socket_at
 
-from .clutch import OperatorPosition
-from .protocol import DEFAULT_PORT, SessionParams, camera_names, default_socket_path
+from .protocol import DEFAULT_PORT, default_socket_path
 from .service import Phase, TeleopService
 from .window import Window, window_app
 
@@ -79,34 +78,20 @@ def serve(
     hold_sec: float = 1.0,
     press_threshold: float = 0.6,
     view_fps: float = 30.0,
-    headset_camera: str | None = None,
     open_window: bool = True,
-    operator_position: OperatorPosition | None = SessionParams.operator_position,
-    cameras: tuple[str, ...] = SessionParams.cameras,
-    image_fps: float = SessionParams.image_fps,
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
     ``served_address`` is the Unix socket of this user by default.
     ``--served_address=@positronic.teleop.command.network`` serves on a host and a port, and needs the bearer token in
-    ``AUTH_TOKEN_ENV``.
-    ``operator_position``, ``cameras`` and ``image_fps`` are the defaults of the session
-    parameters (``SessionParams``). A run can set others in the query of its address.
+    ``AUTH_TOKEN_ENV``. A run sets the parameters of its session (``SessionParams``) in the query of its address.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
-    defaults = SessionParams(operator_position, camera_names(cameras), image_fps)
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
     # lock out `cfg.policy.teleop`, which sends none.
     auth_token = os.environ.get(AUTH_TOKEN_ENV) if isinstance(served_address, ServedHostPort) else None
     service = TeleopService(
-        served_address,
-        ready_limit,
-        silence_limit,
-        hold_sec,
-        press_threshold,
-        headset_camera,
-        session_defaults=defaults,
-        auth_token=auth_token,
+        served_address, ready_limit, silence_limit, hold_sec, press_threshold, auth_token=auth_token
     )
     headset = _Headset(service, view_fps)
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:

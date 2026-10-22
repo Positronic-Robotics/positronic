@@ -177,9 +177,6 @@ class _Sample:
     buttons: Sequence[float] | None
 
 
-_DEFAULT_SESSION_PARAMS = SessionParams()
-
-
 class TeleopService:
     """Serve one teleop session at a time at ``served_address``, as a model server.
 
@@ -189,7 +186,6 @@ class TeleopService:
     ``take_sample`` takes each sample of the right controller. A frame request waits for the next sample. When none
     comes within ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. A ready request waits
     at most ``READY_SLICE_SEC`` for Ready or Cancel. The ready limit counts from the first ready request of a session.
-    ``session_defaults`` holds the parameters of a session that sets none.
     """
 
     READY_SLICE_SEC = 1.0
@@ -203,8 +199,6 @@ class TeleopService:
         silence_limit: float,
         hold_sec: float,
         press_threshold: float = 0.6,
-        headset_camera: str | None = None,
-        session_defaults: SessionParams = _DEFAULT_SESSION_PARAMS,
         auth_token: str | None = None,
     ):
         for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
@@ -216,7 +210,6 @@ class TeleopService:
         self._auth_token = auth_token
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit
-        self._session_defaults = session_defaults
         self._buttons = ButtonMap(hold_sec, press_threshold)
         self._changed = threading.Condition()
         self._sample = _Sample(0, None, None)
@@ -229,8 +222,8 @@ class TeleopService:
         self._attempt_started = False
         # The last camera images of the run, by name, in the order that the client sends them.
         self._images: dict[str, np.ndarray] = {}
-        # The camera that the headset shows. ``None`` is the first camera of the run.
-        self._headset_camera = headset_camera
+        # The camera that the headset shows in this trial. ``None`` is the first camera of the run.
+        self._headset_camera: str | None = None
         # A wait ends at once when the service stops.
         self._stopping = False
         self._wire: WebsocketWire | None = None
@@ -260,7 +253,7 @@ class TeleopService:
     def __enter__(self) -> 'TeleopService':
         if isinstance(self._binds, ServedUnixSocket):
             self._prepare_private_directory(self._binds.uds.parent)
-        server = ModelServer(lambda: TeleopModel(self, self._session_defaults), auth_token=self._auth_token)
+        server = ModelServer(lambda: TeleopModel(self), auth_token=self._auth_token)
         self._wire = WebsocketWire(self._binds)
         wires = [self._wire]
         started: Future[None] = Future()
@@ -377,11 +370,12 @@ class TeleopService:
             return self._images.get(self._headset_camera)
         return next(iter(self._images.values()), None)
 
-    def begin_ready_wait(self) -> None:
-        """Start a new trial that waits for Ready."""
+    def begin_ready_wait(self, headset_camera: str | None) -> None:
+        """Start a new trial that waits for Ready. The headset shows ``headset_camera``, or the first camera for
+        ``None``."""
         with self._changed:
             self._clear_trial()
-            self._phase, self._ready = Phase.READY_WAIT, None
+            self._phase, self._ready, self._headset_camera = Phase.READY_WAIT, None, headset_camera
 
     def await_ready(self, deadline: float) -> Reply:
         """Wait at most ``READY_SLICE_SEC`` for Ready or Cancel. Answer ``EXPIRED`` at the ``time.monotonic()``
@@ -459,6 +453,7 @@ class TeleopService:
         """Show no trial. Hold the lock."""
         self._phase, self._events = Phase.IDLE, []
         self._task, self._control, self._attempt_started, self._images = '', False, False, {}
+        self._headset_camera = None
 
     def end_session(self) -> None:
         with self._changed:
@@ -469,11 +464,16 @@ class TeleopSession(Session):
     """One trial of the teleop service: the ready wait, then the frames."""
 
     def __init__(
-        self, service: TeleopService, tracker: Tracker, client_stack: dict[str, Any], on_close: Callable[[], None]
+        self,
+        service: TeleopService,
+        settings: SessionParams,
+        client_stack: dict[str, Any],
+        on_close: Callable[[], None],
     ):
         super().__init__(client_stack)
         self._service = service
-        self._tracker = tracker
+        self._tracker = Tracker(settings.operator())
+        self._headset_camera = settings.headset_camera
         self._on_close = on_close
         # The `time.monotonic()` instant at which the ready limit ends. It starts at the first ready request.
         self._ready_deadline: float | None = None
@@ -483,7 +483,7 @@ class TeleopSession(Session):
             case Request.READY:
                 if self._ready_deadline is None:
                     self._ready_deadline = time.monotonic() + self._service.ready_limit
-                    self._service.begin_ready_wait()
+                    self._service.begin_ready_wait(self._headset_camera)
                 return {KIND: self._service.await_ready(self._ready_deadline)}
             case Request.FRAME:
                 return self._service.next_frame(observation, self._tracker)
@@ -499,9 +499,9 @@ class TeleopModel(Model):
     ``ModelServer`` calls it on one worker thread only.
     """
 
-    def __init__(self, service: TeleopService, defaults: SessionParams):
+    def __init__(self, service: TeleopService):
         super().__init__(
-            parameters=defaults.to_json(),
+            parameters=SessionParams().to_json(),
             metadata={
                 policy_keys.TYPE: 'teleop',
                 'ready_limit_sec': service.ready_limit,
@@ -521,7 +521,7 @@ class TeleopModel(Model):
             image_fps=settings.image_fps,
         )
         stack = spec.sequence(client.to_spec(), EncodeImages(quality=settings.jpeg_quality).to_spec())
-        session = TeleopSession(self._service, Tracker(settings.operator()), stack, self._release)
+        session = TeleopSession(self._service, settings, stack, self._release)
         self._open = True
         return session
 

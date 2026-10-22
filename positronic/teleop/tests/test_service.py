@@ -434,6 +434,12 @@ def test_a_session_with_a_wrong_operator_position_is_refused_at_connect(service,
         RemotePolicy('websocket_unix', address).meta()
 
 
+def test_a_session_with_a_headset_camera_that_it_does_not_send_is_refused_at_connect(service, socket_path):
+    address = UnixSocketAddress(socket_path, SESSION_PATH, 'headset_camera="image.wrist"')
+    with pytest.raises(RuntimeError, match='headset_camera must be one of the cameras'):
+        RemotePolicy('websocket_unix', address).meta()
+
+
 def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
     with pytest.raises(ValueError, match='operator_position must be one of'):
         session_query(operator_position='SIDE')
@@ -443,6 +449,8 @@ def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
         session_query(image_fps=0)
     with pytest.raises(ValueError, match='cameras must be a list of camera names'):
         session_query(cameras=keys.WRIST_IMAGE)
+    with pytest.raises(ValueError, match='headset_camera must be one of the cameras'):
+        session_query(cameras=[keys.WRIST_IMAGE], headset_camera=keys.EXTERIOR_IMAGE)
     assert session_query(operator_position=None, cameras=[keys.WRIST_IMAGE]) == (
         'operator_position=null&cameras=%5B%22image.wrist%22%5D'
     )
@@ -639,9 +647,9 @@ def test_a_frame_request_before_ready_is_refused(service, socket_path, connect):
         connection.ask(frame)
 
 
-def _readied_connection(service: TeleopService, socket_path: Path, connect):
-    """A test session that the teleoperator readied from the headset."""
-    connection = connect(socket_path)
+def _readied_connection(service: TeleopService, socket_path: Path, connect, query: str = ''):
+    """A test session with ``query`` that the teleoperator readied from the headset."""
+    connection = connect(socket_path, query)
     answer = connection.ready_in_background()
     _until_phase(service, Phase.READY_WAIT)
     service.take_sample(HAND, _buttons(b=1.0))
@@ -675,13 +683,14 @@ def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, sock
 
 
 @pytest.mark.parametrize('headset_camera', [None, keys.EXTERIOR_IMAGE])
-def test_the_headset_shows_the_first_camera_or_the_one_it_names(socket_path, connect, headset_camera):
+def test_the_headset_shows_the_first_camera_or_the_one_that_the_session_names(socket_path, connect, headset_camera):
     images = {
         keys.WRIST_IMAGE: np.full((24, 32, 3), 50, np.uint8),
         keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 200, np.uint8),
     }
-    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, headset_camera=headset_camera) as service:
-        connection = _readied_connection(service, socket_path, connect)
+    query = session_query(cameras=list(images), headset_camera=headset_camera)
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
         encoded = {name: encode_jpeg(image) for name, image in images.items()}
         connection.ask({**FRAME_REQUEST, protocol.IMAGES: encoded})
         shown = keys.WRIST_IMAGE if headset_camera is None else headset_camera

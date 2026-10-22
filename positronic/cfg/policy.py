@@ -45,23 +45,24 @@ remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
 # A person, through the teleop service on this machine: an ordinary remote policy on the socket of the service. A ready
 # request ends within a second, so a short infer timeout also bounds a frame. A service that is down fails the trial
 # after the connect deadline.
+teleop_query = cfn.Config(session_query)
 teleop = remote.override(
     wire='websocket_unix',
-    address=socket_address.override(uds=str(default_socket_path())),
+    address=socket_address.override(uds=str(default_socket_path()), query=teleop_query),
     infer_timeout=10.0,
     connect_deadline=30.0,
 )
 
 # The views of `cfg.eval.sim.positronic.stack_cubes_collect` that a person teleoperates with, the most useful first.
 TELEOP_COLLECT_CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_UPRIGHT_IMAGE, keys.HANDCAM_RIGHT_IMAGE, keys.WRIST_IMAGE)
-TELEOP_COLLECT_QUERY = session_query(cameras=list(TELEOP_COLLECT_CAMERAS))
-teleop_collect = teleop.override(**{'address.query': TELEOP_COLLECT_QUERY})
+teleop_collect_query = teleop_query.override(operator_position='BACK', cameras=list(TELEOP_COLLECT_CAMERAS))
+teleop_collect = teleop.override(**{'address.query': teleop_collect_query})
 
 # A person on MolmoSpaces. The eval puts each shoulder camera in one exterior slot at random, so the person sees both
 # exteriors.
 TELEOP_MOLMO_CAMERAS = (keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2, keys.WRIST_IMAGE)
-TELEOP_MOLMO_QUERY = session_query(cameras=list(TELEOP_MOLMO_CAMERAS))
-teleop_molmo = teleop.override(**{'address.query': TELEOP_MOLMO_QUERY})
+teleop_molmo_query = teleop_query.override(cameras=list(TELEOP_MOLMO_CAMERAS))
+teleop_molmo = teleop.override(**{'address.query': teleop_molmo_query})
 
 
 @cfn.config()
@@ -105,7 +106,7 @@ nebius_remote = cfn.Config(RemotePolicy, address=network_address, headers=nebius
 file_authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=file_headers)
 
 # A person, through a teleop service on another machine: `--policy.address.host` names it. The token in `AUTH_TOKEN_ENV`
-# is the token of the service. `--policy.address.query=@positronic.cfg.policy.TELEOP_MOLMO_QUERY` sets the cameras.
+# is the token of the service. `--policy.address.query=@positronic.cfg.policy.teleop_molmo_query` sets the cameras.
 teleop_network = teleop.override(
-    wire='websocket', address=network_address.override(port=DEFAULT_PORT), headers=bearer_headers
+    wire='websocket', address=network_address.override(port=DEFAULT_PORT, query=teleop_query), headers=bearer_headers
 )

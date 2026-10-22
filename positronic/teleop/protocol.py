@@ -87,13 +87,15 @@ class SessionParams:
     ``OperatorPosition`` as its name.
 
     An ``operator_position`` of ``None`` is UMI mode: control is always on, and the hand pose is the robot pose.
-    ``cameras`` names the cameras that the client sends.
+    ``cameras`` names the cameras that the client sends. ``headset_camera`` names the one that the headset shows;
+    ``None`` is the first one.
     """
 
     operator_position: OperatorPosition | None = OperatorPosition.FRONT
     cameras: tuple[str, ...] = ()
     image_fps: float = 15.0
     jpeg_quality: int = DEFAULT_JPEG_QUALITY
+    headset_camera: str | None = None
 
     def __post_init__(self) -> None:
         if self.operator_position is not None and not isinstance(self.operator_position, OperatorPosition):
@@ -103,6 +105,10 @@ class SessionParams:
             )
         if not math.isfinite(self.image_fps) or self.image_fps <= 0:
             raise ValueError(f'image_fps must be finite and positive, got {self.image_fps}')
+        if self.headset_camera is not None and self.headset_camera not in self.cameras:
+            raise ValueError(
+                f'headset_camera must be one of the cameras {list(self.cameras)}, got {self.headset_camera!r}'
+            )
 
     @classmethod
     def from_json(cls, operator_position: Any, cameras: Any, **params: Any) -> SessionParams:

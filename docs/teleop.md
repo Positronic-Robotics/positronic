@@ -75,16 +75,15 @@ Conversion for training picks its own keys from the recording.
 - The session parameter `cameras` names the cameras that the person sees, in that order. By default the person sees
   no camera (see Session parameters).
 - The window shows the cameras of the policy in a grid, each with its name.
-- The headset video shows one camera: the first one, or the one that `positronic teleop --headset_camera=<name>`
-  names. The phone page shows no video.
+- The headset video shows one camera: the first one, or the one that the session parameter `headset_camera` names.
+  The phone page shows no video.
 
 ## Collect demonstrations in MuJoCo
 
 1. In terminal 1, start the service. For an iPhone:
 
    ```bash
-   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop \
-     --operator_position=@positronic.teleop.clutch.OperatorPosition.BACK
+   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop
    ```
 
 2. In terminal 2, start a run of 20 trials:
@@ -136,20 +135,29 @@ uv run positronic eval run \
   the config selects.
 - `teleop_molmo` shows `image.exterior`, `image.exterior_2` and `image.wrist`. The eval puts each shoulder camera in
   one exterior slot at random, so the person sees both.
-- Start the service with `--operator_position=@positronic.teleop.clutch.OperatorPosition.BACK` if the arm moves the
-  wrong way.
+- Add `--policy.address.query.operator_position=BACK` if the arm moves the wrong way.
 
 Start `positronic teleop` first, as in MuJoCo.
 
 ## Session parameters
 
-The service CLI sets the defaults: `--operator_position` (a member of `positronic.teleop.clutch.OperatorPosition`,
-for example `@positronic.teleop.clutch.OperatorPosition.BACK`, or `None` for UMI mode, where control is always on and
-the hand pose is the robot pose), `--cameras` (a list, empty by default) and `--image_fps`.
-A run sets its own in the query of its address, each value a JSON literal, for example
-`--policy.address.query='operator_position="BACK"'`. `positronic.teleop.protocol.session_query` builds such a query:
-`TELEOP_COLLECT_QUERY` and `TELEOP_MOLMO_QUERY` in `positronic.cfg.policy` are the queries of `teleop_collect` and
-`teleop_molmo`. The episode records the values in `inference.policy.server.effective_params`.
+The run sets the parameters of its session in the query of its address. The service takes no session parameters, so
+one service serves runs with different parameters. A parameter that the run does not set has the default of
+`positronic.teleop.protocol.SessionParams`.
+
+| Parameter | Value | Default |
+|---|---|---|
+| `operator_position` | a member of `positronic.teleop.clutch.OperatorPosition`, for example `BACK`, or `None` for UMI mode, where control is always on and the hand pose is the robot pose | `FRONT` |
+| `cameras` | the cameras that the person sees, in that order | none |
+| `headset_camera` | the camera of `cameras` that the headset shows | the first one |
+| `image_fps` | how often the run sends the camera images | 15 |
+| `jpeg_quality` | the JPEG quality of the camera images | 90 |
+
+`positronic.teleop.protocol.session_query` builds the query. In `positronic.cfg.policy`, `teleop_query` is the query
+of `teleop` and `teleop_network`, and `teleop_collect_query` and `teleop_molmo_query` are the queries of
+`teleop_collect` and `teleop_molmo`. `teleop_collect_query` sets `operator_position` to `BACK`. Set one parameter on the command line, for example
+`--policy.address.query.headset_camera=image.wrist`. The episode records the values in
+`inference.policy.server.effective_params`.
 
 ## Run the service on another machine
 
@@ -171,7 +179,7 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
    uv run positronic eval run \
      --eval=@positronic.cfg.eval.sim.positronic.stack_cubes_collect \
      --policy=@positronic.cfg.policy.teleop_network --policy.address.host=<laptop> \
-     --policy.address.query=@positronic.cfg.policy.TELEOP_COLLECT_QUERY \
+     --policy.address.query=@positronic.cfg.policy.teleop_collect_query \
      --output_dir=~/datasets/stack_cubes_demos
    ```
 

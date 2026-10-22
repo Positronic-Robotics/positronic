@@ -2,6 +2,7 @@ import json
 from urllib.parse import parse_qsl
 
 import pytest
+from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_model_server.spec import parse_params
 
 from positronic import keys
@@ -70,9 +71,20 @@ def test_the_collection_eval_records_every_camera_that_the_teleop_collection_pol
     assert {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE} <= set(recorded)
 
 
-def test_the_teleop_collection_policy_asks_the_service_for_its_cameras():
+def test_the_teleop_collection_policy_asks_the_service_for_its_cameras_with_the_person_at_the_back():
     query = policy_cfg.teleop_collect.instantiate()._client.session_url.split('?', 1)[1]
-    assert parse_params(parse_qsl(query)) == {'cameras': list(policy_cfg.TELEOP_COLLECT_CAMERAS)}
+    assert parse_params(parse_qsl(query)) == {
+        'operator_position': 'BACK',
+        'cameras': list(policy_cfg.TELEOP_COLLECT_CAMERAS),
+    }
+
+
+@pytest.mark.parametrize('name', ['teleop', 'teleop_network'])
+def test_a_run_sets_one_session_parameter_of_a_teleop_policy(monkeypatch, name):
+    monkeypatch.setenv(AUTH_TOKEN_ENV, 'token')
+    config = getattr(policy_cfg, name).override(**{'address.query.operator_position': 'BACK'})
+    query = config.instantiate()._client.session_url.split('?', 1)[1]
+    assert parse_params(parse_qsl(query)) == {'operator_position': 'BACK'}
 
 
 def test_the_teleop_policy_is_a_remote_policy_on_the_socket_of_the_service(tmp_path):
