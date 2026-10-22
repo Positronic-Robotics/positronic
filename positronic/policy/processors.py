@@ -775,11 +775,7 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
 
 
 class RequireRunningClock(Processor[InputT, OutputT, ReturnT]):
-    """Refuse a runtime whose clock stands still while a call runs, and pass the inputs and outputs through.
-
-    A server declares it when its answers must see the time that passes during a call, as for a person who controls
-    the robot.
-    """
+    """Refuse a runtime whose clock stands still while a call runs, and pass the inputs and outputs through."""
 
     WIRE_NAME = 'require_running_clock'
 
