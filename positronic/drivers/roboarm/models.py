@@ -13,20 +13,24 @@ from positronic import geom, keys
 from positronic.drivers.roboarm import keys as roboarm_keys
 
 FLANGE_LINK = 'link8'
-DROID_EEF_LINK = 'droid_eef'
+ROBOLAB_EEF_LINK = 'robolab_eef'
 # The franka's own tool frame, ``F_T_EE`` off the flange. TODO(#550): move ``DEFAULT_FRAME`` to the flange.
 EE_LINK = 'end_effector'
 # The frame every embodiment publishes its poses in and every codec transform is measured from. Recommended at
 # the flange whenever the gripper can be swapped: recorded data outlives grippers, and an episode anchored to a
 # gripper frame becomes unplaceable once that gripper comes off.
 DEFAULT_FRAME = 'default'
-# ``DROID_EEF_LINK`` measured from ``DEFAULT_FRAME``: the Robotiq 2F-85 coupler, 18.17mm along the flange
-# approach axis and +90deg about it. DROID's checkpoints express poses here, and stating it as a transform is
-# what lets one declare its frame without any rig consulting a robot model to serve it.
-# TODO(#550): the awkward numbers are the FR3's ``F_T_EE`` offset riding along, because ``DEFAULT_FRAME`` is not
-# the flange yet. Moving it there turns this into the authored gripper geometry and makes the value portable —
-# as it stands it is right on a franka rig and 45mm off on the sim, whose ``DEFAULT_FRAME`` sits elsewhere again.
-DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.085225977]), geom.Rotation.from_euler([0.0, 0.0, 2.35619449]))
+# The frame DROID records its poses in: the flange, ``panda_link8``, measured from ``DEFAULT_FRAME``. DROID's
+# ``cartesian_position`` equals FK at ``panda_link8``, and DROID's checkpoints speak that frame.
+# TODO(#550): the numbers are the inverse of the FR3's ``F_T_EE``, because ``DEFAULT_FRAME`` is not the flange yet.
+DROID_EE_FRAME = geom.Transform3D(
+    np.array([0.0, 0.0, -0.1033999994]), geom.Rotation.from_euler([0.0, 0.0, 0.7853981634])
+)
+# ``ROBOLAB_EEF_LINK`` measured from ``DEFAULT_FRAME``: RoboLab's ``eef_frame``, at the Robotiq 2F-85 coupler,
+# 18.17mm along the flange approach axis and +90deg about it. RoboLab measures and drives its arm there.
+ROBOLAB_EE_FRAME = geom.Transform3D(
+    np.array([0.0, 0.0, -0.085225977]), geom.Rotation.from_euler([0.0, 0.0, 2.35619449])
+)
 # Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
@@ -112,7 +116,7 @@ _ROBOTIQ_2F85 = [
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
     # RoboLab's ``eef_frame`` (``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``), measured off its DROID USD
     # ``franka_robotiq_2f_85_flattened.usd`` as 18.17mm along the flange Z and +90deg about it.
-    _UrdfRow(DROID_EEF_LINK, FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
+    _UrdfRow(ROBOLAB_EEF_LINK, FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
 ]
 
 

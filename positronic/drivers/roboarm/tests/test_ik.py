@@ -25,10 +25,11 @@ from positronic.drivers.roboarm.ik import (
 from positronic.drivers.roboarm.models import (
     DEFAULT_FRAME,
     DROID_EE_FRAME,
-    DROID_EEF_LINK,
     EE_LINK,
     FLANGE_LINK,
     GRASP_SITE_LINK,
+    ROBOLAB_EE_FRAME,
+    ROBOLAB_EEF_LINK,
     bundled_franka_model,
     bundled_panda_model,
 )
@@ -222,13 +223,13 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
         np.testing.assert_allclose(solved[:3], anchored[i].translation, atol=1e-3)
 
 
-def test_frame_transform_reproduces_droid_eef_across_configs():
+def test_frame_transform_reproduces_robolab_eef_across_configs():
     urdf = bundled_franka_model()[roboarm_keys.URDF]
-    transform = frame_transform(urdf, EE_LINK, DROID_EEF_LINK)
+    transform = frame_transform(urdf, EE_LINK, ROBOLAB_EEF_LINK)
     quat = geom.Rotation.Representation.QUAT
     for q in TEST_CONFIGS:
         got = geom.Transform3D.from_vector(_fk_site(urdf, q, EE_LINK), quat) * transform
-        want = geom.Transform3D.from_vector(_fk_site(urdf, q, DROID_EEF_LINK), quat)
+        want = geom.Transform3D.from_vector(_fk_site(urdf, q, ROBOLAB_EEF_LINK), quat)
         np.testing.assert_allclose(got.translation, want.translation, atol=1e-9)
         assert geom.quat_closest(got.rotation, want.rotation) == want.rotation
 
@@ -239,11 +240,14 @@ def test_bundled_model_declares_the_frame_it_reports_in(model):
     frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
 
 
-def test_declared_droid_frame_matches_the_model_geometry():
-    """The checkpoint states its frame as a constant; this pins it to where the model puts that frame."""
+@pytest.mark.parametrize(
+    'declared, frame', [(DROID_EE_FRAME, FLANGE_LINK), (ROBOLAB_EE_FRAME, ROBOLAB_EEF_LINK)], ids=['droid', 'robolab']
+)
+def test_declared_frame_matches_the_model_geometry(declared, frame):
+    """A checkpoint or an env states its frame as a constant; this pins it to where the model puts that frame."""
     urdf = bundled_franka_model()[roboarm_keys.URDF]
-    measured = frame_transform(urdf, DEFAULT_FRAME, DROID_EEF_LINK)
-    np.testing.assert_allclose(DROID_EE_FRAME.as_matrix, measured.as_matrix, atol=1e-9)
+    measured = frame_transform(urdf, DEFAULT_FRAME, frame)
+    np.testing.assert_allclose(declared.as_matrix, measured.as_matrix, atol=1e-9)
 
 
 def test_default_frame_still_coincides_with_the_franka_tool_frame():

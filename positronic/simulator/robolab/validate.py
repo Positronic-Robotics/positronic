@@ -10,7 +10,7 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
   equivalence claim) and the arm converges onto the target;
 - ``joint_vel``: the joint targets anchor on the measured joints (``q + dq``), exactly;
 - the eef_frame <-> base_link offset: un-offsetting the observed eef quat recovers the base_link body quat;
-- eef_frame against ``models.DROID_EE_FRAME``: RoboLab's own scene puts eef_frame where the constant
+- eef_frame against ``models.ROBOLAB_EE_FRAME``: RoboLab's own scene puts eef_frame where the constant
   ``RobolabAdapter`` converts with says it is;
 - Cartesian tracking, the ``examples/run_abs_ik_demo.py`` protocol: ±5 cm translations and ±20° world-axis
   rotations held 30 steps each, pass at 5 mm / 2°; the demo's own known-divergent ``translate +x`` case is
@@ -57,8 +57,8 @@ _ROT_TOL = math.radians(2.0)
 _KNOWN_DIVERGENT = {'translate +x'}
 _EEF_OFFSET_ROT_T = torch.tensor([EEF_OFFSET_ROT], dtype=torch.float32)
 
-# ``models.DROID_EE_FRAME`` restated against the flange, because this script runs in RoboLab's venv and cannot
-# import positronic: the same transform as ``frame_transform(fr3_urdf, FLANGE_LINK, DROID_EEF_LINK)``, quat wxyz.
+# ``models.ROBOLAB_EE_FRAME`` restated against the flange, because this script runs in RoboLab's venv and cannot
+# import positronic: the same transform as ``frame_transform(fr3_urdf, FLANGE_LINK, ROBOLAB_EEF_LINK)``, quat wxyz.
 # It is measured from an FR3 and applied to RoboLab's Panda, so the check below is what says the two agree.
 # rules-allow: hardcoded-keys — this script runs in RoboLab's venv, where positronic is not importable, so
 # there is no shared constant to reach for; naming the body is the point of the check
@@ -207,7 +207,7 @@ def _check_flange_to_eef(env: RobolabEnv) -> None:
     rot_err = _quat_angle(rel_quat[0], torch.tensor(_FLANGE_TO_EEF_QUAT))
     assert pos_err <= _FRAME_POS_TOL and rot_err <= _FRAME_ROT_TOL, (
         f'RoboLab measures eef_frame at {rel_pos.tolist()} / {rel_quat[0].tolist()} off {_FLANGE_BODY}, '
-        f'{pos_err * 1000:.3f} mm and {math.degrees(rot_err):.3f} deg from where DROID_EE_FRAME puts it'
+        f'{pos_err * 1000:.3f} mm and {math.degrees(rot_err):.3f} deg from where ROBOLAB_EE_FRAME puts it'
     )
     print(f'  flange -> eef_frame: OK ({pos_err * 1000:.4f} mm / {math.degrees(rot_err):.4f} deg)')
 

@@ -12,7 +12,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.roboarm.models import DROID_EE_FRAME
+from positronic.drivers.roboarm.models import ROBOLAB_EE_FRAME
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -23,7 +23,7 @@ from positronic.simulator.robolab import keys as robolab_keys
 class RobolabAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
         # Converting here is what lets one checkpoint run on RoboLab and on the rig it stands in for unchanged.
-        super().__init__(DROID_EE_FRAME)
+        super().__init__(ROBOLAB_EE_FRAME)
         self._camera_dict = camera_dict  # logical observation name -> the RoboLab obs image key
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
