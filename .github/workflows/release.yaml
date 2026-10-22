@@ -14,6 +14,7 @@ jobs:
   # put a distribution on the index first.
   verify-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,6 +45,7 @@ jobs:
   # failed release.
   publish-client-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: publish-evals-pypi
     steps:
       - name: Checkout
@@ -72,6 +74,7 @@ jobs:
 
   publish-wire-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: verify-release
     steps:
       - name: Checkout
@@ -100,6 +103,7 @@ jobs:
 
   publish-model-server-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: publish-wire-pypi
     steps:
       - name: Checkout
@@ -128,6 +132,7 @@ jobs:
 
   publish-vocabulary-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: verify-release
     steps:
       - name: Checkout
@@ -156,6 +161,7 @@ jobs:
 
   publish-evals-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: publish-vocabulary-pypi
     steps:
       - name: Checkout
@@ -184,6 +190,7 @@ jobs:
 
   publish-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [verify-release, publish-client-pypi, publish-evals-pypi, publish-wire-pypi, publish-model-server-pypi, publish-vocabulary-pypi]
     steps:
       - name: Checkout
@@ -214,6 +221,7 @@ jobs:
 
   publish-docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: publish-pypi
     steps:
       - name: Checkout
