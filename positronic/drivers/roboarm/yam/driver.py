@@ -650,7 +650,8 @@ class Robot(pimm.ControlSystem):
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
-        # Answers once the chain is open. On a lost chain it opens the chain again first.
+        # Answers once the chain is open. On a lost chain it opens the chain again and moves the arm to the start
+        # pose first.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
@@ -694,10 +695,11 @@ class Robot(pimm.ControlSystem):
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ) -> Generator[pimm.Command, None, DeviceFault | None]:
-        """Open the chain, answer ``asked``, and serve the arm until ``should_stop``. Park and release it after.
+        """Open the chain, move the arm to the start pose, answer ``asked``, and serve the arm until ``should_stop``.
+        Park and release it after.
 
-        A ``ChainFault`` goes on the state and the grip before the park, and comes back as the return value once the
-        arm is parked. Any other fault is raised again.
+        A ``ChainFault`` goes on the state and the grip before the park, answers ``asked`` if the start move has not
+        ended, and comes back as the return value once the arm is parked. Any other fault is raised again.
         """
         try:
             with _chain_call():
@@ -706,8 +708,6 @@ class Robot(pimm.ControlSystem):
             for call in asked:
                 call.set_exception(exc)
             return self._report_lost(exc)
-        for call in asked:
-            call.set_result(None)
         fault, lost = None, None
         with _opened(vendor):
             arm = _Arm(
@@ -727,13 +727,21 @@ class Robot(pimm.ControlSystem):
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 self.robot_meta.emit(meta)
-                yield from self._serve(arm, should_stop, clock)
+                start = yield from arm.go_to_start()
+                for call in asked:
+                    call.set_result(None)
+                asked = []
+                yield from self._serve(arm, start, should_stop, clock)
             except ChainFault as exc:
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
                 lost = self._report_lost(exc)
+                for call in asked:
+                    call.set_exception(lost)
             except Exception as exc:
                 fault = exc
                 logger.exception('The arm driver failed during the run; parking the arm before it lets go')
+                for call in asked:
+                    call.set_exception(exc)
             yield from arm.shutdown()
         if fault is not None:
             raise fault
@@ -775,10 +783,10 @@ class Robot(pimm.ControlSystem):
         return []
 
     def _serve(
-        self, arm: _Arm, should_stop: pimm.SignalReceiver, clock: pimm.Clock
+        self, arm: _Arm, start: tuple[np.ndarray, float], should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, None]:
-        """Move to the start pose, then answer commands and park when idle until ``should_stop``."""
-        joints, grip = yield from arm.go_to_start()
+        """Hold the joints and grip ``start``, then answer commands and park when idle until ``should_stop``."""
+        joints, grip = start
         serving = _Serving(joints, grip, idle_since=clock.now())
         try:
             with Moves[float](self.sync_grip, self.target_grip) as fingers:

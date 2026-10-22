@@ -1236,14 +1236,29 @@ def test_a_chain_fault_during_a_blocking_move_answers_the_move_and_holds_the_arm
     _assert_held_as_a_lost_arm(rig, rig.vendor)
 
 
-def test_a_chain_fault_during_the_start_move_after_a_ready_call_holds_the_arm_as_lost(world, rig):
+def test_a_chain_fault_during_the_start_move_after_a_ready_call_answers_it_and_holds_the_arm_as_lost(world, rig):
     reopened = _lose_the_chain(rig)
     _fail_the_first_move(reopened)
 
-    _readier(world, rig)(None)
+    answer = _readier(world, rig)(None)
     rig.tick(10)
 
+    with pytest.raises(DeviceFault, match='CAN write failed') as raised:
+        answer.result()
+    assert raised.value.kind is FaultKind.ARM
     _assert_held_as_a_lost_arm(rig, reopened)
+
+
+def test_a_ready_call_on_a_lost_arm_is_answered_once_the_start_move_ends(world, rig):
+    reopened = _lose_the_chain(rig)
+
+    answer = _readier(world, rig)(None)
+    rig.tick(0.1)
+    assert not answer.done(), 'the ready call was answered before the arm reached the start pose'
+    rig.ready()
+
+    assert answer.result() is None
+    np.testing.assert_allclose(reopened._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
 
 
 def test_a_chain_fault_during_an_idle_park_holds_the_arm_as_lost(rig):
