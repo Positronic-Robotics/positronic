@@ -31,7 +31,7 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
 from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server import launcher, protocol
 from positronic.simulator.env_server.adapter import EnvAdapter, WireCommandAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import _CLOSE_ACK_TIMEOUT, EnvConnection
 from positronic.simulator.env_server.launcher import free_port, serve_subprocess
@@ -97,18 +97,76 @@ def test_serve_subprocess_reports_a_server_that_dies_before_binding():
         pass
 
 
+# Binds its port once it reads a line on stdin, then listens until it is terminated.
+_LISTEN_SCRIPT = (
+    'import socket,sys,time\nsys.stdin.readline()\ns=socket.socket()\ns.bind(("localhost",int(sys.argv[1])))\n'
+    's.listen()\ntime.sleep(30)'
+)
+
+
+def _spawn_unbound(host, port):
+    return subprocess.Popen([sys.executable, '-c', _LISTEN_SCRIPT, str(port)], stdin=subprocess.PIPE, text=True)
+
+
+def _let_bind(proc: subprocess.Popen) -> None:
+    assert proc.stdin is not None
+    proc.stdin.write('\n')
+    proc.stdin.flush()
+
+
+def _listening_spawn(host, port):
+    proc = _spawn_unbound(host, port)
+    _let_bind(proc)
+    return proc
+
+
 @pytest.mark.timeout(30.0)
 def test_serve_subprocess_yields_once_the_port_accepts():
-    script = (
-        'import socket,sys,time\ns=socket.socket()\ns.bind(("localhost",int(sys.argv[1])))\ns.listen()\ntime.sleep(30)'
-    )
-
-    def spawn(host, port):
-        return subprocess.Popen([sys.executable, '-c', script, str(port)])
-
-    with serve_subprocess(spawn, 'localhost') as (host, port):
+    with serve_subprocess(_listening_spawn, 'localhost') as (host, port):
         with socket.create_connection((host, port), timeout=1.0):
             pass
+
+
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_never_gives_the_port_of_a_server_that_has_not_bound_yet(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, '_PORT_LOCKS', tmp_path)
+    starting: list[tuple[int, subprocess.Popen]] = []
+    spawned, finished = threading.Event(), threading.Event()
+
+    def spawn_unbound(host, port):
+        proc = _spawn_unbound(host, port)
+        starting.append((port, proc))
+        spawned.set()
+        return proc
+
+    def first_launcher():
+        with serve_subprocess(spawn_unbound, 'localhost'):
+            finished.wait()
+
+    first = threading.Thread(target=first_launcher, daemon=True)
+    first.start()
+    assert spawned.wait(10.0)
+    first_port, first_server = starting[0]
+    try:
+        # The kernel gives the same free port again, as it can while the first server is still in its imports.
+        given = iter([first_port])
+        monkeypatch.setattr(launcher, 'free_port', lambda: next(given, None) or free_port())
+        with serve_subprocess(_listening_spawn, 'localhost') as (_, port):
+            assert port != first_port
+    finally:
+        finished.set()
+        _let_bind(first_server)
+        first.join(10.0)
+
+
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_gives_again_the_port_of_a_launcher_that_exited(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, '_PORT_LOCKS', tmp_path)
+    port = free_port()
+    monkeypatch.setattr(launcher, 'free_port', lambda: port)
+    for _ in range(2):
+        with serve_subprocess(_listening_spawn, 'localhost') as (_, given):
+            assert given == port
 
 
 @pytest.mark.timeout(60.0)
