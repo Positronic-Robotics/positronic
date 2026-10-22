@@ -103,7 +103,8 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
     ]
 
 
-GRASP_SITE_LINK = 'gripper_grasp_site'
+# The grip point every bundled Franka model names, on the flange axes: z is the approach axis.
+GRIPPER_SITE = 'gripper'
 # The 2F-85's closed pads meet 155 mm along the flange approach axis.
 _2F85_GRASP_XYZ = '0 0 0.155'
 
@@ -111,7 +112,7 @@ _2F85_GRASP_XYZ = '0 0 0.155'
 _ROBOTIQ_2F85 = [
     _UrdfRow('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
     _UrdfRow('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
-    _UrdfRow(GRASP_SITE_LINK, FLANGE_LINK, None, _2F85_GRASP_XYZ, '0 0 0', None, None, None),
+    _UrdfRow(GRIPPER_SITE, FLANGE_LINK, None, _2F85_GRASP_XYZ, '0 0 0', None, None, None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
     # RoboLab's ``eef_frame`` (``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``), measured off its DROID USD
