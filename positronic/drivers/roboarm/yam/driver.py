@@ -664,8 +664,8 @@ class Robot(pimm.ControlSystem):
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
-        # Answers once the arm is at the start pose. On a lost chain it opens the chain again first. While the arm
-        # misses the start pose, each call moves it there again, and answers with the fault while the arm misses.
+        # Answers once the arm is at the start pose, and opens a lost chain first. After a miss, each call moves the
+        # arm to that pose again and fails until it arrives.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
