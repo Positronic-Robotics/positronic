@@ -431,7 +431,8 @@ class ChunkedSchedule(Policy):
                 end = _apply_markers(runtime, commands, marked)
                 recovering = recovering and not commands
                 if stats is not None:
-                    stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
+                    queued = sum(waypoint.counted for waypoint in trajectory)
+                    stats.count_round(planned, due_ns, now_ns, queued=queued, starts_chunk=starts_chunk)
                 if end is not None:
                     yield Step(commands, now_ns)
                     return end

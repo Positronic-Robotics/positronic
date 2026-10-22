@@ -126,7 +126,7 @@ def test_declared_markers_act_when_their_elements_play(execution):
         for now_ns, start_ns in ((0, None), (100_000_000, 100_000_000), (200_000_000, 100_000_000)):
             clock.advance_to_ns(now_ns)
             assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
-            assert runtime.metadata_snapshot().get('attempt_start_ns') == start_ns
+            assert runtime.metadata_snapshot().get(mark_time_key('attempt_start')) == start_ns
         clock.advance_to_ns(300_000_000)
         assert run.send({}) == Step({}, 300_000_000)
         with pytest.raises(StopIteration) as end:
@@ -434,6 +434,19 @@ def test_the_markers_of_a_replaced_waypoint_are_not_counted_as_emitted(execution
     stats = {name.removeprefix(f'{eval_keys.SCHEDULE}.'): value for name, value in runtime.metadata_snapshot().items()}
     assert stats[eval_keys.EMITTED] == emitted
     assert (stats[eval_keys.DROPPED], stats[eval_keys.LATE_MAX_MS], stats[eval_keys.GAP_MAX_MS]) == (1, 0, 0)
+
+
+# An end stops the round, and the marks of a later replaced waypoint stay queued behind it.
+@pytest.mark.parametrize('marker', [{}, {MARKS: ['grasp']}])
+def test_marks_left_queued_behind_an_end_are_not_counted_as_queued(execution, marker):
+    runtime, clock = execution
+    answers = iter([[{MOTOR: 1}, {MOTOR: 2, END: 'complete'}, {MOTOR: 3, **marker}], [{MOTOR: 10}, {MOTOR: 11}]])
+    run = runtime.start(ChunkedSchedule(fps=20, inference_lead=ConstantDuration(0.1)), lambda obs: next(answers))
+    run.send({})
+    clock.advance_to_ns(250_000_000)
+    run.send({})
+    run.close()
+    assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 2
 
 
 def test_a_new_chunk_excludes_the_gap_from_the_previous_chunk(execution):
