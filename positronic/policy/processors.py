@@ -1,4 +1,4 @@
-"""Policy processors for scheduling, fault handling, temporal frame stacking, markers, and clock checks.
+"""Policy processors for scheduling, fault handling, temporal frame stacking, and clock checks.
 
 Constructors hold configuration. ``run(runtime, *dependencies)`` creates an episode generator whose
 locals hold its state. Control processors yield a ``Step`` with commands and the next wake-up time.
@@ -39,6 +39,7 @@ from positronic.policy.base import (
     InputT,
     Obs,
     Policy,
+    PolicyEnd,
     PolicyRun,
     Processor,
     ProcessorRun,
@@ -91,39 +92,6 @@ class PauseOnUnavailable(Policy):
                 obs = yield step
             else:
                 obs = yield Step({}, runtime.time_ns + MILLISECOND_NS)
-
-    def to_spec(self) -> dict[str, Any]:
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
-
-
-class ApplyMarkers(Policy):
-    """The processor that acts on the reserved fields ``END`` and ``MARKS`` of the commands of each round.
-
-    A mark writes the episode time of its first play to the episode metadata, under ``mark_time_key``. A round with an
-    end sends its other commands, and the run then ends with the ``PolicyEnd`` at the next observation.
-    """
-
-    WIRE_NAME = 'apply_markers'
-
-    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
-        marked: set[str] = set()
-        obs = yield
-        while True:
-            try:
-                step = inner.send(obs)
-            except StopIteration as end:
-                return end.value
-            assert step is not None, 'a policy must yield a Step for each observation'
-            markers = checked_markers(step.commands)
-            commands = {name: value for name, value in step.commands.items() if name not in markers}
-            for name in markers.get(MARKS, ()):
-                if name not in marked:
-                    marked.add(name)
-                    runtime.set_metadata(mark_time_key(name), runtime.time_ns)
-            if END in markers:
-                yield Step(commands, runtime.time_ns)
-                return markers[END]
-            obs = yield Step(commands, step.resume_at_ns)
 
     def to_spec(self) -> dict[str, Any]:
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
@@ -236,6 +204,18 @@ def _merge_due(commands: dict[str, Any], element: Commands) -> None:
         commands[MARKS] = marks
 
 
+def _apply_markers(runtime: Runtime, commands: dict[str, Any], marked: set[str]) -> PolicyEnd | None:
+    """Take the reserved fields out of the ``commands`` of a round, and stamp each mark not in ``marked`` yet.
+
+    Returns the ``PolicyEnd`` of an ``END``, or ``None``.
+    """
+    for name in commands.pop(MARKS, ()):
+        if name not in marked:
+            marked.add(name)
+            runtime.set_metadata(mark_time_key(name), runtime.time_ns)
+    return commands.pop(END, None)
+
+
 class ChunkedSchedule(Policy):
     """Request action chunks asynchronously and emit their commands at a fixed cadence.
 
@@ -274,9 +254,10 @@ class ChunkedSchedule(Policy):
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
 
-    The reserved fields ``END`` and ``MARKS`` of every due waypoint reach the round, also when a new chunk replaces
-    the waypoint. A round stops at the first waypoint with ``END``. A replan after an arm error clears the plan, and
-    with it the reserved fields of the waypoints that are due in that round.
+    The schedule acts on the reserved fields ``END`` and ``MARKS`` of every due waypoint, also when a new chunk
+    replaces the waypoint. A mark writes the episode time of its first play under ``mark_time_key``. A round stops at
+    the first waypoint with ``END``, sends its other commands, and the run ends at the next observation. A replan
+    after an arm error clears the plan, and with it the reserved fields of the waypoints that are due in that round.
 
     ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
     immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
@@ -409,6 +390,7 @@ class ChunkedSchedule(Policy):
         called_at_ns = 0
         lead = self._inference_lead.run()
         stats = self._Stats(runtime) if self._record_stats else None
+        marked: set[str] = set()
 
         obs = yield
         try:
@@ -445,9 +427,13 @@ class ChunkedSchedule(Policy):
                         due_ns = waypoint.due_ns
                     starts_chunk |= waypoint.starts_chunk
                     _merge_due(commands, waypoint.commands)
+                end = _apply_markers(runtime, commands, marked)
                 recovering = recovering and not commands
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
+                if end is not None:
+                    yield Step(commands, now_ns)
+                    return end
                 resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
@@ -604,6 +590,9 @@ class RTCSchedule(Policy):
     `infer` gets the observation and the prefix, in the command format that `infer`
     returns, and converts both to the model's format.
 
+    The policy acts on the reserved fields ``END`` and ``MARKS`` of the actions it executes, as
+    `ChunkedSchedule` does. The prefix holds no reserved fields.
+
     Only a model with absolute actions works with this policy. No codec converts a
     command back to a relative model action, so the prefix cannot be given to a
     model with relative actions.
@@ -632,6 +621,7 @@ class RTCSchedule(Policy):
         called_at_ns = 0
         chunk: _TimedChunk | None = None
         next_call_ns = 0
+        marked: set[str] = set()
         obs = yield
         try:
             while True:
@@ -652,6 +642,10 @@ class RTCSchedule(Policy):
                     answer = runtime.submit(infer, obs, prefix)
 
                 commands = {} if chunk is None else chunk.take_due(now_ns)
+                end = _apply_markers(runtime, commands, marked)
+                if end is not None:
+                    yield Step(commands, now_ns)
+                    return end
                 next_due_ns = None if chunk is None else chunk.next_due_ns()
                 if answer is not None:
                     # Pending inference asks for the earliest allowed poll; action cadence is independent.

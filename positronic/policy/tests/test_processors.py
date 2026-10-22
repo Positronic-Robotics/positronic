@@ -45,7 +45,6 @@ from positronic.policy.codecs.observation import ObservationCodec, PackObservati
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.keys import END, MARKS, mark_time_key
 from positronic.policy.processors import (
-    ApplyMarkers,
     ChunkedSchedule,
     ConstantDuration,
     DelayEstimate,
@@ -88,9 +87,7 @@ def test_unavailability_withholds_commands_and_resumes_on_recovery(execution, st
         run.close()
 
 
-@pytest.mark.parametrize(
-    'wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,)), ApplyMarkers(), RequireRunningClock()]
-)
+@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,)), RequireRunningClock()])
 def test_a_wrapper_returns_what_its_inner_run_returned(wrapper):
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=True)
 
@@ -120,7 +117,6 @@ def test_declared_markers_act_when_their_elements_play(execution):
     ]
     stack = spec.from_spec(
         sequence(
-            component(ApplyMarkers.WIRE_NAME),
             component(ChunkedSchedule.WIRE_NAME, fps=10),
             component(AbsolutePositionAction.WIRE_NAME, tgt_ee_pose_key='pose', tgt_grip_key='grip'),
         )
@@ -143,7 +139,7 @@ def test_declared_markers_act_when_their_elements_play(execution):
 def test_a_round_with_an_end_sends_its_commands_before_the_run_ends(execution):
     runtime, clock = execution
     chunk = [{MOTOR: 1, MARKS: ['grasp', 'lift']}, {MOTOR: 2, END: 'complete'}]
-    run = runtime.start(Sequential(ApplyMarkers(), ChunkedSchedule(fps=10, record_stats=False)), lambda obs: chunk)
+    run = runtime.start(ChunkedSchedule(fps=10, record_stats=False), lambda obs: chunk)
     try:
         assert run.send({}).commands == {MOTOR: 1}
         assert runtime.metadata_snapshot() == {mark_time_key('grasp'): 0, mark_time_key('lift'): 0}
@@ -165,7 +161,7 @@ def test_a_late_round_keeps_the_marks_of_every_due_element_and_stops_at_an_end(e
         {MOTOR: 4, END: 'complete'},
         {MOTOR: 5},
     ]
-    run = runtime.start(Sequential(ApplyMarkers(), ChunkedSchedule(fps=10, record_stats=False)), lambda obs: chunk)
+    run = runtime.start(ChunkedSchedule(fps=10, record_stats=False), lambda obs: chunk)
     try:
         assert run.send({}).commands == {MOTOR: 1}
         clock.advance_to_ns(400_000_000)
@@ -178,19 +174,33 @@ def test_a_late_round_keeps_the_marks_of_every_due_element_and_stops_at_an_end(e
         run.close()
 
 
-@pytest.mark.parametrize(
-    ('marker', 'played'),
-    [({MARKS: ['grasp']}, {MOTOR: 10, MARKS: ('grasp',)}), ({END: 'complete'}, {END: PolicyEnd.COMPLETE})],
-)
-def test_a_new_chunk_keeps_the_markers_of_the_due_elements_it_replaces(execution, marker, played):
+def _replace_a_due_element(execution, marker: dict):
+    """A run whose second answer, at 250 ms, replaces the due element that carries ``marker``."""
     runtime, clock = execution
     answers = iter([[{MOTOR: 1}, {MOTOR: 2, **marker}], [{MOTOR: 10}, {MOTOR: 11}]])
     schedule = ChunkedSchedule(fps=10, record_stats=False, inference_lead=ConstantDuration(0.1))
     run = runtime.start(schedule, lambda obs: next(answers))
+    assert run.send({}).commands == {MOTOR: 1}
+    clock.advance_to_ns(250_000_000)
+    return run
+
+
+def test_a_new_chunk_keeps_the_marks_of_the_due_elements_it_replaces(execution):
+    run = _replace_a_due_element(execution, {MARKS: ['grasp']})
     try:
-        assert run.send({}).commands == {MOTOR: 1}
-        clock.advance_to_ns(250_000_000)
-        assert run.send({}).commands == played
+        assert run.send({}).commands == {MOTOR: 10}
+        assert execution[0].metadata_snapshot() == {mark_time_key('grasp'): 250_000_000}
+    finally:
+        run.close()
+
+
+def test_a_new_chunk_keeps_the_end_of_a_due_element_it_replaces(execution):
+    run = _replace_a_due_element(execution, {END: 'complete'})
+    try:
+        assert run.send({}) == Step({}, 250_000_000)
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.COMPLETE
     finally:
         run.close()
 
@@ -1042,7 +1052,7 @@ def test_a_late_rtc_round_keeps_the_marks_of_every_due_action_and_stops_at_an_en
     runtime, clock = execution
     chunk = [{MOTOR: 1}, {MOTOR: 2, MARKS: ['grasp']}, {MOTOR: 3, END: 'complete'}, {MOTOR: 4, MARKS: ['lift']}]
     schedule = RTCSchedule(fps=10, call_after_sec=10, prefix_duration=ConstantDuration())
-    run = runtime.start(Sequential(ApplyMarkers(), schedule), lambda obs, prefix: chunk)
+    run = runtime.start(schedule, lambda obs, prefix: chunk)
     try:
         run.send({})
         assert run.send({}).commands == {MOTOR: 1}
@@ -1411,7 +1421,6 @@ def test_wire_names_match_the_registered_components():
         'unpack_action_chunk': UnpackActionChunk({'action': ['prediction']}),
         'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         'convert_pose': ConvertPose('rot6d'),
-        'apply_markers': ApplyMarkers(),
         'require_running_clock': RequireRunningClock(),
     }
     registered = spec.COMPONENTS

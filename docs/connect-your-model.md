@@ -172,17 +172,7 @@ An element can also carry two reserved fields. The client acts on them when the 
 | `marks` | list of str | The names of moments, each a Python identifier. The episode records the time of the first play of each name as `inference.policy.<name>_ns` |
 
 An element can hold only reserved fields, for example `{"end": "complete"}`. The codecs keep the two fields and refuse
-a malformed value when the answer arrives. The client stack must hold `ApplyMarkers` outside the scheduler:
-
-```python
-from positronic_model_server.spec import component, sequence
-
-sequence(
-    component('apply_markers'),
-    component('chunked_schedule', fps=15),
-    component('absolute_position_action', tgt_ee_pose_key='pose', tgt_grip_key='grip'),
-)
-```
+a malformed value when the answer arrives. The schedule of the client stack acts on the fields.
 
 `ChunkedSchedule` plays the fields of every element that falls due, also when one round plays several elements or a
 new chunk replaces them. A round stops at the first element with `end`. A field is lost when its element never falls

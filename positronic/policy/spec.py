@@ -30,13 +30,7 @@ from positronic.policy.codecs.action import (
 from positronic.policy.codecs.geometry import ConvertPose
 from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
 from positronic.policy.compatibility import ChunkedScheduleV2
-from positronic.policy.processors import (
-    ApplyMarkers,
-    ChunkedSchedule,
-    PauseOnUnavailable,
-    RequireRunningClock,
-    TemporalStack,
-)
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, RequireRunningClock, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
@@ -50,7 +44,6 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         EncodeImages,
         PauseOnUnavailable,
         TemporalStack,
-        ApplyMarkers,
         RequireRunningClock,
         BinarizeGripTraining,
         BinarizeGripInference,

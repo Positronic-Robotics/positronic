@@ -310,7 +310,7 @@ several sessions without keeping episode history. Stateful models must keep
 each session's history separate or reject overlapping sessions. Ending a session
 releases its episode state, not the shared loaded model.
 
-A remote model ends the run, or marks a moment, through reserved fields of a result element. `ApplyMarkers` acts on
+A remote model ends the run, or marks a moment, through reserved fields of a result element. The schedule acts on
 them in the round that plays the element, so the end and the time of a mark follow the schedule, not the call. The
 `Codec` base checks the fields and keeps them through each codec that decodes one element at a time. A codec that
 makes elements from arrays, such as `UnpackActionChunk`, refuses an answer with the fields.
