@@ -12,6 +12,18 @@ from positronic.keys import EE_POSE, JOINTS, TARGET_EE_POSE
 ROBOT_STATIC_META = {eval_keys.JOINT_SIGNALS: [JOINTS], eval_keys.POSE_SIGNALS: [EE_POSE, TARGET_EE_POSE]}
 
 
+def only_keep_written_signals(static: dict[str, Any], written: set[str]) -> dict[str, Any]:
+    """Filter ``joint_signals`` and ``pose_signals`` to names the episode actually recorded."""
+    return {
+        **static,
+        **{
+            key: [name for name in static[key] if name in written]
+            for key in (eval_keys.JOINT_SIGNALS, eval_keys.POSE_SIGNALS)
+            if key in static
+        },
+    }
+
+
 @dataclass
 class Observation:
     """A policy-facing signal source and the serializer for its canonical entries.
