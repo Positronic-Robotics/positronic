@@ -1421,8 +1421,7 @@ def test_end_on_field_refuses_a_malformed_end_when_its_element_plays(execution):
         run.close()
 
 
-# A late round past the chunk's end calls again. An answer that is ready replaces the queue, and its
-# first element ends the run; a pending one leaves the queue, and the round plays one element past the end.
+# A ready answer ends on its first element; a pending one lets the round play one element past the end.
 @pytest.mark.parametrize(('latency_ns', 'sent'), [(0, [1, (1, 0)]), (PERIOD_NS, [1, 5])])
 def test_a_late_round_ends_the_run_on_the_next_end_that_plays(execution, monkeypatch, latency_ns, sent):
     runtime, _ = execution
@@ -1465,8 +1464,7 @@ def test_a_replan_after_an_arm_error_ends_on_the_replanned_chunk(execution):
     assert (sent, end) == ([0, 1, (1, 0)], PolicyEnd.COMPLETE)
 
 
-# Each RTC answer arrives 2.5 periods after its call, and the new chunk starts at the action that runs then,
-# so its first two elements never play. An end on every element plays; an end on the first one only is lost.
+# Answers arrive 2.5 periods late, so RTC skips each new chunk's first two elements.
 @pytest.mark.parametrize(('on', 'end'), [('every', PolicyEnd.COMPLETE), ('first', None)])
 def test_rtc_plays_an_end_only_from_an_element_that_it_does_not_skip(execution, monkeypatch, on, end):
     runtime, _ = execution

@@ -312,8 +312,7 @@ releases its episode state, not the shared loaded model.
 
 A remote model ends the run through the reserved field `end` of a result element. One declared component,
 `EndOnField`, sits outermost in the client stack and turns a step's `end` into the run's `PolicyEnd`. The
-schedules carry `end` as an opaque command and can drop it with its element, so a model that ends puts `end` on
-every element of every later answer, and the client stops up to about one element and one call later. The `Codec`
+schedules carry `end` as an opaque command; `docs/connect-your-model.md` states what a model that ends sends. The `Codec`
 base reads the field as a `PolicyEnd` and keeps it through each codec that decodes one element at a time. A codec
 that makes elements from arrays, such as `UnpackActionChunk`, refuses an answer with the field.
 
