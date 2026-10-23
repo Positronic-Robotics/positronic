@@ -52,7 +52,7 @@ class Impedance:
     kqd: tuple[float, ...]
     kx: tuple[float, ...]
     kxd: tuple[float, ...]
-    # Per-mode, not a shared default, for the reason `CartesianDelta.frame` gives.
+    # A fresh identity per mode: `Transform3D` attributes are writable, as `CartesianDelta.frame` says.
     frame: geom.Transform3D = field(default_factory=lambda: geom.Transform3D.identity)
 
     @staticmethod

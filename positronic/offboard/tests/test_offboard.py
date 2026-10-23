@@ -206,7 +206,7 @@ class TestCommandEnvelope:
         assert from_wire(to_wire(impedance)) != replace(impedance, frame=Transform3D.identity)
 
     def test_an_impedance_wire_with_no_frame_runs_at_the_receivers_control_frame(self):
-        """A sender built before the frame existed names none, and its stiffness acts where it always did."""
+        """A sender that names no frame runs its stiffness at the receiver's control frame."""
         impedance = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
         wire = to_wire(impedance)
         assert wire['frame'] == Transform3D.identity.as_vector(Rotation.Representation.ROTATION_MATRIX).tolist()
