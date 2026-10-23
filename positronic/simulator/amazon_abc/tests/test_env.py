@@ -65,6 +65,8 @@ class _FakeScene:
         # How many builds raise as ABC's unseeded build-time draw raises when it cannot lay out a scene.
         self.failed_layouts = 0
         self.builds = 0
+        # The gripper width ABC reports per arm, in i2rt's aperture (1 open).
+        self.apertures = dict.fromkeys(mapping.ARMS, 0.0)
 
     def forget_arm_state(self) -> None:
         pass
@@ -91,7 +93,9 @@ class _FakeScene:
     def _obs(self) -> dict[str, Any]:
         images = {camera: np.zeros((3, 4, 6), dtype=np.uint8) for camera in CAMERAS.values()}
         return {
-            mapping.ABC_OBS_STATE: np.zeros(len(mapping.ARMS) * (mapping.ARM_JOINTS + 1)),
+            mapping.ABC_OBS_STATE: np.concatenate([
+                np.append(np.zeros(mapping.ARM_JOINTS), self.apertures[arm]) for arm in self.robot_names
+            ]),
             mapping.ABC_OBS_IMAGES: images,
             mapping.ABC_OBS_PROMPT: self.prompt,
         }
@@ -281,3 +285,53 @@ def test_a_pose_in_reach_moves_the_arm_to_it(env, scene):
 
     left, _right = np.split(scene.actions[-1], len(mapping.ARMS))
     np.testing.assert_allclose(left[: mapping.ARM_JOINTS], np.full(mapping.ARM_JOINTS, 0.3), atol=1e-2)
+
+
+def _left_command(command: dict[str, Any], grip: float = 0.0) -> dict[str, Any]:
+    action = _hold_both()
+    action[protocol.arm_channel(protocol.ROBOT_COMMAND, 'left')] = command
+    action[protocol.arm_channel(protocol.TARGET_GRIP, 'left')] = grip
+    return action
+
+
+@pytest.mark.parametrize(
+    'joints',
+    [np.full(mapping.ARM_JOINTS, np.nan), np.full(mapping.ARM_JOINTS, np.inf), np.zeros(mapping.ARM_JOINTS - 1)],
+    ids=['nan', 'infinite', 'too_few_joints'],
+)
+def test_a_joint_target_that_is_no_finite_pose_of_the_arm_holds_that_arm(env, scene, joints: np.ndarray):
+    env.reset(_TOKEN)
+    scene.data.qpos[: mapping.ARM_JOINTS] = 0.25
+    action = _left_command({protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: joints})
+    target = np.full(mapping.ARM_JOINTS, 0.2)
+    action[protocol.arm_channel(protocol.ROBOT_COMMAND, 'right')] = {
+        protocol.COMMAND_TYPE: protocol.JOINT_POS,
+        protocol.COMMAND_JOINT_POS: target,
+    }
+
+    env.step({0: action})
+
+    left, right = np.split(scene.actions[-1], len(mapping.ARMS))
+    np.testing.assert_allclose(left[: mapping.ARM_JOINTS], np.full(mapping.ARM_JOINTS, 0.25))
+    np.testing.assert_allclose(right[: mapping.ARM_JOINTS], target)
+
+
+def test_a_finite_joint_target_at_the_joint_limit_is_stepped(env, scene):
+    env.reset(_TOKEN)
+    limit = np.full(mapping.ARM_JOINTS, 3.0)
+
+    env.step({0: _left_command({protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: limit})})
+
+    left, _right = np.split(scene.actions[-1], len(mapping.ARMS))
+    np.testing.assert_allclose(left[: mapping.ARM_JOINTS], limit)
+
+
+def test_a_grip_target_that_is_not_finite_holds_the_grippers_measured_width(env, scene):
+    scene.apertures = {'left': 0.6, 'right': 0.1}
+    env.reset(_TOKEN)
+
+    env.step({0: _left_command({protocol.COMMAND_TYPE: protocol.HOLD}, grip=np.nan)})
+
+    left, right = np.split(scene.actions[-1], len(mapping.ARMS))
+    # i2rt's aperture: the grip target 0.0 of the right arm is a fully open gripper.
+    assert (left[-1], right[-1]) == (pytest.approx(0.6), pytest.approx(1.0))

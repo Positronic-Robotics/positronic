@@ -45,6 +45,7 @@ class AbcEnv(EnvProtocol):
         self._key: tuple[Any, ...] | None = None
         self._env: Any = None
         self._arms: list[_Arm] = []
+        self._last_reported_apertures = np.zeros(0)
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """ABC's own catalogue, or the tasks ``spec`` names in it."""
@@ -140,17 +141,18 @@ class AbcEnv(EnvProtocol):
         """ABC's ``[joints(6), grip]`` per arm, in the order its robots are named."""
         self._sync_sites()
         per_arm = []
-        for arm in self._arms:
+        for index, arm in enumerate(self._arms):
             command = action[protocol.arm_channel(protocol.ROBOT_COMMAND, arm.name)]
             measured = self._measured_q(arm)
             joints = arm_action.wire_command_to_arm_action(
                 command, measured, ik=functools.partial(self._ik, arm), current_eef=self._measured_eef(arm)
             )
-            if joints is None:
-                # The rig's driver refuses such a command and holds, so a bad command fails the task, not the run.
+            # The rig's driver refuses such a command and holds, so a bad command fails the task, not the run.
+            if joints is None or joints.shape != measured.shape or not np.all(np.isfinite(joints)):
                 joints = measured
-            grip = mapping.invert_grip(action[protocol.arm_channel(protocol.TARGET_GRIP, arm.name)])
-            per_arm.append(np.append(joints, grip))
+            grip = action[protocol.arm_channel(protocol.TARGET_GRIP, arm.name)]
+            aperture = mapping.invert_grip(grip) if np.isfinite(grip) else self._last_reported_apertures[index]
+            per_arm.append(np.append(joints, aperture))
         return np.concatenate(per_arm).astype(np.float32)
 
     def _mounts(self) -> dict[str, list[float]]:
@@ -215,6 +217,7 @@ class AbcEnv(EnvProtocol):
     def _observe(self, obs: dict[str, Any], task_eval: dict[str, Any]) -> dict[str, Any]:
         self._sync_sites()
         per_arm = np.asarray(obs[mapping.ABC_OBS_STATE]).reshape(len(self._arms), mapping.ARM_JOINTS + 1)
+        self._last_reported_apertures = per_arm[:, -1]
         payload: dict[str, Any] = {
             mapping.OBS_SIM_STATE: self._physics_state(),
             mapping.OBS_TASK_EVAL: mapping.task_eval_signals(task_eval),
