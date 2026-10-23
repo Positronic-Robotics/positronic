@@ -166,6 +166,22 @@ decoder; `codecs.droid_execution` and `codecs.phail_v1_execution` wrap an action
 
 Which command your model produces is decided by its codec.
 
+An element can also carry the reserved field `end`, with the value `complete` or `give_up`. Ending takes two
+declared parts. The `end_command` codec decodes your model's end decision into the `end` command; compose it in
+parallel with your action codec, for example `obs & action & EndCommand()`. The `end_on_field` processor sits
+outermost in the client stack. When a round plays an element with `end`, it sends the element's other commands,
+and the run then ends with this claim. An element that ends still carries the action fields its action codec
+reads.
+
+Once your model decides to end, every element of every later answer carries `end` with the same value. The schedule
+can drop the element that holds the first `end`: past `horizon_sec`, in a replan after an arm error, in the elements
+that `RTCSchedule` skips when a new chunk starts, or when a late round replaces the queue with a new answer. A later
+element then carries the end. Until the run stops, the client can play about one more element and make one more call.
+The prefix that `RTCSchedule` sends to the model holds `end` like any other command, so a model that cannot read its own `end` back drops it.
+
+`EndOnField` refuses a malformed value when its element plays. `UnpackActionChunk` builds elements from arrays and
+ignores a key it does not map, so a model behind it maps a per-step field named `end`.
+
 A rig with more than one arm names every channel after the arm that owns it: observations arrive as
 `robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left` alongside
 `target_grip.left`. An arm your action omits holds its last command.

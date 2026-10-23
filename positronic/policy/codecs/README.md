@@ -100,6 +100,7 @@ These are the public codec classes exported by this package. Each name links to 
 | [`IKJointsAction`](action.py) | Training: replaces pose targets with joint targets through inverse kinematics. Inference: passes through. | Train a joint-position model from recorded pose targets; compose before `AbsoluteJointsAction`. |
 | [`JointDeltaAction`](action.py) | Inference: clips and scales normalized DROID joint velocities into `JointDelta` commands, and thresholds grip. | Serve a checkpoint using the DROID joint-delta action convention. |
 | [`SetControlMode`](action.py) | Inference: stamps a supplied control mode on each decoded arm command. | Require explicit impedance or position control; compose to the left of the action decoder. |
+| [`EndCommand`](end.py) | Inference: decodes the model's per-element end decision into the reserved `end` command. Training passes through. | The model ends its own run; compose it in parallel with the action codec, with `end_on_field` outermost in the client stack. |
 
 ### Geometry
 
