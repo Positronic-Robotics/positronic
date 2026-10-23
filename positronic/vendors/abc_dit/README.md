@@ -26,7 +26,7 @@ that makes the policy available to others must display "Built with DINOv3". See 
 ## How it runs
 
 The policy runs in ABC's own interpreter, as ABC's websocket policy server `deploy/serve_policy.py`. The
-[backend](backend.py) starts that server on `127.0.0.1` only, because it asks for no token. The
+[backend](backend.py) starts that server on `127.0.0.1` only. The
 [server](server.py) starts it as a child process, waits until it listens, sends one warm-up request, and then sends it
 each encoded observation. Each request carries standard normal flow noise from one generator, seeded at 0, as ABC's
 sim eval draws it.

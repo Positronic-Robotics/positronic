@@ -48,5 +48,4 @@ def backend(monkeypatch) -> types.ModuleType:
 def test_the_backend_serves_abcs_policy_on_loopback_only(backend):
     backend.main(types.SimpleNamespace(port=9123))
 
-    # The backend takes no token, so only the server on this machine may reach it.
     assert _PolicyServer.started == [{'policy': _POLICY, 'host': '127.0.0.1', 'port': 9123}]
