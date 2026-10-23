@@ -1010,7 +1010,9 @@ def test_policy_meta_states_the_frames_the_server_codec_declares():
 def test_policy_meta_states_the_frames_a_v1_client_stack_declares():
     """A server older than ``ee_frames`` declares its frame only as a v1 ``change_ee_frame`` in the client stack."""
     v1 = spec.component(ChangeEEFrame.WIRE_NAME, version=1, transform=[0, 0, 0, 1, 0, 0, 0], keys=[keys.EE_POSE])
-    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: spec.sequence(v1, CHUNKED_STACK['local_stack'])})
+    policy, session = _mock_remote_policy({
+        offboard_keys.LOCAL_STACK: spec.sequence(v1, CHUNKED_STACK[offboard_keys.LOCAL_STACK])
+    })
     session.protocol_version = protocol.ProtocolVersion.V3
     assert _frames_meta(policy.meta()) == {keys.EE_POSE: DEFAULT_FRAME}
 
