@@ -7,8 +7,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.cfg import codecs
-from positronic.drivers.roboarm import command
-from positronic.policy.codecs import ACTION, Codec, FlipGrip
+from positronic.policy.codecs import BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
 from positronic.vendors import molmoact2
 
 
@@ -66,10 +65,6 @@ droid = codecs.compose.override(
 droid_3cam = droid.override(**{'obs.exterior_camera_2': keys.EXTERIOR_IMAGE_2})
 
 
-# The BimanualYAM checkpoint packs 6 joints and a gripper width per arm, left arm first, into its 14-D vectors.
-YAM_JOINTS = 6
-
-
 class MolmoAct2BimanualObservationCodec(Codec):
     """Encodes a bimanual YAM observation into MolmoAct2 ``predict_action`` inputs.
 
@@ -86,35 +81,11 @@ class MolmoAct2BimanualObservationCodec(Codec):
         self._cameras = (top_camera, left_camera, right_camera)
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        state = []
-        for arm in keys.BIMANUAL_ARMS:
-            joints = np.asarray(inputs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'])
-            grip = np.asarray(inputs[keys.arm_channel(keys.GRIP, arm)], dtype=np.float32).reshape(-1)
-            state.extend([joints.reshape(-1), grip])
         return {
             molmoact2.IMAGES: [_image(k, inputs) for k in self._cameras],
-            molmoact2.STATE: np.concatenate(state).astype(np.float32),
+            molmoact2.STATE: bimanual_joints_state(inputs),
             molmoact2.TASK: inputs.get(keys.TASK, ''),
         }
-
-
-class BimanualJointsAction(Codec):
-    """Decodes the 14-D bimanual action into one ``JointPosition`` and one grip target per arm.
-
-    The grip target is the gripper width the checkpoint predicts. ``FlipGrip`` turns it into positronic's grip.
-    """
-
-    def _decode_single(self, data: dict) -> dict:
-        vector = np.asarray(data[ACTION], dtype=np.float64)
-        width = YAM_JOINTS + 1
-        if vector.shape[-1] != width * len(keys.BIMANUAL_ARMS):
-            raise ValueError(f'Expected a {width * len(keys.BIMANUAL_ARMS)}-D action, got {vector.shape[-1]}')
-        out: dict[str, Any] = {}
-        for i, arm in enumerate(keys.BIMANUAL_ARMS):
-            arm_vector = vector[i * width : (i + 1) * width]
-            out[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.JointPosition(positions=arm_vector[:YAM_JOINTS])
-            out[keys.arm_channel(keys.TARGET_GRIP, arm)] = float(arm_vector[YAM_JOINTS])
-        return out
 
 
 # The upstream YAM example records and runs at 30 Hz.

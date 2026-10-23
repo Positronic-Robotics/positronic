@@ -17,6 +17,16 @@ from .metadata import LEROBOT_FEATURES, lerobot_vector
 TASK_FIELD = 'task'
 
 
+def bimanual_joints_state(data: dict[str, Any]) -> np.ndarray:
+    """The two-arm state: per arm, the joints and then the grip, left arm first. ``FlipGrip(arms=...)`` turns the grip
+    into a gripper width for a model that reads one."""
+    state = []
+    for arm in keys.BIMANUAL_ARMS:
+        state.append(np.asarray(data[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}']).reshape(-1))
+        state.append(np.asarray(data[keys.arm_channel(keys.GRIP, arm)], dtype=np.float32).reshape(-1))
+    return np.concatenate(state).astype(np.float32)
+
+
 class SelectObservationFields(Codec):
     """Select and rename literal input fields; contribute no decoded commands."""
 
