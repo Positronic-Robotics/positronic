@@ -43,7 +43,8 @@ class PositionControl:
 class Impedance:
     """Arm control mode: the hybrid joint/Cartesian impedance law with instantly-stepped references.
 
-    ``tau = (J^T Kx J + Kq)(q_d - q) - (J^T Kxd J + Kqd) dq + coriolis``.
+    ``tau = (J^T Kx J + Kq)(q_d - q) - (J^T Kxd J + Kqd) dq + coriolis``, with ``J`` the Jacobian of the point
+    ``frame`` names. ``frame`` is measured from the receiver's control frame, whatever frame the policy speaks.
     """
 
     TYPE = 'impedance'
@@ -51,6 +52,8 @@ class Impedance:
     kqd: tuple[float, ...]
     kx: tuple[float, ...]
     kxd: tuple[float, ...]
+    # Per-mode, not a shared default, for the reason `CartesianDelta.frame` gives.
+    frame: geom.Transform3D = field(default_factory=lambda: geom.Transform3D.identity)
 
     @staticmethod
     def _validate_gains(name: str, k: tuple[float, ...], kd: tuple[float, ...]) -> None:
@@ -163,8 +166,9 @@ def to_wire(command: CommandType | ControlModeType) -> dict[str, Any]:
     match command:
         case PositionControl(stiffness=stiffness):
             return {'type': command.TYPE} if stiffness is None else {'type': command.TYPE, 'stiffness': list(stiffness)}
-        case Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd):
-            return {'type': command.TYPE, 'kq': list(kq), 'kqd': list(kqd), 'kx': list(kx), 'kxd': list(kxd)}
+        case Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd, frame=frame):
+            gains = {'kq': list(kq), 'kqd': list(kqd), 'kx': list(kx), 'kxd': list(kxd)}
+            return {'type': command.TYPE, **gains, 'frame': frame.as_vector(rep).tolist()}
         case CartesianPosition(pose):
             wire = {'type': command.TYPE, 'pose': pose.as_vector(rep)}
         case JointPosition(positions):
@@ -186,7 +190,15 @@ def from_wire(wire: dict[str, Any]) -> CommandType | ControlModeType:
         case PositionControl.TYPE:
             return PositionControl(stiffness=wire.get('stiffness'))
         case Impedance.TYPE:
-            return Impedance(kq=wire['kq'], kqd=wire['kqd'], kx=wire['kx'], kxd=wire['kxd'])
+            # A sender that names no frame means the receiver's control frame.
+            frame = geom.Transform3D.from_vector(np.asarray(wire['frame']), rep) if 'frame' in wire else None
+            return Impedance(
+                kq=wire['kq'],
+                kqd=wire['kqd'],
+                kx=wire['kx'],
+                kxd=wire['kxd'],
+                frame=geom.Transform3D.identity if frame is None else frame,
+            )
         case CartesianPosition.TYPE:
             return CartesianPosition(pose=geom.Transform3D.from_vector(wire['pose'], rep), mode=mode)
         case JointPosition.TYPE:

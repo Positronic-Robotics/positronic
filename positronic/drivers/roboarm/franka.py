@@ -495,7 +495,10 @@ class _Arm(DriverRun[command.CommandType]):
                 return pf.InternalImpedance()
             case command.PositionControl(stiffness=stiffness):
                 return pf.InternalImpedance() if stiffness is None else pf.InternalImpedance(k_theta=list(stiffness))
-            case command.Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd):
+            case command.Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd, frame=frame):
+                # TODO(#550): pass `frame` as the stiffness point once positronic-franka takes one.
+                if frame != geom.Transform3D.identity:
+                    raise ValueError(f'this arm runs the Cartesian stiffness at its control frame only, not at {frame}')
                 return pf.SoftwareImpedance(kq=list(kq), kqd=list(kqd), kx=list(kx), kxd=list(kxd))
 
     def command_target(self, target: np.ndarray, mode: command.ControlModeType | None) -> None:
@@ -670,6 +673,7 @@ class _Arm(DriverRun[command.CommandType]):
         Solved here so that a malformed command raises before anything changes; ``command_target``
         applies the result.
         """
+        self._to_pf_mode(cmd.mode)  # refuses a mode the arm cannot run
         match cmd:
             case command.CartesianPosition(pose):
                 target = self._ik(pose)

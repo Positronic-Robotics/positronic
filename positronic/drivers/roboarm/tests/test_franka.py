@@ -1511,6 +1511,50 @@ def test_a_commands_mode_reaches_the_arm_with_the_gains_it_named(desk):
     assert applied[-1].kq == list(IMPEDANCE.kq), 'the gains the command named did not reach the arm'
 
 
+# TODO(#550): drop these two once the driver passes the frame to the arm as its stiffness point.
+FLANGE_IMPEDANCE = command.Impedance(
+    kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6, frame=geom.Transform3D([0.0, 0.0, -0.1])
+)
+
+
+def test_a_streamed_impedance_at_another_frame_leaves_the_arm_alone(desk):
+    """The arm runs its Cartesian stiffness at its control frame only, so a mode naming another point is refused."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):
+        next(loop)
+    mark, targets = len(arm.modes), len(arm.targets)
+    feed.push(command.JointPosition(positions=JOGGED, mode=FLANGE_IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+
+    assert arm.modes[mark:] == [], 'the arm changed law for a mode it cannot run'
+    assert len(arm.targets) == targets, 'the arm got a target under a mode it cannot run'
+
+
+def test_a_sync_move_under_an_impedance_at_another_frame_answers_a_refusal(world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm, manage_desk=False)
+    loop = driver.run(StopFlag(), MockClock())
+
+    for _ in range(2):
+        next(loop)
+    answer = _mover(world, driver)(command.JointPosition(JOGGED, mode=FLANGE_IMPEDANCE))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    with pytest.raises(ValueError, match='control frame only'):
+        answer.result()
+
+
 def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):
     """A mode is pinned per command, so one that names none does not inherit what the last one ran under."""
     arm = FakeArm(PARK)
