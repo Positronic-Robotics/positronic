@@ -1816,6 +1816,15 @@ def test_a_policy_that_states_no_frames_sees_no_pose():
     assert keys.JOINTS in policy.observations[0]
 
 
+def test_a_policy_that_states_no_frames_sees_no_signal_the_rig_states_as_a_pose_whatever_its_name():
+    framed = {signal: EEFrame(site=DEFAULT_FRAME) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.JOINTS)}
+    static_meta = {**ROBOT_STATIC_META, **ee_frames_entry(framed)}
+    policy = StubPolicy(command=JointPosition(positions=np.zeros(7)))
+    assert _run_robot_rollout(policy, static_meta).result()[eval_keys.TERMINATED] is True
+    assert keys.JOINTS not in policy.observations[0]
+    assert keys.EE_POSE not in policy.observations[0]
+
+
 def test_a_policy_that_states_the_rig_site_sees_the_pose():
     policy = FramedPolicy({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
     assert _run_robot_rollout(policy).result()[eval_keys.TERMINATED] is True
@@ -1898,7 +1907,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), frozenset({keys.EE_POSE}), runtime, run, None)
+            harness._step(Task('move', None), frozenset(), runtime, run, None)
         finally:
             runtime.close()
             run.close()
