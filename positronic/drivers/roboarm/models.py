@@ -166,11 +166,11 @@ def _bundled_robotiq_2f85() -> dict:
     }
 
 
-def add_default_frame(arm_root: ET.Element, parent: str) -> None:
-    """Declare ``DEFAULT_FRAME`` on a URDF in place, coincident with the ``parent`` link."""
+def add_default_frame(arm_root: ET.Element, parent: str, xyz: str = '0 0 0', rpy: str = '0 0 0') -> None:
+    """Declare ``DEFAULT_FRAME`` on a URDF in place, at ``xyz`` and ``rpy`` in the ``parent`` link."""
     ET.SubElement(arm_root, 'link', name=DEFAULT_FRAME)
     joint = ET.SubElement(arm_root, 'joint', name=f'{parent}_to_{DEFAULT_FRAME}', type='fixed')
-    ET.SubElement(joint, 'origin', xyz='0 0 0', rpy='0 0 0')
+    ET.SubElement(joint, 'origin', xyz=xyz, rpy=rpy)
     ET.SubElement(joint, 'parent', link=parent)
     ET.SubElement(joint, 'child', link=DEFAULT_FRAME)
 
@@ -199,6 +199,29 @@ def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         roboarm_keys.GRIPPER: gripper,
+    }
+
+
+YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
+_YAM_WRIST_LINK = 'link_6'
+# The YAM MJCF's ``default`` site: 134.7 mm along the wrist axis, turned -90deg about it.
+_YAM_DEFAULT_XYZ, _YAM_DEFAULT_RPY = '0 0 0.1347', '0 0 -1.5707963268'
+
+
+@lru_cache(maxsize=1)
+def bundled_yam_model() -> dict:
+    """i2rt YAM model metadata: its URDF and visual meshes, its joint names, and the ``DEFAULT_FRAME`` its
+    ``ee_pose`` is measured at."""
+    urdf_path = Path(__file__).resolve().parents[2] / 'assets' / 'i2rt_yam' / 'yam.urdf'
+    root = ET.fromstring(urdf_path.read_text())
+    mesh_files = {mesh.attrib['filename'] for mesh in root.iter('mesh')}
+    add_default_frame(root, _YAM_WRIST_LINK, _YAM_DEFAULT_XYZ, _YAM_DEFAULT_RPY)
+    return {
+        'robot': 'i2rt_yam',
+        roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
+        'meshes': {name: (urdf_path.parent / name).read_bytes() for name in sorted(mesh_files)},
+        roboarm_keys.JOINT_NAMES: list(YAM_JOINT_NAMES),
+        roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
     }
 
 
