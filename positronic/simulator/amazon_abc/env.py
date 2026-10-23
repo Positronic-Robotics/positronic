@@ -64,7 +64,7 @@ class AbcEnv(EnvProtocol):
             render_cameras=True,
             camera_height=token[mapping.TOKEN_CAMERA_HEIGHT],
             camera_width=token[mapping.TOKEN_CAMERA_WIDTH],
-            terminate_on_success=True,
+            max_episode_steps=mapping.ABC_EVAL_STEPS,
         )
         self._key = key
 
@@ -76,24 +76,39 @@ class AbcEnv(EnvProtocol):
         self._arms = [_Arm(self._env.model, name) for name in self._env.robot_names]
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(obs, self._env.evaluate_task().to_info(squeeze=True))}],
-            protocol.FRAME_META: {mapping.META_TASK: obs[mapping.ABC_OBS_PROMPT]},
+            protocol.FRAME_META: self._meta(obs),
             protocol.FRAME_ROBOT_META: {protocol.MOUNTS: self._mounts()},
             protocol.FRAME_CONTROL_DT: self._control_dt(),
         }
 
+    @staticmethod
+    def _trial_over(task_eval: dict[str, Any]) -> bool:
+        """Whether the trial ends before its time limit, as ABC's own eval ends it."""
+        # A maintenance task succeeds from its reset, so it ends only when it fails.
+        if mapping.ABC_EVAL_EVER_FAILED in task_eval:
+            return bool(task_eval[mapping.ABC_EVAL_EVER_FAILED])
+        return bool(task_eval[mapping.ABC_EVAL_EVER_SUCCESS])
+
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
         (action,) = actions.values()  # ABC runs one scene per server, so this server serves one slot
-        obs, _reward, terminated, truncated, info = self._env.step(self._joint_action(action))
+        obs, _reward, _terminated, truncated, info = self._env.step(self._joint_action(action))
+        task_eval = info[mapping.ABC_INFO_TASK_EVAL]
         return {
             protocol.SLOTS: [
                 {
-                    protocol.FRAME_OBS: self._observe(obs, info[mapping.ABC_INFO_TASK_EVAL]),
-                    protocol.FRAME_DONE: bool(terminated or truncated),
-                    protocol.FRAME_SUCCESS: bool(info[mapping.ABC_INFO_SUCCESS]),
+                    protocol.FRAME_OBS: self._observe(obs, task_eval),
+                    protocol.FRAME_DONE: bool(truncated or self._trial_over(task_eval)),
+                    protocol.FRAME_SUCCESS: bool(task_eval[mapping.ABC_EVAL_EVER_SUCCESS]),
+                    # A task such as multi_drawer_search moves its prompt to the next target as it goes.
+                    protocol.FRAME_META: self._meta(obs),
                 }
             ],
             protocol.FRAME_CONTROL_DT: self._control_dt(),
         }
+
+    @staticmethod
+    def _meta(obs: dict[str, Any]) -> dict[str, Any]:
+        return {mapping.META_TASK: obs[mapping.ABC_OBS_PROMPT]}
 
     def _control_dt(self) -> float:
         # The scene sets the physics step and how many of them one action spans; ABC exposes neither.

@@ -4,10 +4,12 @@ from typing import Any
 
 import numpy as np
 import pytest
+from eval_vocabulary.episode import ABC_REWARD_SIGNAL
 
 import pimm
 from positronic import geom, keys
 from positronic.cfg.eval.sim import amazon_abc as abc_cfg
+from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import keys as abc_keys
@@ -112,6 +114,15 @@ def test_the_privileged_channel_carries_the_physics_state_and_the_task_metrics()
 
     assert set(privileged) == {mapping.OBS_SIM_STATE, mapping.OBS_TASK_EVAL}
     assert privileged[mapping.OBS_TASK_EVAL] == metrics
+
+
+def test_the_eval_records_abcs_reward_under_the_signal_that_the_abc_labeler_reads():
+    ev = abc_cfg.put_bottles.instantiate()
+    metrics = mapping.task_eval_signals({'reward': 0.5, 'num_bottles_in_bin': 1})
+
+    recorded = {signal for name in ev.privileged for signal, _ in expand_suffixed(name, metrics)}
+
+    assert ABC_REWARD_SIGNAL in recorded
 
 
 def test_the_task_metrics_keep_every_numeric_entry_as_a_suffixed_signal():
