@@ -2324,7 +2324,8 @@ def _gone(pid: int) -> bool:
     try:
         with open(f'/proc/{pid}/stat') as stat:
             return stat.read().split(')')[-1].split()[0] == 'Z'
-    except FileNotFoundError:
+    # A process that exits between the open and the read makes the read fail with ESRCH.
+    except (FileNotFoundError, ProcessLookupError):
         return True
 
 
