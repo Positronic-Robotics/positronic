@@ -55,6 +55,10 @@ and simulation packages. Positronic installs its locked dependencies without ext
 Inference requires a CUDA GPU; Galaxea's DROID guide estimates about 12 GB of free
 GPU memory. RoboLab also needs GPU memory and graphics support.
 
+FlashAttention 4 fails every call on an RTX PRO 6000 (sm_120). The image patches one line of
+Galaxea's vision tower, so the tower uses FlashAttention 4 on compute capability 9 and 10 only,
+and its own SDPA path on other cards.
+
 The image carries the gated weights, so a person who pulls it accepts no terms.
 Push it to a private registry only. CI does not build it.
 
