@@ -34,8 +34,6 @@ from positronic.vendors.abc_dit import codecs
 BACKEND_MODULE = 'deploy.serve_policy'
 # The DiT checkpoints predict chunks of this many actions.
 CHUNK_LENGTH = 30
-# ABC's synchronous sim eval executes this many actions of each chunk, then takes a new observation.
-EXECUTED_ACTIONS = 15
 
 
 class AbcDitModel(Model):
@@ -120,6 +118,10 @@ def abc_dit_model(checkpoint: str, abc_python: str, fast_inference: bool, noise_
         model.close()
         raise
     return model
+
+
+# ABC's synchronous sim eval executes this many actions of each chunk, then takes a new observation.
+EXECUTED_ACTIONS = 15
 
 
 @cfn.config(codec=codecs.multitask_200k)
