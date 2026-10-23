@@ -56,6 +56,7 @@ class _FakeScene:
         self.robot_names = list(mapping.ARMS)
         self.terminate_on_success = False
         self.max_episode_steps: int | None = None
+        self.task: str | None = None
         self.truncated = False
         # None stands for a task that ships no evaluator, which ABC reports as no metrics at all.
         self.task_eval: dict[str, Any] | None = {mapping.ABC_EVAL_EVER_SUCCESS: False}
@@ -112,7 +113,10 @@ def env(monkeypatch, scene: _FakeScene) -> Any:
     abc_sim = types.ModuleType('abc_sim')
     task = types.SimpleNamespace(name=_TOKEN[mapping.TOKEN_TASK], env_task='bottles', prompt=_PROMPT)
 
-    def make_env(terminate_on_success: bool = False, max_episode_steps: int | None = None, **_: Any) -> _FakeScene:
+    def make_env(
+        task: str, terminate_on_success: bool = False, max_episode_steps: int | None = None, **_: Any
+    ) -> _FakeScene:
+        scene.task = task
         scene.terminate_on_success = terminate_on_success
         scene.max_episode_steps = max_episode_steps
         return scene
@@ -170,6 +174,13 @@ def test_a_step_ends_the_trial_and_gives_its_verdict_as_abcs_own_eval_does(
     (slot,) = frame[protocol.SLOTS]
     assert set(slot) == {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS, protocol.FRAME_META}
     assert (slot[protocol.FRAME_DONE], slot[protocol.FRAME_SUCCESS]) == (done, success)
+
+
+def test_the_env_is_built_for_the_task_so_abc_attaches_that_tasks_evaluator(env, scene):
+    env.reset(_TOKEN)
+
+    # Several tasks share one scene (`env_task`): ABC picks the evaluator and the prompt by the task name.
+    assert scene.task == _TOKEN[mapping.TOKEN_TASK]
 
 
 def test_abc_truncates_a_trial_at_the_horizon_of_its_own_eval(env, scene):
