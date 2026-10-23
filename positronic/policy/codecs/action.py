@@ -13,7 +13,6 @@ from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
-from positronic.policy.keys import END
 
 from .base import Codec
 from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action
@@ -46,8 +45,6 @@ class UnpackActionChunk(Codec):
                 or any(type(part) not in (str, int) for part in path)
             ):
                 raise ValueError('Prediction fields require string names and paths of string keys or integer indices')
-            if name == END:
-                raise ValueError(f'{type(self).__name__} cannot place {END!r} on the elements it makes')
         self._fields = {name: tuple(path) for name, path in fields.items()}
         self._squeeze_dims = squeeze_dims
 
@@ -69,8 +66,6 @@ class UnpackActionChunk(Codec):
         return data.reshape(data.shape[self._squeeze_dims :])
 
     def decode(self, data: Any) -> list[dict[str, Any]]:
-        if isinstance(data, Mapping) and END in data:
-            raise ValueError(f'{type(self).__name__} cannot place {END!r} on the elements it makes')
         arrays = {name: self._array(data, name, path) for name, path in self._fields.items()}
         horizons = {len(array) for array in arrays.values()}
         if len(horizons) != 1:

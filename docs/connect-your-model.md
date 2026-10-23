@@ -175,8 +175,8 @@ that `RTCSchedule` skips when a new chunk starts, or when a late round replaces 
 element then carries the end. Until the run stops, the client can play about one more element and make one more call.
 The prefix that `RTCSchedule` sends to the model holds `end` like any other command, so a model that cannot read its own `end` back drops it.
 
-The codecs keep `end`, and `EndOnField` refuses a malformed value when its element plays. A codec that builds elements from arrays,
-such as `UnpackActionChunk`, refuses an answer with `end`.
+The codecs keep `end`, and `EndOnField` refuses a malformed value when its element plays. `UnpackActionChunk` builds
+elements from arrays and ignores a key it does not map, so a model behind it maps a per-step field named `end`.
 
 A rig with more than one arm names every channel after the arm that owns it: observations arrive as
 `robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left` alongside
