@@ -17,6 +17,9 @@ from positronic.vendors import abc_dit
 FPS = 30.0
 # ABC renders its sim training views at this (width, height). Its DiT then pads each view to a square.
 VIEW_SIZE = (224, 168)
+# Per arm, the state and each action hold the joints of a YAM arm and then the gripper width.
+YAM_JOINTS = 6
+BIMANUAL_SIZE = (YAM_JOINTS + 1) * len(keys.BIMANUAL_ARMS)
 
 # The prompt that each sim task's episodes carried in the training of `abc_dit_xl_200k_model.pt`, keyed by the task
 # instruction that ABC's sim reports. The release's `abc_dit_xl_200k_model.json` records the same map by task name.
@@ -77,7 +80,7 @@ def multitask_200k(training_fps: float):
     """The codec of the multi-task checkpoint, with each arm's grip in the gripper width (1 = open) that ABC speaks."""
     pair = codecs.compose(
         obs=AbcObservationCodec(prompts=MULTITASK_200K_PROMPTS),
-        action=BimanualJointsAction(),
+        action=BimanualJointsAction(num_joints=YAM_JOINTS),
         training_fps=training_fps,
     )
     return FlipGrip(arms=keys.BIMANUAL_ARMS) | pair
