@@ -36,9 +36,13 @@ class PolicyDeployment:
     compress_images: bool = True
 
     def __post_init__(self) -> None:
-        if (
-            self.codec is not None
-            and roboarm_keys.EE_FRAMES in self.codec.meta
-            and roboarm_keys.EE_FRAMES in self.local.meta()
-        ):
-            raise ValueError(f'Only one side of a deployment may declare {roboarm_keys.EE_FRAMES}')
+        if self.codec is None:
+            return
+        both = (
+            self.codec.meta.get(roboarm_keys.EE_FRAMES, {}).keys()
+            & self.local.meta().get(roboarm_keys.EE_FRAMES, {}).keys()
+        )
+        if both:
+            raise ValueError(
+                f'Only one side of a deployment may declare the {roboarm_keys.EE_FRAMES} of {sorted(both)}'
+            )

@@ -865,6 +865,13 @@ def test_pipeline_rejects_frame_conversion_on_both_sides():
         PolicyDeployment(local, codec=ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity))
 
 
+def test_pipeline_takes_frame_conversions_of_different_signals_on_each_side():
+    local = Sequential(
+        ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10)
+    )
+    PolicyDeployment(local, codec=ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.TARGET_EE_POSE,)))
+
+
 @pytest.fixture
 def runtime():
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
