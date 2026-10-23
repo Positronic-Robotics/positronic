@@ -166,7 +166,7 @@ A pose-reading checkpoint therefore always states its frame, also when the offse
 
 It is declared in two places, for the two things it does:
 
-- **Training** — `compose(ee_frame=...)` takes an `EEFrame` and re-expresses the dataset in it, which is what makes the resulting checkpoint speak it. The training transform refuses a pose that the recording does not state at that site with no offset. It defaults to unset, which trains on the poses as recorded.
+- **Training** — `compose(ee_frame=...)` takes an `EEFrame` and re-expresses the dataset in it, so the resulting checkpoint speaks that frame. The training transform refuses a pose that the recording does not state at that site with no offset. It defaults to unset, which trains on the poses as recorded.
 - **Serving** — the OpenPI pipeline's `ee_frame=` puts `ChangeEEFrame` in the client's pipeline. It has no default: every deployment states its frame. Pass `@positronic.cfg.codecs.default_ee_frame` for a checkpoint trained on poses at `default`, and `None` for one that speaks joints only. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
 
 Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `EEFrame(site=DEFAULT_FRAME, offset=models.DROID_EE_FRAME)`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.

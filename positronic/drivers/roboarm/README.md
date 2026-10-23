@@ -18,7 +18,7 @@ An arm that publishes no model, such as Kinova, states no frame for any pose sig
 states frames there.
 
 A policy trained in some other end-effector frame carries the constant transform from the rig site to it
-(`ChangeEEFrame`, see [codec guide](../../policy/codecs/README.md#end-effector-frames)), which is what lets one
+(`ChangeEEFrame`, see [codec guide](../../policy/codecs/README.md#end-effector-frames)). The transform lets one
 checkpoint run on any embodiment that keeps the contract. At the start of each episode the harness compares the
 policy's `ee_frames` with the rig's. A policy observes only the poses it states at the rig's site. A policy that
 states none speaks joints only and observes no pose. A policy that names another site is refused.
