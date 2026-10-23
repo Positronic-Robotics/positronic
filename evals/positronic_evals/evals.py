@@ -139,7 +139,7 @@ ABC_FIRST_SEED = 20260511
 ABC_TRIALS_PER_TASK = 20
 ABC_SCORING = Scoring(labelers=(ABC_LABELER,), primary=MeanEpisodeScore(per_task=True))
 # TODO: name the commit on `main` that holds the ABC backend.
-ABC_POSITRONIC_REVISION = '4d4699d5e05f20e1ef951236296b7fafa3871efe'
+ABC_POSITRONIC_REVISION = 'f30bad8bd7dcf9f379803be18c525c6b9bb19033'
 
 
 def _abc(tasks: tuple[str, ...], time_limit_s: int) -> EvalDefinition:
