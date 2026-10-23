@@ -27,6 +27,8 @@ _ABC_SRC = _ABC_CACHE / 'src'
 _ABC_PYTHON = '3.12'
 # Installing the ABC project itself would pull its CUDA torch and mujoco-warp.
 _ABC_DEPS = ('mujoco~=3.8.0', 'gymnasium>=1.1', 'numpy', 'tyro')
+# ABC's contact-rich tasks score differently on another MuJoCo, so every version is pinned.
+_ABC_CONSTRAINTS = Path(__file__).parent / 'abc_constraints.txt'
 
 _PREPARE_SCRIPT = Path('prepare.py')
 _PREPARE_ONE_TASK = '--sim-task'
@@ -53,7 +55,9 @@ def ensure_abc(tasks: Sequence[str] | None) -> Path:
             subprocess.run(['uv', 'venv', '--python', _ABC_PYTHON, str(venv)], check=True)
         python = venv / 'bin' / 'python'
         subprocess.run(
-            ['uv', 'pip', 'install', *_ABC_DEPS, *SERVER_DEPS], env={**os.environ, 'VIRTUAL_ENV': str(venv)}, check=True
+            ['uv', 'pip', 'install', '-c', str(_ABC_CONSTRAINTS), *_ABC_DEPS, *SERVER_DEPS],
+            env={**os.environ, 'VIRTUAL_ENV': str(venv)},
+            check=True,
         )
         assets = [_PREPARE_EVERY_TASK, _PREPARE_ROBOCASA] if tasks is None else [_PREPARE_ONE_TASK, *tasks]
         subprocess.run([str(python), str(_PREPARE_SCRIPT), *assets], cwd=str(src), check=True)
