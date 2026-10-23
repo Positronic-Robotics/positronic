@@ -208,6 +208,7 @@
                     <geom mesh="link7_7" material="white" class="visual"/>
                     <geom mesh="link7_c" class="collision"/>
                     <site name="link8" pos="0 0 0.107" group="4"/>
+                    <site name="gripper" pos="0 0 0.21065" group="4"/>
                     <body name="hand" pos="0 0 0.107" quat="0.9238795 0 0 -0.3826834">
                       <site name="end_effector" pos="0 0 0.0584" size="0.01" rgba="1 0 0 1"/>
 

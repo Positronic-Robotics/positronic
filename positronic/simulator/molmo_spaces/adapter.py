@@ -9,7 +9,7 @@ from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import frame_transform
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, GRASP_SITE_LINK, bundled_franka_model
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, GRIPPER_SITE, bundled_franka_model
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -46,7 +46,7 @@ class MolmoAdapter(WireCommandAdapter):
     def __init__(self, cameras: Mapping[str, tuple[str, ...]]):
         # The env measures and drives at the 2F-85 grasp site of this model, which the embodiment declares.
         self.robot_model = bundled_franka_model()
-        super().__init__(frame_transform(self.robot_model[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK))
+        super().__init__(frame_transform(self.robot_model[roboarm_keys.URDF], DEFAULT_FRAME, GRIPPER_SITE))
         self._cameras = cameras
         self._with_right_shoulder = SHOULDER_CAMERAS[ShoulderSide.RIGHT] in cameras.values()
 

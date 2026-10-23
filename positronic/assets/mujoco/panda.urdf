@@ -138,6 +138,13 @@
     <parent link="link7" />
     <child link="link8" />
   </joint>
+  <!-- `gripper` is the grip point on the flange axes: the midpoint of the fingertip pads of the sim scene. -->
+  <link name="gripper" />
+  <joint name="gripper_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0.10365" />
+    <parent link="link8" />
+    <child link="gripper" />
+  </joint>
   <joint name="hand_joint" type="fixed">
     <origin rpy="0 0 -0.7853981633974483" xyz="0 0 0" />
     <parent link="link8" />

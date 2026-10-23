@@ -41,6 +41,11 @@ the placement moves.
 | YAM (`yam/driver.py`) | the `default` site in `yam.xml` | Coincident with the vendor's `grasp_site`. |
 | SO-101 (`so101/driver.py`) | `gripper_frame_link` | |
 
+Every bundled Franka model names its grip point `gripper` (`models.GRIPPER_SITE`). The frame has the axes of the
+flange `link8`, so z is the approach axis. On the FR3 with the 2F-85, `gripper` is 155 mm along that axis, where
+the closed pads meet. On the MuJoCo panda it is 103.65 mm, the midpoint of the fingertip pads. No embodiment reports
+or solves at `gripper`.
+
 ## Adding an embodiment
 
 1. Ship a model: `robot_meta` carries `urdf`, `joint_names`, `control_frame`, and the meshes the viewer needs.
