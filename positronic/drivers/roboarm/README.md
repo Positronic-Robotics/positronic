@@ -13,13 +13,15 @@ publishes in its `robot_meta`.
 `{signal: {site, offset}}` (`models.EEFrame`): the pose is `offset` from `site`, a site of the model. The
 embodiment states it in its static meta for each entry of `pose_signals`, so a recording carries it.
 `ik.ee_frames` reads it, and refuses a pose signal with no entry and a site that a carried model does not have.
-A rig with no model, such as Kinova, skips the site check.
+An arm that publishes no model, such as Kinova, states no frame for any pose signal and no `pose_signals` in its
+`robot_meta` (`eval.NO_MODEL_ROBOT_META`). Its rig runs joint-only policies only: the harness refuses a policy that
+states frames there.
 
 A policy trained in some other end-effector frame carries the constant transform from the rig site to it
 (`ChangeEEFrame`, see [codec guide](../../policy/codecs/README.md#end-effector-frames)), which is what lets one
 checkpoint run on any embodiment that keeps the contract. At the start of each episode the harness compares the
-policy's `ee_frames` with the rig's. A policy that states none speaks joints only and sees no pose signal. A
-policy that names another site is refused.
+policy's `ee_frames` with the rig's. A policy observes only the poses it states at the rig's site. A policy that
+states none speaks joints only and observes no pose. A policy that names another site is refused.
 
 Recordings made before `ee_frames` state the site as `control_frame` and a codec offset as `ee_frame`.
 `cfg.ds.internal.REAL_ROBOT_TRANSFORM` and `SIM_ROBOT_TRANSFORM` relabel both as `ee_frames`.

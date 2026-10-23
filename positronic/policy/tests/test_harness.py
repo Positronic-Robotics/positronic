@@ -32,7 +32,7 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, EEFrame, ee_frames_entry
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
+from positronic.eval import NO_MODEL_ROBOT_META, ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
@@ -1769,8 +1769,9 @@ def test_robot_state_serializer_emits_the_status_beside_the_pose(status):
     assert serialized['.status'] is status
 
 
-def _run_robot_rollout(policy, static_meta=None):
-    """Run one episode of ``policy`` on a robot embodiment that reports the poses ``static_meta`` states."""
+def _run_robot_rollout(policy, static_meta=None, robot_meta=None):
+    """Run one episode of ``policy`` on a robot embodiment that reports the poses ``static_meta`` states, and whose
+    arm publishes ``robot_meta``."""
     with pimm.World(virtual_time=True) as world:
         device = Passive()
         state_out = pimm.ControlSystemEmitter(device)
@@ -1788,6 +1789,10 @@ def _run_robot_rollout(policy, static_meta=None):
         )
         harness = Harness(embodiment)
         wire.wire_embodiment(world, harness, embodiment)
+        if robot_meta is not None:
+            meta_out, meta_in = world.local_pipe()
+            harness.robot_meta_in._bind(meta_in)
+            meta_out.emit(robot_meta)
         caller = world.pair(harness.perform_task)
         done = world.pair(harness.done)
         loop = world.start([harness, device])
@@ -1821,6 +1826,20 @@ def test_a_policy_that_states_another_site_is_refused():
     policy = FramedPolicy({keys.EE_POSE: EEFrame(site=EE_LINK)})
     with pytest.raises(ValueError, match=EE_LINK):
         _run_robot_rollout(policy).result()
+    assert policy.observations == []
+
+
+def test_an_arm_with_no_model_runs_a_joint_policy_without_the_pose():
+    policy = StubPolicy(command=JointPosition(positions=np.zeros(7)))
+    assert _run_robot_rollout(policy, robot_meta=NO_MODEL_ROBOT_META).result()[eval_keys.TERMINATED] is True
+    assert keys.EE_POSE not in policy.observations[0]
+    assert keys.JOINTS in policy.observations[0]
+
+
+def test_an_arm_with_no_model_refuses_a_policy_that_reads_poses():
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
+    with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
+        _run_robot_rollout(policy, robot_meta=NO_MODEL_ROBOT_META).result()
     assert policy.observations == []
 
 
@@ -1879,7 +1898,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), frozenset(), runtime, run, None)
+            harness._step(Task('move', None), frozenset({keys.EE_POSE}), runtime, run, None)
         finally:
             runtime.close()
             run.close()
