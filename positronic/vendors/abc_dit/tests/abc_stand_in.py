@@ -1,9 +1,9 @@
-"""A stand-in for ABC's interpreter running `deploy/serve_policy.py`. It answers as ABC's policy server answers.
+"""A stand-in for ABC's interpreter running `backend.py`. It answers as ABC's policy server answers.
 
 It writes its arguments, its pid and a summary of every request to a log, one JSON object per line.
 
 Usage
-  python abc_stand_in.py <log> <serve|refuse> -P -m deploy.serve_policy --policy.checkpoint-path=<path> \
+  python abc_stand_in.py <log> <serve|refuse> -P backend.py --policy.checkpoint-path=<path> \
       --port=<port> ...
 """
 

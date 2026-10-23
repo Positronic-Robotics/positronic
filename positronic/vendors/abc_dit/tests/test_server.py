@@ -131,8 +131,8 @@ def test_a_session_reaches_abcs_server_in_its_fields_and_gets_the_whole_chunk(tm
     # The 416x260 views pad to 224x168 with black rows, so each mean is 140/168 of the view's level.
     means = {name: round(view['mean'] * 168 / 140) for name, view in images.items()}
     assert means == pytest.approx({'top': 40, 'left': 120, 'right': 200}, abs=2)
-    assert started['argv'][:3] == ['-P', '-m', server.BACKEND_MODULE]
-    assert set(started['argv'][3:]) == {
+    assert started['argv'][:2] == ['-P', str(server.BACKEND_SCRIPT)]
+    assert set(started['argv'][2:]) == {
         f'--policy.checkpoint-path={CHECKPOINT}',
         '--policy-type=dit',
         '--policy.fast-inference',
