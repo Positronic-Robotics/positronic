@@ -75,30 +75,40 @@ class AbcEnv(EnvProtocol):
         # A reset recompiles the scene and renumbers every joint and site.
         self._arms = [_Arm(self._env.model, name) for name in self._env.robot_names]
         return {
-            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(obs, self._env.evaluate_task().to_info(squeeze=True))}],
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(obs, self._task_eval())}],
             protocol.FRAME_META: self._meta(obs),
             protocol.FRAME_ROBOT_META: {protocol.MOUNTS: self._mounts()},
             protocol.FRAME_CONTROL_DT: self._control_dt(),
         }
 
+    def _task_eval(self) -> dict[str, Any]:
+        """ABC's task metrics now, or none for a task that ships no evaluator."""
+        result = self._env.evaluate_task()
+        return {} if result is None else result.to_info(squeeze=True)
+
     @staticmethod
-    def _trial_over(task_eval: dict[str, Any]) -> bool:
+    def _ever_success(task_eval: dict[str, Any]) -> bool:
+        # A task with no evaluator reports no metrics: ABC rolls it out to its horizon and counts no success.
+        return bool(task_eval.get(mapping.ABC_EVAL_EVER_SUCCESS, False))
+
+    @classmethod
+    def _trial_over(cls, task_eval: dict[str, Any]) -> bool:
         """Whether the trial ends before its time limit, as ABC's own eval ends it."""
         # A maintenance task succeeds from its reset, so it ends only when it fails.
         if mapping.ABC_EVAL_EVER_FAILED in task_eval:
             return bool(task_eval[mapping.ABC_EVAL_EVER_FAILED])
-        return bool(task_eval[mapping.ABC_EVAL_EVER_SUCCESS])
+        return cls._ever_success(task_eval)
 
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
         (action,) = actions.values()  # ABC runs one scene per server, so this server serves one slot
         obs, _reward, _terminated, truncated, info = self._env.step(self._joint_action(action))
-        task_eval = info[mapping.ABC_INFO_TASK_EVAL]
+        task_eval = info.get(mapping.ABC_INFO_TASK_EVAL, {})
         return {
             protocol.SLOTS: [
                 {
                     protocol.FRAME_OBS: self._observe(obs, task_eval),
                     protocol.FRAME_DONE: bool(truncated or self._trial_over(task_eval)),
-                    protocol.FRAME_SUCCESS: bool(task_eval[mapping.ABC_EVAL_EVER_SUCCESS]),
+                    protocol.FRAME_SUCCESS: self._ever_success(task_eval),
                     # A task such as multi_drawer_search moves its prompt to the next target as it goes.
                     protocol.FRAME_META: self._meta(obs),
                 }
