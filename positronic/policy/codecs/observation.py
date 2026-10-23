@@ -158,6 +158,9 @@ class ObservationCodec(Codec):
         input_key, (width, height) = self._image_configs[out_name]
         return image.resize_with_pad(width, height, signal=episode[input_key])
 
+    def encode_commands(self, commands):
+        return [{} for _ in commands]
+
     def encode(self, data: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 

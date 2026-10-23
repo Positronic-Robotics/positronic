@@ -20,7 +20,7 @@ from positronic.policy.codecs import (
     Metadata,
     PolicyCommandError,
 )
-from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction
+from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
 from positronic.policy.codecs.observation import ObservationCodec
 
 
@@ -195,6 +195,25 @@ def test_operator_precedence():
     assert result['encoded_by_a'] is True
     assert result['encoded_by_b'] is True
     assert result['encoded_by_c'] is True
+
+
+def test_composed_codecs_encode_commands_as_the_inverse_of_decode():
+    obs = ObservationCodec(state={'observation.state': {obs_keys.GRIP: 1}}, images={})
+    action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip', Rotation.Representation.QUAT)
+    composed = Metadata({'action_fps': 15}) | FlipGrip() | (BinarizeGripInference() | (obs & action))
+    vec = np.concatenate([[0.1, -0.2, 0.3], Rotation.identity.as_quat, [1.0]]).astype(np.float32)
+
+    [encoded] = composed.encode_commands(composed.decode([{'action': vec}]))
+
+    assert set(encoded) == {'action'}
+    np.testing.assert_allclose(encoded['action'], vec, atol=1e-6)
+
+
+@pytest.mark.parametrize('codec', [JointDeltaAction(), Codec()], ids=['relative', 'no_inverse'])
+def test_a_codec_with_no_command_inverse_refuses_even_an_empty_prefix(codec):
+    composed = ObservationCodec(state={}, images={}) & codec
+    with pytest.raises(ValueError, match=type(codec).__name__):
+        composed.encode_commands([])
 
 
 class _DoublingCodec(Codec):

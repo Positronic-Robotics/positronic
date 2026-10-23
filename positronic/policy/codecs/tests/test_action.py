@@ -338,3 +338,29 @@ class TestSetControlMode:
 def test_non_deliverable_codec_is_rejected():
     with pytest.raises(NotImplementedError, match='IKJointsAction'):
         IKJointsAction(solver_cls=None).to_spec()
+
+
+def test_absolute_position_action_encodes_a_command_to_the_vector_it_decodes():
+    act = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip', Rotation.Representation.ROTVEC)
+    vec = np.array([0.1, -0.2, 0.3, 0.0, 0.0, 0.4, 1.0], dtype=np.float32)
+
+    [encoded] = act.encode_commands([act._decode_single({'action': vec})])
+
+    assert encoded['action'].dtype == np.float32
+    np.testing.assert_allclose(encoded['action'], vec, atol=1e-6)
+
+
+def test_absolute_joints_action_encodes_a_command_to_the_vector_it_decodes():
+    act = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7)
+    vec = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7, 0.0], dtype=np.float32)
+
+    [encoded] = act.encode_commands([act._decode_single({'action': vec})])
+
+    np.testing.assert_allclose(encoded['action'], vec, atol=1e-6)
+
+
+def test_an_absolute_action_codec_refuses_a_command_of_another_type():
+    act = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip')
+    command = cmd_module.CartesianPosition(pose=Transform3D.identity)
+    with pytest.raises(ValueError, match='JointPosition'):
+        act.encode_commands([{obs_keys.ROBOT_COMMAND: command, 'target_grip': 0.0}])

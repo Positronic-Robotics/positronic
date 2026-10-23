@@ -47,6 +47,9 @@ class Metadata(Codec):
     def decode(self, data):
         return data
 
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
+
     @property
     def meta(self) -> dict[str, Any]:
         return dict(self._values)
