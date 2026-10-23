@@ -107,6 +107,12 @@ def test_an_abc_definition_runs_each_task_its_arguments_name_on_the_scenes_of_ab
     }
 
 
+@pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == ABC_CONFIG])
+def test_an_abc_definition_pins_the_size_the_cameras_render_at(name: EvalRef):
+    args = public_eval(name).args
+    assert (args['camera_height'], args['camera_width']) == (260, 416)
+
+
 def _abc_episode(path: Path, static: dict[str, object] | str) -> Path:
     path.mkdir()
     (path / META_FILE).write_text(json.dumps({UID: path.name}))

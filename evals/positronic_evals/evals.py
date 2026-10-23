@@ -137,6 +137,8 @@ ABC_MULTITASK_TASKS = (
 # ABC's own sim eval draws world `i` of a task from seed `20260511 + i`, so trial `i` here runs the same scene.
 ABC_FIRST_SEED = 20260511
 ABC_TRIALS_PER_TASK = 20
+# The render size changes what a policy sees, so a definition pins it rather than take a config default.
+ABC_CAMERA_HEIGHT, ABC_CAMERA_WIDTH = 260, 416
 ABC_SCORING = Scoring(labelers=(ABC_LABELER,), primary=MeanEpisodeScore(per_task=True))
 # TODO: name the commit on `main` that holds the ABC backend.
 ABC_POSITRONIC_REVISION = 'f30bad8bd7dcf9f379803be18c525c6b9bb19033'
@@ -148,7 +150,13 @@ def _abc(tasks: tuple[str, ...], time_limit_s: int) -> EvalDefinition:
     return EvalDefinition(
         config=ABC_CONFIG,
         # Each key must name a parameter of positronic's `all_tasks` config.
-        args={'task': list(tasks), 'seed': ABC_FIRST_SEED, 'trial_count': ABC_TRIALS_PER_TASK},
+        args={
+            'task': list(tasks),
+            'seed': ABC_FIRST_SEED,
+            'trial_count': ABC_TRIALS_PER_TASK,
+            'camera_height': ABC_CAMERA_HEIGHT,
+            'camera_width': ABC_CAMERA_WIDTH,
+        },
         tasks=[EvalTask(name=task, trials=[{SEED: seed} for seed in seeds]) for task in tasks],
         time_limit_s=time_limit_s,
         scoring=ABC_SCORING,
