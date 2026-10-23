@@ -11,6 +11,7 @@ from positronic_wire import websocket, wire
 
 from positronic import keys
 from positronic.drivers.roboarm.command import (
+    FRAME_FIELD,
     CartesianPosition,
     Impedance,
     JointDelta,
@@ -209,8 +210,8 @@ class TestCommandEnvelope:
         """A sender that names no frame runs its stiffness at the receiver's control frame."""
         impedance = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
         wire = to_wire(impedance)
-        assert wire['frame'] == Transform3D.identity.as_vector(Rotation.Representation.ROTATION_MATRIX).tolist()
-        del wire['frame']
+        assert wire[FRAME_FIELD] == Transform3D.identity.as_vector(Rotation.Representation.ROTATION_MATRIX).tolist()
+        del wire[FRAME_FIELD]
         assert from_wire(wire) == impedance
 
     def test_a_bare_wire_mapping_carries_a_nested_mode(self):

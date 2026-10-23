@@ -51,6 +51,8 @@ def droid() -> dict[str, Any]:
         IMAGE_MAPPINGS: {EXTERIOR_IMAGE: obs_keys.EXTERIOR_IMAGE, WRIST_IMAGE: obs_keys.WRIST_IMAGE},
         EE_FRAME: [0.0, 0.0, -0.1033999994, 0.9238795325107985, 0.0, 0.0, 0.3826834323662685],
         ROTATION_OFFSET: [0.5, 0.5, -0.5, -0.5],
+        # rules-allow: hardcoded-keys — the wire form of `DROID_IMPEDANCE`; this image cannot import positronic, and
+        # test_droid_control_mode_is_the_droid_impedance_on_the_wire pins it to `command.to_wire`.
         CONTROL_MODE: {
             'type': 'impedance',
             'kq': [40.0, 30.0, 50.0, 25.0, 35.0, 25.0, 10.0],

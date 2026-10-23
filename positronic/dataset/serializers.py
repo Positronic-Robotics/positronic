@@ -66,7 +66,7 @@ class Serializers:
                     f'{keys.CONTROL_MODE_SUFFIX}.impedance.kqd': np.asarray(kqd),
                     f'{keys.CONTROL_MODE_SUFFIX}.impedance.kx': np.asarray(kx),
                     f'{keys.CONTROL_MODE_SUFFIX}.impedance.kxd': np.asarray(kxd),
-                    f'{keys.CONTROL_MODE_SUFFIX}.impedance.frame': Serializers.transform_3d(frame),
+                    keys.IMPEDANCE_FRAME_SUFFIX: Serializers.transform_3d(frame),
                 }
 
     # TODO: a command writes only the entries its own form has, so a signal here is sparse — `.mode.*` has

@@ -159,6 +159,9 @@ class CartesianDelta:
 
 CommandType = CartesianPosition | JointPosition | JointDelta | CartesianDelta
 
+# The wire field that carries `CartesianDelta.frame` and `Impedance.frame`.
+FRAME_FIELD = 'frame'
+
 
 def to_wire(command: CommandType | ControlModeType) -> dict[str, Any]:
     wire: dict[str, Any]
@@ -168,7 +171,7 @@ def to_wire(command: CommandType | ControlModeType) -> dict[str, Any]:
             return {'type': command.TYPE} if stiffness is None else {'type': command.TYPE, 'stiffness': list(stiffness)}
         case Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd, frame=frame):
             gains = {'kq': list(kq), 'kqd': list(kqd), 'kx': list(kx), 'kxd': list(kxd)}
-            return {'type': command.TYPE, **gains, 'frame': frame.as_vector(rep).tolist()}
+            return {'type': command.TYPE, **gains, FRAME_FIELD: frame.as_vector(rep).tolist()}
         case CartesianPosition(pose):
             wire = {'type': command.TYPE, 'pose': pose.as_vector(rep)}
         case JointPosition(positions):
@@ -176,7 +179,7 @@ def to_wire(command: CommandType | ControlModeType) -> dict[str, Any]:
         case JointDelta(velocities):
             wire = {'type': command.TYPE, 'velocities': velocities}
         case CartesianDelta(delta, frame):
-            wire = {'type': command.TYPE, 'delta': delta.as_vector(rep), 'frame': frame.as_vector(rep)}
+            wire = {'type': command.TYPE, 'delta': delta.as_vector(rep), FRAME_FIELD: frame.as_vector(rep)}
     if command.mode is not None:
         wire['mode'] = to_wire(command.mode)
     return wire
@@ -191,7 +194,7 @@ def from_wire(wire: dict[str, Any]) -> CommandType | ControlModeType:
             return PositionControl(stiffness=wire.get('stiffness'))
         case Impedance.TYPE:
             # A sender that names no frame means the receiver's control frame.
-            frame = geom.Transform3D.from_vector(np.asarray(wire['frame']), rep) if 'frame' in wire else None
+            frame = geom.Transform3D.from_vector(np.asarray(wire[FRAME_FIELD]), rep) if FRAME_FIELD in wire else None
             return Impedance(
                 kq=wire['kq'],
                 kqd=wire['kqd'],
@@ -208,7 +211,7 @@ def from_wire(wire: dict[str, Any]) -> CommandType | ControlModeType:
         case CartesianDelta.TYPE:
             return CartesianDelta(
                 delta=geom.Transform3D.from_vector(wire['delta'], rep),
-                frame=geom.Transform3D.from_vector(wire['frame'], rep),
+                frame=geom.Transform3D.from_vector(wire[FRAME_FIELD], rep),
                 mode=mode,
             )
         case _:

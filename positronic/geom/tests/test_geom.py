@@ -199,6 +199,20 @@ class TestRotation(unittest.TestCase):
         expected_result = Rotation.from_quat([0.5, 0.5, 0.5, 0.5])  # Combined rotation
         np.testing.assert_array_almost_equal(result.as_quat, expected_result.as_quat, decimal=4)
 
+    def test_a_quaternion_and_its_negation_are_one_rotation(self):
+        assert Rotation.identity == Rotation.from_quat([-1.0, 0.0, 0.0, 0.0])
+        quat = np.random.default_rng(7).normal(size=4)
+        assert Rotation.from_quat(quat) == Rotation.from_quat(-quat)
+        assert Transform3D([1.0, 2.0, 3.0], Rotation.from_quat(quat)) == Transform3D(
+            [1.0, 2.0, 3.0], Rotation.from_quat(-quat)
+        )
+
+    def test_different_rotations_are_not_equal(self):
+        about_x = Rotation.from_quat([0.7071, 0.7071, 0, 0])
+        assert about_x != Rotation.identity
+        assert about_x != about_x.inv
+        assert Rotation.from_quat([0.7071, 0, 0.7071, 0]) != about_x
+
     def test_call(self):
         q = Rotation.from_quat([0.7071, 0.7071, 0, 0])  # 90 degrees rotation around x-axis
         vector = np.array([1, 1, 1])

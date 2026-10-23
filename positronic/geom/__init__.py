@@ -521,7 +521,8 @@ class Rotation(metaclass=RotationMeta):
     def __eq__(self, other):
         if not isinstance(other, Rotation):
             return False
-        return np.allclose(self._quat, other._quat)
+        # q and -q are one rotation.
+        return np.allclose(self._quat, other._quat) or np.allclose(self._quat, -other._quat)
 
 
 def quat_closest(q: Rotation, reference: Rotation) -> Rotation:

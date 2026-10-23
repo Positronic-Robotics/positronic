@@ -500,7 +500,7 @@ def test_robot_command_serializer_variants(world):
     )
     np.testing.assert_allclose(items['cmd.joints'], joints)
     np.testing.assert_allclose(items['cmd.mode.impedance.kq'], impedance.kq)
-    np.testing.assert_allclose(items['cmd.mode.impedance.frame'], Serializers.transform_3d(stiffness_point))
+    np.testing.assert_allclose(items[f'cmd{keys.IMPEDANCE_FRAME_SUFFIX}'], Serializers.transform_3d(stiffness_point))
     # A pin naming no stiffness is a marker: a vector would fix the signal's shape, and what a mode does not
     # name has no shape to fix it at.
     assert items['cmd.mode.position_control'] == 1
