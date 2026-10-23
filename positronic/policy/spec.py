@@ -14,6 +14,7 @@ from positronic.policy.codecs import (
     ChangeEEFrame,
     Codec,
     EncodeImages,
+    EndCommand,
     FlipGrip,
     Metadata,
     RestrictImageSize,
@@ -42,6 +43,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     for component in (
         ChunkedSchedule,
         EncodeImages,
+        EndCommand,
         EndOnField,
         PauseOnUnavailable,
         TemporalStack,

@@ -31,11 +31,17 @@ from positronic.offboard.client import (
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Obs, Step
-from positronic.policy.codecs import ChangeEEFrame, Codec, RestrictImageSize
+from positronic.policy.base import Obs, PolicyEnd, Step
+from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, ConstantDuration, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import (
+    ChunkedSchedule,
+    ConstantDuration,
+    EndOnField,
+    PauseOnUnavailable,
+    TemporalStack,
+)
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
@@ -1193,3 +1199,41 @@ class TestEveryWireSpendsTheCallersBudgetOnce:
 
         given = unary.call_args.kwargs['timeout']
         assert given <= budget - on_the_channel, f'the channel spent {on_the_channel}s and the call still got {given}s'
+
+
+class _EndingModel(FixedModel):
+    def __call__(self, obs: Obs, *, session_id: str):
+        self.observations.append(obs)
+        pose = np.array([0.1, -0.2, 0.3, 1.0, 0.0, 0.0, 0.0, 0.5])
+        return [{'action': pose}, {'action': pose, policy_keys.END: 'complete'}]
+
+
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+@pytest.mark.parametrize('side', ['server', 'client'])
+def test_an_end_command_in_the_codec_ends_the_client_run_when_its_element_plays(served, transport, side):
+    codec = codecs.absolute_pos_action.override(tgt_ee_pose_key='pose', tgt_grip_key='grip').instantiate()
+    codec = codec & EndCommand()
+    if side == 'server':  # openpi, galaxea, lerobot: the action codec is the deployment codec
+        placement = {'codec': codec, 'local': Sequential(EndOnField(), ChunkedSchedule(fps=10), RestrictImageSize())}
+    else:  # dreamzero: the action codec sits in the client stack, inside the schedule
+        placement = {'local': Sequential(EndOnField(), ChunkedSchedule(fps=10), codec)}
+    address, _, _ = served(model=_EndingModel(), transport=transport, **placement)
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    run = runtime.start(RemotePolicy(transport, address))
+    try:
+        run.send({})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+        first = run.send({})
+        assert first is not None
+        assert keys.ROBOT_COMMAND in first.commands and policy_keys.END not in first.commands
+        now[0] = 100_000_000
+        last = run.send({})
+        assert last is not None
+        assert keys.ROBOT_COMMAND in last.commands and policy_keys.END not in last.commands
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.COMPLETE
+    finally:
+        runtime.close()
+        run.close()

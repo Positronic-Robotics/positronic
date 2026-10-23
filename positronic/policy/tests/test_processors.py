@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component, sequence
+from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component, parallel, sequence
 
 import pimm
 from pimm.world import VirtualClock
@@ -26,6 +26,7 @@ from positronic.policy.codecs import (
     BinarizeGripTraining,
     ChangeEEFrame,
     EncodeImages,
+    EndCommand,
     FlipGrip,
     Metadata,
     Resample,
@@ -1224,6 +1225,7 @@ def test_wire_names_match_the_registered_components():
         'encode_images': EncodeImages([['camera']]),
         'stop_on_fault': PauseOnUnavailable(),
         'end_on_field': EndOnField(),
+        'end_command': EndCommand(),
         'temporal_stack': TemporalStack(('v',), (0.0,)),
         'binarize_grip_training': BinarizeGripTraining(('grip',)),
         'binarize_grip_inference': BinarizeGripInference(),
@@ -1396,13 +1398,17 @@ def test_a_declared_end_on_field_ends_a_declared_stack(execution):
     declared = sequence(
         component(EndOnField.WIRE_NAME),
         component(ChunkedSchedule.WIRE_NAME, fps=10),
-        component(AbsolutePositionAction.WIRE_NAME, tgt_ee_pose_key='pose', tgt_grip_key='grip'),
+        parallel(
+            component(AbsolutePositionAction.WIRE_NAME, tgt_ee_pose_key='pose', tgt_grip_key='grip'),
+            component(EndCommand.WIRE_NAME),
+        ),
     )
-    run = runtime.start(cast(Policy, spec.from_spec(declared)), lambda obs: [{ACTION: pose}, {END: 'give_up'}])
+    model = lambda obs: [{ACTION: pose}, {ACTION: pose, END: 'give_up'}]  # noqa: E731
+    run = runtime.start(cast(Policy, spec.from_spec(declared)), model)
     try:
         assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
         clock.advance_to_ns(PERIOD_NS)
-        assert run.send({}) == Step({}, PERIOD_NS)
+        assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
         with pytest.raises(StopIteration) as end:
             run.send({})
         assert end.value.value is PolicyEnd.GIVE_UP
