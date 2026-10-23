@@ -166,10 +166,6 @@ def _detach_images(value: Any, found: list[tuple[dict[bytes, Any], np.ndarray]])
 HANDOVER_TIMEOUT_SEC = 10.0
 
 
-def _no_write() -> None:
-    """The write of an observation that carries no image."""
-
-
 class FrameWriter:
     """The client's half: one ring per session, handed to the server and grown when a frame outgrows it.
 
@@ -199,8 +195,10 @@ class FrameWriter:
         writer._hand_over_new_ring(sock, 0)
         return writer
 
-    def pack(self, obs: Mapping[str, Any]) -> tuple[dict[str, Any], Callable[[], None]]:
+    def pack(self, obs: Mapping[str, Any]) -> tuple[dict[str, Any], Callable[[], None] | None]:
         """``obs`` with a reference in place of every image, and the write that puts the images in the ring.
+
+        The write is None where ``obs`` carries no image.
 
         Call the write once the message is known good. A message refused before then leaves every slot as it
         was, so a frame the server holds stays valid.
@@ -208,7 +206,7 @@ class FrameWriter:
         found: list[tuple[dict[bytes, Any], np.ndarray]] = []
         packed = _detach_images(obs, found)
         if not found:
-            return packed, _no_write
+            return packed, None
         arrays = [array for _reference, array in found]
         ring = self._ring_for(sum(_aligned(array.nbytes) for array in arrays))
         for (reference, _array), named in zip(found, ring.next_references(arrays), strict=True):
