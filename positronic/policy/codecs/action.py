@@ -194,6 +194,28 @@ class AbsoluteJointsAction(Codec):
         }
 
 
+class BimanualJointsAction(Codec):
+    """Decodes a two-arm action into one ``JointPosition`` and one grip target per arm.
+
+    Per arm, the action holds ``num_joints`` joints and then the gripper width (1 open, 0 closed), left arm first.
+    """
+
+    def __init__(self, num_joints: int = 6):
+        self.num_joints = num_joints
+
+    def _decode_single(self, data: dict) -> dict:
+        vector = np.asarray(data[ACTION], dtype=np.float64)
+        width = self.num_joints + 1
+        if vector.shape[-1] != width * len(keys.BIMANUAL_ARMS):
+            raise ValueError(f'Expected a {width * len(keys.BIMANUAL_ARMS)}-D action, got {vector.shape[-1]}')
+        out: dict[str, Any] = {}
+        for i, arm in enumerate(keys.BIMANUAL_ARMS):
+            arm_vector = vector[i * width : (i + 1) * width]
+            out[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.JointPosition(positions=arm_vector[:-1])
+            out[keys.arm_channel(keys.TARGET_GRIP, arm)] = float(1.0 - arm_vector[-1])
+        return out
+
+
 class IKJointsAction(Codec):
     """Signal-level codec that replaces EE pose targets with joint targets via IK.
 

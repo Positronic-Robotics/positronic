@@ -12,8 +12,13 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
-from positronic.policy.codecs import LEROBOT_FEATURES
-from positronic.policy.codecs.observation import PackFields, RenameObservationFields, StateObservationCodec
+from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, BimanualJointsAction
+from positronic.policy.codecs.observation import (
+    PackFields,
+    RenameObservationFields,
+    StateObservationCodec,
+    bimanual_joints_state,
+)
 from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.spec import from_spec
 
@@ -414,3 +419,19 @@ def test_observation_encode_task():
 
     obs_no_task = enc.encode({'a': 1.0})
     assert obs_keys.TASK not in obs_no_task
+
+
+def test_bimanual_joints_state_packs_the_left_arm_first_with_gripper_widths():
+    state = bimanual_joints_state({
+        'robot_state.left.q': np.arange(6, dtype=np.float64),
+        'robot_state.right.q': np.arange(6, 12, dtype=np.float64),
+        'grip.left': 0.0,
+        'grip.right': 0.75,
+    })
+
+    assert state.dtype == np.float32
+    np.testing.assert_array_equal(state, np.concatenate([np.arange(6), [1.0], np.arange(6, 12), [0.25]]))
+    # The action codec reads the same layout, so a state fed back as an action commands the observed pose.
+    decoded = BimanualJointsAction().decode({ACTION: state})
+    np.testing.assert_array_equal(decoded['robot_command.right'].positions, np.arange(6, 12))
+    assert decoded['target_grip.right'] == pytest.approx(0.75)
