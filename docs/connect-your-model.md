@@ -155,8 +155,10 @@ The `robot_command` field says what the arm is asked to do. Build one of the com
 | `CartesianDelta` | `delta`, `frame`: `geom.Transform3D` | Relative motion, composed onto the pose the arm is at when it lands; `frame` is the frame `delta` is expressed in |
 
 Every command also takes an optional `mode`, the control law it asks to execute under:
-`PositionControl(stiffness=...)` for a position servo, or `Impedance(kq, kqd, kx, kxd)` for the hybrid
-joint/Cartesian law. Omit it — the default — and the arm runs its native law. What a pinned mode does is the
+`PositionControl(stiffness=...)` for a position servo, or `Impedance(kq, kqd, kx, kxd, frame)` for the hybrid
+joint/Cartesian law. Omit the mode — the default — and the arm runs its native law. An impedance `frame` is the point
+where the Cartesian stiffness acts, measured from the rig's control frame whatever frame the policy speaks; it defaults
+to the control frame. What a pinned mode does is the
 driver's: a simulator runs its own law regardless, and a driver that cannot execute the mode raises.
 A server built on positronic sets the mode with the `SetControlMode` codec, composed left of the action
 decoder; `codecs.droid_execution` and `codecs.phail_v1_execution` wrap an action codec that way. See

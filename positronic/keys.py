@@ -26,6 +26,8 @@ POSE_DELTA_SUFFIX = '.pose_delta'
 POSE_DELTA_FRAME_SUFFIX = '.pose_delta_frame'
 # A command's control mode unfolds into signals under this suffix, for example ``robot_command.mode.impedance.kq``.
 CONTROL_MODE_SUFFIX = '.mode'
+# The point an impedance mode's Cartesian stiffness acts at, as a pose vector.
+IMPEDANCE_FRAME_SUFFIX = f'{CONTROL_MODE_SUFFIX}.impedance.frame'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}{POSE_SUFFIX}'
 TARGET_JOINTS = f'{ROBOT_COMMAND}{JOINT_TARGETS_SUFFIX}'
 TARGET_JOINT_DELTAS = f'{ROBOT_COMMAND}{JOINT_DELTAS_SUFFIX}'

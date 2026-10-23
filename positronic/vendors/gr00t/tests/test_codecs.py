@@ -8,8 +8,8 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
+from positronic.drivers.roboarm import command, models
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm import models
 from positronic.policy import spec
 from positronic.policy.codecs import ACTION, Codec
 from positronic.policy.keys import ACTION_FPS
@@ -69,6 +69,11 @@ def test_droid_decodes_native_chunk_and_binarizes_grip(config, horizon):
         assert item[keys.ROBOT_COMMAND].mode == DROID_IMPEDANCE
         assert item[keys.TARGET_GRIP] == (0.0 if i % 2 else 1.0)
         assert 'timestamp' not in item
+
+
+def test_droid_control_mode_is_the_droid_impedance_on_the_wire():
+    """The serving image cannot import positronic, so it spells out the mode the rig runs."""
+    assert model_settings.droid()[model_settings.CONTROL_MODE] == command.to_wire(DROID_IMPEDANCE)
 
 
 @pytest.mark.parametrize('config', [recipes.droid, recipes.droid_three_cameras])

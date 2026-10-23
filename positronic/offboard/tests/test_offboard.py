@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from types import MappingProxyType
 from unittest.mock import AsyncMock
 
@@ -10,11 +11,13 @@ from positronic_wire import websocket, wire
 
 from positronic import keys
 from positronic.drivers.roboarm.command import (
+    FRAME_FIELD,
     CartesianPosition,
     Impedance,
     JointDelta,
     JointPosition,
     PositionControl,
+    from_wire,
     to_wire,
 )
 from positronic.geom import Rotation, Transform3D
@@ -195,6 +198,21 @@ class TestCommandEnvelope:
             Impedance(kq=(), kqd=(), kx=(750.0,) * 6, kxd=(37.0,) * 6)
         cartesian_only = Impedance(kq=(0.0,) * 7, kqd=(0.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
         assert deserialise(serialise(JointDelta(velocities=np.zeros(3), mode=cartesian_only))).mode == cartesian_only
+
+    def test_an_impedance_frame_travels_on_the_wire(self):
+        frame = Transform3D(np.array([0.0, 0.0, 0.1034]), Rotation.from_quat([0.9239, 0.0, 0.0, 0.3827]))
+        impedance = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6, frame=frame)
+        assert deserialise(serialise(JointDelta(velocities=np.zeros(3), mode=impedance))).mode == impedance
+        assert from_wire(to_wire(impedance)) == impedance
+        assert from_wire(to_wire(impedance)) != replace(impedance, frame=Transform3D.identity)
+
+    def test_an_impedance_wire_with_no_frame_runs_at_the_receivers_control_frame(self):
+        """A sender that names no frame runs its stiffness at the receiver's control frame."""
+        impedance = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+        wire = to_wire(impedance)
+        assert wire[FRAME_FIELD] == Transform3D.identity.as_vector(Rotation.Representation.ROTATION_MATRIX).tolist()
+        del wire[FRAME_FIELD]
+        assert from_wire(wire) == impedance
 
     def test_a_bare_wire_mapping_carries_a_nested_mode(self):
         """A server built on another stack sends plain data, mode included, and it types like any other."""

@@ -131,8 +131,9 @@ def test_decode_maps_action_back_to_canonical():
 
 
 def test_decode_keeps_the_control_mode_a_command_pinned():
-    """Re-expressing a pose does not change what law drives to it."""
-    mode = cmd_module.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+    """Re-expressing a pose does not change what law drives to it, nor the point its stiffness acts at."""
+    stiffness_point = _pose([0.0, 0.0, 0.1], [0.0, 0.0, 0.3])
+    mode = cmd_module.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6, frame=stiffness_point)
     pose = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
     action = {
         obs_keys.ROBOT_COMMAND: cmd_module.CartesianPosition(pose=pose, mode=mode),
@@ -143,6 +144,7 @@ def test_decode_keeps_the_control_mode_a_command_pinned():
 
     assert decoded[obs_keys.ROBOT_COMMAND].mode == mode
     assert decoded['other'].mode == mode
+    assert decoded[obs_keys.ROBOT_COMMAND].mode.frame == stiffness_point
 
 
 def test_decode_hands_a_delta_the_frame_it_was_meant_for():
