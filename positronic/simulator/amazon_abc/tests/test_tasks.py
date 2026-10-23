@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import pytest
 from eval_vocabulary.episode import ABC_REWARD_SIGNAL
+from positronic_evals.evals import ABC_CONFIG, PUBLIC_EVALS, EvalRef, public_eval
 
 import pimm
 from positronic import geom, keys
@@ -123,6 +124,20 @@ def test_the_eval_records_abcs_reward_under_the_signal_that_the_abc_labeler_read
     recorded = {signal for name in ev.privileged for signal, _ in expand_suffixed(name, metrics)}
 
     assert ABC_REWARD_SIGNAL in recorded
+
+
+@pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == ABC_CONFIG])
+def test_a_public_abc_eval_pins_the_trials_that_its_arguments_run(monkeypatch, name: EvalRef):
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{eval_keys.TASK: task} for task in spec[mapping.SELECT_TASKS]]
+
+    monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
+    definition = public_eval(name)
+
+    trials = abc_cfg.all_tasks.override(**definition.args).instantiate().tasks()
+
+    pinned = [(task.name, trial) for task in definition.tasks for trial in task.trials]
+    assert [(t.meta[eval_keys.TASK], {eval_keys.SEED: t.meta[eval_keys.SEED]}) for t in trials] == pinned
 
 
 def test_the_task_metrics_keep_every_numeric_entry_as_a_suffixed_signal():

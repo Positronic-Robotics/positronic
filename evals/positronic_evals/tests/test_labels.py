@@ -3,7 +3,9 @@
 The MolmoSpaces fixture holds 20 episodes of one sweep of `pi05_droid_jointpos`, in the `<block>/<episode>` layout that
 positronic records: each `static.json`, the id from each `meta.json`, and the time column of each `robot_state.q`
 signal. The labeler reads each end from that signal. The RoboLab fixture holds six episodes of one sweep of a pi05
-policy: each `static.json`, the id from each `meta.json`, and the last 15 samples of each `subtask` signal.
+policy: each `static.json`, the id from each `meta.json`, and the last 15 samples of each `subtask` signal. The ABC
+fixture holds one episode of ABC's put-bottles task, where a policy held the joints until a 3 s timeout: its
+`static.json`, the id from its `meta.json`, and its `task_eval.reward` signal.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from eval_vocabulary.episode import (
+    ABC_REWARD_SIGNAL,
     BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
@@ -37,6 +40,7 @@ from eval_vocabulary.episode import (
 from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD
 from positronic_evals import labels
 from positronic_evals.labels import (
+    ABC_LABELER,
     MOLMO_LABELER,
     PUBLIC_LABELERS,
     ROBOLAB_LABELER,
@@ -53,6 +57,8 @@ from positronic_evals.labels import (
     StageReached,
     SubtaskAchieved,
     Success,
+    abc_label,
+    abc_max_progress,
     label,
     molmo_label,
     read_static,
@@ -604,6 +610,96 @@ def test_a_subtask_signal_of_reset_frames_only_states_no_total(tmp_path: Path):
     assert (given.total_subtasks, given.subtask_score) == (None, None)
 
 
+# --- ABC
+
+
+ABC_SWEEP = sorted(p for p in (Path(__file__).parent / 'fixtures' / 'abc_sweep').glob('*/*') if p.is_dir())
+BOTTLES = 'put_plastic_bottles_in_bin'
+BOTTLES_PROMPT = 'put the plastic bottles in the bin'
+
+
+def _write_reward(episode: Path, rewards: list[float]) -> None:
+    """A `task_eval.reward` signal with one sample a second on the world clock."""
+    columns = {
+        f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WORLD}': pa.array([s * 1_000_000_000 for s in range(len(rewards))]),
+        VALUE_COLUMN: pa.array(rewards, type=pa.float64()),
+    }
+    pq.write_table(pa.table(columns), episode / f'{ABC_REWARD_SIGNAL}{SIGNAL_FILE_SUFFIX}')
+
+
+def test_the_recorded_abc_episode_ran_out_of_time_and_made_no_progress():
+    (episode,) = ABC_SWEEP
+
+    given = abc_label(episode)
+
+    assert given is not None
+    assert (given.uid, given.task, given.annotator) == ('882b1e12c8c748a49636dd4090ed6724', BOTTLES, ABC_LABELER)
+    assert (given.outcome, given.events) == (Outcome.out_of_time, ())
+    assert given.seconds_to_end == pytest.approx(3.026)
+    assert abc_max_progress(episode) == 0.0
+
+
+@pytest.mark.parametrize(
+    ('verdict', 'events'),
+    [
+        ({SUCCESS: True, TERMINATED: True}, (Success(seconds=2.0),)),
+        ({SUCCESS: False, TERMINATED: True}, (Fail(seconds=2.0),)),
+        ({TERMINATED: False}, ()),
+    ],
+    ids=['success', 'fail', 'out_of_time'],
+)
+def test_an_abc_trial_ends_on_the_verdict_it_recorded(tmp_path: Path, verdict: dict[str, object], events: tuple):
+    (episode,) = _episodes(tmp_path, {TASK: BOTTLES_PROMPT, BENCHMARK_TASK: BOTTLES, **verdict})
+    _write_reward(episode, [0.0, 0.5, 0.25])
+
+    assert abc_label(episode) == _label(*events, task=BOTTLES, seconds_to_end=2.0, annotator=ABC_LABELER)
+
+
+def test_an_abc_label_groups_by_the_task_id_and_not_by_the_prompt(tmp_path: Path):
+    spelled = [
+        {TASK: 'spell the word on the table', BENCHMARK_TASK: task, SUCCESS: False, TERMINATED: True}
+        for task in ('spell_cat', 'spell_dog')
+    ]
+    for episode in _episodes(tmp_path, *spelled):
+        _write_reward(episode, [0.0, 0.0])
+    given = [abc_label(episode) for episode in sorted(tmp_path.iterdir())]
+
+    assert [given_label.task if given_label else None for given_label in given] == ['spell_cat', 'spell_dog']
+
+
+def test_an_abc_trial_with_no_task_id_or_no_statics_has_no_label(tmp_path: Path):
+    no_task_id, no_statics = _episodes(tmp_path, {TASK: BOTTLES_PROMPT, SUCCESS: True, TERMINATED: True}, None)
+    for episode in (no_task_id, no_statics):
+        _write_reward(episode, [0.0, 1.0])
+
+    assert [abc_label(no_task_id), abc_label(no_statics)] == [None, None]
+
+
+def test_the_abc_progress_is_the_largest_reward_of_the_episode_and_not_the_last(tmp_path: Path):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: BOTTLES, TERMINATED: False})
+    _write_reward(episode, [0.0, 0.75, 0.5])
+
+    assert abc_max_progress(episode) == 0.75
+
+
+def test_an_episode_with_no_reward_sample_has_no_abc_progress(tmp_path: Path):
+    missing, empty = _episodes(tmp_path, *[{BENCHMARK_TASK: BOTTLES, TERMINATED: False}] * 2)
+    _write_reward(empty, [])
+
+    assert [abc_max_progress(missing), abc_max_progress(empty)] == [None, None]
+
+
+def test_a_reward_signal_that_does_not_parse_has_no_abc_progress_and_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: BOTTLES, TERMINATED: False})
+    (episode / f'{ABC_REWARD_SIGNAL}{SIGNAL_FILE_SUFFIX}').write_bytes(b'not a parquet file')
+
+    with caplog.at_level(logging.ERROR, logger=labels.__name__):
+        assert abc_max_progress(episode) is None
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+
+
 # --- the recorded verdict
 
 
@@ -697,5 +793,5 @@ def test_label_takes_the_first_labeler_that_labels_the_episode():
 
 
 def test_label_refuses_a_labeler_that_the_table_does_not_hold():
-    with pytest.raises(LookupError, match="no labeler 'held_out'; the labelers are molmo, robolab$"):
+    with pytest.raises(LookupError, match="no labeler 'held_out'; the labelers are abc, molmo, robolab$"):
         label(SWEEP[0], (MOLMO_LABELER, LabelerRef('held_out')))
