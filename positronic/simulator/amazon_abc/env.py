@@ -18,6 +18,10 @@ from server import EnvProtocol, EnvServer
 
 logger = logging.getLogger(__name__)
 
+# `make_env` lays out one scene from an unseeded draw, which fails for about 1 draw in 150 on put_relative.
+# The seeded reset replaces that scene, so another build leaves the trial's scene as its seed names it.
+_BUILD_ATTEMPTS = 3
+
 
 class _Arm:
     """One YAM chain of the ABC scene."""
@@ -58,15 +62,22 @@ class AbcEnv(EnvProtocol):
             return
         self.close()
         spec = abc_sim.get_task_spec(token[mapping.TOKEN_TASK])
-        # ABC attaches a task's evaluator and prompt by its name; several tasks share one `env_task` scene.
-        self._env = abc_sim.make_env(
-            task=spec.name,
-            prompt=spec.prompt,
-            render_cameras=True,
-            camera_height=token[mapping.TOKEN_CAMERA_HEIGHT],
-            camera_width=token[mapping.TOKEN_CAMERA_WIDTH],
-            max_episode_steps=mapping.ABC_EVAL_STEPS,
-        )
+        for attempt in range(1, _BUILD_ATTEMPTS + 1):
+            try:
+                # ABC attaches a task's evaluator and prompt by its name; several tasks share one `env_task` scene.
+                self._env = abc_sim.make_env(
+                    task=spec.name,
+                    prompt=spec.prompt,
+                    render_cameras=True,
+                    camera_height=token[mapping.TOKEN_CAMERA_HEIGHT],
+                    camera_width=token[mapping.TOKEN_CAMERA_WIDTH],
+                    max_episode_steps=mapping.ABC_EVAL_STEPS,
+                )
+                break
+            except RuntimeError as error:
+                if attempt == _BUILD_ATTEMPTS:
+                    raise
+                logger.warning(f'Building the ABC env for {spec.name} failed ({error}); building it again')
         self._key = key
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
