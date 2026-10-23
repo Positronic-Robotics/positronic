@@ -298,8 +298,15 @@ the request prints `the server answered HTTP <code>`, and a `401` means that it 
 in `AUTH_TOKEN`. A server that listens only on `127.0.0.1` cannot answer the platform, and the script says
 so. The log follows each of them.
 
-In a correct image, the server pins its checkpoint and starts the model process. The openpi and
-MolmoAct2 recipes then load the model on the CPU and serve. The GR00T recipe stops on the missing GPU
+In a correct image, the server pins its checkpoint and starts the model process. The openpi recipe
+then loads the model on the CPU and serves. The MolmoAct2 server stops without a GPU with `MolmoAct2
+found no CUDA GPU`, so that it cannot serve from the CPU on the platform. Add `--model.device_map=cpu`
+after the image name, and it loads the model on the CPU and serves:
+
+```bash
+bash docker/test_policy_image.sh docker.io/<you>/molmoact2-droid:v1 --model.device_map=cpu
+```
+ The GR00T recipe stops on the missing GPU
 with `Flash Attention 2 is not available on CPU`. For the FLUX 3 Action recipe, BFL's server exits on
 the missing GPU, and the server reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano
 recipe, NVIDIA's server exits the same way, and the server reports `Cosmos3 backend exited with code 1`.

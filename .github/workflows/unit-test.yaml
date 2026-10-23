@@ -245,6 +245,27 @@ jobs:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest positronic/vendors/openpi/tests
 
+  molmoact2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked --extra molmoact2
+
+      - name: Run molmoact2 vendor tests
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest positronic/vendors/molmoact2/tests
+
   lockfile-portability:
     strategy:
       fail-fast: false
