@@ -17,7 +17,7 @@ pytest.importorskip('openpi_client')
 from openpi_client import msgpack_numpy
 from websockets.sync.server import ServerConnection, serve
 
-from positronic.vendors.openpi.server import COMMANDS, PREALLOCATE_ENV, OpenpiSubprocess, SubprocessClient
+from positronic.vendors.openpi.server import COMMANDS, PREALLOCATE_ENV, OpenpiSubprocess, PinglessWebsocketClientPolicy
 
 
 def _subprocess_env(monkeypatch) -> dict[str, str]:
@@ -49,7 +49,7 @@ def _send_metadata_and_wait(connection: ServerConnection) -> None:
 def test_the_subprocess_client_sends_no_keepalive_pings():
     with serve(_send_metadata_and_wait, '127.0.0.1', 0) as server:
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        client = SubprocessClient(host='127.0.0.1', port=server.socket.getsockname()[1])
+        client = PinglessWebsocketClientPolicy(host='127.0.0.1', port=server.socket.getsockname()[1])
         try:
             assert client._ws.ping_interval is None
             assert client._ws.keepalive_thread is None

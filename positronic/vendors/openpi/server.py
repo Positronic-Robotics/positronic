@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 PREALLOCATE_ENV = 'XLA_PYTHON_CLIENT_PREALLOCATE'
 
 
-class SubprocessClient(WebsocketClientPolicy):
-    """A client to the openpi subprocess on the loopback, with no keepalive pings.
+class PinglessWebsocketClientPolicy(WebsocketClientPolicy):
+    """A websocket policy client that sends no keepalive pings. It talks to the openpi subprocess on the loopback.
 
     The subprocess runs ``infer`` on its event loop, so it answers no ping until the inference returns. A first
     inference compiles the model and can take longer than a keepalive window. A dead subprocess closes the socket.
@@ -61,7 +61,7 @@ class OpenpiSubprocess:
         self.ws_port = ws_port
         self.uv_path = uv_path or 'uv'
         self.process: subprocess.Popen | None = None
-        self._client: SubprocessClient | None = None
+        self._client: PinglessWebsocketClientPolicy | None = None
 
     def _build_command(self) -> list[str]:
         return [
@@ -108,11 +108,11 @@ class OpenpiSubprocess:
         )
 
     @property
-    def client(self) -> SubprocessClient:
+    def client(self) -> PinglessWebsocketClientPolicy:
         """Get or create WebSocket client for inference."""
         if self._client is None:
             logger.info(f'Creating WebSocket client to OpenPI subprocess on port {self.ws_port}...')
-            self._client = SubprocessClient(host='127.0.0.1', port=self.ws_port)
+            self._client = PinglessWebsocketClientPolicy(host='127.0.0.1', port=self.ws_port)
             logger.info('WebSocket client created successfully')
         return self._client
 
