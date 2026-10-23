@@ -56,10 +56,10 @@ Examples:
   bash workflows/nebius/serve.sh lerobot smolvla-server ee \
     --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
-  # OpenPI (ee_frame is the EE frame the checkpoint speaks; None means the rig's default)
+  # OpenPI (ee_frame is the EE frame the checkpoint speaks; None means it speaks joints only)
   bash workflows/nebius/serve.sh openpi pi-server ee \
     --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
-    --pipeline.ee_frame=None
+    --pipeline.ee_frame=@positronic.cfg.codecs.default_ee_frame
 
   # GR00T
   bash workflows/nebius/serve.sh gr00t groot-server droid \

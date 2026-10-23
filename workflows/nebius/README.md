@@ -277,10 +277,10 @@ Use the vendor's model option to select the matching checkpoint (`--model.model_
 bash workflows/nebius/serve.sh lerobot smolvla-server ee \
   --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
-# --pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`
+# --pipeline.ee_frame states the EE frame the checkpoint speaks; None means it speaks joints only
 bash workflows/nebius/serve.sh openpi my-openpi ee \
   --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
-  --pipeline.ee_frame=None
+  --pipeline.ee_frame=@positronic.cfg.codecs.default_ee_frame
 
 bash workflows/nebius/serve.sh gr00t groot-server droid \
   --model.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/
