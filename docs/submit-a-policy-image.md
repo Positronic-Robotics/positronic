@@ -217,6 +217,22 @@ What the platform does with the credential:
    compute. The container runs under the
    limits in [The container](#the-container).
 
+The RTX PRO 6000 is a Blackwell card with compute capability 12.0 (`sm_120`). Each framework in the
+image needs kernels for `sm_120`. Without them, the first inference fails with
+`CUDA error: no kernel image is available for execution on the device`. The PyPI build of torch 2.7.1
+is a CUDA 12.6 build, and its kernels stop at `sm_90`. Install a PyTorch build for CUDA 12.8 or newer,
+for example from the `https://download.pytorch.org/whl/cu128` index, as the MolmoAct2 recipe does. A
+CUDA 12.8 build needs NVIDIA driver 570 or newer. `docker/test_policy_image.sh` runs no inference, so
+check the kernels on a machine with a GPU:
+
+```bash
+docker run --rm --gpus device=0 --entrypoint python docker.io/<you>/<image>:v1 \
+  -c "import torch; print(torch.cuda.get_arch_list())"
+```
+
+The list must contain `sm_120`. If `python` in your image is not the interpreter your server uses,
+give the full path to that interpreter.
+
 ## The container
 
 [`client/platform_client/policy_container.py`](../client/platform_client/policy_container.py)

@@ -245,6 +245,12 @@ eval against the server in the image.
 - If a route refuses the token of the run, the run fails with `policy_setup_crash`.
 - The GPU is one `1g.24gb` slice of an NVIDIA RTX PRO 6000, with 24192 MiB of memory and a quarter
   of the card's compute.
+- The card is a Blackwell GPU with compute capability 12.0 (`sm_120`). Each framework in the image needs
+  kernels for `sm_120`, or the first inference fails with
+  `CUDA error: no kernel image is available for execution on the device`. For PyTorch, install a build
+  for CUDA 12.8 or newer (`cu128`): the PyPI build of torch 2.7.1 stops at `sm_90`. To check, run
+  `python -c "import torch; print(torch.cuda.get_arch_list())"` in the image on a machine with a GPU. The
+  list must contain `sm_120`.
 - The platform runs the image digest that it found when you submitted. It pulls that digest from your
   registry when the run starts, and it keeps no copy of the image.
 - The [rules](https://competition.phail.ai/rules#limits) give the other limits on
