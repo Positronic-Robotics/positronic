@@ -17,6 +17,7 @@ from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
+from positronic.cfg import codecs as cfg_codecs
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry, parse_ee_frames
@@ -1034,6 +1035,14 @@ def test_policy_meta_states_the_frames_both_sides_of_a_split_deployment_declare(
     address, _, _ = served(local=local, codec=codec)
     frames = _frames_meta(RemotePolicy('websocket', address).meta())
     assert frames == {keys.EE_POSE: DEFAULT_FRAME, keys.TARGET_EE_POSE: DEFAULT_FRAME}
+
+
+def test_a_server_with_the_franka_hand_frame_codec_states_its_poses_at_the_rig_default(served):
+    local = Sequential(
+        cfg_codecs.franka_hand_frame.instantiate(), PauseOnUnavailable(), ChunkedSchedule(fps=10, horizon_sec=0.2)
+    )
+    address, _, _ = served(local=local)
+    assert _frames_meta(RemotePolicy('websocket', address).meta())[keys.EE_POSE] == DEFAULT_FRAME
 
 
 def test_policy_meta_states_no_frames_for_a_server_that_declares_none():

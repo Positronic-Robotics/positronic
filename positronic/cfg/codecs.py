@@ -58,6 +58,9 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 # The frame of a checkpoint trained on poses a rig reported at ``DEFAULT_FRAME``. ``offset`` takes a transform
 # off that site, such as ``@positronic.drivers.roboarm.models.DROID_EE_FRAME``.
 default_ee_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME)
+# A server built for poses at the Franka Hand point, where the FR3 and the bundled panda report ``DEFAULT_FRAME``,
+# states that frame with this codec in its pipeline. A server that states no frame observes no pose.
+franka_hand_frame = cfn.Config(ChangeEEFrame, site=DEFAULT_FRAME, transform=geom.Transform3D.identity)
 
 
 @cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)
