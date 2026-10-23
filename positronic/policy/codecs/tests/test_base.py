@@ -225,13 +225,8 @@ def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned(
 def test_decode_keeps_the_end_of_each_element_beside_its_commands(codec, factor):
     plain, ending, last = codec.decode([{'value': 1}, {'value': 1, END: 'give_up'}, {END: 'complete'}])
     assert plain == {'value': factor}
-    assert ending == {'value': factor, END: PolicyEnd.GIVE_UP}
-    assert last == {END: PolicyEnd.COMPLETE}
-
-
-def test_decode_refuses_a_malformed_end():
-    with pytest.raises(ValueError):
-        _DoublingCodec().decode([{'value': 1, END: 'done'}])
+    assert ending == {'value': factor, END: 'give_up'}
+    assert last == {END: 'complete'}
 
 
 def _joints_codec() -> AbsoluteJointsAction:

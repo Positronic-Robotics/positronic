@@ -7,7 +7,7 @@ from positronic_model_server.spec import PAR, SEQ
 from positronic import telemetry, telemetry_keys
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.policy.base import Obs, PolicyEnd, ProcessorRun, Step
+from positronic.policy.base import Obs, ProcessorRun, Step
 from positronic.policy.keys import END
 from positronic.utils import merge_dicts
 
@@ -22,8 +22,8 @@ class Codec:
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
     (action decoding). The ``training_encoder`` property
     returns an ``EpisodeTransform`` used by the training pipeline to derive dataset columns.
-    ``decode`` reads the reserved field ``END`` of each result element as a ``PolicyEnd`` and keeps it beside what
-    ``_decode_single`` returns. An element with only ``END`` skips ``_decode_single``.
+    ``decode`` keeps the reserved field ``END`` of each result element, unchanged, beside what ``_decode_single``
+    returns. An element with only ``END`` skips ``_decode_single``.
 
     Reserved ``meta`` key:
 
@@ -44,7 +44,7 @@ class Codec:
             return [self.decode(d) for d in data]
         if END not in data:
             return self._decode_single(data)
-        end = {END: PolicyEnd(data[END])}
+        end = {END: data[END]}
         rest = {name: value for name, value in data.items() if name != END}
         return {**self._decode_single(rest), **end} if rest else end
 
