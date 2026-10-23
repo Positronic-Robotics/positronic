@@ -1310,10 +1310,10 @@ class _EndingModel:
         self.calls: list[int] = []
         self.prefixes: list[list] = []
 
-    def __call__(self, obs, prefix=()):
+    def __call__(self, obs):
         call = len(self.calls)
         self.calls.append(self._runtime.time_ns)
-        self.prefixes.append(list(prefix))
+        self.prefixes.append(list(obs.get(policy_keys.ACTION_PREFIX, ())))
         chunk: list[dict[str, Any]] = (
             [dict(e) for e in self._first] if call == 0 else [{MOTOR: (call, i)} for i in range(self._length)]
         )

@@ -134,10 +134,10 @@ def test_encode_commands_maps_a_command_to_the_policy_frame():
     pose_c = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
     commands = {obs_keys.ROBOT_COMMAND: cmd_module.CartesianPosition(pose=pose_c), 'target_grip': 1.0}
 
-    [encoded] = ChangeEEFrame(TO_DROID).encode_commands([commands])
+    [encoded] = ChangeEEFrame(TO_ROBOLAB).encode_commands([commands])
 
     np.testing.assert_allclose(
-        encoded[obs_keys.ROBOT_COMMAND].pose.as_vector(QUAT), (pose_c * TO_DROID).as_vector(QUAT), atol=1e-9
+        encoded[obs_keys.ROBOT_COMMAND].pose.as_vector(QUAT), (pose_c * TO_ROBOLAB).as_vector(QUAT), atol=1e-9
     )
     assert encoded['target_grip'] == 1.0
     assert commands[obs_keys.ROBOT_COMMAND].pose is pose_c
