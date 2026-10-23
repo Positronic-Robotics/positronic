@@ -109,14 +109,12 @@ def test_a_session_reaches_abcs_server_in_its_fields_and_gets_the_whole_chunk(tm
         assert action[keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM)] == pytest.approx(1.0 - expected[6])
         assert action[keys.arm_channel(keys.TARGET_GRIP, keys.RIGHT_ARM)] == pytest.approx(1.0 - expected[13])
     # One warm-up request comes before the session's own.
-    started, warm_up, request = _log(tmp_path)
+    started, _, request = _log(tmp_path)
     fields = request['request']
     images = fields.pop('images')
-    # Each request draws the next noise from one generator, which starts at ABC's sim-eval seed.
-    draws = np.random.default_rng(0)
-    for logged in (warm_up, request):
-        expected = draws.standard_normal((30, 14), dtype=np.float32)
-        assert logged['request']['noise'].pop('sum') == pytest.approx(float(expected.sum()), rel=1e-5)
+    # The session's request carries the first noise draw of ABC's sim-eval seed.
+    first_draw = np.random.default_rng(0).standard_normal((30, 14), dtype=np.float32)
+    assert fields['noise'].pop('sum') == pytest.approx(float(first_draw.sum()), rel=1e-5)
     # rules-allow: hardcoded-keys — the fields of ABC's policy server as its code spells them, pinned apart from the
     # package constants so a typo in a constant fails here.
     assert fields == {
@@ -139,6 +137,54 @@ def test_a_session_reaches_abcs_server_in_its_fields_and_gets_the_whole_chunk(tm
         f'--port={port}',
     }
     assert not _alive(started['pid']), 'the server left the backend running after it stopped'
+
+
+def test_the_warm_up_leaves_the_seeded_noise_stream_to_the_sessions(tmp_path):
+    model = server.abc_dit_model(
+        checkpoint=CHECKPOINT,
+        abc_python=_abc_python(tmp_path, abc_stand_in.Mode.SERVE),
+        noise_seed=7,
+        backend_port=_free_port(),
+    )
+    try:
+        model(server._warm_observation(), session_id='first')
+        model(server._warm_observation(), session_id='second')
+    finally:
+        model.close()
+    _, _, first, second = _log(tmp_path)
+    draws = np.random.default_rng(7)
+    for logged in (first, second):
+        expected = draws.standard_normal((30, 14), dtype=np.float32)
+        assert logged['request']['noise']['sum'] == pytest.approx(float(expected.sum()), rel=1e-5)
+
+
+def _time_wait_port() -> int:
+    """A port whose only socket is the TIME_WAIT end of a connection its listener closed first."""
+    with socket.create_server(('127.0.0.1', 0)) as listener:
+        port = listener.getsockname()[1]
+        with socket.create_connection(('127.0.0.1', port)) as client:
+            accepted, _ = listener.accept()
+            accepted.close()
+            client.recv(1)
+    return port
+
+
+def test_a_backend_port_another_server_listens_on_fails_the_load_before_the_backend_starts(tmp_path):
+    with socket.create_server(('127.0.0.1', 0)) as occupant:
+        with pytest.raises(OSError, match='Address already in use'):
+            server.abc_dit_model(
+                checkpoint=CHECKPOINT,
+                abc_python=_abc_python(tmp_path, abc_stand_in.Mode.SERVE),
+                backend_port=occupant.getsockname()[1],
+            )
+    assert not (tmp_path / LOG).exists()
+
+
+def test_a_backend_port_with_only_closed_connections_on_it_loads(tmp_path):
+    model = server.abc_dit_model(
+        checkpoint=CHECKPOINT, abc_python=_abc_python(tmp_path, abc_stand_in.Mode.SERVE), backend_port=_time_wait_port()
+    )
+    model.close()
 
 
 def test_a_load_without_fast_inference_asks_the_backend_for_none(tmp_path):
