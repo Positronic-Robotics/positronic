@@ -32,8 +32,6 @@ from positronic.vendors.abc_dit import codecs
 
 # The module that ABC's interpreter runs: ABC's own websocket policy server.
 BACKEND_MODULE = 'deploy.serve_policy'
-# The state and each action hold 14 values: per arm, 6 joints then the gripper width.
-BIMANUAL_SIZE = 14
 # The DiT checkpoints predict chunks of this many actions.
 CHUNK_LENGTH = 30
 # ABC's synchronous sim eval executes this many actions of each chunk, then takes a new observation.
@@ -53,7 +51,7 @@ class AbcDitModel(Model):
         self._meta = meta
 
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
-        noise = self._noise.standard_normal((CHUNK_LENGTH, BIMANUAL_SIZE), dtype=np.float32)
+        noise = self._noise.standard_normal((CHUNK_LENGTH, codecs.BIMANUAL_SIZE), dtype=np.float32)
         return [{ACTION: action} for action in self._client.infer({**obs, abc_dit.NOISE: noise})[abc_dit.ACTIONS]]
 
     def meta(self) -> dict[str, Any]:
@@ -80,7 +78,7 @@ def _warm_observation() -> dict[str, Any]:
     view = np.zeros((3, height, width), dtype=np.uint8)
     cameras = (abc_dit.TOP_CAMERA, abc_dit.LEFT_CAMERA, abc_dit.RIGHT_CAMERA)
     return {
-        abc_dit.STATE: np.zeros(BIMANUAL_SIZE, dtype=np.float32),
+        abc_dit.STATE: np.zeros(codecs.BIMANUAL_SIZE, dtype=np.float32),
         abc_dit.IMAGES: dict.fromkeys(cameras, view),
         abc_dit.PROMPT: '',
     }
