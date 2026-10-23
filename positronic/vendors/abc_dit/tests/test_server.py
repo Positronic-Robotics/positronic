@@ -88,10 +88,10 @@ def test_a_session_reaches_abcs_server_in_its_fields_and_gets_the_whole_chunk(tm
         checkpoint=CHECKPOINT, abc_python=_abc_python(tmp_path, abc_stand_in.Mode.SERVE), backend_port=port
     )
     obs = {
-        'robot_state.left.q': np.arange(6, dtype=np.float32),
-        'robot_state.right.q': np.arange(6, 12, dtype=np.float32),
-        'grip.left': 0.0,
-        'grip.right': 1.0,
+        keys.arm_channel(keys.ROBOT_STATE, keys.LEFT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, dtype=np.float32),
+        keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, 12, dtype=np.float32),
+        keys.arm_channel(keys.GRIP, keys.LEFT_ARM): 0.0,
+        keys.arm_channel(keys.GRIP, keys.RIGHT_ARM): 1.0,
         keys.EXTERIOR_IMAGE: _view(40),
         keys.WRIST_LEFT_IMAGE: _view(120),
         keys.WRIST_RIGHT_IMAGE: _view(200),
@@ -102,10 +102,12 @@ def test_a_session_reaches_abcs_server_in_its_fields_and_gets_the_whole_chunk(tm
 
     assert len(actions) == len(abc_stand_in.CHUNK)
     for action, expected in zip(actions, abc_stand_in.CHUNK, strict=True):
-        np.testing.assert_allclose(action['robot_command.left'].positions, expected[:6])
-        np.testing.assert_allclose(action['robot_command.right'].positions, expected[7:13])
-        assert action['target_grip.left'] == pytest.approx(1.0 - expected[6])
-        assert action['target_grip.right'] == pytest.approx(1.0 - expected[13])
+        np.testing.assert_allclose(action[keys.arm_channel(keys.ROBOT_COMMAND, keys.LEFT_ARM)].positions, expected[:6])
+        np.testing.assert_allclose(
+            action[keys.arm_channel(keys.ROBOT_COMMAND, keys.RIGHT_ARM)].positions, expected[7:13]
+        )
+        assert action[keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM)] == pytest.approx(1.0 - expected[6])
+        assert action[keys.arm_channel(keys.TARGET_GRIP, keys.RIGHT_ARM)] == pytest.approx(1.0 - expected[13])
     # One warm-up request comes before the session's own.
     started, warm_up, request = _log(tmp_path)
     fields = request['request']

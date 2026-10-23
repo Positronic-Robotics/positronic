@@ -9,10 +9,10 @@ TOP, LEFT, RIGHT = keys.EXTERIOR_IMAGE, 'image.wrist_left', 'image.wrist_right'
 
 def _obs() -> dict:
     return {
-        'robot_state.left.q': np.arange(6, dtype=np.float64),
-        'robot_state.right.q': np.arange(6, 12, dtype=np.float64),
-        'grip.left': 0.0,
-        'grip.right': 1.0,
+        keys.arm_channel(keys.ROBOT_STATE, keys.LEFT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, dtype=np.float64),
+        keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, 12, dtype=np.float64),
+        keys.arm_channel(keys.GRIP, keys.LEFT_ARM): 0.0,
+        keys.arm_channel(keys.GRIP, keys.RIGHT_ARM): 1.0,
         TOP: np.full((4, 4, 3), 1, dtype=np.uint8),
         LEFT: np.full((4, 4, 3), 2, dtype=np.uint8),
         RIGHT: np.full((4, 4, 3), 3, dtype=np.uint8),
