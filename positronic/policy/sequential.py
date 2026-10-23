@@ -57,13 +57,19 @@ class Sequential(Processor[InputT, OutputT, ReturnT]):
                 child.close()
 
     def meta(self) -> dict[str, Any]:
-        """Combine metadata, allowing one frame conversion; later components override other shared keys."""
-        meta = {}
+        """Combine metadata, allowing one frame conversion per pose signal; later components override other shared
+        keys. ``EE_FRAMES`` stays one entry keyed by pose signal."""
+        meta: dict[str, Any] = {}
+        frames: dict[str, Any] = {}
         for component in self._components:
-            values = component.meta() if isinstance(component, Processor) else component.meta
-            if roboarm_keys.EE_FRAME in meta and roboarm_keys.EE_FRAME in values:
-                raise ValueError('Only one component in a sequence may convert the end-effector frame')
+            values = dict(component.meta() if isinstance(component, Processor) else component.meta)
+            declared = values.pop(roboarm_keys.EE_FRAMES, {})
+            if both := frames.keys() & declared.keys():
+                raise ValueError(f'Only one component in a sequence may convert the frame of {sorted(both)}')
+            frames.update(declared)
             meta.update(flatten_dict(values))
+        if frames:
+            meta[roboarm_keys.EE_FRAMES] = frames
         return meta
 
     def to_spec(self) -> dict[str, Any]:

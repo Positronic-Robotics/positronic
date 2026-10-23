@@ -692,11 +692,7 @@ class Robot(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         # Built before the chain opens, so nothing can raise between enabling the motors and the protected region.
         kinematics, state = _Kinematics(), YamState()
-        meta = {
-            'robot': 'i2rt_yam',
-            roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES),
-            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-        }
+        meta = {'robot': 'i2rt_yam', roboarm_keys.JOINT_NAMES: list(_JOINT_NAMES)}
         asked: list[pimm.calls.Call[None, None]] = []
         while not should_stop.value:
             error = yield from self._drive_chain(kinematics, state, meta, asked, should_stop, clock)

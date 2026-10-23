@@ -18,9 +18,9 @@ from positronic.drivers.roboarm.ik import (
     DLSIKSolverWithLimits,
     LMIKSolver,
     _prepare_spec,
+    ee_frames,
     frame_transform,
     ik_joints_from_episode,
-    pose_anchor,
 )
 from positronic.drivers.roboarm.models import (
     DEFAULT_FRAME,
@@ -30,10 +30,13 @@ from positronic.drivers.roboarm.models import (
     GRIPPER_SITE,
     ROBOLAB_EE_FRAME,
     ROBOLAB_EEF_LINK,
+    EEFrame,
     bundled_franka_model,
     bundled_panda_model,
+    ee_frames_entry,
 )
 from positronic.drivers.roboarm.so101.driver import Robot as So101Robot
+from positronic.eval import keys as eval_keys
 from positronic.utils import package_assets_path
 
 PANDA_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
@@ -171,7 +174,7 @@ def test_ik_joints_from_episode(timeline):
             keys.TARGET_EE_POSE: DummySignal(ts, ee_poses, timelines=(timeline,)),
             roboarm_keys.URDF: PANDA_URDF,
             roboarm_keys.JOINT_NAMES: PANDA_JOINTS,
-            roboarm_keys.CONTROL_FRAME: PANDA_FRAME,
+            **ee_frames_entry({keys.TARGET_EE_POSE: EEFrame(site=PANDA_FRAME)}),
         }
     )
     result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
@@ -196,7 +199,7 @@ def _fk_site(urdf_xml, q, frame):
 
 
 def test_ik_joints_from_episode_solves_targets_a_codec_moved():
-    """Targets re-expressed in a policy's frame come back to the episode's anchor frame before the solve."""
+    """Targets re-expressed in a policy's frame come back to the site their ``EE_FRAMES`` entry names."""
     n_steps = 3
     ts = np.arange(n_steps, dtype=np.int64) * 100_000_000
     q_traj = np.linspace(TEST_CONFIGS[0], TEST_CONFIGS[1], n_steps)
@@ -212,8 +215,7 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
             keys.TARGET_EE_POSE: DummySignal(ts, moved),
             roboarm_keys.URDF: urdf,
             roboarm_keys.JOINT_NAMES: PANDA_JOINTS,
-            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-            roboarm_keys.EE_FRAME: offset.as_vector(quat),
+            **ee_frames_entry({keys.TARGET_EE_POSE: EEFrame(site=DEFAULT_FRAME, offset=offset)}),
         }
     )
     result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
@@ -235,8 +237,7 @@ def test_frame_transform_reproduces_robolab_eef_across_configs():
 
 
 @pytest.mark.parametrize('model', [bundled_franka_model(), bundled_panda_model()], ids=['franka', 'panda'])
-def test_bundled_model_declares_the_frame_it_reports_in(model):
-    assert model[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
+def test_bundled_model_has_the_site_every_embodiment_reports_at(model):
     frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
 
 
@@ -251,8 +252,8 @@ def test_declared_frame_matches_the_model_geometry(declared, frame):
 
 
 def test_default_frame_still_coincides_with_the_franka_tool_frame():
-    """Two things rest on this and neither is reachable from the data: recordings predating ``EE_FRAME`` are
-    solved at ``end_effector`` (see ``pose_anchor``), and ``DROID_EE_FRAME`` is stated from where
+    """Two things rest on this and neither is reachable from the data: recordings before #485 state their site as
+    ``end_effector`` (see ``cfg.ds.internal.REAL_ROBOT_TRANSFORM``), and ``DROID_EE_FRAME`` is stated from where
     ``DEFAULT_FRAME`` sits. TODO(#550): moving it to the flange invalidates both, so re-express those
     recordings and re-measure the constant in the same change.
     """
@@ -278,18 +279,59 @@ def test_panda_hand_frames_keep_their_offset_from_the_flange():
     np.testing.assert_allclose(mjcf_flange.as_matrix, hand_point.as_matrix, atol=1e-7)
 
 
-def test_pose_anchor_reads_a_stated_frame_and_falls_back_to_the_name():
+def test_ee_frames_reads_the_site_and_offset_of_each_pose_signal():
     offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.identity)
-    quat = geom.Rotation.Representation.QUAT
-    stated = EpisodeContainer(
-        data={roboarm_keys.CONTROL_FRAME: PANDA_FRAME, roboarm_keys.EE_FRAME: offset.as_vector(quat)}
-    )
-    legacy = EpisodeContainer(data={roboarm_keys.CONTROL_FRAME: PANDA_FRAME})
+    stated = {
+        eval_keys.POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE],
+        **ee_frames_entry({
+            keys.EE_POSE: EEFrame(site=DEFAULT_FRAME),
+            keys.TARGET_EE_POSE: EEFrame(site=EE_LINK, offset=offset),
+        }),
+    }
 
-    assert pose_anchor(stated)[0] == DEFAULT_FRAME
-    np.testing.assert_allclose(pose_anchor(stated)[1].as_vector(quat), offset.as_vector(quat), atol=1e-12)
-    assert pose_anchor(legacy)[0] == PANDA_FRAME
-    np.testing.assert_allclose(pose_anchor(legacy)[1].as_matrix, np.eye(4), atol=1e-12)
+    frames = ee_frames(stated)
+
+    assert frames[keys.EE_POSE].site == DEFAULT_FRAME
+    np.testing.assert_allclose(frames[keys.EE_POSE].offset.as_matrix, np.eye(4), atol=1e-12)
+    assert frames[keys.TARGET_EE_POSE].site == EE_LINK
+    np.testing.assert_allclose(frames[keys.TARGET_EE_POSE].offset.as_matrix, offset.as_matrix, atol=1e-12)
+
+
+def test_ee_frames_refuses_a_pose_signal_with_no_frame():
+    statics = {
+        eval_keys.POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE],
+        **ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)}),
+    }
+    with pytest.raises(ValueError, match=keys.TARGET_EE_POSE):
+        ee_frames(statics)
+
+
+def test_ee_frames_refuses_a_site_the_carried_model_lacks():
+    statics = {
+        roboarm_keys.URDF: '<robot name="r"><link name="base"/></robot>',
+        eval_keys.POSE_SIGNALS: [keys.EE_POSE],
+        **ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)}),
+    }
+    with pytest.raises(ValueError, match=DEFAULT_FRAME):
+        ee_frames(statics)
+
+
+def test_ee_frames_skips_the_site_check_when_no_model_is_carried():
+    statics = {eval_keys.POSE_SIGNALS: [keys.EE_POSE], **ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})}
+    assert ee_frames(statics)[keys.EE_POSE].site == DEFAULT_FRAME
+
+
+def test_ik_joints_from_episode_refuses_targets_with_no_frame():
+    episode = EpisodeContainer(
+        data={
+            keys.JOINTS: DummySignal(np.array([0]), np.array([TEST_CONFIGS[0]])),
+            keys.TARGET_EE_POSE: DummySignal(np.array([0]), np.array([_fk(PANDA_URDF, TEST_CONFIGS[0])])),
+            roboarm_keys.URDF: PANDA_URDF,
+            roboarm_keys.JOINT_NAMES: PANDA_JOINTS,
+        }
+    )
+    with pytest.raises(ValueError, match=keys.TARGET_EE_POSE):
+        ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
 
 
 def test_frame_transform_rejects_frames_across_movable_joints():
@@ -342,8 +384,7 @@ def test_gripper_sits_on_the_flange_approach_axis(urdf, grip_point):
     np.testing.assert_allclose(transform.rotation.as_rotation_matrix, np.eye(3), atol=1e-9)
 
 
-def test_gripper_model_declares_the_frame_it_reports_in():
+def test_gripper_model_puts_default_at_the_grip_point():
     model = bundled_franka_model(GRIPPER_SITE)
-    assert model[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
     transform = frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, GRIPPER_SITE)
     np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-9)

@@ -61,7 +61,7 @@ def test_standalone_checkpoint_metadata_contract():
     'field',
     [
         model_settings.IMAGE_SIZE,
-        model_settings.EE_FRAME,
+        model_settings.EE_FRAMES,
         model_settings.ROTATION_OFFSET,
         model_settings.ACTION_FPS,
         model_settings.IMAGE_MAPPINGS,
@@ -78,6 +78,18 @@ def test_conflicting_checkpoint_settings_fail_before_native_loading(tmp_path, fi
     (tmp_path / gr00t.CONFIG_FILENAME).write_text('{}')
     with pytest.raises(ValueError, match=field):
         server.load_model(str(tmp_path), settings)
+
+
+def test_a_checkpoint_that_records_its_frame_as_one_vector_is_refused(tmp_path):
+    settings = model_settings.droid()
+    recorded = {key: value for key, value in settings.items() if key != model_settings.EE_FRAMES}
+    # rules-allow: hardcoded-keys — the key a checkpoint recorded before ``ee_frames``, which no code writes now
+    recorded['ee_frame'] = [0.0, 0.0, -0.1033999994, 0.9238795325107985, 0.0, 0.0, 0.3826834323662685]
+    destination = tmp_path / MODEL_SETTINGS_PATH
+    destination.parent.mkdir()
+    destination.write_text(json.dumps(recorded))
+    with pytest.raises(ValueError, match=model_settings.EE_FRAMES):
+        model_settings.validate(settings, tmp_path)
 
 
 def test_checkpoint_without_settings_and_deployment_only_differences(tmp_path):

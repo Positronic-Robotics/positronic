@@ -8,6 +8,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 
@@ -153,11 +154,12 @@ def yam_bimanual(
         **{f'{keys.TARGET_GRIP}.{s}': Command(arm.target_grip, None) for s, arm in arms.items()},
     }
     joint_signals = {side: f'{keys.ROBOT_STATE}.{side}.q' for side in arms}
+    pose_signals = [f'{keys.ROBOT_STATE}.{s}.ee_pose' for s in arms] + [f'{keys.ROBOT_COMMAND}.{s}.pose' for s in arms]
     static_meta = {
         eval_keys.JOINT_SIGNALS: list(joint_signals.values()),
-        eval_keys.POSE_SIGNALS: [f'{keys.ROBOT_STATE}.{s}.ee_pose' for s in arms]
-        + [f'{keys.ROBOT_COMMAND}.{s}.pose' for s in arms],
+        eval_keys.POSE_SIGNALS: pose_signals,
         eval_keys.MOUNTS: {sig: mounts[side] for side, sig in joint_signals.items()},
+        **ee_frames_entry({sig: EEFrame(site=DEFAULT_FRAME) for sig in pose_signals}),
     }
     return Embodiment(
         descriptor='yam_bimanual',

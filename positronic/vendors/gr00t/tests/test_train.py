@@ -10,6 +10,7 @@ from positronic.dataset import Dataset
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES, Codec
 from positronic.policy.codecs.metadata import MODEL_SETTINGS, MODEL_SETTINGS_PATH
 from positronic.policy.keys import ACTION_FPS
@@ -30,7 +31,11 @@ def raw_dataset():
         keys.EXTERIOR_IMAGE_2: [np.full((180, 320, 3), 73, dtype=np.uint8)] * 2,
     }
     episode = EpisodeContainer(
-        {**{key: DummySignal([0, 100_000_000], values) for key, values in fields.items()}, keys.TASK: 'pick'},
+        {
+            **{key: DummySignal([0, 100_000_000], values) for key, values in fields.items()},
+            keys.TASK: 'pick',
+            **ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)}),
+        },
         meta={'uid': 'recording'},
     )
     dataset = MagicMock(spec=Dataset)

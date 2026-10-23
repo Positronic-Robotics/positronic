@@ -38,7 +38,7 @@ class PolicyDeployment:
     def __post_init__(self) -> None:
         if (
             self.codec is not None
-            and roboarm_keys.EE_FRAME in self.codec.meta
-            and roboarm_keys.EE_FRAME in self.local.meta()
+            and roboarm_keys.EE_FRAMES in self.codec.meta
+            and roboarm_keys.EE_FRAMES in self.local.meta()
         ):
-            raise ValueError('Only one side of a deployment may convert the end-effector frame')
+            raise ValueError(f'Only one side of a deployment may declare {roboarm_keys.EE_FRAMES}')

@@ -28,7 +28,7 @@ from positronic.drivers.utils import (
 )
 
 from . import RobotStatus, State, command
-from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
+from .models import EE_LINK, add_default_frame, attach_robotiq_2f85
 
 with vendor_import(
     'positronic_franka',
@@ -941,7 +941,6 @@ class Robot(pimm.ControlSystem):
             roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
             roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
             'meshes': meshes,
-            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
             roboarm_keys.GRIPPER: gripper,
         }
 

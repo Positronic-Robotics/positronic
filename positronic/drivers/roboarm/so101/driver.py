@@ -11,7 +11,7 @@ from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.kinematics import Kinematics
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
+from positronic.drivers.roboarm.models import add_default_frame
 from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
 
 
@@ -218,11 +218,7 @@ class Robot(pimm.ControlSystem):
     def _build_robot_meta() -> dict:
         urdf = ET.fromstring(Path(_SO101_URDF_PATH).read_text())
         add_default_frame(urdf, _SO101_EE_LINK)
-        return {
-            roboarm_keys.URDF: ET.tostring(urdf, encoding='unicode'),
-            roboarm_keys.JOINT_NAMES: _SO101_JOINT_NAMES,
-            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-        }
+        return {roboarm_keys.URDF: ET.tostring(urdf, encoding='unicode'), roboarm_keys.JOINT_NAMES: _SO101_JOINT_NAMES}
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         # The bus opens first and closes last, so a failure building the arm still gives the port back

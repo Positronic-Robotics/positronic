@@ -20,7 +20,7 @@ from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
-from positronic.drivers.roboarm.ik import assert_default_frame
+from positronic.drivers.roboarm.ik import ee_frames
 from positronic.eval import Embodiment, Task, only_keep_written_signals
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
@@ -144,6 +144,8 @@ class Harness(pimm.ControlSystem):
         self._recorded_signals: set[str] = set()
         self._recorded_privileged: set[str] = set()
         self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
+        # The rig's pose signals that the running policy declares no frame for, so its observation leaves them out.
+        self._withheld_poses: frozenset[str] = frozenset()
         self._telemetry = _EpisodeTelemetry()
         # A ready call the harness made between episodes, by device name, until the device answers it.
         self._repairs: dict[str, pimm.calls.Answer[None]] = {}
@@ -205,6 +207,26 @@ class Harness(pimm.ControlSystem):
 
     def _statics(self) -> dict[str, Any]:
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
+
+    def _pose_handshake(self, policy: Policy) -> frozenset[str]:
+        """The rig's pose signals that ``policy`` declares no frame for. Raise when it declares a site the rig does
+        not report that signal at.
+
+        A policy that declares no ``EE_FRAMES`` speaks joints only, and sees no pose signal.
+        """
+        rig = ee_frames(self._statics())
+        declared = ee_frames(policy.meta())
+        mismatched = {
+            name: (frame.site, rig[name].site)
+            for name, frame in declared.items()
+            if name in rig and frame.site != rig[name].site
+        }
+        if mismatched:
+            raise ValueError(
+                'The policy declares poses at a site the rig does not report them at, as {signal: (declared, rig)}: '
+                f'{mismatched}'
+            )
+        return frozenset(rig.keys() - declared.keys())
 
     def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:
         task = rollout.task
@@ -275,7 +297,6 @@ class Harness(pimm.ControlSystem):
         Conversion errors propagate.
         Put each signal's read and conversion durations into ``step_ms``.
         """
-        assert_default_frame(self._statics())
         self._sample(step_ms)
         inputs: dict[str, Any] = {}
         complete = True
@@ -289,6 +310,8 @@ class Harness(pimm.ControlSystem):
                 inputs.update(values)
         if not complete:
             return None
+        for name in self._withheld_poses & inputs.keys():
+            del inputs[name]
         inputs[keys.TASK] = task.instruction
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return frozen_view(inputs)
@@ -461,6 +484,7 @@ class Harness(pimm.ControlSystem):
         policy_run = None
         try:
             policy_run = runtime.start(rollout.policy)
+            self._withheld_poses = self._pose_handshake(rollout.policy)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())

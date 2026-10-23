@@ -30,7 +30,7 @@ from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, EEFrame, ee_frames_entry
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
@@ -71,6 +71,17 @@ class StubPolicy(Policy):
             obs = yield Step(
                 {keys.ROBOT_COMMAND: self.command, keys.TARGET_GRIP: self.target_grip}, runtime.time_ns + 100_000_000
             )
+
+
+class FramedPolicy(StubPolicy):
+    """A ``StubPolicy`` that states ``frames`` as its ``EE_FRAMES``."""
+
+    def __init__(self, frames):
+        super().__init__()
+        self.frames = frames
+
+    def meta(self):
+        return ee_frames_entry(self.frames)
 
 
 class RemoteStubPolicy(StubPolicy):
@@ -1758,25 +1769,65 @@ def test_robot_state_serializer_emits_the_status_beside_the_pose(status):
     assert serialized['.status'] is status
 
 
-@pytest.mark.parametrize('late', [False, True])
-@pytest.mark.parametrize(
-    'model',
-    [
-        {roboarm_keys.URDF: bundled_franka_model()[roboarm_keys.URDF], roboarm_keys.CONTROL_FRAME: EE_LINK},
-        {roboarm_keys.URDF: '<robot name="r"><link name="base"/></robot>', roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME},
-    ],
-)
-def test_observations_reject_an_invalid_control_frame(observed_harness, model, late):
-    world, harness, _, _, _, step = observed_harness
-    if late:
-        step()
-        emitter, receiver = world.local_pipe()
-        harness.robot_meta_in._bind(receiver)
-        emitter.emit(model)
-    else:
-        harness._embodiment.static_meta.update(model)
-    with pytest.raises(ValueError, match=model[roboarm_keys.CONTROL_FRAME]):
-        step()
+def _run_robot_rollout(policy, static_meta=None):
+    """Run one episode of ``policy`` on a robot embodiment that reports the poses ``static_meta`` states."""
+    with pimm.World(virtual_time=True) as world:
+        device = Passive()
+        state_out = pimm.ControlSystemEmitter(device)
+        embodiment = Embodiment(
+            descriptor='robot',
+            observations={keys.ROBOT_STATE: Observation(state_out, Serializers.robot_state)},
+            commands={
+                keys.ROBOT_COMMAND: Command(pimm.FakeReceiver(device), Serializers.robot_command),
+                keys.TARGET_GRIP: Command(pimm.FakeReceiver(device), None),
+            },
+            prepare_handlers={},
+            static_meta=dict(ROBOT_STATIC_META if static_meta is None else static_meta),
+            meta_source=None,
+            simulated=True,
+        )
+        harness = Harness(embodiment)
+        wire.wire_embodiment(world, harness, embodiment)
+        caller = world.pair(harness.perform_task)
+        done = world.pair(harness.done)
+        loop = world.start([harness, device])
+        try:
+            state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
+            answer = caller(Rollout(Task('move', None), policy, None))
+            next(loop)
+            done.emit({eval_keys.SUCCESS: True})
+            while not answer.done():
+                next(loop)
+            return answer
+        finally:
+            world.request_stop()
+            list(loop)
+
+
+def test_a_policy_that_states_no_frames_sees_no_pose():
+    policy = StubPolicy()
+    assert _run_robot_rollout(policy).result()[eval_keys.TERMINATED] is True
+    assert keys.EE_POSE not in policy.observations[0]
+    assert keys.JOINTS in policy.observations[0]
+
+
+def test_a_policy_that_states_the_rig_site_sees_the_pose():
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
+    assert _run_robot_rollout(policy).result()[eval_keys.TERMINATED] is True
+    np.testing.assert_allclose(policy.observations[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
+
+
+def test_a_policy_that_states_another_site_is_refused():
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=EE_LINK)})
+    with pytest.raises(ValueError, match=EE_LINK):
+        _run_robot_rollout(policy).result()
+    assert policy.observations == []
+
+
+def test_a_rig_that_states_no_frame_for_a_pose_signal_is_refused():
+    static_meta = {**ROBOT_STATIC_META, roboarm_keys.EE_FRAMES: {}}
+    with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
+        _run_robot_rollout(StubPolicy(), static_meta).result()
 
 
 @pytest.mark.parametrize('requested_ns, expected_ns', [(-1, 5_000_000), (100_000_000, 100_000_000), (10**12, 10**9)])

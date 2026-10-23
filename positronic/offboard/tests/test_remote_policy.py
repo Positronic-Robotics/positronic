@@ -17,7 +17,9 @@ from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianPosition
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry, parse_ee_frames
 from positronic.geom import Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
@@ -858,9 +860,9 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():
-    local = Sequential(ChangeEEFrame(Transform3D.identity), ChunkedSchedule(fps=10))
+    local = Sequential(ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity), ChunkedSchedule(fps=10))
     with pytest.raises(ValueError, match='Only one side'):
-        PolicyDeployment(local, codec=ChangeEEFrame(Transform3D.identity))
+        PolicyDeployment(local, codec=ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity))
 
 
 @pytest.fixture
@@ -992,6 +994,39 @@ def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(co
         assert meta[policy_keys.JPEG_QUALITY] == 75
     else:
         assert policy_keys.JPEG_QUALITY not in meta
+
+
+def _frames_meta(meta):
+    return {name: frame.site for name, frame in parse_ee_frames(meta[roboarm_keys.EE_FRAMES]).items()}
+
+
+def test_policy_meta_states_the_frames_the_server_codec_declares():
+    server_frames = ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
+    policy, session = _mock_remote_policy({**CHUNKED_STACK, **server_frames})
+    session.protocol_version = protocol.ProtocolVersion.V3
+    assert _frames_meta(policy.meta()) == {keys.EE_POSE: DEFAULT_FRAME}
+
+
+def test_policy_meta_states_the_frames_a_v1_client_stack_declares():
+    """A server older than ``ee_frames`` declares its frame only as a v1 ``change_ee_frame`` in the client stack."""
+    v1 = spec.component(ChangeEEFrame.WIRE_NAME, version=1, transform=[0, 0, 0, 1, 0, 0, 0], keys=[keys.EE_POSE])
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: spec.sequence(v1, CHUNKED_STACK['local_stack'])})
+    session.protocol_version = protocol.ProtocolVersion.V3
+    assert _frames_meta(policy.meta()) == {keys.EE_POSE: DEFAULT_FRAME}
+
+
+def test_policy_meta_states_no_frames_for_a_server_that_declares_none():
+    policy, session = _mock_remote_policy(CHUNKED_STACK)
+    session.protocol_version = protocol.ProtocolVersion.V3
+    assert roboarm_keys.EE_FRAMES not in policy.meta()
+
+
+def test_a_frame_codec_around_a_server_that_declares_none_states_the_frames_for_it():
+    """A server that knows nothing of ``ee_frames`` reads poses at a frame the client side states for it."""
+    policy, session = _mock_remote_policy(CHUNKED_STACK)
+    session.protocol_version = protocol.ProtocolVersion.V3
+    framed = Sequential(ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity), policy)
+    assert _frames_meta(framed.meta())[keys.EE_POSE] == DEFAULT_FRAME
 
 
 @pytest.mark.parametrize('start_run', [False, True], ids=['meta', 'run'])

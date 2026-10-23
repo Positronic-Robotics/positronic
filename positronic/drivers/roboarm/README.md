@@ -5,17 +5,24 @@ against it. Which point that is, is a choice; this file states the choice and wh
 
 ## `default`
 
-**Every embodiment's model declares a frame named `default`, reports `robot_state.ee_pose` in it, and accepts
-Cartesian commands in it.** The model is the `urdf` the driver publishes in its `robot_meta`; `control_frame`
-names the frame within it, and under this contract that name is always `default` (`models.DEFAULT_FRAME`).
+**Every embodiment's model declares a site named `default` (`models.DEFAULT_FRAME`), reports
+`robot_state.ee_pose` at it, and accepts Cartesian commands at it.** The model is the `urdf` the driver
+publishes in its `robot_meta`.
 
-Every frame conversion is measured from `default`. A policy trained in some other end-effector frame carries
-the constant transform from `default` to it rather than naming it (`ChangeEEFrame`, see
-[codec guide](../../policy/codecs/README.md#end-effector-frames)) — which is what lets one checkpoint run on any
-embodiment honouring the contract.
+**Every rig, recording and pose-reading policy states where each pose signal sits, as `ee_frames`.** The entry is
+`{signal: {site, offset}}` (`models.EEFrame`): the pose is `offset` from `site`, a site of the model. The
+embodiment states it in its static meta for each entry of `pose_signals`, so a recording carries it.
+`ik.ee_frames` reads it, and refuses a pose signal with no entry and a site that a carried model does not have.
+A rig with no model, such as Kinova, skips the site check.
 
-The harness checks the declaration on every observation, not once per episode: a remote env publishes its
-`robot_meta` a turn after the reset that produced it, so at episode start there is no model to check.
+A policy trained in some other end-effector frame carries the constant transform from the rig site to it
+(`ChangeEEFrame`, see [codec guide](../../policy/codecs/README.md#end-effector-frames)), which is what lets one
+checkpoint run on any embodiment that keeps the contract. At the start of each episode the harness compares the
+policy's `ee_frames` with the rig's. A policy that states none speaks joints only and sees no pose signal. A
+policy that names another site is refused.
+
+Recordings made before `ee_frames` state the site as `control_frame` and a codec offset as `ee_frame`.
+`cfg.ds.internal.REAL_ROBOT_TRANSFORM` and `SIM_ROBOT_TRANSFORM` relabel both as `ee_frames`.
 
 ## Where to put it
 
@@ -27,9 +34,8 @@ A checkpoint's transform is portable only while every embodiment puts `default` 
 Today's placements do not — the FR3 and the sim panda sit 45 mm apart along the approach axis — which is what
 [#550](https://github.com/Positronic-Robotics/positronic/issues/550) closes.
 
-Two things are pinned to the Franka's FR3's current placement: recordings predating this contract state a frame name
-rather than an `ee_frame` transform and `ik.pose_anchor` solves at that name, and `models.DROID_EE_FRAME` is
-measured from where `default` sits. `test_default_frame_still_coincides_with_the_franka_tool_frame` fails when
+Two things are pinned to the Franka's FR3's current placement: recordings before #485 state their site as
+`end_effector`, and `models.DROID_EE_FRAME` is measured from where `default` sits. `test_default_frame_still_coincides_with_the_franka_tool_frame` fails when
 the placement moves.
 
 | Embodiment | `default` sits at | Note |
@@ -48,10 +54,11 @@ or solves at `gripper`.
 
 ## Adding an embodiment
 
-1. Ship a model: `robot_meta` carries `urdf`, `joint_names`, `control_frame`, and the meshes the viewer needs.
+1. Ship a model: `robot_meta` carries `urdf`, `joint_names`, and the meshes the viewer needs.
 2. Declare `default` in that URDF — `models.add_default_frame` attaches it to a link you name.
-3. Set `control_frame` to `models.DEFAULT_FRAME`.
-4. Report `robot_state.ee_pose` at that frame and drive `CartesianPosition` to it.
+3. State `ee_frames` at `models.DEFAULT_FRAME` for each pose signal in the embodiment's static meta.
+   `eval.ROBOT_STATIC_META` does this for one arm.
+4. Report `robot_state.ee_pose` at that site and drive `CartesianPosition` to it.
 5. For `CartesianDelta`, compose through `CartesianDelta.apply`, which applies the command's own `frame`
    before anchoring on the measured pose.
 
