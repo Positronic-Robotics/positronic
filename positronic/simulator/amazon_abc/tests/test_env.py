@@ -62,6 +62,9 @@ class _FakeScene:
         self.task_eval: dict[str, Any] | None = {mapping.ABC_EVAL_EVER_SUCCESS: False}
         self.prompt = _PROMPT
         self.actions: list[np.ndarray] = []
+        # How many builds raise as ABC's unseeded build-time draw raises when it cannot lay out a scene.
+        self.failed_layouts = 0
+        self.builds = 0
 
     def forget_arm_state(self) -> None:
         pass
@@ -116,6 +119,10 @@ def env(monkeypatch, scene: _FakeScene) -> Any:
     def make_env(
         task: str, terminate_on_success: bool = False, max_episode_steps: int | None = None, **_: Any
     ) -> _FakeScene:
+        scene.builds += 1
+        if scene.failed_layouts > 0:
+            scene.failed_layouts -= 1
+            raise RuntimeError('put_relative could not place non-overlapping objects')
         scene.task = task
         scene.terminate_on_success = terminate_on_success
         scene.max_episode_steps = max_episode_steps
@@ -181,6 +188,23 @@ def test_the_env_is_built_for_the_task_so_abc_attaches_that_tasks_evaluator(env,
 
     # Several tasks share one scene (`env_task`): ABC picks the evaluator and the prompt by the task name.
     assert scene.task == _TOKEN[mapping.TOKEN_TASK]
+
+
+def test_a_build_whose_unseeded_layout_fails_is_built_again(env, scene):
+    scene.failed_layouts = 1
+
+    frame = env.reset(_TOKEN)
+
+    # The seeded reset draws the trial's scene, so the scene the failed build drew was never the trial's.
+    assert (scene.builds, len(frame[protocol.SLOTS])) == (2, 1)
+
+
+def test_a_build_that_keeps_failing_raises_after_a_bounded_number_of_tries(env, scene):
+    scene.failed_layouts = 100
+
+    with pytest.raises(RuntimeError, match='could not place'):
+        env.reset(_TOKEN)
+    assert scene.builds < 100
 
 
 def test_abc_truncates_a_trial_at_the_horizon_of_its_own_eval(env, scene):
