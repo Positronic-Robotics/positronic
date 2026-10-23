@@ -124,17 +124,6 @@ class EndOnField(Policy):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
-def prefix_without_end(
-    infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]],
-) -> Callable[[Obs, Sequence[Commands]], Sequence[Commands]]:
-    """``infer`` with ``END`` removed from each prefix action: a prefix holds what the robot executes."""
-
-    def call(obs: Obs, prefix: Sequence[Commands]) -> Sequence[Commands]:
-        return infer(obs, [{name: value for name, value in action.items() if name != END} for action in prefix])
-
-    return call
-
-
 class DurationEstimateRun(ABC):
     """One episode's inference-delay history and duration estimates."""
 
@@ -578,7 +567,7 @@ class RTCSchedule(Policy):
     action until its answer arrives (-- in the drawing).
 
     `infer` gets the observation and the prefix, in the command format that `infer`
-    returns, and converts both to the model's format. The prefix holds no ``END``.
+    returns, and converts both to the model's format.
 
     Only a model with absolute actions works with this policy. No codec converts a
     command back to a relative model action, so the prefix cannot be given to a
@@ -602,7 +591,6 @@ class RTCSchedule(Policy):
         self._prefix_sampling = prefix_sampling
 
     def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
-        infer = prefix_without_end(infer)
         duration = self._prefix_duration.run()
         prefix_sec = 0.0
         answer: Answer[Sequence[Commands]] | None = None

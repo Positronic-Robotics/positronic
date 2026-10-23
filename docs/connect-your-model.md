@@ -173,7 +173,7 @@ Once your model decides to end, every element of every later answer carries `end
 can drop the element that holds the first `end`: past `horizon_sec`, in a replan after an arm error, in the elements
 that `RTCSchedule` skips when a new chunk starts, or when a late round replaces the queue with a new answer. A later
 element then carries the end. Until the run stops, the client can play about one more element and make one more call.
-`RTCSchedule` leaves `end` out of the prefix that it sends to the model.
+The prefix that `RTCSchedule` sends to the model holds `end` like any other command, so a model that cannot read its own `end` back drops it.
 
 The codecs keep `end` and refuse a malformed value when the answer arrives. A codec that builds elements from arrays,
 such as `UnpackActionChunk`, refuses an answer with `end`.
