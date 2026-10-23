@@ -46,3 +46,13 @@ class PolicyDeployment:
             raise ValueError(
                 f'Only one side of a deployment may declare the {roboarm_keys.EE_FRAMES} of {sorted(both)}'
             )
+
+    def meta(self) -> dict[str, Any]:
+        """The server codec's meta and the client stack's, with the frames each side states merged per signal."""
+        codec_meta = self.codec.meta if self.codec is not None else {}
+        local_meta = self.local.meta()
+        frames = {**codec_meta.get(roboarm_keys.EE_FRAMES, {}), **local_meta.get(roboarm_keys.EE_FRAMES, {})}
+        meta = {**codec_meta, **local_meta}
+        if frames:
+            meta[roboarm_keys.EE_FRAMES] = frames
+        return meta

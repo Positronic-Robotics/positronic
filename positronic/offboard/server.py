@@ -209,8 +209,7 @@ class PolicyServer:
             meta = {
                 **conn.served_address.meta,
                 **model.meta(),
-                **(pipeline.codec.meta if pipeline.codec is not None else {}),
-                **pipeline.local.meta(),
+                **pipeline.meta(),
                 offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
                 policy_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),

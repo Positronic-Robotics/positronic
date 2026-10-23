@@ -1024,6 +1024,18 @@ def test_policy_meta_states_the_frames_a_v1_client_stack_declares():
     assert _frames_meta(policy.meta()) == {keys.EE_POSE: DEFAULT_FRAME}
 
 
+def test_policy_meta_states_the_frames_both_sides_of_a_split_deployment_declare(served):
+    local = Sequential(
+        ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.EE_POSE,)),
+        PauseOnUnavailable(),
+        ChunkedSchedule(fps=10, horizon_sec=0.2),
+    )
+    codec = ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.TARGET_EE_POSE,))
+    address, _, _ = served(local=local, codec=codec)
+    frames = _frames_meta(RemotePolicy('websocket', address).meta())
+    assert frames == {keys.EE_POSE: DEFAULT_FRAME, keys.TARGET_EE_POSE: DEFAULT_FRAME}
+
+
 def test_policy_meta_states_no_frames_for_a_server_that_declares_none():
     policy, session = _mock_remote_policy(CHUNKED_STACK)
     session.protocol_version = protocol.ProtocolVersion.V3
