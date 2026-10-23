@@ -8,6 +8,7 @@ Usage
       --model.checkpoint=<dir>/abc_dit_xl_200k_model.pt
 """
 
+import socket
 import subprocess
 from functools import partial
 from pathlib import Path
@@ -39,14 +40,19 @@ CHUNK_LENGTH = 30
 class AbcDitModel(Model):
     """An ABC-DiT checkpoint behind ABC's policy server in a child process, which this model owns.
 
-    Each request carries standard normal flow noise from one generator, as ABC's sim eval draws it.
+    Each request carries standard normal flow noise from one generator seeded with `noise_seed`, as ABC's sim eval
+    draws it.
     """
 
     def __init__(self, backend: subprocess.Popen, port: int, noise_seed: int, meta: dict[str, Any]):
         self._backend = backend
         self._client = RoboarenaClient(port=port)
-        self._noise = np.random.default_rng(noise_seed)
+        self._noise_seed = noise_seed
+        self.restart_noise()
         self._meta = meta
+
+    def restart_noise(self) -> None:
+        self._noise = np.random.default_rng(self._noise_seed)
 
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
         noise = self._noise.standard_normal((CHUNK_LENGTH, codecs.BIMANUAL_SIZE), dtype=np.float32)
@@ -98,6 +104,10 @@ def abc_dit_model(checkpoint: str, abc_python: str, fast_inference: bool, noise_
         '--policy.fast-inference' if fast_inference else '--policy.no-fast-inference',
         f'--port={backend_port}',
     ]
+    # Refuse a port another server holds: the readiness probe would reach that server, not this checkpoint.
+    with socket.socket() as port_check:
+        port_check.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        port_check.bind(('127.0.0.1', backend_port))
     backend = subprocess.Popen(command)
     meta = {
         policy_keys.CHECKPOINT_ID: checkpoint_path.name,
@@ -114,6 +124,8 @@ def abc_dit_model(checkpoint: str, abc_python: str, fast_inference: bool, noise_
             max_wait=PROVISIONING_DEADLINE_S,
         )
         warmup(model, _warm_observation())
+        # ABC's sim eval warms up with a generator of its own, so its first rollout gets the seed's first draw.
+        model.restart_noise()
     except Exception:
         model.close()
         raise
