@@ -55,6 +55,16 @@ class TestTransform3D(unittest.TestCase):
         np.testing.assert_allclose(composed.translation, Transform3D.identity.translation, atol=1e-4, rtol=0)
         np.testing.assert_allclose(composed.rotation.as_quat, Transform3D.identity.rotation.as_quat, atol=1e-4, rtol=0)
 
+    def test_transforms_with_the_same_value_are_equal(self):
+        rotation = Rotation.from_quat([0.7071, 0.7071, 0, 0])
+        assert Transform3D([1.0, 2.0, 3.0], rotation) == Transform3D(np.array([1.0, 2.0, 3.0]), rotation.copy())
+
+    def test_transforms_that_differ_in_translation_or_rotation_are_not_equal(self):
+        rotation = Rotation.from_quat([0.7071, 0.7071, 0, 0])
+        assert Transform3D([1.0, 2.0, 3.0], rotation) != Transform3D([1.0, 2.0, 3.1], rotation)
+        assert Transform3D([1.0, 2.0, 3.0], rotation) != Transform3D([1.0, 2.0, 3.0], Rotation.identity)
+        assert Transform3D.identity != Rotation.identity
+
     def test_identity_is_zero_translation_identity_rotation(self):
         identity = Transform3D.identity
 
