@@ -45,6 +45,7 @@ from positronic.simulator.env_server.tests.mujoco_env import (
     remote_stack_cubes_eval,
 )
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE, SIM_STATE_INTEGRATION
+from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.tests.testing_coutils import drive_scheduler
 
@@ -560,6 +561,25 @@ class TestEnvControlFrame:
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         with pytest.raises(ValueError, match='measured pose'):
             _in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame, None)
+
+    def test_a_one_arm_adapter_composes_a_delta_at_the_pose_its_observation_measured(self):
+        adapter = RobolabAdapter(camera_dict={})
+        eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+        adapter.observations({
+            robolab_keys.OBS_EEF_POS: eef.translation,
+            robolab_keys.OBS_EEF_QUAT: eef.rotation.as_quat,
+            robolab_keys.OBS_JOINT_POS: np.zeros(7),
+            robolab_keys.OBS_JOINT_VEL: np.zeros(7),
+            robolab_keys.OBS_GRIP: 0.0,
+        })
+        delta = geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
+        cmd = roboarm_command.CartesianDelta(delta)
+
+        wired = adapter.action({keys.ROBOT_COMMAND: pimm.Message(cmd)})[keys.ROBOT_COMMAND]
+
+        expected = cmd.apply(eef * adapter.env_control_frame.inv) * adapter.env_control_frame
+        assert wired[protocol.COMMAND_TYPE] == protocol.CARTESIAN
+        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], expected.as_vector(self.rotmat), atol=1e-12)
 
     def test_robolab_reports_and_drives_the_same_frame(self):
         adapter = RobolabAdapter(camera_dict={})

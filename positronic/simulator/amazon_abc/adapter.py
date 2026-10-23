@@ -37,9 +37,12 @@ class AbcAdapter(WireCommandAdapter):
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
         for arm in mapping.ARMS:
-            pose = geom.Transform3D(
-                raw_obs[protocol.arm_channel(mapping.OBS_EEF_POS, arm)],
-                geom.Rotation.from_quat(raw_obs[protocol.arm_channel(mapping.OBS_EEF_QUAT, arm)]),
+            pose = self._measure(
+                geom.Transform3D(
+                    raw_obs[protocol.arm_channel(mapping.OBS_EEF_POS, arm)],
+                    geom.Rotation.from_quat(raw_obs[protocol.arm_channel(mapping.OBS_EEF_QUAT, arm)]),
+                ),
+                arm,
             )
             state = YamState()
             state.encode(
