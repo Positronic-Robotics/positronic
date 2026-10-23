@@ -18,6 +18,7 @@ from typing import Annotated, ClassVar, Literal, NamedTuple, NewType, Self
 import pyarrow as pa
 import pyarrow.parquet as pq
 from eval_vocabulary.episode import (
+    ABC_REWARD_SIGNAL,
     BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
@@ -485,6 +486,20 @@ def _recorded_sim_trial(episode: Path, task_key: str) -> _SimTrial | None:
     return _SimTrial(uid, *recorded, start_ns, (end_ns - start_ns) / 1e9)
 
 
+def _end_label(episode: Path, task_key: str, annotator: LabelerRef) -> Label | None:
+    """The label of a trial that succeeds or fails at its end, or runs out of time, with its task under `task_key`."""
+    trial = _recorded_sim_trial(episode, task_key)
+    if trial is None:
+        return None
+    return Label(
+        uid=trial.uid,
+        task=trial.task,
+        annotator=annotator,
+        seconds_to_end=trial.seconds_to_end,
+        events=trial.end_events,
+    )
+
+
 MOLMO_LABELER = LabelerRef('molmo')
 
 
@@ -493,16 +508,32 @@ def molmo_label(episode: Path) -> Label | None:
 
     A trial that an operator ended has no label.
     """
-    trial = _recorded_sim_trial(episode, TASK)
-    if trial is None:
+    return _end_label(episode, TASK, MOLMO_LABELER)
+
+
+ABC_LABELER = LabelerRef('abc')
+
+
+def abc_label(episode: Path) -> Label | None:
+    """ABC's labeler: a trial ends as in `molmo_label`, and its task is the task id that ABC names."""
+    return _end_label(episode, BENCHMARK_TASK, ABC_LABELER)
+
+
+def abc_max_progress(episode: Path) -> float | None:
+    """The largest progress that ABC's evaluator recorded in `episode`, from 0 to 1, as ABC scores progress.
+
+    None when the episode records no progress sample, or its signal does not parse.
+    """
+    signal = episode / f'{ABC_REWARD_SIGNAL}{SIGNAL_FILE_SUFFIX}'
+    if not signal.is_file():
         return None
-    return Label(
-        uid=trial.uid,
-        task=trial.task,
-        annotator=MOLMO_LABELER,
-        seconds_to_end=trial.seconds_to_end,
-        events=trial.end_events,
-    )
+    try:
+        rewards = pq.read_table(signal, columns=[VALUE_COLUMN]).column(VALUE_COLUMN)
+    except pa.ArrowInvalid:
+        # One damaged upload leaves the other episodes measured, so this is logged, not raised.
+        log.error('%s does not parse; this episode has no progress', signal)
+        return None
+    return max((reward for reward in rewards.to_pylist() if reward is not None), default=None)
 
 
 ROBOLAB_LABELER = LabelerRef('robolab')
@@ -569,6 +600,7 @@ def robolab_label(episode: Path) -> Label | None:
 PUBLIC_LABELERS: Mapping[LabelerRef, Labeler] = MappingProxyType({
     MOLMO_LABELER: molmo_label,
     ROBOLAB_LABELER: robolab_label,
+    ABC_LABELER: abc_label,
 })
 
 
