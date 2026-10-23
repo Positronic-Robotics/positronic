@@ -4,7 +4,7 @@ import json
 from concurrent.futures import Future
 from datetime import date
 from sys import maxsize
-from typing import cast
+from typing import Any, cast
 from unittest.mock import Mock
 
 import numpy as np
@@ -19,7 +19,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, JointPosition,
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
-from positronic.policy.base import Policy, PolicyEnd, Step
+from positronic.policy.base import Answer, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
     ACTION,
     BinarizeGripInference,
@@ -50,6 +50,7 @@ from positronic.policy.processors import (
     DelayEstimate,
     DurationEstimate,
     DurationEstimateRun,
+    EndOnField,
     PauseOnUnavailable,
     PrefixSampling,
     RTCSchedule,
@@ -86,7 +87,7 @@ def test_unavailability_withholds_commands_and_resumes_on_recovery(execution, st
         run.close()
 
 
-@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,))])
+@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,)), EndOnField()])
 def test_a_wrapper_returns_what_its_inner_run_returned(execution, wrapper):
     runtime, _ = execution
 
@@ -100,129 +101,6 @@ def test_a_wrapper_returns_what_its_inner_run_returned(execution, wrapper):
     with pytest.raises(StopIteration) as end:
         run.send({MOTOR: 1})
     assert end.value.value is PolicyEnd.COMPLETE
-
-
-def test_a_declared_stack_ends_the_run_when_the_end_element_plays(execution):
-    runtime, clock = execution
-    pose = np.array([0.1, -0.2, 0.3, 1.0, 0.0, 0.0, 0.0, 0.5])
-    chunk = [{ACTION: pose}, {ACTION: pose}, {ACTION: pose}, {END: 'give_up'}]
-    stack = spec.from_spec(
-        sequence(
-            component(ChunkedSchedule.WIRE_NAME, fps=10),
-            component(AbsolutePositionAction.WIRE_NAME, tgt_ee_pose_key='pose', tgt_grip_key='grip'),
-        )
-    )
-    run = runtime.start(cast(Policy, stack), lambda obs: chunk)
-    try:
-        for now_ns in (0, 100_000_000, 200_000_000):
-            clock.advance_to_ns(now_ns)
-            assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
-        clock.advance_to_ns(300_000_000)
-        assert run.send({}) == Step({}, 300_000_000)
-        with pytest.raises(StopIteration) as end:
-            run.send({})
-        assert end.value.value is PolicyEnd.GIVE_UP
-    finally:
-        run.close()
-
-
-def test_a_round_with_an_end_sends_its_commands_before_the_run_ends(execution):
-    runtime, clock = execution
-    chunk = [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}]
-    run = runtime.start(ChunkedSchedule(fps=10, record_stats=False), lambda obs: chunk)
-    try:
-        assert run.send({}).commands == {MOTOR: 1}
-        clock.advance_to_ns(100_000_000)
-        assert run.send({}).commands == {MOTOR: 2}
-        with pytest.raises(StopIteration) as end:
-            run.send({})
-        assert end.value.value is PolicyEnd.COMPLETE
-    finally:
-        run.close()
-
-
-def test_a_late_round_stops_at_an_end(execution):
-    runtime, clock = execution
-    chunk = [{MOTOR: 1}, {MOTOR: 2}, {MOTOR: 3}, {MOTOR: 4, END: 'complete'}, {MOTOR: 5}]
-    run = runtime.start(ChunkedSchedule(fps=10, record_stats=False), lambda obs: chunk)
-    try:
-        assert run.send({}).commands == {MOTOR: 1}
-        clock.advance_to_ns(400_000_000)
-        assert run.send({}).commands == {MOTOR: 4}
-        with pytest.raises(StopIteration) as end:
-            run.send({})
-        assert end.value.value is PolicyEnd.COMPLETE
-    finally:
-        run.close()
-
-
-# Each schedule would ask for its next chunk at or before the end.
-@pytest.mark.parametrize(
-    ('schedule', 'times_ns'),
-    [
-        (lambda: ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.1), record_stats=False), (0, 100_000_000)),
-        (
-            lambda: ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.15), record_stats=False),
-            (0, 50_000_000, 100_000_000),
-        ),
-        (
-            lambda: RTCSchedule(fps=10, call_after_sec=0.1, prefix_duration=ConstantDuration()),
-            (0, 100_000_000, 200_000_000),
-        ),
-    ],
-    ids=['chunked', 'chunked-early-call', 'rtc'],
-)
-def test_a_queued_end_asks_for_no_further_chunk(execution, schedule, times_ns):
-    runtime, clock = execution
-    calls = []
-
-    def infer(obs, *prefix):
-        calls.append(runtime.time_ns)
-        return [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}]
-
-    run = runtime.start(schedule(), infer)
-    try:
-        steps = []
-        for time_ns in times_ns:
-            clock.advance_to_ns(time_ns)
-            steps.append(run.send({}))
-        assert steps[-1].commands == {MOTOR: 2}
-        with pytest.raises(StopIteration) as end:
-            run.send({})
-        assert end.value.value is PolicyEnd.COMPLETE
-    finally:
-        run.close()
-    assert calls == [0]
-
-
-@pytest.mark.parametrize(
-    'schedule',
-    [
-        lambda: ChunkedSchedule(fps=10, record_stats=False),
-        lambda: RTCSchedule(fps=10, call_after_sec=10, prefix_duration=ConstantDuration()),
-    ],
-    ids=['chunked', 'rtc'],
-)
-def test_a_schedule_refuses_a_malformed_end_when_the_answer_arrives(execution, schedule):
-    runtime, _ = execution
-    run = runtime.start(schedule(), lambda obs, *prefix: [{MOTOR: 1, END: 'done'}])
-    try:
-        with pytest.raises(ValueError):
-            run.send({})
-            run.send({})
-    finally:
-        run.close()
-
-
-def test_the_schedule_refuses_a_malformed_end_past_its_horizon(execution):
-    runtime, _ = execution
-    schedule = ChunkedSchedule(fps=10, horizon_sec=0.1, record_stats=False)
-    run = runtime.start(schedule, lambda obs: [{MOTOR: 1}, {MOTOR: 2, END: 'done'}])
-    try:
-        with pytest.raises(ValueError):
-            run.send({})
-    finally:
-        run.close()
 
 
 @pytest.mark.parametrize('pad_start', [True, False])
@@ -402,18 +280,6 @@ def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.SCHEDULED}'] == 10
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.EMITTED}'] == 2
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.DROPPED}'] == 4
-
-
-def test_the_elements_after_an_end_are_not_scheduled(execution):
-    runtime, clock = execution
-    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}, {MOTOR: 3}])
-    run.send({})
-    clock.advance_to_ns(100_000_000)
-    run.send({})
-    with pytest.raises(StopIteration):
-        run.send({})
-    stats = {name.removeprefix(f'{eval_keys.SCHEDULE}.'): value for name, value in runtime.metadata_snapshot().items()}
-    assert (stats[eval_keys.SCHEDULED], stats[eval_keys.EMITTED], stats[eval_keys.DROPPED]) == (2, 2, 0)
 
 
 def test_a_new_chunk_excludes_the_gap_from_the_previous_chunk(execution):
@@ -658,7 +524,7 @@ def test_serialized_error_replanning_preserves_the_behavior(execution, replan_on
     runtime, clock = execution
     definition = ChunkedSchedule(fps=10, replan_on_error=replan_on_error)
     encoded = json.loads(json.dumps(definition.to_spec()))
-    assert encoded[VERSION] == ChunkedSchedule.WIRE_VERSION
+    assert encoded[VERSION] == 3
     rebuilt = spec.from_spec(encoded)
     assert rebuilt.to_spec() == encoded
     infer = Mock(return_value=[{MOTOR: 1}] * 5)
@@ -1039,42 +905,6 @@ def test_rtc_follows_the_drawing(execution, monkeypatch):
     assert model.calls == [(0, []), (8 * PERIOD_NS, ['o5', 'o6', 'o7']), (13 * PERIOD_NS, ['n5', 'n6', 'n7'])]
 
 
-def test_a_late_rtc_round_stops_at_an_end(execution):
-    runtime, clock = execution
-    chunk = [{MOTOR: 1}, {MOTOR: 2}, {MOTOR: 3, END: 'complete'}, {MOTOR: 4}]
-    schedule = RTCSchedule(fps=10, call_after_sec=10, prefix_duration=ConstantDuration())
-    run = runtime.start(schedule, lambda obs, prefix: chunk)
-    try:
-        run.send({})
-        assert run.send({}).commands == {MOTOR: 1}
-        clock.advance_to_ns(300_000_000)
-        assert run.send({}).commands == {MOTOR: 3}
-        with pytest.raises(StopIteration) as end:
-            run.send({})
-        assert end.value.value is PolicyEnd.COMPLETE
-    finally:
-        run.close()
-
-
-def test_the_rtc_prefix_stops_at_the_end_and_holds_no_end(execution):
-    runtime, clock = execution
-    calls = []
-
-    def infer(obs, prefix):
-        calls.append(prefix)
-        return [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}, {MOTOR: 3}]
-
-    schedule = RTCSchedule(fps=10, call_after_sec=0, prefix_duration=ConstantDuration(0.3))
-    run = runtime.start(schedule, infer)
-    try:
-        run.send({})
-        clock.advance_to_ns(PERIOD_NS // 2)
-        run.send({})
-    finally:
-        run.close()
-    assert calls == [[], [{MOTOR: 1}, {MOTOR: 2}]]
-
-
 def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execution, monkeypatch):
     model, run, step = _rtc(execution, monkeypatch, 0.2, DelayEstimate.mean())
     answers = {1: ('o', 4), 8: ('n', 10)}
@@ -1336,11 +1166,7 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    declared = {
-        NAME: ChunkedSchedule.WIRE_NAME,
-        VERSION: ChunkedSchedule.WIRE_VERSION,
-        ARGS: {ChunkedSchedule.FPS_ARG: 10},
-    }
+    declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 3, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
     schedule = spec.from_spec(declared)
     assert type(schedule) is ChunkedSchedule
     assert schedule.to_spec() == declared
@@ -1397,6 +1223,7 @@ def test_wire_names_match_the_registered_components():
         'chunked_schedule': ChunkedSchedule(fps=10),
         'encode_images': EncodeImages([['camera']]),
         'stop_on_fault': PauseOnUnavailable(),
+        'end_on_field': EndOnField(),
         'temporal_stack': TemporalStack(('v',), (0.0,)),
         'binarize_grip_training': BinarizeGripTraining(('grip',)),
         'binarize_grip_inference': BinarizeGripInference(),
@@ -1459,3 +1286,194 @@ def test_unversioned_wire_specs_still_select_v1():
     assert isinstance(spec.from_spec({NAME: Metadata.WIRE_NAME, ARGS: {'values': {}}}), Metadata)
     with pytest.raises(ValueError, match='Unsupported .* version 1'):
         spec.from_spec({NAME: ChunkedSchedule.WIRE_NAME, ARGS: {ChunkedSchedule.FPS_ARG: 20}})
+
+
+class _EndingModel:
+    """Answers ``first``, then chunks of ``length``. Every answer after one with ``END`` carries ``END``.
+
+    ``on`` says which elements of such an answer carry it: ``'first'`` or ``'every'``.
+    """
+
+    def __init__(self, runtime, first, on='every', length=10):
+        self._runtime = runtime
+        self._first = first
+        self._on = on
+        self._length = length
+        self._ended = False
+        self.calls: list[int] = []
+        self.prefixes: list[list] = []
+
+    def __call__(self, obs, prefix=()):
+        call = len(self.calls)
+        self.calls.append(self._runtime.time_ns)
+        self.prefixes.append(list(prefix))
+        chunk: list[dict[str, Any]] = (
+            [dict(e) for e in self._first] if call == 0 else [{MOTOR: (call, i)} for i in range(self._length)]
+        )
+        if self._ended:
+            for i, element in enumerate(chunk):
+                if self._on == 'every' or i == 0:
+                    element[END] = 'complete'
+        self._ended |= any(END in element for element in chunk)
+        return chunk
+
+
+class _DueAnswer(Answer):
+    def __init__(self, runtime, value, due_ns):
+        self._runtime, self._value, self._due_ns = runtime, value, due_ns
+
+    def done(self):
+        return self._runtime.time_ns >= self._due_ns
+
+    def result(self):
+        return self._value
+
+
+def _answer_after(runtime, monkeypatch, *latencies_ns):
+    """Make call k answer ``latencies_ns[k]`` after its submission; later calls take the last latency."""
+    calls = []
+
+    def submit(function, *args):
+        latency_ns = latencies_ns[min(len(calls), len(latencies_ns) - 1)]
+        calls.append(latency_ns)
+        return _DueAnswer(runtime, function(*args), runtime.time_ns + latency_ns)
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+
+
+def _play(execution, schedule, model, times_ns, observations=None):
+    """The motor commands sent at each time, and the ``PolicyEnd`` the run returned, or ``None``."""
+    runtime, clock = execution
+    run = runtime.start(Sequential(EndOnField(), schedule), model)
+    sent = []
+    try:
+        for time_ns in times_ns:
+            clock.advance_to_ns(time_ns)
+            try:
+                step = run.send((observations or {}).get(time_ns, {}))
+            except StopIteration as stop:
+                return sent, stop.value
+            sent.append(step.commands.get(MOTOR))
+    finally:
+        run.close()
+    return sent, None
+
+
+def _ending(motor):
+    return {MOTOR: motor, END: 'complete'}
+
+
+def test_end_on_field_sends_the_other_commands_and_returns_at_the_next_observation(execution):
+    runtime, clock = execution
+    run = runtime.start(Sequential(EndOnField(), ChunkedSchedule(fps=10)), lambda obs: [{MOTOR: 1}, _ending(2)])
+    try:
+        assert run.send({}).commands == {MOTOR: 1}
+        clock.advance_to_ns(PERIOD_NS)
+        assert run.send({}) == Step({MOTOR: 2}, PERIOD_NS)
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.COMPLETE
+    finally:
+        run.close()
+
+
+def test_a_schedule_passes_end_up_as_a_command(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}])
+    try:
+        run.send({})
+        clock.advance_to_ns(PERIOD_NS)
+        assert run.send({}).commands == {MOTOR: 2, END: 'complete'}
+        clock.advance_to_ns(2 * PERIOD_NS)
+        run.send({})
+    finally:
+        run.close()
+
+
+def test_a_declared_end_on_field_ends_a_declared_stack(execution):
+    runtime, clock = execution
+    pose = np.array([0.1, -0.2, 0.3, 1.0, 0.0, 0.0, 0.0, 0.5])
+    declared = sequence(
+        component(EndOnField.WIRE_NAME),
+        component(ChunkedSchedule.WIRE_NAME, fps=10),
+        component(AbsolutePositionAction.WIRE_NAME, tgt_ee_pose_key='pose', tgt_grip_key='grip'),
+    )
+    run = runtime.start(cast(Policy, spec.from_spec(declared)), lambda obs: [{ACTION: pose}, {END: 'give_up'}])
+    try:
+        assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
+        clock.advance_to_ns(PERIOD_NS)
+        assert run.send({}) == Step({}, PERIOD_NS)
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.GIVE_UP
+    finally:
+        run.close()
+    assert EndOnField().to_spec() == {NAME: EndOnField.WIRE_NAME, VERSION: EndOnField.WIRE_VERSION}
+
+
+def test_end_on_field_refuses_a_malformed_end_when_its_element_plays(execution):
+    runtime, _ = execution
+    run = runtime.start(Sequential(EndOnField(), ChunkedSchedule(fps=10)), lambda obs: [{MOTOR: 1, END: 'done'}])
+    try:
+        with pytest.raises(ValueError):
+            run.send({})
+    finally:
+        run.close()
+
+
+# A late round past the chunk's end calls again. An answer that is ready replaces the queue, and its
+# first element ends the run; a pending one leaves the queue, and the round plays one element past the end.
+@pytest.mark.parametrize(('latency_ns', 'sent'), [(0, [1, (1, 0)]), (PERIOD_NS, [1, 5])])
+def test_a_late_round_ends_the_run_on_the_next_end_that_plays(execution, monkeypatch, latency_ns, sent):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [{MOTOR: 1}, {MOTOR: 2}, {MOTOR: 3}, _ending(4), {MOTOR: 5}])
+    _answer_after(runtime, monkeypatch, 0, latency_ns)
+    times_ns = [0, 5 * PERIOD_NS, 6 * PERIOD_NS]
+    assert _play(execution, ChunkedSchedule(fps=10, record_stats=False), model, times_ns) == (sent, PolicyEnd.COMPLETE)
+    assert model.calls == [0, 5 * PERIOD_NS]
+
+
+# Each schedule asks for the next chunk before the end plays: one more call, and no more motion.
+@pytest.mark.parametrize(
+    ('schedule', 'calls'),
+    [
+        (lambda: ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.1), record_stats=False), [0, PERIOD_NS]),
+        (lambda: RTCSchedule(fps=10, call_after_sec=0.1, prefix_duration=ConstantDuration()), [0, 2 * PERIOD_NS]),
+    ],
+    ids=['chunked', 'rtc'],
+)
+def test_a_queued_end_plays_on_its_own_element(execution, schedule, calls):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2)])
+    sent, end = _play(execution, schedule(), model, [i * PERIOD_NS for i in range(5)])
+    assert (sent[-1], end) == (2, PolicyEnd.COMPLETE)
+    assert model.calls == calls
+
+
+def test_an_end_past_the_horizon_plays_on_the_next_chunk(execution):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2)], on='first')
+    schedule = ChunkedSchedule(fps=10, horizon_sec=0.1, record_stats=False)
+    assert _play(execution, schedule, model, [i * PERIOD_NS for i in range(5)]) == ([1, (1, 0)], PolicyEnd.COMPLETE)
+
+
+def test_a_replan_after_an_arm_error_ends_on_the_replanned_chunk(execution):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [{MOTOR: i} for i in range(3)] + [_ending(3), {MOTOR: 4}], on='first')
+    error = {2 * PERIOD_NS: {keys.ROBOT_STATUS: RobotStatus.ERROR}}
+    sent, end = _play(execution, ChunkedSchedule(fps=10), model, [i * PERIOD_NS for i in range(6)], error)
+    assert (sent, end) == ([0, 1, (1, 0)], PolicyEnd.COMPLETE)
+
+
+# Each RTC answer arrives 2.5 periods after its call, and the new chunk starts at the action that runs then,
+# so its first two elements never play. An end on every element plays; an end on the first one only is lost.
+@pytest.mark.parametrize(('on', 'end'), [('every', PolicyEnd.COMPLETE), ('first', None)])
+def test_rtc_plays_an_end_only_from_an_element_that_it_does_not_skip(execution, monkeypatch, on, end):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [_ending(i) if i == 6 else {MOTOR: i} for i in range(10)], on=on)
+    _answer_after(runtime, monkeypatch, 5 * PERIOD_NS // 2)
+    schedule = RTCSchedule(fps=10, call_after_sec=0.1, prefix_duration=ConstantDuration(0.25))
+    sent, ended = _play(execution, schedule, model, [i * PERIOD_NS // 2 for i in range(60)])
+    assert ended is end
+    assert 6 not in sent
+

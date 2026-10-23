@@ -29,8 +29,8 @@ from positronic.policy.codecs.action import (
 )
 from positronic.policy.codecs.geometry import ConvertPose
 from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
-from positronic.policy.compatibility import ChunkedScheduleV2, ChunkedScheduleV3
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.compatibility import ChunkedScheduleV2
+from positronic.policy.processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
@@ -42,6 +42,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     for component in (
         ChunkedSchedule,
         EncodeImages,
+        EndOnField,
         PauseOnUnavailable,
         TemporalStack,
         BinarizeGripTraining,
@@ -66,7 +67,6 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
 
 
 COMPONENTS[ChunkedSchedule.WIRE_NAME][ChunkedScheduleV2.WIRE_VERSION] = Version(ChunkedScheduleV2.from_spec_args)
-COMPONENTS[ChunkedSchedule.WIRE_NAME][ChunkedScheduleV3.WIRE_VERSION] = Version(ChunkedScheduleV3.from_spec_args)
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:
