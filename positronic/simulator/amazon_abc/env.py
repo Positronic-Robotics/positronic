@@ -58,8 +58,9 @@ class AbcEnv(EnvProtocol):
             return
         self.close()
         spec = abc_sim.get_task_spec(token[mapping.TOKEN_TASK])
+        # ABC attaches a task's evaluator and prompt by its name; several tasks share one `env_task` scene.
         self._env = abc_sim.make_env(
-            task=spec.env_task,
+            task=spec.name,
             prompt=spec.prompt,
             render_cameras=True,
             camera_height=token[mapping.TOKEN_CAMERA_HEIGHT],
