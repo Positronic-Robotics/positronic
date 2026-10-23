@@ -88,19 +88,20 @@ def abc_dit_model(checkpoint: str, abc_python: str, fast_inference: bool, noise_
 
     `fast_inference` runs the DiT in bfloat16 and compiles it, as ABC's sim eval does; it needs a CUDA device.
     """
+    checkpoint_path, python = Path(checkpoint), Path(abc_python)
     command = [
-        abc_python,
+        python,
         '-P',
         '-m',
         BACKEND_MODULE,
-        f'--policy.checkpoint-path={checkpoint}',
+        f'--policy.checkpoint-path={checkpoint_path}',
         '--policy-type=dit',
         '--policy.fast-inference' if fast_inference else '--policy.no-fast-inference',
         f'--port={backend_port}',
     ]
     backend = subprocess.Popen(command)
     meta = {
-        policy_keys.CHECKPOINT_ID: Path(checkpoint).name,
+        policy_keys.CHECKPOINT_ID: checkpoint_path.name,
         policy_keys.TYPE: 'abc_dit',
         'fast_inference': fast_inference,
     }

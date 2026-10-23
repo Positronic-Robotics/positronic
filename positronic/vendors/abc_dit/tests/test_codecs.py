@@ -19,10 +19,10 @@ def _view(red: int, height: int = 260, width: int = 416) -> np.ndarray:
 
 def _obs(**changes) -> dict:
     obs = {
-        'robot_state.left.q': np.arange(6, dtype=np.float64),
-        'robot_state.right.q': np.arange(6, 12, dtype=np.float64),
-        'grip.left': 0.0,
-        'grip.right': 0.75,
+        keys.arm_channel(keys.ROBOT_STATE, keys.LEFT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, dtype=np.float64),
+        keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, 12, dtype=np.float64),
+        keys.arm_channel(keys.GRIP, keys.LEFT_ARM): 0.0,
+        keys.arm_channel(keys.GRIP, keys.RIGHT_ARM): 0.75,
         keys.EXTERIOR_IMAGE: _view(10),
         keys.WRIST_LEFT_IMAGE: _view(20),
         keys.WRIST_RIGHT_IMAGE: _view(30),
@@ -44,7 +44,10 @@ def test_the_state_is_abcs_14_d_layout_left_arm_first_with_gripper_widths():
 
 
 def test_a_swap_of_the_arms_reaches_the_state():
-    swapped = _obs(**{'robot_state.left.q': np.arange(6, 12.0), 'robot_state.right.q': np.arange(6.0)})
+    swapped = _obs(**{
+        keys.arm_channel(keys.ROBOT_STATE, keys.LEFT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, 12.0),
+        keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM) + keys.JOINTS_SUFFIX: np.arange(6.0),
+    })
 
     np.testing.assert_array_equal(_encode(swapped)[abc_dit.STATE][:6], np.arange(6, 12))
 
@@ -86,9 +89,12 @@ def test_an_action_decodes_left_arm_first_into_joint_commands_and_positronic_gri
 
     decoded = codecs.multitask_200k.instantiate().decode({ACTION: vector})
 
-    left, right = decoded['robot_command.left'], decoded['robot_command.right']
+    left, right = (
+        decoded[keys.arm_channel(keys.ROBOT_COMMAND, keys.LEFT_ARM)],
+        decoded[keys.arm_channel(keys.ROBOT_COMMAND, keys.RIGHT_ARM)],
+    )
     assert isinstance(left, command.JointPosition) and isinstance(right, command.JointPosition)
     np.testing.assert_array_equal(left.positions, np.arange(6))
     np.testing.assert_array_equal(right.positions, np.arange(6, 12))
-    assert decoded['target_grip.left'] == pytest.approx(0.0)
-    assert decoded['target_grip.right'] == pytest.approx(0.75)
+    assert decoded[keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM)] == pytest.approx(0.0)
+    assert decoded[keys.arm_channel(keys.TARGET_GRIP, keys.RIGHT_ARM)] == pytest.approx(0.75)
