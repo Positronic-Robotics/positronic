@@ -473,8 +473,8 @@ def test_the_bimanual_embodiment_states_a_frame_for_each_pose_signal_of_both_arm
     frames = ee_frames(static_meta)
     assert set(frames) == set(static_meta[eval_keys.POSE_SIGNALS])
     for side in (keys.LEFT_ARM, keys.RIGHT_ARM):
-        assert frames[f'{keys.ROBOT_STATE}.{side}.ee_pose'].site == DEFAULT_FRAME
-        assert frames[f'{keys.ROBOT_COMMAND}.{side}.pose'].site == DEFAULT_FRAME
+        assert frames[f'{keys.ROBOT_STATE}.{side}{keys.EE_POSE_SUFFIX}'].site == DEFAULT_FRAME
+        assert frames[f'{keys.ROBOT_COMMAND}.{side}{keys.POSE_SUFFIX}'].site == DEFAULT_FRAME
 
 
 def test_failed_shutdown_parking_keeps_the_arm_powered(rig, caplog):

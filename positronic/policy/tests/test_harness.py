@@ -169,7 +169,7 @@ def observed_harness():
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
-        step = partial(harness._step, Task('test', None), runtime, policy_run, None)
+        step = partial(harness._step, Task('test', None), frozenset(), runtime, policy_run, None)
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
@@ -1846,7 +1846,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
     try:
-        assert h.harness._step(Task('test', None), runtime, run, None) == expected_ns
+        assert h.harness._step(Task('test', None), frozenset(), runtime, run, None) == expected_ns
     finally:
         runtime.close()
         run.close()
@@ -1879,7 +1879,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), runtime, run, None)
+            harness._step(Task('move', None), frozenset(), runtime, run, None)
         finally:
             runtime.close()
             run.close()

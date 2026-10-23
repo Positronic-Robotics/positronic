@@ -154,7 +154,9 @@ def yam_bimanual(
         **{f'{keys.TARGET_GRIP}.{s}': Command(arm.target_grip, None) for s, arm in arms.items()},
     }
     joint_signals = {side: f'{keys.ROBOT_STATE}.{side}.q' for side in arms}
-    pose_signals = [f'{keys.ROBOT_STATE}.{s}.ee_pose' for s in arms] + [f'{keys.ROBOT_COMMAND}.{s}.pose' for s in arms]
+    pose_signals = [f'{keys.ROBOT_STATE}.{s}{keys.EE_POSE_SUFFIX}' for s in arms] + [
+        f'{keys.ROBOT_COMMAND}.{s}{keys.POSE_SUFFIX}' for s in arms
+    ]
     static_meta = {
         eval_keys.JOINT_SIGNALS: list(joint_signals.values()),
         eval_keys.POSE_SIGNALS: pose_signals,
