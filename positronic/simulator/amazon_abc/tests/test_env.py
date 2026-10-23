@@ -57,7 +57,8 @@ class _FakeScene:
         self.terminate_on_success = False
         self.max_episode_steps: int | None = None
         self.truncated = False
-        self.task_eval: dict[str, Any] = {mapping.ABC_EVAL_EVER_SUCCESS: False}
+        # None stands for a task that ships no evaluator, which ABC reports as no metrics at all.
+        self.task_eval: dict[str, Any] | None = {mapping.ABC_EVAL_EVER_SUCCESS: False}
         self.prompt = _PROMPT
         self.actions: list[np.ndarray] = []
 
@@ -68,11 +69,15 @@ class _FakeScene:
         return self._obs(), {}
 
     def evaluate_task(self) -> Any:
+        if self.task_eval is None:
+            return None
         return types.SimpleNamespace(to_info=lambda squeeze: {'num_bottles_in_bin': 0})
 
     def step(self, action: np.ndarray) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
         self.actions.append(action)
         # ABC's own step: it ends a trial at its first success when the server asks it to.
+        if self.task_eval is None:
+            return self._obs(), 0.0, False, self.truncated, {}
         terminated = self.terminate_on_success and self.task_eval[mapping.ABC_EVAL_EVER_SUCCESS]
         return self._obs(), 0.0, terminated, self.truncated, {mapping.ABC_INFO_TASK_EVAL: self.task_eval}
 
@@ -172,6 +177,17 @@ def test_abc_truncates_a_trial_at_the_horizon_of_its_own_eval(env, scene):
 
     # 236 chunks of 15 actions, as ABC's sim eval runs; a maintenance task succeeds only when ABC truncates there.
     assert scene.max_episode_steps == 3540
+
+
+@pytest.mark.parametrize(('truncated', 'done'), [(False, False), (True, True)], ids=['running', 'at_the_horizon'])
+def test_a_task_without_an_evaluator_runs_to_abcs_horizon_and_never_succeeds(env, scene, truncated: bool, done: bool):
+    scene.task_eval = None
+    env.reset(_TOKEN)
+    scene.truncated = truncated
+
+    (slot,) = env.step({0: _hold_both()})[protocol.SLOTS]
+
+    assert (slot[protocol.FRAME_DONE], slot[protocol.FRAME_SUCCESS]) == (done, False)
 
 
 def test_a_step_reports_the_prompt_the_task_moved_to(env, scene):
