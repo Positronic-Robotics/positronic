@@ -79,3 +79,6 @@ WRIST_LEFT_IMAGE = f'{IMAGE_PREFIX}wrist_left'
 WRIST_RIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_right'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
+# An upright view from the wrist, and a view from the right side of the hand.
+WRIST_UPRIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_upright'
+HANDCAM_RIGHT_IMAGE = f'{IMAGE_PREFIX}handcam_right'

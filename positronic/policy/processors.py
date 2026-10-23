@@ -1,4 +1,4 @@
-"""Policy processors for scheduling, fault handling, and temporal frame stacking.
+"""Policy processors for scheduling, fault handling, temporal frame stacking, and clock checks.
 
 Constructors hold configuration. ``run(runtime, *dependencies)`` creates an episode generator whose
 locals hold its state. Control processors yield a ``Step`` with commands and the next wake-up time.
@@ -38,6 +38,7 @@ from positronic.policy.base import (
     Commands,
     Obs,
     Policy,
+    PolicyEnd,
     PolicyRun,
     Processor,
     ProcessorRun,
@@ -45,7 +46,7 @@ from positronic.policy.base import (
     Runtime,
     Step,
 )
-from positronic.policy.keys import ACTION_FPS
+from positronic.policy.keys import ACTION_FPS, END
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -193,6 +194,16 @@ class DelayEstimate(DurationEstimate):
         return cls(cls.Statistic.MAX, last, max_sec)
 
 
+def _up_to_first_end(chunk: Sequence[Commands]) -> list[Commands]:
+    """The elements of ``chunk`` up to its first ``END``, with each ``END`` read as a ``PolicyEnd``.
+
+    The run ends at the first ``END``, so the rest never plays. A value that is no ``PolicyEnd`` raises ``ValueError``.
+    """
+    checked = [{**element, END: PolicyEnd(element[END])} if END in element else element for element in chunk]
+    last = next((i for i, element in enumerate(checked) if END in element), len(checked) - 1)
+    return checked[: last + 1]
+
+
 class ChunkedSchedule(Policy):
     """Request action chunks asynchronously and emit their commands at a fixed cadence.
 
@@ -231,13 +242,18 @@ class ChunkedSchedule(Policy):
     With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
     episode metadata.
 
+    A waypoint with the reserved field ``END`` ends the run. The round that plays it stops at it, sends its other
+    commands, and the run returns the ``PolicyEnd`` at the next observation. The plan ends at the first ``END``, so
+    the schedule makes no call while a waypoint with ``END`` is queued. A replan after an arm error clears the plan,
+    and with it an ``END`` that is due in that round.
+
     ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
     immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
     until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
     """
 
     WIRE_NAME = 'chunked_schedule'
-    WIRE_VERSION = 3
+    WIRE_VERSION = 4
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
     RECORD_STATS_ARG = 'record_stats'
@@ -331,12 +347,13 @@ class ChunkedSchedule(Policy):
 
     def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[list[_Waypoint], int]:
         period_sec = 1 / self._fps
-        duration_sec = len(chunk) * period_sec
+        checked = _up_to_first_end(chunk)
+        duration_sec = len(checked) * period_sec
         if self._horizon_sec is not None:
             duration_sec = min(duration_sec, self._horizon_sec)
         waypoints = [
             self._Waypoint(waypoint, start_ns + round(i * period_sec * 1e9), starts_chunk=i == 0)
-            for i, waypoint in enumerate(chunk)
+            for i, waypoint in enumerate(checked)
             if i * period_sec < duration_sec
         ]
         return waypoints, start_ns + round(duration_sec * 1e9)
@@ -362,7 +379,9 @@ class ChunkedSchedule(Policy):
                     trajectory.clear()
                     end_ns = call_ns = now_ns
                     planned, recovering = 0, True
-                if answer is None and now_ns >= call_ns:
+                # The plan ends at a queued end, so no further chunk can play.
+                ends = any(END in waypoint.commands for waypoint in trajectory)
+                if answer is None and now_ns >= call_ns and not ends:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
@@ -371,20 +390,28 @@ class ChunkedSchedule(Policy):
                     waypoints, end_ns = self._plan_chunk(chunk, start_ns)
                     call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
                     # A regular early answer waits behind the commands that are still due.
-                    trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
+                    if start_ns == now_ns:
+                        trajectory = deque(waypoints)
+                    else:
+                        trajectory.extend(waypoints)
                     planned = len(waypoints)
 
                 commands: dict[str, Any] = {}
                 due_ns = None
                 starts_chunk = False
-                while trajectory and trajectory[0].due_ns <= now_ns:
+                end = None
+                while end is None and trajectory and trajectory[0].due_ns <= now_ns:
                     waypoint = trajectory.popleft()
                     due_ns = waypoint.due_ns
                     starts_chunk |= waypoint.starts_chunk
                     commands.update(waypoint.commands)
+                    end = commands.pop(END, None)
                 recovering = recovering and not commands
                 if stats is not None:
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
+                if end is not None:
+                    yield Step(commands, now_ns)
+                    return end
                 resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
                 obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
@@ -440,7 +467,7 @@ class _TimedChunk:
     """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
 
     def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
-        self._actions = actions
+        self._actions = _up_to_first_end(actions)
         self._start_ns = start_ns
         self._fps = fps
         self._next_index = self._running_index(now_ns)
@@ -463,7 +490,7 @@ class _TimedChunk:
             action = self._sample(slot_ns, sampling)
             if action is None:
                 break
-            prefix.append(action)
+            prefix.append({name: value for name, value in action.items() if name != END})
         return prefix
 
     def _sample(self, time_ns: int, sampling: PrefixSampling) -> Commands | None:
@@ -484,12 +511,22 @@ class _TimedChunk:
         return interpolate_commands(self._actions[running], self._actions[running + 1], fraction)
 
     def take_due(self, now_ns: int) -> dict[str, Any]:
-        """The merged commands of every action due by ``now_ns`` and not taken yet."""
+        """The merged commands of every action due by ``now_ns`` and not taken yet, up to the first with ``END``."""
         commands: dict[str, Any] = {}
-        while self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns:
+        while (
+            self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns and END not in commands
+        ):
             commands.update(self._actions[self._next_index])
             self._next_index += 1
         return commands
+
+    def ends_by(self, now_ns: int) -> bool:
+        """Whether an action due by ``now_ns`` and not taken yet holds ``END``."""
+        return any(
+            END in self._actions[index]
+            for index in range(self._next_index, len(self._actions))
+            if self._due_ns(index) <= now_ns
+        )
 
     def next_due_ns(self) -> int | None:
         """When the next action not taken yet is due, or ``None`` after the last one."""
@@ -539,6 +576,9 @@ class RTCSchedule(Policy):
     `infer` gets the observation and the prefix, in the command format that `infer`
     returns, and converts both to the model's format.
 
+    An action with the reserved field ``END`` ends the run, as in `ChunkedSchedule`. A round with a due ``END``
+    makes no call. The prefix holds no ``END``.
+
     Only a model with absolute actions works with this policy. No codec converts a
     command back to a relative model action, so the prefix cannot be given to a
     model with relative actions.
@@ -579,7 +619,7 @@ class RTCSchedule(Policy):
                     answer = None
                     next_call_ns = start_ns + self._call_after_ns
 
-                if answer is None and now_ns >= next_call_ns:
+                if answer is None and now_ns >= next_call_ns and (chunk is None or not chunk.ends_by(now_ns)):
                     prefix = []
                     if chunk is not None:
                         prefix = chunk.prefix(now_ns, prefix_sec, self._prefix_sampling)
@@ -587,6 +627,10 @@ class RTCSchedule(Policy):
                     answer = runtime.submit(infer, obs, prefix)
 
                 commands = {} if chunk is None else chunk.take_due(now_ns)
+                end = commands.pop(END, None)
+                if end is not None:
+                    yield Step(commands, now_ns)
+                    return end
                 next_due_ns = None if chunk is None else chunk.next_due_ns()
                 if answer is not None:
                     # Pending inference asks for the earliest allowed poll; action cadence is independent.

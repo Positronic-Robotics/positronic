@@ -222,8 +222,10 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     if timing:
         _validate_timing([ev.embodiment for ev in evals], output_dir)
 
-    logger.info('Warming up policy endpoints')
-    # Reading remote metadata waits for model loading and warmup, keeping startup outside the timed sweep.
+    logger.info('Waiting for policy endpoints')
+    # A remote policy's `meta()` returns once its server answers, which keeps the model load outside the timed sweep.
+    # TODO: The preparation of each session falls inside the `eval.pass` span, and a one-time warm-up in the first
+    # one depresses the real-time factor. Time the session preparation as its own span and leave it out of the factor.
     policy.meta()
     with scoped_env_var(ENV_TELEMETRY_DIR):
         output_path = prepare_output_dir(output_dir)

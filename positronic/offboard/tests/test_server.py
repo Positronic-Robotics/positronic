@@ -291,7 +291,7 @@ def test_full_inference_cycle(stub_server):
         assert session.metadata['type'] == 'stub'
         assert session.metadata[offboard_keys.LOCAL_STACK] == {
             NAME: ChunkedSchedule.WIRE_NAME,
-            VERSION: 3,
+            VERSION: ChunkedSchedule.WIRE_VERSION,
             ARGS: {ChunkedSchedule.FPS_ARG: 10},
         }
         assert policy_keys.POSITRONIC_VERSION in session.metadata
@@ -464,7 +464,7 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_model):
     try:
         assert session.metadata[offboard_keys.LOCAL_STACK] == {
             NAME: ChunkedSchedule.WIRE_NAME,
-            VERSION: 3,
+            VERSION: ChunkedSchedule.WIRE_VERSION,
             ARGS: {ChunkedSchedule.FPS_ARG: 10},
         }
     finally:
@@ -487,7 +487,7 @@ def test_a_pipeline_served_over_a_unix_socket(unix_stub_server, socket_path):
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata[offboard_keys.LOCAL_STACK] == {
             NAME: ChunkedSchedule.WIRE_NAME,
-            VERSION: 3,
+            VERSION: ChunkedSchedule.WIRE_VERSION,
             ARGS: {ChunkedSchedule.FPS_ARG: 10},
         }
         assert session.metadata[offboard_keys.UDS] == socket_path

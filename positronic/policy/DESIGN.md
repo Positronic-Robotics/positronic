@@ -310,6 +310,11 @@ several sessions without keeping episode history. Stateful models must keep
 each session's history separate or reject overlapping sessions. Ending a session
 releases its episode state, not the shared loaded model.
 
+A remote model ends the run through the reserved field `end` of a result element. The schedule acts on it in the
+round that plays the element, so the end follows the schedule, not the call. The `Codec` base reads the field as a
+`PolicyEnd` and keeps it through each codec that decodes one element at a time. A codec that makes elements from
+arrays, such as `UnpackActionChunk`, refuses an answer with the field.
+
 A server deployment brings together the model to load, the client stack, and
 any data conversion performed on the server. Loading and serving models belong
 to the server; the policy run sees an ordinary function call. See the

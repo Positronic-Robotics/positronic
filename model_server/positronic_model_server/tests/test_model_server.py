@@ -1,9 +1,11 @@
 """Native model lifecycle over independently installed transports, without Positronic."""
 
 import asyncio
+import logging
 import os
 import socket
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, suppress
 from dataclasses import dataclass, field
@@ -15,7 +17,7 @@ from typing import Any
 import numpy as np
 import pytest
 from positronic_model_server import keys, protocol, serialization, server_wire, spec
-from positronic_model_server.server import Model, ModelServer, Session
+from positronic_model_server.server import Model, ModelServer, PreparationCancelled, Session
 from positronic_wire import wire
 
 TRANSPORTS = []
@@ -42,6 +44,7 @@ class Probe(Model):
         self.inferring = threading.Event()
         self.infer_release = threading.Event()
         self.cleaned = threading.Event()
+        self.cancelled: list[threading.Event] = []
         for gate in (self.load_release, self.prepare_release, self.infer_release):
             gate.set()
 
@@ -57,8 +60,9 @@ class Probe(Model):
     def close(self) -> None:
         self.record('close_model')
 
-    def prepare_session(self, params: dict[str, Any]) -> Session:
+    def prepare_session(self, params: dict[str, Any], cancelled: threading.Event) -> Session:
         self.record('prepare')
+        self.cancelled.append(cancelled)
         self.preparing.set()
         assert self.prepare_release.wait(10)
         if not isinstance(params['scale'], int):
@@ -356,7 +360,47 @@ def test_shutdown_waits_for_inference_before_session_and_model_cleanup(start):
     assert [name for name, *_ in probe.calls][-3:] == ['infer', 'close_session', 'close_model']
 
 
-def test_disconnect_during_preparation_releases_the_prepared_session(start):
+def test_an_operation_outlasts_every_cancellation_of_its_caller():
+    server = ModelServer(Probe().load)
+    release = threading.Event()
+
+    async def scenario() -> None:
+        call = asyncio.create_task(server._call(lambda: release.wait(5)))
+        for _ in range(2):
+            await asyncio.sleep(0.05)
+            call.cancel()
+        await asyncio.sleep(0.05)
+        assert not call.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+
+    with ThreadPoolExecutor(1) as worker:
+        server._worker = worker
+        asyncio.run(scenario())
+
+
+def test_disconnect_during_preparation_cancels_it_and_releases_the_prepared_session(start):
+    probe = Probe()
+    probe.prepare_release.clear()
+    running = start(probe)
+    # No waiting status falls due within the test, so only the receive can find that the opener left.
+    running.server.WAITING_INTERVAL_SEC = 30
+    connection = running.connect()
+    assert probe.preparing.wait(5)
+    # A gRPC close waits for the server to end the stream, which it does once the preparation ends.
+    closing_thread = threading.Thread(target=connection.close)
+    closing_thread.start()
+    assert probe.cancelled[0].wait(1)
+    probe.prepare_release.set()
+    assert probe.cleaned.wait(5)
+    closing_thread.join(5)
+
+
+def test_a_session_prepared_after_its_opener_closed_the_connection_is_released(start, monkeypatch):
+    if find_spec('grpc') is not None:
+        # A gRPC client closes its channel this long after its half-close, and the server then cancels the session.
+        monkeypatch.setattr('positronic_wire.grpc._CLOSE_TIMEOUT_SEC', 0.1)
     probe = Probe()
     probe.prepare_release.clear()
     running = start(probe)
@@ -365,6 +409,124 @@ def test_disconnect_during_preparation_releases_the_prepared_session(start):
     connection.close()
     probe.prepare_release.set()
     assert probe.cleaned.wait(5)
+
+
+class PersonWait(Probe):
+    """A preparation that waits for an event outside the server, as one that waits for a person does."""
+
+    def prepare_session(self, params: dict[str, Any], cancelled: threading.Event) -> Session:
+        self.record('prepare')
+        self.cancelled.append(cancelled)
+        self.preparing.set()
+        while not self.prepare_release.wait(0.01):
+            if cancelled.is_set():
+                raise PreparationCancelled('the opener left')
+        return ProbeSession(self, params['scale'])
+
+
+def test_a_cancelled_preparation_frees_the_worker_for_the_next_session(start):
+    probe = PersonWait()
+    probe.prepare_release.clear()
+    running = start(probe)
+    first = running.connect()
+    assert probe.preparing.wait(5)
+    first.close()
+    assert probe.cancelled[0].wait(5)
+    probe.preparing.clear()
+    connection = running.connect()
+    assert probe.preparing.wait(5)
+    probe.prepare_release.set()
+    message = serialization.deserialise(connection.recv(timeout=5))
+    while message[protocol.STATUS] == protocol.ServerStatus.WAITING:
+        message = serialization.deserialise(connection.recv(timeout=5))
+    assert message[protocol.STATUS] == protocol.ServerStatus.READY
+    assert not probe.cancelled[1].is_set()
+    assert not probe.cleaned.is_set()
+
+
+def wait_for_log(caplog, message: str) -> None:
+    deadline = time.monotonic() + 5
+    while not any(message in record.getMessage() for record in caplog.records):
+        assert time.monotonic() < deadline, f'no log record with {message!r}'
+        time.sleep(0.01)
+
+
+def test_a_preparation_whose_opener_left_before_it_began_does_not_run(start, caplog):
+    caplog.set_level(logging.INFO, logger='positronic_model_server.server')
+    probe = Probe()
+    probe.prepare_release.clear()
+    running = start(probe)
+    first = running.connect()
+    assert probe.preparing.wait(5)
+    second = running.connect()
+    assert serialization.deserialise(second.recv(timeout=5))[protocol.STATUS] == protocol.ServerStatus.WAITING
+    # A gRPC close waits for the server to end the stream, which it does once the worker is free.
+    closing_thread = threading.Thread(target=second.close)
+    closing_thread.start()
+    wait_for_log(caplog, 'Cancelled the preparation of a session')
+    probe.prepare_release.set()
+    closing_thread.join(5)
+    while serialization.deserialise(first.recv(timeout=5))[protocol.STATUS] != protocol.ServerStatus.READY:
+        pass
+    assert [name for name, *_ in probe.calls].count('prepare') == 1
+
+
+class FailingWhenCancelled(PersonWait):
+    """A preparation that fails with an error of its own once the server cancels it."""
+
+    def prepare_session(self, params: dict[str, Any], cancelled: threading.Event) -> Session:
+        self.record('prepare')
+        self.cancelled.append(cancelled)
+        self.preparing.set()
+        assert cancelled.wait(5)
+        raise RuntimeError('the preparation broke')
+
+
+@pytest.mark.parametrize(
+    ('probe_type', 'logged_as_error'), [(PersonWait, False), (FailingWhenCancelled, True)], ids=['cancelled', 'failed']
+)
+def test_only_a_failure_of_a_preparation_with_no_opener_is_an_error(start, caplog, probe_type, logged_as_error):
+    caplog.set_level(logging.INFO, logger='positronic_model_server.server')
+    probe = probe_type()
+    probe.prepare_release.clear()
+    running = start(probe)
+    connection = running.connect()
+    assert probe.preparing.wait(5)
+    connection.close()
+    wait_for_log(caplog, 'Session disconnected')
+    errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert [record.getMessage() for record in errors] == (
+        ['A preparation failed after its opener left'] if logged_as_error else []
+    )
+
+
+def test_a_message_sent_before_ready_is_the_first_request(start):
+    probe = Probe()
+    probe.prepare_release.clear()
+    running = start(probe)
+    connection = running.connect()
+    assert probe.preparing.wait(5)
+    connection.send(serialization.serialise({protocol.SESSION_ID: 'not-this-session', protocol.OBSERVATION: 1}))
+    probe.prepare_release.set()
+    message = serialization.deserialise(connection.recv(timeout=5))
+    while message[protocol.STATUS] == protocol.ServerStatus.WAITING:
+        message = serialization.deserialise(connection.recv(timeout=5))
+    assert message[protocol.STATUS] == protocol.ServerStatus.READY
+    answer = serialization.deserialise(connection.recv(timeout=5))
+    assert 'does not belong' in answer[protocol.ERROR]
+
+
+def test_shutdown_cancels_a_preparation(start):
+    probe = PersonWait()
+    probe.prepare_release.clear()
+    running = start(probe)
+    running.connect()
+    assert probe.preparing.wait(5)
+    running.server.shutdown()
+    running.thread.join(5)
+    assert not running.thread.is_alive()
+    assert probe.cancelled[0].is_set()
+    assert [name for name, *_ in probe.calls] == ['load', 'prepare', 'close_model']
 
 
 def test_sessions_serialize_inference_and_keep_independent_state(start):

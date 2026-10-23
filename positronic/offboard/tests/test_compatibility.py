@@ -24,7 +24,7 @@ from positronic.policy.base import Step
 from positronic.policy.codecs import RestrictImageSize
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
-from positronic.policy.keys import ACTION_FPS
+from positronic.policy.keys import ACTION_FPS, END
 from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
 from positronic.utils import flatten_dict
@@ -325,6 +325,14 @@ def test_component_versions_are_independent_and_exact():
     for version in (1, 99):
         with pytest.raises(ValueError, match=f'Unsupported.*version {version}'):
             spec.from_spec({'name': 'chunked_schedule', 'version': version, 'args': {'fps': 10}})
+
+
+@pytest.mark.parametrize('version', [2, 3])
+def test_a_schedule_declared_before_end_refuses_an_answer_with_one(version):
+    schedule = spec.from_spec({'name': 'chunked_schedule', 'version': version, 'args': {'fps': 10}})
+    assert isinstance(schedule, ChunkedSchedule)
+    with pytest.raises(ValueError, match='cannot end a run'):
+        schedule._plan_chunk([{'motor': 1}, {'motor': 2, END: 'complete'}], 0)
 
 
 @pytest.mark.parametrize(

@@ -95,12 +95,18 @@ def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[
 
 TOKEN_EPISODE_INDEX = 'episode_index'
 TOKEN_SEED = 'seed'
+# The horizon in seconds that replaces the horizon of the benchmark, or None.
+TOKEN_HORIZON_SEC = 'horizon_sec'
 
 SELECT_EPISODES = 'episodes'
+# The horizon in seconds that replaces the horizon of each selected benchmark.
+SELECT_HORIZON_SEC = 'horizon_sec'
 # In a selection and a reset token: whether the server adds the right shoulder camera.
 WITH_RIGHT_SHOULDER = 'with_right_shoulder'
 TASK_NAME = 'name'
 TASK_HORIZON_SEC = 'task_horizon_sec'
+# The horizon override of a task in seconds, or None when the benchmark sets the horizon.
+TASK_HORIZON_OVERRIDE_SEC = 'task_horizon_override_sec'
 
 META_TASK = 'task'
 META_HOUSE_INDEX = 'house_index'
@@ -203,6 +209,17 @@ def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | 
 
 # A reflection across the robot base's XZ plane, and a flip of the camera's own x axis. A camera looks along -Z with +Y
 # up, so its view and up directions reflect, and its x axis turns to keep the frame right-handed.
+def horizon_steps(horizon_sec: float | None, policy_dt_ms: float) -> int | None:
+    """``horizon_sec`` in policy steps, as MolmoSpaces converts its own ``--task_horizon_sec``, or None. Raise for a
+    horizon shorter than one step."""
+    if horizon_sec is None:
+        return None
+    steps = round(horizon_sec * 1000.0 / policy_dt_ms)
+    if steps < 1:
+        raise ValueError(f'horizon_sec {horizon_sec} is shorter than one policy step of {policy_dt_ms} ms')
+    return steps
+
+
 _REFLECT_Y = np.diag([1.0, -1.0, 1.0])
 _FLIP_CAMERA_X = np.diag([-1.0, 1.0, 1.0])
 

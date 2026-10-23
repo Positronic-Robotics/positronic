@@ -25,6 +25,7 @@ from positronic.policy.codecs import (
     UnpackActionChunk,
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
+from positronic.policy.keys import END
 from positronic.policy.spec import from_spec
 
 
@@ -140,6 +141,16 @@ def test_unpack_action_chunk_rejects_invalid_dimensions(squeeze_dims):
 def test_unpack_action_chunk_rejects_invalid_field_paths(fields):
     with pytest.raises(ValueError, match='field'):
         UnpackActionChunk(fields)
+
+
+def test_unpack_action_chunk_refuses_an_end_that_it_cannot_place():
+    with pytest.raises(ValueError, match='cannot place'):
+        UnpackActionChunk({'value': ['prediction']}).decode({'prediction': np.zeros((3, 2)), END: 'complete'})
+
+
+def test_unpack_action_chunk_refuses_end_as_an_output_name():
+    with pytest.raises(ValueError, match='cannot place'):
+        UnpackActionChunk({END: ['prediction']})
 
 
 def test_unpack_action_chunk_preserves_observations_and_training_columns():

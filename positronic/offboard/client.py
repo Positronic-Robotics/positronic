@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from enum import Enum
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeVar
 
 from positronic_model_server import protocol, serialization
 from positronic_wire import wire
@@ -26,6 +26,8 @@ DEFAULT_INFER_TIMEOUT = 180.0
 # One transport handshake, whichever the wire makes, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
+# How long a status handshake waits for ready while the server loads its model or prepares the session.
+DEFAULT_READY_DEADLINE = 900.0
 # How long ``infer`` retries to rebuild a connection that dropped before its first answer.
 # FOOTGUN: the arm holds its last setpoint throughout, and an attended trial (``timeout_sec=None``) has no
 # episode deadline behind this one to end that stall.
@@ -35,6 +37,10 @@ DEFAULT_RECONNECT_DEADLINE = 45.0
 # cost the two minus ``served_ms``, because the server's own span sits inside the second one.
 SEND_MS = 'send_ms'
 RECV_MS = 'recv_ms'
+
+
+class ReadyDeadlinePassed(TimeoutError):
+    """The server answered with status updates, and was not ready by the time the client waits for."""
 
 
 class InferenceSession:
@@ -77,17 +83,23 @@ class InferenceSession:
     def _handshake(self, ready_by: float, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
 
-        The server must send an update at least every ``timeout_per_message`` seconds. No wait for a further
-        update begins past ``ready_by``, so a server that reports loading for ever is left there.
+        The server must send an update at least every ``timeout_per_message`` seconds. No wait runs past
+        ``ready_by``, so a server that reports loading for ever is left there.
         """
-        wait = timeout_per_message
+        last = 'no status'
         while True:
+            left = ready_by - time.monotonic()
+            if left <= 0:
+                raise ReadyDeadlinePassed(f'Server was not ready in the time the client waits for: {last}')
+            wait = min(timeout_per_message, left)
             try:
                 raw = self._conn.recv(timeout=wait)
                 response = serialization.deserialise(raw)
             except TimeoutError:
                 if wait < timeout_per_message:
-                    raise TimeoutError('Server was not ready in the time left to connect') from None
+                    raise ReadyDeadlinePassed(
+                        f'Server was not ready in the time the client waits for: {last}'
+                    ) from None
                 raise TimeoutError(
                     f'Server did not send status update within {timeout_per_message}s. '
                     f'Server may have crashed or model loading is taking too long without progress updates.'
@@ -106,10 +118,7 @@ class InferenceSession:
 
             message = response.get(legacy_protocol.MESSAGE, status)
             logger.info(f'Server status: [{status}] {message}')
-            left = ready_by - time.monotonic()
-            if left <= 0:
-                raise TimeoutError('Server was not ready in the time left to connect')
-            wait = min(timeout_per_message, left)
+            last = f'[{status}] {message}'
 
     @property
     def protocol_version(self) -> protocol.ProtocolVersion:
@@ -277,14 +286,18 @@ class ConnectRetries:
         return ConnectOutcome.RETRY if again else ConnectOutcome.SURFACE
 
 
+T = TypeVar('T')
+
+
 class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
     ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one transport
     handshake, whichever the wire makes — a TCP or TLS one, or a connect to a Unix socket —
-    ``connect_deadline`` the retries until a cold backend answers, ``infer_timeout`` one inference
-    round trip, and ``reconnect_deadline`` the rebuild of a connection that drops before its first answer.
-    No attempt begins past a deadline, and no handshake waits for a further status update past it.
+    ``connect_deadline`` the retries until a cold backend answers, ``ready_deadline`` the wait of one status
+    handshake for ready, ``infer_timeout`` one inference round trip, and ``reconnect_deadline`` the rebuild of a
+    connection that drops before its first answer. No attempt begins past the connect deadline, and no handshake
+    waits for a further status update past its ready deadline. A rebuild uses the reconnect deadline for both.
     """
 
     def __init__(
@@ -295,6 +308,7 @@ class InferenceClient:
         headers: dict[str, str] | None = None,
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
+        ready_deadline: float = DEFAULT_READY_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         reconnect_deadline: float = DEFAULT_RECONNECT_DEADLINE,
     ):
@@ -309,6 +323,7 @@ class InferenceClient:
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
+        self.ready_deadline = ready_deadline
         self.infer_timeout = infer_timeout
         self.reconnect_deadline = reconnect_deadline
 
@@ -329,20 +344,42 @@ class InferenceClient:
     def new_session(self) -> InferenceSession:
         """Creates a new inference session on the server's model.
 
-        Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
+        Attempts begin until the connect deadline, and each waits for ready up to the ready deadline, so the call
+        can take the sum of both. Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry
+        clears it.
         """
-        return self._connect(self.connect_deadline, reopen=lambda: self._connect(self.reconnect_deadline, reopen=None))
+        deadline = time.monotonic() + self.connect_deadline
+        return self._retry(deadline, lambda: self._open_session(time.monotonic() + self.ready_deadline, self._reopen))
 
-    def _connect(self, deadline_sec: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
-        """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock."""
-        deadline = time.monotonic() + deadline_sec
+    def _reopen(self) -> InferenceSession:
+        """A session in place of one that dropped before its first answer."""
+        deadline = time.monotonic() + self.reconnect_deadline
+        return self._retry(deadline, lambda: self._open_session(deadline, reopen=None))
+
+    def wait_for_server(self) -> None:
+        """Return once a server answers on the address, without opening a session.
+
+        Raises ``wire.ConnectRefused`` when the wire refuses the server and no retry clears it.
+        """
+
+        def probe() -> None:
+            if (refusal := self._wire.probe(self._address, self.headers, self.open_timeout)) is not None:
+                raise wire.ConnectRefused(refusal, f'{self.session_url} refused the probe: {refusal.value}')
+
+        self._retry(time.monotonic() + self.connect_deadline, probe)
+
+    def _retry(self, deadline: float, attempt: Callable[[], T]) -> T:
+        """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``."""
         backoff = 1.0
         retries = ConnectRetries()
         while True:
             try:
-                return self._open_session(deadline, reopen)
+                return attempt()
             except wire.ConnectRefused as e:
                 refusal, not_ready = e.refusal, e
+            # A server that sent status updates is up, and a new attempt makes it prepare the session again.
+            except ReadyDeadlinePassed:
+                raise
             # A status handshake the server did not finish: a backend that is not ready.
             except (TimeoutError, wire.PeerDisconnected) as e:
                 refusal, not_ready = wire.Refusal.COLD, e

@@ -21,6 +21,8 @@ SERVER = 'server'
 TRANSCRIPT = 'transcript'
 STOP_REASON = 'stop_reason'
 HINDSIGHT = 'hindsight'
+# The reserved field of a result element that holds the ``PolicyEnd`` that ends the run.
+END = 'end'
 
 POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'

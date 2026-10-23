@@ -14,6 +14,7 @@ from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import EncodeImages
+from positronic.policy.executor import Executor
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.remote import RemotePolicy
 from positronic.policy.spec import from_spec
@@ -30,7 +31,7 @@ class EchoModel(Model):
         super().__init__(parameters={'fps': 20})
         self._session_metadata = session_metadata
 
-    def prepare_session(self, params):
+    def prepare_session(self, params, cancelled):
         return EchoSession(
             spec.component('chunked_schedule', version=2, fps=params['fps']), metadata=self._session_metadata
         )
@@ -91,7 +92,7 @@ def test_images_use_client_selection_and_explicit_output_paths(serving, image_ar
             return {'images': [observation['video']['camera']], 'state': observation['state']}
 
     class ImageModel(Model):
-        def prepare_session(self, params):
+        def prepare_session(self, params, cancelled):
             return ImageSession(description, output_images=[serialization.JpegEncoding(('images', 0), 95)])
 
     with serving(ImageModel) as endpoint:
@@ -111,6 +112,11 @@ def test_images_use_client_selection_and_explicit_output_paths(serving, image_ar
 def test_remote_policy_derives_client_metadata_without_changing_the_server_report(serving):
     with serving(EchoModel) as (client, address):
         policy = RemotePolicy(client.NAME, address)
+        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        try:
+            runtime.start(policy).close()
+        finally:
+            runtime.close()
         metadata = policy.meta()
         assert metadata[ACTION_FPS] == 20
         assert f'{policy_keys.SERVER}.{ACTION_FPS}' not in metadata
