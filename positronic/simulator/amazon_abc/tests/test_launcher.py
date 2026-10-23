@@ -54,6 +54,11 @@ def test_only_the_named_tasks_assets_are_downloaded(spawned):
     assert runs[-1][-3:] == ['--sim-task', 'put_plastic_bottles_in_bin', 'turn_mug_right_side_up']
 
 
-def test_a_sweep_over_the_catalogue_downloads_every_package(spawned):
+def test_a_sweep_over_the_catalogue_downloads_every_package_with_the_robocasa_packs(spawned):
     _, runs = spawned('linux', tasks=None)
-    assert runs[-1][-1] == '--sim'
+    assert runs[-1][-2:] == ['--sim', '--sim-robocasa']
+
+
+def test_named_tasks_leave_the_robocasa_choice_to_their_own_asset_map(spawned):
+    _, runs = spawned('linux', tasks=['put_plastic_bottles_in_bin'])
+    assert '--sim-robocasa' not in runs[-1]

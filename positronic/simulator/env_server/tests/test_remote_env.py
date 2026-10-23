@@ -751,6 +751,35 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
         assert task.instruction == 'countdown'
 
 
+class _PromptPerStepEnv(_CountdownEnv):
+    """Moves its prompt to ``step <n>`` at each step, as a task with several targets in turn does."""
+
+    def __init__(self):
+        super().__init__()
+        self.prompts: list[str] = []
+
+    def step(self, actions):
+        frame = super().step(actions)
+        self.prompts.append(f'step {self._steps}')
+        frame[protocol.SLOTS][0][protocol.FRAME_META] = {'task': self.prompts[-1]}
+        return frame
+
+
+@pytest.mark.timeout(60.0)
+def test_a_prompt_the_env_moves_in_the_episode_is_the_live_instruction():
+    env = _PromptPerStepEnv()
+    with serve_env(env) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
+        task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
+        scheduler = world.start([proxy])
+
+        proxy.reset({eval_keys.SEED: 0})
+        assert task.instruction == _COUNTDOWN
+        drive_scheduler(scheduler, steps=4)
+        assert env.prompts
+        assert task.instruction == env.prompts[-1]
+
+
 def test_the_canonical_contract_is_exactly_what_a_client_can_emit():
     pose = geom.Transform3D(np.zeros(3), geom.Rotation.identity)
     commands = [

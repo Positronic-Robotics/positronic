@@ -27,6 +27,8 @@ POLICY_END = 'eval.policy_end'
 TASK = 'task'
 # The id of the task that a trial runs, as the benchmark names it.
 BENCHMARK_TASK = 'eval.task'
+# The seed that draws a trial's scene, in the trial's params and in its episode's statics.
+SEED = 'eval.seed'
 
 # A recorded signal is the file `<signal name><SIGNAL_FILE_SUFFIX>`.
 SIGNAL_FILE_SUFFIX = '.parquet'
@@ -42,6 +44,11 @@ SUBTASK_SIGNAL = 'subtask'
 SUBTASK_COMPLETED_INDEX = 1
 SUBTASK_TOTAL_INDEX = 2
 SUBTASK_SCORE_INDEX = 3
+
+# ABC's task evaluator records each of its metrics as the signal `<ABC_TASK_EVAL_SIGNAL>.<metric>`, under ABC's name.
+ABC_TASK_EVAL_SIGNAL = 'task_eval'
+# ABC's progress through the task at each step, from 0 to 1. ABC scores progress as its maximum over the episode.
+ABC_REWARD_SIGNAL = f'{ABC_TASK_EVAL_SIGNAL}.reward'
 
 
 class PolicyEnd(StrEnum):

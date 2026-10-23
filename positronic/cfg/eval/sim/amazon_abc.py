@@ -1,4 +1,5 @@
 import configuronic as cfn
+from eval_vocabulary.episode import ABC_TASK_EVAL_SIGNAL
 
 from positronic.cfg.eval import build_tasks, spec
 from positronic.drivers.roboarm.models import bundled_yam_model
@@ -14,9 +15,8 @@ from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote
     camera_dict=CAMERAS,
     camera_height=260,
     camera_width=416,
-    # ABC's own sim-eval budget is 3540 actions of 34 ms. One more period lets the last action's verdict
-    # arrive before the deadline.
-    timeout=(3540 + 1) * 0.034,
+    # ABC's actions are 34 ms apart. One more period lets the last action's verdict arrive before the deadline.
+    timeout=(mapping.ABC_EVAL_STEPS + 1) * 0.034,
     seed=None,
     task=None,
     trial_count=1,
@@ -31,7 +31,10 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()
     )
-    privileged = {name: proxy.privileged[name] for name in (mapping.OBS_SIM_STATE, mapping.OBS_TASK_EVAL)}
+    privileged = {
+        mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE],
+        ABC_TASK_EVAL_SIGNAL: proxy.privileged[mapping.OBS_TASK_EVAL],
+    }
     task_spec = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=timeout)
 
     def tasks() -> list[Task]:

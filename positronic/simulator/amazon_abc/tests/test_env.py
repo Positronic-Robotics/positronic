@@ -54,8 +54,11 @@ class _FakeScene:
         self.data = mujoco.MjData(self.model)
         self._control_decimation = _DECIMATION
         self.robot_names = list(mapping.ARMS)
-        self.terminated = False
-        self.success = False
+        self.terminate_on_success = False
+        self.max_episode_steps: int | None = None
+        self.truncated = False
+        self.task_eval: dict[str, Any] = {mapping.ABC_EVAL_EVER_SUCCESS: False}
+        self.prompt = _PROMPT
         self.actions: list[np.ndarray] = []
 
     def forget_arm_state(self) -> None:
@@ -69,8 +72,9 @@ class _FakeScene:
 
     def step(self, action: np.ndarray) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
         self.actions.append(action)
-        info = {mapping.ABC_INFO_SUCCESS: self.success, mapping.ABC_INFO_TASK_EVAL: {'num_bottles_in_bin': 1}}
-        return self._obs(), 0.0, self.terminated, False, info
+        # ABC's own step: it ends a trial at its first success when the server asks it to.
+        terminated = self.terminate_on_success and self.task_eval[mapping.ABC_EVAL_EVER_SUCCESS]
+        return self._obs(), 0.0, terminated, self.truncated, {mapping.ABC_INFO_TASK_EVAL: self.task_eval}
 
     def close(self) -> None:
         pass
@@ -80,7 +84,7 @@ class _FakeScene:
         return {
             mapping.ABC_OBS_STATE: np.zeros(len(mapping.ARMS) * (mapping.ARM_JOINTS + 1)),
             mapping.ABC_OBS_IMAGES: images,
-            mapping.ABC_OBS_PROMPT: _PROMPT,
+            mapping.ABC_OBS_PROMPT: self.prompt,
         }
 
 
@@ -102,7 +106,13 @@ def env(monkeypatch, scene: _FakeScene) -> Any:
     """An ``AbcEnv`` loaded as the server's interpreter loads it, with ``abc_sim`` answering ``scene``."""
     abc_sim = types.ModuleType('abc_sim')
     task = types.SimpleNamespace(name=_TOKEN[mapping.TOKEN_TASK], env_task='bottles', prompt=_PROMPT)
-    abc_sim.__dict__.update(get_task_spec=lambda name: task, list_task_specs=lambda: [task], make_env=lambda **_: scene)
+
+    def make_env(terminate_on_success: bool = False, max_episode_steps: int | None = None, **_: Any) -> _FakeScene:
+        scene.terminate_on_success = terminate_on_success
+        scene.max_episode_steps = max_episode_steps
+        return scene
+
+    abc_sim.__dict__.update(get_task_spec=lambda name: task, list_task_specs=lambda: [task], make_env=make_env)
     monkeypatch.setitem(sys.modules, 'abc_sim', abc_sim)
     for name, directory in (('protocol', _SERVER_DIR), ('arm_action', _SERVER_DIR), ('server', _SERVER_DIR)):
         monkeypatch.setitem(sys.modules, name, _load(name, directory / f'{name}.py'))
@@ -128,22 +138,54 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
     assert frame[protocol.FRAME_CONTROL_DT] == pytest.approx(_TIMESTEP * _DECIMATION)
 
 
-@pytest.mark.parametrize('terminated, success', [(False, False), (True, False), (True, True)])
-def test_a_step_answers_the_slot_with_its_observation_end_and_verdict(env, scene, terminated, success):
+_EVER_SUCCESS, _EVER_FAILED = mapping.ABC_EVAL_EVER_SUCCESS, mapping.ABC_EVAL_EVER_FAILED
+
+
+@pytest.mark.parametrize(
+    ('task_eval', 'truncated', 'done', 'success'),
+    [
+        ({_EVER_SUCCESS: False}, False, False, False),
+        ({_EVER_SUCCESS: True}, False, True, True),
+        ({_EVER_SUCCESS: False}, True, True, False),
+        ({_EVER_SUCCESS: True, _EVER_FAILED: False}, False, False, True),
+        ({_EVER_SUCCESS: True, _EVER_FAILED: False}, True, True, True),
+        ({_EVER_SUCCESS: False, _EVER_FAILED: True}, False, True, False),
+    ],
+    ids=['running', 'succeeded', 'out_of_time', 'still_held', 'held_to_the_limit', 'dropped'],
+)
+def test_a_step_ends_the_trial_and_gives_its_verdict_as_abcs_own_eval_does(
+    env, scene, task_eval: dict[str, bool], truncated: bool, done: bool, success: bool
+):
     env.reset(_TOKEN)
-    scene.terminated, scene.success = terminated, success
+    scene.task_eval, scene.truncated = task_eval, truncated
 
     frame = env.step({0: _hold_both()})
 
     assert set(frame) == {protocol.SLOTS, protocol.FRAME_CONTROL_DT}
     (slot,) = frame[protocol.SLOTS]
-    assert set(slot) == {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS}
-    assert (slot[protocol.FRAME_DONE], slot[protocol.FRAME_SUCCESS]) == (terminated, success)
+    assert set(slot) == {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS, protocol.FRAME_META}
+    assert (slot[protocol.FRAME_DONE], slot[protocol.FRAME_SUCCESS]) == (done, success)
+
+
+def test_abc_truncates_a_trial_at_the_horizon_of_its_own_eval(env, scene):
+    env.reset(_TOKEN)
+
+    # 236 chunks of 15 actions, as ABC's sim eval runs; a maintenance task succeeds only when ABC truncates there.
+    assert scene.max_episode_steps == 3540
+
+
+def test_a_step_reports_the_prompt_the_task_moved_to(env, scene):
+    env.reset(_TOKEN)
+    scene.prompt = 'find the red mug'
+
+    result = protocol.slot_frame(env.step({0: _hold_both()}), 0)
+
+    assert result[protocol.FRAME_META] == {mapping.META_TASK: 'find the red mug'}
 
 
 def test_the_client_reads_the_envs_own_verdict_from_its_slot(env, scene):
     env.reset(_TOKEN)
-    scene.terminated, scene.success = True, True
+    scene.task_eval = {_EVER_SUCCESS: True}
 
     result = protocol.slot_frame(env.step({0: _hold_both()}), 0)
 

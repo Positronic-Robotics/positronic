@@ -31,6 +31,8 @@ _ABC_DEPS = ('mujoco~=3.8.0', 'gymnasium>=1.1', 'numpy', 'tyro')
 _PREPARE_SCRIPT = Path('prepare.py')
 _PREPARE_ONE_TASK = '--sim-task'
 _PREPARE_EVERY_TASK = '--sim'
+# `--sim` leaves out the RoboCasa packs that inhand_transfer needs; `--sim-task` adds them for that task.
+_PREPARE_ROBOCASA = '--sim-robocasa'
 
 
 @contextmanager
@@ -53,7 +55,7 @@ def ensure_abc(tasks: Sequence[str] | None) -> Path:
         subprocess.run(
             ['uv', 'pip', 'install', *_ABC_DEPS, *SERVER_DEPS], env={**os.environ, 'VIRTUAL_ENV': str(venv)}, check=True
         )
-        assets = [_PREPARE_EVERY_TASK] if tasks is None else [_PREPARE_ONE_TASK, *tasks]
+        assets = [_PREPARE_EVERY_TASK, _PREPARE_ROBOCASA] if tasks is None else [_PREPARE_ONE_TASK, *tasks]
         subprocess.run([str(python), str(_PREPARE_SCRIPT), *assets], cwd=str(src), check=True)
     return python
 
