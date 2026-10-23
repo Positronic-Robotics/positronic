@@ -59,9 +59,7 @@ ROBOT_SIGNAL_POINTERS = Derive(**_POINTER_VALUES)
 _REAL_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_franka_model().items()})
 _SIM_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_panda_model().items()})
 
-# A recording made before ``ee_frames`` names the site its poses sit at as ``control_frame`` (``end_effector``
-# before #485, ``default`` after; absent on the oldest real recordings, which sit at ``default``), and a codec's
-# move off it as an ``ee_frame`` vector.
+# The keys of the site and the codec offset of an older recording. A real one with no site sits at ``default``.
 _LEGACY_CONTROL_FRAME = 'control_frame'
 _LEGACY_EE_FRAME = 'ee_frame'
 

@@ -36,9 +36,9 @@ A checkpoint's transform is portable only while every embodiment puts `default` 
 Today's placements do not — the FR3 and the sim panda sit 45 mm apart along the approach axis — which is what
 [#550](https://github.com/Positronic-Robotics/positronic/issues/550) closes.
 
-Two things are pinned to the Franka's FR3's current placement: recordings before #485 state their site as
-`end_effector`, and `models.DROID_EE_FRAME` is measured from where `default` sits. `test_default_frame_still_coincides_with_the_franka_tool_frame` fails when
-the placement moves.
+Recordings before #485 state their site as `end_effector`, which coincides with the FR3's `default`.
+`models.DROID_EE_FRAME` is measured from that `default`. `test_default_frame_still_coincides_with_the_franka_tool_frame`
+fails when the placement moves.
 
 | Embodiment | `default` sits at | Note |
 | --- | --- | --- |

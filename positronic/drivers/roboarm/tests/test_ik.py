@@ -252,10 +252,9 @@ def test_declared_frame_matches_the_model_geometry(declared, frame):
 
 
 def test_default_frame_still_coincides_with_the_franka_tool_frame():
-    """Two things rest on this and neither is reachable from the data: recordings before #485 state their site as
-    ``end_effector`` (see ``cfg.ds.internal.REAL_ROBOT_TRANSFORM``), and ``DROID_EE_FRAME`` is stated from where
-    ``DEFAULT_FRAME`` sits. TODO(#550): moving it to the flange invalidates both, so re-express those
-    recordings and re-measure the constant in the same change.
+    """Recordings before #485 state their site as ``end_effector`` (``cfg.ds.internal.REAL_ROBOT_TRANSFORM``), and
+    ``DROID_EE_FRAME`` is stated from ``DEFAULT_FRAME``. Neither is reachable from the data. TODO(#550): a move of
+    ``DEFAULT_FRAME`` to the flange invalidates both, so re-express those recordings and re-measure the constant then.
     """
     transform = frame_transform(bundled_franka_model()[roboarm_keys.URDF], DEFAULT_FRAME, EE_LINK)
     np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-12)
