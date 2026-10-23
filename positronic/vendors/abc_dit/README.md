@@ -20,8 +20,8 @@ sidecar `abc_dit_xl_200k_model.json` records the same map by task name. ABC's si
 
 The ABC code and the DiT checkpoints are under the Apache License 2.0. The checkpoints embed a vision backbone derived
 from DINOv3, and the [DINOv3 License](LICENSE-DINOv3.md) governs it. A publication of results from this model must
-acknowledge the use of DINOv3. An image that holds the weights must carry a copy of the DINOv3 License. See
-[NOTICE](NOTICE).
+acknowledge the use of DINOv3. An image that holds the weights must carry a copy of the DINOv3 License. A service
+that makes the policy available to others must display "Built with DINOv3". See [NOTICE](NOTICE).
 
 ## How it runs
 

@@ -9,9 +9,15 @@ governs that backbone, in the weights and in the code that loads them. LICENSE-D
 of that licence, from
 https://github.com/facebookresearch/dinov3/blob/ffb4bb89c6558ca3244655c25a3955d01788b732/LICENSE.md.
 
+Meta also publishes the DINOv3 License at https://ai.meta.com/resources/models-and-libraries/dinov3-license/. That
+text adds a second duty to section 1.b.i, so this NOTICE follows it.
+
 The DINOv3 License sets these duties:
 - A distribution of the weights to a third party, for example in a container image, carries a copy of the DINOv3
   License (section 1.b.i).
+- A party that makes the weights available to a third party, for example as a served policy, prominently displays
+  "Built with DINOv3" on a related website, user interface, about page or product documentation (section 1.b.i, in
+  the text on Meta's page).
 - A publication of results from the model acknowledges the use of DINOv3 (section 1.b.ii).
 - The use complies with trade controls, and it is not for an end use that section 1.b.v prohibits.
 
