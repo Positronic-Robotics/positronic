@@ -21,16 +21,6 @@ VIEW_SIZE = (224, 168)
 YAM_JOINTS = 6
 BIMANUAL_SIZE = (YAM_JOINTS + 1) * len(keys.BIMANUAL_ARMS)
 
-# The prompt that each sim task's episodes carried in the training of `abc_dit_xl_200k_model.pt`, keyed by the task
-# instruction that ABC's sim reports. The release's `abc_dit_xl_200k_model.json` records the same map by task name.
-MULTITASK_200K_PROMPTS = {
-    'put the plastic bottles in the bin': 'sim throw plastic bottles in bin',
-    'sweep away paper scraps from the table': 'sim sweep away paper scraps from the table',
-    'turn mug right side up': 'sim turn mug right side up',
-    'load plates into tabletop dish rack': 'sim load plates into tabletop dish rack',
-    'hang mug on mug rack': 'sim hang the mug on the mug rack',
-}
-
 
 def _channels_first_view(key: str, inputs: dict[str, Any]) -> np.ndarray:
     frame = np.asarray(inputs[key])
@@ -73,6 +63,16 @@ class AbcObservationCodec(Codec):
             abc_dit.PROMPT: self._prompts[task],
         }
 
+
+# The prompt that each sim task's episodes carried in the training of `abc_dit_xl_200k_model.pt`, keyed by the task
+# instruction that ABC's sim reports. The release's `abc_dit_xl_200k_model.json` records the same map by task name.
+MULTITASK_200K_PROMPTS = {
+    'put the plastic bottles in the bin': 'sim throw plastic bottles in bin',
+    'sweep away paper scraps from the table': 'sim sweep away paper scraps from the table',
+    'turn mug right side up': 'sim turn mug right side up',
+    'load plates into tabletop dish rack': 'sim load plates into tabletop dish rack',
+    'hang mug on mug rack': 'sim hang the mug on the mug rack',
+}
 
 multitask_200k = codecs.compose.override(
     obs=cfn.Config(AbcObservationCodec, prompts=MULTITASK_200K_PROMPTS),
