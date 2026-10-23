@@ -352,12 +352,15 @@ def test_bimanual_joints_action_splits_into_per_arm_joint_commands_and_positroni
 
     decoded = BimanualJointsAction().decode({ACTION: vector})
 
-    left, right = decoded['robot_command.left'], decoded['robot_command.right']
+    left, right = (
+        decoded[obs_keys.arm_channel(obs_keys.ROBOT_COMMAND, obs_keys.LEFT_ARM)],
+        decoded[obs_keys.arm_channel(obs_keys.ROBOT_COMMAND, obs_keys.RIGHT_ARM)],
+    )
     assert isinstance(left, cmd_module.JointPosition) and isinstance(right, cmd_module.JointPosition)
     np.testing.assert_array_equal(left.positions, np.arange(6))
     np.testing.assert_array_equal(right.positions, np.arange(6, 12))
-    assert decoded['target_grip.left'] == pytest.approx(0.0)
-    assert decoded['target_grip.right'] == pytest.approx(0.75)
+    assert decoded[obs_keys.arm_channel(obs_keys.TARGET_GRIP, obs_keys.LEFT_ARM)] == pytest.approx(0.0)
+    assert decoded[obs_keys.arm_channel(obs_keys.TARGET_GRIP, obs_keys.RIGHT_ARM)] == pytest.approx(0.75)
 
 
 def test_bimanual_joints_action_of_the_wrong_width_is_refused():
