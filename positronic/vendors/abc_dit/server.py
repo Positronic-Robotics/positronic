@@ -1,6 +1,6 @@
 """Serve an ABC-DiT checkpoint over positronic's session protocol.
 
-The policy runs in ABC's own interpreter, as ABC's policy server `deploy/serve_policy.py`, on this machine.
+The policy runs in ABC's own interpreter, as ABC's policy server started by `backend.py`, on this machine.
 `multitask_200k` serves `abc_dit_xl_200k_model.pt`, ABC's multi-task sim policy, with the prompts it trained under.
 
 Usage
@@ -30,8 +30,8 @@ from positronic.policy.processors import ChunkedSchedule
 from positronic.vendors import abc_dit
 from positronic.vendors.abc_dit import codecs
 
-# The module that ABC's interpreter runs: ABC's own websocket policy server.
-BACKEND_MODULE = 'deploy.serve_policy'
+# The script that ABC's interpreter runs: ABC's own websocket policy server, on loopback.
+BACKEND_SCRIPT = Path(__file__).with_name('backend.py')
 # The DiT checkpoints predict chunks of this many actions.
 CHUNK_LENGTH = 30
 
@@ -92,8 +92,7 @@ def abc_dit_model(checkpoint: str, abc_python: str, fast_inference: bool, noise_
     command = [
         python,
         '-P',
-        '-m',
-        BACKEND_MODULE,
+        BACKEND_SCRIPT,
         f'--policy.checkpoint-path={checkpoint_path}',
         '--policy-type=dit',
         '--policy.fast-inference' if fast_inference else '--policy.no-fast-inference',
