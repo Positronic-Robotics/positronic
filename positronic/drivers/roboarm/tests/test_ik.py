@@ -309,7 +309,7 @@ def test_the_bundled_yam_model_carries_every_mesh_its_urdf_names():
 
     named = {mesh.get('filename') for mesh in ET.fromstring(model[roboarm_keys.URDF]).iter('mesh')}
 
-    assert named == set(model['meshes']) and all(model['meshes'].values())
+    assert named == set(model[roboarm_keys.MESHES]) and all(model[roboarm_keys.MESHES].values())
 
 
 def test_panda_flange_sits_on_link7_as_on_the_fr3():

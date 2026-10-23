@@ -1628,16 +1628,6 @@
                 }
             }
         ],
-        "./positronic/drivers/roboarm/models.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 75,
-                    "endColumn": 85,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/drivers/roboarm/so101/driver.py": [
             {
                 "code": "reportArgumentType",
