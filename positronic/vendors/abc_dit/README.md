@@ -57,7 +57,7 @@ checkpoint (8.1 GB):
 git clone https://github.com/amazon-far/abc && cd abc
 git checkout 6c467cebcecf16a4dce79e6fd87a7ca2281c3ef0
 uv sync
-uv pip install websockets opencv-python-headless  # ABC's policy server imports both
+uv pip install websockets opencv-python-headless msgpack  # ABC's policy server imports all three
 uv run prepare.py --pretrained                    # writes cache/abc_dit_xl_200k_model.pt and its sidecar
 ```
 
