@@ -1477,3 +1477,15 @@ def test_rtc_plays_an_end_only_from_an_element_that_it_does_not_skip(execution, 
     assert ended is end
     assert 6 not in sent
 
+
+def test_the_rtc_prefix_keeps_the_commands_of_an_ending_action_but_not_its_end(execution):
+    runtime, clock = execution
+    model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2), {MOTOR: 3}])
+    run = runtime.start(RTCSchedule(fps=10, call_after_sec=0, prefix_duration=ConstantDuration(0.3)), model)
+    try:
+        run.send({})
+        clock.advance_to_ns(PERIOD_NS // 2)
+        run.send({})
+    finally:
+        run.close()
+    assert model.prefixes == [[], [{MOTOR: 1}, {MOTOR: 2}, {MOTOR: 3}]]
