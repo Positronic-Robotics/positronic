@@ -400,7 +400,8 @@ def _image(height: int = 48, width: int = 64) -> np.ndarray:
 def _packed(writer: frame_ring.FrameWriter, obs) -> dict:
     """``obs`` as ``writer`` packs it, with its images written into the ring."""
     packed, write = writer.pack(obs)
-    write()
+    if write is not None:
+        write()
     return packed
 
 
@@ -465,8 +466,8 @@ def test_a_packed_observation_leaves_the_pixels_out_of_the_message(frame_writer)
 
 
 @pytestmark_ring
-def test_an_observation_with_no_image_creates_no_ring(frame_writer):
-    assert _packed(frame_writer, {keys.GRIP: 0.5}) == {keys.GRIP: 0.5}
+def test_an_observation_with_no_image_creates_no_ring_and_no_write(frame_writer):
+    assert frame_writer.pack({keys.GRIP: 0.5}) == ({keys.GRIP: 0.5}, None)
     assert frame_writer._ring is None
 
 
