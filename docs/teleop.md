@@ -197,6 +197,7 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
 | `inference.policy.type` | `remote` |
 | `inference.policy.server.type` | `teleop` |
 | `inference.policy.server.effective_params.*` | the session parameters, for example `operator_position` |
+| `inference.policy.action_fps` | 100: the most frequent polls of the schedule, not the rate of the commands of the person |
 | `eval.ended_by` | `policy`, when Complete or Give up ended the trial |
 | `eval.policy_end` | `complete` or `give_up` |
 | `eval.terminated` | `False`, when the time limit ended the trial |
