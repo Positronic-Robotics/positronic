@@ -227,8 +227,8 @@ This metadata tells the client:
 - `compress_images` — whether the client JPEG-encodes frames before
   sending. It is true unless the deployment sets it false. A session with a frame ring sends raw frames
   whatever it says (see above).
-  The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
-  each run records it in the episode metadata.
+  The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default. A run that
+  sends JPEG frames in the message records the quality in the episode metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 - `frame_ring` — true when the server takes images through shared memory (see above); absent when it does not
 

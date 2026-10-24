@@ -198,7 +198,7 @@ class RemotePolicy(Policy):
             episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
             if frames:
                 episode_meta[roboarm_keys.EE_FRAMES] = frames
-            if server_compresses_images:
+            if server_compresses_images and not session.sends_frames_through_ring:
                 episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
             recorded_session_id = session.session_id
             if recorded_session_id is not None:
