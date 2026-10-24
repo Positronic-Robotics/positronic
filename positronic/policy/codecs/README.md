@@ -156,7 +156,7 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 "EE pose" has no universal meaning: our rigs report the grip point their model calls `gripper`, DROID reports the flange (`panda_link8`), and RoboLab reports its own `eef_frame` at the gripper coupler (`robolab_eef`). A checkpoint speaks whichever frame its training data was in, so serving it in another frame misreads every pose and every command by one constant transform — silently. See [the frame contract](../../drivers/roboarm/README.md) for what `gripper` is and what each embodiment owes it.
 
-`ChangeEEFrame(site, T)` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
+`ChangeEEFrame(EEFrame(site=site, offset=T))` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
 
 The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
 
@@ -172,7 +172,7 @@ It is declared in two places, for the two things it does:
 
 Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `EEFrame(site=GRIPPER_SITE, offset=models.DROID_EE_FRAME)`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
 
-A server built for poses at the Franka Hand point, the FR3's `F_T_EE`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline. A version 1 `change_ee_frame` spec is refused as an unsupported version.
+A server built on positronic states its frame with the same configs: a server built for poses at the Franka Hand point, the FR3's `F_T_EE`, puts `ChangeEEFrame(cfg.codecs.franka_hand_frame.instantiate())` in its pipeline. A version 1 `change_ee_frame` spec is refused as an unsupported version.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 

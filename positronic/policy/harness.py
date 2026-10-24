@@ -271,7 +271,7 @@ class Harness(pimm.ControlSystem):
         changes = []
         for site, names in keys_by_site.items():
             offset = frame_transform(urdf, site, EE_LINK) if has_ee_link else geom.Transform3D.identity
-            changes.append(ChangeEEFrame(site, offset, tuple(names)))
+            changes.append(ChangeEEFrame(EEFrame(site=site, offset=offset), tuple(names)))
         return reduce(or_, changes)
 
     def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:

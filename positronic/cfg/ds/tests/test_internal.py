@@ -129,7 +129,9 @@ def test_a_recorded_delta_frame_moves_with_the_targets():
 
 
 def test_training_moves_a_recording_from_before_485_off_the_gripper():
-    trained = ChangeEEFrame(GRIPPER_SITE, OFFSET)(REAL_ROBOT_TRANSFORM(_recording(**{CONTROL_FRAME: EE_LINK})))
+    trained = ChangeEEFrame(EEFrame(site=GRIPPER_SITE, offset=OFFSET))(
+        REAL_ROBOT_TRANSFORM(_recording(**{CONTROL_FRAME: EE_LINK}))
+    )
     want = POSE * FR3_EE_FRAME.inv * OFFSET
     got = geom.Transform3D.from_vector(np.asarray(trained[keys.EE_POSE][0][0]), QUAT)
     np.testing.assert_allclose(got.as_matrix, want.as_matrix, atol=1e-9)

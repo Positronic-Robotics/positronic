@@ -35,7 +35,7 @@ def test_the_eef_pose_is_reported_at_the_gripper_site_of_the_sim_panda():
 def test_the_libero_checkpoint_frame_sees_the_pose_the_env_reports():
     reported = LiberoAdapter({}).observations(_raw_obs(_EEF_POSE))[keys.ROBOT_STATE].ee_pose
     frame = cfg_codecs.panda_ee_frame.instantiate()
-    seen = ChangeEEFrame(frame.site, frame.offset).encode({keys.EE_POSE: reported.as_vector(_QUAT)})[keys.EE_POSE]
+    seen = ChangeEEFrame(frame).encode({keys.EE_POSE: reported.as_vector(_QUAT)})[keys.EE_POSE]
     np.testing.assert_allclose(geom.Transform3D.from_vector(seen, _QUAT).as_matrix, _EEF_POSE.as_matrix, atol=1e-6)
 
 

@@ -5,7 +5,7 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm.models import FR3_EE_FRAME, GRIPPER_SITE, PANDA_EE_FRAME, EEFrame
+from positronic.drivers.roboarm.models import DROID_EE_FRAME, FR3_EE_FRAME, GRIPPER_SITE, PANDA_EE_FRAME, EEFrame
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -62,9 +62,10 @@ gripper_ee_frame = cfn.Config(EEFrame, site=GRIPPER_SITE)
 # rigs reported at ``GRIPPER_SITE``.
 fr3_ee_frame = gripper_ee_frame.override(offset=FR3_EE_FRAME)
 panda_ee_frame = gripper_ee_frame.override(offset=PANDA_EE_FRAME)
-# A server built for poses at the Franka Hand point, the FR3's ``F_T_EE``, states that frame with this codec in
-# its pipeline.
-franka_hand_frame = cfn.Config(ChangeEEFrame, site=GRIPPER_SITE, transform=FR3_EE_FRAME)
+# The FR3's Franka Hand point, the hand point of the MuJoCo panda, and the FR3 flange, where DROID records its poses.
+franka_hand_frame = fr3_ee_frame
+panda_hand_frame = panda_ee_frame
+droid_frame = gripper_ee_frame.override(offset=DROID_EE_FRAME)
 
 
 @cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)
@@ -77,7 +78,7 @@ def compose_data(obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: 
     """
     result = obs & action
     if ee_frame is not None:
-        result = ChangeEEFrame(ee_frame.site, ee_frame.offset) | result
+        result = ChangeEEFrame(ee_frame) | result
     if flip_grip:
         result = FlipGrip() | result
     if binarize_grip:
