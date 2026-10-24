@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+from typing import Any
 
 from platform_client.policy_container import AUTH_TOKEN_ENV
 
@@ -20,25 +21,32 @@ AUTH_TOKEN_KEY = AUTH_TOKEN_ENV
 _CLI_TIMEOUT_SEC = 30.0
 
 
-def _nebius(*args: str) -> dict:
-    """The parsed JSON of one `nebius` call."""
-    command = ['nebius', *args, '--format', 'json']
+class NebiusError(RuntimeError):
+    """A `nebius` call that failed."""
+
+
+class NebiusNotInstalled(NebiusError):
+    """The `nebius` CLI is not on PATH."""
+
+
+def call(*args: str, profile: str | None = None, structured: bool = True, timeout: float = _CLI_TIMEOUT_SEC) -> Any:
+    """One `nebius` call: its parsed JSON, or its raw output when it is not `structured`."""
+    command = ['nebius', *args, *(['--profile', profile] if profile else [])]
+    command += ['--format', 'json'] if structured else []
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=_CLI_TIMEOUT_SEC, check=True)
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=True)
     except FileNotFoundError:
-        raise RuntimeError(
-            f'The `nebius` CLI is not on PATH. Install it, or export {AUTH_TOKEN_ENV} and use `.authed_remote`.'
-        ) from None
+        raise NebiusNotInstalled('The `nebius` CLI is not on PATH: https://docs.nebius.com/cli/install') from None
     except subprocess.TimeoutExpired:
         # An expired CLI credential turns any call into a browser login that waits for a human, which would
         # hang a run rather than fail it.
-        raise RuntimeError(
-            f'`{" ".join(command)}` did not answer in {_CLI_TIMEOUT_SEC:.0f}s. Run a `nebius` command '
+        raise NebiusError(
+            f'`{" ".join(command)}` did not answer in {timeout:.0f}s. Run a `nebius` command '
             f'yourself to complete the login, then retry.'
         ) from None
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f'`{" ".join(command)}` failed: {e.stderr.strip()}') from None
-    return json.loads(completed.stdout)
+        raise NebiusError(f'`{" ".join(command)}` failed: {e.stderr.strip()}') from None
+    return json.loads(completed.stdout) if structured else completed.stdout
 
 
 def auth_token(secret: str = AUTH_TOKEN_SECRET, parent_id: str = PARENT_ID) -> str:
@@ -46,8 +54,11 @@ def auth_token(secret: str = AUTH_TOKEN_SECRET, parent_id: str = PARENT_ID) -> s
 
     Two calls because the payload is addressable only by secret id, which the name has to be resolved to.
     """
-    found = _nebius('mysterybox', 'secret', 'get-by-name', '--parent-id', parent_id, '--name', secret)
-    payload = _nebius(
+    try:
+        found = call('mysterybox', 'secret', 'get-by-name', '--parent-id', parent_id, '--name', secret)
+    except NebiusNotInstalled as e:
+        raise NebiusNotInstalled(f'{e} Install it, or export {AUTH_TOKEN_ENV} and use `.authed_remote`.') from None
+    payload = call(
         'mysterybox', 'payload', 'get-by-key', '--secret-id', found['metadata']['id'], '--key', AUTH_TOKEN_KEY
     )
     token = payload['data']['string_value']

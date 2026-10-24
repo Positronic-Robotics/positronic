@@ -15,10 +15,10 @@ command makes and deletes, so no command line holds the token.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import secrets
 import signal
-import subprocess
 import sys
 import tempfile
 import time
@@ -34,6 +34,8 @@ from platform_client.policy_container import AUTH_TOKEN_ENV, POLICY_PORT, PROVIS
 from positronic_evals.evals import EvalRef, public_eval
 
 from positronic.cli.eval.run import SCORE_LINE_PREFIX
+from positronic.utils import nebius as nebius_cli
+from positronic.utils.nebius import NebiusError
 
 DEFAULT_SIM_IMAGE = 'docker.io/positro/molmospaces:main'
 DEFAULT_EVAL = 'molmo.franka_pick_mini_smoke'
@@ -60,31 +62,8 @@ RETRY_S = 10.0
 CLI_TIMEOUT_S = 300.0
 
 
-class NebiusError(RuntimeError):
-    """A `nebius` call that failed."""
-
-
 class RunFailed(RuntimeError):
     """The run ended with no score."""
-
-
-class Nebius:
-    """The `nebius` CLI. A structured call adds `--format json` and returns the parsed output."""
-
-    def __init__(self, profile: str | None = None):
-        self._profile = ['--profile', profile] if profile else []
-
-    def __call__(self, *args: str, structured: bool = True) -> Any:
-        command = ['nebius', *args, *self._profile, *(['--format', 'json'] if structured else [])]
-        try:
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=CLI_TIMEOUT_S)
-        except FileNotFoundError:
-            raise NebiusError('The `nebius` CLI is not on PATH: https://docs.nebius.com/cli/install') from None
-        except subprocess.TimeoutExpired:
-            raise NebiusError(f'`{" ".join(command)}` did not answer in {CLI_TIMEOUT_S:.0f}s') from None
-        if completed.returncode != 0:
-            raise NebiusError(f'`{" ".join(command)}` failed: {completed.stderr.strip()}')
-        return json.loads(completed.stdout) if structured else completed.stdout
 
 
 @dataclass(frozen=True)
@@ -129,39 +108,10 @@ class Kind(Enum):
     JOB = ('ai', 'job')
 
 
-@dataclass
-class Made:
-    """The ids of what the run made, so that the cleanup deletes exactly that."""
-
-    secret: str | None = None
-    endpoint: str | None = None
-    job: str | None = None
-
-    def record(self, kind: Kind, resource_id: str) -> None:
-        match kind:
-            case Kind.SECRET:
-                self.secret = resource_id
-            case Kind.ENDPOINT:
-                self.endpoint = resource_id
-            case Kind.JOB:
-                self.job = resource_id
-
-
 @dataclass(frozen=True)
 class Clock:
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
-
-
-def run_name(now: datetime) -> str:
-    return f'molmo-eval-{now:%Y%m%d-%H%M%S}-{secrets.token_hex(2)}'
-
-
-def token_secret_request(run: Run, token: str) -> dict[str, Any]:
-    return {
-        'metadata': {'parent_id': run.parent_id, 'name': run.secret_name},
-        'spec': {'secret_version': {'payload': [{'key': AUTH_TOKEN_ENV, 'string_value': token}]}},
-    }
 
 
 def endpoint_create_args(run: Run, token_env: list[str]) -> list[str]:
@@ -210,7 +160,8 @@ class ServerlessEval:
         self.nebius = nebius
         self.run = run
         self.clock = clock or Clock()
-        self.made = Made()
+        # The ids of what the run made, so that the cleanup deletes exactly that.
+        self.made: dict[Kind, str] = {}
 
     def dry_run(self) -> None:
         """Validate both create requests. The token is a placeholder: the secret it would name does not exist."""
@@ -242,7 +193,12 @@ class ServerlessEval:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'secret.json'
             path.touch(mode=0o600)
-            path.write_text(json.dumps(token_secret_request(self.run, secrets.token_urlsafe(32))))
+            payload = [{'key': AUTH_TOKEN_ENV, 'string_value': secrets.token_urlsafe(32)}]
+            request = {
+                'metadata': {'parent_id': self.run.parent_id, 'name': self.run.secret_name},
+                'spec': {'secret_version': {'payload': payload}},
+            }
+            path.write_text(json.dumps(request))
             self._create(Kind.SECRET, self.run.secret_name, ['--file', str(path)])
 
     def _create(self, kind: Kind, name: str, args: list[str]) -> str:
@@ -252,7 +208,7 @@ class ServerlessEval:
         finally:
             resource_id = self._id(kind, name)
             if resource_id is not None:
-                self.made.record(kind, resource_id)
+                self.made[kind] = resource_id
                 print(f'Made {name}. If this command stops: nebius {" ".join(kind.value)} delete --id {resource_id}')
         if resource_id is None:
             raise RunFailed(f'Nebius lists no {" ".join(kind.value)} named {name} after its create')
@@ -311,15 +267,12 @@ class ServerlessEval:
     def cleanup(self) -> list[str]:
         """Delete what the run made. Return each delete that failed and each resource that is left."""
         problems = []
-        if self.made.job is not None:
-            problems += self._attempt(self._stop_job, self.made.job)
-        for kind, resource_id in (
-            (Kind.JOB, self.made.job),
-            (Kind.ENDPOINT, self.made.endpoint),
-            (Kind.SECRET, self.made.secret),
-        ):
-            if resource_id is not None:
-                problems += self._attempt(self.nebius, *kind.value, 'delete', '--id', resource_id, structured=False)
+        if Kind.JOB in self.made:
+            problems += self._attempt(self._stop_job, self.made[Kind.JOB])
+        # The job first, then the endpoint it dials, then the secret both read.
+        for kind in (Kind.JOB, Kind.ENDPOINT, Kind.SECRET):
+            if kind in self.made:
+                problems += self._attempt(self.nebius, *kind.value, 'delete', '--id', self.made[kind], structured=False)
         return problems + self._left()
 
     def _stop_job(self, job: str) -> None:
@@ -420,13 +373,13 @@ def main(argv: list[str] | None = None, nebius: Callable[..., Any] | None = None
         public_eval(EvalRef(args.eval))
     except LookupError as exc:
         raise SystemExit(str(exc)) from None
-    nebius = nebius or Nebius(args.profile)
+    nebius = nebius or functools.partial(nebius_cli.call, profile=args.profile, timeout=CLI_TIMEOUT_S)
     try:
         parent_id = args.parent_id or nebius('config', 'get', 'parent-id', structured=False).strip()
     except NebiusError as exc:
         raise SystemExit(str(exc)) from None
     run = Run(
-        name=run_name(datetime.now(UTC)),
+        name=f'molmo-eval-{datetime.now(UTC):%Y%m%d-%H%M%S}-{secrets.token_hex(2)}',
         parent_id=parent_id,
         subnet_id=args.subnet_id,
         policy_image=args.policy_image,
