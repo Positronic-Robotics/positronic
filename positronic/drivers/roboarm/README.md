@@ -25,8 +25,8 @@ checkpoint run on any embodiment that keeps the contract. At the start of each e
 policy's `ee_frames` with the rig's. A policy observes only the poses it states at the rig's site. A policy that
 names another site is refused. A policy that states none observes each pose at the rig's legacy point, the point the
 rig reported before `gripper`, and its pose commands go back from that point. The legacy point is `end_effector`
-(`models.EE_LINK`) on a model that has it, as the FR3 and the MuJoCo panda do, and the rig site on any other model,
-as YAM at `models.YAM_SITE`. The harness reads it from the rig's model and logs a warning for each such session. This
+(`models.EE_LINK`) on a model that names it, as the FR3, the MuJoCo panda and YAM do, and the rig site on any other
+model, such as SO-101. The harness reads it from the rig's model and logs a warning for each such session. This
 fallback is transitional (#550).
 
 `Impedance.frame` is the stiffness point, measured from the rig site. The Franka driver accepts an offset only, and
@@ -34,8 +34,8 @@ refuses a turned frame. `DROID_IMPEDANCE` puts it at the flange.
 
 ## Old recordings
 
-Recordings made before `gripper` state their poses at `default`, which every Franka model put at `end_effector`
-and every YAM model at the MJCF `grasp_site`, or before `ee_frames` at the site that `control_frame` names, with a
+Recordings made before `gripper` state their poses at `default`, the point each model now names `end_effector` (the
+first YAM recordings name it `grasp_site`), or before `ee_frames` at the site that `control_frame` names, with a
 codec offset in `ee_frame`. `cfg.ds.internal.REAL_ROBOT_TRANSFORM`, `SIM_ROBOT_TRANSFORM` and `YAM_ROBOT_TRANSFORM`
 relabel these as `ee_frames`, and then re-express every pose signal at `gripper` from the model the recording
 carries (`ik.MoveToSite`). A model with no `gripper` gets one at the grip point of its gripper. A YAM recording with

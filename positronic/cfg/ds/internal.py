@@ -10,7 +10,7 @@ These datasets remain on the private s3://raw/ bucket and include:
 """
 
 import xml.etree.ElementTree as ET
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from functools import partial
 from typing import Any
 
@@ -105,38 +105,31 @@ _SIM_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: partial(_legacy_ee
 _YAM_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: _yam_legacy_ee_frames})
 _LEGACY_FRAME_KEYS = [_LEGACY_CONTROL_FRAME, _LEGACY_EE_FRAME]
 
-# Where an older model lacks a site, as ``(parent link, xyz, rpy)``. Every Franka model that carried ``default``
-# put it at ``EE_LINK``. Every YAM model put ``default`` and ``grasp_site`` at the MJCF ``grasp_site``.
-_FRANKA_SITES = {
-    GRIPPER_SITE: (FLANGE_LINK, GRIPPER_2F85_XYZ, '0 0 0'),
-    _LEGACY_DEFAULT_SITE: (EE_LINK, '0 0 0', '0 0 0'),
-}
-_YAM_GRASP_SITE = (YAM_WRIST_LINK, '0 0 0.1347', '0 0 -1.5707963268')
-_YAM_SITES = {
-    GRIPPER_SITE: (YAM_WRIST_LINK, GRIPPER_YAM_XYZ, '0 0 0'),
-    _LEGACY_DEFAULT_SITE: _YAM_GRASP_SITE,
-    _LEGACY_YAM_GRASP_SITE: _YAM_GRASP_SITE,
-}
+# The sites a recording older than ``GRIPPER_SITE`` names: ``default``, and ``grasp_site`` of the first YAM
+# recordings. Every model put them at the point it names ``EE_LINK`` now.
+_LEGACY_SITES = frozenset({_LEGACY_DEFAULT_SITE, _LEGACY_YAM_GRASP_SITE})
 
 
-def _with_legacy_sites(episode, placements: Mapping[str, tuple[str, str, str]]) -> str:
-    """The episode's URDF with the sites an older model lacks: ``GRIPPER_SITE``, and each site a frame names."""
+def _with_legacy_sites(episode, gripper_parent: str, gripper_xyz: str) -> str:
+    """The episode's URDF with the sites an older model lacks: ``GRIPPER_SITE`` at ``gripper_xyz`` in
+    ``gripper_parent``, and each legacy site a frame names at ``EE_LINK``."""
     root = ET.fromstring(episode[roboarm_keys.URDF])
     links = {link.get('name') for link in root.findall('link')}
-    named = {GRIPPER_SITE} | {frame.site for frame in parse_ee_frames(episode[roboarm_keys.EE_FRAMES]).values()}
-    for site in sorted(named - links):
-        if site in placements:
-            attach_frame(root, site, *placements[site])
+    sites = {frame.site for frame in parse_ee_frames(episode[roboarm_keys.EE_FRAMES]).values()}
+    if GRIPPER_SITE not in links:
+        attach_frame(root, GRIPPER_SITE, gripper_parent, gripper_xyz)
+    for site in sorted((sites & _LEGACY_SITES) - links):
+        attach_frame(root, site, EE_LINK)
     return ET.tostring(root, encoding='unicode')
 
 
-def _at_the_gripper(placements: Mapping[str, tuple[str, str, str]]):
-    """Re-express every pose at ``GRIPPER_SITE`` of the model a recording carries, with the ``placements`` it lacks."""
-    urdf = partial(_with_legacy_sites, placements=placements)
+def _at_the_gripper(gripper_parent: str, gripper_xyz: str):
+    """Re-express every pose at ``GRIPPER_SITE`` of the model a recording carries, with the sites it lacks."""
+    urdf = partial(_with_legacy_sites, gripper_parent=gripper_parent, gripper_xyz=gripper_xyz)
     return Group(Derive(meta=None, **{roboarm_keys.URDF: urdf}), Identity()) | MoveToSite(GRIPPER_SITE)
 
 
-_AT_THE_FRANKA_GRIPPER = _at_the_gripper(_FRANKA_SITES)
+_AT_THE_FRANKA_GRIPPER = _at_the_gripper(FLANGE_LINK, GRIPPER_2F85_XYZ)
 
 
 # Backfill the canonical `robot_command.pose` from the plural name older recordings stored on
@@ -171,7 +164,7 @@ SIM_ROBOT_TRANSFORM = (
 
 # A YAM recording carries the model its driver emitted; the bundled YAM model backfills one that carries none.
 YAM_ROBOT_TRANSFORM = Group(Identity(remove=_LEGACY_FRAME_KEYS), _YAM_MODEL, _YAM_EE_FRAMES) | _at_the_gripper(
-    _YAM_SITES
+    YAM_WRIST_LINK, GRIPPER_YAM_XYZ
 )
 
 RECOVERY_TASK = 'Recovery cases.'

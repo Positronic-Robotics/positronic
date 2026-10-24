@@ -35,6 +35,7 @@ from positronic.drivers.roboarm.models import (
     FRANKA_HAND_FRAME,
     GRIPPER_SITE,
     PANDA_HAND_FRAME,
+    YAM_GRASP_SITE_FRAME,
     EEFrame,
     bundled_franka_model,
     bundled_panda_model,
@@ -1834,7 +1835,7 @@ def _legacy_point_warnings(caplog):
     [
         (ROBOT_STATIC_META, bundled_franka_model(), FRANKA_HAND_FRAME),
         (ROBOT_STATIC_META, bundled_panda_model(), PANDA_HAND_FRAME),
-        (ROBOT_STATIC_META, bundled_yam_model(), Transform3D.identity),
+        (ROBOT_STATIC_META, bundled_yam_model(), YAM_GRASP_SITE_FRAME),
     ],
     ids=['fr3', 'panda', 'yam'],
 )

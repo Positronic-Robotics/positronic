@@ -16,7 +16,8 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 
 FLANGE_LINK = 'link8'
 ROBOLAB_EEF_LINK = 'robolab_eef'
-# The Franka tool frame ``F_T_EE`` on the FR3, and the old grasp site on the sim panda: a URDF link name only.
+# The point a bundled model reported at before ``GRIPPER_SITE``, as a URDF link: the FR3's ``F_T_EE``, the old grasp
+# site of the sim panda, the YAM's i2rt grasp site. A policy that states no frame observes its poses there.
 EE_LINK = 'end_effector'
 # The grip point every bundled model names, on the axes of the arm's last link: z is the approach axis. Every
 # embodiment reports its poses here, and every codec transform is measured from here.
@@ -255,6 +256,8 @@ YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 YAM_WRIST_LINK = 'link_6'
 # The centroid of the face where the closed YAM fingertips meet, in the i2rt CAD mesh of ``YAM_WRIST_LINK``.
 GRIPPER_YAM_XYZ = '0 -0.0408 0.138'
+# The YAM MJCF's ``grasp_site``: 134.7mm along the wrist axis, turned -90deg about it.
+_YAM_GRASP_SITE_XYZ, _YAM_GRASP_SITE_RPY = '0 0 0.1347', '0 0 -1.5707963268'
 
 
 @lru_cache(maxsize=1)
@@ -264,6 +267,7 @@ def bundled_yam_model() -> dict:
     root = ET.fromstring(urdf_path.read_text())
     mesh_files = {mesh.attrib['filename'] for mesh in root.iter('mesh')}
     attach_frame(root, GRIPPER_SITE, YAM_WRIST_LINK, GRIPPER_YAM_XYZ)
+    attach_frame(root, EE_LINK, YAM_WRIST_LINK, _YAM_GRASP_SITE_XYZ, _YAM_GRASP_SITE_RPY)
     return {
         'robot': 'i2rt_yam',
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),

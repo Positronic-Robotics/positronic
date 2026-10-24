@@ -258,8 +258,9 @@ def test_bundled_model_has_the_site_its_embodiment_reports_at(model):
         (bundled_franka_model(), ROBOLAB_EE_FRAME, ROBOLAB_EEF_LINK),
         (bundled_franka_model(), FRANKA_HAND_FRAME, EE_LINK),
         (bundled_panda_model(), PANDA_HAND_FRAME, EE_LINK),
+        (bundled_yam_model(), YAM_GRASP_SITE_FRAME, EE_LINK),
     ],
-    ids=['droid', 'robolab', 'fr3', 'panda'],
+    ids=['droid', 'robolab', 'fr3', 'panda', 'yam'],
 )
 def test_declared_frame_matches_the_model_geometry(model, declared, frame):
     """A checkpoint or an env states its frame as a constant; this pins it to where the model puts that frame."""
