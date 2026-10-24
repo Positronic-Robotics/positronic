@@ -18,9 +18,13 @@ from positronic_wire import grpc, registry, websocket, wire
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
 from positronic.cfg import codecs as cfg_codecs
+from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.command import CartesianPosition
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry, parse_ee_frames
+from positronic.drivers.roboarm.command import CartesianPosition, to_wire
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, EEFrame, ee_frames_entry, parse_ee_frames
+from positronic.drivers.roboarm.tests.fakes import make_robot_state
+from positronic.eval import keys as eval_keys
+from positronic.geom import Rotation, Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
@@ -47,6 +51,7 @@ from positronic.policy.processors import (
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
+from positronic.policy.tests.test_harness import legacy_point_warnings, run_robot_rollout
 from positronic.tests.testing_inference import post, read_status, run_attended, wait
 from positronic.utils import flatten_dict
 
@@ -1104,6 +1109,78 @@ def test_a_frame_codec_around_a_server_that_states_none_states_the_frames_for_it
     session.protocol_version = protocol.ProtocolVersion.V3
     framed = Sequential(ChangeEEFrame(EEFrame(site=DEFAULT_FRAME)), policy)
     assert _frames_meta(framed.meta())[keys.EE_POSE] == DEFAULT_FRAME
+
+
+@pytest.mark.parametrize('side', ['client_stack', 'server_meta'])
+def test_a_remote_server_that_states_its_frames_gets_the_pose_with_no_fallback_on_one_session(caplog, side):
+    if side == 'client_stack':
+        stack = Sequential(ChangeEEFrame(EEFrame(site=DEFAULT_FRAME), keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+        metadata = {offboard_keys.LOCAL_STACK: stack.to_spec()}
+    else:
+        metadata = {**CHUNKED_STACK, **ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})}
+    policy, session = _mock_remote_policy(metadata, infer_return=[{keys.TARGET_GRIP: 0.5}])
+    session.protocol_version = protocol.ProtocolVersion.V3
+
+    assert run_robot_rollout(policy, ticks=5).result()[eval_keys.TERMINATED] is True
+    np.testing.assert_allclose(session.infer.call_args_list[0].args[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
+    assert legacy_point_warnings(caplog) == []
+    client = policy._client
+    assert isinstance(client, MagicMock)
+    client.new_session.assert_called_once()
+
+
+def test_a_remote_server_that_states_another_site_is_refused_before_it_gets_an_observation():
+    policy, session = _mock_remote_policy({**CHUNKED_STACK, **ee_frames_entry({keys.EE_POSE: EEFrame(site=EE_LINK)})})
+    session.protocol_version = protocol.ProtocolVersion.V3
+
+    with pytest.raises(ValueError, match=EE_LINK):
+        run_robot_rollout(policy).result()
+    session.infer.assert_not_called()
+    session.close.assert_called_once()
+
+
+# The handshake of a protocol v1 server that states no frames: an unversioned client stack, and no ``ee_frames``.
+FRAMELESS_V1_HANDSHAKE = {
+    offboard_keys.LOCAL_STACK: {
+        'seq': [
+            {'name': 'stop_on_fault'},
+            {
+                'name': 'temporal_stack',
+                'args': {
+                    'keys': [keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EE_POSE, keys.GRIP],
+                    'offsets_sec': [(step - 24) / 15 for step in range(25)],
+                    'pad_start': False,
+                },
+            },
+            {'name': 'chunked_schedule'},
+            {'name': 'restrict_image_size', 'args': {'width': 1024, 'height': 288}},
+        ]
+    }
+}
+
+
+def test_a_v1_server_that_states_no_frames_gets_the_rig_pose_and_moves_the_arm_to_its_poses(caplog):
+    target = CartesianPosition(pose=Transform3D(translation=np.array([0.4, 0.5, 0.6]), rotation=Rotation.identity))
+    rows = [{keys.ROBOT_COMMAND: to_wire(target), keys.TARGET_GRIP: 0.5, 'timestamp': step / 15} for step in range(4)]
+    replies = iter([_ready('v1', FRAMELESS_V1_HANDSHAKE, version=protocol.ProtocolVersion.V1)])
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = lambda timeout=None: next(replies, _answer(rows))
+    policy = RemotePolicy('websocket', _ADDRESS)
+    policy._client = InferenceClient(_FakeWire(conn), _ADDRESS)
+    image = np.zeros((4, 6, 3), dtype=np.uint8)
+    sensors = {keys.WRIST_IMAGE: image, keys.EXTERIOR_IMAGE: image, keys.GRIP: np.float32(0.0)}
+    commands = []
+
+    answer = run_robot_rollout(policy, ticks=50, commands=commands, sensors=sensors)
+
+    assert answer.result()[eval_keys.TERMINATED] is True
+    first = legacy_protocol.deserialise(conn.send.call_args_list[0].args[0])
+    rig_pose = Serializers.transform_3d(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]).ee_pose)
+    np.testing.assert_array_equal(first[keys.EE_POSE], [rig_pose])
+    assert len(legacy_point_warnings(caplog)) == 1
+    assert commands and all(isinstance(command, CartesianPosition) for command in commands)
+    np.testing.assert_array_equal(commands[0].pose.translation, target.pose.translation)
+    np.testing.assert_array_equal(commands[0].pose.rotation.as_quat, target.pose.rotation.as_quat)
 
 
 def test_policy_meta_holds_only_client_values_and_makes_no_call():

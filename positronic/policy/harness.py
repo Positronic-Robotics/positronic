@@ -210,16 +210,21 @@ class Harness(pimm.ControlSystem):
     def _statics(self) -> dict[str, Any]:
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
 
-    def _pose_handshake(self, policy: Policy) -> tuple[frozenset[str], Codec | None]:
+    def _pose_handshake(self, policy: Policy, runtime: Executor) -> tuple[frozenset[str], Codec | None]:
         """The rig's pose signals that ``policy`` does not observe, and the codec that the harness puts around the
-        policy, if any.
+        policy, if any. Call it after ``runtime.start(policy)``, before the first observation.
 
-        A policy that states ``EE_FRAMES`` observes only the poses it states. A policy that states none observes each
-        pose at the rig's legacy point (``_legacy_point_codec``). Raise when the policy states another site than the
-        rig, or states frames on a rig that states none, such as an arm with no model.
+        The policy states its frames as ``EE_FRAMES`` in ``meta()``, or its run writes them to ``runtime`` as it
+        starts, as a remote run does once its session opens. A policy that states frames observes only the poses it
+        states. A policy that states none observes each pose at the rig's legacy point (``_legacy_point_codec``).
+        Raise when the policy states another site than the rig, or states frames on a rig that states none, such as
+        an arm with no model.
         """
         rig = ee_frames(self._statics())
-        declared = ee_frames(policy.meta())
+        stated, recorded = ee_frames(policy.meta()), ee_frames(runtime.metadata_snapshot())
+        if both := stated.keys() & recorded.keys():
+            raise ValueError(f'Only one component of the policy may state the {EE_FRAMES} of {sorted(both)}')
+        declared = stated | recorded
         if declared and not rig:
             raise ValueError(
                 f'The rig states no {EE_FRAMES}, so it runs only a policy that speaks joints, and the policy states '
@@ -518,7 +523,7 @@ class Harness(pimm.ControlSystem):
         policy_run = None
         try:
             policy_run = runtime.start(rollout.policy)
-            withheld_poses, pose_codec = self._pose_handshake(rollout.policy)
+            withheld_poses, pose_codec = self._pose_handshake(rollout.policy, runtime)
             # Closing ``policy_run`` is enough: the codec run holds no resource of its own.
             stepped_run = policy_run if pose_codec is None else pose_codec.wrap(policy_run)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
