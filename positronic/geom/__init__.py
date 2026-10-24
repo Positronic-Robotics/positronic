@@ -109,6 +109,11 @@ class Transform3D(metaclass=Transform3DMeta):
         quaternion_str = np.array2string(self.rotation.as_quat, precision=3, suppress_small=True)
         return f'Transform3D(t={translation_str}, q={quaternion_str})'
 
+    def __eq__(self, other):
+        if not isinstance(other, Transform3D):
+            return False
+        return np.allclose(self.translation, other.translation) and self.rotation == other.rotation
+
     def __str__(self):
         translation_str = np.array2string(self.translation, precision=3, suppress_small=True)
         quaternion_str = np.array2string(self.rotation.as_quat, precision=3, suppress_small=True)
@@ -516,7 +521,8 @@ class Rotation(metaclass=RotationMeta):
     def __eq__(self, other):
         if not isinstance(other, Rotation):
             return False
-        return np.allclose(self._quat, other._quat)
+        # q and -q are one rotation.
+        return np.allclose(self._quat, other._quat) or np.allclose(self._quat, -other._quat)
 
 
 def quat_closest(q: Rotation, reference: Rotation) -> Rotation:

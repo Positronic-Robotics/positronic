@@ -1,0 +1,87 @@
+"""Launches the ABC env server as a subprocess and owns its lifetime.
+
+The server runs in an interpreter of its own: ABC needs MuJoCo 3.8 and positronic locks 3.5.
+"""
+
+import fcntl
+import os
+import subprocess
+import sys
+from collections.abc import Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager
+from functools import partial
+from pathlib import Path
+
+from positronic.simulator.env_server.launcher import SERVER_DEPS, ensure_pinned_checkout, serve_subprocess
+
+_ENV_SCRIPT = Path(__file__).parent / 'env.py'
+_ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
+_MAPPING_DIR = Path(__file__).parent
+
+_ABC_REPO = 'https://github.com/amazon-far/abc.git'
+_ABC_COMMIT = '6c467cebcecf16a4dce79e6fd87a7ca2281c3ef0'
+_ABC_CACHE = Path.home() / '.cache' / 'positronic' / 'abc'
+_ABC_SRC = _ABC_CACHE / 'src'
+
+# ABC declares ``requires-python = ">=3.10"``, so uv would otherwise inherit positronic's interpreter.
+_ABC_PYTHON = '3.12'
+# Installing the ABC project itself would pull its CUDA torch and mujoco-warp.
+_ABC_DEPS = ('mujoco~=3.8.0', 'gymnasium>=1.1', 'numpy', 'tyro')
+# ABC's contact-rich tasks score differently on another MuJoCo, so every version is pinned.
+_ABC_CONSTRAINTS = Path(__file__).parent / 'abc_constraints.txt'
+
+_PREPARE_SCRIPT = Path('prepare.py')
+_PREPARE_ONE_TASK = '--sim-task'
+_PREPARE_EVERY_TASK = '--sim'
+# `--sim` leaves out the RoboCasa packs that inhand_transfer needs; `--sim-task` adds them for that task.
+_PREPARE_ROBOCASA = '--sim-robocasa'
+
+
+@contextmanager
+def _checkout_lock() -> Iterator[None]:
+    """Prevent concurrent checkout, installation and asset download in the shared cache."""
+    _ABC_CACHE.mkdir(parents=True, exist_ok=True)
+    with open(_ABC_CACHE / 'setup.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def ensure_abc(tasks: Sequence[str] | None) -> Path:
+    """The Python executable of the prepared ABC environment; ``None`` tasks installs every asset package."""
+    venv = _ABC_SRC / '.venv'
+    with _checkout_lock():
+        src = ensure_pinned_checkout(_ABC_REPO, _ABC_COMMIT, _ABC_SRC)
+        if not venv.exists():
+            subprocess.run(['uv', 'venv', '--python', _ABC_PYTHON, str(venv)], check=True)
+        python = venv / 'bin' / 'python'
+        subprocess.run(
+            ['uv', 'pip', 'install', '-c', str(_ABC_CONSTRAINTS), *_ABC_DEPS, *SERVER_DEPS],
+            env={**os.environ, 'VIRTUAL_ENV': str(venv)},
+            check=True,
+        )
+        assets = [_PREPARE_EVERY_TASK, _PREPARE_ROBOCASA] if tasks is None else [_PREPARE_ONE_TASK, *tasks]
+        subprocess.run([str(python), str(_PREPARE_SCRIPT), *assets], cwd=str(src), check=True)
+    return python
+
+
+_GL_BACKEND_ENV = 'MUJOCO_GL'
+PYTHONPATH_ENV = 'PYTHONPATH'
+
+
+def abc_subprocess_env() -> dict[str, str]:
+    return {
+        **os.environ,
+        PYTHONPATH_ENV: os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR), str(_ABC_SRC)]),
+        _GL_BACKEND_ENV: os.environ.get(_GL_BACKEND_ENV, 'cgl' if sys.platform == 'darwin' else 'egl'),
+    }
+
+
+def _spawn(host: str, port: int, tasks: Sequence[str] | None) -> subprocess.Popen:
+    python = ensure_abc(tasks)
+    command = [str(python), str(_ENV_SCRIPT), '--host', host, '--port', str(port)]
+    return subprocess.Popen(command, env=abc_subprocess_env())
+
+
+def serve_abc(tasks: Sequence[str] | None, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
+    """Run an ABC server for the context's lifetime and yield its address, with ``tasks``' assets prepared."""
+    return serve_subprocess(partial(_spawn, tasks=tasks), host)

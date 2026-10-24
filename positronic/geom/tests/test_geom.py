@@ -55,6 +55,16 @@ class TestTransform3D(unittest.TestCase):
         np.testing.assert_allclose(composed.translation, Transform3D.identity.translation, atol=1e-4, rtol=0)
         np.testing.assert_allclose(composed.rotation.as_quat, Transform3D.identity.rotation.as_quat, atol=1e-4, rtol=0)
 
+    def test_transforms_with_the_same_value_are_equal(self):
+        rotation = Rotation.from_quat([0.7071, 0.7071, 0, 0])
+        assert Transform3D([1.0, 2.0, 3.0], rotation) == Transform3D(np.array([1.0, 2.0, 3.0]), rotation.copy())
+
+    def test_transforms_that_differ_in_translation_or_rotation_are_not_equal(self):
+        rotation = Rotation.from_quat([0.7071, 0.7071, 0, 0])
+        assert Transform3D([1.0, 2.0, 3.0], rotation) != Transform3D([1.0, 2.0, 3.1], rotation)
+        assert Transform3D([1.0, 2.0, 3.0], rotation) != Transform3D([1.0, 2.0, 3.0], Rotation.identity)
+        assert Transform3D.identity != Rotation.identity
+
     def test_identity_is_zero_translation_identity_rotation(self):
         identity = Transform3D.identity
 
@@ -188,6 +198,20 @@ class TestRotation(unittest.TestCase):
         result = q1 * q2
         expected_result = Rotation.from_quat([0.5, 0.5, 0.5, 0.5])  # Combined rotation
         np.testing.assert_array_almost_equal(result.as_quat, expected_result.as_quat, decimal=4)
+
+    def test_a_quaternion_and_its_negation_are_one_rotation(self):
+        assert Rotation.identity == Rotation.from_quat([-1.0, 0.0, 0.0, 0.0])
+        quat = np.random.default_rng(7).normal(size=4)
+        assert Rotation.from_quat(quat) == Rotation.from_quat(-quat)
+        assert Transform3D([1.0, 2.0, 3.0], Rotation.from_quat(quat)) == Transform3D(
+            [1.0, 2.0, 3.0], Rotation.from_quat(-quat)
+        )
+
+    def test_different_rotations_are_not_equal(self):
+        about_x = Rotation.from_quat([0.7071, 0.7071, 0, 0])
+        assert about_x != Rotation.identity
+        assert about_x != about_x.inv
+        assert Rotation.from_quat([0.7071, 0, 0.7071, 0]) != about_x
 
     def test_call(self):
         q = Rotation.from_quat([0.7071, 0.7071, 0, 0])  # 90 degrees rotation around x-axis

@@ -155,14 +155,32 @@ The `robot_command` field says what the arm is asked to do. Build one of the com
 | `CartesianDelta` | `delta`, `frame`: `geom.Transform3D` | Relative motion, composed onto the pose the arm is at when it lands; `frame` is the frame `delta` is expressed in |
 
 Every command also takes an optional `mode`, the control law it asks to execute under:
-`PositionControl(stiffness=...)` for a position servo, or `Impedance(kq, kqd, kx, kxd)` for the hybrid
-joint/Cartesian law. Omit it — the default — and the arm runs its native law. What a pinned mode does is the
+`PositionControl(stiffness=...)` for a position servo, or `Impedance(kq, kqd, kx, kxd, frame)` for the hybrid
+joint/Cartesian law. Omit the mode — the default — and the arm runs its native law. An impedance `frame` is the point
+where the Cartesian stiffness acts, measured from the rig's control frame whatever frame the policy speaks; it defaults
+to the control frame. What a pinned mode does is the
 driver's: a simulator runs its own law regardless, and a driver that cannot execute the mode raises.
 A server built on positronic sets the mode with the `SetControlMode` codec, composed left of the action
 decoder; `codecs.droid_execution` and `codecs.phail_v1_execution` wrap an action codec that way. See
 [Control mode](../positronic/policy/codecs/README.md#control-mode) in the Codec Guide.
 
 Which command your model produces is decided by its codec.
+
+An element can also carry the reserved field `end`, with the value `complete` or `give_up`. Ending takes two
+declared parts. The `end_command` codec decodes your model's end decision into the `end` command; compose it in
+parallel with your action codec, for example `obs & action & EndCommand()`. The `end_on_field` processor sits
+outermost in the client stack. When a round plays an element with `end`, it sends the element's other commands,
+and the run then ends with this claim. An element that ends still carries the action fields its action codec
+reads.
+
+Once your model decides to end, every element of every later answer carries `end` with the same value. The schedule
+can drop the element that holds the first `end`: past `horizon_sec`, in a replan after an arm error, in the elements
+that `RTCSchedule` skips when a new chunk starts, or when a late round replaces the queue with a new answer. A later
+element then carries the end. Until the run stops, the client can play about one more element and make one more call.
+The prefix that `RTCSchedule` sends to the model holds `end` like any other command, so a model that cannot read its own `end` back drops it.
+
+`EndOnField` refuses a malformed value when its element plays. `UnpackActionChunk` builds elements from arrays and
+ignores a key it does not map, so a model behind it maps a per-step field named `end`.
 
 A rig with more than one arm names every channel after the arm that owns it: observations arrive as
 `robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left` alongside

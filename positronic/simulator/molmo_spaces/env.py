@@ -36,6 +36,7 @@ _install_cgl_noop_stub()
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
+import arm_action  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
@@ -229,7 +230,7 @@ class MolmoSpacesEnv(EnvProtocol):
         (action,) = actions.values()  # MolmoSpaces runs one scene per server, so this server serves one slot
         wire = protocol.single_arm(action)
         measured = self._measured_arm_q()
-        arm = mapping.wire_command_to_arm_action(
+        arm = arm_action.wire_command_to_arm_action(
             wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, current_eef=self._measured_eef_pose()
         )
         gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)

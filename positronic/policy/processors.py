@@ -1,4 +1,4 @@
-"""Policy processors for scheduling, fault handling, and temporal frame stacking.
+"""Policy processors for scheduling, fault handling, ending a run, and temporal frame stacking.
 
 Constructors hold configuration. ``run(runtime, *dependencies)`` creates an episode generator whose
 locals hold its state. Control processors yield a ``Step`` with commands and the next wake-up time.
@@ -38,6 +38,7 @@ from positronic.policy.base import (
     Commands,
     Obs,
     Policy,
+    PolicyEnd,
     PolicyRun,
     Processor,
     ProcessorRun,
@@ -45,7 +46,7 @@ from positronic.policy.base import (
     Runtime,
     Step,
 )
-from positronic.policy.keys import ACTION_FPS
+from positronic.policy.keys import ACTION_FPS, END
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -89,6 +90,35 @@ class PauseOnUnavailable(Policy):
                 obs = yield step
             else:
                 obs = yield Step({}, runtime.time_ns + MILLISECOND_NS)
+
+    def to_spec(self) -> dict[str, Any]:
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
+
+
+class EndOnField(Policy):
+    """End the run when a step of the inner run carries the reserved field ``END``.
+
+    The step's other commands go out, and the run returns the ``END`` value as a ``PolicyEnd`` at the next
+    observation. A schedule can drop the element that holds ``END`` before it plays, so a model that ends puts
+    ``END``, with the same value, on every element of every later answer.
+    """
+
+    WIRE_NAME = 'end_on_field'
+    WIRE_VERSION = 1
+
+    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
+        obs = yield
+        while True:
+            try:
+                step = inner.send(obs)
+            except StopIteration as stop:
+                return stop.value
+            if step is not None and END in step.commands:
+                commands = dict(step.commands)
+                end = PolicyEnd(commands.pop(END))
+                yield Step(commands, runtime.time_ns)
+                return end
+            obs = yield step
 
     def to_spec(self) -> dict[str, Any]:
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}

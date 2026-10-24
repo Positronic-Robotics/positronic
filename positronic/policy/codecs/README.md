@@ -100,6 +100,7 @@ These are the public codec classes exported by this package. Each name links to 
 | [`IKJointsAction`](action.py) | Training: replaces pose targets with joint targets through inverse kinematics. Inference: passes through. | Train a joint-position model from recorded pose targets; compose before `AbsoluteJointsAction`. |
 | [`JointDeltaAction`](action.py) | Inference: clips and scales normalized DROID joint velocities into `JointDelta` commands, and thresholds grip. | Serve a checkpoint using the DROID joint-delta action convention. |
 | [`SetControlMode`](action.py) | Inference: stamps a supplied control mode on each decoded arm command. | Require explicit impedance or position control; compose to the left of the action decoder. |
+| [`EndCommand`](end.py) | Inference: decodes the model's per-element end decision into the reserved `end` command. Training passes through. | The model ends its own run; compose it in parallel with the action codec, with `end_on_field` outermost in the client stack. |
 
 ### Geometry
 
@@ -168,7 +169,7 @@ A `CartesianDelta` is the one command this cannot convert on its own: a delta ha
 
 ## Control mode
 
-`SetControlMode(mode)` stamps a control mode on every robot command of a decoded chunk, so a checkpoint executes under the law its training data ran under. It composes left of the action decoder: `SetControlMode(mode) | action`. `mode` is `Impedance(kq, kqd, kx, kxd)` or `PositionControl(stiffness=None)` from [`positronic.drivers.roboarm.command`](../../drivers/roboarm/command.py); a command without one runs under the arm's native law (see [the wire format](../../../docs/connect-your-model.md#actions-server--client)). Implementation in [`positronic/policy/codecs/action.py`](action.py).
+`SetControlMode(mode)` stamps a control mode on every robot command of a decoded chunk, so a checkpoint executes under the law its training data ran under. It composes left of the action decoder: `SetControlMode(mode) | action`. `mode` is `Impedance(kq, kqd, kx, kxd, frame)` or `PositionControl(stiffness=None)` from [`positronic.drivers.roboarm.command`](../../drivers/roboarm/command.py); a command without one runs under the arm's native law (see [the wire format](../../../docs/connect-your-model.md#actions-server--client)). `ChangeEEFrame` leaves the mode alone: an impedance `frame` is always measured from the rig's control frame. Implementation in [`positronic/policy/codecs/action.py`](action.py).
 
 Two wrappers in [`positronic/cfg/codecs.py`](../../cfg/codecs.py) apply it to an action codec:
 
