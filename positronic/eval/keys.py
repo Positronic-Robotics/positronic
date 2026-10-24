@@ -35,9 +35,7 @@ CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
 # True when the operator replaced the trial's own instruction. The episode's ``keys.TASK`` holds the text that
 # the policy got.
 INSTRUCTION_OVERRIDDEN = 'eval.instruction_overridden'
-# The signal of each instruction that the policy got: a sample at the first observation, and one at each change.
-# The static ``keys.TASK`` holds the instruction at the end of the trial.
-INSTRUCTION = 'eval.instruction'
+INSTRUCTION = vocabulary.INSTRUCTION
 
 # The conditions the trial ran under, stamped into its episode's statics. ``UNIVERSE`` is ``'sim'`` or
 # ``'real'``; ``TIMEOUT`` is absent from an episode whose task set no budget.

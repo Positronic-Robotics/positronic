@@ -25,6 +25,8 @@ ENDED_BY_POLICY = 'policy'
 POLICY_END = 'eval.policy_end'
 # The instruction that the policy got, as it was at the end of the trial.
 TASK = 'task'
+# The signal of each instruction that the policy got: a sample at the first observation, and one at each change.
+INSTRUCTION = 'eval.instruction'
 # The id of the task that a trial runs, as the benchmark names it.
 BENCHMARK_TASK = 'eval.task'
 # The seed that draws a trial's scene, in the trial's params and in its episode's statics.
