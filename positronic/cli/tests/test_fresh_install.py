@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 from platform_client import routes
-from platform_client.client import API_KEY_ENV, API_URL_ENV, CREDENTIAL_ENV
+from platform_client.client import API_KEY_ENV, API_URL_ENV, CLIENT_VERSION, CREDENTIAL_ENV, PLATFORM_VERSION_HEADER
 from platform_client.config import CONFIG_DIR_ENV
 from platform_client.responses import QUOTA_SUBMISSIONS_DAY
 
@@ -99,7 +99,7 @@ ANSWERS: dict[str, object] = {
         ],
     },
     routes.CATALOG_EVALS: {'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': [], 'composable': True}]},
-    routes.CATALOG_TASKS: {'tasks': [{'id': TASK, 'embodiment': 'franka', 'task': 'spoons into a tote'}]},
+    routes.CATALOG_TASKS: {'tasks': [{'id': TASK, 'embodiments': ['franka', 'yam'], 'task': 'spoons into a tote'}]},
     routes.RANKINGS_LIST: {
         'boards': [
             {
@@ -125,6 +125,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
+        self.send_header(PLATFORM_VERSION_HEADER, str(CLIENT_VERSION))
         self.end_headers()
         self.wfile.write(body)
 

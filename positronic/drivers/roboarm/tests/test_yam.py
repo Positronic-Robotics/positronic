@@ -78,6 +78,7 @@ class Site(Enum):
 
     CHAIN_READ = ('vendor', 'get_observations')
     CHAIN_COMMAND = ('vendor', 'command_joint_pos')
+    LIMITS_READ = ('vendor', 'get_robot_info')
     META_EMIT = ('robot_meta', '_emit')
     STATE_EMIT = ('state', '_emit')
     GRIP_EMIT = ('grip', '_emit')
@@ -692,6 +693,61 @@ def test_a_streamed_target_past_the_joint_range_stops_at_the_limit(rig, past_the
     assert asked[-1][5] == kinematics.lower[5]
 
 
+# The joint limits an i2rt YAM chain reports: its arm XML range widened by 0.15 rad (i2rt get_robot.py:196).
+I2RT_YAM_LIMITS = np.array([
+    [-2.61799, 3.14159],
+    [-8.88178e-16, 3.66519],
+    [0.0, 3.14159],
+    [-1.69297, 1.5708],
+    [-1.5708, 1.5708],
+    [-2.0944, 2.0944],
+]) + np.array([-0.15, 0.15])
+# i2rt halts the chain when a joint reads this far past its limits (i2rt motor_chain_robot.py:254).
+I2RT_HALT_PAST_LIMIT_RAD = 0.1
+JOINT3 = 2
+
+
+def _on_an_i2rt_chain(rig) -> None:
+    rig.vendor.joint_limits = I2RT_YAM_LIMITS.copy()
+
+
+def test_a_streamed_target_past_the_chain_limit_stops_short_of_where_the_chain_halts(rig):
+    _on_an_i2rt_chain(rig)
+    rig.raise_arm()
+    folded = RAISED.copy()
+    folded[JOINT3] = 3.6  # inside the model's range, past the chain's
+    sent = len(rig.vendor.targets)
+    rig.commands.push(command.JointPosition(folded))
+    rig.tick(0.9)
+    asked = _asked(rig)[sent:]
+    halts_above = I2RT_YAM_LIMITS[JOINT3, 1] + I2RT_HALT_PAST_LIMIT_RAD
+    assert np.max(asked[:, JOINT3]) < halts_above - yam._Arm._CHAIN_LIMIT_MARGIN_RAD
+    assert asked[-1][JOINT3] == pytest.approx(I2RT_YAM_LIMITS[JOINT3, 1] - yam._Arm._CHAIN_LIMIT_MARGIN_RAD)
+
+
+def test_a_streamed_target_inside_the_model_and_the_chain_limits_reaches_the_chain_unchanged(rig):
+    _on_an_i2rt_chain(rig)
+    rig.raise_arm()
+    folded = RAISED.copy()
+    folded[JOINT3] = 3.0
+    rig.commands.push(command.JointPosition(folded))
+    rig.tick(0.9)
+    np.testing.assert_array_equal(_asked(rig)[-1], folded)
+
+
+def test_a_blocking_move_past_the_chain_limit_never_sends_a_target_past_it(world, rig):
+    _on_an_i2rt_chain(rig)
+    rig.raise_arm()
+    folded = RAISED.copy()
+    folded[JOINT3] = 3.6
+    sent = len(rig.vendor.targets)
+    answer = _sync_caller(world, rig)(command.JointPosition(folded))
+    _until_answered(rig, answer)
+    with pytest.raises(DeviceFault):
+        answer.result()
+    assert np.max(_asked(rig)[sent:, JOINT3]) <= I2RT_YAM_LIMITS[JOINT3, 1] - yam._Arm._CHAIN_LIMIT_MARGIN_RAD + 1e-12
+
+
 def test_the_park_holds_its_correction_past_the_joint_range(rig):
     rig.raise_arm()
     rig.vendor.bias = np.array([0.0, 0.0, 0.025, 0.0, 0.0, 0.0])
@@ -1158,9 +1214,10 @@ def test_every_call_the_driver_makes_while_the_motors_are_on_is_a_site(world):
 
 
 CHAIN_SITES = [Site.CHAIN_READ, Site.CHAIN_COMMAND]
+ONCE_PER_CHAIN_SITES = [Site.LIMITS_READ]  # read once, by the start move
 
 
-@pytest.mark.parametrize('site', [site for site in Site if site not in CHAIN_SITES])
+@pytest.mark.parametrize('site', [site for site in Site if site not in CHAIN_SITES + ONCE_PER_CHAIN_SITES])
 def test_a_fault_at_a_site_off_the_chain_parks_releases_and_is_raised_again(site):
     watch = Watch(site)
     rig = Rig(watch=watch)
@@ -1219,6 +1276,22 @@ def test_a_chain_fault_parks_releases_and_puts_an_error_on_the_state_and_the_gri
         error = _last(emitter)
         assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
         assert 'The YAM arm is lost: the chain failed: collaborator failed' in str(_last(emitter))
+    rig.finish()
+
+
+def test_a_chain_whose_limits_cannot_be_read_parks_releases_and_holds_the_arm_as_lost():
+    watch = Watch(Site.LIMITS_READ)
+    watch.armed = True
+    rig = Rig(watch=watch)
+    rig.tick(10)
+
+    assert not watch.armed
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+    for emitter in (rig.states, rig.grips):
+        error = _last(emitter)
+        assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+        assert 'The YAM arm is lost: the chain failed: collaborator failed' in str(error)
     rig.finish()
 
 
