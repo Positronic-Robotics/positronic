@@ -94,9 +94,15 @@ positronic account register --alias="<team name>"
 
 ### Enter the competition
 
-The command shows what becomes public about your team. With `--yes`, your team enters. The entry asks
-for no terms: your team accepts the [terms](https://competition.phail.ai/terms) with its first submission
-(see [Submit](#submit)). The section "Your data" of the terms tells how the organizers use your data.
+You can enter in your browser or with a command. Both enter the same team, so do one of the two. The
+entry asks for no terms: your team accepts the [terms](https://competition.phail.ai/terms) with its first
+submission (see [Submit](#submit)). The section "Your data" of the terms tells how the organizers use
+your data.
+
+- In your browser, open the [entry page](https://competition.phail.ai/enter). Sign in with the same
+  account that you used for `positronic account register`.
+- With the command, `competition-enter` shows what becomes public about your team. With `--yes`, your
+  team enters.
 
 ```bash
 competition-enter
@@ -198,6 +204,10 @@ positronic eval run --eval=<eval> \
 positronic eval status --id=<submission id>
 positronic eval list
 ```
+
+Your submissions also show in your browser: the [entry page](https://competition.phail.ai/enter) shows the
+status of each one, and how many more submissions your team can make today. Sign in with the same account
+that you used for `positronic account register`.
 
 - The platform refuses the first submission of your team until your team accepts the terms. Read the
   [terms](https://competition.phail.ai/terms), then run `competition-enter --accept-terms=<version>` with
