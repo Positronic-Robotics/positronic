@@ -86,6 +86,12 @@ class Run:
     sim: Machine
     timeout_min: int
     registry_secret: str | None = None
+    profile: str | None = None
+
+    @property
+    def cli(self) -> str:
+        """The `nebius` command that reaches the project of the run."""
+        return f'nebius --profile {self.profile}' if self.profile else 'nebius'
 
     @property
     def endpoint_name(self) -> str:
@@ -209,7 +215,8 @@ class ServerlessEval:
             resource_id = self._id(kind, name)
             if resource_id is not None:
                 self.made[kind] = resource_id
-                print(f'Made {name}. If this command stops: nebius {" ".join(kind.value)} delete --id {resource_id}')
+                delete = f'{self.run.cli} {" ".join(kind.value)} delete --id {resource_id}'
+                print(f'Made {name}. If this command stops: {delete}')
         if resource_id is None:
             raise RunFailed(f'Nebius lists no {" ".join(kind.value)} named {name} after its create')
         return resource_id
@@ -336,10 +343,11 @@ def _score_then_delete(session: ServerlessEval) -> str:
             with _signals({signal.SIGINT: signal.SIG_IGN, signal.SIGTERM: signal.SIG_IGN}):
                 problems = session.cleanup()
     if problems:
+        listing, parent = f'{session.run.cli} ai', f'--parent-id {session.run.parent_id}'
         print('\n'.join(problems), file=sys.stderr)
         failure = (
             f'{failure}\n' if failure else ''
-        ) + 'Delete what is left: `nebius ai endpoint list`, `nebius ai job list`'
+        ) + f'Delete what is left: `{listing} endpoint list {parent}`, `{listing} job list {parent}`'
     else:
         print('No endpoint or job of this run is left')
     if failure is not None or found is None:
@@ -389,6 +397,7 @@ def main(argv: list[str] | None = None, nebius: Callable[..., Any] | None = None
         sim=Machine(args.sim_platform, args.sim_preset),
         timeout_min=args.timeout_min,
         registry_secret=args.registry_secret,
+        profile=args.profile,
     )
     session = ServerlessEval(nebius, run, clock)
     if args.dry_run:

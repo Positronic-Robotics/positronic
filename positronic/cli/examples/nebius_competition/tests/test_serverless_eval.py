@@ -216,6 +216,14 @@ def test_a_resource_still_listed_after_its_delete_is_reported(script, capsys):
     assert '-policy is still there' in capsys.readouterr().err
 
 
+def test_the_delete_commands_it_prints_name_the_profile_of_the_run(script, capsys):
+    fake = _fake(script, undeletable='endpoint')
+    with pytest.raises(SystemExit) as exit_info:
+        _run(script, fake, '--profile=team', '--parent-id=project-team')
+    assert 'nebius --profile team ai endpoint list --parent-id project-team' in str(exit_info.value)
+    assert 'If this command stops: nebius --profile team ai endpoint delete --id' in capsys.readouterr().out
+
+
 def test_a_dry_run_validates_both_requests_and_makes_nothing(script, capsys):
     fake = _fake(script)
     _run(script, fake, '--dry-run')
