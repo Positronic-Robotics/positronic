@@ -56,6 +56,7 @@ class FakeNebius:
         failing_lookup: str | None = None,
         lookup_failures: int = 1,
         endpoint_states: tuple[str, ...] = ('RUNNING',),
+        endpoint_details: dict[str, str] | None = None,
         interrupt_on_job_get: bool = False,
     ):
         self.error = error
@@ -64,6 +65,7 @@ class FakeNebius:
         self.lookup_failures = lookup_failures
         self.endpoint_states: Iterator[str] = iter(endpoint_states)
         self.endpoint_state = 'PROVISIONING'
+        self.endpoint_details = endpoint_details
         self.job_states: Iterator[str] = iter(job_states)
         self.job_state = 'PROVISIONING'
         self.logs = logs
@@ -121,7 +123,10 @@ class FakeNebius:
             self.endpoint_polls += 1
             urls = ['10.0.0.1:8000'] + ([f'https://{POLICY_URL_HOST}'] if self.endpoint_polls > 1 else [])
             self.endpoint_state = next(self.endpoint_states, self.endpoint_state)
-            return {'status': {'state': self.endpoint_state, 'public_endpoints': urls}}
+            status: dict[str, Any] = {'state': self.endpoint_state, 'public_endpoints': urls}
+            if self.endpoint_details is not None:
+                status['state_details'] = self.endpoint_details
+            return {'status': status}
         if self.interrupt_on_job_get:
             self.interrupt_on_job_get = False
             raise KeyboardInterrupt
@@ -247,6 +252,23 @@ def test_a_job_that_outlives_its_timeout_is_cancelled_and_deleted(script):
     assert 'did not end in 60 min' in str(exit_info.value)
     assert fake.verbs('job')[-3:] == ['cancel', 'delete', 'get-by-name']
     assert fake.resources['job'] == {}
+
+
+def test_a_job_state_unknown_to_the_api_ends_the_run_and_leaves_nothing(script):
+    fake = _fake(script, job_states=('RUNNING', 'PAUSED'))
+    with pytest.raises(SystemExit) as exit_info:
+        _run(script, fake)
+    assert 'PAUSED' in str(exit_info.value)
+    assert fake.resources == {'secret': {}, 'endpoint': {}, 'job': {}}
+
+
+def test_a_failed_endpoint_reports_why(script):
+    fake = _fake(
+        script, endpoint_states=('ERROR',), endpoint_details={'code': 'IMAGE_PULL_FAILED', 'message': 'no such image'}
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        _run(script, fake)
+    assert 'no such image' in str(exit_info.value)
 
 
 def test_a_hangup_does_not_stop_the_deletes(script):

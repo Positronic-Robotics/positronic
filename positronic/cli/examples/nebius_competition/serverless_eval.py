@@ -28,7 +28,7 @@ from typing import Any
 
 from platform_client.policy_container import AUTH_TOKEN_ENV, IMAGE_FETCH_DEADLINE_S, POLICY_PORT, WARMUP_DEADLINE_S
 from positronic_evals.evals import EvalRef, public_eval
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from positronic.cli.eval.run import SCORE_LINE_PREFIX
 from positronic.utils import nebius as nebius_cli
@@ -120,8 +120,16 @@ class Job(BaseModel):
     status: JobStatus = Field(default_factory=JobStatus)
 
 
+class StateDetails(BaseModel):
+    """Why an endpoint is in its state: `EndpointStateDetails` of the Nebius AI API."""
+
+    code: str | None = None
+    message: str | None = None
+
+
 class EndpointStatus(BaseModel):
     state: EndpointState = EndpointState.STATE_UNSPECIFIED
+    state_details: StateDetails | None = None
     public_endpoints: list[str] = Field(default_factory=list)
 
 
@@ -370,7 +378,8 @@ class ServerlessEval:
     def _attempt(call: Callable[..., Any], *args: Any, **kwargs: Any) -> list[str]:
         try:
             call(*args, **kwargs)
-        except NebiusError as exc:
+        # A response that the models cannot read is a problem to report, so it does not stop the other deletes.
+        except (NebiusError, ValidationError) as exc:
             return [str(exc)]
         return []
 
@@ -380,7 +389,7 @@ class ServerlessEval:
         while True:
             try:
                 found = [(kind, name) for kind, name in self._names().items() if self._id(kind, name) is not None]
-            except NebiusError as exc:
+            except (NebiusError, ValidationError) as exc:
                 return [f'Could not check what is left: {exc}']
             left = [f'The {" ".join(kind.value)} {name} is still there' for kind, name in found]
             if not left or self.clock.monotonic() >= deadline:
@@ -409,7 +418,7 @@ def _score_then_delete(session: ServerlessEval) -> str:
     with _signals({signal.SIGTERM: _interrupt, signal.SIGHUP: _interrupt}):
         try:
             found = session.score()
-        except (NebiusError, RunFailed) as exc:
+        except (NebiusError, RunFailed, ValidationError) as exc:
             failure = str(exc)
         except KeyboardInterrupt:
             failure = 'Stopped before the end'
