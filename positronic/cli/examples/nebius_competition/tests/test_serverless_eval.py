@@ -54,12 +54,15 @@ class FakeNebius:
         undeletable: str | None = None,
         failing_lookup: str | None = None,
         lookup_failures: int = 1,
+        endpoint_states: tuple[str, ...] = ('RUNNING',),
         interrupt_on_job_get: bool = False,
     ):
         self.error = error
         self.not_found = not_found
         self.failing_lookup = failing_lookup
         self.lookup_failures = lookup_failures
+        self.endpoint_states: Iterator[str] = iter(endpoint_states)
+        self.endpoint_state = 'PROVISIONING'
         self.job_states: Iterator[str] = iter(job_states)
         self.job_state = 'PROVISIONING'
         self.logs = logs
@@ -115,7 +118,8 @@ class FakeNebius:
         if kind == 'endpoint':
             self.endpoint_polls += 1
             urls = ['10.0.0.1:8000'] + ([f'https://{POLICY_URL_HOST}'] if self.endpoint_polls > 1 else [])
-            return {'status': {'state': 'RUNNING', 'public_endpoints': urls}}
+            self.endpoint_state = next(self.endpoint_states, self.endpoint_state)
+            return {'status': {'state': self.endpoint_state, 'public_endpoints': urls}}
         if self.interrupt_on_job_get:
             self.interrupt_on_job_get = False
             raise KeyboardInterrupt
@@ -217,6 +221,15 @@ def test_a_lookup_that_fails_in_the_cleanup_is_reported(script, capsys):
         _run(script, fake)
     assert 'get-by-name job timed out' in capsys.readouterr().err
     assert 'nebius ai job list' in str(exit_info.value)
+
+
+def test_an_endpoint_that_stops_while_the_job_runs_ends_the_run_and_leaves_nothing(script):
+    fake = _fake(script, endpoint_states=('RUNNING', 'RUNNING', 'STOPPED'), job_states=('RUNNING',))
+    with pytest.raises(SystemExit) as exit_info:
+        _run(script, fake)
+    assert 'The policy endpoint is STOPPED while the eval runs' in str(exit_info.value)
+    assert fake.verbs('job')[-3:] == ['cancel', 'delete', 'list']
+    assert fake.resources == {'secret': {}, 'endpoint': {}, 'job': {}}
 
 
 def test_an_interrupt_while_the_job_runs_cancels_it_and_leaves_nothing(script):

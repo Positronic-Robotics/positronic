@@ -43,9 +43,10 @@ answered() {
 
 echo "Waiting up to ${wait_s}s for $keepalive"
 deadline=$((SECONDS + wait_s))
-until answer=$(answered 2>/dev/null); do
+# With --fail, a failed call prints nothing to stdout, so $answer holds the error of the last try.
+until answer=$(answered 2>&1); do
   if [ "$SECONDS" -ge "$deadline" ]; then
-    echo "The policy server did not answer $keepalive in ${wait_s}s" >&2
+    echo "The policy server did not answer $keepalive in ${wait_s}s. The last error: $answer" >&2
     exit 1
   fi
   sleep 10

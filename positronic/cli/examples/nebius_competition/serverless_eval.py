@@ -92,7 +92,13 @@ class EndpointState(StrEnum):
 
 
 JOB_TERMINAL_STATES = frozenset({JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.ERROR})
-ENDPOINT_FAILED_STATES = frozenset({EndpointState.ERROR})
+# An endpoint in one of these states serves no more requests.
+ENDPOINT_ENDED_STATES = frozenset({
+    EndpointState.ERROR,
+    EndpointState.STOPPING,
+    EndpointState.STOPPED,
+    EndpointState.DELETING,
+})
 
 
 class Metadata(BaseModel):
@@ -301,7 +307,7 @@ class ServerlessEval:
         deadline = self.clock.monotonic() + URL_WAIT_S
         while True:
             status = self._endpoint_status(endpoint)
-            if status.state in ENDPOINT_FAILED_STATES:
+            if status.state in ENDPOINT_ENDED_STATES:
                 raise RunFailed(f'The policy endpoint is {status.state}: {status}')
             host = https_host(status.public_endpoints)
             if host is not None:
@@ -321,7 +327,7 @@ class ServerlessEval:
             if state in JOB_TERMINAL_STATES:
                 return state
             status = self._endpoint_status(endpoint)
-            if status.state in ENDPOINT_FAILED_STATES:
+            if status.state in ENDPOINT_ENDED_STATES:
                 raise RunFailed(f'The policy endpoint is {status.state} while the eval runs: {status}')
             if self.clock.monotonic() >= deadline:
                 raise RunFailed(f'The eval job did not end in {self.run.timeout_min} min')
