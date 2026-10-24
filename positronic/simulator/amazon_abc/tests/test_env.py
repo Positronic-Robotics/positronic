@@ -163,6 +163,10 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
 _EVER_SUCCESS, _EVER_FAILED = mapping.ABC_EVAL_EVER_SUCCESS, mapping.ABC_EVAL_EVER_FAILED
 
 
+# Each kind of ABC evaluator, with the metrics it reports at the pin:
+# - most tasks latch `ever_success` at their first success;
+# - ball_tray_balancing reports `ever_failed`, and `ever_success` as `not ever_failed`;
+# - count_into_opaque_box reports `ever_failed` as always false, and `ever_success` as the count at that step.
 @pytest.mark.parametrize(
     ('task_eval', 'truncated', 'done', 'success'),
     [
@@ -172,8 +176,23 @@ _EVER_SUCCESS, _EVER_FAILED = mapping.ABC_EVAL_EVER_SUCCESS, mapping.ABC_EVAL_EV
         ({_EVER_SUCCESS: True, _EVER_FAILED: False}, False, False, True),
         ({_EVER_SUCCESS: True, _EVER_FAILED: False}, True, True, True),
         ({_EVER_SUCCESS: False, _EVER_FAILED: True}, False, True, False),
+        ({_EVER_SUCCESS: False, _EVER_FAILED: False}, False, False, False),
+        ({_EVER_SUCCESS: True, _EVER_FAILED: False}, False, False, True),
+        ({_EVER_SUCCESS: True, _EVER_FAILED: False}, True, True, True),
+        ({_EVER_SUCCESS: False, _EVER_FAILED: False}, True, True, False),
     ],
-    ids=['running', 'succeeded', 'out_of_time', 'still_held', 'held_to_the_limit', 'dropped'],
+    ids=[
+        'running',
+        'succeeded',
+        'out_of_time',
+        'ball_still_held',
+        'ball_held_to_the_limit',
+        'ball_dropped',
+        'count_wrong_while_running',
+        'count_right_while_running',
+        'count_right_at_the_limit',
+        'count_wrong_at_the_limit',
+    ],
 )
 def test_a_step_ends_the_trial_and_gives_its_verdict_as_abcs_own_eval_does(
     env, scene, task_eval: dict[str, bool], truncated: bool, done: bool, success: bool
@@ -237,6 +256,27 @@ def test_a_step_of_a_scored_task_that_reports_no_metrics_raises(env, scene):
 
     # Run to its horizon, it would record a failure that hides the broken evaluator.
     with pytest.raises(RuntimeError, match='no task metrics'):
+        env.step({0: _hold_both()})
+
+
+def test_a_count_task_is_decided_by_its_count_at_the_limit_and_not_by_an_earlier_right_count(env, scene):
+    env.reset(_TOKEN)
+    adapter = AbcAdapter(CAMERAS)
+    scene.task_eval = {_EVER_SUCCESS: True, _EVER_FAILED: False}
+    assert adapter.terminal(protocol.slot_frame(env.step({0: _hold_both()}), 0)) is None
+
+    scene.task_eval, scene.truncated = {_EVER_SUCCESS: False, _EVER_FAILED: False}, True
+    result = protocol.slot_frame(env.step({0: _hold_both()}), 0)
+
+    assert adapter.terminal(result) == {eval_keys.SUCCESS: False}
+
+
+def test_a_step_of_a_scored_task_whose_metrics_carry_no_verdict_raises(env, scene):
+    env.reset(_TOKEN)
+    scene.task_eval = {'num_bottles_in_bin': 0}
+
+    # ABC's own eval reads the verdict by its key; a default would record a failure that hides the broken evaluator.
+    with pytest.raises(KeyError, match=_EVER_SUCCESS):
         env.step({0: _hold_both()})
 
 

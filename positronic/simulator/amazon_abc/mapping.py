@@ -28,10 +28,11 @@ ABC_OBS_STATE = 'state'  # ``[joints(6), aperture]`` per arm, in the order ABC n
 ABC_OBS_IMAGES = 'images'
 ABC_OBS_PROMPT = 'prompt'
 ABC_INFO_TASK_EVAL = 'task_eval'
-# Whether the task succeeded at some step, and, for a maintenance task, whether it failed at some step.
+# ABC's verdict on the trial, and, from a task that reports it, the flag that ends the trial early.
 ABC_EVAL_EVER_SUCCESS = 'ever_success'
 ABC_EVAL_EVER_FAILED = 'ever_failed'
-# ABC's own sim eval runs every task for 236 chunks of 15 actions, and a maintenance task succeeds only there.
+# ABC's own sim eval runs every task for 236 chunks of 15 actions. A maintenance task succeeds only there,
+# and a count task is decided there.
 ABC_EVAL_STEPS = 236 * 15
 
 # The raw observation this server reports. Every name but the physics state and the task metrics is per arm.
