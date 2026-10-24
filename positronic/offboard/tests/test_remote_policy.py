@@ -1019,18 +1019,6 @@ def test_policy_meta_states_the_frames_the_server_codec_declares():
     assert _frames_meta(policy.meta()) == {keys.EE_POSE: GRIPPER_SITE}
 
 
-def test_policy_meta_states_the_franka_hand_point_for_an_identity_v1_client_stack():
-    """A server older than ``ee_frames`` declares its frame only as a v1 ``change_ee_frame`` in the client stack. An
-    identity one meant the poses the FR3 reported then, at its ``F_T_EE``."""
-    v1 = spec.component(ChangeEEFrame.WIRE_NAME, version=1, transform=[0, 0, 0, 1, 0, 0, 0], keys=[keys.EE_POSE])
-    policy, session = _mock_remote_policy({
-        offboard_keys.LOCAL_STACK: spec.sequence(v1, CHUNKED_STACK[offboard_keys.LOCAL_STACK])
-    })
-    session.protocol_version = protocol.ProtocolVersion.V3
-    [(signal, frame)] = parse_ee_frames(policy.meta()[roboarm_keys.EE_FRAMES]).items()
-    assert (signal, frame.site, frame.offset) == (keys.EE_POSE, GRIPPER_SITE, FR3_EE_FRAME)
-
-
 def test_policy_meta_states_the_frames_both_sides_of_a_split_deployment_declare(served):
     local = Sequential(
         ChangeEEFrame(GRIPPER_SITE, Transform3D.identity, keys=(keys.EE_POSE,)),

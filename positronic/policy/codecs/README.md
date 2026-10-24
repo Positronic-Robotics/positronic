@@ -172,7 +172,7 @@ It is declared in two places, for the two things it does:
 
 Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `EEFrame(site=GRIPPER_SITE, offset=models.DROID_EE_FRAME)`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
 
-A server built for poses at the Franka Hand point, the FR3's `F_T_EE`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline. A v1 `change_ee_frame` spec states its transform from that point, so the client reads it from `gripper` through `models.FR3_EE_FRAME`.
+A server built for poses at the Franka Hand point, the FR3's `F_T_EE`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline. A version 1 `change_ee_frame` spec is refused as an unsupported version.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 

@@ -8,7 +8,6 @@ from scipy.spatial.transform import Rotation as ScipyRotation
 import positronic.drivers.roboarm.command as cmd_module
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys as obs_keys
-from positronic.cfg import codecs as cfg_codecs
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -16,7 +15,6 @@ from positronic.drivers.roboarm.ik import frame_transform
 from positronic.drivers.roboarm.models import (
     EE_LINK,
     FLANGE_LINK,
-    FR3_EE_FRAME,
     GRIPPER_SITE,
     ROBOLAB_EEF_LINK,
     EEFrame,
@@ -246,19 +244,10 @@ def test_survives_the_wire_spec_round_trip():
     assert rebuilt.meta == codec.meta
 
 
-def _v1_spec(transform: Transform3D) -> dict:
-    return {NAME: ChangeEEFrame.WIRE_NAME, VERSION: 1, ARGS: {'transform': transform.as_vector(QUAT).tolist()}}
-
-
-def test_a_v1_spec_states_its_transform_from_the_franka_hand_point():
-    rebuilt = from_spec(_v1_spec(TO_ROBOLAB))
-    assert isinstance(rebuilt, ChangeEEFrame)
-    _assert_states(rebuilt.meta, (obs_keys.EE_POSE,), GRIPPER_SITE, FR3_EE_FRAME * TO_ROBOLAB)
-
-
-def test_an_identity_v1_spec_states_the_franka_hand_point():
-    """A server that stated the rig's old site with no offset keeps its poses at the FR3's ``F_T_EE``."""
-    assert from_spec(_v1_spec(Transform3D.identity)).meta == cfg_codecs.franka_hand_frame.instantiate().meta
+def test_a_v1_spec_is_refused_as_an_unsupported_version():
+    v1 = {NAME: ChangeEEFrame.WIRE_NAME, VERSION: 1, ARGS: {'transform': Transform3D.identity.as_vector(QUAT).tolist()}}
+    with pytest.raises(ValueError, match='Unsupported .* version 1'):
+        from_spec(v1)
 
 
 def test_training_encoder_maps_both_poses_forward():
