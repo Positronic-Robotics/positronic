@@ -35,7 +35,7 @@ dependencies = [
     "opentelemetry-api>=1.42",  # no-op span surface; the SDK ships in the `telemetry` extra
     # openpi-client: optional, see [project.optional-dependencies] openpi
     "plotly>=6.5.0",
-    "pos3>=0.3.1",
+    "pos3>=0.5.0",
     # The platform's wire contract, which `positronic eval run --policy-image` and
     # `positronic account` speak. A workspace member in a clone (see [tool.uv.sources]); a released
     # `positronic` resolves it from the index, so the client is published first
@@ -226,6 +226,8 @@ pyzed = [
 ]
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
 i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb30c65e397f2ece506550a0db4594" }
+# TODO(Positronic-Robotics/internal#264): drop this pin once pos3 0.5.0 is on PyPI; it carries `upload_exclude`.
+pos3 = { git = "https://github.com/Positronic-Robotics/pos3.git", rev = "ddebabd2f3c2c207f47012804be0ebbb7c913cbd" }
 # Linux x86_64 takes the CUDA 12.8 build: the PyPI build has no Blackwell (sm_120) kernels.
 # The README install section states the driver that this build needs.
 torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }]

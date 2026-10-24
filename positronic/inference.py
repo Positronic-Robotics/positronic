@@ -151,7 +151,7 @@ def _internal_main():
 
 @cfn.config(fields=['eval.object', 'eval.external_camera', 'eval.tote_placement'])
 def stats(output_dir: str, fields: list[str]):
-    dataset = load_all_datasets(pos3.sync(output_dir))
+    dataset = load_all_datasets(pos3.download(output_dir))
     counts = Counter()
     for i in range(len(dataset)):
         static = dataset[i].static

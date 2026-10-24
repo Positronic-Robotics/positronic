@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
-import pos3
 from platform_client.eval_plan import Sample
 from platform_client.responses import SubmissionCreateResponse
 from positronic_evals.evals import EvalDefinition, EvalRef, public_eval
@@ -24,7 +23,7 @@ from positronic.cli.account.gateway import CommandFailed, Fault, refusing_bad_in
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
 from positronic.dataset.episode import META_PATH
-from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.local_dataset import LocalDataset, sync_recording_dir
 from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy
 from positronic.policy.harness import Harness, Rollout
@@ -52,7 +51,7 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     if output_dir is None:
         os.environ.pop(ENV_TELEMETRY_DIR, None)
         return None
-    local_dir = pos3.sync(str(output_dir), sync_on_error=True)
+    local_dir = sync_recording_dir(str(output_dir))
     try:
         local_dir.mkdir(parents=True, exist_ok=True)
         utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
@@ -60,7 +59,7 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
         if not _is_on_the_path_to(exc.filename, local_dir):
             raise
         raise CommandFailed(f'--output_dir={output_dir}: {exc.filename}: {exc.strerror}', Fault.USAGE) from exc
-    # `pos3.sync` mirrors the whole local directory, so a sidecar written inside it uploads with the episodes.
+    # The sync mirrors the whole local directory, so a sidecar written inside it uploads with the episodes.
     # Pointed anywhere else the spans stay on the box that ran, and somebody copies them off by hand.
     os.environ[ENV_TELEMETRY_DIR] = str(local_dir / telemetry.TELEMETRY_SUBDIR)
     return local_dir
