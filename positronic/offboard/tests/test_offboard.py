@@ -551,6 +551,27 @@ def test_a_larger_frame_grows_the_ring_and_leaves_the_earlier_view_readable(fram
 
 
 @pytestmark_ring
+def test_a_growth_whose_answer_is_lost_after_the_server_took_the_ring_leaves_the_next_frame_readable(
+    frame_channel, frame_writer, monkeypatch
+):
+    _packed(frame_writer, {'image.left': _image(8, 8)})
+    hand_over = frame_ring.FrameWriter._hand_over
+
+    def answer_lost(writer, sock, ring):
+        hand_over(writer, sock, ring)
+        raise TimeoutError('the answer came after the writer stopped waiting')
+
+    monkeypatch.setattr(frame_ring.FrameWriter, '_hand_over', answer_lost)
+    with pytest.raises(TimeoutError):
+        _packed(frame_writer, {'image.left': _image(64, 64)})
+    monkeypatch.undo()
+
+    small = _image(8, 8)
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, {'image.left': small})))
+    np.testing.assert_array_equal(served['image.left'], small)
+
+
+@pytestmark_ring
 def test_an_unsealed_descriptor_is_refused_before_it_is_mapped():
     """An unsealed ring may shrink under the mapping, and the next read of a dropped page is a SIGBUS."""
     fd = os.memfd_create('unsealed', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
