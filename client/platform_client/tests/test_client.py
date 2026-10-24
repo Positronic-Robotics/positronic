@@ -606,6 +606,17 @@ def test_an_answer_from_a_platform_older_than_the_client_reads_is_refused(served
     assert raised.value.synthesized_envelope
 
 
+@pytest.mark.parametrize(
+    ('served', 'named'),
+    [({}, 'too old to name its version'), ({PLATFORM_VERSION_HEADER: 'latest'}, "'latest', which is not a version")],
+)
+def test_the_refusal_tells_a_platform_that_names_no_version_from_one_that_names_a_bad_one(
+    served: dict[str, str], named: str
+):
+    with pytest.raises(PlatformError, match=named):
+        make_client(Gateway(200, {'boards': []}, headers=served)).list_boards()
+
+
 def test_an_answer_from_a_platform_at_the_oldest_contract_the_client_reads_is_taken():
     gateway = Gateway(200, {'boards': []}, headers={PLATFORM_VERSION_HEADER: str(MIN_PLATFORM_VERSION)})
     assert make_client(gateway).list_boards().boards == []

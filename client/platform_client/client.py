@@ -318,7 +318,12 @@ class PlatformClient:
             served = None
         if served is not None and served >= MIN_PLATFORM_VERSION:
             return
-        serves = f'contract {named}' if served is not None else 'a contract too old to name its version'
+        if named is None:
+            serves = 'a contract too old to name its version'
+        elif served is None:
+            serves = f'a contract it names as {named!r}, which is not a version'
+        else:
+            serves = f'contract {served}'
         raise PlatformError.synthesized(
             response.status_code,
             f'{response.request.url.host} serves {serves}; positronic-platform-client {CLIENT_VERSION} '
