@@ -1079,7 +1079,7 @@ def test_the_user_is_shown_the_link_that_carries_the_code_when_the_provider_send
 
 
 def test_a_workos_sign_in_line_sends_the_user_to_the_spam_folder_for_the_code_mail(capsys):
-    """WorkOS can mail a code from a shared domain that mail providers file as spam; the line says where to look."""
+    """A mail provider can file the WorkOS code mail as spam, so the line says where to look."""
     device = dict(DEVICE_ANSWER) | {'verification_uri_complete': COMPLETE_URI, 'expires_in': 300}
     flow, _ = _flow(_workos(device=device, polls=[dict(WORKOS_GRANTED)]))
 
