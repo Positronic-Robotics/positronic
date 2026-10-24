@@ -141,7 +141,7 @@ ABC_TRIALS_PER_TASK = 20
 ABC_CAMERA_HEIGHT, ABC_CAMERA_WIDTH = 260, 416
 ABC_SCORING = Scoring(labelers=(ABC_LABELER,), primary=MeanEpisodeScore(per_task=True))
 # TODO: name the commit on `main` that holds the ABC backend.
-ABC_POSITRONIC_REVISION = 'f30bad8bd7dcf9f379803be18c525c6b9bb19033'
+ABC_POSITRONIC_REVISION = 'd4ebf4166cf37b6f623f06203b663d8047ee53a4'
 
 
 def _abc(tasks: tuple[str, ...], time_limit_s: int) -> EvalDefinition:
