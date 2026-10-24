@@ -143,7 +143,7 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
 - `--pipeline.ee_frame`: The end-effector frame the checkpoint speaks: an offset from a site of the rig's model.
   Required on the EE pipelines. Pass `@positronic.cfg.codecs.gripper_ee_frame` for a checkpoint trained on poses at `gripper`, and add
   `--pipeline.ee_frame.offset=@positronic.drivers.roboarm.models.DROID_EE_FRAME` for one that speaks the DROID
-  flange. `None` states a checkpoint that speaks joints only: the harness then sends it no pose. The joint-space
+  flange. `None` states a checkpoint that speaks joints only. The joint-space
   pipelines set `None` themselves
 - `--model.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
 - `--model.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)

@@ -160,10 +160,10 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
 
-- A policy that states no `ee_frames` speaks joints only. Its observation carries no pose signal, so a codec that reads a pose fails on the missing key.
+- A policy that states no `ee_frames` gets each pose at the rig's legacy point, as [the frame contract](../../drivers/roboarm/README.md) says.
 - A policy that names a site the rig does not report that signal at is refused.
 
-A pose-reading checkpoint therefore always states its frame, also when the offset is the identity (`cfg.codecs.gripper_ee_frame`).
+A pose-reading checkpoint states its frame, also when the offset is the identity (`cfg.codecs.gripper_ee_frame`).
 
 It is declared in two places, for the two things it does:
 
@@ -172,7 +172,7 @@ It is declared in two places, for the two things it does:
 
 Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `EEFrame(site=GRIPPER_SITE, offset=models.DROID_EE_FRAME)`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
 
-A remote server that states no frame observes no pose, so a client stack of its that reads one fails on the first observation. A server built for poses at the Franka Hand point, the FR3's `F_T_EE`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline. A v1 `change_ee_frame` spec states its transform from that point, so the client reads it from `gripper` through `models.FR3_EE_FRAME`.
+A server built for poses at the Franka Hand point, the FR3's `F_T_EE`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline. A v1 `change_ee_frame` spec states its transform from that point, so the client reads it from `gripper` through `models.FR3_EE_FRAME`.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 

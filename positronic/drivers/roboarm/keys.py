@@ -9,5 +9,5 @@ MESHES = 'meshes'
 GRIPPER = 'gripper'
 
 # Where each pose signal sits, keyed by the signal, as dumped ``models.EEFrame`` entries. A rig, a recording and a
-# policy that reads poses state it; a policy that states none speaks joints only.
+# policy that reads poses state it.
 EE_FRAMES = 'ee_frames'

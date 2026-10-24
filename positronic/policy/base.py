@@ -152,7 +152,8 @@ class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
         """Model and configuration metadata shared across episodes.
 
         The harness reads one entry: ``ee_frames``, nested and keyed by pose signal, states the frame of each pose
-        signal the policy reads. A pose signal with no entry is not in the policy's observation.
+        signal the policy reads. A policy that states entries observes only those pose signals. A policy that states
+        none observes each pose at the rig's legacy point (``Harness._pose_handshake``).
         """
         return {}
 
