@@ -1769,9 +1769,10 @@ def test_robot_state_serializer_emits_the_status_beside_the_pose(status):
     assert serialized['.status'] is status
 
 
-def _run_robot_rollout(policy, static_meta=None, robot_meta=None):
-    """Run one episode of ``policy`` on a robot embodiment that reports the poses ``static_meta`` states, and whose
-    arm publishes ``robot_meta``."""
+def _run_robot_rollout(policy, static_meta=None, robot_meta=None, *, ticks=1, commands=None):
+    """Run one episode of ``policy`` for ``ticks`` world ticks on a robot embodiment that reports the poses
+    ``static_meta`` states, and whose arm publishes ``robot_meta``. Append each robot command the rig gets to
+    ``commands``."""
     with pimm.World(virtual_time=True) as world:
         device = Passive()
         state_out = pimm.ControlSystemEmitter(device)
@@ -1793,42 +1794,64 @@ def _run_robot_rollout(policy, static_meta=None, robot_meta=None):
             meta_out, meta_in = world.local_pipe()
             harness.robot_meta_in._bind(meta_in)
             meta_out.emit(robot_meta)
+        received = Trace(world.clock)
+        harness.commands[keys.ROBOT_COMMAND]._bind(received, clock=world.clock)
         caller = world.pair(harness.perform_task)
         done = world.pair(harness.done)
         loop = world.start([harness, device])
         try:
             state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
             answer = caller(Rollout(Task('move', None), policy, None))
-            next(loop)
+            for _ in range(ticks):
+                next(loop)
             done.emit({eval_keys.SUCCESS: True})
             while not answer.done():
                 next(loop)
+            if commands is not None:
+                commands.extend(command for _, command in received.values)
             return answer
         finally:
             world.request_stop()
             list(loop)
 
 
-def test_a_policy_that_states_no_frames_sees_no_pose():
+def _legacy_point_warnings(caplog):
+    return [record for record in caplog.records if 'legacy point' in record.getMessage()]
+
+
+def test_a_policy_that_states_no_frames_observes_the_rig_poses_and_commands_them_unchanged(caplog):
     policy = StubPolicy()
-    assert _run_robot_rollout(policy).result()[eval_keys.TERMINATED] is True
-    assert keys.EE_POSE not in policy.observations[0]
+    commands = []
+    assert _run_robot_rollout(policy, commands=commands).result()[eval_keys.TERMINATED] is True
+    np.testing.assert_allclose(policy.observations[0][keys.EE_POSE], [0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0])
     assert keys.JOINTS in policy.observations[0]
+    np.testing.assert_allclose(commands[0].pose.translation, policy.command.pose.translation)
+    np.testing.assert_allclose(commands[0].pose.rotation.as_quat, policy.command.pose.rotation.as_quat)
 
 
-def test_a_policy_that_states_no_frames_sees_no_signal_the_rig_states_as_a_pose_whatever_its_name():
+def test_a_policy_that_states_no_frames_gets_one_legacy_point_warning_per_session(caplog):
+    policy = StubPolicy()
+    assert _run_robot_rollout(policy, ticks=250).result()[eval_keys.TERMINATED] is True
+    assert len(policy.observations) > 1
+    assert len(_legacy_point_warnings(caplog)) == 1
+
+
+def test_a_policy_that_states_frames_sees_no_other_signal_the_rig_states_as_a_pose_whatever_its_name():
     framed = {signal: EEFrame(site=DEFAULT_FRAME) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.JOINTS)}
     static_meta = {**ROBOT_STATIC_META, **ee_frames_entry(framed)}
-    policy = StubPolicy(command=JointPosition(positions=np.zeros(7)))
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
     assert _run_robot_rollout(policy, static_meta).result()[eval_keys.TERMINATED] is True
     assert keys.JOINTS not in policy.observations[0]
-    assert keys.EE_POSE not in policy.observations[0]
+    assert keys.EE_POSE in policy.observations[0]
 
 
-def test_a_policy_that_states_the_rig_site_sees_the_pose():
+def test_a_policy_that_states_the_rig_site_sees_the_pose(caplog):
     policy = FramedPolicy({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
-    assert _run_robot_rollout(policy).result()[eval_keys.TERMINATED] is True
+    commands = []
+    assert _run_robot_rollout(policy, commands=commands).result()[eval_keys.TERMINATED] is True
     np.testing.assert_allclose(policy.observations[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
+    np.testing.assert_allclose(commands[0].pose.translation, policy.command.pose.translation)
+    assert _legacy_point_warnings(caplog) == []
 
 
 def test_a_policy_that_states_another_site_is_refused():
@@ -1838,11 +1861,12 @@ def test_a_policy_that_states_another_site_is_refused():
     assert policy.observations == []
 
 
-def test_an_arm_with_no_model_runs_a_joint_policy_without_the_pose():
+def test_an_arm_with_no_model_runs_a_joint_policy_without_the_pose(caplog):
     policy = StubPolicy(command=JointPosition(positions=np.zeros(7)))
     assert _run_robot_rollout(policy, robot_meta=NO_MODEL_ROBOT_META).result()[eval_keys.TERMINATED] is True
     assert keys.EE_POSE not in policy.observations[0]
     assert keys.JOINTS in policy.observations[0]
+    assert _legacy_point_warnings(caplog) == []
 
 
 def test_an_arm_with_no_model_refuses_a_policy_that_reads_poses():

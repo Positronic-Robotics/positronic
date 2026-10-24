@@ -49,7 +49,7 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
 
 
 # Every pose checkpoint served here was trained on poses the rig reported at ``default``, so its frame has no
-# offset. ``ee_frame=None`` serves a checkpoint that speaks joints only, which then sees no pose.
+# offset. ``ee_frame=None`` serves a checkpoint that speaks joints only.
 @cfn.config(**{
     'ee_frame': codecs.default_ee_frame,
     'obs': codecs.general_obs,

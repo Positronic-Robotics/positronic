@@ -160,10 +160,10 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
 
-- A policy that states no `ee_frames` speaks joints only. Its observation carries no pose signal, so a codec that reads a pose fails on the missing key.
+- A policy that states no `ee_frames` observes each pose at the rig's legacy point, `default`, and its pose commands go back from that point. The harness logs a warning for each such session. This fallback is transitional (#550).
 - A policy that names a site the rig does not report that signal at is refused.
 
-A pose-reading checkpoint therefore always states its frame, also when the offset is the identity (`cfg.codecs.default_ee_frame`).
+A pose-reading checkpoint states its frame, also when the offset is the identity (`cfg.codecs.default_ee_frame`).
 
 It is declared in two places, for the two things it does:
 
@@ -172,7 +172,7 @@ It is declared in two places, for the two things it does:
 
 Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `EEFrame(site=DEFAULT_FRAME, offset=models.DROID_EE_FRAME)`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
 
-A remote server that states no frame observes no pose, so a client stack of its that reads one fails on the first observation. A server built for poses at the Franka Hand point, where the FR3 and the bundled panda report `default`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline.
+A remote server that states no frame gets the poses at the rig's legacy point, as above. A server built for poses at the Franka Hand point, where the FR3 and the bundled panda report `default`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 

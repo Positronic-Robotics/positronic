@@ -212,7 +212,7 @@ def pipeline(codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_
     """The OpenPI serving pipeline: rig-side chunk scheduling and the server-side codec.
 
     ``ee_frame`` is the frame this checkpoint's poses live in (``cfg.codecs.default_ee_frame`` for a checkpoint
-    trained on poses at ``DEFAULT_FRAME``); ``None`` for one that speaks joints only, which then sees no pose.
+    trained on poses at ``DEFAULT_FRAME``); ``None`` for one that speaks joints only.
     """
     local = Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize(224, 224))
     if ee_frame is not None:

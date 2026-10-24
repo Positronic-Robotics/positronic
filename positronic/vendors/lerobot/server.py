@@ -48,7 +48,7 @@ def lerobot_model(checkpoints_dir: str, checkpoint: str | None, device: str | No
 
 
 # Every pose checkpoint served here was trained on poses the rig reported at ``default``, so its frame has no
-# offset. ``ee_frame=None`` serves a checkpoint that speaks joints only, which then sees no pose.
+# offset. ``ee_frame=None`` serves a checkpoint that speaks joints only.
 @cfn.config(codec=lerobot_codecs.ee, ee_frame=default_ee_frame)
 def pipeline(
     codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_sec: float | None = 1.0
