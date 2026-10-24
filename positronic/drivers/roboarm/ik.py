@@ -141,6 +141,15 @@ def ee_frames(statics) -> dict[str, EEFrame]:
     return frames
 
 
+def _moved_signal(episode: Episode, key: str, move: Callable[[Any], Any]) -> Any:
+    return transforms.Elementwise(episode[key], transforms.lazy_sequence(move))
+
+
+def _move_delta_frame(vector, site_to_frame: geom.Transform3D) -> np.ndarray:
+    """A ``CartesianDelta`` frame vector, restated from the site that the targets move to."""
+    return (site_to_frame * geom.Transform3D.from_vector(np.asarray(vector, dtype=np.float64), _QUAT)).as_vector(_QUAT)
+
+
 class MoveToSite(EpisodeTransform):
     """Re-express every pose signal of an episode at ``site`` of the model it carries, and state them there.
 
@@ -172,15 +181,6 @@ class MoveToSite(EpisodeTransform):
         stated = ee_frames_entry(dict.fromkeys(frames, EEFrame(site=self._site)))
         statics = {name: FromValue(value) for name, value in stated.items()}
         return Group(Derive(meta=None, **statics, **moved), Identity())(episode)
-
-
-def _moved_signal(episode: Episode, key: str, move: Callable[[Any], Any]) -> Any:
-    return transforms.Elementwise(episode[key], transforms.lazy_sequence(move))
-
-
-def _move_delta_frame(vector, site_to_frame: geom.Transform3D) -> np.ndarray:
-    """A ``CartesianDelta`` frame vector, restated from the site that the targets move to."""
-    return (site_to_frame * geom.Transform3D.from_vector(np.asarray(vector, dtype=np.float64), _QUAT)).as_vector(_QUAT)
 
 
 def _parse_target(target_ee_pose_vec):
