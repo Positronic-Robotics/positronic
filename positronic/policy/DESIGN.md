@@ -310,6 +310,12 @@ several sessions without keeping episode history. Stateful models must keep
 each session's history separate or reject overlapping sessions. Ending a session
 releases its episode state, not the shared loaded model.
 
+A remote model ends the run through the reserved field `end` of a result element. One declared component,
+`EndOnField`, sits outermost in the client stack and turns a step's `end` into the run's `PolicyEnd`. The
+codec `EndCommand`, composed in parallel with the action codec, decodes the model's decision into `end`. The
+schedules carry `end` as an opaque command.
+`docs/connect-your-model.md` states what a model that ends sends.
+
 A server deployment brings together the model to load, the client stack, and
 any data conversion performed on the server. Loading and serving models belong
 to the server; the policy run sees an ordinary function call. See the
