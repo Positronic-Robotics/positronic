@@ -380,6 +380,8 @@ Each side refuses a version of the other that is too old:
 - Every answer names the contract version the platform serves in `X-Positronic-Platform-Version`. The
   client refuses a successful answer that names none, or one older than
   `platform_client.client.MIN_PLATFORM_VERSION`.
+  Before its first write, a client reads `auth.config` and checks the version there, so it sends no
+  write to a platform it cannot read.
 
 `rankings.list` names the boards, and `rankings.get?board=<slug>` reads one. From the command line,
 `positronic/cli/examples/nebius_competition/standings.py` prints the boards, or the rows of one:

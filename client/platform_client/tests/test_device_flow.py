@@ -725,7 +725,7 @@ def test_the_registration_carries_the_access_token_as_the_credential():
     with PlatformClient(client=gateway.client()) as platform:
         response = register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT), alias='team-rocket')
 
-    sent = gateway.requests[0]
+    sent = gateway.requests[-1]
     assert str(sent.url) == f'https://gateway.example{routes.USERS_REGISTER}'
     assert json.loads(sent.content) == {'credential': TOKEN, 'alias': 'team-rocket', 'rotate': False}
     assert response.api_key == MINTED_KEY
@@ -740,7 +740,7 @@ def test_the_registration_asks_the_gateway_to_rotate_when_told_to():
     with PlatformClient(client=gateway.client()) as platform:
         register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT), rotate=True)
 
-    assert json.loads(gateway.requests[0].content)['rotate'] is True
+    assert json.loads(gateway.requests[-1].content)['rotate'] is True
 
 
 # --- the pick: which provider `auth.config` names ------------------------------
@@ -1096,7 +1096,7 @@ def test_a_github_registration_waits_out_the_gateways_two_github_reads():
     with PlatformClient(client=gateway.client()) as platform:
         register_with_device_flow(platform, SignIn(flow, sign_in.register_timeout))
 
-    assert gateway.requests[0].extensions['timeout'] == {
+    assert gateway.requests[-1].extensions['timeout'] == {
         'connect': CONNECT_TIMEOUT_S,
         'read': 3 * MAX_REQUEST_STALL_S,
         'write': WRITE_TIMEOUT_S,
@@ -1114,7 +1114,7 @@ def test_a_workos_registration_waits_out_the_deadline_the_gateway_names():
     with PlatformClient(client=gateway.client()) as platform:
         register_with_device_flow(platform, SignIn(flow, sign_in.register_timeout))
 
-    assert gateway.requests[0].extensions['timeout'] == {
+    assert gateway.requests[-1].extensions['timeout'] == {
         'connect': CONNECT_TIMEOUT_S,
         'read': 120.0 + MAX_REQUEST_STALL_S,
         'write': WRITE_TIMEOUT_S,

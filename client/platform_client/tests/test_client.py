@@ -76,22 +76,39 @@ EPISODE_KEY = 'episodes/0000/meta.json'
 SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
 
 
-class Gateway:
-    """Records the request it was handed and answers a canned payload."""
+GITHUB_ONLY_AUTH_CONFIG = {'github_registration': True, 'workos': None}
 
-    def __init__(self, status: int, payload: object, *, headers: dict[str, str] = SERVES_THIS_CLIENT) -> None:
+
+class Gateway:
+    """Records the requests it was handed and answers a canned payload.
+
+    `auth.config`, which the client reads before its first write, answers `auth_config`; None answers it the
+    canned payload too, for a test of that route.
+    """
+
+    def __init__(
+        self,
+        status: int,
+        payload: object,
+        *,
+        headers: dict[str, str] = SERVES_THIS_CLIENT,
+        auth_config: object | None = GITHUB_ONLY_AUTH_CONFIG,
+    ) -> None:
         self.status = status
         self.payload = payload
         self.headers = headers
-        self.seen: httpx.Request | None = None
+        self.auth_config = auth_config
+        self.requests: list[httpx.Request] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.seen = request
+        self.requests.append(request)
+        if request.url.path == routes.AUTH_CONFIG and self.auth_config is not None:
+            return httpx.Response(200, json=self.auth_config, headers=self.headers)
         return httpx.Response(self.status, json=self.payload, headers=self.headers)
 
     def request(self) -> httpx.Request:
-        assert self.seen is not None, 'no request reached the gateway'
-        return self.seen
+        assert self.requests, 'no request reached the gateway'
+        return self.requests[-1]
 
     def body(self) -> dict:
         return json.loads(self.request().content)
@@ -212,7 +229,7 @@ def test_register_without_a_timeout_sends_one_request_that_outwaits_the_clients_
 
 def test_a_platform_without_auth_config_is_refused():
     with pytest.raises(PlatformError):
-        make_client(Gateway(404, {'detail': 'Not Found'})).auth_config()
+        make_client(Gateway(404, {'detail': 'Not Found'}, auth_config=None)).auth_config()
 
 
 @pytest.mark.parametrize('deadline', [0, -1, float('inf'), float('nan'), 10**9])
@@ -267,18 +284,18 @@ def test_register_waits_the_timeout_it_is_given():
 )
 def test_the_register_timeout_covers_the_longest_check_the_platform_names(status, config, expected):
     """The gateway owns its WorkOS deadline and states it in `auth.config`; GitHub keeps its own figure."""
-    assert make_client(Gateway(status, config)).register_timeout() == expected
+    assert make_client(Gateway(status, config, auth_config=None)).register_timeout() == expected
 
 
 def test_a_failing_auth_config_is_no_reason_to_guess_a_register_timeout():
     with pytest.raises(PlatformError):
-        make_client(Gateway(500, {'detail': 'boom'})).register_timeout()
+        make_client(Gateway(500, {'detail': 'boom'}, auth_config=None)).register_timeout()
 
 
 def test_auth_config_reads_the_sign_ins_without_a_key():
     workos = {'client_id': 'client_01', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 75.0}
     config = {'github_registration': False, 'workos': workos}
-    gateway = Gateway(200, config)
+    gateway = Gateway(200, config, auth_config=None)
 
     answer = make_client(gateway).auth_config()
 
@@ -606,6 +623,22 @@ def test_an_answer_from_a_platform_older_than_the_client_reads_is_refused(served
     assert raised.value.synthesized_envelope
 
 
+def test_a_write_to_a_platform_older_than_the_client_reads_is_refused_before_it_is_sent():
+    gateway = Gateway(200, {'submission_id': 'a0', 'status': 'pending'}, headers={})
+    with pytest.raises(PlatformError, match='too old to name its version'):
+        make_client(gateway).create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke')))
+    assert [request.url.path for request in gateway.requests] == [routes.AUTH_CONFIG]
+
+
+def test_the_platform_version_is_read_once_before_the_first_write():
+    gateway = Gateway(200, {'status': 'cancelled', 'refunded': True})
+    client = make_client(gateway)
+    client.cancel_submission(CancelRequest(id=SubmissionId(0x1F)))
+    client.cancel_submission(CancelRequest(id=SubmissionId(0x1F)))
+    paths = [request.url.path for request in gateway.requests]
+    assert paths == [routes.AUTH_CONFIG, routes.SUBMISSIONS_CANCEL, routes.SUBMISSIONS_CANCEL]
+
+
 @pytest.mark.parametrize(
     ('served', 'named'),
     [({}, 'too old to name its version'), ({PLATFORM_VERSION_HEADER: 'latest'}, "'latest', which is not a version")],
@@ -733,7 +766,7 @@ def test_an_authenticated_call_without_a_key_fails_before_the_request():
     gateway = Gateway(200, {})
     with pytest.raises(ValueError, match='API key'):
         make_client(gateway, api_key=None).me()
-    assert gateway.seen is None
+    assert not gateway.requests
 
 
 def test_a_client_given_nothing_reaches_the_default_platform(monkeypatch):

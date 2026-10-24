@@ -7,13 +7,14 @@ from dataclasses import dataclass, field
 
 import httpx
 import pytest
+from platform_client import routes
 from platform_client.client import API_KEY_ENV, API_URL_ENV, AUTH_HEADER
 from platform_client.config import CONFIG_DIR_ENV, REGISTER_COMMAND, Config, write_config
 from platform_client.enums import ErrorCode
 from platform_client.errors import ApiErrorBody, ErrorEnvelope
 from platform_client.ids import ApiKey
 
-from positronic.cli.conftest import SERVES_THIS_CLIENT
+from positronic.cli.conftest import GITHUB_ONLY_AUTH_CONFIG, SERVES_THIS_CLIENT
 from positronic.cli.examples.nebius_competition import enter
 from positronic.cli.examples.nebius_competition.enter import (
     COMPETITION_ACCEPT_TERMS,
@@ -46,6 +47,9 @@ class StubGateway:
     requests: list[httpx.Request] = field(default_factory=list)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
+        # The client reads the platform's version here before its first write.
+        if request.url.path == routes.AUTH_CONFIG:
+            return httpx.Response(200, json=GITHUB_ONLY_AUTH_CONFIG, headers=SERVES_THIS_CLIENT)
         self.requests.append(request)
         if request.url.path == COMPETITION_ENTER:
             entered = httpx.Response(200, json=self.entry.model_dump(mode='json'), headers=SERVES_THIS_CLIENT)

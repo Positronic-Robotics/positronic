@@ -167,6 +167,7 @@ class PlatformClient:
                 )
         self._client = client
         self.api_key = resolve_api_key(api_key)
+        self._platform_version_checked = False
 
     @property
     def base_url(self) -> str:
@@ -300,6 +301,9 @@ class PlatformClient:
         auth: Auth = Auth.REQUIRED,
         timeout: httpx.Timeout | None = None,
     ) -> M:
+        # A write is applied before its answer names the platform's version, so the version is read first.
+        if not self._platform_version_checked:
+            self.auth_config()
         # This dump reveals the registry password. Every other dump masks it.
         body = request.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
         # None keeps the client's own timeout.
@@ -355,6 +359,7 @@ class PlatformClient:
             raise PlatformError.from_payload(response.status_code, payload)
         # Only a 2xx: a proxy's error page names no version, and calling it an old platform would hide the fault.
         self._require_platform_version(response)
+        self._platform_version_checked = True
         return response
 
     def close(self) -> None:

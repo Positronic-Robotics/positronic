@@ -62,6 +62,8 @@ class StubPlatform:
         self.base_url: str | None = None
         self.api_key: ApiKey | None = None
         self.no_answer: httpx.TransportError | None = None
+        # The one path whose answer is lost; None loses every answer.
+        self.no_answer_on: str | None = None
 
     def answer(self, payload: object, *, status: int = 200) -> None:
         self.payload, self.status = payload, status
@@ -77,7 +79,7 @@ class StubPlatform:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.seen = request
         self.paths.append(request.url.path)
-        if self.no_answer is not None:
+        if self.no_answer is not None and self.no_answer_on in (None, request.url.path):
             raise self.no_answer
         if queued := self.in_turn.get(request.url.path):
             payload, status = queued.pop(0)
