@@ -60,7 +60,8 @@ def pipeline(
 
 
 ee = pipeline
-joints = pipeline.override(codec=lerobot_codecs.joints, ee_frame=None)
+# Joint observations, absolute EE actions: a pose pipeline.
+joints = pipeline.override(codec=lerobot_codecs.joints)
 joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik, ee_frame=None)
 joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim, ee_frame=None)
 

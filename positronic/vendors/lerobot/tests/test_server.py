@@ -75,13 +75,13 @@ def _pipeline(name: str) -> cfn.Config:
     return server.COMMANDS[name].kwargs['pipeline']
 
 
-@pytest.mark.parametrize('name', ['serve', 'ee'])
+@pytest.mark.parametrize('name', ['serve', 'ee', 'joints'])
 def test_a_pose_pipeline_that_states_no_frame_fails_to_build(name):
     with pytest.raises(TypeError, match='ee_frame'):
         _pipeline(name).instantiate()
 
 
-@pytest.mark.parametrize('name', ['joints', 'joints_ik', 'joints_ik_sim'])
+@pytest.mark.parametrize('name', ['joints_ik', 'joints_ik_sim'])
 def test_a_joint_pipeline_builds_with_no_frame(name):
     assert roboarm_keys.EE_FRAMES not in _pipeline(name).instantiate().meta()
 

@@ -273,7 +273,7 @@ bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
 
 Use the vendor's model option to select the matching checkpoint (`--model.model_source` for GR00T,
 `--model.checkpoints_dir` for LeRobot and OpenPI). A LeRobot or OpenPI pose pipeline also takes
-`--pipeline.ee_frame`, the EE frame the checkpoint speaks; the joint pipelines set `None` themselves:
+`--pipeline.ee_frame`, the EE frame the checkpoint speaks; a pipeline that speaks joints only sets `None` itself:
 
 ```bash
 bash workflows/nebius/serve.sh lerobot smolvla-server ee \

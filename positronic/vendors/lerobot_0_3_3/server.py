@@ -76,7 +76,8 @@ def pipeline(
 
 
 ee = pipeline
-joints = pipeline.override(**{'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1}, 'ee_frame': None})
+# Joint observations, absolute EE actions: a pose pipeline.
+joints = pipeline.override(**{'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1}})
 ee_traj = pipeline.override(**{
     'action.tgt_ee_pose_key': keys.EE_POSE,
     'action.tgt_grip_key': keys.GRIP,
