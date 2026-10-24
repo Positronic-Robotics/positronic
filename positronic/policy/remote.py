@@ -16,7 +16,6 @@ from positronic import telemetry, telemetry_keys
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
-from positronic.utils import flatten_dict
 
 from .base import Policy, PolicyRun, Processor, Runtime
 from .compatibility import from_v1_spec
@@ -121,7 +120,9 @@ class RemotePolicy(Policy):
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
-    codecs run.
+    codecs run. ``meta`` holds only the client's own values. Each run records the server's values in the episode
+    metadata before its first yield, with the frames that the server and its declared stack state as ``EE_FRAMES``.
+    ``wait_for_server`` waits for the server without a session.
     """
 
     def __init__(
@@ -136,31 +137,14 @@ class RemotePolicy(Policy):
         self._client = InferenceClient(
             registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout
         )
-        self._server_meta: dict[str, Any] | None = None
-        self._client_meta: dict[str, Any] = {}
         self._jpeg_quality = jpeg_quality
 
     def meta(self) -> dict[str, Any]:
-        if self._server_meta is None:
-            with closing(self._client.new_session()) as session:
-                server_meta = dict(session.metadata)
-                client_meta = (
-                    declared_stack(server_meta, session.protocol_version).meta()
-                    if session.protocol_version is ProtocolVersion.V3
-                    else {}
-                )
-            self._server_meta, self._client_meta = server_meta, client_meta
-        client_meta = dict(self._client_meta)
-        # Either side of the server's deployment may declare the frames, so the policy states both, one entry keyed
-        # by pose signal. A server older than ``EE_FRAMES`` declares them only through its client stack.
-        frames = {**client_meta.pop(roboarm_keys.EE_FRAMES, {}), **self._server_meta.get(roboarm_keys.EE_FRAMES, {})}
-        meta: dict[str, Any] = {**client_meta, policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
-        if self._server_meta.get(policy_keys.COMPRESS_IMAGES):
-            meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
-        meta = flatten_dict(meta)
-        if frames:
-            meta[roboarm_keys.EE_FRAMES] = frames
-        return meta
+        return {policy_keys.TYPE: 'remote'}
+
+    def wait_for_server(self) -> None:
+        """Return once the server has loaded its model. Opens no session."""
+        self._client.wait_for_server()
 
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
@@ -168,8 +152,17 @@ class RemotePolicy(Policy):
         try:
             server_meta = dict(session.metadata)
             stack = declared_stack(server_meta, session.protocol_version)
-            client_meta = stack.meta() if session.protocol_version is ProtocolVersion.V3 else {}
-            self._server_meta, self._client_meta = server_meta, client_meta
+            client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
+            # Either side of the server's deployment may state the frames, so the run records both as one entry keyed
+            # by pose signal. A server older than ``EE_FRAMES`` states them only through its client stack.
+            frames = {**client_meta.pop(roboarm_keys.EE_FRAMES, {}), **server_meta.get(roboarm_keys.EE_FRAMES, {})}
+            episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
+            if frames:
+                episode_meta[roboarm_keys.EE_FRAMES] = frames
+            if server_meta.get(policy_keys.COMPRESS_IMAGES):
+                episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
+            for name, value in episode_meta.items():
+                runtime.set_metadata(name, value)
             compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
                 server_meta.get(policy_keys.COMPRESS_IMAGES)
             )

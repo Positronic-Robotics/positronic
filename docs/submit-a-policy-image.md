@@ -207,9 +207,10 @@ What the platform does with the credential:
    exits, and the run fails with `policy_setup_crash`.
 4. It denies all network egress from the container for the whole run. Only the simulator can
    reach your container, on port 8000. A download at start hangs or fails.
-5. It waits for `POST /api/v1/keepalive` to answer on port 8000. VM boot, the image pull and your
-   server's start share one provisioning deadline of 1800 s. A 25 GB image takes about 10 minutes
-   to pull.
+5. It waits for `POST /api/v1/keepalive` to answer on port 8000. VM boot and the image pull have a
+   deadline of 1800 s from the start of the VM. A miss there is the platform's fault. Your
+   server's start has its own deadline of 1800 s, from the end of the pull to the first
+   answer. A 25 GB image takes about 10 minutes to pull.
 6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token.
 7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
    servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
@@ -242,7 +243,8 @@ holds each value below. The platform runs every image under them.
 |---|---|---|
 | The port the server listens on | 8000 | `POLICY_PORT` |
 | The one variable the platform sets | `AUTH_TOKEN` | `AUTH_TOKEN_ENV` |
-| The deadline for VM boot, the pull and the server's start | 1800 s | `PROVISIONING_DEADLINE_S` |
+| The deadline for VM boot and the pull | 1800 s | `IMAGE_FETCH_DEADLINE_S` |
+| The deadline for the server's start, from the end of the pull | 1800 s | `WARMUP_DEADLINE_S` |
 | The GPU slice | `1g.24gb` | `MIG_PROFILE` |
 | VRAM | 24192 MiB | `VRAM_MIB` |
 | The compressed image | 50 GB | `COMPRESSED_IMAGE_BYTES` |
@@ -323,8 +325,8 @@ bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
 The script then waits up to 600 s: FLUX 3 Action binds port 8000 after about 140 s, and GR00T loads in
-about 151 s. `no answer in 600 s` means a hung server, or one too slow for the provisioning deadline,
-which it shares with VM boot and the pull.
+about 151 s. `no answer in 600 s` means a hung server, or a slow one. The platform gives the server's start
+1800 s from the end of the pull.
 
 The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
 sure that your model uses less. A memory setting that is a fraction of the GPU, such as

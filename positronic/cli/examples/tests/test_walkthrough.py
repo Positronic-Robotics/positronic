@@ -14,6 +14,8 @@ from platform_client.client import API_KEY_ENV, API_URL_ENV, AUTH_HEADER, Platfo
 from platform_client.config import CONFIG_DIR_ENV, Config, write_config
 from platform_client.ids import ApiKey
 
+from positronic.cli.conftest import SERVES_THIS_CLIENT
+
 SCRIPT = Path(__file__).resolve().parents[1] / 'walkthrough.py'
 BASE = 'http://gateway.test'
 BOARDS = {  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
@@ -52,7 +54,7 @@ class Platform:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         assert request.url.path == routes.RANKINGS_LIST
-        return httpx.Response(200, json=BOARDS)
+        return httpx.Response(200, json=BOARDS, headers=SERVES_THIS_CLIENT)
 
 
 def test_the_discovery_read_sends_no_key_even_when_the_environment_holds_one(walkthrough: dict[str, Any], monkeypatch):
@@ -79,10 +81,10 @@ def test_authentication_spends_the_token_on_one_registration(walkthrough: dict[s
 
     def answer(request: httpx.Request) -> httpx.Response:
         if request.url.path == routes.AUTH_CONFIG:
-            return httpx.Response(200, json={'github_registration': True, 'workos': None})
+            return httpx.Response(200, json={'github_registration': True, 'workos': None}, headers=SERVES_THIS_CLIENT)
         sent.append(json.loads(request.content))
         body = {'user_id': 'a0', 'artifact_location': 's3://b/a0/', 'api_key': 'pk_new', 'key_status': key_status}
-        return httpx.Response(200, json=body)
+        return httpx.Response(200, json=body, headers=SERVES_THIS_CLIENT)
 
     client = PlatformClient(client=httpx.Client(base_url=BASE, transport=httpx.MockTransport(answer)))
     walkthrough['authenticate'](client, credential='token', alias='demo')

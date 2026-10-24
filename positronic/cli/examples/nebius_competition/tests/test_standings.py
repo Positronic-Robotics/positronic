@@ -14,6 +14,8 @@ from platform_client.client import API_KEY_ENV, API_URL_ENV, AUTH_HEADER, Platfo
 from platform_client.config import CONFIG_DIR_ENV, Config, write_config
 from platform_client.ids import ApiKey
 
+from positronic.cli.conftest import SERVES_THIS_CLIENT
+
 SCRIPT = Path(__file__).resolve().parents[1] / 'standings.py'
 BASE = 'http://gateway.test'
 SUBMISSION = '5f3a91c2b7d40e18'
@@ -92,7 +94,7 @@ class Platform:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         payload, status = self.answers[request.url.path]
-        return httpx.Response(status, json=payload)
+        return httpx.Response(status, json=payload, headers=SERVES_THIS_CLIENT)
 
 
 def make_client(platform: Platform) -> PlatformClient:

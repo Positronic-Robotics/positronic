@@ -48,6 +48,7 @@ from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 from positronic.tests.testing_inference import post, read_status, run_attended, wait
+from positronic.utils import flatten_dict
 
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}}
 
@@ -469,6 +470,36 @@ class TestADroppedConnectionReconnects:
         assert clock[0] - started <= 20.0
 
 
+class TestWaitForServer:
+    """Waiting for a server opens no session."""
+
+    class _ProbedWire(_FakeWire):
+        def __init__(self, *answers: wire.Refusal | None):
+            super().__init__()
+            self._answers = list(answers)
+            self.probes = 0
+
+        def probe(self, address, headers, open_timeout):
+            self.probes += 1
+            return self._answers.pop(0)
+
+    def test_a_cold_server_is_probed_until_it_answers(self):
+        fake = self._ProbedWire(wire.Refusal.COLD, wire.Refusal.SILENT, None)
+        with patch('positronic.offboard.client.time.sleep'):
+            InferenceClient(fake, _ADDRESS).wait_for_server()
+
+        assert fake.probes == 3
+        assert fake.dials == []
+
+    def test_a_final_refusal_is_raised_at_once(self):
+        fake = self._ProbedWire(wire.Refusal.FINAL)
+        with pytest.raises(wire.ConnectRefused) as refused:
+            InferenceClient(fake, _ADDRESS).wait_for_server()
+
+        assert refused.value.refusal is wire.Refusal.FINAL
+        assert fake.probes == 1
+
+
 def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
     policy = RemotePolicy('websocket_tls', _address('example.com', 443, query='fps=2.5'), headers=headers)
@@ -540,7 +571,7 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
     [status] = statuses
     assert status is not None
     assert [episode.outcome for episode in status.run.episodes] == [Outcome.PASS, Outcome.FAIL]
-    assert model.end_session.call_count == 3  # Metadata and two completed episodes.
+    assert model.end_session.call_count == 2
 
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
@@ -556,10 +587,8 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
     )
     address, model, pipeline = served(local=local, transport=transport)
     policy = RemotePolicy(transport, address)
-    assert policy.meta()['server.model_name'] == 'fixed'
-    assert policy.meta()['server.action_fps'] == 10
-    assert policy.meta()['server.action_horizon_sec'] == 0.2
-    assert len(model.ended_sessions) == 1  # The metadata probe also ends its session.
+    assert policy.meta() == {policy_keys.TYPE: 'remote'}
+    assert model.ended_sessions == []
     obs = {'image': np.zeros((16, 16, 3), dtype=np.uint8)}
     for episode in range(2):
         now = [0]
@@ -595,9 +624,13 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
         finally:
             runtime.close()
             run.close()
-        assert len(model.ended_sessions) == episode + 2
+        assert len(model.ended_sessions) == episode + 1
         assert model.session_ids[-2:] == [model.ended_sessions[-1]] * 2
-    assert len(set(model.ended_sessions)) == 3
+        episode_meta = flatten_dict(runtime.metadata_snapshot())
+        assert episode_meta['server.model_name'] == 'fixed'
+        assert episode_meta['server.action_fps'] == 10
+        assert episode_meta['server.action_horizon_sec'] == 0.2
+    assert len(set(model.ended_sessions)) == 2
     assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
 
 
@@ -606,12 +639,11 @@ class DeclaredPromptModel(FixedModel):
         return {'model_name': 'fixed', 'prompt': 'A prompt this deployment declares.'}
 
 
-def test_a_declared_prompt_is_in_policy_meta_and_the_task_reaches_the_model_unchanged(served):
-    """A ``prompt`` in the handshake appears unchanged in the policy's meta, under the server block. The task an
+def test_a_declared_prompt_is_in_episode_meta_and_the_task_reaches_the_model_unchanged(served):
+    """A ``prompt`` in the handshake appears unchanged in the episode metadata, under the server block. The task an
     episode sends reaches the model unchanged, with no prompt beside it."""
     address, model, _ = served(model=DeclaredPromptModel())
     policy = RemotePolicy('websocket', address)
-    assert policy.meta()[f'{policy_keys.SERVER}.prompt'] == 'A prompt this deployment declares.'
 
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
     run = runtime.start(policy)
@@ -621,6 +653,8 @@ def test_a_declared_prompt_is_in_policy_meta_and_the_task_reaches_the_model_unch
     finally:
         runtime.close()
         run.close()
+    server_meta = runtime.metadata_snapshot()[policy_keys.SERVER]
+    assert server_meta['prompt'] == 'A prompt this deployment declares.'
     assert model.observations[-1][keys.TASK] == 'the task this episode sends'
     assert 'prompt' not in model.observations[-1]
 
@@ -996,11 +1030,12 @@ def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
 
 
 @pytest.mark.parametrize('compressed', [False, True])
-def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(compressed):
+def test_a_run_records_the_jpeg_quality_only_when_images_are_compressed(runtime, compressed):
     policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
     policy._client = MagicMock()
-    policy._client.new_session.return_value = _mock_session({policy_keys.COMPRESS_IMAGES: compressed})
-    meta = policy.meta()
+    policy._client.new_session.return_value = _mock_session({**CHUNKED_STACK, policy_keys.COMPRESS_IMAGES: compressed})
+    runtime.start(policy).close()
+    meta = runtime.metadata_snapshot()
     if compressed:
         assert meta[policy_keys.JPEG_QUALITY] == 75
     else:
@@ -1011,24 +1046,30 @@ def _frames_meta(meta):
     return {name: frame.site for name, frame in parse_ee_frames(meta[roboarm_keys.EE_FRAMES]).items()}
 
 
-def test_policy_meta_states_the_frames_the_server_codec_declares():
+def _recorded_frames(policy, runtime):
+    """The site of each pose signal that one run of ``policy`` records as it starts."""
+    runtime.start(policy).close()
+    return _frames_meta(runtime.metadata_snapshot())
+
+
+def test_a_run_records_the_frames_the_server_codec_states(runtime):
     server_frames = ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
     policy, session = _mock_remote_policy({**CHUNKED_STACK, **server_frames})
     session.protocol_version = protocol.ProtocolVersion.V3
-    assert _frames_meta(policy.meta()) == {keys.EE_POSE: DEFAULT_FRAME}
+    assert _recorded_frames(policy, runtime) == {keys.EE_POSE: DEFAULT_FRAME}
 
 
-def test_policy_meta_states_the_frames_a_v1_client_stack_declares():
-    """A server older than ``ee_frames`` declares its frame only as a v1 ``change_ee_frame`` in the client stack."""
+def test_a_run_records_the_frames_a_v1_client_stack_states(runtime):
+    """A server older than ``ee_frames`` states its frame only as a v1 ``change_ee_frame`` in the client stack."""
     v1 = spec.component(ChangeEEFrame.WIRE_NAME, version=1, transform=[0, 0, 0, 1, 0, 0, 0], keys=[keys.EE_POSE])
     policy, session = _mock_remote_policy({
         offboard_keys.LOCAL_STACK: spec.sequence(v1, CHUNKED_STACK[offboard_keys.LOCAL_STACK])
     })
     session.protocol_version = protocol.ProtocolVersion.V3
-    assert _frames_meta(policy.meta()) == {keys.EE_POSE: DEFAULT_FRAME}
+    assert _recorded_frames(policy, runtime) == {keys.EE_POSE: DEFAULT_FRAME}
 
 
-def test_policy_meta_states_the_frames_both_sides_of_a_split_deployment_declare(served):
+def test_a_run_records_the_frames_both_sides_of_a_split_deployment_state(served, runtime):
     local = Sequential(
         ChangeEEFrame(EEFrame(site=DEFAULT_FRAME), keys=(keys.EE_POSE,)),
         PauseOnUnavailable(),
@@ -1036,27 +1077,28 @@ def test_policy_meta_states_the_frames_both_sides_of_a_split_deployment_declare(
     )
     codec = ChangeEEFrame(EEFrame(site=DEFAULT_FRAME), keys=(keys.TARGET_EE_POSE,))
     address, _, _ = served(local=local, codec=codec)
-    frames = _frames_meta(RemotePolicy('websocket', address).meta())
+    frames = _recorded_frames(RemotePolicy('websocket', address), runtime)
     assert frames == {keys.EE_POSE: DEFAULT_FRAME, keys.TARGET_EE_POSE: DEFAULT_FRAME}
 
 
-def test_a_server_built_for_the_franka_hand_frame_states_its_poses_at_the_rig_default(served):
+def test_a_server_built_for_the_franka_hand_frame_states_its_poses_at_the_rig_default(served, runtime):
     local = Sequential(
         ChangeEEFrame(cfg_codecs.franka_hand_frame.instantiate()),
         PauseOnUnavailable(),
         ChunkedSchedule(fps=10, horizon_sec=0.2),
     )
     address, _, _ = served(local=local)
-    assert _frames_meta(RemotePolicy('websocket', address).meta())[keys.EE_POSE] == DEFAULT_FRAME
+    assert _recorded_frames(RemotePolicy('websocket', address), runtime)[keys.EE_POSE] == DEFAULT_FRAME
 
 
-def test_policy_meta_states_no_frames_for_a_server_that_declares_none():
+def test_a_run_records_no_frames_for_a_server_that_states_none(runtime):
     policy, session = _mock_remote_policy(CHUNKED_STACK)
     session.protocol_version = protocol.ProtocolVersion.V3
-    assert roboarm_keys.EE_FRAMES not in policy.meta()
+    runtime.start(policy).close()
+    assert roboarm_keys.EE_FRAMES not in runtime.metadata_snapshot()
 
 
-def test_a_frame_codec_around_a_server_that_declares_none_states_the_frames_for_it():
+def test_a_frame_codec_around_a_server_that_states_none_states_the_frames_for_it():
     """A server that knows nothing of ``ee_frames`` reads poses at a frame the client side states for it."""
     policy, session = _mock_remote_policy(CHUNKED_STACK)
     session.protocol_version = protocol.ProtocolVersion.V3
@@ -1064,43 +1106,38 @@ def test_a_frame_codec_around_a_server_that_declares_none_states_the_frames_for_
     assert _frames_meta(framed.meta())[keys.EE_POSE] == DEFAULT_FRAME
 
 
-@pytest.mark.parametrize('start_run', [False, True], ids=['meta', 'run'])
-def test_invalid_v3_stack_does_not_cache_metadata(runtime, start_run):
+def test_policy_meta_holds_only_client_values_and_makes_no_call():
+    policy = RemotePolicy('websocket', _address('localhost', 0))
+    client = MagicMock()
+    policy._client = client
+
+    assert policy.meta() == {policy_keys.TYPE: 'remote'}
+    assert client.method_calls == []
+
+
+def test_waiting_for_the_server_opens_no_session():
+    policy = RemotePolicy('websocket', _address('localhost', 0))
+    client = MagicMock()
+    policy._client = client
+
+    policy.wait_for_server()
+    client.wait_for_server.assert_called_once()
+    client.new_session.assert_not_called()
+
+
+def test_a_run_with_an_invalid_v3_stack_records_no_metadata(runtime):
     policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: spec.component('unknown_processor')})
     session.protocol_version = protocol.ProtocolVersion.V3
 
     with pytest.raises(ValueError, match='Unknown local-stack entry'):
-        if start_run:
-            runtime.start(policy)
-        else:
-            policy.meta()
-    with pytest.raises(ValueError, match='Unknown local-stack entry'):
-        policy.meta()
-    assert session.close.call_count == 2
+        runtime.start(policy)
+    assert runtime.metadata_snapshot() == {}
+    assert session.close.call_count == 1
 
     session.metadata = CHUNKED_STACK
-    metadata = policy.meta()
-    assert metadata[ACTION_FPS] == 10
-    assert policy.meta() == metadata
-    assert session.close.call_count == 3
-
-
-def test_failed_metadata_session_close_does_not_cache_metadata():
-    policy, session = _mock_remote_policy(CHUNKED_STACK)
-    session.protocol_version = protocol.ProtocolVersion.V3
-    session.close.side_effect = RuntimeError('cleanup failed')
-
-    for _ in range(2):
-        with pytest.raises(RuntimeError, match='cleanup failed'):
-            policy.meta()
+    runtime.start(policy).close()
+    assert runtime.metadata_snapshot()[ACTION_FPS] == 10
     assert session.close.call_count == 2
-
-    session.close.side_effect = None
-    session.metadata = {offboard_keys.LOCAL_STACK: ChunkedSchedule(fps=20).to_spec()}
-    metadata = policy.meta()
-    assert metadata[ACTION_FPS] == 20
-    assert policy.meta() == metadata
-    assert session.close.call_count == 3
 
 
 @pytest.mark.parametrize('fails', [False, True])

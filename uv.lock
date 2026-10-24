@@ -5817,7 +5817,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/1a/35/2fdfb01be020f4374
 
 [[package]]
 name = "positronic-model-server"
-version = "0.2.3"
+version = "0.3.0"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },
@@ -5850,10 +5850,12 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.39.1"
+version = "0.40.1"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
+    { name = "packaging", version = "26.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra == 'extra-10-positronic-yam' or extra != 'extra-10-positronic-lerobot'" },
     { name = "positronic-evals" },
     { name = "pydantic" },
     { name = "typing-extensions" },
@@ -5862,6 +5864,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "packaging", specifier = ">=24" },
     { name = "positronic-evals", editable = "evals" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "typing-extensions", specifier = ">=4.12.2" },
