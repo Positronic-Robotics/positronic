@@ -710,8 +710,8 @@ def test_a_streamed_target_past_the_chain_limit_stops_short_of_where_the_chain_h
     rig.tick(0.9)
     asked = _asked(rig)[sent:]
     halts_above = I2RT_YAM_LIMITS[JOINT3, 1] + I2RT_HALT_PAST_LIMIT_RAD
-    assert np.max(asked[:, JOINT3]) < halts_above - yam._CHAIN_LIMIT_MARGIN_RAD
-    assert asked[-1][JOINT3] == pytest.approx(I2RT_YAM_LIMITS[JOINT3, 1] - yam._CHAIN_LIMIT_MARGIN_RAD)
+    assert np.max(asked[:, JOINT3]) < halts_above - yam._Arm._CHAIN_LIMIT_MARGIN_RAD
+    assert asked[-1][JOINT3] == pytest.approx(I2RT_YAM_LIMITS[JOINT3, 1] - yam._Arm._CHAIN_LIMIT_MARGIN_RAD)
 
 
 def test_a_streamed_target_inside_the_model_and_the_chain_limits_reaches_the_chain_unchanged(rig):
@@ -734,7 +734,7 @@ def test_a_blocking_move_past_the_chain_limit_never_sends_a_target_past_it(world
     _until_answered(rig, answer)
     with pytest.raises(DeviceFault):
         answer.result()
-    assert np.max(_asked(rig)[sent:, JOINT3]) <= I2RT_YAM_LIMITS[JOINT3, 1] - yam._CHAIN_LIMIT_MARGIN_RAD + 1e-12
+    assert np.max(_asked(rig)[sent:, JOINT3]) <= I2RT_YAM_LIMITS[JOINT3, 1] - yam._Arm._CHAIN_LIMIT_MARGIN_RAD + 1e-12
 
 
 def test_the_park_holds_its_correction_past_the_joint_range(rig):
@@ -1203,13 +1203,14 @@ def test_every_call_the_driver_makes_while_the_motors_are_on_is_a_site(world):
 
 
 CHAIN_SITES = [Site.CHAIN_READ, Site.CHAIN_COMMAND]
+ONCE_PER_CHAIN_SITES = [Site.LIMITS_READ]  # read once, by the start move
 
 
-@pytest.mark.parametrize('site', [site for site in Site if site not in CHAIN_SITES])
+@pytest.mark.parametrize('site', [site for site in Site if site not in CHAIN_SITES + ONCE_PER_CHAIN_SITES])
 def test_a_fault_at_a_site_off_the_chain_parks_releases_and_is_raised_again(site):
     watch = Watch(site)
     rig = Rig(watch=watch)
-    if site not in (Site.META_EMIT, Site.LIMITS_READ):  # each is read or sent once, as the run starts
+    if site is not Site.META_EMIT:  # the metadata goes out once, as the run starts
         rig.raise_arm()
     watch.armed = True
     rig.tick()  # the fault lands in the run, before anything asks the driver to stop
@@ -1264,6 +1265,22 @@ def test_a_chain_fault_parks_releases_and_puts_an_error_on_the_state_and_the_gri
         error = _last(emitter)
         assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
         assert 'The YAM arm is lost: the chain failed: collaborator failed' in str(_last(emitter))
+    rig.finish()
+
+
+def test_a_chain_whose_limits_cannot_be_read_parks_releases_and_holds_the_arm_as_lost():
+    watch = Watch(Site.LIMITS_READ)
+    watch.armed = True
+    rig = Rig(watch=watch)
+    rig.tick(10)
+
+    assert not watch.armed
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+    for emitter in (rig.states, rig.grips):
+        error = _last(emitter)
+        assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+        assert 'The YAM arm is lost: the chain failed: collaborator failed' in str(error)
     rig.finish()
 
 
