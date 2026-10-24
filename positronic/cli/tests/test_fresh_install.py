@@ -99,7 +99,9 @@ ANSWERS: dict[str, object] = {
         ],
     },
     routes.CATALOG_EVALS: {'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': [], 'composable': True}]},
-    routes.CATALOG_TASKS: {'tasks': [{'id': TASK, 'embodiment': 'franka', 'task': 'spoons into a tote'}]},
+    routes.CATALOG_TASKS: {
+        'tasks': [{'id': TASK, 'embodiment': 'franka', 'rig_shapes': ['franka', 'yam'], 'task': 'spoons into a tote'}]
+    },
     routes.RANKINGS_LIST: {
         'boards': [
             {

@@ -6,7 +6,7 @@ names, and a customer grant adds the rig's evals and tasks.
 
 from __future__ import annotations
 
-from platform_client.enums import CameraVantage, Placement, StartPose
+from platform_client.enums import CameraVantage, Placement, RigShape, StartPose
 from platform_client.eval_plan import Clutter
 from platform_client.tasks import TaskRef
 from positronic_evals.evals import EvalRef
@@ -17,15 +17,18 @@ from pydantic import BaseModel, Field
 class TaskSummary(BaseModel):
     """`catalog.tasks` — one task the caller may put in a plan, as the catalogue states it.
 
-    `tote_placement` and `external_cameras` list the sides a plan may choose, or ask `random` to
-    draw from. `external_cameras` is keyed by the mount name the task defines.
+    `rig_shapes` lists the rig shapes the task runs on. `tote_placement` and `external_cameras` list
+    the sides a plan may choose, or ask `random` to draw from. `external_cameras` is keyed by the
+    mount name the task defines.
     `default_cap_per_episode_sec` applies when the plan states no cap. `clutter` applies when the
     plan states none; a task carrying neither draws no clutter objects. `start_pose` applies when
     the plan states none.
     """
 
     id: TaskRef
+    # TODO: remove once no installed client requires it; `rig_shapes` names the rig shapes.
     embodiment: str
+    rig_shapes: list[Slugged[RigShape]]
     task: str
     setup: str = ''
     total_items: int | None = None
