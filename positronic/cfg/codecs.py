@@ -60,7 +60,7 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 default_ee_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME)
 # A server built for poses at the Franka Hand point, where the FR3 and the bundled panda report ``DEFAULT_FRAME``,
 # states that frame with this codec in its pipeline. A server that states no frame observes no pose.
-franka_hand_frame = cfn.Config(ChangeEEFrame, site=DEFAULT_FRAME, transform=geom.Transform3D.identity)
+franka_hand_frame = cfn.Config(ChangeEEFrame, frame=default_ee_frame)
 
 
 @cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)
@@ -73,7 +73,7 @@ def compose_data(obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: 
     """
     result = obs & action
     if ee_frame is not None:
-        result = ChangeEEFrame(ee_frame.site, ee_frame.offset) | result
+        result = ChangeEEFrame(ee_frame) | result
     if flip_grip:
         result = FlipGrip() | result
     if binarize_grip:

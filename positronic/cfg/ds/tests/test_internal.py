@@ -58,4 +58,4 @@ def test_a_sim_recording_states_the_site_of_the_bundled_model():
 def test_training_refuses_to_move_a_recording_from_before_485():
     recording = _recording(**{CONTROL_FRAME: EE_LINK, roboarm_keys.URDF: bundled_franka_model()[roboarm_keys.URDF]})
     with pytest.raises(ValueError, match=EE_LINK):
-        ChangeEEFrame(DEFAULT_FRAME, OFFSET)(REAL_ROBOT_TRANSFORM(recording))
+        ChangeEEFrame(EEFrame(site=DEFAULT_FRAME, offset=OFFSET))(REAL_ROBOT_TRANSFORM(recording))

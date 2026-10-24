@@ -55,7 +55,7 @@ def pipeline(
 ) -> PolicyDeployment:
     local = Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize(512, 512))
     if ee_frame is not None:
-        local = Sequential(ChangeEEFrame(ee_frame.site, ee_frame.offset), local)
+        local = Sequential(ChangeEEFrame(ee_frame), local)
     return PolicyDeployment(local, codec)
 
 

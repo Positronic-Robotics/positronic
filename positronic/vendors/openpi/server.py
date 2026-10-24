@@ -217,7 +217,7 @@ def pipeline(codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_
     local = Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize(224, 224))
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
-        local = Sequential(ChangeEEFrame(ee_frame.site, ee_frame.offset), local)
+        local = Sequential(ChangeEEFrame(ee_frame), local)
     return PolicyDeployment(local, codec)
 
 

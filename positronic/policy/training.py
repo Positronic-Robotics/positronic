@@ -16,18 +16,13 @@ _QUAT = geom.Rotation.Representation.QUAT
 
 
 class ChangeEEFrame(EpisodeTransform):
-    """Move recorded poses off ``site`` by ``transform``, and state where they now sit in ``EE_FRAMES``.
+    """Move recorded poses into ``frame``, and state where they now sit in ``EE_FRAMES``.
 
-    Every field it moves must be recorded at ``site`` with no offset, since the transform is measured from there.
+    Every field it moves must be recorded at ``frame.site`` with no offset, since the offset is measured from there.
     """
 
-    def __init__(
-        self,
-        site: str,
-        transform: geom.Transform3D,
-        fields: Sequence[str] = (keys.EE_POSE, keys.TARGET_EE_POSE, keys.ROBOT_COMMAND),
-    ):
-        self._frame = EEFrame(site=site, offset=transform)
+    def __init__(self, frame: EEFrame, fields: Sequence[str] = (keys.EE_POSE, keys.TARGET_EE_POSE, keys.ROBOT_COMMAND)):
+        self._frame = frame
         self._fields = tuple(fields)
 
     def __call__(self, episode: Episode) -> Episode:

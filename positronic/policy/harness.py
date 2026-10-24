@@ -15,7 +15,7 @@ from opentelemetry.trace import Span
 
 import pimm
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
-from positronic import geom, keys, telemetry, telemetry_keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.local_dataset import LocalDatasetWriter
@@ -257,7 +257,7 @@ class Harness(pimm.ControlSystem):
         for channel in self._embodiment.commands:
             if (frame := rig.get(f'{channel}{keys.POSE_SUFFIX}')) is not None:
                 keys_by_site[frame.site].append(channel)
-        changes = (ChangeEEFrame(site, geom.Transform3D.identity, tuple(names)) for site, names in keys_by_site.items())
+        changes = (ChangeEEFrame(EEFrame(site=site), tuple(names)) for site, names in keys_by_site.items())
         return reduce(or_, changes)
 
     def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:

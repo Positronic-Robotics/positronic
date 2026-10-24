@@ -156,7 +156,7 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 "EE pose" has no universal meaning: our rigs report the frame their model calls `default`, DROID reports the flange (`panda_link8`), and RoboLab reports its own `eef_frame` at the gripper coupler (`robolab_eef`). A checkpoint speaks whichever frame its training data was in, so serving it on a rig whose `default` sits elsewhere misreads every pose and every command by one constant transform — silently. See [the frame contract](../../drivers/roboarm/README.md) for what `default` is and what each embodiment owes it.
 
-`ChangeEEFrame(site, T)` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
+`ChangeEEFrame(EEFrame(site=site, offset=T))` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
 
 The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
 

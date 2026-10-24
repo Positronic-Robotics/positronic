@@ -21,7 +21,6 @@ from positronic.cfg import codecs as cfg_codecs
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry, parse_ee_frames
-from positronic.geom import Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
@@ -867,16 +866,14 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():
-    local = Sequential(ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity), ChunkedSchedule(fps=10))
+    local = Sequential(ChangeEEFrame(EEFrame(site=DEFAULT_FRAME)), ChunkedSchedule(fps=10))
     with pytest.raises(ValueError, match='Only one side'):
-        PolicyDeployment(local, codec=ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity))
+        PolicyDeployment(local, codec=ChangeEEFrame(EEFrame(site=DEFAULT_FRAME)))
 
 
 def test_pipeline_takes_frame_conversions_of_different_signals_on_each_side():
-    local = Sequential(
-        ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10)
-    )
-    PolicyDeployment(local, codec=ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.TARGET_EE_POSE,)))
+    local = Sequential(ChangeEEFrame(EEFrame(site=DEFAULT_FRAME), keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    PolicyDeployment(local, codec=ChangeEEFrame(EEFrame(site=DEFAULT_FRAME), keys=(keys.TARGET_EE_POSE,)))
 
 
 @pytest.fixture
@@ -1033,11 +1030,11 @@ def test_policy_meta_states_the_frames_a_v1_client_stack_declares():
 
 def test_policy_meta_states_the_frames_both_sides_of_a_split_deployment_declare(served):
     local = Sequential(
-        ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.EE_POSE,)),
+        ChangeEEFrame(EEFrame(site=DEFAULT_FRAME), keys=(keys.EE_POSE,)),
         PauseOnUnavailable(),
         ChunkedSchedule(fps=10, horizon_sec=0.2),
     )
-    codec = ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.TARGET_EE_POSE,))
+    codec = ChangeEEFrame(EEFrame(site=DEFAULT_FRAME), keys=(keys.TARGET_EE_POSE,))
     address, _, _ = served(local=local, codec=codec)
     frames = _frames_meta(RemotePolicy('websocket', address).meta())
     assert frames == {keys.EE_POSE: DEFAULT_FRAME, keys.TARGET_EE_POSE: DEFAULT_FRAME}
@@ -1061,7 +1058,7 @@ def test_a_frame_codec_around_a_server_that_declares_none_states_the_frames_for_
     """A server that knows nothing of ``ee_frames`` reads poses at a frame the client side states for it."""
     policy, session = _mock_remote_policy(CHUNKED_STACK)
     session.protocol_version = protocol.ProtocolVersion.V3
-    framed = Sequential(ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity), policy)
+    framed = Sequential(ChangeEEFrame(EEFrame(site=DEFAULT_FRAME)), policy)
     assert _frames_meta(framed.meta())[keys.EE_POSE] == DEFAULT_FRAME
 
 
