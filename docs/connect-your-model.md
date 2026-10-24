@@ -243,7 +243,8 @@ the model takes encoded inputs and returns model-native outputs. Client codecs
 belong in `local`, where they can mix with processors. For example,
 `RestrictImageSize(224, 224)` before the remote call limits upload volume.
 If the model resizes the frames again, `RestrictImageSize(resample=Resample.AREA)` scales them faster.
-The client JPEG-encodes each frame before it sends it. Set `compress_images=False` on the
+The client JPEG-encodes each frame before it sends it, unless the session has a frame ring
+([Offboard Protocol](../positronic/offboard/README.md)). Set `compress_images=False` on the
 deployment to receive raw frames.
 The client sets the JPEG quality with `--policy.jpeg_quality`, 90 by default.
 
@@ -283,7 +284,8 @@ Every message is msgpack. Numpy arrays use a custom extension:
 }
 ```
 
-An image frame travels as JPEG unless the deployment sets `compress_images=False`. One envelope
+An image frame travels as JPEG unless the deployment sets `compress_images=False` or the session
+has a frame ring. One envelope
 carries one `(H, W, 3)` frame or a `(T, H, W, 3)` stack:
 
 ```python

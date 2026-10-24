@@ -5,6 +5,7 @@ The client side, and the facts both ends share, are ``positronic_wire``.
 
 import abc
 import dataclasses
+import socket
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -104,3 +105,11 @@ class Wire(abc.ABC):
     @abc.abstractmethod
     async def stop(self) -> None:
         """End the wire, and every session on it."""
+
+    def bind_frame_channel(self) -> socket.socket | None:
+        """A listening socket for the frame channel beside where this wire serves, or None where it has none.
+
+        A frame channel carries file descriptors from a client on this host, so the client hands over shared
+        memory in place of image bytes. Call this once ``start`` returns; the caller serves and closes the socket.
+        """
+        return None

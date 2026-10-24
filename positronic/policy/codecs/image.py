@@ -8,7 +8,13 @@ from typing import Any, Self
 import cv2
 import numpy as np
 from PIL import Image as PilImage
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, JpegEncoding, encode_images, encode_jpeg
+from positronic_model_server.serialization import (
+    DEFAULT_JPEG_QUALITY,
+    JpegEncoding,
+    encode_images,
+    encode_jpeg,
+    is_image,
+)
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic.dataset.transforms.episode import EpisodeTransform
@@ -111,7 +117,7 @@ class RestrictImageSize(Codec):
 
     def _restrict(self, value: Any) -> Any:
         # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
-        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+        if is_image(value):
             # A TemporalStack emits a (T, H, W, 3) stack, so bound each frame rather than the stack's first axis.
             if value.ndim == 4:
                 return np.stack(self._scaled_frames(value))

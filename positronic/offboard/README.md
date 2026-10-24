@@ -134,6 +134,49 @@ The client names each part: `--policy=.remote --policy.wire=websocket --policy.a
 --policy.address.query='fps=10'`, and forwards the query string verbatim. Credentials stay a
 separate `headers` argument.
 
+#### The frame ring
+
+A server on a wire with a frame channel takes each observation's images through shared memory instead of the
+message. Only the websocket wire on a Unix socket has a frame channel (`wire/README.md`). The server declares
+`"frame_ring": true` in the ready handshake. A client whose wire has a frame channel then creates a ring, hands
+the descriptor over, and sends a reference in place of every image. A client that ignores the declaration keeps
+sending whole images, and so does a client whose wire has no frame channel.
+
+- **The ring is a sealed `memfd`.** The client maps it writable, seals it with
+  `F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_FUTURE_WRITE`, and only then hands the descriptor over. The server maps
+  it read-only and cannot write it, resize it, or punch a hole in it. That holds whatever the server's code
+  does, so a server that runs untrusted code gets the frames and no way to change them.
+- **The descriptor travels over the wire's frame channel.** The server gets the channel from
+  `server_wire.Wire.bind_frame_channel`, and the client from `ClientWire.frame_channel_dialer`. On the websocket
+  wire the channel sits beside the session socket, and each end builds its path from the socket path it already
+  holds, so a bind mount that gives the two processes different names for one directory still lands them on the
+  same socket. A session hands the server a ring with empty slots when it opens. A client whose path reaches no
+  channel — a hard link to the session socket, or a bind mount of the socket file alone — takes no ring, logs
+  why, and sends whole images. The client sends the descriptor with `SCM_RIGHTS`, names the session ID from the
+  handshake, and waits for the server to map it.
+  A session that reconnects hands a new ring over, under the new session ID.
+- **A session with a ring never moves its images to the message.** A channel that stops answering when the ring
+  must grow raises, and so does a reconnect to a session that has no ring.
+- **A server may keep a frame for four calls.** `frame_ring.CALLS_A_FRAME_STAYS_VALID` is that count, and the
+  ring holds one slot per call. A frame the server gets is a view of the ring, not a copy. It is valid for the
+  call that delivers it and the three calls after it that reach the server. The fifth call writes the same slot,
+  and a view kept that long shows the new pixels, with no error. A model that keeps an image longer copies it.
+  The client writes a slot only for a message that serialised, so a message it refuses changes no slot.
+- **A torn slot is refused.** One round trip is in flight at a time. Each slot carries a sequence number before
+  its payload and one after it; a reader that finds either one different from the reference refuses that
+  observation rather than serving other pixels under it.
+- **A larger frame grows the ring.** The client creates a bigger one and hands it over before it sends any
+  reference to it. The server holds the newest mapping alone, and a view it built earlier keeps its own
+  mapping alive for as long as that view lives, so the view stays readable.
+- **The views are read-only.** Code that writes an observation's image in place raises; a codec that resizes or
+  copies is unaffected.
+- **A ring session does not apply `compress_images`.** A session with a ring sends its images raw through the
+  ring, whatever `compress_images` says. So `compress_images` is not recommended on a server that takes frame
+  rings over `websocket_unix`. A session without a ring applies `compress_images` from its first call.
+
+`--frame_ring=false` on the server keeps every image in the message. A server declares no ring where the
+kernel seals no `memfd` — a macOS server, or Linux before 5.1 — or where none of its wires has a frame channel.
+
 ### Session Flow
 
 #### 1. Handshake
@@ -182,10 +225,12 @@ This metadata tells the client:
   Processor and codec names and versions resolve only through `COMPONENTS` in
   `positronic.policy.spec`; an unsupported declaration fails before the policy emits commands.
 - `compress_images` — whether the client JPEG-encodes frames before
-  sending. It is true unless the deployment sets it false.
+  sending. It is true unless the deployment sets it false. A session with a frame ring sends raw frames
+  whatever it says (see above).
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
   records it in the policy metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
+- `frame_ring` — true when the server takes images through shared memory (see above); absent when it does not
 
 #### Compatibility and deprecation
 
@@ -248,7 +293,7 @@ After handshake, the client streams observations and receives actions:
 
 **Client → Server (Observation):**
 
-Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64. Each image frame travels as JPEG unless the deployment sets `compress_images` false (see above). `deserialise()` decodes each frame to the uint8 array below. `docs/connect-your-model.md` carries the full key table and the JPEG envelope.
+Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64. Each image frame travels as JPEG unless the deployment sets `compress_images` false, or the session has a frame ring (see above). `deserialise()` decodes each frame to the uint8 array below. `docs/connect-your-model.md` carries the full key table and the JPEG envelope.
 
 ```json
 {

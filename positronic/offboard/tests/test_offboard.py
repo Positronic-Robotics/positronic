@@ -1,6 +1,19 @@
 import asyncio
+import ctypes
+import ctypes.util
+import errno
+import fcntl
+import logging
+import mmap
+import os
+import socket
+import threading
+import time
+from collections.abc import Callable, Generator
 from dataclasses import replace
+from pathlib import Path
 from types import MappingProxyType
+from typing import NamedTuple
 from unittest.mock import AsyncMock
 
 import numpy as np
@@ -21,6 +34,7 @@ from positronic.drivers.roboarm.command import (
     to_wire,
 )
 from positronic.geom import Rotation, Transform3D
+from positronic.offboard import frame_ring
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.protocol import deserialise, serialise, typed_commands
 
@@ -318,3 +332,321 @@ class TestServedCommandDecode:
 
         assert isinstance(from_envelope, CartesianPosition) and isinstance(from_bare, CartesianPosition)
         np.testing.assert_allclose(from_bare.pose.translation, from_envelope.pose.translation, atol=1e-6)
+
+
+SESSION_ID = 'session-under-test'
+
+pytestmark_ring = pytest.mark.skipif(
+    not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which Linux has and macOS has not'
+)
+
+
+def _bind_frame_channel(socket_path: str) -> socket.socket:
+    """The frame channel a websocket wire binds beside the Unix socket at ``socket_path``."""
+    channel = wire.frame_channel_path(Path(socket_path))
+    assert channel is not None
+    return websocket_wire.claim_socket_path(channel, socket.SOCK_SEQPACKET)
+
+
+def _frame_channel_dialer(socket_path: str) -> Callable[[float], socket.socket]:
+    """How the Unix websocket wire reaches the frame channel beside ``socket_path``."""
+    address = wire.UnixSocketAddress(Path(socket_path), wire.SESSION_PATH, '')
+    dial = websocket.WebsocketUnixClientWire().frame_channel_dialer(address)
+    assert dial is not None
+    return dial
+
+
+@pytest.fixture
+def frame_channel(socket_path: str) -> Generator[frame_ring.FrameChannel, None, None]:
+    channel = frame_ring.FrameChannel()
+    channel.start(_bind_frame_channel(socket_path))
+    channel.open_session(SESSION_ID)
+    yield channel
+    channel.close()
+
+
+@pytest.fixture
+def frame_writer(socket_path: str, frame_channel) -> Generator[frame_ring.FrameWriter, None, None]:
+    writer = frame_ring.FrameWriter(_frame_channel_dialer(socket_path), SESSION_ID)
+    yield writer
+    writer.close()
+
+
+_PIXELS = np.random.default_rng(0)
+
+
+def _image(height: int = 48, width: int = 64) -> np.ndarray:
+    return _PIXELS.integers(0, 256, (height, width, 3), dtype=np.uint8)
+
+
+def _packed(writer: frame_ring.FrameWriter, obs) -> dict:
+    """``obs`` as ``writer`` packs it, with its images written into the ring."""
+    packed, write = writer.pack(obs)
+    if write is not None:
+        write()
+    return packed
+
+
+def _over_the_wire(obs):
+    """``obs`` as the server reads it, after a msgpack round trip."""
+    return deserialise(serialise(obs))
+
+
+@pytestmark_ring
+def test_a_ring_carries_every_image_of_an_observation_byte_identical(frame_channel, frame_writer):
+    image, stack = _image(), np.stack([_image(), _image()])
+    obs = {'image.left': image, keys.GRIP: 0.5, 'nested': {'frames': [image, stack]}}
+
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, obs)))
+
+    np.testing.assert_array_equal(served['image.left'], image)
+    np.testing.assert_array_equal(served['nested']['frames'][0], image)
+    np.testing.assert_array_equal(served['nested']['frames'][1], stack)
+    assert served[keys.GRIP] == 0.5
+
+
+class _Pair(NamedTuple):
+    image: np.ndarray
+    grip: float
+
+
+class _Frames(list):
+    pass
+
+
+@pytestmark_ring
+def test_every_container_the_wire_carries_reaches_the_server_as_the_message_path_delivers_it(
+    frame_channel, frame_writer
+):
+    """The wire carries a tuple, a list and any subclass of either as a plain array, and a mapping as a dict."""
+    image = _image()
+    obs = {
+        'pair': _Pair(image, 0.5),
+        'tuple': (image, 0.5),
+        'frames': _Frames([image]),
+        'view': MappingProxyType({'image': image}),
+        keys.TASK: 'pick',
+    }
+
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, obs)))
+
+    for key in ('pair', 'tuple', 'frames'):
+        assert type(served[key]) is list, key
+        np.testing.assert_array_equal(served[key][0], image)
+    assert served['pair'][1] == served['tuple'][1] == 0.5
+    np.testing.assert_array_equal(served['view']['image'], image)
+    assert served[keys.TASK] == 'pick'
+
+
+@pytestmark_ring
+def test_a_packed_observation_leaves_the_pixels_out_of_the_message(frame_writer):
+    image = _image(720, 1280)
+
+    message = serialise(_packed(frame_writer, {'image.left': image}))
+
+    assert len(message) < image.nbytes // 100
+
+
+@pytestmark_ring
+def test_an_observation_with_no_image_creates_no_ring_and_no_write(frame_writer):
+    assert frame_writer.pack({keys.GRIP: 0.5}) == ({keys.GRIP: 0.5}, None)
+    assert frame_writer._ring is None
+
+
+@pytestmark_ring
+def test_a_sealed_ring_refuses_a_write_a_resize_and_a_hole():
+    ring = frame_ring.FrameRing(1024, slots=2)
+    try:
+        with pytest.raises(PermissionError):
+            mmap.mmap(ring.fd, 1024, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
+        with pytest.raises(PermissionError):
+            os.write(ring.fd, b'x')
+        with pytest.raises(PermissionError):
+            os.ftruncate(ring.fd, 1 << 20)
+        libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+        # FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE, from linux/falloc.h.
+        assert libc.fallocate(ring.fd, 0x01 | 0x02, ctypes.c_int64(0), ctypes.c_int64(1024)) == -1
+        assert ctypes.get_errno() == errno.EPERM
+    finally:
+        ring.close()
+
+
+@pytestmark_ring
+def test_a_channel_that_answers_and_refuses_the_ring_still_raises(socket_path, frame_channel):
+    """Only a path that reaches no channel turns the ring off. A channel that refuses the handover raises."""
+    writer = frame_ring.FrameWriter(_frame_channel_dialer(socket_path), 'a-session-not-open-here')
+    try:
+        with pytest.raises(RuntimeError, match='did not map the frame ring'):
+            _packed(writer, {'image.left': _image()})
+    finally:
+        writer.close()
+
+
+@pytestmark_ring
+def test_a_frame_view_keeps_its_pixels_for_the_calls_a_frame_stays_valid_and_no_longer(frame_channel, frame_writer):
+    first = _image()
+    view = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, {'image.left': first})))['image.left']
+    for _ in range(frame_ring.CALLS_A_FRAME_STAYS_VALID - 1):
+        _packed(frame_writer, {'image.left': _image()})
+
+    np.testing.assert_array_equal(view, first)
+    _packed(frame_writer, {'image.left': _image()})
+    assert not np.array_equal(view, first)
+
+
+@pytestmark_ring
+def test_a_slot_written_over_before_it_is_read_is_refused(frame_channel, frame_writer):
+    stale = _over_the_wire(_packed(frame_writer, {'image.left': _image()}))
+    for _ in range(frame_ring.CALLS_A_FRAME_STAYS_VALID):
+        _packed(frame_writer, {'image.left': _image()})
+
+    with pytest.raises(frame_ring.TornFrame):
+        frame_channel.resolve(SESSION_ID, stale)
+
+
+@pytestmark_ring
+def test_a_reference_that_points_outside_the_ring_is_refused(frame_channel, frame_writer):
+    packed = _over_the_wire(_packed(frame_writer, {'image.left': _image()}))
+    packed['image.left'][frame_ring._OFFSET] = 1 << 30
+
+    with pytest.raises(ValueError, match='outside the ring'):
+        frame_channel.resolve(SESSION_ID, packed)
+
+
+@pytestmark_ring
+def test_a_reference_from_a_session_that_handed_over_no_ring_is_refused(frame_channel):
+    frame_channel.open_session('another-session')
+
+    with pytest.raises(RuntimeError, match='before it handed over a ring'):
+        frame_channel.resolve('another-session', {frame_ring._RING: True})
+
+
+@pytestmark_ring
+def test_a_larger_frame_grows_the_ring_and_leaves_the_earlier_view_readable(frame_channel, frame_writer):
+    small, large = _image(8, 8), _image(64, 64)
+
+    first = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, {'image.left': small})))
+    second = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, {'image.left': large})))
+
+    np.testing.assert_array_equal(second['image.left'], large)
+    np.testing.assert_array_equal(first['image.left'], small)
+
+
+@pytestmark_ring
+def test_an_unsealed_descriptor_is_refused_before_it_is_mapped():
+    """An unsealed ring may shrink under the mapping, and the next read of a dropped page is a SIGBUS."""
+    fd = os.memfd_create('unsealed', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    os.ftruncate(fd, 1 << 16)
+    try:
+        with pytest.raises(ValueError, match='without the seals'):
+            frame_ring.MappedRing(fd, slots=2, slot_bytes=1024)
+    finally:
+        os.close(fd)
+
+
+@pytestmark_ring
+def test_a_descriptor_sealed_beyond_what_the_server_needs_is_accepted():
+    """The server needs its seals present, not alone: a peer may seal the ring against further seals."""
+    ring = frame_ring.FrameRing(1024, slots=2)
+    try:
+        # F_SEAL_SEAL, from linux/fcntl.h: no further seal may be added.
+        fcntl.fcntl(ring.fd, frame_ring._F_ADD_SEALS, 0x0001)
+
+        assert frame_ring.MappedRing(ring.fd, slots=2, slot_bytes=1024).array is not None
+    finally:
+        ring.close()
+
+
+@pytestmark_ring
+def test_a_reference_naming_a_dtype_the_wire_refuses_is_refused(frame_channel, frame_writer):
+    """An object dtype reads the ring's bytes as pointers into this process, and touching one segfaults."""
+    packed = _over_the_wire(_packed(frame_writer, {'image.left': _image()}))
+    packed['image.left'][frame_ring._DTYPE] = '|O'
+
+    with pytest.raises(ValueError, match='which the wire does not carry'):
+        frame_channel.resolve(SESSION_ID, packed)
+
+
+@pytestmark_ring
+def test_an_image_whose_dtype_the_wire_refuses_never_reaches_the_ring(frame_writer):
+    """``is_image`` asks about shape alone, so the ring keeps the serializer's dtype policy itself."""
+    forgeable = np.empty((4, 4, 3), dtype=object)
+    forgeable[:] = 'not pixels'
+
+    packed = _packed(frame_writer, {'image.left': forgeable})
+
+    assert packed['image.left'] is forgeable
+    assert frame_writer._ring is None
+    with pytest.raises(ValueError, match='Unsupported dtype'):
+        serialise(packed)
+
+
+@pytestmark_ring
+def test_a_float_image_travels_through_the_ring(frame_channel, frame_writer):
+    """The ring carries every dtype the wire carries, not the uint8 frames alone."""
+    depth = _PIXELS.random((8, 8, 3)).astype(np.float32)
+
+    packed = _packed(frame_writer, {'image.left': depth})
+
+    # The message path carries a float image too, so only the reference proves the ring took this one.
+    assert isinstance(packed['image.left'], dict) and frame_ring._RING in packed['image.left']
+    served = frame_channel.resolve(SESSION_ID, _over_the_wire(packed))
+    np.testing.assert_array_equal(served['image.left'], depth)
+    assert served['image.left'].dtype == np.float32
+
+
+@pytestmark_ring
+@pytest.mark.parametrize('refused', ['memfd_create', 'seals'])
+def test_a_host_that_builds_no_ring_says_so_at_error_level(monkeypatch, caplog, refused):
+    def refuse(*_args, **_kwargs):
+        raise OSError(errno.EPERM, 'refused under test')
+
+    if refused == 'memfd_create':
+        monkeypatch.setattr(os, 'memfd_create', refuse)
+    else:
+        monkeypatch.setattr(frame_ring.fcntl, 'fcntl', refuse)
+
+    with caplog.at_level(logging.WARNING, logger=frame_ring.logger.name):
+        assert not frame_ring._ring_is_supported()
+
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert 'No frame ring' in caplog.records[0].message
+
+
+@pytestmark_ring
+def test_closing_a_channel_that_waits_for_a_handover_ends_its_thread(socket_path):
+    channel = frame_ring.FrameChannel()
+    channel.start(_bind_frame_channel(socket_path))
+    accepting = channel._thread
+
+    channel.close()
+
+    assert accepting is not None and not accepting.is_alive()
+
+
+@pytestmark_ring
+def test_closing_a_channel_before_its_accept_thread_runs_raises_nothing_in_that_thread(socket_path, monkeypatch):
+    released = threading.Event()
+    accept_forever = frame_ring.FrameChannel._accept_forever
+
+    def held_until_released(self, *args):
+        released.wait()
+        accept_forever(self, *args)
+
+    monkeypatch.setattr(frame_ring.FrameChannel, '_accept_forever', held_until_released)
+    raised: list[BaseException | None] = []
+    monkeypatch.setattr(threading, 'excepthook', lambda failure: raised.append(failure.exc_value))
+    channel = frame_ring.FrameChannel()
+    listener = _bind_frame_channel(socket_path)
+    channel.start(listener)
+    accepting = channel._thread
+    closing = threading.Thread(target=channel.close)
+    closing.start()
+    while listener.fileno() != -1:
+        time.sleep(0.01)
+
+    released.set()
+    closing.join(timeout=frame_ring.HANDOVER_TIMEOUT_SEC)
+
+    assert accepting is not None and not accepting.is_alive()
+    assert raised == []

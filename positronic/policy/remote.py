@@ -5,10 +5,9 @@ from contextlib import closing
 from threading import Lock, Thread
 from typing import Any
 
-import numpy as np
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import ProtocolVersion
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg, is_image
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
@@ -24,7 +23,7 @@ from .spec import from_spec
 
 def _prepare_value(value: Any, jpeg_quality: int) -> Any:
     # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
-    if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+    if is_image(value):
         # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's message cap.
         return encode_jpeg(value, jpeg_quality)
     if isinstance(value, cabc.Mapping):
@@ -50,10 +49,12 @@ def round_trip(
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
-    Image preparation has its own span; the inference span covers only the server round trip.
+    Image preparation has its own span; the inference span covers only the server round trip. A session
+    with a frame ring sends its images raw through the ring and does not apply ``compress_images``.
     """
     with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
-        prepared = prepare_obs(obs, compress_images, jpeg_quality)
+        compress = compress_images and not session.sends_frames_through_ring
+        prepared = prepare_obs(obs, compress, jpeg_quality)
     with telemetry.span(telemetry_keys.SPAN_POLICY_INFER) as span:
         try:
             return session.infer(prepared)
@@ -116,7 +117,7 @@ class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
     ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG
-    quality of images sent to a server that asks for compressed images.
+    quality of the images a session sends in the message to a server that asks for compressed images.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -137,6 +138,7 @@ class RemotePolicy(Policy):
         )
         self._server_meta: dict[str, Any] | None = None
         self._client_meta: dict[str, Any] = {}
+        self._sends_frames_through_ring = False
         self._jpeg_quality = jpeg_quality
 
     def meta(self) -> dict[str, Any]:
@@ -148,9 +150,11 @@ class RemotePolicy(Policy):
                     if session.protocol_version is ProtocolVersion.V3
                     else {}
                 )
+                through_ring = session.sends_frames_through_ring
             self._server_meta, self._client_meta = server_meta, client_meta
+            self._sends_frames_through_ring = through_ring
         meta: dict[str, Any] = {**self._client_meta, policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
-        if self._server_meta.get(policy_keys.COMPRESS_IMAGES):
+        if self._server_meta.get(policy_keys.COMPRESS_IMAGES) and not self._sends_frames_through_ring:
             meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
         return flatten_dict(meta)
 
@@ -162,6 +166,7 @@ class RemotePolicy(Policy):
             stack = declared_stack(server_meta, session.protocol_version)
             client_meta = stack.meta() if session.protocol_version is ProtocolVersion.V3 else {}
             self._server_meta, self._client_meta = server_meta, client_meta
+            self._sends_frames_through_ring = session.sends_frames_through_ring
             compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
                 server_meta.get(policy_keys.COMPRESS_IMAGES)
             )
