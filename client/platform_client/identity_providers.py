@@ -53,6 +53,8 @@ class IdentityProvider:
     token_url: str
     # Sent with the device-code request when set (RFC 8628 §3.1).
     scope: str | None
+    # A sign-in page that can mail the user a code names it here, so the prompt can send them to the spam folder too.
+    code_mail_hint: str | None = None
 
 
 GITHUB = IdentityProvider(
@@ -67,6 +69,9 @@ WORKOS = IdentityProvider(
     device_authorization_url='https://api.workos.com/user_management/authorize/device',
     token_url='https://api.workos.com/user_management/authenticate',
     scope=None,
+    code_mail_hint=(
+        'If the sign-in page sends you a code by email and it is not in your inbox, look in your spam folder.'
+    ),
 )
 
 

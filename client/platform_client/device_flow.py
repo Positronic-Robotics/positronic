@@ -395,6 +395,12 @@ def may_have_minted_a_key(exc: httpx.HTTPError) -> bool:
     return exc.request.url.path.endswith(routes.USERS_REGISTER)
 
 
+def sign_in_line(authorization: DeviceAuthorization, provider: IdentityProvider) -> str:
+    """The one line the user reads: where to sign in, and where a code mail can land."""
+    prompt = authorization.sign_in_prompt()
+    return prompt if provider.code_mail_hint is None else f'{prompt}. {provider.code_mail_hint}'
+
+
 def register_with_device_flow(
     platform: PlatformClient, sign_in: SignIn, *, alias: str | None = None, rotate: bool = False
 ) -> RegisterResponse:
@@ -402,7 +408,7 @@ def register_with_device_flow(
     flow = sign_in.flow
     authorization = flow.start_device_authorization()
     # To stderr: it is a prompt for the person at the terminal, and stdout carries the command's answer.
-    print(authorization.sign_in_prompt(), file=sys.stderr, flush=True)
+    print(sign_in_line(authorization, flow.provider), file=sys.stderr, flush=True)
     token = flow.poll_for_token(authorization)
     request = RegisterRequest(credential=token, alias=alias, rotate=rotate)
     return platform.register(request, timeout=sign_in.register_timeout)
