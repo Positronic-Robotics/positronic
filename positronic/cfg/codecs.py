@@ -5,7 +5,14 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm.models import FR3_EE_FRAME, GRIPPER_SITE, PANDA_EE_FRAME, YAM_EE_FRAME, EEFrame
+from positronic.drivers.roboarm.models import (
+    DROID_EE_FRAME,
+    FRANKA_HAND_FRAME,
+    GRIPPER_SITE,
+    PANDA_HAND_FRAME,
+    YAM_GRASP_SITE_FRAME,
+    EEFrame,
+)
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -55,17 +62,16 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
-# The frame of a checkpoint trained on poses a rig reported at ``GRIPPER_SITE``. ``offset`` takes a transform
-# off that site, such as ``@positronic.drivers.roboarm.models.DROID_EE_FRAME``.
-gripper_ee_frame = cfn.Config(EEFrame, site=GRIPPER_SITE)
-# The frame of a checkpoint trained on real FR3 poses, on sim panda poses, and on YAM poses, recorded before the
-# rigs reported at ``GRIPPER_SITE``.
-fr3_ee_frame = gripper_ee_frame.override(offset=FR3_EE_FRAME)
-panda_ee_frame = gripper_ee_frame.override(offset=PANDA_EE_FRAME)
-yam_ee_frame = gripper_ee_frame.override(offset=YAM_EE_FRAME)
-# A server built for poses at the Franka Hand point, the FR3's ``F_T_EE``, states that frame with this codec in
-# its pipeline. A server that states no frame observes no pose.
-franka_hand_frame = cfn.Config(ChangeEEFrame, site=GRIPPER_SITE, transform=FR3_EE_FRAME)
+# The grip point, where every rig reports its poses.
+gripper_frame = cfn.Config(EEFrame, site=GRIPPER_SITE)
+# The FR3's Franka Hand point, where the real FR3 and the FR3 sims reported before ``GRIPPER_SITE``.
+franka_hand_frame = gripper_frame.override(offset=FRANKA_HAND_FRAME)
+# The hand point of the MuJoCo panda, where the MuJoCo sim reported before ``GRIPPER_SITE``.
+panda_hand_frame = gripper_frame.override(offset=PANDA_HAND_FRAME)
+# The YAM's i2rt grasp site, where the YAM reported before ``GRIPPER_SITE``.
+yam_grasp_site_frame = gripper_frame.override(offset=YAM_GRASP_SITE_FRAME)
+# The FR3 flange, where DROID records its poses.
+droid_frame = gripper_frame.override(offset=DROID_EE_FRAME)
 
 
 @cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)
@@ -78,7 +84,7 @@ def compose_data(obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: 
     """
     result = obs & action
     if ee_frame is not None:
-        result = ChangeEEFrame(ee_frame.site, ee_frame.offset) | result
+        result = ChangeEEFrame(ee_frame) | result
     if flip_grip:
         result = FlipGrip() | result
     if binarize_grip:

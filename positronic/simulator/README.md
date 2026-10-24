@@ -29,7 +29,7 @@ claim, and holds whether or not the constant is right.
 | --- | --- | --- |
 | RoboLab | `models.ROBOLAB_EE_FRAME` | `robolab/validate.py:_check_flange_to_eef`, against RoboLab's own scene |
 | MolmoSpaces | identity — the env drives the 2F-85 grip point | |
-| LIBERO | `models.PANDA_EE_FRAME` — the grip site is taken to be the panda's `end_effector` | `libero/validate.py:_check_flange_to_eef`, and it diverges: 38.1 mm and 90° ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)) |
+| LIBERO | `models.PANDA_HAND_FRAME` — the grip site is taken to be the panda's `end_effector` | `libero/validate.py:_check_flange_to_eef`, and it diverges: 38.1 mm and 90° ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)) |
 
 TODO: have the env report the offset itself, so positronic stops restating it from a robot model that is not
 the env's.

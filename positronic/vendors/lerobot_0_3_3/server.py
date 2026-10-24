@@ -76,7 +76,8 @@ def pipeline(
 
 
 ee = pipeline
-joints = pipeline.override(**{'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1}, 'ee_frame': None})
+# Joint observations, absolute EE actions: a pose pipeline.
+joints = pipeline.override(**{'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1}})
 ee_traj = pipeline.override(**{
     'action.tgt_ee_pose_key': keys.EE_POSE,
     'action.tgt_grip_key': keys.GRIP,
@@ -110,7 +111,7 @@ ee_flip = pipeline.override(flip_grip=True)
 phail = pipeline.override(**{
     'action': codecs.phail_v1_execution,
     'action.action': codecs.absolute_pos_action,
-    'ee_frame': codecs.fr3_ee_frame,
+    'ee_frame': codecs.franka_hand_frame,
 })
 demo = pipeline.override(**{
     'obs': codecs.general_obs,
@@ -122,7 +123,7 @@ demo = pipeline.override(**{
     'flip_grip': True,
     'fps': 15.0,
     'horizon_sec': 1.0,
-    'ee_frame': codecs.panda_ee_frame,
+    'ee_frame': codecs.panda_hand_frame,
 })
 
 
@@ -142,7 +143,7 @@ COMMANDS = {
     ),
     'sim_stack': serve.override(
         model=act_model.override(checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/'),
-        pipeline=ee_flip.override(ee_frame=codecs.panda_ee_frame),
+        pipeline=ee_flip.override(ee_frame=codecs.panda_hand_frame),
     ),
     'demo': serve.override(
         model=act_model.override(checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'),

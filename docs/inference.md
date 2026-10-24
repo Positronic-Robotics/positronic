@@ -18,12 +18,12 @@ deployment configs as server subcommands, such as `groot-server droid`.
 # LeRobot (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
   --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 # LeRobot (ACT — 0.3.3)
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
   --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 # GR00T
 cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
@@ -32,7 +32,7 @@ cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" 
 # OpenPI
 cd docker && docker compose run --rm --service-ports openpi-server ee \
   --model.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 ```
 
 Check server: `curl -X POST http://localhost:8000/api/v1/keepalive` answers once the model has loaded and warmed.

@@ -23,7 +23,11 @@ A policy trained in some other end-effector frame carries the constant transform
 (`ChangeEEFrame`, see [codec guide](../../policy/codecs/README.md#end-effector-frames)). The transform lets one
 checkpoint run on any embodiment that keeps the contract. At the start of each episode the harness compares the
 policy's `ee_frames` with the rig's. A policy observes only the poses it states at the rig's site. A policy that
-states none speaks joints only and observes no pose. A policy that names another site is refused.
+names another site is refused. A policy that states none observes each pose at the rig's legacy point, the point the
+rig reported before `gripper`, and its pose commands go back from that point. The legacy point is `end_effector`
+(`models.EE_LINK`) on a model that has it, as the FR3 and the MuJoCo panda do, and the rig site on any other model,
+as YAM at `models.YAM_SITE`. The harness reads it from the rig's model and logs a warning for each such session. This
+fallback is transitional (#550).
 
 `Impedance.frame` is the stiffness point, measured from the rig site. The Franka driver accepts an offset only, and
 refuses a turned frame. `DROID_IMPEDANCE` puts it at the flange.
@@ -38,10 +42,10 @@ carries (`ik.MoveToSite`). A model with no `gripper` gets one at the grip point 
 no model gets the bundled YAM model.
 
 Checkpoints trained on those recordings speak the old frame. They state it as an offset from `gripper`:
-`models.FR3_EE_FRAME` (the FR3's `F_T_EE`, 51.6 mm short of `gripper` and −45°), `models.PANDA_EE_FRAME` (the
-sim panda's `end_effector`, 45.25 mm short of `gripper` and −45°) and `models.YAM_EE_FRAME` (the YAM `grasp_site`,
-on the wrist axis, 40.8 mm to the side of `gripper`, 3.3 mm short of it and −90°). `test_ik.py` pins each constant
-to the model.
+`models.FRANKA_HAND_FRAME` (the FR3's `F_T_EE`, 51.6 mm short of `gripper` and −45°), `models.PANDA_HAND_FRAME`
+(the sim panda's `end_effector`, 45.25 mm short of `gripper` and −45°) and `models.YAM_GRASP_SITE_FRAME` (the
+YAM's i2rt `grasp_site`, on the wrist axis, 40.8 mm to the side of `gripper`, 3.3 mm short of it and −90°).
+Each model names that old point `end_effector`. `test_ik.py` pins each constant to the model.
 
 | Embodiment | Reports at | Note |
 | --- | --- | --- |
@@ -49,7 +53,7 @@ to the model.
 | MuJoCo panda (`simulator/mujoco/sim.py`) | `gripper` | The site in `panda.xml` and `franka_table.xml`. The sim adds it to an older scene that lacks it. |
 | RoboLab (`simulator/robolab/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at `robolab_eef`; `RobolabAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
 | MolmoSpaces (`simulator/molmo_spaces/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at the 2F-85 grasp site, in the arm base `fr3_link0`. MolmoSpaces' own robot base is at the bottom of the stand below it. |
-| LIBERO (`simulator/libero/`) | `gripper` | `LiberoAdapter` takes the env's grip site to be the panda's `end_effector` (`PANDA_EE_FRAME`); it is not ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)). |
+| LIBERO (`simulator/libero/`) | `gripper` | `LiberoAdapter` takes the env's grip site to be the panda's `end_effector` (`PANDA_HAND_FRAME`); it is not ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)). |
 | YAM (`yam/driver.py`) | `gripper` | The site in `yam.xml` and the link in the bundled URDF, where the closed fingertips meet: 40.8 mm off the wrist axis. The vendor's `grasp_site` is on the axis. |
 | SO-101 (`so101/driver.py`) | `gripper` | Coincident with `gripper_frame_link`. |
 

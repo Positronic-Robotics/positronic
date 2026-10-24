@@ -27,12 +27,12 @@ from positronic.drivers.roboarm.models import (
     DROID_EE_FRAME,
     EE_LINK,
     FLANGE_LINK,
-    FR3_EE_FRAME,
+    FRANKA_HAND_FRAME,
     GRIPPER_SITE,
-    PANDA_EE_FRAME,
+    PANDA_HAND_FRAME,
     ROBOLAB_EE_FRAME,
     ROBOLAB_EEF_LINK,
-    YAM_EE_FRAME,
+    YAM_GRASP_SITE_FRAME,
     YAM_JOINT_NAMES,
     YAM_WRIST_LINK,
     EEFrame,
@@ -256,8 +256,8 @@ def test_bundled_model_has_the_site_its_embodiment_reports_at(model):
     [
         (bundled_franka_model(), DROID_EE_FRAME, FLANGE_LINK),
         (bundled_franka_model(), ROBOLAB_EE_FRAME, ROBOLAB_EEF_LINK),
-        (bundled_franka_model(), FR3_EE_FRAME, EE_LINK),
-        (bundled_panda_model(), PANDA_EE_FRAME, EE_LINK),
+        (bundled_franka_model(), FRANKA_HAND_FRAME, EE_LINK),
+        (bundled_panda_model(), PANDA_HAND_FRAME, EE_LINK),
     ],
     ids=['droid', 'robolab', 'fr3', 'panda'],
 )
@@ -282,7 +282,7 @@ def test_yam_declared_frame_is_the_grasp_site_of_the_yam_mjcf():
     """YAM poses older than ``GRIPPER_SITE`` sit at the MJCF ``grasp_site``, where the driver measured them."""
     # rules-allow: hardcoded-keys — the vendor's site name is this test's input, not a name it shares with the code
     measured = _yam_mjcf_wrist_to_site(GRIPPER_SITE).inv * _yam_mjcf_wrist_to_site('grasp_site')
-    np.testing.assert_allclose(YAM_EE_FRAME.as_matrix, measured.as_matrix, atol=1e-9)
+    np.testing.assert_allclose(YAM_GRASP_SITE_FRAME.as_matrix, measured.as_matrix, atol=1e-9)
 
 
 # Joint configs inside the YAM's joint range: home, and three that bend every joint.

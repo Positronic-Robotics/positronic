@@ -126,7 +126,7 @@ case "$VENDOR" in
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
     # The run trains on poses at the rig's `gripper` site, so the checkpoint states that frame.
-    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/" --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame)
+    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/" --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame)
     ;;
   lerobot)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" lerobot expert_only \
@@ -135,7 +135,7 @@ case "$VENDOR" in
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
     # The run trains on poses at the rig's `gripper` site, so the checkpoint states that frame.
-    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/" --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame)
+    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/" --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame)
     ;;
   openpi)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" openpi \
@@ -149,7 +149,7 @@ case "$VENDOR" in
     SERVE_SUBCMD=(
       ee
       --model.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/"
-      --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
+      --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
     )
     ;;
   gr00t)

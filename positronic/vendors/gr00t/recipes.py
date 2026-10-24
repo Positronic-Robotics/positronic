@@ -107,7 +107,7 @@ def droid(settings: dict) -> EpisodeTransform:
 
     return (
         Identity(meta={ACTION_FPS: settings[model_settings.ACTION_FPS], MODEL_SETTINGS: settings})
-        | training.ChangeEEFrame(ee_frame.site, ee_frame.offset, (observation_keys[gr00t.EE_POSE],))
+        | training.ChangeEEFrame(ee_frame, (observation_keys[gr00t.EE_POSE],))
         | map_signals(encode_pose, (observation_keys[gr00t.EE_POSE],))
         | columns
     )

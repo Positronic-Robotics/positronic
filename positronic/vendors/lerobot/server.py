@@ -4,7 +4,7 @@ import configuronic as cfn
 import pos3
 
 from pimm.logging import init_logging
-from positronic.cfg.codecs import fr3_ee_frame
+from positronic.cfg.codecs import franka_hand_frame
 from positronic.drivers.roboarm.models import EEFrame
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
@@ -55,12 +55,13 @@ def pipeline(
 ) -> PolicyDeployment:
     local = Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize(512, 512))
     if ee_frame is not None:
-        local = Sequential(ChangeEEFrame(ee_frame.site, ee_frame.offset), local)
+        local = Sequential(ChangeEEFrame(ee_frame), local)
     return PolicyDeployment(local, codec)
 
 
 ee = pipeline
-joints = pipeline.override(codec=lerobot_codecs.joints, ee_frame=None)
+# Joint observations, absolute EE actions: a pose pipeline.
+joints = pipeline.override(codec=lerobot_codecs.joints)
 joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik, ee_frame=None)
 joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim, ee_frame=None)
 
@@ -74,7 +75,7 @@ COMMANDS = {
     'joints_ik_sim': serve.override(model=lerobot_model, pipeline=joints_ik_sim),
     'phail': serve.override(
         model=lerobot_model.override(checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/'),
-        pipeline=ee.override(codec=lerobot_codecs.phail_v1, ee_frame=fr3_ee_frame),
+        pipeline=ee.override(codec=lerobot_codecs.phail_v1, ee_frame=franka_hand_frame),
     ),
 }
 

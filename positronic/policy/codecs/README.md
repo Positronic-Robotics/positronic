@@ -156,23 +156,23 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 "EE pose" has no universal meaning: our rigs report the grip point their model calls `gripper`, DROID reports the flange (`panda_link8`), and RoboLab reports its own `eef_frame` at the gripper coupler (`robolab_eef`). A checkpoint speaks whichever frame its training data was in, so serving it in another frame misreads every pose and every command by one constant transform — silently. See [the frame contract](../../drivers/roboarm/README.md) for what `gripper` is and what each embodiment owes it.
 
-`ChangeEEFrame(site, T)` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
+`ChangeEEFrame(EEFrame(site=site, offset=T))` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
 
 The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
 
-- A policy that states no `ee_frames` speaks joints only. Its observation carries no pose signal, so a codec that reads a pose fails on the missing key.
+- A policy that states no `ee_frames` gets each pose at the rig's legacy point, as [the frame contract](../../drivers/roboarm/README.md) says.
 - A policy that names a site the rig does not report that signal at is refused.
 
-A pose-reading checkpoint therefore always states its frame, also when the offset is the identity (`cfg.codecs.gripper_ee_frame`).
+A pose-reading checkpoint states its frame, also when the offset is the identity (`cfg.codecs.gripper_frame`).
 
 It is declared in two places, for the two things it does:
 
 - **Training** — `compose(ee_frame=...)` takes an `EEFrame` and re-expresses the dataset in it, so the resulting checkpoint speaks that frame. The training transform refuses a pose that the recording does not state at that site with no offset. It defaults to unset, which trains on the poses as recorded.
-- **Serving** — the LeRobot and OpenPI pipelines take `ee_frame=`, which puts `ChangeEEFrame` in the deployment. It has no default: every pose deployment states its frame, and a pose pipeline built without one fails when the server starts. The joint pipelines state `None` themselves. Pass `@positronic.cfg.codecs.gripper_ee_frame` for a checkpoint trained on poses at `gripper`, `@positronic.cfg.codecs.fr3_ee_frame` or `@positronic.cfg.codecs.panda_ee_frame` for one trained on real FR3 or sim panda recordings made before the rigs reported at `gripper`, and `None` for one that speaks joints only. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
+- **Serving** — the LeRobot and OpenPI pipelines take `ee_frame=`, which puts `ChangeEEFrame` in the deployment. It has no default: every pose deployment states its frame, and a pose pipeline built without one fails when the server starts. A pipeline that speaks joints only states `None` itself. Pass `@positronic.cfg.codecs.gripper_frame` for a checkpoint trained on poses at `gripper`, `@positronic.cfg.codecs.franka_hand_frame` or `@positronic.cfg.codecs.panda_hand_frame` for one trained on real FR3 or MuJoCo sim recordings made before the rigs reported at `gripper`, `@positronic.cfg.codecs.droid_frame` for the DROID flange, and `None` for one that speaks joints only. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
 
-Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `EEFrame(site=GRIPPER_SITE, offset=models.DROID_EE_FRAME)`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
+Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `cfg.codecs.droid_frame`, `models.DROID_EE_FRAME` from `gripper`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
 
-A remote server that states no frame observes no pose, so a client stack of its that reads one fails on the first observation. A server built for poses at the Franka Hand point, the FR3's `F_T_EE`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline. A v1 `change_ee_frame` spec states its transform from that point, so the client reads it from `gripper` through `models.FR3_EE_FRAME`.
+A server built on positronic states its frame with the same configs: a server built for poses at the Franka Hand point, the FR3's `F_T_EE`, puts `ChangeEEFrame(cfg.codecs.franka_hand_frame.instantiate())` in its pipeline. A version 1 `change_ee_frame` spec is refused as an unsupported version.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 
@@ -288,7 +288,7 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
 
 # Serve the matching recipe
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
-  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 ```
 
 ## See Also

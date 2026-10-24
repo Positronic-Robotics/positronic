@@ -19,9 +19,9 @@ _QUAT = geom.Rotation.Representation.QUAT
 class ChangeEEFrame(Codec):
     """Convert poses between a site of the embodiment's model and the frame the policy speaks.
 
-    The policy speaks ``transform`` from ``site``, and states it as the ``EE_FRAMES`` entry of each key in ``keys``.
-    The rig reports its poses at a site with no offset and refuses a policy that names another site. Keys in
-    ``keys`` go ``pose * transform`` on encode and ``pose * transform⁻¹`` on decode; absent keys and joint-space
+    The policy speaks ``frame``, and states it as the ``EE_FRAMES`` entry of each key in ``keys``. The rig reports
+    its poses at a site with no offset and refuses a policy that names another site. Keys in ``keys`` go
+    ``pose * frame.offset`` on encode and ``pose * frame.offset⁻¹`` on decode; absent keys and joint-space
     commands are left alone. A ``CartesianDelta`` has no anchor pose to convert against, so it travels with the
     frame it is expressed in and the driver applies it there.
 
@@ -34,18 +34,17 @@ class ChangeEEFrame(Codec):
 
     def __init__(
         self,
-        site: str,
-        transform: geom.Transform3D,
+        frame: EEFrame,
         keys: tuple[str, ...] = (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE, obs_keys.ROBOT_COMMAND),
     ):
-        self._frame = EEFrame(site=site, offset=transform)
+        self._frame = frame
         self._keys = tuple(keys)
 
     @classmethod
     def from_spec_args(cls, **args: Any) -> Self:
-        # A wire spec carries the transform as a ``[tx,ty,tz,qw,qx,qy,qz]`` vector.
-        args['transform'] = geom.Transform3D.from_vector(np.asarray(args['transform'], dtype=np.float64), _QUAT)
-        return cls(**args)
+        # A wire spec carries the frame as ``site`` and a ``[tx,ty,tz,qw,qx,qy,qz]`` ``transform`` vector.
+        offset = geom.Transform3D.from_vector(np.asarray(args.pop('transform'), dtype=np.float64), _QUAT)
+        return cls(EEFrame(site=args.pop('site'), offset=offset), **args)
 
     def _apply(self, data: dict, transform: geom.Transform3D) -> dict:
         moved = {key: change_frame(data[key], transform) for key in self._keys if key in data}
@@ -59,7 +58,7 @@ class ChangeEEFrame(Codec):
 
     @property
     def training_encoder(self) -> EpisodeTransform:
-        return training.ChangeEEFrame(self._frame.site, self._frame.offset, self._keys)
+        return training.ChangeEEFrame(self._frame, self._keys)
 
     @property
     def meta(self):

@@ -33,7 +33,7 @@ against robosuite's *own* control path:
   inverse of robosuite's ``scale_action`` + ``set_goal`` — byte-identical to what a LIBERO policy drives.
 - forward kinematics: ``_fk`` of the live joints reproduces the controller's eef-site read to the bit.
 - the eef site against the panda model's ``EE_LINK``: LIBERO's own scene puts the site where
-  ``LiberoAdapter``, passing ``PANDA_EE_FRAME`` as its ``env_control_frame``, claims it is.
+  ``LiberoAdapter``, passing ``PANDA_HAND_FRAME`` as its ``env_control_frame``, claims it is.
 - inverse kinematics: ``_fk(_ik(pose))`` recovers the target pose (round-trip; LIBERO has no IK to match).
 
 Run on a LIBERO-capable box with the positronic-free ``server`` module and a LIBERO source checkout on the
@@ -65,7 +65,7 @@ _FK_ATOL = 2e-4  # a fresh FK recompute vs the live stepped eef site agree only 
 
 # ``bundled_panda_model``'s ``EE_LINK`` restated against link7, because this script runs in LIBERO's venv
 # and cannot import positronic: the same transform as ``frame_transform(panda_urdf, 'link7', EE_LINK)``.
-# ``LiberoAdapter`` passes ``PANDA_EE_FRAME``, which claims LIBERO's eef site is exactly this pose.
+# ``LiberoAdapter`` passes ``PANDA_HAND_FRAME``, which claims LIBERO's eef site is exactly this pose.
 # rules-allow: hardcoded-keys — this script runs in LIBERO's 3.10 venv, where positronic is not importable, so
 # there is no shared constant to reach for; naming the body is the point of the check
 _LINK7_BODY = 'robot0_link7'
