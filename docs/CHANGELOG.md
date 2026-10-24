@@ -2,7 +2,7 @@
 
 ## [0.4.0] - 2026-10-24
 
-This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.40.2, `positronic-evals` 0.1.1 and `positronic-eval-vocabulary` 0.5.0. The other distributions keep their 0.3.1 versions.
+This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.40.2, `positronic-evals` 0.1.1 and `positronic-eval-vocabulary` 0.5.0. `positronic-wire` 0.12.0 and `positronic-model-server` 0.2.3 do not change, so the release skips them.
 
 | Distribution | Version |
 |---|---|
