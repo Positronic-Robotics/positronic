@@ -26,16 +26,17 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
 
-from platform_client.policy_container import AUTH_TOKEN_ENV, POLICY_PORT, PROVISIONING_DEADLINE_S
+from platform_client.policy_container import AUTH_TOKEN_ENV, IMAGE_FETCH_DEADLINE_S, POLICY_PORT, WARMUP_DEADLINE_S
 from positronic_evals.evals import EvalRef, public_eval
+from pydantic import BaseModel, Field
 
 from positronic.cli.eval.run import SCORE_LINE_PREFIX
 from positronic.utils import nebius as nebius_cli
-from positronic.utils.nebius import NebiusError
+from positronic.utils.nebius import NebiusError, NebiusNotFound
 
 DEFAULT_SIM_IMAGE = 'docker.io/positro/molmospaces:main'
 DEFAULT_EVAL = 'molmo.franka_pick_mini_smoke'
@@ -49,8 +50,6 @@ POLICY_HOST_ENV = 'POLICY_HOST'
 EVAL_ENV = 'EVAL'
 POLICY_WAIT_ENV = 'POLICY_WAIT_S'
 
-JOB_TERMINAL_STATES = frozenset({'COMPLETED', 'FAILED', 'CANCELLED', 'ERROR'})
-ENDPOINT_FAILED_STATES = frozenset({'ERROR'})
 URL_WAIT_S = 600.0
 # The job's own timeout ends it first. This margin covers the time that Nebius takes to stop it.
 JOB_GRACE_S = 600.0
@@ -64,6 +63,72 @@ CLI_TIMEOUT_S = 300.0
 
 class RunFailed(RuntimeError):
     """The run ended with no score."""
+
+
+class JobState(StrEnum):
+    """`JobStatus.State` of the Nebius AI API."""
+
+    STATE_UNSPECIFIED = 'STATE_UNSPECIFIED'
+    PROVISIONING = 'PROVISIONING'
+    IMAGE_PULLING = 'IMAGE_PULLING'
+    STARTING = 'STARTING'
+    RUNNING = 'RUNNING'
+    CANCELLING = 'CANCELLING'
+    CANCELLED = 'CANCELLED'
+    COMPLETED = 'COMPLETED'
+    FAILED = 'FAILED'
+    ERROR = 'ERROR'
+    DELETING = 'DELETING'
+
+
+class EndpointState(StrEnum):
+    """`EndpointStatus.State` of the Nebius AI API."""
+
+    STATE_UNSPECIFIED = 'STATE_UNSPECIFIED'
+    PROVISIONING = 'PROVISIONING'
+    IMAGE_PULLING = 'IMAGE_PULLING'
+    STARTING = 'STARTING'
+    RUNNING = 'RUNNING'
+    STOPPING = 'STOPPING'
+    STOPPED = 'STOPPED'
+    DELETING = 'DELETING'
+    ERROR = 'ERROR'
+
+
+JOB_TERMINAL_STATES = frozenset({JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.ERROR})
+ENDPOINT_FAILED_STATES = frozenset({EndpointState.ERROR})
+
+
+class Metadata(BaseModel):
+    id: str
+    name: str
+
+
+class Named(BaseModel):
+    """What `get-by-name` returns, and an item of what `list` returns."""
+
+    metadata: Metadata
+
+
+class Listing(BaseModel):
+    items: list[Named] = Field(default_factory=list)
+
+
+class JobStatus(BaseModel):
+    state: JobState = JobState.STATE_UNSPECIFIED
+
+
+class Job(BaseModel):
+    status: JobStatus = Field(default_factory=JobStatus)
+
+
+class EndpointStatus(BaseModel):
+    state: EndpointState = EndpointState.STATE_UNSPECIFIED
+    public_endpoints: list[str] = Field(default_factory=list)
+
+
+class Endpoint(BaseModel):
+    status: EndpointStatus = Field(default_factory=EndpointStatus)
 
 
 @dataclass(frozen=True)
@@ -139,7 +204,8 @@ def job_create_args(run: Run, policy_host: str, token_env: list[str]) -> list[st
         *('--platform', run.sim.platform, '--preset', run.sim.preset, '--subnet-id', run.subnet_id),
         *('--timeout', f'{run.timeout_min}m', '--restart-policy', 'never'),
         *('--env', f'{POLICY_HOST_ENV}={policy_host}', '--env', f'{EVAL_ENV}={run.eval}'),
-        *('--env', f'{POLICY_WAIT_ENV}={PROVISIONING_DEADLINE_S:.0f}'),
+        # The platform's budget for a policy: the image pull, then the warmup.
+        *('--env', f'{POLICY_WAIT_ENV}={IMAGE_FETCH_DEADLINE_S + WARMUP_DEADLINE_S:.0f}'),
         *token_env,
     ]
 
@@ -189,7 +255,7 @@ class ServerlessEval:
         state = self._wait_for_job(job, endpoint)
         logs = self._logs(job)
         found = last_score_line(logs)
-        if state != 'COMPLETED' or found is None:
+        if state is not JobState.COMPLETED or found is None:
             tail = '\n'.join(logs.splitlines()[-LOG_TAIL_LINES:])
             raise RunFailed(f'The eval job ended {state} with no score. The end of its log:\n{tail}')
         return found
@@ -222,41 +288,45 @@ class ServerlessEval:
         return resource_id
 
     def _id(self, kind: Kind, name: str) -> str | None:
+        """The id of the resource named `name`, or None when Nebius has none. Any other failure raises."""
         try:
             found = self.nebius(*kind.value, 'get-by-name', '--parent-id', self.run.parent_id, '--name', name)
-        except NebiusError:
+        except NebiusNotFound:
             return None
-        return found['metadata']['id']
+        return Named.model_validate(found).metadata.id
 
-    def _state(self, kind: Kind, resource_id: str) -> dict[str, Any]:
-        return self.nebius(*kind.value, 'get', '--id', resource_id).get('status', {})
+    def _job_state(self, job: str) -> JobState:
+        return Job.model_validate(self.nebius(*Kind.JOB.value, 'get', '--id', job)).status.state
+
+    def _endpoint_status(self, endpoint: str) -> EndpointStatus:
+        return Endpoint.model_validate(self.nebius(*Kind.ENDPOINT.value, 'get', '--id', endpoint)).status
 
     def _wait_for_host(self, endpoint: str) -> str:
         deadline = self.clock.monotonic() + URL_WAIT_S
         while True:
-            status = self._state(Kind.ENDPOINT, endpoint)
-            if status.get('state') in ENDPOINT_FAILED_STATES:
-                raise RunFailed(f'The policy endpoint is {status["state"]}: {status}')
-            host = https_host(status.get('public_endpoints', []))
+            status = self._endpoint_status(endpoint)
+            if status.state in ENDPOINT_FAILED_STATES:
+                raise RunFailed(f'The policy endpoint is {status.state}: {status}')
+            host = https_host(status.public_endpoints)
             if host is not None:
                 return host
             if self.clock.monotonic() >= deadline:
                 raise RunFailed(f'The policy endpoint got no https:// URL in {URL_WAIT_S:.0f}s')
             self.clock.sleep(POLL_S)
 
-    def _wait_for_job(self, job: str, endpoint: str) -> str:
+    def _wait_for_job(self, job: str, endpoint: str) -> JobState:
         deadline = self.clock.monotonic() + self.run.timeout_min * 60 + JOB_GRACE_S
         shown = None
         while True:
-            state = self._state(Kind.JOB, job).get('state')
+            state = self._job_state(job)
             if state != shown:
                 print(f'The eval job is {state}')
                 shown = state
             if state in JOB_TERMINAL_STATES:
                 return state
-            status = self._state(Kind.ENDPOINT, endpoint)
-            if status.get('state') in ENDPOINT_FAILED_STATES:
-                raise RunFailed(f'The policy endpoint is {status["state"]} while the eval runs: {status}')
+            status = self._endpoint_status(endpoint)
+            if status.state in ENDPOINT_FAILED_STATES:
+                raise RunFailed(f'The policy endpoint is {status.state} while the eval runs: {status}')
             if self.clock.monotonic() >= deadline:
                 raise RunFailed(f'The eval job did not end in {self.run.timeout_min} min')
             self.clock.sleep(POLL_S)
@@ -274,6 +344,10 @@ class ServerlessEval:
     def cleanup(self) -> list[str]:
         """Delete what the run made. Return each delete that failed and each resource that is left."""
         problems = []
+        # A create whose lookup failed leaves its id unknown: look for it by name once more.
+        for kind, name in self._names().items():
+            if kind not in self.made:
+                problems += self._attempt(self._recover, kind, name)
         if Kind.JOB in self.made:
             problems += self._attempt(self._stop_job, self.made[Kind.JOB])
         # The job first, then the endpoint it dials, then the secret both read.
@@ -282,8 +356,16 @@ class ServerlessEval:
                 problems += self._attempt(self.nebius, *kind.value, 'delete', '--id', self.made[kind], structured=False)
         return problems + self._left()
 
+    def _names(self) -> dict[Kind, str]:
+        return {Kind.JOB: self.run.job_name, Kind.ENDPOINT: self.run.endpoint_name, Kind.SECRET: self.run.secret_name}
+
+    def _recover(self, kind: Kind, name: str) -> None:
+        resource_id = self._id(kind, name)
+        if resource_id is not None:
+            self.made[kind] = resource_id
+
     def _stop_job(self, job: str) -> None:
-        if self._state(Kind.JOB, job).get('state') not in JOB_TERMINAL_STATES:
+        if self._job_state(job) not in JOB_TERMINAL_STATES:
             self.nebius(*Kind.JOB.value, 'cancel', '--id', job, structured=False)
 
     @staticmethod
@@ -296,14 +378,16 @@ class ServerlessEval:
 
     def _left(self) -> list[str]:
         """The endpoint and the job of this run that Nebius still lists, after a wait for the deletes to end."""
-        names = {self.run.endpoint_name: Kind.ENDPOINT, self.run.job_name: Kind.JOB}
+        names = {name: kind for kind, name in self._names().items() if kind is not Kind.SECRET}
         deadline = self.clock.monotonic() + DELETE_WAIT_S
         while True:
             try:
                 listed = [
-                    item['metadata']['name']
+                    item.metadata.name
                     for kind in (Kind.ENDPOINT, Kind.JOB)
-                    for item in self.nebius(*kind.value, 'list', '--parent-id', self.run.parent_id).get('items', [])
+                    for item in Listing.model_validate(
+                        self.nebius(*kind.value, 'list', '--parent-id', self.run.parent_id)
+                    ).items
                 ]
             except NebiusError as exc:
                 return [f'Could not check what is left: {exc}']

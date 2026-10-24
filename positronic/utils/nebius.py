@@ -29,6 +29,14 @@ class NebiusNotInstalled(NebiusError):
     """The `nebius` CLI is not on PATH."""
 
 
+class NebiusNotFound(NebiusError):
+    """The resource that a `nebius` call names does not exist."""
+
+
+# The gRPC status that the CLI prints for a resource that does not exist.
+_NOT_FOUND_STATUS = 'code = NotFound'
+
+
 def call(*args: str, profile: str | None = None, structured: bool = True, timeout: float = _CLI_TIMEOUT_SEC) -> Any:
     """One `nebius` call: its parsed JSON, or its raw output when it is not `structured`."""
     command = ['nebius', *args, *(['--profile', profile] if profile else [])]
@@ -45,7 +53,8 @@ def call(*args: str, profile: str | None = None, structured: bool = True, timeou
             f'yourself to complete the login, then retry.'
         ) from None
     except subprocess.CalledProcessError as e:
-        raise NebiusError(f'`{" ".join(command)}` failed: {e.stderr.strip()}') from None
+        error = NebiusNotFound if _NOT_FOUND_STATUS in e.stderr else NebiusError
+        raise error(f'`{" ".join(command)}` failed: {e.stderr.strip()}') from None
     return json.loads(completed.stdout) if structured else completed.stdout
 
 

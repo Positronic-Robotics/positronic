@@ -57,3 +57,18 @@ def test_a_failing_call_surfaces_what_the_cli_said():
     with patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'nebius', stderr='denied')):
         with pytest.raises(RuntimeError, match='denied'):
             nebius.auth_token()
+
+
+def test_a_missing_resource_raises_not_found():
+    stderr = 'Error: rpc error: code = NotFound desc = not found'
+    with patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'nebius', stderr=stderr)):
+        with pytest.raises(nebius.NebiusNotFound):
+            nebius.call('ai', 'endpoint', 'get-by-name', '--name', 'x')
+
+
+def test_a_failure_other_than_not_found_is_not_read_as_absence():
+    stderr = 'Error: rpc error: code = Unavailable desc = connection reset'
+    with patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'nebius', stderr=stderr)):
+        with pytest.raises(nebius.NebiusError) as error:
+            nebius.call('ai', 'endpoint', 'get-by-name', '--name', 'x')
+    assert not isinstance(error.value, nebius.NebiusNotFound)

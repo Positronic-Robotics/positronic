@@ -39,21 +39,29 @@ class FakeNebius:
     """The `nebius` CLI over an in-memory project. A job walks through `job_states` and stays at the last one.
 
     `interrupt_on_job_get` makes the first read of the job raise KeyboardInterrupt, as Ctrl-C does.
+    `failing_lookup` makes the first `lookup_failures` lookups by name of that kind fail with an error other than
+    NotFound.
     """
 
     def __init__(
         self,
         error: type[Exception],
+        not_found: type[Exception],
         *,
         job_states: tuple[str, ...] = ('PROVISIONING', 'RUNNING', 'COMPLETED'),
         logs: str = f'Waiting for the policy server\n{SCORE}\n',
         failing_create: str | None = None,
         undeletable: str | None = None,
+        failing_lookup: str | None = None,
+        lookup_failures: int = 1,
         interrupt_on_job_get: bool = False,
     ):
         self.error = error
+        self.not_found = not_found
+        self.failing_lookup = failing_lookup
+        self.lookup_failures = lookup_failures
         self.job_states: Iterator[str] = iter(job_states)
-        self.job_state = 'PENDING'
+        self.job_state = 'PROVISIONING'
         self.logs = logs
         self.failing_create = failing_create
         self.undeletable = undeletable
@@ -96,8 +104,11 @@ class FakeNebius:
 
     def _get_by_name(self, kind: str, args: tuple[str, ...]) -> dict[str, Any]:
         name = self._value(args, '--name')
+        if kind == self.failing_lookup and self.lookup_failures > 0:
+            self.lookup_failures -= 1
+            raise self.error(f'get-by-name {kind} timed out')
         if name not in self.resources[kind]:
-            raise self.error(f'NotFound: {name}')
+            raise self.not_found(f'NotFound: {name}')
         return {'metadata': {'id': self.resources[kind][name], 'name': name}}
 
     def _get(self, kind: str, args: tuple[str, ...]) -> dict[str, Any]:
@@ -125,7 +136,7 @@ class FakeNebius:
         return ''
 
     def _list(self, kind: str, args: tuple[str, ...]) -> dict[str, Any]:
-        return {'items': [{'metadata': {'name': name}} for name in self.resources[kind]]}
+        return {'items': [{'metadata': {'id': i, 'name': name}} for name, i in self.resources[kind].items()]}
 
     def verbs(self, kind: str) -> list[str]:
         return [call[2] for call in self.calls if call[1:2] == (kind,)]
@@ -136,7 +147,7 @@ def _run(script: dict[str, Any], fake: FakeNebius, *extra: str) -> None:
 
 
 def _fake(script: dict[str, Any], **kwargs: Any) -> FakeNebius:
-    return FakeNebius(script['NebiusError'], **kwargs)
+    return FakeNebius(script['NebiusError'], script['NebiusNotFound'], **kwargs)
 
 
 def test_a_run_prints_the_score_last_and_leaves_nothing(script, capsys):
@@ -189,6 +200,23 @@ def test_a_create_that_fails_after_it_made_the_endpoint_still_deletes_it(script)
     assert 'create endpoint failed' in str(exit_info.value)
     assert 'delete' in fake.verbs('endpoint')
     assert fake.resources == {'secret': {}, 'endpoint': {}, 'job': {}}
+
+
+def test_a_create_whose_lookup_fails_is_found_by_name_and_deleted(script):
+    fake = _fake(script, failing_lookup='endpoint')
+    with pytest.raises(SystemExit) as exit_info:
+        _run(script, fake)
+    assert 'get-by-name endpoint timed out' in str(exit_info.value)
+    assert 'delete' in fake.verbs('endpoint')
+    assert fake.resources == {'secret': {}, 'endpoint': {}, 'job': {}}
+
+
+def test_a_lookup_that_fails_in_the_cleanup_is_reported(script, capsys):
+    fake = _fake(script, failing_lookup='job', lookup_failures=2)
+    with pytest.raises(SystemExit) as exit_info:
+        _run(script, fake)
+    assert 'get-by-name job timed out' in capsys.readouterr().err
+    assert 'nebius ai job list' in str(exit_info.value)
 
 
 def test_an_interrupt_while_the_job_runs_cancels_it_and_leaves_nothing(script):
