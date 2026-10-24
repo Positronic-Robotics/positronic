@@ -2,11 +2,11 @@
 
 ## [0.4.0] - 2026-10-24
 
-This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.40.1, `positronic-evals` 0.1.1 and `positronic-eval-vocabulary` 0.5.0. The other distributions keep their 0.3.1 versions.
+This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.40.2, `positronic-evals` 0.1.1 and `positronic-eval-vocabulary` 0.5.0. The other distributions keep their 0.3.1 versions.
 
 | Distribution | Version |
 |---|---|
-| `positronic-platform-client` | 0.40.1 |
+| `positronic-platform-client` | 0.40.2 |
 | `positronic-evals` | 0.1.1 |
 | `positronic-eval-vocabulary` | 0.5.0 |
 | `positronic-wire` | 0.12.0 |
@@ -16,6 +16,7 @@ This release changes the platform API contract, and every `positronic` install o
 - Every request names the client version in the `X-Positronic-Client-Version` header. The platform refuses a client older than 0.40.0, and the refusal names the version to install ([#1024](https://github.com/Positronic-Robotics/positronic/pull/1024))
 - The client refuses an answer from a platform that serves a contract older than 0.40.0, or that names no contract version in `X-Positronic-Platform-Version`. Before its first write, the client reads `auth.config` once and checks the version, so it sends no write to such a platform ([#1024](https://github.com/Positronic-Robotics/positronic/pull/1024))
 - Each `catalog.tasks` entry lists the rig shapes the task runs on in `embodiments`, in place of the single `embodiment` string. `positronic eval catalog` prints the list. The platform refuses a plan that states its tasks when its `rig_shape` is not one of the `embodiments` of a task ([#1024](https://github.com/Positronic-Robotics/positronic/pull/1024))
+- A submitted policy image has two deadlines in place of one shared 1800 s deadline. `IMAGE_FETCH_DEADLINE_S` (1800 s) bounds the VM boot and the image pull, from the start of the VM, and a miss is the platform's fault. `WARMUP_DEADLINE_S` (1800 s) bounds the server's start, from the end of the image pull to the first readiness answer. They replace `PROVISIONING_DEADLINE_S` in `platform_client.policy_container`. A large image no longer shortens the time its server gets to start ([#1028](https://github.com/Positronic-Robotics/positronic/pull/1028))
 - `positronic account register` tells an account that already has a key to set `POSITRONIC_PLATFORM_API_KEY` to it, and says that `--rotate` stops the old key ([#989](https://github.com/Positronic-Robotics/positronic/pull/989))
 - `platform-register` tells an account that already has a key to set `POSITRONIC_PLATFORM_API_KEY` to it, and says that `platform-register --rotate` stops the old key
 - `competition-enter` shows what becomes public about the team and ends with `To join, run: competition-enter --yes`. It does not show the terms. The platform refuses the first submission until the team accepts the terms, and the refusal names `competition-enter --accept-terms=<version>` ([#989](https://github.com/Positronic-Robotics/positronic/pull/989))
