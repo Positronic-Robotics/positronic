@@ -61,6 +61,8 @@ class _FakeScene:
         # None stands for a task that ships no evaluator, which ABC reports as no metrics at all.
         self.task_eval: dict[str, Any] | None = {mapping.ABC_EVAL_EVER_SUCCESS: False}
         self.prompt = _PROMPT
+        # Whether a step of a scored task omits its metrics, as a broken ABC would.
+        self.drops_step_metrics = False
         self.actions: list[np.ndarray] = []
         # How many builds raise as ABC's unseeded build-time draw raises when it cannot lay out a scene.
         self.failed_layouts = 0
@@ -82,7 +84,7 @@ class _FakeScene:
     def step(self, action: np.ndarray) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
         self.actions.append(action)
         # ABC's own step: it ends a trial at its first success when the server asks it to.
-        if self.task_eval is None:
+        if self.task_eval is None or self.drops_step_metrics:
             return self._obs(), 0.0, False, self.truncated, {}
         terminated = self.terminate_on_success and self.task_eval[mapping.ABC_EVAL_EVER_SUCCESS]
         return self._obs(), 0.0, terminated, self.truncated, {mapping.ABC_INFO_TASK_EVAL: self.task_eval}
@@ -227,6 +229,15 @@ def test_a_task_without_an_evaluator_runs_to_abcs_horizon_and_never_succeeds(env
     (slot,) = env.step({0: _hold_both()})[protocol.SLOTS]
 
     assert (slot[protocol.FRAME_DONE], slot[protocol.FRAME_SUCCESS]) == (done, False)
+
+
+def test_a_step_of_a_scored_task_that_reports_no_metrics_raises(env, scene):
+    env.reset(_TOKEN)
+    scene.drops_step_metrics = True
+
+    # Run to its horizon, it would record a failure that hides the broken evaluator.
+    with pytest.raises(RuntimeError, match='no task metrics'):
+        env.step({0: _hold_both()})
 
 
 def test_a_step_reports_the_prompt_the_task_moved_to(env, scene):

@@ -46,6 +46,7 @@ class AbcEnv(EnvProtocol):
         self._env: Any = None
         self._arms: list[_Arm] = []
         self._last_reported_apertures = np.zeros(0)
+        self._scored = False
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """ABC's own catalogue, or the tasks ``spec`` names in it."""
@@ -97,7 +98,15 @@ class AbcEnv(EnvProtocol):
     def _task_eval(self) -> dict[str, Any]:
         """ABC's task metrics now, or none for a task that ships no evaluator."""
         result = self._env.evaluate_task()
+        self._scored = result is not None
         return {} if result is None else result.to_info(squeeze=True)
+
+    def _step_task_eval(self, info: dict[str, Any]) -> dict[str, Any]:
+        if not self._scored:
+            return {}
+        if mapping.ABC_INFO_TASK_EVAL not in info:
+            raise RuntimeError(f'ABC reported no task metrics for a step of a scored task: {sorted(info)}')
+        return info[mapping.ABC_INFO_TASK_EVAL]
 
     @staticmethod
     def _ever_success(task_eval: dict[str, Any]) -> bool:
@@ -115,7 +124,7 @@ class AbcEnv(EnvProtocol):
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
         (action,) = actions.values()  # ABC runs one scene per server, so this server serves one slot
         obs, _reward, _terminated, truncated, info = self._env.step(self._joint_action(action))
-        task_eval = info.get(mapping.ABC_INFO_TASK_EVAL, {})
+        task_eval = self._step_task_eval(info)
         return {
             protocol.SLOTS: [
                 {
