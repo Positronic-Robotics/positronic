@@ -48,10 +48,9 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
     return model
 
 
-# A pose checkpoint trained on poses the rig reported at ``GRIPPER_SITE`` has no offset. ``ee_frame=None`` serves
-# a checkpoint that speaks joints only, which then sees no pose.
+# ``ee_frame`` has no default. A wrong frame raises no error and sends the arm to a different place, so each
+# deployment states the frame of its checkpoint. ``ee_frame=None`` serves a checkpoint that speaks joints only.
 @cfn.config(**{
-    'ee_frame': codecs.gripper_ee_frame,
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
     'obs.state_features': {keys.EE_POSE: 7, keys.GRIP: 1},
@@ -62,11 +61,11 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
 def pipeline(
     obs: Codec,
     action: Codec,
+    ee_frame: EEFrame | None,
     fps: float = 15.0,
     horizon_sec: float | None = 1.0,
     binarize_grip: tuple[str, ...] | None = None,
     flip_grip: bool = False,
-    ee_frame: EEFrame | None = None,
 ) -> PolicyDeployment:
     return PolicyDeployment(
         local=Sequential(ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), RestrictImageSize(224, 224)),

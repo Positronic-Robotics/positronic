@@ -167,7 +167,7 @@ A pose-reading checkpoint therefore always states its frame, also when the offse
 It is declared in two places, for the two things it does:
 
 - **Training** — `compose(ee_frame=...)` takes an `EEFrame` and re-expresses the dataset in it, so the resulting checkpoint speaks that frame. The training transform refuses a pose that the recording does not state at that site with no offset. It defaults to unset, which trains on the poses as recorded.
-- **Serving** — the OpenPI pipeline's `ee_frame=` puts `ChangeEEFrame` in the client's pipeline. It has no default: every deployment states its frame. Pass `@positronic.cfg.codecs.gripper_ee_frame` for a checkpoint trained on poses at `gripper`, `@positronic.cfg.codecs.fr3_ee_frame` or `@positronic.cfg.codecs.panda_ee_frame` for one trained on real FR3 or sim panda recordings made before the rigs reported at `gripper`, and `None` for one that speaks joints only. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
+- **Serving** — the LeRobot and OpenPI pipelines take `ee_frame=`, which puts `ChangeEEFrame` in the deployment. It has no default: every pose deployment states its frame, and a pose pipeline built without one fails when the server starts. The joint pipelines state `None` themselves. Pass `@positronic.cfg.codecs.gripper_ee_frame` for a checkpoint trained on poses at `gripper`, `@positronic.cfg.codecs.fr3_ee_frame` or `@positronic.cfg.codecs.panda_ee_frame` for one trained on real FR3 or sim panda recordings made before the rigs reported at `gripper`, and `None` for one that speaks joints only. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
 
 Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `EEFrame(site=GRIPPER_SITE, offset=models.DROID_EE_FRAME)`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
 
@@ -286,7 +286,8 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # Serve the matching recipe
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
 ```
 
 ## See Also

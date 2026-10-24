@@ -4,7 +4,7 @@ import configuronic as cfn
 import pos3
 
 from pimm.logging import init_logging
-from positronic.cfg.codecs import fr3_ee_frame, gripper_ee_frame
+from positronic.cfg.codecs import fr3_ee_frame
 from positronic.drivers.roboarm.models import EEFrame
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
@@ -47,9 +47,9 @@ def lerobot_model(checkpoints_dir: str, checkpoint: str | None, device: str | No
     return policy
 
 
-# A pose checkpoint trained on poses the rig reported at ``GRIPPER_SITE`` has no offset. ``ee_frame=None`` serves
-# a checkpoint that speaks joints only, which then sees no pose.
-@cfn.config(codec=lerobot_codecs.ee, ee_frame=gripper_ee_frame)
+# ``ee_frame`` has no default. A wrong frame raises no error and sends the arm to a different place, so each
+# deployment states the frame of its checkpoint. ``ee_frame=None`` serves a checkpoint that speaks joints only.
+@cfn.config(codec=lerobot_codecs.ee)
 def pipeline(
     codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_sec: float | None = 1.0
 ) -> PolicyDeployment:

@@ -109,7 +109,7 @@ The server manages the OpenPI subprocess and handles observation encoding and ac
 ### Starting the Server
 
 ```bash
-# Default pipeline (ee codec). `gripper_ee_frame` says the checkpoint speaks the poses the rig reports at `gripper`
+# The ee pipeline. `gripper_ee_frame` states a checkpoint trained on the poses the rig reports at `gripper`
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee \
   --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
   --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame

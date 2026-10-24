@@ -315,7 +315,8 @@ any running inference finishes. Reconnecting creates a new session ID.
 ```bash
 # LeRobot server (SmolVLA — 0.4.x); the subcommand names the codec pipeline
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --model.checkpoints_dir=~/checkpoints/lerobot/exp_v1
+  --model.checkpoints_dir=~/checkpoints/lerobot/exp_v1 \
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
 
 # GR00T server (swap hardware code stays the same)
 cd docker && docker compose run --rm --service-ports groot-server droid \
