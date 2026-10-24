@@ -1,7 +1,7 @@
 """Registry and wire-spec decoding for client-side processors and codecs."""
 
 from collections.abc import Callable
-from functools import partial, reduce
+from functools import reduce
 from operator import and_, or_
 from typing import Any, cast
 
@@ -67,8 +67,20 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
 
 
 COMPONENTS[ChunkedSchedule.WIRE_NAME][ChunkedScheduleV2.WIRE_VERSION] = Version(ChunkedScheduleV2.from_spec_args)
-# A v1 ``change_ee_frame`` states its transform from ``DEFAULT_FRAME``, the site every rig reports its poses at.
-COMPONENTS[ChangeEEFrame.WIRE_NAME][1] = Version(partial(ChangeEEFrame.from_spec_args, site=DEFAULT_FRAME))
+
+
+def _change_ee_frame_v1(**args: Any) -> ChangeEEFrame:
+    """A v1 ``change_ee_frame``, whose transform is measured from ``DEFAULT_FRAME``, the site every rig reports at."""
+    return ChangeEEFrame.from_spec_args(site=DEFAULT_FRAME, **args)
+
+
+def _change_ee_frame_v2(**args: Any) -> ChangeEEFrame:
+    # A server built before v2 asks for ``latest`` with the v1 arguments, which name no site.
+    return ChangeEEFrame.from_spec_args(**args) if 'site' in args else _change_ee_frame_v1(**args)
+
+
+COMPONENTS[ChangeEEFrame.WIRE_NAME][1] = Version(_change_ee_frame_v1)
+COMPONENTS[ChangeEEFrame.WIRE_NAME][ChangeEEFrame.WIRE_VERSION] = Version(_change_ee_frame_v2)
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:
