@@ -32,6 +32,7 @@ from platform_client.device_flow import (
     register_with_device_flow,
     sign_in_flow,
 )
+from platform_client.enums import KeyStatus
 from platform_client.errors import PlatformError
 from platform_client.identity_providers import (
     CONNECT_TIMEOUT_S,
@@ -46,6 +47,7 @@ from platform_client.identity_providers import (
     IdentityProvider,
     max_stall_s,
 )
+from platform_client.ids import UserId
 from platform_client.responses import RegisterResponse
 
 CLIENT_ID = 'Iv1.testclientid'
@@ -1017,9 +1019,10 @@ def _main_against(gateway: ScriptedGateway, flow: DeviceFlow | None = None) -> S
 
 def test_the_command_tells_an_existing_account_to_set_its_key_and_that_rotate_stops_it(capsys):
     flow, _ = _flow(ScriptedProvider(polls=[dict(GRANTED)]))  # built before the patch, so GitHub keeps its transport
-    gateway = ScriptedGateway(
-        body={'user_id': 'a1', 'artifact_location': 's3://artifacts/a1', 'api_key': None, 'key_status': 'existing'}
+    existing = RegisterResponse(
+        user_id=UserId(0xA1), artifact_location='s3://artifacts/a1', key_status=KeyStatus.existing
     )
+    gateway = ScriptedGateway(body=existing.model_dump(mode='json'))
 
     with pytest.MonkeyPatch.context() as patch:
         _answer_the_command_as(patch, gateway, flow)
