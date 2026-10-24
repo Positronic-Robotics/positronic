@@ -52,7 +52,20 @@ def test_a_public_source_may_name_an_internal_word():
 
 
 def test_an_internal_word_in_a_path_outside_the_public_sources_is_a_finding():
-    assert _findings({'etc/gateway/config.yaml': ''}) == ['/etc/gateway/config.yaml: an internal name']
+    assert _findings({'opt/gateway/config.yaml': ''}) == ['/opt/gateway/config.yaml: an internal name']
+
+
+def test_the_distro_config_may_name_an_internal_word_and_hold_ca_certificates():
+    files = {
+        'etc/sysctl.conf': '# Do not act as a router or gateway',
+        'etc/ssl/certs/Amazon_Root_CA_1.pem': '-----BEGIN CERTIFICATE-----',
+    }
+    assert _findings(files) == []
+
+
+def test_a_private_key_or_host_name_in_the_distro_config_is_a_finding():
+    found = _findings({'etc/ssh/key': '-----BEGIN OPENSSH PRIVATE KEY-----', 'etc/hosts': '10.0.0.1 box.tail1.ts.net'})
+    assert found == ["/etc/ssh/key: holds '-----BEGIN OPENSSH PRIVATE KEY-----'", "/etc/hosts: holds 'tail1.ts.net'"]
 
 
 def test_a_key_file_outside_the_public_sources_is_a_finding():
