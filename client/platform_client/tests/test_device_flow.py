@@ -63,8 +63,6 @@ GRANTED = {'access_token': TOKEN, 'token_type': 'bearer', 'scope': IDENTITY_SCOP
 # rules-allow: hardcoded-keys — `positronic/cli/conftest.py` holds the same value, and this package
 # may not import from `positronic`: the dependency runs the other way, and the client installs alone.
 MINTED_KEY = 'pk_live_secret'
-# What a platform built against this client names in every answer.
-SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
 COMPLETE_URI = 'https://a.authkit.app/device?user_code=WDJB-MJHT'
 
 
@@ -675,6 +673,10 @@ def test_the_refresh_token_leaves_the_flow_nowhere(capsys):
 
 
 # --- step three: the registration --------------------------------------------
+
+
+# What a platform built against this client names in every answer.
+SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
 
 
 @dataclass

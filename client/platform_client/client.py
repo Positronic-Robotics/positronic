@@ -68,9 +68,9 @@ DEFAULT_PLATFORM_URL = 'https://platform.positronic.ro'
 # may therefore not default — three places that have to agree.
 AUTH_HEADER = 'Authorization'
 
-# Every request names the version of this client, and the gateway refuses one older than it serves.
+# The header every request carries, naming this client's version.
 CLIENT_VERSION_HEADER = 'X-Positronic-Client-Version'
-# Every answer names the contract version the platform serves: the version of this package it is built against.
+# The header an answer names its platform's contract version under: the version of this package it is built against.
 PLATFORM_VERSION_HEADER = 'X-Positronic-Platform-Version'
 CLIENT_VERSION = Version(version('positronic-platform-client'))
 # The oldest contract this client reads.
@@ -118,23 +118,6 @@ def resolve_base_url(base_url: str | None = None) -> str:
         require_absolute_url(value, source)
         return value
     return DEFAULT_PLATFORM_URL
-
-
-def require_platform_version(response: httpx.Response) -> None:
-    """Refuse an answer from a platform that serves a contract older than `MIN_PLATFORM_VERSION`."""
-    named = response.headers.get(PLATFORM_VERSION_HEADER)
-    try:
-        served = Version(named) if named is not None else None
-    except InvalidVersion:
-        served = None
-    if served is not None and served >= MIN_PLATFORM_VERSION:
-        return
-    serves = f'contract {named}' if served is not None else 'a contract too old to name its version'
-    raise PlatformError.synthesized(
-        response.status_code,
-        f'{response.request.url.host} serves {serves}; positronic-platform-client {CLIENT_VERSION} '
-        f'needs {MIN_PLATFORM_VERSION} or later. Ask the platform operator, or install an older positronic',
-    )
 
 
 class Auth(Enum):
@@ -325,6 +308,23 @@ class PlatformClient:
         )
         return model.model_validate_json(sent.content)
 
+    @staticmethod
+    def _require_platform_version(response: httpx.Response) -> None:
+        """Refuse an answer from a platform that serves a contract older than `MIN_PLATFORM_VERSION`."""
+        named = response.headers.get(PLATFORM_VERSION_HEADER)
+        try:
+            served = Version(named) if named is not None else None
+        except InvalidVersion:
+            served = None
+        if served is not None and served >= MIN_PLATFORM_VERSION:
+            return
+        serves = f'contract {named}' if served is not None else 'a contract too old to name its version'
+        raise PlatformError.synthesized(
+            response.status_code,
+            f'{response.request.url.host} serves {serves}; positronic-platform-client {CLIENT_VERSION} '
+            f'needs {MIN_PLATFORM_VERSION} or later. Ask the platform operator, or install an older positronic',
+        )
+
     def _send(
         self, method: str, path: str, *, query: BaseModel | None = None, auth: Auth = Auth.REQUIRED, **kwargs: Any
     ) -> httpx.Response:
@@ -348,7 +348,7 @@ class PlatformClient:
                 payload = response.text
             raise PlatformError.from_payload(response.status_code, payload)
         # Only a 2xx: a proxy's error page names no version, and calling it an old platform would hide the fault.
-        require_platform_version(response)
+        self._require_platform_version(response)
         return response
 
     def close(self) -> None:
