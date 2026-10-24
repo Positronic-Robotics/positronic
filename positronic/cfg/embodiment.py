@@ -8,8 +8,8 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry
-from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.drivers.roboarm.models import YAM_SITE, EEFrame, ee_frames_entry
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, robot_static_meta
 from positronic.eval import keys as eval_keys
 
 if TYPE_CHECKING:
@@ -78,7 +78,7 @@ def yam(robot_arm, cameras, video_encoder):
         observations=observations,
         commands=commands,
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: robot_arm.sync_grip},
-        static_meta=dict(ROBOT_STATIC_META),
+        static_meta=robot_static_meta(YAM_SITE),
         meta_source=robot_arm.robot_meta,
         ready_handlers={eval_keys.ARM: robot_arm.ready, **{name: cam.ready for name, cam in cameras.items()}},
         control_systems=(*cameras.values(), robot_arm),
@@ -161,7 +161,7 @@ def yam_bimanual(
         eval_keys.JOINT_SIGNALS: list(joint_signals.values()),
         eval_keys.POSE_SIGNALS: pose_signals,
         eval_keys.MOUNTS: {sig: mounts[side] for side, sig in joint_signals.items()},
-        **ee_frames_entry({sig: EEFrame(site=DEFAULT_FRAME) for sig in pose_signals}),
+        **ee_frames_entry({sig: EEFrame(site=YAM_SITE) for sig in pose_signals}),
     }
     return Embodiment(
         descriptor='yam_bimanual',

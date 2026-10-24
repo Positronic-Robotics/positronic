@@ -6,7 +6,7 @@ from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, parse_ee_frames
+from positronic.drivers.roboarm.models import GRIPPER_SITE, parse_ee_frames
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Step
@@ -276,24 +276,24 @@ class TestCodecComposition:
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
         b = Transform3D(np.array([0.01, 0.0, 0.02]), Rotation.from_euler([0.0, 0.0, -0.4]))
         with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
-            _ = (ChangeEEFrame(DEFAULT_FRAME, a) | ChangeEEFrame(DEFAULT_FRAME, b)).meta
+            _ = (ChangeEEFrame(GRIPPER_SITE, a) | ChangeEEFrame(GRIPPER_SITE, b)).meta
 
     def test_the_same_frame_twice_is_still_two_moves(self):
         """The second move starts where the first left off, so the shared value names neither end of the pair."""
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
         with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
-            _ = (ChangeEEFrame(DEFAULT_FRAME, a) | ChangeEEFrame(DEFAULT_FRAME, a)).meta
+            _ = (ChangeEEFrame(GRIPPER_SITE, a) | ChangeEEFrame(GRIPPER_SITE, a)).meta
 
     def test_parallel_frame_codecs_keep_the_frame_they_share(self):
         """Both halves encode the same input, so one move happens and the shared declaration describes it."""
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        meta = (ChangeEEFrame(DEFAULT_FRAME, a) & ChangeEEFrame(DEFAULT_FRAME, a)).meta
+        meta = (ChangeEEFrame(GRIPPER_SITE, a) & ChangeEEFrame(GRIPPER_SITE, a)).meta
         frame = parse_ee_frames(meta[roboarm_keys.EE_FRAMES])[obs_keys.EE_POSE]
         np.testing.assert_allclose(frame.offset.as_matrix, a.as_matrix, atol=1e-12)
 
     def test_sequential_frame_codecs_over_different_keys_state_both(self):
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        composed = ChangeEEFrame(DEFAULT_FRAME, a, keys=('left',)) | ChangeEEFrame(DEFAULT_FRAME, a, keys=('right',))
+        composed = ChangeEEFrame(GRIPPER_SITE, a, keys=('left',)) | ChangeEEFrame(GRIPPER_SITE, a, keys=('right',))
         assert parse_ee_frames(composed.meta[roboarm_keys.EE_FRAMES]).keys() == {'left', 'right'}
 
 

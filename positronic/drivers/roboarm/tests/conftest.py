@@ -42,8 +42,11 @@ def _install_vendor_stub() -> None:
             kqd=(4.0, 6.0, 5.0, 5.0, 3.0, 2.0, 1.0),
             kx=(750.0, 750.0, 750.0, 15.0, 15.0, 15.0),
             kxd=(37.0, 37.0, 37.0, 2.0, 2.0, 2.0),
+            *,
+            stiffness_point=(0.0, 0.0, 0.0),
         ):
             self.kq, self.kqd, self.kx, self.kxd = list(kq), list(kqd), list(kx), list(kxd)
+            self.stiffness_point = list(stiffness_point)
 
     vendor = types.ModuleType(VENDOR)
     vendor.__dict__.update(

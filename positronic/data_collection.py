@@ -26,7 +26,9 @@ from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers import roboarm
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import State as RoboarmState
+from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_SITE
 from positronic.drivers.webxr import WebXR
+from positronic.eval import robot_static_meta
 from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
@@ -291,6 +293,8 @@ def main(
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
     video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
+    # The site of the arm's model that its poses are reported at.
+    pose_site: str = GRIPPER_SITE,
 ):
     """Runs data collection in real hardware."""
     if (robot_arm is not None) != (len(nominal_joints) > 0):
@@ -314,7 +318,7 @@ def main(
     if task is not None:
         static_meta[keys.TASK] = task
     if robot_arm is not None:
-        static_meta.update(wire.ROBOT_STATIC_META)
+        static_meta.update(robot_static_meta(pose_site))
     output_path = None
     if output_dir is not None:
         video_encoder.ensure_available()
@@ -448,6 +452,7 @@ yamcfg = arm_as_gripper.override(
     cameras={},
     nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
     video_encoder=positronic.cfg.video_encoder.jetson_h264,
+    pose_site=YAM_SITE,
 )
 
 

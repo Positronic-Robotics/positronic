@@ -1,5 +1,6 @@
 from unittest.mock import Mock
 
+import configuronic as cfn
 import pytest
 
 pytest.importorskip('lerobot', minversion='0.4')
@@ -7,6 +8,9 @@ pytest.importorskip('lerobot', minversion='0.4')
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.act.configuration_act import ACTConfig
 
+from positronic import keys
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.models import FR3_EE_FRAME, GRIPPER_SITE, parse_ee_frames
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs.observation import TASK_FIELD
 from positronic.vendors.lerobot import server
@@ -65,3 +69,23 @@ def test_session_owner_isolated_from_probes_and_other_episodes():
     model.end_session('episode')
     model._policy.reset.assert_called_once()
     assert model._session_id is None
+
+
+def _pipeline(name: str) -> cfn.Config:
+    return server.COMMANDS[name].kwargs['pipeline']
+
+
+@pytest.mark.parametrize('name', ['serve', 'ee'])
+def test_a_pose_pipeline_that_states_no_frame_fails_to_build(name):
+    with pytest.raises(TypeError, match='ee_frame'):
+        _pipeline(name).instantiate()
+
+
+@pytest.mark.parametrize('name', ['joints', 'joints_ik', 'joints_ik_sim'])
+def test_a_joint_pipeline_builds_with_no_frame(name):
+    assert roboarm_keys.EE_FRAMES not in _pipeline(name).instantiate().meta()
+
+
+def test_the_phail_checkpoint_states_the_fr3_frame_it_was_trained_in():
+    frame = parse_ee_frames(_pipeline('phail').instantiate().meta()[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
+    assert (frame.site, frame.offset) == (GRIPPER_SITE, FR3_EE_FRAME)

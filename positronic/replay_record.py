@@ -12,6 +12,7 @@ import positronic.cfg.ds
 import positronic.cfg.simulator
 from pimm.logging import init_logging
 from positronic import geom, keys, wire
+from positronic.cfg.ds.internal import SIM_ROBOT_TRANSFORM
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.transforms.episode import Derive, Group, Identity
@@ -59,10 +60,7 @@ class RestoreCommand(Derive):
 
     @staticmethod
     def _commands_from_episode(episode: Episode) -> Any:
-        # Datasets recorded before the rename store the plural key; accept both.
-        key = keys.TARGET_EE_POSE if keys.TARGET_EE_POSE in episode else 'robot_commands.pose'
-        pose = episode[key]
-        return transforms.Elementwise(pose, RestoreCommand.command_from_pose)
+        return transforms.Elementwise(episode[keys.TARGET_EE_POSE], RestoreCommand.command_from_pose)
 
     @staticmethod
     def command_from_pose(pose: Sequence[np.ndarray]) -> Sequence[roboarm.command.CommandType]:
@@ -108,7 +106,7 @@ def main(
     """Replay and optionally record episodes from a dataset.
 
     Args:
-        dataset: Source dataset containing episodes to replay
+        dataset: Source dataset containing episodes to replay, read at ``GRIPPER_SITE`` through ``SIM_ROBOT_TRANSFORM``
         episodes: Episodes to replay. Accepts multiple formats:
             - Single episode: --episodes 5
             - Multiple episodes: --episodes '[0,5,10]'
@@ -124,8 +122,8 @@ def main(
     """
     indices = parse_episodes(episodes, dataset)
 
-    # Apply dataset transform once
-    dataset = transforms.TransformedDataset(dataset, Group(RestoreCommand(), Identity()))
+    # The sim solves at its ``GRIPPER_SITE``, so every recording is read with its targets there.
+    dataset = transforms.TransformedDataset(dataset, SIM_ROBOT_TRANSFORM | Group(RestoreCommand(), Identity()))
 
     output_path = Path(output_dir) if output_dir is not None else None
     dataset_factory = LocalDatasetWriter if output_path is not None else None

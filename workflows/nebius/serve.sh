@@ -48,18 +48,20 @@ Examples:
   # ACT public demo checkpoint (no S3 credentials needed inside the container)
   bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 
-  # Your own ACT checkpoint
+  # Your own ACT checkpoint (a pose pipeline takes ee_frame, the EE frame the checkpoint speaks)
   bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
-    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/ \
+    --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
 
   # SmolVLA / lerobot 0.4.x checkpoint
   bash workflows/nebius/serve.sh lerobot smolvla-server ee \
-    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+    --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/ \
+    --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
 
-  # OpenPI (ee_frame is the EE frame the checkpoint speaks; None means it speaks joints only)
+  # OpenPI
   bash workflows/nebius/serve.sh openpi pi-server ee \
     --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
-    --pipeline.ee_frame=@positronic.cfg.codecs.default_ee_frame
+    --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
 
   # GR00T
   bash workflows/nebius/serve.sh gr00t groot-server droid \

@@ -30,7 +30,7 @@ from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, EEFrame, ee_frames_entry
+from positronic.drivers.roboarm.models import EE_LINK, GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import NO_MODEL_ROBOT_META, ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
@@ -1817,7 +1817,7 @@ def test_a_policy_that_states_no_frames_sees_no_pose():
 
 
 def test_a_policy_that_states_no_frames_sees_no_signal_the_rig_states_as_a_pose_whatever_its_name():
-    framed = {signal: EEFrame(site=DEFAULT_FRAME) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.JOINTS)}
+    framed = {signal: EEFrame(site=GRIPPER_SITE) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.JOINTS)}
     static_meta = {**ROBOT_STATIC_META, **ee_frames_entry(framed)}
     policy = StubPolicy(command=JointPosition(positions=np.zeros(7)))
     assert _run_robot_rollout(policy, static_meta).result()[eval_keys.TERMINATED] is True
@@ -1826,7 +1826,7 @@ def test_a_policy_that_states_no_frames_sees_no_signal_the_rig_states_as_a_pose_
 
 
 def test_a_policy_that_states_the_rig_site_sees_the_pose():
-    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
     assert _run_robot_rollout(policy).result()[eval_keys.TERMINATED] is True
     np.testing.assert_allclose(policy.observations[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
 
@@ -1846,7 +1846,7 @@ def test_an_arm_with_no_model_runs_a_joint_policy_without_the_pose():
 
 
 def test_an_arm_with_no_model_refuses_a_policy_that_reads_poses():
-    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
     with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
         _run_robot_rollout(policy, robot_meta=NO_MODEL_ROBOT_META).result()
     assert policy.observations == []

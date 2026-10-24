@@ -11,7 +11,7 @@ from positronic import geom, telemetry, telemetry_keys
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import qpos_from_site_pose
-from positronic.drivers.roboarm.models import bundled_panda_model
+from positronic.drivers.roboarm.models import GRIPPER_SITE, bundled_panda_model
 from positronic.drivers.utils import Moves, MoveStatus
 from positronic.eval import keys as eval_keys
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
@@ -130,7 +130,8 @@ class MujocoSim(pimm.ControlSystem):
         self.warmup_steps = 1000
         self.fps_counter = pimm.utils.RateCounter('MujocoSim')
 
-        self._ee_name = f'end_effector{suffix}'
+        self._gripper_site = f'{GRIPPER_SITE}{suffix}'
+        self._gripper_body = f'link7{suffix}'
         self._joint_names = [f'joint{i}{suffix}' for i in range(1, 8)]
         self._actuator_names = [f'actuator{i}{suffix}' for i in range(1, 8)]
         self._gripper_actuator = gripper_actuator
@@ -263,9 +264,16 @@ class MujocoSim(pimm.ControlSystem):
         """Apply the loaders to the model file and bind the result; ``scene_xml`` captures the draw."""
         with np_seed(seed):
             spec, self.metadata = load_spec_from_file(self.mujoco_model_path, self.loaders)
+        self._name_the_gripper(spec)
         self.model = spec.compile()
         self.scene_xml = spec.to_xml()
         self._bind_model()
+
+    def _name_the_gripper(self, spec: mj.MjSpec) -> None:  # pyright: ignore[reportAttributeAccessIssue]
+        """Add the ``GRIPPER_SITE`` site where ``panda.xml`` puts it, unless the scene has one."""
+        if spec.site(self._gripper_site) is None:
+            # The midpoint of the fingertip pads, 0.21065 m along the axis of ``link7``, as in ``panda.xml``.
+            spec.body(self._gripper_body).add_site(name=self._gripper_site, pos=(0.0, 0.0, 0.21065), group=4)
 
     def _emit_robot_meta(self):
         # Emit the full robot model (URDF + meshes + frames + gripper) at record time, like franka.py,
@@ -330,6 +338,7 @@ class MujocoSim(pimm.ControlSystem):
         if SCENE_XML in state:
             self.scene_xml = state[SCENE_XML]
             scene, self.metadata = load_spec(self.scene_xml, Path(self.mujoco_model_path).parent)
+            self._name_the_gripper(scene)
             self.model = scene.compile()
             self._bind_model()
         mj.mj_resetData(self.model, self.data)
@@ -387,10 +396,10 @@ class MujocoSim(pimm.ControlSystem):
             self._error = True
 
     def _ik(self, target: geom.Transform3D) -> np.ndarray:
-        """The joints that put the end effector at ``target``; raises what the arm cannot reach."""
+        """The joints that put ``GRIPPER_SITE`` at ``target``; raises what the arm cannot reach."""
         if self._ik_data is None:
             self._ik_data = mj.MjData(self.model)
-            self._ik_site_id = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_SITE, self._ee_name)
+            self._ik_site_id = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_SITE, self._gripper_site)
             self._ik_dof_ids = np.array([self.model.joint(n).dofadr.item() for n in self._joint_names])
         # Search on a scratch copy warm-started from the robot's current pose, leaving the live sim intact.
         self._ik_data.qpos[:] = self.data.qpos
@@ -436,7 +445,7 @@ class MujocoSim(pimm.ControlSystem):
 
     @property
     def _ee_pose(self) -> geom.Transform3D:
-        site = self.data.site(self._ee_name)
+        site = self.data.site(self._gripper_site)
         quat = np.empty(4)
         mj.mju_mat2Quat(quat, site.xmat.copy())
         return geom.Transform3D(translation=site.xpos.copy(), rotation=geom.Rotation.from_quat(quat))

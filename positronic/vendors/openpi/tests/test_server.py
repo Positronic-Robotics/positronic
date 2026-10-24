@@ -40,6 +40,12 @@ def test_the_preallocation_setting_of_the_environment_reaches_the_subprocess(mon
     assert _subprocess_env(monkeypatch)[PREALLOCATE_ENV] == 'true'
 
 
+@pytest.mark.parametrize('name', ['serve', 'ee', 'ee_joints', 'ee_traj', 'ee_joints_traj', 'ee_flip_grip'])
+def test_a_pose_pipeline_that_states_no_frame_fails_to_build(name):
+    with pytest.raises(TypeError, match='ee_frame'):
+        COMMANDS[name].kwargs['pipeline'].instantiate()
+
+
 def _send_metadata_and_wait(connection: ServerConnection) -> None:
     connection.send(msgpack_numpy.Packer().pack({}))
     for _ in connection:

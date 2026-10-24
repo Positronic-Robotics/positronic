@@ -138,7 +138,7 @@ class CartesianDelta:
     space.
 
     A delta has no anchor pose of its own, so it carries the frame it is expressed in instead: ``frame``
-    places that frame relative to the receiver's ``default``, and ``apply`` measures there before composing.
+    places that frame relative to the receiver's control frame, and ``apply`` measures there before composing.
     """
 
     TYPE = 'cartesian_delta'
@@ -149,7 +149,7 @@ class CartesianDelta:
     mode: ControlModeType | None = None
 
     def apply(self, current: geom.Transform3D) -> geom.Transform3D:
-        """The absolute target to drive to, given the pose measured at the receiver's ``default`` frame.
+        """The absolute target to drive to, given the pose measured at the receiver's control frame.
 
         ``frame`` carries the delta into the frame it was expressed in and the result back out, so a policy
         speaking a different end-effector frame moves the arm as it intended.

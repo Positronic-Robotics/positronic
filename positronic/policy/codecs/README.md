@@ -154,7 +154,7 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 ## End-effector frames
 
-"EE pose" has no universal meaning: our rigs report the frame their model calls `default`, DROID reports the flange (`panda_link8`), and RoboLab reports its own `eef_frame` at the gripper coupler (`robolab_eef`). A checkpoint speaks whichever frame its training data was in, so serving it on a rig whose `default` sits elsewhere misreads every pose and every command by one constant transform — silently. See [the frame contract](../../drivers/roboarm/README.md) for what `default` is and what each embodiment owes it.
+"EE pose" has no universal meaning: our rigs report the grip point their model calls `gripper`, DROID reports the flange (`panda_link8`), and RoboLab reports its own `eef_frame` at the gripper coupler (`robolab_eef`). A checkpoint speaks whichever frame its training data was in, so serving it in another frame misreads every pose and every command by one constant transform — silently. See [the frame contract](../../drivers/roboarm/README.md) for what `gripper` is and what each embodiment owes it.
 
 `ChangeEEFrame(site, T)` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
 
@@ -163,22 +163,22 @@ The codec states its frame as the `ee_frames` entry of each pose signal it conve
 - A policy that states no `ee_frames` speaks joints only. Its observation carries no pose signal, so a codec that reads a pose fails on the missing key.
 - A policy that names a site the rig does not report that signal at is refused.
 
-A pose-reading checkpoint therefore always states its frame, also when the offset is the identity (`cfg.codecs.default_ee_frame`).
+A pose-reading checkpoint therefore always states its frame, also when the offset is the identity (`cfg.codecs.gripper_ee_frame`).
 
 It is declared in two places, for the two things it does:
 
 - **Training** — `compose(ee_frame=...)` takes an `EEFrame` and re-expresses the dataset in it, so the resulting checkpoint speaks that frame. The training transform refuses a pose that the recording does not state at that site with no offset. It defaults to unset, which trains on the poses as recorded.
-- **Serving** — the OpenPI pipeline's `ee_frame=` puts `ChangeEEFrame` in the client's pipeline. It has no default: every deployment states its frame. Pass `@positronic.cfg.codecs.default_ee_frame` for a checkpoint trained on poses at `default`, and `None` for one that speaks joints only. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
+- **Serving** — the LeRobot and OpenPI pipelines take `ee_frame=`, which puts `ChangeEEFrame` in the deployment. It has no default: every pose deployment states its frame, and a pose pipeline built without one fails when the server starts. The joint pipelines state `None` themselves. Pass `@positronic.cfg.codecs.gripper_ee_frame` for a checkpoint trained on poses at `gripper`, `@positronic.cfg.codecs.fr3_ee_frame` or `@positronic.cfg.codecs.panda_ee_frame` for one trained on real FR3 or sim panda recordings made before the rigs reported at `gripper`, and `None` for one that speaks joints only. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
 
-Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `EEFrame(site=DEFAULT_FRAME, offset=models.DROID_EE_FRAME)`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
+Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `EEFrame(site=GRIPPER_SITE, offset=models.DROID_EE_FRAME)`, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
 
-A remote server that states no frame observes no pose, so a client stack of its that reads one fails on the first observation. A server built for poses at the Franka Hand point, where the FR3 and the bundled panda report `default`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline.
+A remote server that states no frame observes no pose, so a client stack of its that reads one fails on the first observation. A server built for poses at the Franka Hand point, the FR3's `F_T_EE`, adds `@positronic.cfg.codecs.franka_hand_frame` to its pipeline. A v1 `change_ee_frame` spec states its transform from that point, so the client reads it from `gripper` through `models.FR3_EE_FRAME`.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 
 ## Control mode
 
-`SetControlMode(mode)` stamps a control mode on every robot command of a decoded chunk, so a checkpoint executes under the law its training data ran under. It composes left of the action decoder: `SetControlMode(mode) | action`. `mode` is `Impedance(kq, kqd, kx, kxd, frame)` or `PositionControl(stiffness=None)` from [`positronic.drivers.roboarm.command`](../../drivers/roboarm/command.py); a command without one runs under the arm's native law (see [the wire format](../../../docs/connect-your-model.md#actions-server--client)). `ChangeEEFrame` leaves the mode alone: an impedance `frame` is always measured from the rig's control frame. Implementation in [`positronic/policy/codecs/action.py`](action.py).
+`SetControlMode(mode)` stamps a control mode on every robot command of a decoded chunk, so a checkpoint executes under the law its training data ran under. It composes left of the action decoder: `SetControlMode(mode) | action`. `mode` is `Impedance(kq, kqd, kx, kxd, frame)` or `PositionControl(stiffness=None)` from [`positronic.drivers.roboarm.command`](../../drivers/roboarm/command.py); a command without one runs under the arm's native law (see [the wire format](../../../docs/connect-your-model.md#actions-server--client)). `ChangeEEFrame` leaves the mode alone: an impedance `frame` is always measured from the rig site, so one `DROID_IMPEDANCE` puts the stiffness at the flange in every stack. Implementation in [`positronic/policy/codecs/action.py`](action.py).
 
 Two wrappers in [`positronic/cfg/codecs.py`](../../cfg/codecs.py) apply it to an action codec:
 
@@ -287,7 +287,8 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # Serve the matching recipe
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
 ```
 
 ## See Also

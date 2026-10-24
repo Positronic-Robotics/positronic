@@ -20,7 +20,7 @@ from positronic.cfg import codecs
 from positronic.cfg import codecs as cfg_codecs
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianPosition
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry, parse_ee_frames
+from positronic.drivers.roboarm.models import FR3_EE_FRAME, GRIPPER_SITE, EEFrame, ee_frames_entry, parse_ee_frames
 from positronic.geom import Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
@@ -867,16 +867,14 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():
-    local = Sequential(ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity), ChunkedSchedule(fps=10))
+    local = Sequential(ChangeEEFrame(GRIPPER_SITE, Transform3D.identity), ChunkedSchedule(fps=10))
     with pytest.raises(ValueError, match='Only one side'):
-        PolicyDeployment(local, codec=ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity))
+        PolicyDeployment(local, codec=ChangeEEFrame(GRIPPER_SITE, Transform3D.identity))
 
 
 def test_pipeline_takes_frame_conversions_of_different_signals_on_each_side():
-    local = Sequential(
-        ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10)
-    )
-    PolicyDeployment(local, codec=ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.TARGET_EE_POSE,)))
+    local = Sequential(ChangeEEFrame(GRIPPER_SITE, Transform3D.identity, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    PolicyDeployment(local, codec=ChangeEEFrame(GRIPPER_SITE, Transform3D.identity, keys=(keys.TARGET_EE_POSE,)))
 
 
 @pytest.fixture
@@ -1015,40 +1013,43 @@ def _frames_meta(meta):
 
 
 def test_policy_meta_states_the_frames_the_server_codec_declares():
-    server_frames = ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
+    server_frames = ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
     policy, session = _mock_remote_policy({**CHUNKED_STACK, **server_frames})
     session.protocol_version = protocol.ProtocolVersion.V3
-    assert _frames_meta(policy.meta()) == {keys.EE_POSE: DEFAULT_FRAME}
+    assert _frames_meta(policy.meta()) == {keys.EE_POSE: GRIPPER_SITE}
 
 
-def test_policy_meta_states_the_frames_a_v1_client_stack_declares():
-    """A server older than ``ee_frames`` declares its frame only as a v1 ``change_ee_frame`` in the client stack."""
+def test_policy_meta_states_the_franka_hand_point_for_an_identity_v1_client_stack():
+    """A server older than ``ee_frames`` declares its frame only as a v1 ``change_ee_frame`` in the client stack. An
+    identity one meant the poses the FR3 reported then, at its ``F_T_EE``."""
     v1 = spec.component(ChangeEEFrame.WIRE_NAME, version=1, transform=[0, 0, 0, 1, 0, 0, 0], keys=[keys.EE_POSE])
     policy, session = _mock_remote_policy({
         offboard_keys.LOCAL_STACK: spec.sequence(v1, CHUNKED_STACK[offboard_keys.LOCAL_STACK])
     })
     session.protocol_version = protocol.ProtocolVersion.V3
-    assert _frames_meta(policy.meta()) == {keys.EE_POSE: DEFAULT_FRAME}
+    [(signal, frame)] = parse_ee_frames(policy.meta()[roboarm_keys.EE_FRAMES]).items()
+    assert (signal, frame.site, frame.offset) == (keys.EE_POSE, GRIPPER_SITE, FR3_EE_FRAME)
 
 
 def test_policy_meta_states_the_frames_both_sides_of_a_split_deployment_declare(served):
     local = Sequential(
-        ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.EE_POSE,)),
+        ChangeEEFrame(GRIPPER_SITE, Transform3D.identity, keys=(keys.EE_POSE,)),
         PauseOnUnavailable(),
         ChunkedSchedule(fps=10, horizon_sec=0.2),
     )
-    codec = ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity, keys=(keys.TARGET_EE_POSE,))
+    codec = ChangeEEFrame(GRIPPER_SITE, Transform3D.identity, keys=(keys.TARGET_EE_POSE,))
     address, _, _ = served(local=local, codec=codec)
     frames = _frames_meta(RemotePolicy('websocket', address).meta())
-    assert frames == {keys.EE_POSE: DEFAULT_FRAME, keys.TARGET_EE_POSE: DEFAULT_FRAME}
+    assert frames == {keys.EE_POSE: GRIPPER_SITE, keys.TARGET_EE_POSE: GRIPPER_SITE}
 
 
-def test_a_server_with_the_franka_hand_frame_codec_states_its_poses_at_the_rig_default(served):
+def test_a_server_with_the_franka_hand_frame_codec_states_its_poses_at_the_franka_hand_point(served):
     local = Sequential(
         cfg_codecs.franka_hand_frame.instantiate(), PauseOnUnavailable(), ChunkedSchedule(fps=10, horizon_sec=0.2)
     )
     address, _, _ = served(local=local)
-    assert _frames_meta(RemotePolicy('websocket', address).meta())[keys.EE_POSE] == DEFAULT_FRAME
+    frame = parse_ee_frames(RemotePolicy('websocket', address).meta()[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
+    assert (frame.site, frame.offset) == (GRIPPER_SITE, FR3_EE_FRAME)
 
 
 def test_policy_meta_states_no_frames_for_a_server_that_declares_none():
@@ -1061,8 +1062,8 @@ def test_a_frame_codec_around_a_server_that_declares_none_states_the_frames_for_
     """A server that knows nothing of ``ee_frames`` reads poses at a frame the client side states for it."""
     policy, session = _mock_remote_policy(CHUNKED_STACK)
     session.protocol_version = protocol.ProtocolVersion.V3
-    framed = Sequential(ChangeEEFrame(DEFAULT_FRAME, Transform3D.identity), policy)
-    assert _frames_meta(framed.meta())[keys.EE_POSE] == DEFAULT_FRAME
+    framed = Sequential(ChangeEEFrame(GRIPPER_SITE, Transform3D.identity), policy)
+    assert _frames_meta(framed.meta())[keys.EE_POSE] == GRIPPER_SITE
 
 
 @pytest.mark.parametrize('start_run', [False, True], ids=['meta', 'run'])
