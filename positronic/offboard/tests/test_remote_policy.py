@@ -20,7 +20,7 @@ from positronic.cfg import codecs
 from positronic.cfg import codecs as cfg_codecs
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianPosition
-from positronic.drivers.roboarm.models import FR3_EE_FRAME, GRIPPER_SITE, EEFrame, ee_frames_entry, parse_ee_frames
+from positronic.drivers.roboarm.models import FRANKA_HAND_FRAME, GRIPPER_SITE, EEFrame, ee_frames_entry, parse_ee_frames
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
@@ -1038,7 +1038,7 @@ def test_a_server_built_for_the_franka_hand_frame_states_its_poses_at_the_franka
     )
     address, _, _ = served(local=local)
     frame = parse_ee_frames(RemotePolicy('websocket', address).meta()[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
-    assert (frame.site, frame.offset) == (GRIPPER_SITE, FR3_EE_FRAME)
+    assert (frame.site, frame.offset) == (GRIPPER_SITE, FRANKA_HAND_FRAME)
 
 
 def test_policy_meta_states_no_frames_for_a_server_that_declares_none():

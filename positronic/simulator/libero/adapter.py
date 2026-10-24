@@ -12,7 +12,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.roboarm.models import PANDA_EE_FRAME
+from positronic.drivers.roboarm.models import PANDA_HAND_FRAME
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -23,7 +23,7 @@ from positronic.simulator.mujoco.sim import MujocoFrankaState
 class LiberoAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
         # TODO(#557): LIBERO's grip site is taken to be the sim panda's ``EE_LINK``, and the two diverge.
-        super().__init__(PANDA_EE_FRAME)
+        super().__init__(PANDA_HAND_FRAME)
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:

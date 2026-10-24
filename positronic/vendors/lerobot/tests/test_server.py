@@ -10,7 +10,7 @@ from lerobot.policies.act.configuration_act import ACTConfig
 
 from positronic import keys
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import FR3_EE_FRAME, GRIPPER_SITE, parse_ee_frames
+from positronic.drivers.roboarm.models import FRANKA_HAND_FRAME, GRIPPER_SITE, parse_ee_frames
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs.observation import TASK_FIELD
 from positronic.vendors.lerobot import server
@@ -86,6 +86,6 @@ def test_a_joint_pipeline_builds_with_no_frame(name):
     assert roboarm_keys.EE_FRAMES not in _pipeline(name).instantiate().meta()
 
 
-def test_the_phail_checkpoint_states_the_fr3_frame_it_was_trained_in():
+def test_the_phail_checkpoint_states_the_franka_hand_frame_it_was_trained_in():
     frame = parse_ee_frames(_pipeline('phail').instantiate().meta()[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
-    assert (frame.site, frame.offset) == (GRIPPER_SITE, FR3_EE_FRAME)
+    assert (frame.site, frame.offset) == (GRIPPER_SITE, FRANKA_HAND_FRAME)

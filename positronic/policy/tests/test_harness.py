@@ -32,9 +32,9 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
 from positronic.drivers.roboarm.models import (
     EE_LINK,
-    FR3_EE_FRAME,
+    FRANKA_HAND_FRAME,
     GRIPPER_SITE,
-    PANDA_EE_FRAME,
+    PANDA_HAND_FRAME,
     YAM_SITE,
     EEFrame,
     bundled_franka_model,
@@ -1841,8 +1841,8 @@ def _legacy_point_warnings(caplog):
 @pytest.mark.parametrize(
     'static_meta, robot_meta, legacy_offset',
     [
-        (ROBOT_STATIC_META, bundled_franka_model(), FR3_EE_FRAME),
-        (ROBOT_STATIC_META, bundled_panda_model(), PANDA_EE_FRAME),
+        (ROBOT_STATIC_META, bundled_franka_model(), FRANKA_HAND_FRAME),
+        (ROBOT_STATIC_META, bundled_panda_model(), PANDA_HAND_FRAME),
         (robot_static_meta(YAM_SITE), bundled_yam_model(), Transform3D.identity),
     ],
     ids=['fr3', 'panda', 'yam'],

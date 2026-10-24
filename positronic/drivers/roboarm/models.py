@@ -31,15 +31,16 @@ DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.155]))
 ROBOLAB_EE_FRAME = geom.Transform3D(
     np.array([0.0, 0.0, -0.13682597739]), geom.Rotation.from_euler([0.0, 0.0, 1.5707963268])
 )
-# The FR3's ``F_T_EE`` under the Franka Hand setting in Desk, measured from ``GRIPPER_SITE``. ``F_T_EE`` is
-# 103.4mm along the flange approach axis and -45deg about it. Real-Franka recordings and checkpoints older than
-# ``GRIPPER_SITE`` speak poses there.
-FR3_EE_FRAME = geom.Transform3D(
+# The FR3's Franka Hand point, ``F_T_EE`` under the Franka Hand setting in Desk, measured from ``GRIPPER_SITE``.
+# ``F_T_EE`` is 103.4mm along the flange approach axis and -45deg about it. Real-Franka recordings and checkpoints
+# older than ``GRIPPER_SITE`` speak poses there.
+FRANKA_HAND_FRAME = geom.Transform3D(
     np.array([0.0, 0.0, -0.0516000006]), geom.Rotation.from_euler([0.0, 0.0, -0.7853981634])
 )
-# The sim panda's ``EE_LINK``, measured from ``GRIPPER_SITE``. ``EE_LINK`` is 58.4mm along the flange approach
-# axis and -45deg about it. Sim recordings and checkpoints older than ``GRIPPER_SITE`` speak poses there.
-PANDA_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.04525]), geom.Rotation.from_euler([0.0, 0.0, -0.7853981634]))
+# The hand point of the MuJoCo panda, its ``EE_LINK``, measured from ``GRIPPER_SITE``. ``EE_LINK`` is 58.4mm along
+# the flange approach axis and -45deg about it. Sim recordings and checkpoints older than ``GRIPPER_SITE`` speak
+# poses there.
+PANDA_HAND_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.04525]), geom.Rotation.from_euler([0.0, 0.0, -0.7853981634]))
 _QUAT = geom.Rotation.Representation.QUAT
 
 

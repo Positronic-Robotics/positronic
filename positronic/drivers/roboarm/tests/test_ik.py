@@ -27,9 +27,9 @@ from positronic.drivers.roboarm.models import (
     DROID_EE_FRAME,
     EE_LINK,
     FLANGE_LINK,
-    FR3_EE_FRAME,
+    FRANKA_HAND_FRAME,
     GRIPPER_SITE,
-    PANDA_EE_FRAME,
+    PANDA_HAND_FRAME,
     ROBOLAB_EE_FRAME,
     ROBOLAB_EEF_LINK,
     YAM_JOINT_NAMES,
@@ -256,8 +256,8 @@ def test_bundled_model_has_the_site_its_embodiment_reports_at(model, site):
     [
         (bundled_franka_model(), DROID_EE_FRAME, FLANGE_LINK),
         (bundled_franka_model(), ROBOLAB_EE_FRAME, ROBOLAB_EEF_LINK),
-        (bundled_franka_model(), FR3_EE_FRAME, EE_LINK),
-        (bundled_panda_model(), PANDA_EE_FRAME, EE_LINK),
+        (bundled_franka_model(), FRANKA_HAND_FRAME, EE_LINK),
+        (bundled_panda_model(), PANDA_HAND_FRAME, EE_LINK),
     ],
     ids=['droid', 'robolab', 'fr3', 'panda'],
 )

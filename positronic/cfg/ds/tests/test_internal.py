@@ -16,9 +16,9 @@ from positronic.drivers.roboarm.models import (
     DROID_EE_FRAME,
     EE_LINK,
     FLANGE_LINK,
-    FR3_EE_FRAME,
+    FRANKA_HAND_FRAME,
     GRIPPER_SITE,
-    PANDA_EE_FRAME,
+    PANDA_HAND_FRAME,
     EEFrame,
     attach_frame,
     bundled_franka_model,
@@ -58,19 +58,19 @@ def _assert_reads_at_the_gripper(episode, gripper_to_recorded: geom.Transform3D)
 )
 def test_a_real_recording_at_the_franka_tool_frame_reads_at_the_gripper(statics):
     relabelled = REAL_ROBOT_TRANSFORM(_recording(**statics))
-    _assert_reads_at_the_gripper(relabelled, FR3_EE_FRAME)
+    _assert_reads_at_the_gripper(relabelled, FRANKA_HAND_FRAME)
     assert CONTROL_FRAME not in relabelled
 
 
 def test_a_real_recording_moves_by_the_offset_its_ee_frame_named():
     relabelled = REAL_ROBOT_TRANSFORM(_recording(**{CONTROL_FRAME: DEFAULT, EE_FRAME: OFFSET.as_vector(QUAT)}))
-    _assert_reads_at_the_gripper(relabelled, FR3_EE_FRAME * OFFSET)
+    _assert_reads_at_the_gripper(relabelled, FRANKA_HAND_FRAME * OFFSET)
     assert EE_FRAME not in relabelled
 
 
 def test_a_real_recording_moves_from_the_frames_it_states():
     stated = ee_frames_entry(dict.fromkeys(POSE_SIGNALS, EEFrame(site=EE_LINK, offset=OFFSET)))
-    _assert_reads_at_the_gripper(REAL_ROBOT_TRANSFORM(_recording(**stated)), FR3_EE_FRAME * OFFSET)
+    _assert_reads_at_the_gripper(REAL_ROBOT_TRANSFORM(_recording(**stated)), FRANKA_HAND_FRAME * OFFSET)
 
 
 def test_a_real_recording_moves_from_where_its_own_model_puts_default():
@@ -83,7 +83,7 @@ def test_a_real_recording_moves_from_where_its_own_model_puts_default():
 def test_a_real_model_with_no_gripper_gets_one_at_the_2f85_grip_point():
     urdf = Path(package_assets_path('drivers/roboarm/fr3.urdf')).read_text()
     recording = _recording(**{roboarm_keys.URDF: urdf, CONTROL_FRAME: EE_LINK})
-    _assert_reads_at_the_gripper(REAL_ROBOT_TRANSFORM(recording), FR3_EE_FRAME)
+    _assert_reads_at_the_gripper(REAL_ROBOT_TRANSFORM(recording), FRANKA_HAND_FRAME)
 
 
 @pytest.mark.parametrize(
@@ -108,14 +108,14 @@ def test_a_recording_at_the_gripper_keeps_its_poses(transform, model):
     ids=['before_485', 'no_frame', 'default'],
 )
 def test_a_sim_recording_at_the_panda_hand_reads_at_the_gripper(statics):
-    _assert_reads_at_the_gripper(SIM_ROBOT_TRANSFORM(_recording(**statics)), PANDA_EE_FRAME)
+    _assert_reads_at_the_gripper(SIM_ROBOT_TRANSFORM(_recording(**statics)), PANDA_HAND_FRAME)
 
 
 def test_a_sim_recording_with_mujoco_xml_for_a_model_reads_at_the_gripper():
     """Older sim recordings store the MuJoCo scene under ``urdf``; the bundled panda replaces it."""
     scene = Path(package_assets_path('assets/mujoco/panda.xml')).read_text()
     recording = _recording(**{roboarm_keys.URDF: scene, CONTROL_FRAME: EE_LINK})
-    _assert_reads_at_the_gripper(SIM_ROBOT_TRANSFORM(recording), PANDA_EE_FRAME)
+    _assert_reads_at_the_gripper(SIM_ROBOT_TRANSFORM(recording), PANDA_HAND_FRAME)
 
 
 def test_a_recorded_delta_frame_moves_with_the_targets():
@@ -125,13 +125,13 @@ def test_a_recorded_delta_frame_moves_with_the_targets():
     read = REAL_ROBOT_TRANSFORM(recording)
 
     moved = geom.Transform3D.from_vector(np.asarray(read[keys.TARGET_EE_POSE_DELTA_FRAME][0][0]), QUAT)
-    np.testing.assert_allclose(moved.as_matrix, FR3_EE_FRAME.as_matrix, atol=1e-9)
+    np.testing.assert_allclose(moved.as_matrix, FRANKA_HAND_FRAME.as_matrix, atol=1e-9)
 
 
 def test_training_moves_a_recording_from_before_485_off_the_gripper():
     trained = ChangeEEFrame(EEFrame(site=GRIPPER_SITE, offset=OFFSET))(
         REAL_ROBOT_TRANSFORM(_recording(**{CONTROL_FRAME: EE_LINK}))
     )
-    want = POSE * FR3_EE_FRAME.inv * OFFSET
+    want = POSE * FRANKA_HAND_FRAME.inv * OFFSET
     got = geom.Transform3D.from_vector(np.asarray(trained[keys.EE_POSE][0][0]), QUAT)
     np.testing.assert_allclose(got.as_matrix, want.as_matrix, atol=1e-9)

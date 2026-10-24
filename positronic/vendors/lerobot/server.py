@@ -4,7 +4,7 @@ import configuronic as cfn
 import pos3
 
 from pimm.logging import init_logging
-from positronic.cfg.codecs import fr3_ee_frame
+from positronic.cfg.codecs import franka_hand_frame
 from positronic.drivers.roboarm.models import EEFrame
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
@@ -74,7 +74,7 @@ COMMANDS = {
     'joints_ik_sim': serve.override(model=lerobot_model, pipeline=joints_ik_sim),
     'phail': serve.override(
         model=lerobot_model.override(checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/'),
-        pipeline=ee.override(codec=lerobot_codecs.phail_v1, ee_frame=fr3_ee_frame),
+        pipeline=ee.override(codec=lerobot_codecs.phail_v1, ee_frame=franka_hand_frame),
     ),
 }
 

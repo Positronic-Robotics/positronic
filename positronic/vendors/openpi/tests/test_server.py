@@ -8,7 +8,13 @@ import pytest
 from positronic import geom, keys
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta
-from positronic.drivers.roboarm.models import FR3_EE_FRAME, GRIPPER_SITE, PANDA_EE_FRAME, EEFrame, parse_ee_frames
+from positronic.drivers.roboarm.models import (
+    FRANKA_HAND_FRAME,
+    GRIPPER_SITE,
+    PANDA_HAND_FRAME,
+    EEFrame,
+    parse_ee_frames,
+)
 from positronic.policy.codecs import ACTION
 from positronic.policy.spec import from_spec
 from positronic.vendors import openpi
@@ -49,7 +55,7 @@ def test_a_pose_pipeline_that_states_no_frame_fails_to_build(name):
 
 
 @pytest.mark.parametrize(
-    'name, offset', [('phail', FR3_EE_FRAME), ('sim_stack', PANDA_EE_FRAME), ('libero', PANDA_EE_FRAME)]
+    'name, offset', [('phail', FRANKA_HAND_FRAME), ('sim_stack', PANDA_HAND_FRAME), ('libero', PANDA_HAND_FRAME)]
 )
 def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name, offset):
     deployment = COMMANDS[name].kwargs['pipeline'].instantiate()

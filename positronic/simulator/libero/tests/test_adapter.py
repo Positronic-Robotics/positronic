@@ -6,7 +6,7 @@ import pimm
 from positronic import geom, keys
 from positronic.cfg import codecs as cfg_codecs
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm.models import PANDA_EE_FRAME
+from positronic.drivers.roboarm.models import PANDA_HAND_FRAME
 from positronic.policy.codecs import ChangeEEFrame
 from positronic.simulator.env_server import protocol
 from positronic.simulator.libero.adapter import LiberoAdapter
@@ -27,14 +27,14 @@ def _raw_obs(eef_pose: geom.Transform3D) -> dict:
 
 
 def test_the_eef_pose_is_reported_at_the_gripper_site_of_the_sim_panda():
-    """The adapter takes the env's grip site to be the panda's ``EE_LINK``, which sits ``PANDA_EE_FRAME`` off it."""
+    """The adapter takes the env's grip site to be the panda's ``EE_LINK``, which sits ``PANDA_HAND_FRAME`` off it."""
     reported = LiberoAdapter({}).observations(_raw_obs(_EEF_POSE))[keys.ROBOT_STATE].ee_pose
-    np.testing.assert_allclose(reported.as_matrix, (_EEF_POSE * PANDA_EE_FRAME.inv).as_matrix, atol=1e-6)
+    np.testing.assert_allclose(reported.as_matrix, (_EEF_POSE * PANDA_HAND_FRAME.inv).as_matrix, atol=1e-6)
 
 
 def test_the_libero_checkpoint_frame_sees_the_pose_the_env_reports():
     reported = LiberoAdapter({}).observations(_raw_obs(_EEF_POSE))[keys.ROBOT_STATE].ee_pose
-    frame = cfg_codecs.panda_ee_frame.instantiate()
+    frame = cfg_codecs.panda_hand_frame.instantiate()
     seen = ChangeEEFrame(frame).encode({keys.EE_POSE: reported.as_vector(_QUAT)})[keys.EE_POSE]
     np.testing.assert_allclose(geom.Transform3D.from_vector(seen, _QUAT).as_matrix, _EEF_POSE.as_matrix, atol=1e-6)
 
