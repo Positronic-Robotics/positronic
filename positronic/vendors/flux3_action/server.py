@@ -16,7 +16,7 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
-from platform_client.policy_container import PROVISIONING_DEADLINE_S
+from platform_client.policy_container import WARMUP_DEADLINE_S
 
 from pimm.logging import init_logging
 from positronic import keys
@@ -113,7 +113,7 @@ def flux3_action_model(
             lambda: probe.probe() is None,
             partial(_exit_status, backend),
             'FLUX 3 Action backend',
-            max_wait=PROVISIONING_DEADLINE_S,
+            max_wait=WARMUP_DEADLINE_S,
         )
         warmup(model, _warm_observation())
     except Exception:
