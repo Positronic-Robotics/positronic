@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.4.0] - 2026-10-24
+
+This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.40.1, `positronic-evals` 0.1.1 and `positronic-eval-vocabulary` 0.5.0. The other distributions keep their 0.3.1 versions.
+
+| Distribution | Version |
+|---|---|
+| `positronic-platform-client` | 0.40.1 |
+| `positronic-evals` | 0.1.1 |
+| `positronic-eval-vocabulary` | 0.5.0 |
+| `positronic-wire` | 0.12.0 |
+| `positronic-model-server` | 0.2.3 |
+
+### Platform client
+- Every request names the client version in the `X-Positronic-Client-Version` header. The platform refuses a client older than 0.40.0, and the refusal names the version to install ([#1024](https://github.com/Positronic-Robotics/positronic/pull/1024))
+- The client refuses an answer from a platform that serves a contract older than 0.40.0, or that names no contract version in `X-Positronic-Platform-Version`. Before its first write, the client reads `auth.config` once and checks the version, so it sends no write to such a platform ([#1024](https://github.com/Positronic-Robotics/positronic/pull/1024))
+- Each `catalog.tasks` entry lists the rig shapes the task runs on in `embodiments`, in place of the single `embodiment` string. `positronic eval catalog` prints the list. The platform refuses a plan that states its tasks when its `rig_shape` is not one of the `embodiments` of a task ([#1024](https://github.com/Positronic-Robotics/positronic/pull/1024))
+- `positronic account register` tells an account that already has a key to set `POSITRONIC_PLATFORM_API_KEY` to it, and says that `--rotate` stops the old key ([#989](https://github.com/Positronic-Robotics/positronic/pull/989))
+- `platform-register` tells an account that already has a key to set `POSITRONIC_PLATFORM_API_KEY` to it, and says that `platform-register --rotate` stops the old key
+- `competition-enter` shows what becomes public about the team and ends with `To join, run: competition-enter --yes`. It does not show the terms. The platform refuses the first submission until the team accepts the terms, and the refusal names `competition-enter --accept-terms=<version>` ([#989](https://github.com/Positronic-Robotics/positronic/pull/989))
+- `positronic account register` and `platform-register` print one sign-in line. When the identity provider sends a link that carries the code, the line gives that link, so you type no code. The line also gives the time until the code expires ([#991](https://github.com/Positronic-Robotics/positronic/pull/991))
+- A submitted policy image gets one `1g.24gb` MIG slice of an RTX PRO 6000: 24192 MiB of memory and a quarter of the card's compute ([#996](https://github.com/Positronic-Robotics/positronic/pull/996))
+
+### Inference
+- A remote model can end its run. The server composes the `end_command` codec with its action codec, and the client stack declares `end_on_field`. When a played element carries `end` (`complete` or `give_up`), the run ends at the next observation ([#1006](https://github.com/Positronic-Robotics/positronic/pull/1006))
+- On Linux x86_64, the `molmoact2`, `lerobot` and `lerobot_0_3_3` extras install the CUDA 12.8 build of `torch` 2.7.1, which runs on Blackwell GPUs. This build needs NVIDIA driver 570 or newer. macOS, aarch64 and Windows keep the PyPI build ([#978](https://github.com/Positronic-Robotics/positronic/pull/978))
+- The MolmoAct2 server does not start when it finds no CUDA GPU. Before, it served from the CPU, too slowly to act, and an eval scored 0 with no error. `--model.device_map=cpu` still runs it on the CPU ([#1014](https://github.com/Positronic-Robotics/positronic/pull/1014))
+- The openpi server sends no keepalive pings to its subprocess. Before, a first inference that compiled for more than about 40 s closed the connection with `1011 keepalive ping timeout`, and the server exited during its warmup ([#1010](https://github.com/Positronic-Robotics/positronic/pull/1010))
+- The Galaxea image uses FlashAttention 4 only on compute capability 9 and 10. On other cards, such as the RTX PRO 6000, its vision tower uses its own SDPA path. Before, every call failed there with `Operation creation failed` ([#1011](https://github.com/Positronic-Robotics/positronic/pull/1011))
+
+### Evaluation
+- `positronic eval run --eval=<public eval> --output_dir=<dir>` labels the episodes that the run records and prints their score. It uses the same `positronic_evals` labelers and metric as the platform. Episodes from an earlier run in the same directory do not count ([#999](https://github.com/Positronic-Robotics/positronic/pull/999))
+- A run with `--output_dir` on an install without the telemetry extra logs one warning line with the reason, and no traceback ([#999](https://github.com/Positronic-Robotics/positronic/pull/999))
+- The static data of an eval episode names only the joint and pose signals that the episode records. Before, an episode with joint commands named `robot_command.pose`, which it does not record ([#1004](https://github.com/Positronic-Robotics/positronic/pull/1004))
+
+### Simulation
+- The MolmoSpaces server reports the end-effector pose relative to the arm base `fr3_link0`, as the real FR3 does. Before, `robot_state.ee_pose` was 0.58 m too high, and a `CartesianPosition` command moved the hand 0.58 m too low ([#972](https://github.com/Positronic-Robotics/positronic/pull/972))
+- The MolmoSpaces `benchmarks` eval takes `episode_paths`: episodes from several benchmarks, each as `<suite>/<scene_dataset>/<task_config>/<benchmark>/<episode index>`, run in list order ([#992](https://github.com/Positronic-Robotics/positronic/pull/992))
+- The MolmoSpaces eval reports the hand pose at the FR3 tool point, 103.4 mm from the flange, as the real FR3 does. Before, the pose was 51.6 mm further out and turned 45 deg about the approach axis. A Cartesian delta command at `default` works in the MolmoSpaces and RoboLab evals. Before, it failed on the first step ([#994](https://github.com/Positronic-Robotics/positronic/pull/994))
+- Two env server launchers on one computer do not get the same port. `serve_subprocess` holds a lock on its port until the launcher exits. Before, two evals could connect to one server, and one of them failed ([#1000](https://github.com/Positronic-Robotics/positronic/pull/1000))
+- `DROID_EE_FRAME` is at the flange, where DROID records `cartesian_position`. Before, it was at RoboLab's `eef_frame`, 18.17 mm along the flange axis and turned 90 deg about it. RoboLab's own frame is `ROBOLAB_EE_FRAME` ([#1007](https://github.com/Positronic-Robotics/positronic/pull/1007))
+- The bundled sim panda names its flange: a `link8` in `panda.urdf` and a `flange` site in the MuJoCo models. No reported or solved pose changes ([#995](https://github.com/Positronic-Robotics/positronic/pull/995))
+- Every bundled Franka model names its grip point `gripper`. The FR3 + 2F-85 site `gripper_grasp_site` is now `gripper` ([#1013](https://github.com/Positronic-Robotics/positronic/pull/1013))
+
+### Hardware
+- The Franka driver with `manage_desk=True` starts when Desk or libfranka refuses the start, and streams the reason as an error in place of the arm state. A recover call connects again. It reboots the control box one time when only a reboot clears the failure. `reboot_on_safety_error` is removed from `franka.Robot` and `cfg.hardware.roboarm.franka` ([#976](https://github.com/Positronic-Robotics/positronic/pull/976))
+- `DLSIKSolverWithLimits` solves one bounded, damped problem per command, as `positronic-franka` 0.9.0 does. Each joint stays within the model limits and within 0.5 rad of the current joints, and a move near a singular pose is damped. The `franka` extra requires `positronic-franka` 0.9.0 ([#980](https://github.com/Positronic-Robotics/positronic/pull/980))
+- The SO-101 and YAM data collection configs `so101cfg` and `yamcfg` are overrides of one `arm_as_gripper` config, which uses the arm driver as the gripper too ([#987](https://github.com/Positronic-Robotics/positronic/pull/987))
+- A fault of the Robotiq gripper, the Franka arm or the YAM arm does not end the run. The driver puts a `pimm.SignalError` on the device signal, refuses each move, and keeps the error until a ready or recover call repairs the device ([#993](https://github.com/Positronic-Robotics/positronic/pull/993))
+- `Impedance` has a `frame`: the point where the Cartesian stiffness acts, from the receiver's control frame. It defaults to identity, so no behaviour changes. The Franka driver refuses a frame that is not identity ([#1016](https://github.com/Positronic-Robotics/positronic/pull/1016))
+- `bundled_yam_model()` carries the i2rt YAM URDF and its visual meshes, with the `default` frame, as the bundled Franka and panda models do. The YAM driver publishes it as its robot metadata, so the 3D viewer and offline IK show and solve the YAM arm ([#1018](https://github.com/Positronic-Robotics/positronic/pull/1018))
+- The YAM driver keeps each joint target inside the limits that the i2rt chain reports, less 0.15 rad. Before, a joint 3 target above 3.29 rad moved the arm to the chain limit, 0.1 rad from the point where the chain stops and the motors release the arm ([#1026](https://github.com/Positronic-Robotics/positronic/pull/1026))
+
+### Datasets
+- With no layout, a `positronic-server` replay shows the cameras and the 3D view in one grid, with the charts of each arm in a column on its right. A robot with more than one arm shows the charts of each arm as a tab. The Other group holds each signal that no chart plots ([#877](https://github.com/Positronic-Robotics/positronic/pull/877))
+
+### Docs
+- The policy image guides state the 24 GB slice. A memory setting that is a fraction of the GPU, such as `XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB ([#996](https://github.com/Positronic-Robotics/positronic/pull/996))
+- `docs/local-molmospaces-eval.md` takes you from a clean machine to a local score on `molmo.franka_pick_mini_smoke` and `molmo.franka_pick_mini`: the install, the asset variables, a policy server, the eval command and the dataset viewer ([#999](https://github.com/Positronic-Robotics/positronic/pull/999))
+- `docs/local-molmospaces-eval.md` asks for about 80 GB of free disk and lists each part. Before, it asked for 40 GB, which does not hold one run ([#1025](https://github.com/Positronic-Robotics/positronic/pull/1025))
+- The GPU descriptions state compute capability 12.0 (sm_120) of the RTX PRO 6000, the PyTorch build to install (CUDA 12.8 or newer), and a command that lists the architectures of the torch in an image ([#1012](https://github.com/Positronic-Robotics/positronic/pull/1012))
+- The competition guide lists a C compiler in the requirements. The install builds `evdev` from source ([#999](https://github.com/Positronic-Robotics/positronic/pull/999))
+- The competition guide installs `positronic` from the `main` branch, says that the sign-in link expires in 5 minutes, and tells a coding agent to run the register command in the background ([#991](https://github.com/Positronic-Robotics/positronic/pull/991))
+- The competition guide registers with `positronic account register`, which saves the key on the computer ([#988](https://github.com/Positronic-Robotics/positronic/pull/988))
+- The competition guide links point at `https://competition.phail.ai` ([#986](https://github.com/Positronic-Robotics/positronic/pull/986))
+
+Full list: [v0.3.1...v0.4.0](https://github.com/Positronic-Robotics/positronic/compare/v0.3.1...v0.4.0)
+
 ## [0.3.1] - 2026-10-20
 
 This release publishes `positronic-model-server` 0.2.3. The other distributions keep their 0.3.0 versions.

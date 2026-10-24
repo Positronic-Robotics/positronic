@@ -525,7 +525,10 @@ def main() -> None:
     print(f'user {response.user_id} ({response.key_status.name})')
     print(f'artifacts at {response.artifact_location}')
     if response.api_key is None:
-        print('no key issued: one is minted on a first registration, or by --rotate')
+        print(
+            f'You already have an API key. Set {API_KEY_ENV} to it. '
+            'Lost it? Run platform-register --rotate. This stops the old key.'
+        )
     else:
         # The key is opaque, so it may hold whitespace or shell metacharacters; an unquoted export
         # line would either mangle it or run the rest of it.
