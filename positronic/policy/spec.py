@@ -77,13 +77,7 @@ def _change_ee_frame_v1(transform: list[float], **args: Any) -> ChangeEEFrame:
     return ChangeEEFrame(GRIPPER_SITE, FR3_EE_FRAME * hand, **args)
 
 
-def _change_ee_frame_v2(**args: Any) -> ChangeEEFrame:
-    # A server built before v2 asks for ``latest`` with the v1 arguments, which name no site.
-    return ChangeEEFrame.from_spec_args(**args) if 'site' in args else _change_ee_frame_v1(**args)
-
-
 COMPONENTS[ChangeEEFrame.WIRE_NAME][1] = Version(_change_ee_frame_v1)
-COMPONENTS[ChangeEEFrame.WIRE_NAME][ChangeEEFrame.WIRE_VERSION] = Version(_change_ee_frame_v2)
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:

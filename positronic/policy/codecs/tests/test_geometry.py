@@ -2,7 +2,7 @@ import json
 
 import numpy as np
 import pytest
-from positronic_model_server.spec import ARGS, NAME, VERSION, component
+from positronic_model_server.spec import ARGS, NAME, VERSION
 from scipy.spatial.transform import Rotation as ScipyRotation
 
 import positronic.drivers.roboarm.command as cmd_module
@@ -259,22 +259,6 @@ def test_a_v1_spec_states_its_transform_from_the_franka_hand_point():
 def test_an_identity_v1_spec_states_the_franka_hand_point():
     """A server that stated the rig's old site with no offset keeps its poses at the FR3's ``F_T_EE``."""
     assert from_spec(_v1_spec(Transform3D.identity)).meta == cfg_codecs.franka_hand_frame.instantiate().meta
-
-
-def test_a_latest_spec_without_a_site_states_its_transform_from_the_franka_hand_point():
-    """A server built before v2 asks for the client's latest version with the v1 arguments."""
-    latest = component(ChangeEEFrame.WIRE_NAME, transform=TO_ROBOLAB.as_vector(QUAT).tolist(), keys=[obs_keys.EE_POSE])
-    _assert_states(from_spec(latest).meta, (obs_keys.EE_POSE,), GRIPPER_SITE, FR3_EE_FRAME * TO_ROBOLAB)
-
-
-def test_a_latest_spec_with_a_site_keeps_its_site():
-    latest = component(
-        ChangeEEFrame.WIRE_NAME,
-        site=FLANGE_LINK,
-        transform=TO_ROBOLAB.as_vector(QUAT).tolist(),
-        keys=[obs_keys.EE_POSE],
-    )
-    _assert_states(from_spec(latest).meta, (obs_keys.EE_POSE,), FLANGE_LINK, TO_ROBOLAB)
 
 
 def test_training_encoder_maps_both_poses_forward():
