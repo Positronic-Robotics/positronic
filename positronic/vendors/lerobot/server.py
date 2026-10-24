@@ -4,7 +4,7 @@ import configuronic as cfn
 import pos3
 
 from pimm.logging import init_logging
-from positronic.cfg.codecs import default_ee_frame
+from positronic.cfg.codecs import franka_hand_frame
 from positronic.drivers.roboarm.models import EEFrame
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
@@ -47,9 +47,9 @@ def lerobot_model(checkpoints_dir: str, checkpoint: str | None, device: str | No
     return policy
 
 
-# Every pose checkpoint served here was trained on poses the rig reported at ``default``, so its frame has no
-# offset. ``ee_frame=None`` serves a checkpoint that speaks joints only.
-@cfn.config(codec=lerobot_codecs.ee, ee_frame=default_ee_frame)
+# ``ee_frame`` has no default. A wrong frame raises no error and sends the arm to a different place, so each
+# deployment states the frame of its checkpoint. ``ee_frame=None`` serves a checkpoint that speaks joints only.
+@cfn.config(codec=lerobot_codecs.ee)
 def pipeline(
     codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_sec: float | None = 1.0
 ) -> PolicyDeployment:
@@ -74,7 +74,7 @@ COMMANDS = {
     'joints_ik_sim': serve.override(model=lerobot_model, pipeline=joints_ik_sim),
     'phail': serve.override(
         model=lerobot_model.override(checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/'),
-        pipeline=ee.override(codec=lerobot_codecs.phail_v1),
+        pipeline=ee.override(codec=lerobot_codecs.phail_v1, ee_frame=franka_hand_frame),
     ),
 }
 

@@ -5,7 +5,7 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, DROID_EE_FRAME, EEFrame
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -55,12 +55,13 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
-# The frame of a checkpoint trained on poses a rig reported at ``DEFAULT_FRAME``. ``offset`` takes a transform
-# off that site, such as ``@positronic.drivers.roboarm.models.DROID_EE_FRAME``.
-default_ee_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME)
-# A server built for poses at the Franka Hand point, where the FR3 and the bundled panda report ``DEFAULT_FRAME``,
-# states that frame with this codec in its pipeline. A server that states no frame observes no pose.
-franka_hand_frame = cfn.Config(ChangeEEFrame, frame=default_ee_frame)
+# Every rig reports its poses at ``DEFAULT_FRAME``, so the frame of each rig is that site with no offset.
+# The FR3's Franka Hand point, where the real FR3 and the FR3 sims report.
+franka_hand_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME)
+# The hand point of the MuJoCo panda, where the MuJoCo sim reports.
+panda_hand_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME)
+# The FR3 flange, where DROID records its poses.
+droid_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME, offset=DROID_EE_FRAME)
 
 
 @cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)

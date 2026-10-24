@@ -48,10 +48,9 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
     return model
 
 
-# Every pose checkpoint served here was trained on poses the rig reported at ``default``, so its frame has no
-# offset. ``ee_frame=None`` serves a checkpoint that speaks joints only.
+# ``ee_frame`` has no default. A wrong frame raises no error and sends the arm to a different place, so each
+# deployment states the frame of its checkpoint. ``ee_frame=None`` serves a checkpoint that speaks joints only.
 @cfn.config(**{
-    'ee_frame': codecs.default_ee_frame,
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
     'obs.state_features': {keys.EE_POSE: 7, keys.GRIP: 1},
@@ -62,11 +61,11 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
 def pipeline(
     obs: Codec,
     action: Codec,
+    ee_frame: EEFrame | None,
     fps: float = 15.0,
     horizon_sec: float | None = 1.0,
     binarize_grip: tuple[str, ...] | None = None,
     flip_grip: bool = False,
-    ee_frame: EEFrame | None = None,
 ) -> PolicyDeployment:
     return PolicyDeployment(
         local=Sequential(ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), RestrictImageSize(224, 224)),
@@ -107,7 +106,12 @@ joints_ik_sim = pipeline.override(**{
 ee_flip = pipeline.override(flip_grip=True)
 
 
-phail = pipeline.override(**{'action': codecs.phail_v1_execution, 'action.action': codecs.absolute_pos_action})
+# The phail checkpoints speak the FR3's Franka Hand point, the sim_stack and demo ones the MuJoCo panda's hand point.
+phail = pipeline.override(**{
+    'action': codecs.phail_v1_execution,
+    'action.action': codecs.absolute_pos_action,
+    'ee_frame': codecs.franka_hand_frame,
+})
 demo = pipeline.override(**{
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
@@ -118,6 +122,7 @@ demo = pipeline.override(**{
     'flip_grip': True,
     'fps': 15.0,
     'horizon_sec': 1.0,
+    'ee_frame': codecs.panda_hand_frame,
 })
 
 
@@ -136,7 +141,8 @@ COMMANDS = {
         model=act_model.override(checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/'), pipeline=phail
     ),
     'sim_stack': serve.override(
-        model=act_model.override(checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/'), pipeline=ee_flip
+        model=act_model.override(checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/'),
+        pipeline=ee_flip.override(ee_frame=codecs.panda_hand_frame),
     ),
     'demo': serve.override(
         model=act_model.override(checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'),

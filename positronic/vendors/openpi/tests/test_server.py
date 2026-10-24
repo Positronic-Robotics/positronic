@@ -6,7 +6,9 @@ import numpy as np
 import pytest
 
 from positronic import geom, keys
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, parse_ee_frames
 from positronic.policy.codecs import ACTION
 from positronic.policy.spec import from_spec
 from positronic.vendors import openpi
@@ -38,6 +40,13 @@ def test_the_preallocation_setting_of_the_environment_reaches_the_subprocess(mon
     monkeypatch.setenv(PREALLOCATE_ENV, 'true')
 
     assert _subprocess_env(monkeypatch)[PREALLOCATE_ENV] == 'true'
+
+
+@pytest.mark.parametrize('name', ['phail', 'sim_stack', 'libero'])
+def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name):
+    deployment = COMMANDS[name].kwargs['pipeline'].instantiate()
+    frame = parse_ee_frames(deployment.meta()[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
+    assert frame == EEFrame(site=DEFAULT_FRAME)
 
 
 def _send_metadata_and_wait(connection: ServerConnection) -> None:

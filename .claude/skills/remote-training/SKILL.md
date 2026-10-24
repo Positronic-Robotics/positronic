@@ -183,13 +183,14 @@ bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 # Explicit checkpoint dir (the subcommand is the pipeline name, one per vendor codec).
 # Get <ckpt-dir> from the vendor's server.py preset or `aws s3 ls` under the S3
 # convention — not memorized.
+# A pose pipeline also takes the EE frame the checkpoint speaks; the joint pipelines set None themselves.
 bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
-  --model.checkpoints_dir=<ckpt-dir>
+  --model.checkpoints_dir=<ckpt-dir> \
+  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
 
-# openpi's ee pipeline also needs the EE frame the checkpoint speaks; None means it speaks joints only.
 bash workflows/nebius/serve.sh openpi pi-server ee \
   --model.checkpoints_dir=<ckpt-dir> \
-  --pipeline.ee_frame=@positronic.cfg.codecs.default_ee_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
 
 bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d \
   --model.checkpoints_dir=<ckpt-dir>
@@ -269,7 +270,8 @@ CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always 
 
 # Custom checkpoint
 CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always \
-  --service-ports lerobot-server ee --model.checkpoints_dir=<ckpt-dir>
+  --service-ports lerobot-server ee --model.checkpoints_dir=<ckpt-dir> \
+  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
 
 # GR00T inference — codec subcommand required
 CACHE_ROOT=/home/<user> docker --context notebook compose run --rm --pull always \
