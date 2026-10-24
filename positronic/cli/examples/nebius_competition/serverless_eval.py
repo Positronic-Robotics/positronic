@@ -107,13 +107,9 @@ class Metadata(BaseModel):
 
 
 class Named(BaseModel):
-    """What `get-by-name` returns, and an item of what `list` returns."""
+    """What `get-by-name` returns."""
 
     metadata: Metadata
-
-
-class Listing(BaseModel):
-    items: list[Named] = Field(default_factory=list)
 
 
 class JobStatus(BaseModel):
@@ -379,21 +375,14 @@ class ServerlessEval:
         return []
 
     def _left(self) -> list[str]:
-        """The endpoint and the job of this run that Nebius still lists, after a wait for the deletes to end."""
-        names = {name: kind for kind, name in self._names().items() if kind is not Kind.SECRET}
+        """The resources of this run that Nebius still has, after a wait for the deletes to end."""
         deadline = self.clock.monotonic() + DELETE_WAIT_S
         while True:
             try:
-                listed = [
-                    item.metadata.name
-                    for kind in (Kind.ENDPOINT, Kind.JOB)
-                    for item in Listing.model_validate(
-                        self.nebius(*kind.value, 'list', '--parent-id', self.run.parent_id)
-                    ).items
-                ]
+                found = [(kind, name) for kind, name in self._names().items() if self._id(kind, name) is not None]
             except NebiusError as exc:
                 return [f'Could not check what is left: {exc}']
-            left = [f'The {" ".join(names[name].value)} {name} is still there' for name in listed if name in names]
+            left = [f'The {" ".join(kind.value)} {name} is still there' for kind, name in found]
             if not left or self.clock.monotonic() >= deadline:
                 return left
             self.clock.sleep(RETRY_S)
@@ -426,7 +415,11 @@ def _score_then_delete(session: ServerlessEval) -> str:
             failure = 'Stopped before the end'
         finally:
             print('Deleting the endpoint, the job and the token secret')
-            with _signals({signal.SIGINT: signal.SIG_IGN, signal.SIGTERM: signal.SIG_IGN}):
+            with _signals({
+                signal.SIGINT: signal.SIG_IGN,
+                signal.SIGTERM: signal.SIG_IGN,
+                signal.SIGHUP: signal.SIG_IGN,
+            }):
                 problems = session.cleanup()
     if problems:
         listing, parent = f'{session.run.cli} ai', f'--parent-id {session.run.parent_id}'

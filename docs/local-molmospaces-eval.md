@@ -166,7 +166,7 @@ on the platform.
 ### Clean up
 
 The command deletes the endpoint, the job and the secret when the eval ends, fails or times out, and when you
-press Ctrl-C. Then it reads the lists of endpoints and jobs, and says `No endpoint or job of this run is left`.
+press Ctrl-C. Then it looks up each of them by name, and says `No endpoint or job of this run is left`.
 
 - The job stops at its timeout, 120 minutes by default. Set another one with `--timeout-min`.
 - The endpoint has no timeout of its own. When the command stops before its end, for example because the

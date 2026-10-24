@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import runpy
+import signal
 import stat
 from collections.abc import Iterator
 from pathlib import Path
@@ -75,6 +76,7 @@ class FakeNebius:
         self.request_file_modes: list[int] = []
         self.request_files: list[Path] = []
         self.endpoint_polls = 0
+        self.hangup_handlers: list[Any] = []
 
     def __call__(self, *args: str, structured: bool = True) -> Any:
         self.calls.append(args)
@@ -134,13 +136,11 @@ class FakeNebius:
         return ''
 
     def _delete(self, kind: str, args: tuple[str, ...]) -> str:
+        self.hangup_handlers.append(signal.getsignal(signal.SIGHUP))
         resource_id = self._value(args, '--id')
         if kind != self.undeletable:
             self.resources[kind] = {n: i for n, i in self.resources[kind].items() if i != resource_id}
         return ''
-
-    def _list(self, kind: str, args: tuple[str, ...]) -> dict[str, Any]:
-        return {'items': [{'metadata': {'id': i, 'name': name}} for name, i in self.resources[kind].items()]}
 
     def verbs(self, kind: str) -> list[str]:
         return [call[2] for call in self.calls if call[1:2] == (kind,)]
@@ -228,7 +228,7 @@ def test_an_endpoint_that_stops_while_the_job_runs_ends_the_run_and_leaves_nothi
     with pytest.raises(SystemExit) as exit_info:
         _run(script, fake)
     assert 'The policy endpoint is STOPPED while the eval runs' in str(exit_info.value)
-    assert fake.verbs('job')[-3:] == ['cancel', 'delete', 'list']
+    assert fake.verbs('job')[-3:] == ['cancel', 'delete', 'get-by-name']
     assert fake.resources == {'secret': {}, 'endpoint': {}, 'job': {}}
 
 
@@ -245,8 +245,21 @@ def test_a_job_that_outlives_its_timeout_is_cancelled_and_deleted(script):
     with pytest.raises(SystemExit) as exit_info:
         _run(script, fake, '--timeout-min=60')
     assert 'did not end in 60 min' in str(exit_info.value)
-    assert fake.verbs('job')[-3:] == ['cancel', 'delete', 'list']
+    assert fake.verbs('job')[-3:] == ['cancel', 'delete', 'get-by-name']
     assert fake.resources['job'] == {}
+
+
+def test_a_hangup_does_not_stop_the_deletes(script):
+    fake = _fake(script)
+    _run(script, fake)
+    assert fake.hangup_handlers == [signal.SIG_IGN] * 3
+
+
+def test_a_job_still_there_after_its_delete_is_reported(script, capsys):
+    fake = _fake(script, undeletable='job')
+    with pytest.raises(SystemExit):
+        _run(script, fake)
+    assert '-sim is still there' in capsys.readouterr().err
 
 
 def test_a_resource_still_listed_after_its_delete_is_reported(script, capsys):
