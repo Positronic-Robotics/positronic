@@ -4,7 +4,7 @@ Usage
     python3 utilities/check_public_image.py positro/molmospaces:local
 
 It exports the filesystem of the image, and reports a finding for each of these:
-- a file under /positronic that git does not track;
+- a file under /positronic that git does not track, other than build output;
 - a path outside the public sources whose name has an internal word in it;
 - a small file outside the public sources whose text has a key, an internal word or a private host name in it.
 
@@ -61,6 +61,11 @@ def is_public_source(path: str) -> bool:
     return path.startswith(PUBLIC_PREFIXES) or any(part in PUBLIC_PARTS for part in path.split('/'))
 
 
+def is_build_output(path: str) -> bool:
+    """A file that the install or an import of the repository writes: package metadata and byte code."""
+    return any(part == '__pycache__' or part.endswith('.egg-info') for part in path.split('/'))
+
+
 def tracked_files(repo: Path = REPO_ROOT) -> set[str]:
     listed = subprocess.run(['git', 'ls-files', '-z'], cwd=repo, capture_output=True, check=True).stdout
     return {APP_ROOT + name for name in listed.decode().split('\0') if name}
@@ -73,7 +78,7 @@ def findings(image: tarfile.TarFile, tracked: set[str]) -> Iterable[str]:
         if is_public_source(path):
             continue
         if path.startswith(APP_ROOT):
-            if member.isfile() and path not in tracked:
+            if member.isfile() and path not in tracked and not is_build_output(path):
                 yield f'/{path}: git does not track this file'
             continue
         if INTERNAL_WORDS.search(path) or KEY_FILE_NAMES.search(path):

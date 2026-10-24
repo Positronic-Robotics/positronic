@@ -33,6 +33,14 @@ def test_a_file_under_the_repository_that_git_does_not_track_is_a_finding():
     ]
 
 
+def test_build_output_under_the_repository_passes():
+    files = {
+        'positronic/positronic.egg-info/PKG-INFO': 'Name: positronic',
+        'positronic/positronic/__pycache__/keys.cpython-313.pyc': '',
+    }
+    assert _findings(files) == []
+
+
 def test_a_public_source_may_name_an_internal_word():
     files = {
         'usr/lib/python3/platform.py': 'import platform',
