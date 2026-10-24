@@ -18,11 +18,9 @@ FLANGE_LINK = 'link8'
 ROBOLAB_EEF_LINK = 'robolab_eef'
 # The Franka tool frame ``F_T_EE`` on the FR3, and the old grasp site on the sim panda: a URDF link name only.
 EE_LINK = 'end_effector'
-# The grip point every bundled Franka model names, on the flange axes: z is the approach axis. Every Franka
-# embodiment reports its poses here, and every codec transform for a Franka is measured from here.
+# The grip point every bundled model names, on the axes of the arm's last link: z is the approach axis. Every
+# embodiment reports its poses here, and every codec transform is measured from here.
 GRIPPER_SITE = 'gripper'
-# The site the YAM MJCF reports and solves at. TODO(#788): move YAM to ``GRIPPER_SITE`` with its published model.
-YAM_SITE = 'default'
 # The frame DROID records its poses in: the flange, ``panda_link8``, measured from ``GRIPPER_SITE`` of the
 # FR3 with the 2F-85. DROID's ``cartesian_position`` equals FK at ``panda_link8``, and its checkpoints speak it.
 DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.155]))
@@ -40,6 +38,9 @@ FR3_EE_FRAME = geom.Transform3D(
 # The sim panda's ``EE_LINK``, measured from ``GRIPPER_SITE``. ``EE_LINK`` is 58.4mm along the flange approach
 # axis and -45deg about it. Sim recordings and checkpoints older than ``GRIPPER_SITE`` speak poses there.
 PANDA_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.04525]), geom.Rotation.from_euler([0.0, 0.0, -0.7853981634]))
+# The YAM MJCF's ``grasp_site``, measured from ``GRIPPER_SITE``. ``grasp_site`` is on the wrist axis, 134.7mm along
+# it and -90deg about it. YAM recordings and checkpoints older than ``GRIPPER_SITE`` speak poses there.
+YAM_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0408, -0.0033]), geom.Rotation.from_euler([0.0, 0.0, -1.5707963268]))
 _QUAT = geom.Rotation.Representation.QUAT
 
 
@@ -247,19 +248,18 @@ def bundled_franka_model() -> dict:
 
 
 YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
-_YAM_WRIST_LINK = 'link_6'
-# The YAM MJCF's ``YAM_SITE``: 134.7 mm along the wrist axis, turned -90deg about it.
-_YAM_SITE_XYZ, _YAM_SITE_RPY = '0 0 0.1347', '0 0 -1.5707963268'
+YAM_WRIST_LINK = 'link_6'
+# The centroid of the face where the closed YAM fingertips meet, in the i2rt CAD mesh of ``YAM_WRIST_LINK``.
+GRIPPER_YAM_XYZ = '0 -0.0408 0.138'
 
 
 @lru_cache(maxsize=1)
 def bundled_yam_model() -> dict:
-    """i2rt YAM model metadata: its URDF and visual meshes, its joint names, and the ``YAM_SITE`` its ``ee_pose``
-    is measured at."""
+    """i2rt YAM model metadata: its URDF and visual meshes, and its joint names."""
     urdf_path = Path(__file__).resolve().parents[2] / 'assets' / 'i2rt_yam' / 'yam.urdf'
     root = ET.fromstring(urdf_path.read_text())
     mesh_files = {mesh.attrib['filename'] for mesh in root.iter('mesh')}
-    attach_frame(root, YAM_SITE, _YAM_WRIST_LINK, _YAM_SITE_XYZ, _YAM_SITE_RPY)
+    attach_frame(root, GRIPPER_SITE, YAM_WRIST_LINK, GRIPPER_YAM_XYZ)
     return {
         'robot': 'i2rt_yam',
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),

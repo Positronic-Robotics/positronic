@@ -32,8 +32,9 @@ from positronic.drivers.roboarm.models import (
     PANDA_EE_FRAME,
     ROBOLAB_EE_FRAME,
     ROBOLAB_EEF_LINK,
+    YAM_EE_FRAME,
     YAM_JOINT_NAMES,
-    YAM_SITE,
+    YAM_WRIST_LINK,
     EEFrame,
     bundled_franka_model,
     bundled_panda_model,
@@ -46,6 +47,7 @@ from positronic.eval import keys as eval_keys
 from positronic.utils import package_assets_path
 
 PANDA_URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
+YAM_MJCF_PATH = package_assets_path('assets/mujoco/i2rt_yam/yam.xml')
 PANDA_JOINTS = bundled_panda_model()[roboarm_keys.JOINT_NAMES]
 PANDA_FRAME = EE_LINK
 
@@ -243,12 +245,10 @@ def test_frame_transform_reproduces_robolab_eef_across_configs():
 
 
 @pytest.mark.parametrize(
-    'model, site',
-    [(bundled_franka_model(), GRIPPER_SITE), (bundled_panda_model(), GRIPPER_SITE), (bundled_yam_model(), YAM_SITE)],
-    ids=['franka', 'panda', 'yam'],
+    'model', [bundled_franka_model(), bundled_panda_model(), bundled_yam_model()], ids=['franka', 'panda', 'yam']
 )
-def test_bundled_model_has_the_site_its_embodiment_reports_at(model, site):
-    frame_transform(model[roboarm_keys.URDF], site, site)
+def test_bundled_model_has_the_site_its_embodiment_reports_at(model):
+    frame_transform(model[roboarm_keys.URDF], GRIPPER_SITE, GRIPPER_SITE)
 
 
 @pytest.mark.parametrize(
@@ -267,6 +267,24 @@ def test_declared_frame_matches_the_model_geometry(model, declared, frame):
     np.testing.assert_allclose(declared.as_matrix, measured.as_matrix, atol=1e-9)
 
 
+def _yam_mjcf_wrist_to_site(site: str) -> geom.Transform3D:
+    """``site`` of the YAM MJCF, in ``YAM_WRIST_LINK``."""
+    model = mj.MjModel.from_xml_path(YAM_MJCF_PATH)
+    data = mj.MjData(model)
+    mj.mj_kinematics(model, data)
+    wrist, placed = data.body(YAM_WRIST_LINK), data.site(site)
+    to_wrist = wrist.xmat.reshape(3, 3).T
+    rotation = geom.Rotation.from_rotation_matrix(to_wrist @ placed.xmat.reshape(3, 3))
+    return geom.Transform3D(to_wrist @ (placed.xpos - wrist.xpos), rotation)
+
+
+def test_yam_declared_frame_is_the_grasp_site_of_the_yam_mjcf():
+    """YAM poses older than ``GRIPPER_SITE`` sit at the MJCF ``grasp_site``, where the driver measured them."""
+    # rules-allow: hardcoded-keys — the vendor's site name is this test's input, not a name it shares with the code
+    measured = _yam_mjcf_wrist_to_site(GRIPPER_SITE).inv * _yam_mjcf_wrist_to_site('grasp_site')
+    np.testing.assert_allclose(YAM_EE_FRAME.as_matrix, measured.as_matrix, atol=1e-9)
+
+
 # Joint configs inside the YAM's joint range: home, and three that bend every joint.
 YAM_CONFIGS = [
     np.zeros(6),
@@ -277,14 +295,14 @@ YAM_CONFIGS = [
 
 
 @pytest.mark.parametrize('q', YAM_CONFIGS)
-def test_the_bundled_yam_urdf_puts_yam_site_where_the_yam_driver_measures_its_pose(q):
+def test_the_bundled_yam_urdf_puts_gripper_where_the_yam_driver_measures_its_pose(q):
     model = bundled_yam_model()
     urdf = model[roboarm_keys.URDF]
-    compiled = _prepare_spec(urdf, YAM_SITE).compile()
+    compiled = _prepare_spec(urdf, GRIPPER_SITE).compile()
     data = mj.MjData(compiled)  # pyright: ignore[reportAttributeAccessIssue]
     data.qpos[[compiled.joint(name).qposadr.item() for name in model[roboarm_keys.JOINT_NAMES]]] = q
     mj.mj_kinematics(compiled, data)  # pyright: ignore[reportAttributeAccessIssue]
-    site = mj.mj_name2id(compiled, mj.mjtObj.mjOBJ_SITE, YAM_SITE)  # pyright: ignore[reportAttributeAccessIssue]
+    site = mj.mj_name2id(compiled, mj.mjtObj.mjOBJ_SITE, GRIPPER_SITE)  # pyright: ignore[reportAttributeAccessIssue]
     quat = np.empty(4)
     mj.mju_mat2Quat(quat, data.site_xmat[site])  # pyright: ignore[reportAttributeAccessIssue]
 
@@ -292,6 +310,19 @@ def test_the_bundled_yam_urdf_puts_yam_site_where_the_yam_driver_measures_its_po
 
     np.testing.assert_allclose(data.site_xpos[site], measured.translation, atol=1e-4)
     assert (geom.Rotation.from_quat(quat).inv * measured.rotation).angle < 1e-3
+
+
+@pytest.mark.parametrize('q', YAM_CONFIGS[1:])
+def test_the_yam_driver_solves_a_pose_at_gripper_to_joints_that_reach_it(q):
+    kinematics = yam._Kinematics()
+    target = kinematics.fk(q)
+
+    solved = kinematics.ik(target, q + 0.2)
+
+    assert solved is not None
+    reached = kinematics.fk(solved)
+    np.testing.assert_allclose(reached.translation, target.translation, atol=1e-3)
+    assert (reached.rotation.inv * target.rotation).angle < 1e-2
 
 
 def test_the_bundled_yam_urdf_has_the_joint_range_of_the_yam_driver():
@@ -433,3 +464,32 @@ def test_gripper_sits_on_the_flange_approach_axis(urdf, grip_point):
     transform = frame_transform(urdf, FLANGE_LINK, GRIPPER_SITE)
     np.testing.assert_allclose(transform.translation, [0.0, 0.0, grip_point], atol=1e-9)
     np.testing.assert_allclose(transform.rotation.as_rotation_matrix, np.eye(3), atol=1e-9)
+
+
+def test_yam_gripper_sits_where_the_closed_fingertips_meet_on_the_wrist_axes():
+    """The fingertips meet 40.8 mm to one side of the wrist axis, so the grip point is off it, on its axes."""
+    urdf = bundled_yam_model()[roboarm_keys.URDF]
+    for transform in (frame_transform(urdf, YAM_WRIST_LINK, GRIPPER_SITE), _yam_mjcf_wrist_to_site(GRIPPER_SITE)):
+        np.testing.assert_allclose(transform.translation, [0.0, -0.0408, 0.138], atol=1e-9)
+        np.testing.assert_allclose(transform.rotation.as_rotation_matrix, np.eye(3), atol=1e-9)
+
+
+def test_yam_gripper_sits_midway_between_the_fingers_at_every_pose_and_opening():
+    """The fingers slide along x of the wrist, so the grip point is midway between their pads at every opening."""
+    model = mj.MjModel.from_xml_path(YAM_MJCF_PATH)
+    data = mj.MjData(model)
+    # rules-allow: hardcoded-keys — the MJCF finger joints and pad bodies are this test's input, not names it shares
+    fingers, pads = ('left_finger', 'right_finger'), ('lf_down', 'rf_down')
+    arm_qpos = [model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES]
+    finger_qpos = [model.joint(name).qposadr.item() for name in fingers]
+    rng = np.random.default_rng(0)
+    for q in [*YAM_CONFIGS, *rng.uniform(-1.0, 1.0, (3, len(YAM_JOINT_NAMES)))]:
+        for opening in (0.0, 0.02, 0.037):
+            data.qpos[arm_qpos] = q
+            data.qpos[finger_qpos] = (opening, -opening)
+            mj.mj_kinematics(model, data)
+            wrist = data.body(YAM_WRIST_LINK)
+            to_wrist = wrist.xmat.reshape(3, 3).T
+            grip = to_wrist @ (data.site(GRIPPER_SITE).xpos - wrist.xpos)
+            pad_x = [(to_wrist @ (data.body(pad).xpos - wrist.xpos))[0] for pad in pads]
+            assert abs((pad_x[0] + pad_x[1]) / 2 - grip[0]) < 1e-9

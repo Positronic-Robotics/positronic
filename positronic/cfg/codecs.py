@@ -5,7 +5,7 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm.models import FR3_EE_FRAME, GRIPPER_SITE, PANDA_EE_FRAME, EEFrame
+from positronic.drivers.roboarm.models import FR3_EE_FRAME, GRIPPER_SITE, PANDA_EE_FRAME, YAM_EE_FRAME, EEFrame
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -58,10 +58,11 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 # The frame of a checkpoint trained on poses a rig reported at ``GRIPPER_SITE``. ``offset`` takes a transform
 # off that site, such as ``@positronic.drivers.roboarm.models.DROID_EE_FRAME``.
 gripper_ee_frame = cfn.Config(EEFrame, site=GRIPPER_SITE)
-# The frame of a checkpoint trained on real FR3 poses, and of one trained on sim panda poses, recorded before the
+# The frame of a checkpoint trained on real FR3 poses, on sim panda poses, and on YAM poses, recorded before the
 # rigs reported at ``GRIPPER_SITE``.
 fr3_ee_frame = gripper_ee_frame.override(offset=FR3_EE_FRAME)
 panda_ee_frame = gripper_ee_frame.override(offset=PANDA_EE_FRAME)
+yam_ee_frame = gripper_ee_frame.override(offset=YAM_EE_FRAME)
 # A server built for poses at the Franka Hand point, the FR3's ``F_T_EE``, states that frame with this codec in
 # its pipeline. A server that states no frame observes no pose.
 franka_hand_frame = cfn.Config(ChangeEEFrame, site=GRIPPER_SITE, transform=FR3_EE_FRAME)
