@@ -23,7 +23,7 @@ ENDED_BY_OPERATOR = 'operator'
 ENDED_BY_POLICY = 'policy'
 # The `PolicyEnd` of a trial that the policy ended. It is the policy's claim, not a verdict.
 POLICY_END = 'eval.policy_end'
-# The instruction that the policy got.
+# The instruction that the policy got, as it was at the end of the trial.
 TASK = 'task'
 # The id of the task that a trial runs, as the benchmark names it.
 BENCHMARK_TASK = 'eval.task'
