@@ -64,7 +64,7 @@ class EnvAdapter(ABC):
 
 
 def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D, measured: geom.Transform3D | None) -> Any:
-    """A command against the embodiment's ``default``, re-expressed in the frame the env measures and drives.
+    """A command against the embodiment's ``GRIPPER_SITE``, re-expressed in the frame the env measures and drives.
 
     ``measured`` is the env's last measured pose in that frame, or None before the first observation.
     """
@@ -126,13 +126,13 @@ class WireCommandAdapter(EnvAdapter):
 
     def __init__(self, env_control_frame: geom.Transform3D | None = None):
         """``env_control_frame`` places the frame the env measures and drives relative to the embodiment's
-        ``default``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
+        ``GRIPPER_SITE``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
         self.env_control_frame = env_control_frame if env_control_frame is not None else geom.Transform3D.identity
         self._measured: geom.Transform3D | None = None
         self._reset_command_state()
 
     def _measure(self, env_pose: geom.Transform3D) -> geom.Transform3D:
-        """The pose the env measures, at ``default``. It also anchors the next Cartesian delta."""
+        """The pose the env measures, at ``GRIPPER_SITE``. It also anchors the next Cartesian delta."""
         self._measured = env_pose
         return env_pose * self.env_control_frame.inv
 

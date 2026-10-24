@@ -143,11 +143,11 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       --num_train_steps=500 2>&1)
     # openpi.train writes to <output_path>/<config_name>/<exp_name>/
-    # The run trains on poses at the rig's `default` site, so the checkpoint states that frame.
+    # The run trains on poses at the rig's `gripper` site, so the checkpoint states that frame.
     SERVE_SUBCMD=(
       ee
       --model.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/"
-      --pipeline.ee_frame=@positronic.cfg.codecs.default_ee_frame
+      --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
     )
     ;;
   gr00t)

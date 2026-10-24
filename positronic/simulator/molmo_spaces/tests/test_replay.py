@@ -23,7 +23,7 @@ from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import _prepare_spec
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
@@ -151,12 +151,12 @@ _REACH_STEPS = 30
 
 
 def _recorded_model_fk(q: np.ndarray) -> geom.Transform3D:
-    """The pose of ``DEFAULT_FRAME`` at joints ``q`` on the recorded model, in the model's root frame."""
-    model = _prepare_spec(_RECORDED_MODEL[roboarm_keys.URDF], DEFAULT_FRAME).compile()
+    """The pose of ``GRIPPER_SITE`` at joints ``q`` on the recorded model, in the model's root frame."""
+    model = _prepare_spec(_RECORDED_MODEL[roboarm_keys.URDF], GRIPPER_SITE).compile()
     data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
     data.qpos[[model.joint(n).qposadr.item() for n in _RECORDED_MODEL[roboarm_keys.JOINT_NAMES]]] = q
     mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
-    site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, DEFAULT_FRAME)  # pyright: ignore[reportAttributeAccessIssue]
+    site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, GRIPPER_SITE)  # pyright: ignore[reportAttributeAccessIssue]
     return geom.Transform3D(
         data.site_xpos[site].copy(), geom.Rotation.from_rotation_matrix(data.site_xmat[site].reshape(3, 3))
     )

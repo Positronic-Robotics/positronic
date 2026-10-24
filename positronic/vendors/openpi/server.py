@@ -14,7 +14,7 @@ from openpi_client.websocket_client_policy import WebsocketClientPolicy
 from websockets.sync.client import ClientConnection, connect
 
 from pimm.logging import init_logging
-from positronic.cfg.codecs import default_ee_frame
+from positronic.cfg.codecs import fr3_ee_frame, panda_ee_frame
 from positronic.drivers.roboarm.models import EEFrame
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
@@ -211,8 +211,8 @@ def openpi_model(
 def pipeline(codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_sec: float | None = None):
     """The OpenPI serving pipeline: rig-side chunk scheduling and the server-side codec.
 
-    ``ee_frame`` is the frame this checkpoint's poses live in (``cfg.codecs.default_ee_frame`` for a checkpoint
-    trained on poses at ``DEFAULT_FRAME``); ``None`` for one that speaks joints only, which then sees no pose.
+    ``ee_frame`` is the frame this checkpoint's poses live in (``cfg.codecs.gripper_ee_frame`` for a checkpoint
+    trained on poses at ``GRIPPER_SITE``); ``None`` for one that speaks joints only, which then sees no pose.
     """
     local = Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize(224, 224))
     if ee_frame is not None:
@@ -229,7 +229,7 @@ ee_joints_traj = pipeline.override(codec=codecs.ee_joints_traj)
 # For checkpoints trained on inverted-grip (1 = open) data, e.g. the sim_stack recordings.
 ee_flip_grip = pipeline.override(**{'codec.flip_grip': True})
 # The joint-space codecs put no pose on the wire, so a checkpoint bound here speaks joints only. An EE-space
-# DROID checkpoint would take ``default_ee_frame`` with ``offset=models.DROID_EE_FRAME`` instead.
+# DROID checkpoint would take ``gripper_ee_frame`` with ``offset=models.DROID_EE_FRAME`` instead.
 joints_traj = pipeline.override(codec=codecs.joints_traj, ee_frame=None)
 droid_pipe = pipeline.override(codec=codecs.droid, ee_frame=None, horizon_sec=8 / 15)
 droid_jointpos_pipe = pipeline.override(codec=codecs.droid_jointpos, ee_frame=None)
@@ -246,24 +246,20 @@ COMMANDS = {
     'ee_joints_traj': serve.override(model=openpi_model, pipeline=ee_joints_traj),
     'joints_traj': serve.override(model=openpi_model, pipeline=joints_traj),
     'ee_flip_grip': serve.override(model=openpi_model, pipeline=ee_flip_grip),
-    # Trained on phail recordings, whose poses are the real Franka's ``default``, so no offset — provided it
-    # is served on that rig.
-    # TODO(#550): that rig's ``default`` moves to the flange, so this checkpoint will need an offset here.
+    # Trained on phail recordings, whose poses are the real Franka's ``F_T_EE``.
     'phail': serve.override(
         model=openpi_model.override(
             checkpoints_dir='s3://checkpoints/phail_unified/openpi/pi05_positronic_lowmem/270226-ee/'
         ),
-        pipeline=ee.override(codec=codecs.phail_v1, ee_frame=default_ee_frame),
+        pipeline=ee.override(codec=codecs.phail_v1, ee_frame=fr3_ee_frame),
     ),
     # The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence the flip-grip pipeline.
-    # Its poses are the sim panda's ``default``, which sits 45 mm along the approach axis from the FR3's, so
-    # this checkpoint is off by that much on the real arm.
-    # TODO(#550): both ``default`` frames move to the flange, so this checkpoint will need an offset here.
+    # Its poses are the sim panda's ``EE_LINK``.
     'sim_stack': serve.override(
         model=openpi_model.override(
             checkpoints_dir='s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/'
         ),
-        pipeline=ee_flip_grip.override(ee_frame=default_ee_frame),
+        pipeline=ee_flip_grip.override(ee_frame=panda_ee_frame),
     ),
     'droid': serve.override(
         model=openpi_model.override(
@@ -279,16 +275,16 @@ COMMANDS = {
         ),
         pipeline=droid_jointpos_pipe,
     ),
-    # TODO(#557): LIBERO reports its eef 38 mm and 90° from where the shipped panda model puts ``default``, and
-    # the codec is calibrated against what the env actually reports. No offset holds that pairing; the frame this
-    # checkpoint speaks can be stated only once the env stops mislabelling its poses.
+    # TODO(#557): LIBERO reports its eef 38 mm and 90° from the shipped panda model's ``EE_LINK``, and the codec
+    # is calibrated against what the env actually reports. ``panda_ee_frame`` undoes the ``PANDA_EE_FRAME`` that
+    # ``LiberoAdapter`` applies, so the checkpoint sees the poses the env reports.
     'libero': serve.override(
         model=openpi_model.override(
             checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero',
             config_name='pi05_libero',
             transform_actions=openpi.libero_actions_to_physical,
         ),
-        pipeline=libero_pipe.override(ee_frame=default_ee_frame),
+        pipeline=libero_pipe.override(ee_frame=panda_ee_frame),
     ),
 }
 

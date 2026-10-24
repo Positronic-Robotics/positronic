@@ -23,11 +23,12 @@ from positronic.drivers.roboarm.ik import (
     ik_joints_from_episode,
 )
 from positronic.drivers.roboarm.models import (
-    DEFAULT_FRAME,
     DROID_EE_FRAME,
     EE_LINK,
     FLANGE_LINK,
+    FR3_EE_FRAME,
     GRIPPER_SITE,
+    PANDA_EE_FRAME,
     ROBOLAB_EE_FRAME,
     ROBOLAB_EEF_LINK,
     EEFrame,
@@ -138,7 +139,7 @@ def test_dls_solver_with_limits_damps_joint_motion_at_a_singularity():
 
 def test_dls_solver_with_limits_solves_a_five_joint_arm():
     meta = So101Robot._build_robot_meta()
-    solver = DLSIKSolverWithLimits(meta[roboarm_keys.URDF], meta[roboarm_keys.JOINT_NAMES], DEFAULT_FRAME)
+    solver = DLSIKSolverWithLimits(meta[roboarm_keys.URDF], meta[roboarm_keys.JOINT_NAMES], GRIPPER_SITE)
     q_start = np.array([0.1, -0.2, 0.3, 0.2, 0.1])
     q_target = q_start + 0.05
     pos, R, _ = solver._fk_jac(q_target)
@@ -206,7 +207,7 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
     quat = geom.Rotation.Representation.QUAT
     urdf = bundled_panda_model()[roboarm_keys.URDF]
     offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 4]))
-    anchored = [geom.Transform3D.from_vector(_fk_site(urdf, q, DEFAULT_FRAME), quat) for q in q_traj]
+    anchored = [geom.Transform3D.from_vector(_fk_site(urdf, q, GRIPPER_SITE), quat) for q in q_traj]
     moved = np.array([(pose * offset).as_vector(quat) for pose in anchored])
 
     episode = EpisodeContainer(
@@ -215,13 +216,13 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
             keys.TARGET_EE_POSE: DummySignal(ts, moved),
             roboarm_keys.URDF: urdf,
             roboarm_keys.JOINT_NAMES: PANDA_JOINTS,
-            **ee_frames_entry({keys.TARGET_EE_POSE: EEFrame(site=DEFAULT_FRAME, offset=offset)}),
+            **ee_frames_entry({keys.TARGET_EE_POSE: EEFrame(site=GRIPPER_SITE, offset=offset)}),
         }
     )
     result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
 
     for i in range(n_steps):
-        solved = _fk_site(urdf, result[i][0], DEFAULT_FRAME)
+        solved = _fk_site(urdf, result[i][0], GRIPPER_SITE)
         np.testing.assert_allclose(solved[:3], anchored[i].translation, atol=1e-3)
 
 
@@ -238,26 +239,23 @@ def test_frame_transform_reproduces_robolab_eef_across_configs():
 
 @pytest.mark.parametrize('model', [bundled_franka_model(), bundled_panda_model()], ids=['franka', 'panda'])
 def test_bundled_model_has_the_site_every_embodiment_reports_at(model):
-    frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
+    frame_transform(model[roboarm_keys.URDF], GRIPPER_SITE, GRIPPER_SITE)
 
 
 @pytest.mark.parametrize(
-    'declared, frame', [(DROID_EE_FRAME, FLANGE_LINK), (ROBOLAB_EE_FRAME, ROBOLAB_EEF_LINK)], ids=['droid', 'robolab']
+    'model, declared, frame',
+    [
+        (bundled_franka_model(), DROID_EE_FRAME, FLANGE_LINK),
+        (bundled_franka_model(), ROBOLAB_EE_FRAME, ROBOLAB_EEF_LINK),
+        (bundled_franka_model(), FR3_EE_FRAME, EE_LINK),
+        (bundled_panda_model(), PANDA_EE_FRAME, EE_LINK),
+    ],
+    ids=['droid', 'robolab', 'fr3', 'panda'],
 )
-def test_declared_frame_matches_the_model_geometry(declared, frame):
+def test_declared_frame_matches_the_model_geometry(model, declared, frame):
     """A checkpoint or an env states its frame as a constant; this pins it to where the model puts that frame."""
-    urdf = bundled_franka_model()[roboarm_keys.URDF]
-    measured = frame_transform(urdf, DEFAULT_FRAME, frame)
+    measured = frame_transform(model[roboarm_keys.URDF], GRIPPER_SITE, frame)
     np.testing.assert_allclose(declared.as_matrix, measured.as_matrix, atol=1e-9)
-
-
-def test_default_frame_still_coincides_with_the_franka_tool_frame():
-    """Recordings before #485 state their site as ``end_effector`` (``cfg.ds.internal.REAL_ROBOT_TRANSFORM``), and
-    ``DROID_EE_FRAME`` is stated from ``DEFAULT_FRAME``. Neither is reachable from the data. TODO(#550): a move of
-    ``DEFAULT_FRAME`` to the flange invalidates both, so re-express those recordings and re-measure the constant then.
-    """
-    transform = frame_transform(bundled_franka_model()[roboarm_keys.URDF], DEFAULT_FRAME, EE_LINK)
-    np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-12)
 
 
 def test_panda_flange_sits_on_link7_as_on_the_fr3():
@@ -269,11 +267,10 @@ def test_panda_flange_sits_on_link7_as_on_the_fr3():
 
 
 def test_panda_hand_frames_keep_their_offset_from_the_flange():
-    """The sim reports and solves at the hand point, 58.4 mm along the flange axis and -45deg about it."""
+    """The panda's ``EE_LINK``, where older sim recordings sit, is 58.4 mm along the flange axis and -45deg about it."""
     hand_point = geom.Transform3D(np.array([0.0, 0.0, 0.0584]), geom.Rotation.from_euler([0.0, 0.0, -np.pi / 4]))
     urdf = bundled_panda_model()[roboarm_keys.URDF]
-    for frame in (EE_LINK, DEFAULT_FRAME):
-        np.testing.assert_allclose(frame_transform(urdf, FLANGE_LINK, frame).as_matrix, hand_point.as_matrix, atol=1e-9)
+    np.testing.assert_allclose(frame_transform(urdf, FLANGE_LINK, EE_LINK).as_matrix, hand_point.as_matrix, atol=1e-9)
     mjcf_flange = frame_transform(PANDA_URDF, FLANGE_LINK, PANDA_FRAME)
     np.testing.assert_allclose(mjcf_flange.as_matrix, hand_point.as_matrix, atol=1e-7)
 
@@ -283,14 +280,14 @@ def test_ee_frames_reads_the_site_and_offset_of_each_pose_signal():
     stated = {
         eval_keys.POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE],
         **ee_frames_entry({
-            keys.EE_POSE: EEFrame(site=DEFAULT_FRAME),
+            keys.EE_POSE: EEFrame(site=GRIPPER_SITE),
             keys.TARGET_EE_POSE: EEFrame(site=EE_LINK, offset=offset),
         }),
     }
 
     frames = ee_frames(stated)
 
-    assert frames[keys.EE_POSE].site == DEFAULT_FRAME
+    assert frames[keys.EE_POSE].site == GRIPPER_SITE
     np.testing.assert_allclose(frames[keys.EE_POSE].offset.as_matrix, np.eye(4), atol=1e-12)
     assert frames[keys.TARGET_EE_POSE].site == EE_LINK
     np.testing.assert_allclose(frames[keys.TARGET_EE_POSE].offset.as_matrix, offset.as_matrix, atol=1e-12)
@@ -299,7 +296,7 @@ def test_ee_frames_reads_the_site_and_offset_of_each_pose_signal():
 def test_ee_frames_refuses_a_pose_signal_with_no_frame():
     statics = {
         eval_keys.POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE],
-        **ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)}),
+        **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}),
     }
     with pytest.raises(ValueError, match=keys.TARGET_EE_POSE):
         ee_frames(statics)
@@ -309,15 +306,15 @@ def test_ee_frames_refuses_a_site_the_carried_model_lacks():
     statics = {
         roboarm_keys.URDF: '<robot name="r"><link name="base"/></robot>',
         eval_keys.POSE_SIGNALS: [keys.EE_POSE],
-        **ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)}),
+        **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}),
     }
-    with pytest.raises(ValueError, match=DEFAULT_FRAME):
+    with pytest.raises(ValueError, match=GRIPPER_SITE):
         ee_frames(statics)
 
 
 def test_ee_frames_skips_the_site_check_when_no_model_is_carried():
-    statics = {eval_keys.POSE_SIGNALS: [keys.EE_POSE], **ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})}
-    assert ee_frames(statics)[keys.EE_POSE].site == DEFAULT_FRAME
+    statics = {eval_keys.POSE_SIGNALS: [keys.EE_POSE], **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})}
+    assert ee_frames(statics)[keys.EE_POSE].site == GRIPPER_SITE
 
 
 def test_ik_joints_from_episode_refuses_targets_with_no_frame():
@@ -381,9 +378,3 @@ def test_gripper_sits_on_the_flange_approach_axis(urdf, grip_point):
     transform = frame_transform(urdf, FLANGE_LINK, GRIPPER_SITE)
     np.testing.assert_allclose(transform.translation, [0.0, 0.0, grip_point], atol=1e-9)
     np.testing.assert_allclose(transform.rotation.as_rotation_matrix, np.eye(3), atol=1e-9)
-
-
-def test_gripper_model_puts_default_at_the_grip_point():
-    model = bundled_franka_model(GRIPPER_SITE)
-    transform = frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, GRIPPER_SITE)
-    np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-9)

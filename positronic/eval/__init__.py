@@ -6,17 +6,22 @@ import pimm
 from positronic.dataset.serializers import Serializer
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers.roboarm.keys import EE_FRAMES
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.eval import keys as eval_keys
 from positronic.keys import EE_POSE, JOINTS, TARGET_EE_POSE
 
-# Embodiment-level static meta of one arm: how recorded signals map to the canonical robot fields, and the site
-# each pose signal is reported at.
-ROBOT_STATIC_META = {
-    eval_keys.JOINT_SIGNALS: [JOINTS],
-    eval_keys.POSE_SIGNALS: [EE_POSE, TARGET_EE_POSE],
-    **ee_frames_entry({signal: EEFrame(site=DEFAULT_FRAME) for signal in (EE_POSE, TARGET_EE_POSE)}),
-}
+
+def robot_static_meta(site: str) -> dict[str, Any]:
+    """Embodiment-level static meta of one arm: how recorded signals map to the canonical robot fields, and the site
+    of its model that each pose signal is reported at."""
+    return {
+        eval_keys.JOINT_SIGNALS: [JOINTS],
+        eval_keys.POSE_SIGNALS: [EE_POSE, TARGET_EE_POSE],
+        **ee_frames_entry({signal: EEFrame(site=site) for signal in (EE_POSE, TARGET_EE_POSE)}),
+    }
+
+
+ROBOT_STATIC_META = robot_static_meta(GRIPPER_SITE)
 
 
 # The meta of an arm that publishes no model: no pose signal has a frame, so its rig runs joint-only policies only.

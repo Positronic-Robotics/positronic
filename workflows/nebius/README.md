@@ -280,7 +280,7 @@ bash workflows/nebius/serve.sh lerobot smolvla-server ee \
 # --pipeline.ee_frame states the EE frame the checkpoint speaks; None means it speaks joints only
 bash workflows/nebius/serve.sh openpi my-openpi ee \
   --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.default_ee_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_ee_frame
 
 bash workflows/nebius/serve.sh gr00t groot-server droid \
   --model.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/

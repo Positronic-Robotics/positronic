@@ -7,6 +7,7 @@ Three solvers for reconstructing joint-space targets from recorded EE targets:
 """
 
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from functools import lru_cache, partial
 from typing import Any
 
@@ -16,11 +17,13 @@ from eval_vocabulary.timeline import recording_timeline
 from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation as ScipyRotation
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.dataset import transforms
+from positronic.dataset.episode import Episode
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import EEFrame, parse_ee_frames
+from positronic.drivers.roboarm.models import EEFrame, ee_frames_entry, parse_ee_frames
 from positronic.eval import keys as eval_keys
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -136,6 +139,48 @@ def ee_frames(statics) -> dict[str, EEFrame]:
         for frame in frames.values():
             frame_transform(statics[roboarm_keys.URDF], frame.site, frame.site)
     return frames
+
+
+class MoveToSite(EpisodeTransform):
+    """Re-express every pose signal of an episode at ``site`` of the model it carries, and state them there.
+
+    Each signal that ``EE_FRAMES`` names moves by the transform from ``site`` to its frame. A recorded
+    ``CartesianDelta`` frame moves with the targets. An episode with every signal at ``site`` stays as it is.
+    """
+
+    def __init__(self, site: str):
+        self._site = site
+
+    def __call__(self, episode: Episode) -> Episode:
+        frames = ee_frames(episode)
+        if all(frame.site == self._site and frame.offset == geom.Transform3D.identity for frame in frames.values()):
+            return episode
+        urdf = episode[roboarm_keys.URDF]
+        site_to_frame = {
+            name: frame_transform(urdf, self._site, frame.site) * frame.offset for name, frame in frames.items()
+        }
+        moved = {
+            name: partial(_moved_signal, key=name, move=partial(change_frame, transform=transform.inv))
+            for name, transform in site_to_frame.items()
+            if name in episode
+        }
+        if keys.TARGET_EE_POSE_DELTA_FRAME in episode and keys.TARGET_EE_POSE in site_to_frame:
+            move = partial(_move_delta_frame, site_to_frame=site_to_frame[keys.TARGET_EE_POSE])
+            moved[keys.TARGET_EE_POSE_DELTA_FRAME] = partial(
+                _moved_signal, key=keys.TARGET_EE_POSE_DELTA_FRAME, move=move
+            )
+        stated = ee_frames_entry(dict.fromkeys(frames, EEFrame(site=self._site)))
+        statics = {name: FromValue(value) for name, value in stated.items()}
+        return Group(Derive(meta=None, **statics, **moved), Identity())(episode)
+
+
+def _moved_signal(episode: Episode, key: str, move: Callable[[Any], Any]) -> Any:
+    return transforms.Elementwise(episode[key], transforms.lazy_sequence(move))
+
+
+def _move_delta_frame(vector, site_to_frame: geom.Transform3D) -> np.ndarray:
+    """A ``CartesianDelta`` frame vector, restated from the site that the targets move to."""
+    return (site_to_frame * geom.Transform3D.from_vector(np.asarray(vector, dtype=np.float64), _QUAT)).as_vector(_QUAT)
 
 
 def _parse_target(target_ee_pose_vec):
