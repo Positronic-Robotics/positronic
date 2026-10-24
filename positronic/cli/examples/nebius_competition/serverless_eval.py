@@ -56,7 +56,7 @@ POLL_S = 30.0
 DELETE_WAIT_S = 120.0
 LOG_TAIL_LINES = 40
 LOG_ATTEMPTS = 3
-LOG_RETRY_S = 10.0
+RETRY_S = 10.0
 CLI_TIMEOUT_S = 300.0
 
 
@@ -305,7 +305,7 @@ class ServerlessEval:
             logs = self.nebius(*Kind.JOB.value, 'logs', job, '--since', since, structured=False)
             if last_score_line(logs) is not None:
                 break
-            self.clock.sleep(LOG_RETRY_S)
+            self.clock.sleep(RETRY_S)
         return logs
 
     def cleanup(self) -> list[str]:
@@ -350,7 +350,7 @@ class ServerlessEval:
             left = [f'The {" ".join(names[name].value)} {name} is still there' for name in listed if name in names]
             if not left or self.clock.monotonic() >= deadline:
                 return left
-            self.clock.sleep(LOG_RETRY_S)
+            self.clock.sleep(RETRY_S)
 
 
 def _interrupt(signum: int, _frame: Any) -> None:
