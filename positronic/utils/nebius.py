@@ -55,7 +55,12 @@ def call(*args: str, profile: str | None = None, structured: bool = True, timeou
     except subprocess.CalledProcessError as e:
         error = NebiusNotFound if _NOT_FOUND_STATUS in e.stderr else NebiusError
         raise error(f'`{" ".join(command)}` failed: {e.stderr.strip()}') from None
-    return json.loads(completed.stdout) if structured else completed.stdout
+    if not structured:
+        return completed.stdout
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        raise NebiusError(f'`{" ".join(command)}` printed no JSON: {completed.stdout[:200]!r}') from None
 
 
 def auth_token(secret: str = AUTH_TOKEN_SECRET, parent_id: str = PARENT_ID) -> str:

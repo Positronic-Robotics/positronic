@@ -72,3 +72,10 @@ def test_a_failure_other_than_not_found_is_not_read_as_absence():
         with pytest.raises(nebius.NebiusError) as error:
             nebius.call('ai', 'endpoint', 'get-by-name', '--name', 'x')
     assert not isinstance(error.value, nebius.NebiusNotFound)
+
+
+def test_output_that_is_not_json_raises_a_nebius_error():
+    printed = subprocess.CompletedProcess(['nebius'], 0, stdout='A new version is available\n{}', stderr='')
+    with patch('subprocess.run', return_value=printed):
+        with pytest.raises(nebius.NebiusError, match='printed no JSON'):
+            nebius.call('ai', 'job', 'get', '--id', 'x')
