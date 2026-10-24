@@ -49,7 +49,7 @@ class Session(ABC):
 
 
 class PreparationCancelled(Exception):
-    """A preparation stopped because the server set its ``cancelled`` event."""
+    """A preparation stopped because the server set ``Model.preparation_cancelled``."""
 
 
 class Model(ABC):
@@ -57,18 +57,24 @@ class Model(ABC):
 
     ``parameters`` declares accepted session names and their defaults. ``prepare_session`` receives
     resolved values, validates their model-specific meaning and returns only once that session is warm.
-    The server sets ``cancelled`` when the session can no longer open: its opener left, or the server
-    stops. A preparation that waits for an event outside the server watches it and raises
-    ``PreparationCancelled``. A preparation that raises must release any resources it acquired before
-    returning a session.
+    A preparation that waits for an event outside the server, such as a person, watches
+    ``preparation_cancelled`` and raises ``PreparationCancelled`` when it is set. A preparation that
+    raises must release any resources it acquired before returning a session.
     """
 
     def __init__(self, *, parameters: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None):
         self.parameters = {} if parameters is None else parameters
         self.metadata = {} if metadata is None else metadata
+        self._preparation_cancelled = threading.Event()
+
+    @property
+    def preparation_cancelled(self) -> threading.Event:
+        """Set when the session that ``prepare_session`` prepares can no longer open: its opener left, or the
+        server stops. The server gives each preparation its own event."""
+        return self._preparation_cancelled
 
     @abstractmethod
-    def prepare_session(self, params: dict[str, Any], cancelled: threading.Event) -> Session: ...
+    def prepare_session(self, params: dict[str, Any]) -> Session: ...
 
     def close(self) -> None:
         """Release the model's resources after its sessions finish."""
@@ -218,7 +224,9 @@ class ModelServer:
             # The opener can leave while its preparation waits for the worker.
             if cancelled.is_set():
                 return
-            session = model.prepare_session(json.loads(json.dumps(params, allow_nan=False)), cancelled)
+            # Preparations run one at a time on the worker, so the event is this preparation's for its whole call.
+            model._preparation_cancelled = cancelled
+            session = model.prepare_session(json.loads(json.dumps(params, allow_nan=False)))
             spec.validate(session.client_stack)
 
         received = asyncio.create_task(conn.receive())

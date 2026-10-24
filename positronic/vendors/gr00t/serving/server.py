@@ -4,7 +4,6 @@ import json
 import logging
 import math
 import os
-import threading
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -138,7 +137,7 @@ class Gr00tModel(Model):
             },
             metadata={**metadata, keys.TYPE: 'groot', keys.EMBODIMENT: EMBODIMENT},
         )
-        self.prepare_session(self.parameters, threading.Event())
+        self.prepare_session(self.parameters)
         width, height = settings[model_settings.IMAGE_SIZE]
         state = {name: np.zeros((1, 1, size), dtype=np.float32) for name, size in STATE_DIMS.items()}
         state[EE_POSE][..., 3:] = [1, 0, 0, 0, 1, 0]
@@ -178,7 +177,7 @@ class Gr00tModel(Model):
             raise ValueError(f'Checkpoint must predict consecutive joint and gripper targets; got {action}')
         return action_horizon
 
-    def prepare_session(self, params: dict[str, Any], cancelled: threading.Event) -> Gr00tSession:
+    def prepare_session(self, params: dict[str, Any]) -> Gr00tSession:
         fps, horizon = params[keys.FPS], params[keys.HORIZON_SEC]
         for name, value in ((keys.FPS, fps), (keys.HORIZON_SEC, horizon)):
             if name == keys.HORIZON_SEC and value is None:

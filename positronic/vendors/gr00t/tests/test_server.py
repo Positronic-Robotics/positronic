@@ -1,7 +1,6 @@
 import json
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -159,8 +158,8 @@ def model(native_policy):
 
 
 def test_sessions_keep_their_own_parameters_and_share_native_weights(model):
-    first = model.prepare_session(resolve_params(model.parameters, {keys.FPS: 10}), threading.Event())
-    second = model.prepare_session(resolve_params(model.parameters, {keys.FPS: 20}), threading.Event())
+    first = model.prepare_session(resolve_params(model.parameters, {keys.FPS: 10}))
+    second = model.prepare_session(resolve_params(model.parameters, {keys.FPS: 20}))
     first_description = json.dumps(first.client_stack)
     assert first.client_stack != second.client_stack
     observation = {gr00t.LANGUAGE: {gr00t.TASK: [['pick']]}}
@@ -187,4 +186,4 @@ def test_sessions_keep_their_own_parameters_and_share_native_weights(model):
 )
 def test_invalid_session_controls_fail_before_ready(model, name, value):
     with pytest.raises(ValueError):
-        model.prepare_session({**model.parameters, name: value}, threading.Event())
+        model.prepare_session({**model.parameters, name: value})

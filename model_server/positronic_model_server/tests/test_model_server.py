@@ -60,7 +60,8 @@ class Probe(Model):
     def close(self) -> None:
         self.record('close_model')
 
-    def prepare_session(self, params: dict[str, Any], cancelled: threading.Event) -> Session:
+    def prepare_session(self, params: dict[str, Any]) -> Session:
+        cancelled = self.preparation_cancelled
         self.record('prepare')
         self.cancelled.append(cancelled)
         self.preparing.set()
@@ -414,7 +415,8 @@ def test_a_session_prepared_after_its_opener_closed_the_connection_is_released(s
 class PersonWait(Probe):
     """A preparation that waits for an event outside the server, as one that waits for a person does."""
 
-    def prepare_session(self, params: dict[str, Any], cancelled: threading.Event) -> Session:
+    def prepare_session(self, params: dict[str, Any]) -> Session:
+        cancelled = self.preparation_cancelled
         self.record('prepare')
         self.cancelled.append(cancelled)
         self.preparing.set()
@@ -474,7 +476,8 @@ def test_a_preparation_whose_opener_left_before_it_began_does_not_run(start, cap
 class FailingWhenCancelled(PersonWait):
     """A preparation that fails with an error of its own once the server cancels it."""
 
-    def prepare_session(self, params: dict[str, Any], cancelled: threading.Event) -> Session:
+    def prepare_session(self, params: dict[str, Any]) -> Session:
+        cancelled = self.preparation_cancelled
         self.record('prepare')
         self.cancelled.append(cancelled)
         self.preparing.set()
