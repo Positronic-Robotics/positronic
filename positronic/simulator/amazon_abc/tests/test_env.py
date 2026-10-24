@@ -14,6 +14,7 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
 from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server.tests.mujoco_chain import hinge_chain_xml
 
 _ABC_DIR = Path(__file__).parents[1]
 _SERVER_DIR = _ABC_DIR.parent / 'env_server'
@@ -26,23 +27,10 @@ _TOKEN = {
 }
 
 
-_AXES = ('1 0 0', '0 0 1', '0 1 0')
-
-
-def _arm_xml(arm: str, y: float) -> str:
-    """A chain of six hinges with the control site at its tip, mounted at ``y``."""
-    links = ''.join(
-        f'<body name="{arm}_link{i}" pos="0 0 0.1"><joint name="{arm}_joint{i}" axis="{_AXES[i % 3]}" '
-        'range="-3 3"/><geom size="0.02" mass="0.1"/>'
-        for i in range(1, mapping.ARM_JOINTS + 1)
-    )
-    tip = f'<site name="{arm}_grasp_site" pos="0 0 0.1"/>'
-    return f'<body name="{arm}_base" pos="0 {y} 0">{links}{tip}{"</body>" * mapping.ARM_JOINTS}</body>'
-
-
 _SCENE = (
     f'<mujoco><compiler angle="radian"/><option timestep="{_TIMESTEP}"/><worldbody>'
-    f'{_arm_xml("left", 0.3)}{_arm_xml("right", -0.3)}</worldbody></mujoco>'
+    f'{hinge_chain_xml("left", 0.3, mapping.ARM_JOINTS)}{hinge_chain_xml("right", -0.3, mapping.ARM_JOINTS)}'
+    '</worldbody></mujoco>'
 )
 
 
@@ -136,8 +124,8 @@ def env(monkeypatch, scene: _FakeScene) -> Any:
 
     abc_sim.__dict__.update(get_task_spec=lambda name: task, list_task_specs=lambda: [task], make_env=make_env)
     monkeypatch.setitem(sys.modules, 'abc_sim', abc_sim)
-    for name, directory in (('protocol', _SERVER_DIR), ('arm_action', _SERVER_DIR), ('server', _SERVER_DIR)):
-        monkeypatch.setitem(sys.modules, name, _load(name, directory / f'{name}.py'))
+    for name in ('protocol', 'arm_action', 'mujoco_state', 'server'):
+        monkeypatch.setitem(sys.modules, name, _load(name, _SERVER_DIR / f'{name}.py'))
     monkeypatch.setitem(sys.modules, 'mapping', _load('mapping', _ABC_DIR / 'mapping.py'))
     return _load('abc_env', _ABC_DIR / 'env.py').AbcEnv()
 

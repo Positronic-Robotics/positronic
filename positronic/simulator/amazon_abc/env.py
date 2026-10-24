@@ -12,6 +12,7 @@ import abc_sim  # pyright: ignore[reportMissingImports] -- installed only in ABC
 import arm_action
 import mapping
 import mujoco
+import mujoco_state
 import numpy as np
 import protocol
 from server import EnvProtocol, EnvServer
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 # `make_env` lays out one scene from an unseeded draw, which fails for about 1 draw in 150 on put_relative.
 # The seeded reset replaces that scene, so another build leaves the trial's scene as its seed names it.
 _BUILD_ATTEMPTS = 3
+# The YAM driver's acceptance of an IK solution.
+_IK_POSITION_TOLERANCE = 1e-3  # m
+_IK_ROTATION_TOLERANCE = 1e-2  # rad
 
 
 class _Arm:
@@ -50,12 +54,8 @@ class AbcEnv(EnvProtocol):
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """ABC's own catalogue, or the tasks ``spec`` names in it."""
-        selection = spec.get(mapping.SELECT_TASKS)
-        if selection is None:
-            specs = abc_sim.list_task_specs()
-        else:
-            names = [selection] if isinstance(selection, str) else list(selection)
-            specs = [abc_sim.get_task_spec(name) for name in names]
+        names = mapping.task_names(spec.get(mapping.SELECT_TASKS))
+        specs = abc_sim.list_task_specs() if names is None else [abc_sim.get_task_spec(name) for name in names]
         return [{mapping.TASK_NAME: s.name} for s in specs]
 
     def _build(self, token: dict[str, Any]) -> None:
@@ -188,41 +188,40 @@ class AbcEnv(EnvProtocol):
         return data.site_xpos[arm.site_id].copy(), data.site_xmat[arm.site_id].reshape(3, 3).copy()
 
     def _ik(self, arm: _Arm, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray | None:
-        """Damped-least-squares differential IK on the arm's site Jacobian, iterated on a scratch ``MjData``
-        seeded from the live scene: a solve must not move the objects standing in it. None where it does not
+        """The arm's joints at the target, solved without moving the live scene; None where it does not
         converge."""
-        iterations, damping = 100, 0.05
-        position_tolerance, rotation_tolerance = 1e-3, 1e-2  # the YAM driver's acceptance, in m and rad
-        model = self._env.model
-        data = mujoco.MjData(model)
-        data.qpos[:] = self._env.data.qpos
-        q = self._measured_q(arm).astype(np.float64)
         rotation_error = np.empty(3)
         quat = np.empty(4)
 
-        def error_at(q: np.ndarray) -> np.ndarray:
-            data.qpos[arm.qpos_ids] = q
-            mujoco.mj_forward(model, data)
-            reached_rot = data.site_xmat[arm.site_id].reshape(3, 3)
-            mujoco.mju_mat2Quat(quat, np.ascontiguousarray(target_rot @ reached_rot.T).reshape(9))
+        def pose_error(site_pos: np.ndarray, site_rot: np.ndarray) -> np.ndarray:
+            mujoco.mju_mat2Quat(quat, np.ascontiguousarray(target_rot @ site_rot.T).reshape(9))
             mujoco.mju_quat2Vel(rotation_error, quat, 1.0)
-            return np.concatenate([target_pos - data.site_xpos[arm.site_id], rotation_error])
+            return np.concatenate([target_pos - site_pos, rotation_error])
 
-        for _ in range(iterations):
-            error = error_at(q)
-            if np.linalg.norm(error[:3]) < position_tolerance and np.linalg.norm(error[3:]) < rotation_tolerance:
-                return q
-            jacp = np.zeros((3, model.nv))
-            jacr = np.zeros((3, model.nv))
-            mujoco.mj_jacSite(model, data, jacp, jacr, arm.site_id)
-            jac = np.vstack([jacp, jacr])[:, arm.dof_ids]
-            dq = jac.T @ np.linalg.solve(jac @ jac.T + damping**2 * np.eye(6), error)
-            q = np.clip(q + dq, arm.lower, arm.upper)
-        residual = error_at(q)
+        def converged(error: np.ndarray) -> bool:
+            return bool(
+                np.linalg.norm(error[:3]) < _IK_POSITION_TOLERANCE
+                and np.linalg.norm(error[3:]) < _IK_ROTATION_TOLERANCE
+            )
+
+        solution = arm_action.damped_least_squares_ik(
+            self._env.model,
+            live_qpos=self._env.data.qpos,
+            site_id=arm.site_id,
+            qpos_ids=arm.qpos_ids,
+            dof_ids=arm.dof_ids,
+            start_q=self._measured_q(arm),
+            lower=arm.lower,
+            upper=arm.upper,
+            pose_error=pose_error,
+            converged=converged,
+        )
+        if solution.converged:
+            return solution.q
         logger.warning(
-            f'IK for the {arm.name} arm did not converge in {iterations} iterations: '
-            f'{np.linalg.norm(residual[:3]):.2e} m and {np.linalg.norm(residual[3:]):.2e} rad short of '
-            f'{target_pos.tolist()}; the arm holds'
+            f'IK for the {arm.name} arm did not converge in {arm_action.IK_ITERATIONS} iterations: '
+            f'{np.linalg.norm(solution.residual[:3]):.2e} m and {np.linalg.norm(solution.residual[3:]):.2e} rad '
+            f'short of {target_pos.tolist()}; the arm holds'
         )
         return None
 
@@ -231,7 +230,7 @@ class AbcEnv(EnvProtocol):
         per_arm = np.asarray(obs[mapping.ABC_OBS_STATE]).reshape(len(self._arms), mapping.ARM_JOINTS + 1)
         self._last_reported_apertures = per_arm[:, -1]
         payload: dict[str, Any] = {
-            mapping.OBS_SIM_STATE: self._physics_state(),
+            mapping.OBS_SIM_STATE: mujoco_state.integration_state(self._env.model, self._env.data),
             mapping.OBS_TASK_EVAL: mapping.task_eval_signals(task_eval),
         }
         for index, arm in enumerate(self._arms):
@@ -249,13 +248,6 @@ class AbcEnv(EnvProtocol):
             })
         payload.update({name: np.ascontiguousarray(frame) for name, frame in obs[mapping.ABC_OBS_IMAGES].items()})
         return payload
-
-    def _physics_state(self) -> np.ndarray:
-        model, data = self._env.model, self._env.data
-        spec = mujoco.mjtState.mjSTATE_INTEGRATION
-        state = np.empty(mujoco.mj_stateSize(model, spec), dtype=np.float64)
-        mujoco.mj_getState(model, data, state, spec)
-        return state
 
     def close(self) -> None:
         if self._env is not None:

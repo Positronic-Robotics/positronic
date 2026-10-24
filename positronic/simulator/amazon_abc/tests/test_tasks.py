@@ -188,3 +188,11 @@ def test_an_arm_holds_its_last_command_and_the_other_arm_is_untouched():
 
     held = adapter.action({left: None, right: None})
     assert held[left][protocol.COMMAND_TYPE] == protocol.CARTESIAN
+
+
+@pytest.mark.parametrize(
+    'selection, names',
+    [(None, None), ('put_plastic_bottles_in_bin', ['put_plastic_bottles_in_bin']), (('a', 'b'), ['a', 'b'])],
+)
+def test_a_selection_names_one_task_several_or_every_task(selection, names):
+    assert mapping.task_names(selection) == names

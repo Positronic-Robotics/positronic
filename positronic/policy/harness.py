@@ -13,7 +13,7 @@ import numpy as np
 from opentelemetry.trace import Span
 
 import pimm
-from pimm.time import EMITTED_PREFIX, EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, emission_time
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.episode import EpisodeWriter
@@ -239,8 +239,7 @@ class Harness(pimm.ControlSystem):
         if self._writer is None or instruction == self._recorded_instruction:
             return
         assert self._clock is not None, 'an episode records only inside run'
-        emitted = pimm.Time(**{f'{EMITTED_PREFIX}{name}': ns for name, ns in self._clock.time().items()})
-        self._append({eval_keys.INSTRUCTION: instruction}, emitted)
+        self._append({eval_keys.INSTRUCTION: instruction}, emission_time(self._clock))
         self._recorded_instruction = instruction
 
     def _convert_and_record(

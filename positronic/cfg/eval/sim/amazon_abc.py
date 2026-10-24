@@ -26,8 +26,7 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
 
     ``task`` is a name, an alias, a prompt, or a list of them; unbound, it sweeps every task ABC lists.
     """
-    selection = None if task is None else [task] if isinstance(task, str) else list(task)
-    proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(selection))
+    proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(mapping.task_names(task)))
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()
     )

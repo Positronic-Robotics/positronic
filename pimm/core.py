@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Generic, TypeAlias, TypeVar, final
 
-from .time import EMITTED_PREFIX, EMITTED_WALL, RECEIVED_PREFIX, Clock, SystemClock, Time
+from .time import EMITTED_PREFIX, EMITTED_WALL, RECEIVED_PREFIX, Clock, SystemClock, Time, emission_time
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -67,10 +67,10 @@ class SignalEmitter(ABC, Generic[T]):
                 raise TypeError('Producer timestamps must be a Time')
             if any(name.startswith((EMITTED_PREFIX, RECEIVED_PREFIX)) for name in time):
                 raise ValueError('The emitted.* and received.* timelines belong to pimm')
-        coordinates = {f'{EMITTED_PREFIX}{k}': v for k, v in self._emission_clock.time().items()}
+        stamp = emission_time(self._emission_clock)
         if time is not None:
-            coordinates.update(time)
-        message = Message(data, Time(**coordinates))
+            stamp = Time(**stamp, **time)
+        message = Message(data, stamp)
         self._emit(message.data, message.time)
         return message
 

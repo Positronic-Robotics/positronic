@@ -46,6 +46,7 @@ import pathlib
 import random
 from typing import Any
 
+import arm_action  # pyright: ignore[reportMissingImports]
 import keys
 import mujoco
 import numpy as np
@@ -61,15 +62,7 @@ builtins.input = lambda *_args, **_kwargs: 'n'
 from libero.libero import benchmark, get_libero_path  # noqa: E402 -- must follow the stdin shim above
 from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
 
-_IK_ITERS = 100
-_IK_DAMPING = 0.05
 _IK_TOL = 1e-4
-
-
-def _unpack_pose(vec: Any) -> tuple[np.ndarray, np.ndarray]:
-    """Split the adapter's flat ``[translation(3), rotation_matrix(9)]`` wire pose into ``(pos, 3x3 rot)``."""
-    vec = np.asarray(vec)
-    return vec[:3], vec[3:].reshape(3, 3)
 
 
 class LiberoEnv(EnvProtocol):
@@ -219,7 +212,7 @@ class LiberoEnv(EnvProtocol):
         # which wants rad/s — there it is divided by the control period.
         match (self._control_mode, command[protocol.COMMAND_TYPE]):
             case ('ee', protocol.CARTESIAN):  # OSC_POSE: world-frame pose error
-                physical = self._pose_error(*_unpack_pose(command[protocol.COMMAND_POSE]))
+                physical = self._pose_error(*arm_action.unpack_wire_pose(command[protocol.COMMAND_POSE]))
             case ('ee', protocol.CARTESIAN_DELTA):  # OSC_POSE: the world-frame delta composed onto the live eef pose
                 physical = self._pose_error(*self._delta_target(command))
             case ('ee', protocol.JOINT_POS):
@@ -233,7 +226,7 @@ class LiberoEnv(EnvProtocol):
             case ('joint', protocol.JOINT_DELTA):
                 physical = command[protocol.COMMAND_JOINT_DELTA]
             case ('joint', protocol.CARTESIAN):
-                physical = self._ik(*_unpack_pose(command[protocol.COMMAND_POSE])) - self._cur_q()
+                physical = self._ik(*arm_action.unpack_wire_pose(command[protocol.COMMAND_POSE])) - self._cur_q()
             case ('joint', protocol.CARTESIAN_DELTA):
                 physical = self._ik(*self._delta_target(command)) - self._cur_q()
             case ('joint', protocol.HOLD):
@@ -246,7 +239,9 @@ class LiberoEnv(EnvProtocol):
             case ('joint_delta', protocol.JOINT_POS):
                 physical = (command[protocol.COMMAND_JOINT_POS] - self._cur_q()) / self._control_dt
             case ('joint_delta', protocol.CARTESIAN):
-                physical = (self._ik(*_unpack_pose(command[protocol.COMMAND_POSE])) - self._cur_q()) / self._control_dt
+                physical = (
+                    self._ik(*arm_action.unpack_wire_pose(command[protocol.COMMAND_POSE])) - self._cur_q()
+                ) / self._control_dt
             case ('joint_delta', protocol.CARTESIAN_DELTA):
                 physical = (self._ik(*self._delta_target(command)) - self._cur_q()) / self._control_dt
             case ('joint_delta', protocol.HOLD):
@@ -276,9 +271,9 @@ class LiberoEnv(EnvProtocol):
         # The absolute pose a world-frame ``cartesian_delta`` targets: translation adds and rotation left-multiplies
         # onto the live eef pose (``goal_pos = ee_pos + Δpos``; ``goal_ori = R(Δrot) @ ee_ori``) — the same compose
         # each control mode then bridges, as an OSC pose error or via IK to joints.
-        cur_pos, cur_rot = self._cur_pose()
-        delta_pos, delta_rot = _unpack_pose(command[protocol.COMMAND_DELTA])
-        return cur_pos + delta_pos, delta_rot @ cur_rot
+        return arm_action.compose_reference_delta(
+            *self._cur_pose(), *arm_action.unpack_wire_pose(command[protocol.COMMAND_DELTA])
+        )
 
     def _cur_pose(self) -> tuple[np.ndarray, np.ndarray]:
         pos = np.array(self._sim.data.site_xpos[self._eef_site_id])
@@ -300,29 +295,22 @@ class LiberoEnv(EnvProtocol):
         return pos, rot
 
     def _ik(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
-        # Damped-least-squares differential IK on the same MuJoCo site Jacobian OSC uses (no pybullet), iterated
-        # on a scratch ``MjData`` from the current joints. ``get_pose_error`` returns the world-frame error that
-        # matches the world-frame site Jacobian; ``validate.py`` checks the ``_fk(_ik(pose))`` round-trip.
-        data = mujoco.MjData(self._model)
-        data.qpos[:] = self._sim.data.qpos
+        # The joints at the target on the same MuJoCo site Jacobian OSC uses (no pybullet); the last joints where
+        # it does not converge. ``get_pose_error`` returns the world-frame error that matches the world-frame site
+        # Jacobian; ``validate.py`` checks the ``_fk(_ik(pose))`` round-trip.
         target_pose = make_pose(target_pos, target_rot)
-        q = self._cur_q()
-        for _ in range(_IK_ITERS):
-            data.qpos[self._qpos_idx] = q
-            mujoco.mj_forward(self._model, data)
-            cur_pose = make_pose(
-                np.array(data.site_xpos[self._eef_site_id]), np.array(data.site_xmat[self._eef_site_id]).reshape(3, 3)
-            )
-            err = get_pose_error(target_pose, cur_pose)
-            if np.linalg.norm(err) < _IK_TOL:
-                break
-            jacp = np.zeros((3, self._model.nv))
-            jacr = np.zeros((3, self._model.nv))
-            mujoco.mj_jacSite(self._model, data, jacp, jacr, self._eef_site_id)
-            jac = np.vstack([jacp, jacr])[:, self._qvel_idx]
-            dq = jac.T @ np.linalg.solve(jac @ jac.T + _IK_DAMPING**2 * np.eye(6), err)
-            q = np.clip(q + dq, self._jnt_low, self._jnt_high)
-        return q
+        return arm_action.damped_least_squares_ik(
+            self._model,
+            live_qpos=self._sim.data.qpos,
+            site_id=self._eef_site_id,
+            qpos_ids=self._qpos_idx,
+            dof_ids=self._qvel_idx,
+            start_q=self._cur_q(),
+            lower=self._jnt_low,
+            upper=self._jnt_high,
+            pose_error=lambda site_pos, site_rot: get_pose_error(target_pose, make_pose(site_pos, site_rot)),
+            converged=lambda error: bool(np.linalg.norm(error) < _IK_TOL),
+        ).q
 
     def _observe(self, raw: dict[str, Any]) -> dict[str, Any]:
         # Report the eef pose in the grip-site frame OSC controls — the frame ``_arm_action`` recovers

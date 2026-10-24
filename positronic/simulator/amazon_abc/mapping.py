@@ -3,6 +3,7 @@
 This module must work in an isolated interpreter without Positronic installed.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -43,6 +44,11 @@ OBS_EEF_QUAT = 'eef_quat'  # ABC world orientation, wxyz.
 OBS_GRIP = 'grip'  # Closure in [0, 1].
 OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
 OBS_TASK_EVAL = 'task_eval'  # The task evaluator's numeric metrics, keyed by recording suffix.
+
+
+def task_names(selection: str | Sequence[str] | None) -> list[str] | None:
+    """The tasks a selection names, as a list: it names one task or several, and None selects every task."""
+    return None if selection is None else [selection] if isinstance(selection, str) else list(selection)
 
 
 def task_eval_signals(task_eval: dict[str, Any]) -> dict[str, Any]:
