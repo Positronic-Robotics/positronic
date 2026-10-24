@@ -37,6 +37,10 @@ class ParquetTimeIndex:
     def _file(self) -> pq.ParquetFile:
         return pq.ParquetFile(self._path)
 
+    def __getstate__(self) -> dict:
+        # An open `ParquetFile` does not pickle. The copy opens its own on first use.
+        return {name: value for name, value in self.__dict__.items() if name != '_file'}
+
     @cached_property
     def _columns(self) -> dict[str, str]:
         schema = self._file.schema_arrow
