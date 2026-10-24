@@ -100,6 +100,7 @@ class FakeNebius:
             self.request_files.append(path)
             self.request_file_modes.append(stat.S_IMODE(os.stat(path).st_mode))
             request = json.loads(path.read_text())
+            # rules-allow: hardcoded-keys — an independent restatement of the Nebius request format is what a fake is
             name = request['metadata']['name']
             self.tokens.append(request['spec']['secret_version']['payload'][0]['string_value'])
         else:

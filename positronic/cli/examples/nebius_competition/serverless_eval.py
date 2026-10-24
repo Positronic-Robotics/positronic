@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import functools
-import json
 import secrets
 import signal
 import sys
@@ -118,6 +117,31 @@ class JobStatus(BaseModel):
 
 class Job(BaseModel):
     status: JobStatus = Field(default_factory=JobStatus)
+
+
+class SecretPayloadEntry(BaseModel):
+    key: str
+    string_value: str
+
+
+class SecretVersion(BaseModel):
+    payload: list[SecretPayloadEntry]
+
+
+class SecretSpec(BaseModel):
+    secret_version: SecretVersion
+
+
+class SecretMetadata(BaseModel):
+    parent_id: str
+    name: str
+
+
+class SecretRequest(BaseModel):
+    """The request of `nebius mysterybox secret create --file`."""
+
+    metadata: SecretMetadata
+    spec: SecretSpec
 
 
 class StateDetails(BaseModel):
@@ -271,12 +295,12 @@ class ServerlessEval:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'secret.json'
             path.touch(mode=0o600)
-            payload = [{'key': AUTH_TOKEN_ENV, 'string_value': secrets.token_urlsafe(32)}]
-            request = {
-                'metadata': {'parent_id': self.run.parent_id, 'name': self.run.secret_name},
-                'spec': {'secret_version': {'payload': payload}},
-            }
-            path.write_text(json.dumps(request))
+            token = SecretPayloadEntry(key=AUTH_TOKEN_ENV, string_value=secrets.token_urlsafe(32))
+            request = SecretRequest(
+                metadata=SecretMetadata(parent_id=self.run.parent_id, name=self.run.secret_name),
+                spec=SecretSpec(secret_version=SecretVersion(payload=[token])),
+            )
+            path.write_text(request.model_dump_json())
             self._create(Kind.SECRET, self.run.secret_name, ['--file', str(path)])
 
     def _create(self, kind: Kind, name: str, args: list[str]) -> str:
