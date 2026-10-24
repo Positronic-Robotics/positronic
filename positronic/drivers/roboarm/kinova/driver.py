@@ -11,6 +11,7 @@ from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
 from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
+from positronic.eval import NO_MODEL_ROBOT_META
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ class Robot(pimm.ControlSystem):
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[KinovaState](self)
+        self.robot_meta = pimm.ControlSystemEmitter(self)
 
     def _arm(self, api: KinovaAPI, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
@@ -186,6 +188,7 @@ class Robot(pimm.ControlSystem):
         _set_realtime_priority()
         with KinovaAPI(self.ip) as api:
             with self._arm(api, should_stop, clock) as arm:
+                self.robot_meta.emit(NO_MODEL_ROBOT_META)
                 while not should_stop.value:
                     arm.settle()
                     asked = arm.moves.next_request()

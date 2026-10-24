@@ -6,9 +6,12 @@ import sys
 import threading
 from contextlib import nullcontext
 
+import numpy as np
 import pytest
 
 from positronic import telemetry, telemetry_keys
+from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.geom import Transform3D
 from positronic.policy.base import Policy, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, Metadata, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
@@ -125,8 +128,8 @@ def test_sequence_preserves_normal_processor_completion_and_its_return(with_code
 
 @pytest.mark.parametrize('translation', [0.1, 0.2])
 def test_sequential_rejects_two_frame_conversions(translation):
-    outer = ChangeEEFrame([0.1, 0, 0, 1, 0, 0, 0])
-    inner = ChangeEEFrame([translation, 0, 0, 1, 0, 0, 0]) | RestrictImageSize()
+    outer = ChangeEEFrame(DEFAULT_FRAME, Transform3D(np.array([0.1, 0.0, 0.0])))
+    inner = ChangeEEFrame(DEFAULT_FRAME, Transform3D(np.array([translation, 0.0, 0.0]))) | RestrictImageSize()
     schedule = ChunkedSchedule(fps=10)
     stack = Sequential(outer, schedule)
     assert stack.meta() == outer.meta | schedule.meta()

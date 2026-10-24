@@ -15,6 +15,7 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
     """Describe the client codec using the checkpoint's image and pose conventions."""
     image_mappings = settings[model_settings.IMAGE_MAPPINGS]
     observation_keys = settings[model_settings.OBSERVATION_KEYS]
+    ee_frame = settings[model_settings.EE_FRAMES][observation_keys[EE_POSE]]
     state = {observation_keys[name]: {observation_keys[name]: size} for name, size in STATE_DIMS.items()}
     return sequence(
         component(
@@ -25,7 +26,12 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
             },
         ),
         component('binarize_grip_inference'),
-        component('change_ee_frame', transform=settings[model_settings.EE_FRAME], keys=[observation_keys[EE_POSE]]),
+        component(
+            'change_ee_frame',
+            site=ee_frame[model_settings.SITE],
+            transform=ee_frame[model_settings.OFFSET],
+            keys=[observation_keys[EE_POSE]],
+        ),
         component(
             'convert_pose',
             output_rotation='rot6d',

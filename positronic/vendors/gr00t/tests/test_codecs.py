@@ -43,9 +43,10 @@ def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(conf
         encoded = codec.encode(inputs)[gr00t.STATE][gr00t.EE_POSE][0, 0]
         np.testing.assert_allclose(encoded, expected, atol=2e-7)
 
-    expected_frame = models.DROID_EE_FRAME.as_vector(geom.Rotation.Representation.QUAT)
-    np.testing.assert_array_equal(codec.meta[roboarm_keys.EE_FRAME], expected_frame)
-    np.testing.assert_array_equal(recipes.droid(settings=settings).meta[roboarm_keys.EE_FRAME], expected_frame)
+    for meta in (codec.meta, recipes.droid(settings=settings).meta):
+        frame = models.parse_ee_frames(meta[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
+        assert frame.site == models.DEFAULT_FRAME
+        np.testing.assert_allclose(frame.offset.as_matrix, models.DROID_EE_FRAME.as_matrix, atol=1e-9)
 
 
 @pytest.mark.parametrize('config', [model_settings.droid, model_settings.droid_three_cameras])
@@ -87,12 +88,18 @@ def test_training_cadence_metadata(config):
 def test_training_actions_align_on_the_recording_clock(timeline):
     training = recipes.droid(**{
         f'settings.{model_settings.IMAGE_MAPPINGS}': {},
-        f'settings.{model_settings.EE_FRAME}': [0, 0, 0, 1, 0, 0, 0],
+        f'settings.{model_settings.EE_FRAMES}': {
+            keys.EE_POSE: {
+                model_settings.SITE: model_settings.DEFAULT_SITE,
+                model_settings.OFFSET: [0, 0, 0, 1, 0, 0, 0],
+            }
+        },
     })
     episode = EpisodeContainer({
         keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]], timelines=(timeline,)),
         keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)], timelines=(timeline,)),
         keys.GRIP: DummySignal([100, 200], [0.0, 1.0], timelines=(timeline,)),
+        **models.ee_frames_entry({keys.EE_POSE: models.EEFrame(site=models.DEFAULT_FRAME)}),
     })
     encoded = training(episode)
     action = encoded[ACTION]

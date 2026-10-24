@@ -6,8 +6,9 @@ from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
 
 from pimm.logging import init_logging
-from positronic import geom, keys
+from positronic import keys
 from positronic.cfg import codecs
+from positronic.drivers.roboarm.models import EEFrame
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
@@ -47,9 +48,10 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
     return model
 
 
-# No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
-# so none has a transform to declare.
+# Every pose checkpoint served here was trained on poses the rig reported at ``default``, so its frame has no
+# offset. ``ee_frame=None`` serves a checkpoint that speaks joints only, which then sees no pose.
 @cfn.config(**{
+    'ee_frame': codecs.default_ee_frame,
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
     'obs.state_features': {keys.EE_POSE: 7, keys.GRIP: 1},
@@ -64,7 +66,7 @@ def pipeline(
     horizon_sec: float | None = 1.0,
     binarize_grip: tuple[str, ...] | None = None,
     flip_grip: bool = False,
-    ee_frame: geom.Transform3D | None = None,
+    ee_frame: EEFrame | None = None,
 ) -> PolicyDeployment:
     return PolicyDeployment(
         local=Sequential(ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), RestrictImageSize(224, 224)),
@@ -75,7 +77,7 @@ def pipeline(
 
 
 ee = pipeline
-joints = pipeline.override(**{'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1}})
+joints = pipeline.override(**{'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1}, 'ee_frame': None})
 ee_traj = pipeline.override(**{
     'action.tgt_ee_pose_key': keys.EE_POSE,
     'action.tgt_grip_key': keys.GRIP,
@@ -83,6 +85,7 @@ ee_traj = pipeline.override(**{
 })
 joints_traj = pipeline.override(**{
     'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1},
+    'ee_frame': None,
     'action': codecs.absolute_joints_action,
     'action.tgt_joints_key': keys.JOINTS,
     'action.tgt_grip_key': keys.GRIP,
@@ -90,11 +93,13 @@ joints_traj = pipeline.override(**{
 })
 joints_ik = pipeline.override(**{
     'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1},
+    'ee_frame': None,
     'action': codecs.ik_joints_action,
     'action.solver': 'dls_limits',
 })
 joints_ik_sim = pipeline.override(**{
     'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1},
+    'ee_frame': None,
     'action': codecs.ik_joints_action,
     'action.solver': 'lm',
 })

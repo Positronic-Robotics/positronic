@@ -15,6 +15,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
 from positronic.policy import spec
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec
@@ -41,9 +42,13 @@ def observation():
     }
 
 
-def _episode(observation, task_key=keys.TASK):
+def _episode(observation, task_key=keys.TASK, pose_key=keys.EE_POSE):
     return EpisodeContainer({
-        name: value if name == task_key else DummySignal([0, 1], [value, value]) for name, value in observation.items()
+        **{
+            name: value if name == task_key else DummySignal([0, 1], [value, value])
+            for name, value in observation.items()
+        },
+        **models.ee_frames_entry({pose_key: models.EEFrame(site=models.DEFAULT_FRAME)}),
     })
 
 
@@ -126,12 +131,17 @@ def test_standalone_observation_names_match_the_client():
         assert getattr(serving_keys, name) == getattr(keys, name)
 
 
+def test_standalone_ee_frames_match_the_client():
+    assert model_settings.EE_FRAMES == roboarm_keys.EE_FRAMES
+    assert {model_settings.SITE, model_settings.OFFSET} == set(models.EEFrame.model_fields)
+    assert model_settings.DEFAULT_SITE == models.DEFAULT_FRAME
+
+
 def test_python_settings_drive_independent_training_and_inference_recipes(observation):
     settings = {
         **model_settings.droid(),
         model_settings.IMAGE_SIZE: [160, 90],
         model_settings.IMAGE_MAPPINGS: {'custom_camera': keys.EXTERIOR_IMAGE_2},
-        model_settings.EE_FRAME: [0, 0, 0, 1, 0, 0, 0],
         model_settings.ROTATION_OFFSET: [1, 0, 0, 0],
         ACTION_FPS: 20,
     }
@@ -139,11 +149,15 @@ def test_python_settings_drive_independent_training_and_inference_recipes(observ
         renamed = f'custom.{name}'
         observation[renamed] = observation.pop(source)
         settings[model_settings.OBSERVATION_KEYS][name] = renamed
+    pose_key = settings[model_settings.OBSERVATION_KEYS][gr00t.EE_POSE]
+    settings[model_settings.EE_FRAMES] = {
+        pose_key: {model_settings.SITE: model_settings.DEFAULT_SITE, model_settings.OFFSET: [0, 0, 0, 1, 0, 0, 0]}
+    }
     training = recipes.droid(settings=settings)
     description = json.loads(json.dumps(recipe.inference(settings)))
     codec = spec.from_spec(description)
     assert isinstance(codec, Codec)
-    prepared = training(_episode(observation, settings[model_settings.OBSERVATION_KEYS][gr00t.TASK]))
+    prepared = training(_episode(observation, settings[model_settings.OBSERVATION_KEYS][gr00t.TASK], pose_key))
     encoded = codec.encode(observation)
     assert prepared[keys.TASK] == encoded[gr00t.LANGUAGE][gr00t.TASK][0][0]
     assert encoded[gr00t.VIDEO]['custom_camera'].shape == (1, 1, 90, 160, 3)

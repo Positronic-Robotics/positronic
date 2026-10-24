@@ -29,7 +29,7 @@ The default pose transform matches Franka rigs and the RoboLab adapter. The bund
 Panda reports poses at a different tool frame; using the default transform on its recordings
 (including `sim_stack_cubes`) introduces a 45 mm offset. That frame alignment is tracked in
 [#550](https://github.com/Positronic-Robotics/positronic/issues/550). Such datasets and their
-serving codec require a matching simulator-specific `ee_frame`; the default is not a validated
+serving codec require a matching simulator-specific `ee_frames` entry; the default is not a validated
 native-checkpoint configuration for that simulator.
 
 ## Docker

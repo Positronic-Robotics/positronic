@@ -13,6 +13,7 @@ from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
 from positronic import telemetry, telemetry_keys
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
@@ -149,10 +150,17 @@ class RemotePolicy(Policy):
                     else {}
                 )
             self._server_meta, self._client_meta = server_meta, client_meta
-        meta: dict[str, Any] = {**self._client_meta, policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
+        client_meta = dict(self._client_meta)
+        # Either side of the server's deployment may declare the frames, so the policy states both, one entry keyed
+        # by pose signal. A server older than ``EE_FRAMES`` declares them only through its client stack.
+        frames = {**client_meta.pop(roboarm_keys.EE_FRAMES, {}), **self._server_meta.get(roboarm_keys.EE_FRAMES, {})}
+        meta: dict[str, Any] = {**client_meta, policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
         if self._server_meta.get(policy_keys.COMPRESS_IMAGES):
             meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
-        return flatten_dict(meta)
+        meta = flatten_dict(meta)
+        if frames:
+            meta[roboarm_keys.EE_FRAMES] = frames
+        return meta
 
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()

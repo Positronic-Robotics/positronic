@@ -5,6 +5,7 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -54,21 +55,25 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
+# The frame of a checkpoint trained on poses a rig reported at ``DEFAULT_FRAME``. ``offset`` takes a transform
+# off that site, such as ``@positronic.drivers.roboarm.models.DROID_EE_FRAME``.
+default_ee_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME)
+# A server built for poses at the Franka Hand point, where the FR3 and the bundled panda report ``DEFAULT_FRAME``,
+# states that frame with this codec in its pipeline. A server that states no frame observes no pose.
+franka_hand_frame = cfn.Config(ChangeEEFrame, site=DEFAULT_FRAME, transform=geom.Transform3D.identity)
+
+
 @cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)
-def compose_data(
-    obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: geom.Transform3D | None
-):
+def compose_data(obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: EEFrame | None):
     """Compose observation and action conversions, with optional grip and frame conversions.
 
-    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
-    places the end-effector frame the checkpoint speaks relative to ``DEFAULT_FRAME`` (``models.DROID_EE_FRAME``)
-    and re-expresses a dataset in it for training (see ``ChangeEEFrame``); serving declares the conversion in
-    the pipeline instead, so leave it unset there.
-
+    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame`` is the
+    frame the checkpoint speaks its poses in: a ``ChangeEEFrame`` declares it and re-expresses a dataset in it for
+    training. A codec that reads or writes poses states one; ``None`` speaks joints only.
     """
     result = obs & action
     if ee_frame is not None:
-        result = ChangeEEFrame(ee_frame) | result
+        result = ChangeEEFrame(ee_frame.site, ee_frame.offset) | result
     if flip_grip:
         result = FlipGrip() | result
     if binarize_grip:
@@ -78,12 +83,7 @@ def compose_data(
 
 @cfn.config(training_fps=15.0, binarize_grip=None, flip_grip=False, ee_frame=None)
 def compose(
-    obs,
-    action,
-    training_fps: float,
-    binarize_grip: tuple[str, ...] | None,
-    flip_grip: bool,
-    ee_frame: geom.Transform3D | None,
+    obs, action, training_fps: float, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: EEFrame | None
 ):
     """Data conversions with the sampling cadence recorded in training metadata."""
     result = compose_data(obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame)

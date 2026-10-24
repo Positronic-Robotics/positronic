@@ -26,10 +26,10 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
   --model.model_source=/data/checkpoints/experiment_v1/
 
-# OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`)
+# OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means it speaks joints only)
 cd docker && docker compose run --rm --service-ports openpi-server ee \
   --model.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
-  --pipeline.ee_frame=None
+  --pipeline.ee_frame=@positronic.cfg.codecs.default_ee_frame
 ```
 
 Check server: `curl -X POST http://localhost:8000/api/v1/keepalive` answers once the model has loaded and warmed.

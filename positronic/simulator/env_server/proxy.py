@@ -16,6 +16,7 @@ from typing import Any
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry
 from positronic.eval import Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
@@ -163,10 +164,13 @@ def remote_embodiment(
         **{name: Command(proxy.commands[name], Serializers.robot_command) for name in commanded},
         **{name: Command(proxy.commands[name], None) for name in target_grips},
     }
+    pose_signals = [f'{name}{keys.EE_POSE_SUFFIX}' for name in states] + [
+        f'{name}{keys.POSE_SUFFIX}' for name in commanded
+    ]
     signal_meta = {
         eval_keys.JOINT_SIGNALS: [f'{name}{keys.JOINTS_SUFFIX}' for name in states],
-        eval_keys.POSE_SIGNALS: [f'{name}{keys.EE_POSE_SUFFIX}' for name in states]
-        + [f'{name}{keys.POSE_SUFFIX}' for name in commanded],
+        eval_keys.POSE_SIGNALS: pose_signals,
+        **ee_frames_entry({name: EEFrame(site=DEFAULT_FRAME) for name in pose_signals}),
     }
     return Embodiment(
         descriptor=descriptor,

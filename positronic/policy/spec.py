@@ -1,12 +1,13 @@
 """Registry and wire-spec decoding for client-side processors and codecs."""
 
 from collections.abc import Callable
-from functools import reduce
+from functools import partial, reduce
 from operator import and_, or_
 from typing import Any, cast
 
 from positronic_model_server.spec import ARGS, LATEST, NAME, PAR, SEQ, VERSION
 
+from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.policy.base import Processor
 from positronic.policy.codecs import (
     BinarizeGripInference,
@@ -69,6 +70,8 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
 
 
 COMPONENTS[ChunkedSchedule.WIRE_NAME][ChunkedScheduleV2.WIRE_VERSION] = Version(ChunkedScheduleV2.from_spec_args)
+# A v1 ``change_ee_frame`` states its transform from ``DEFAULT_FRAME``, the site every rig reports its poses at.
+COMPONENTS[ChangeEEFrame.WIRE_NAME][1] = Version(partial(ChangeEEFrame.from_spec_args, site=DEFAULT_FRAME))
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:

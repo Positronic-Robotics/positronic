@@ -9,6 +9,7 @@ These datasets remain on the private s3://raw/ bucket and include:
 - Full combined datasets for multi-task training
 """
 
+from functools import partial
 from typing import Any
 
 import configuronic as cfn
@@ -24,8 +25,16 @@ from positronic.dataset.transforms import Elementwise, TransformedDataset, agg_f
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.roboarm.models import bundled_franka_model, bundled_panda_model
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.models import (
+    DEFAULT_FRAME,
+    EEFrame,
+    bundled_franka_model,
+    bundled_panda_model,
+    ee_frames_entry,
+)
 from positronic.eval import keys as eval_keys
+from positronic.geom import Transform3D
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
 
@@ -39,16 +48,38 @@ _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 # Signal-name pointers the 3D viewer reads. They must name the signals as they exist after the
 # transform, so the transform always supplies them — overriding any stale value a recording baked
 # into static (pre-rename recordings carry `robot_commands.pose` in their `pose_signals`).
+_POSE_SIGNALS = [keys.EE_POSE, keys.TARGET_EE_POSE]
 _POINTER_VALUES: dict[str, Any] = {
     eval_keys.JOINT_SIGNALS: FromValue([keys.JOINTS]),
-    eval_keys.POSE_SIGNALS: FromValue([keys.EE_POSE, keys.TARGET_EE_POSE]),
+    eval_keys.POSE_SIGNALS: FromValue(_POSE_SIGNALS),
 }
 ROBOT_SIGNAL_POINTERS = Derive(**_POINTER_VALUES)
 
-# The bundled model (URDF + collision meshes + joint names + control frame + gripper) for the real
-# arm and the MuJoCo sim.
+# The bundled model (URDF + collision meshes + joint names + gripper) for the real arm and the MuJoCo sim.
 _REAL_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_franka_model().items()})
 _SIM_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_panda_model().items()})
+
+# The keys of the site and the codec offset of an older recording. A real one with no site sits at ``default``.
+_LEGACY_CONTROL_FRAME = 'control_frame'
+_LEGACY_EE_FRAME = 'ee_frame'
+
+
+def _legacy_ee_frames(episode, site: str) -> dict[str, Any]:
+    offset = episode[_LEGACY_EE_FRAME] if _LEGACY_EE_FRAME in episode else Transform3D.identity
+    frame = EEFrame(site=site, offset=offset)
+    return ee_frames_entry(dict.fromkeys(_POSE_SIGNALS, frame))[roboarm_keys.EE_FRAMES]
+
+
+def _real_legacy_ee_frames(episode) -> dict[str, Any]:
+    site = episode[_LEGACY_CONTROL_FRAME] if _LEGACY_CONTROL_FRAME in episode else DEFAULT_FRAME
+    return _legacy_ee_frames(episode, site)
+
+
+# Each relabels only a recording that states no ``ee_frames`` of its own: the Identity before it wins the key.
+# The sim's comes from its bundled model, which always replaces the recorded one, so its site is that model's.
+_REAL_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: _real_legacy_ee_frames})
+_SIM_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: partial(_legacy_ee_frames, site=DEFAULT_FRAME)})
+_LEGACY_FRAME_KEYS = [_LEGACY_CONTROL_FRAME, _LEGACY_EE_FRAME]
 
 # Backfill the canonical `robot_command.pose` from the plural name older recordings stored on
 # disk. Recordings already using the canonical name pass through the Identity, which wins on the
@@ -60,9 +91,19 @@ _RENAME_ROBOT_COMMAND = Derive(**{keys.TARGET_EE_POSE: Get('robot_commands.pose'
 # `_REAL_MODEL`). The sim's model always comes from the transform — older sim recordings store raw
 # MuJoCo XML under `urdf` — so the bundled panda overwrites (`_SIM_MODEL` before Identity).
 REAL_ROBOT_TRANSFORM = Group(
-    ROBOT_SIGNAL_POINTERS, Identity(remove=_REMOVE_SIGNALS), _REAL_MODEL, _RENAME_ROBOT_COMMAND
+    ROBOT_SIGNAL_POINTERS,
+    Identity(remove=_REMOVE_SIGNALS + _LEGACY_FRAME_KEYS),
+    _REAL_MODEL,
+    _RENAME_ROBOT_COMMAND,
+    _REAL_EE_FRAMES,
 )
-SIM_ROBOT_TRANSFORM = Group(ROBOT_SIGNAL_POINTERS, _SIM_MODEL, Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
+SIM_ROBOT_TRANSFORM = Group(
+    ROBOT_SIGNAL_POINTERS,
+    _SIM_MODEL,
+    Identity(remove=_REMOVE_SIGNALS + _LEGACY_FRAME_KEYS),
+    _RENAME_ROBOT_COMMAND,
+    _SIM_EE_FRAMES,
+)
 
 RECOVERY_TASK = 'Recovery cases.'
 
