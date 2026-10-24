@@ -8,10 +8,11 @@ The platform holds the definitions of the evals it does not publish.
 
 from __future__ import annotations
 
+from eval_vocabulary.episode import SEED
 from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, JsonValue, PositiveInt
 from pydantic_core import core_schema
 
-from positronic_evals.labels import MOLMO_LABELER
+from positronic_evals.labels import ABC_LABELER, MOLMO_LABELER
 from positronic_evals.scoring import MeanEpisodeScore, Scoring
 
 
@@ -90,10 +91,85 @@ def _franka_pick_mini(episodes: list[int]) -> EvalDefinition:
     )
 
 
+# The ABC evals on the bimanual i2rt YAM. A run ranks on the mean of its task success rates, and a timeout scores 0.
+ABC_CONFIG = '.sim.amazon_abc.all_tasks'
+# The 29 tasks that ABC ships a success evaluator for at the ABC commit that the config pins. ABC scores none of its
+# other four tasks.
+ABC_SCORED_TASKS = (
+    'throw_plastic_bottles_in_bin',
+    'put_plastic_bottles_in_bin',
+    'conveyor_pick',
+    'count_into_opaque_box',
+    'count_one_into_opaque_box',
+    'count_two_into_opaque_box',
+    'count_three_into_opaque_box',
+    'count_four_into_opaque_box',
+    'put_relative',
+    'grab_specific_object_from_clutter',
+    'ball_tray_balancing',
+    'inhand_transfer_item_to_other_side',
+    'multi_drawer_search',
+    'pouring',
+    'hang_mug_on_mug_rack',
+    'turn_mug_right_side_up',
+    'sweep_away_paper_scraps_from_table',
+    'sort_nuts_and_bolts',
+    'sort_lego_blocks',
+    'load_plates_into_dish_rack',
+    'set_up_chess_pieces_on_board',
+    'spell_cat',
+    'spell_dog',
+    'spell_fish',
+    'spell_bair',
+    'spell_xdof',
+    'spell_abc',
+    'spell_yam',
+    'spell_agi',
+)
+# The five tasks that ABC's multi-task sim policy trained on.
+ABC_MULTITASK_TASKS = (
+    'put_plastic_bottles_in_bin',
+    'sweep_away_paper_scraps_from_table',
+    'turn_mug_right_side_up',
+    'load_plates_into_dish_rack',
+    'hang_mug_on_mug_rack',
+)
+# ABC's own sim eval draws world `i` of a task from seed `20260511 + i`, so trial `i` here runs the same scene.
+ABC_FIRST_SEED = 20260511
+ABC_TRIALS_PER_TASK = 20
+# The render size changes what a policy sees, so a definition pins it rather than take a config default.
+ABC_CAMERA_HEIGHT, ABC_CAMERA_WIDTH = 260, 416
+ABC_SCORING = Scoring(labelers=(ABC_LABELER,), primary=MeanEpisodeScore(per_task=True))
+# TODO: name the commit on `main` that holds the ABC backend.
+ABC_POSITRONIC_REVISION = 'd4ebf4166cf37b6f623f06203b663d8047ee53a4'
+
+
+def _abc(tasks: tuple[str, ...], time_limit_s: int) -> EvalDefinition:
+    """`tasks`, each on the first `ABC_TRIALS_PER_TASK` scenes of ABC's own sim eval."""
+    seeds = range(ABC_FIRST_SEED, ABC_FIRST_SEED + ABC_TRIALS_PER_TASK)
+    return EvalDefinition(
+        config=ABC_CONFIG,
+        # Each key must name a parameter of positronic's `all_tasks` config.
+        args={
+            'task': list(tasks),
+            'seed': ABC_FIRST_SEED,
+            'trial_count': ABC_TRIALS_PER_TASK,
+            'camera_height': ABC_CAMERA_HEIGHT,
+            'camera_width': ABC_CAMERA_WIDTH,
+        },
+        tasks=[EvalTask(name=task, trials=[{SEED: seed} for seed in seeds]) for task in tasks],
+        time_limit_s=time_limit_s,
+        scoring=ABC_SCORING,
+        positronic_revision=ABC_POSITRONIC_REVISION,
+    )
+
+
 _PUBLIC_EVALS: dict[EvalRef, EvalDefinition] = {
     # Episode 6 hides the start grasp site from the right shoulder camera; the sim server refuses it.
     EvalRef('molmo.franka_pick_mini'): _franka_pick_mini([*range(6), *range(7, 21)]),
     EvalRef('molmo.franka_pick_mini_smoke'): _franka_pick_mini([0, 1, 2, 3, 4]),
+    EvalRef('abc.yam_bimanual'): _abc(ABC_SCORED_TASKS, time_limit_s=6 * 3600),
+    EvalRef('abc.yam_bimanual_multitask'): _abc(ABC_MULTITASK_TASKS, time_limit_s=2 * 3600),
 }
 
 PUBLIC_EVALS: tuple[EvalRef, ...] = tuple(_PUBLIC_EVALS)

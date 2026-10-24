@@ -5789,7 +5789,7 @@ source = { editable = "vocabulary" }
 
 [[package]]
 name = "positronic-evals"
-version = "0.1.2"
+version = "0.2.0"
 source = { editable = "evals" }
 dependencies = [
     { name = "positronic-eval-vocabulary" },
@@ -5850,7 +5850,7 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.39.2"
+version = "0.39.3"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
