@@ -116,7 +116,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 
 | Key | Type | Shape | Description |
 |-----|------|-------|-------------|
-| `robot_state.ee_pose` | float32 | (7,) | End-effector pose: `x, y, z, qw, qx, qy, qz` (quaternion is **wxyz**, scalar first) |
+| `robot_state.ee_pose` | float32 | (7,) | End-effector pose: `x, y, z, qw, qx, qy, qz` (quaternion is **wxyz**, scalar first). A Franka rig reports its grip point `gripper`, on the flange axes ([frame contract](../positronic/drivers/roboarm/README.md)); a policy that reads poses states its frame as an offset from it |
 | `robot_state.q` | float32 | (7,) | Joint positions (radians) |
 | `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
 | `robot_state.status` | int | scalar | The arm's status: `0` available, `1` busy, `3` error. `2` is also accepted and read as available — an arm travelling towards a setpoint still takes commands. The measurements above come on every sample whatever the status; this is what says whether a command you send will reach the arm |
@@ -158,7 +158,7 @@ Every command also takes an optional `mode`, the control law it asks to execute 
 `PositionControl(stiffness=...)` for a position servo, or `Impedance(kq, kqd, kx, kxd, frame)` for the hybrid
 joint/Cartesian law. Omit the mode — the default — and the arm runs its native law. An impedance `frame` is the point
 where the Cartesian stiffness acts, measured from the rig's control frame whatever frame the policy speaks; it defaults
-to the control frame. What a pinned mode does is the
+to the control frame. The Franka arm refuses a `frame` with a rotation. What a pinned mode does is the
 driver's: a simulator runs its own law regardless, and a driver that cannot execute the mode raises.
 A server built on positronic sets the mode with the `SetControlMode` codec, composed left of the action
 decoder; `codecs.droid_execution` and `codecs.phail_v1_execution` wrap an action codec that way. See
