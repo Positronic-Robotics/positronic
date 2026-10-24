@@ -13,6 +13,7 @@ from platform_client.enums import ErrorCode
 from platform_client.errors import ApiErrorBody, ErrorEnvelope
 from platform_client.ids import ApiKey
 
+from positronic.cli.conftest import SERVES_THIS_CLIENT
 from positronic.cli.examples.nebius_competition import enter
 from positronic.cli.examples.nebius_competition.enter import (
     COMPETITION_ACCEPT_TERMS,
@@ -47,11 +48,12 @@ class StubGateway:
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.url.path == COMPETITION_ENTER:
-            return self.refusal or httpx.Response(200, json=self.entry.model_dump(mode='json'))
+            entered = httpx.Response(200, json=self.entry.model_dump(mode='json'), headers=SERVES_THIS_CLIENT)
+            return self.refusal or entered
         if request.url.path == COMPETITION_ACCEPT_TERMS:
             accepted = self.entry.model_copy()
             accepted.terms_version = TERMS_VERSION
-            return httpx.Response(200, json=accepted.model_dump(mode='json'))
+            return httpx.Response(200, json=accepted.model_dump(mode='json'), headers=SERVES_THIS_CLIENT)
         raise AssertionError(f'the command reached a route it has no business at: {request.url.path}')
 
     def client(self, api_key: ApiKey | None = KEY) -> CompetitionClient:

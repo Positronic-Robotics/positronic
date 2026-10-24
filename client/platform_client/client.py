@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import os
 from enum import Enum, auto
+from importlib.metadata import version
 from types import TracebackType
 from typing import Any, ClassVar, Self, TypeVar
 
 import httpx
+from packaging.version import InvalidVersion, Version
 from platform_client import routes
 from platform_client.billing import BillingAccount, PurchaseListResponse, PurchaseView
 from platform_client.boards import BoardRef
@@ -66,6 +68,14 @@ DEFAULT_PLATFORM_URL = 'https://platform.positronic.ro'
 # may therefore not default — three places that have to agree.
 AUTH_HEADER = 'Authorization'
 
+# Every request names the version of this client, and the gateway refuses one older than it serves.
+CLIENT_VERSION_HEADER = 'X-Positronic-Client-Version'
+# Every answer names the contract version the platform serves: the version of this package it is built against.
+PLATFORM_VERSION_HEADER = 'X-Positronic-Platform-Version'
+CLIENT_VERSION = Version(version('positronic-platform-client'))
+# The oldest contract this client reads.
+MIN_PLATFORM_VERSION = Version('0.40.0')
+
 API_URL_ENV = 'POSITRONIC_PLATFORM_URL'
 API_KEY_ENV = 'POSITRONIC_PLATFORM_API_KEY'
 CREDENTIAL_ENV = 'POSITRONIC_PLATFORM_CREDENTIAL'
@@ -108,6 +118,23 @@ def resolve_base_url(base_url: str | None = None) -> str:
         require_absolute_url(value, source)
         return value
     return DEFAULT_PLATFORM_URL
+
+
+def require_platform_version(response: httpx.Response) -> None:
+    """Refuse an answer from a platform that serves a contract older than `MIN_PLATFORM_VERSION`."""
+    named = response.headers.get(PLATFORM_VERSION_HEADER)
+    try:
+        served = Version(named) if named is not None else None
+    except InvalidVersion:
+        served = None
+    if served is not None and served >= MIN_PLATFORM_VERSION:
+        return
+    serves = f'contract {named}' if served is not None else 'a contract too old to name its version'
+    raise PlatformError.synthesized(
+        response.status_code,
+        f'{response.request.url.host} serves {serves}; positronic-platform-client {CLIENT_VERSION} '
+        f'needs {MIN_PLATFORM_VERSION} or later. Ask the platform operator, or install an older positronic',
+    )
 
 
 class Auth(Enum):
@@ -305,7 +332,7 @@ class PlatformClient:
         # value, which the gateway would have to tell apart from a caller that meant the empty string.
         if query is not None:
             kwargs['params'] = query.model_dump(mode='json', exclude_none=True)
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = {CLIENT_VERSION_HEADER: str(CLIENT_VERSION)}
         if auth is Auth.REQUIRED and self.api_key is None:
             raise ValueError(f'{path} needs an API key: pass api_key=, set {API_KEY_ENV}, or call register() first')
         if auth is not Auth.NONE and self.api_key is not None:
@@ -320,6 +347,8 @@ class PlatformClient:
                 # A failure need not carry an envelope at all: a proxy's HTML 502 arrives here too.
                 payload = response.text
             raise PlatformError.from_payload(response.status_code, payload)
+        # Only a 2xx: a proxy's error page names no version, and calling it an old platform would hide the fault.
+        require_platform_version(response)
         return response
 
     def close(self) -> None:

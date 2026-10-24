@@ -1,6 +1,6 @@
 [project]
 name = "positronic-platform-client"
-version = "0.39.1"
+version = "0.40.0"
 description = "Typed wire contract and HTTP client for the Positronic evaluation platform API"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,6 +11,8 @@ dependencies = [
     # 2.11 is the first that takes a TypeVar with constraints and a default, which `EvalPlan` is generic in.
     "pydantic>=2.11",
     "httpx>=0.27",
+    # Compares the contract version a platform names with the oldest this client reads.
+    "packaging>=24",
     "typing-extensions>=4.12.2",
     # The eval names and the wire codec of an enum. The root pins it exactly at the same version.
     "positronic-evals==0.1.1",

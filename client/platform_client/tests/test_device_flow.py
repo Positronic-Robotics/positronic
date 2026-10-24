@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 from platform_client import device_flow, routes
-from platform_client.client import PlatformClient
+from platform_client.client import CLIENT_VERSION, PLATFORM_VERSION_HEADER, PlatformClient
 from platform_client.device_flow import (
     DEFAULT_GITHUB_CLIENT_ID,
     DEVICE_GRANT_TYPE,
@@ -63,6 +63,8 @@ GRANTED = {'access_token': TOKEN, 'token_type': 'bearer', 'scope': IDENTITY_SCOP
 # rules-allow: hardcoded-keys — `positronic/cli/conftest.py` holds the same value, and this package
 # may not import from `positronic`: the dependency runs the other way, and the client installs alone.
 MINTED_KEY = 'pk_live_secret'
+# What a platform built against this client names in every answer.
+SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
 COMPLETE_URI = 'https://a.authkit.app/device?user_code=WDJB-MJHT'
 
 
@@ -700,8 +702,10 @@ class ScriptedGateway:
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.url.path == routes.AUTH_CONFIG:
-            return self.config if isinstance(self.config, httpx.Response) else httpx.Response(200, json=self.config)
-        return httpx.Response(200, json=self.body)
+            if isinstance(self.config, httpx.Response):
+                return self.config
+            return httpx.Response(200, json=self.config, headers=SERVES_THIS_CLIENT)
+        return httpx.Response(200, json=self.body, headers=SERVES_THIS_CLIENT)
 
 
 WORKOS_SETTINGS = {

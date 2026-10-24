@@ -15,7 +15,11 @@ from platform_client.client import (
     API_KEY_ENV,
     API_URL_ENV,
     AUTH_HEADER,
+    CLIENT_VERSION,
+    CLIENT_VERSION_HEADER,
     DEFAULT_PLATFORM_URL,
+    MIN_PLATFORM_VERSION,
+    PLATFORM_VERSION_HEADER,
     PlatformClient,
     resolve_api_key,
     resolve_base_url,
@@ -68,19 +72,22 @@ BASE = 'http://gateway.test'
 KEY = ApiKey('pk_live_secret')
 AT = '2026-03-04T05:06:07Z'
 EPISODE_KEY = 'episodes/0000/meta.json'
+# What a platform built against this client names in every answer.
+SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
 
 
 class Gateway:
     """Records the request it was handed and answers a canned payload."""
 
-    def __init__(self, status: int, payload: object) -> None:
+    def __init__(self, status: int, payload: object, *, headers: dict[str, str] = SERVES_THIS_CLIENT) -> None:
         self.status = status
         self.payload = payload
+        self.headers = headers
         self.seen: httpx.Request | None = None
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.seen = request
-        return httpx.Response(self.status, json=self.payload)
+        return httpx.Response(self.status, json=self.payload, headers=self.headers)
 
     def request(self) -> httpx.Request:
         assert self.seen is not None, 'no request reached the gateway'
@@ -577,6 +584,40 @@ def test_a_redirect_is_a_failure_rather_than_a_body_to_parse():
     with pytest.raises(PlatformError) as raised:
         make_client(gateway).me()
     assert raised.value.http_status == 302
+
+
+def test_every_call_names_the_client_version_with_a_key_or_without():
+    gateway = Gateway(200, {'boards': []})
+    client = make_client(gateway)
+    client.list_boards()
+    with_key = gateway.request()
+    make_client(gateway, api_key=None).list_boards()
+
+    assert AUTH_HEADER in with_key.headers
+    assert with_key.headers[CLIENT_VERSION_HEADER] == gateway.request().headers[CLIENT_VERSION_HEADER]
+    assert gateway.request().headers[CLIENT_VERSION_HEADER] == str(CLIENT_VERSION)
+
+
+@pytest.mark.parametrize('served', [{}, {PLATFORM_VERSION_HEADER: '0.39.1'}, {PLATFORM_VERSION_HEADER: 'latest'}])
+def test_an_answer_from_a_platform_older_than_the_client_reads_is_refused(served: dict[str, str]):
+    gateway = Gateway(200, {'boards': []}, headers=served)
+    with pytest.raises(PlatformError, match=f'needs {MIN_PLATFORM_VERSION} or later') as raised:
+        make_client(gateway).list_boards()
+    assert raised.value.synthesized_envelope
+
+
+def test_an_answer_from_a_platform_at_the_oldest_contract_the_client_reads_is_taken():
+    gateway = Gateway(200, {'boards': []}, headers={PLATFORM_VERSION_HEADER: str(MIN_PLATFORM_VERSION)})
+    assert make_client(gateway).list_boards().boards == []
+
+
+def test_a_refusal_that_names_no_platform_version_raises_its_own_envelope():
+    # A proxy's error page names no version either; calling it an old platform would hide the fault.
+    gateway = Gateway(403, {'error': {'code': 'forbidden', 'message': 'no grant'}}, headers={})
+    with pytest.raises(PlatformError) as raised:
+        make_client(gateway).catalog_tasks()
+    assert raised.value.code is ErrorCode.forbidden
+    assert not raised.value.synthesized_envelope
 
 
 def test_a_numeric_id_is_refused_at_the_boundary():
