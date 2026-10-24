@@ -5,12 +5,12 @@ This module must work in an isolated interpreter without Positronic installed.
 Protocol (msgpack frames, see ``protocol``), between a client and its slot:
   client ``{'cmd': 'tasks', 'spec': ...}``    -> server ``{'tasks': [{...}, ...]}``
   client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``
-  client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``
+  client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``, and optional ``meta``
   client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
 Command handling failures return ``{'error': str}`` without closing the session; the client re-raises them.
 
 ``control_dt`` is the control period in seconds and can vary per step.
-``meta`` identifies the scene; ``robot_meta`` identifies the robot model.
+``meta`` identifies the scene; ``robot_meta`` identifies the robot model. A step's ``meta`` replaces the reset's.
 Either metadata dict can be empty when the client supplies that information.
 
 An env serves a fixed number of slots, ``num_slots``: independent episodes that one env call steps together. Most
