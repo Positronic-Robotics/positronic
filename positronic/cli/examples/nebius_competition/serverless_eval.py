@@ -4,12 +4,8 @@
         --policy-image=docker.io/<you>/policy:v1 --subnet-id=<vpcsubnet-...>
     uv run positronic/cli/examples/nebius_competition/serverless_eval.py ... --dry-run   # validate, create nothing
 
-It serves the image as an Endpoint and runs the eval as a Job against it. It prints the score, deletes both,
-and checks that neither is left. Nebius bills each of them until it is deleted.
-
-It needs the `nebius` CLI with a profile. Everything runs in the project of the profile, or of `--parent-id`,
-and in the region of that project. The bearer token of the endpoint goes through a MysteryBox secret that the
-command makes and deletes, so no command line holds the token.
+The guide is the second section of `docs/local-molmospaces-eval.md`. Nebius bills the endpoint and the job
+until they are deleted.
 """
 
 from __future__ import annotations
