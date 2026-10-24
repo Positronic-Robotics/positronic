@@ -10,7 +10,7 @@ import queue
 import threading
 import traceback
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import HTTPConnection
 
 import pimm
@@ -101,6 +102,49 @@ class CameraFeed:
         )
 
 
+# The names that reach a console bound to the loopback address.
+_LOOPBACK_NAMES = ('127.0.0.1', 'localhost')
+# The bind addresses that take a connection on every interface. No one name reaches them.
+_EVERY_INTERFACE = ('0.0.0.0', '::', '')
+
+
+def _allowed_hosts_of(host: str) -> list[str]:
+    """The host names that a console bound to ``host`` answers: the loopback names, the bound address, or any name.
+
+    A bind on every interface answers any name, and a user who wants the DNS-rebinding check names the hosts.
+    """
+    host = host.lower()
+    if host in _LOOPBACK_NAMES:
+        return list(_LOOPBACK_NAMES)
+    if host in _EVERY_INTERFACE:
+        return ['*']
+    if host == '::1':
+        return ['localhost']
+    return [host]
+
+
+def _checked_allowed_hosts(allowed_hosts: Sequence[str]) -> list[str]:
+    """``allowed_hosts`` in lower case, as a browser sends ``Host``. Raise for a list that the check cannot use.
+
+    ``TrustedHostMiddleware`` reads the name before the first ``:`` of ``Host``, so a name with ``:``, such as an IPv6
+    address or a name with a port, never matches. It takes ``*`` alone, or ``*.`` at the start of a name.
+    """
+    if isinstance(allowed_hosts, str):
+        raise TypeError(f'allowed_hosts is a list of names, not the string {allowed_hosts!r}')
+    names = [name.lower() for name in allowed_hosts]
+    if not names:
+        raise ValueError('allowed_hosts names no host, so the console would refuse every request')
+    with_colon = [name for name in names if ':' in name]
+    if with_colon:
+        raise ValueError(f'the names {with_colon} carry a port or an IPv6 address, which the Host check cannot match')
+    bad_wildcards = [n for n in names if '*' in n and n != '*' and not (n.startswith('*.') and '*' not in n[1:])]
+    if bad_wildcards:
+        raise ValueError(f'the names {bad_wildcards} are no wildcard that the Host check takes: use * or *.<domain>')
+    if '*' in names:
+        logger.warning('The console answers any host name. Name the hosts with --allowed_hosts.')
+    return names
+
+
 class StationConsole(pimm.ControlSystem):
     """Serves the station page and turns its presses into episodes. End run on the page returns from its loop, and
     that stops the World.
@@ -111,7 +155,14 @@ class StationConsole(pimm.ControlSystem):
     """
 
     def __init__(
-        self, next_task: Callable[[], Task], policy: Policy, output_path: Path | None, *, host: str, port: int
+        self,
+        next_task: Callable[[], Task],
+        policy: Policy,
+        output_path: Path | None,
+        *,
+        host: str,
+        port: int,
+        allowed_hosts: Sequence[str] | None = None,
     ):
         self._next_task = next_task
         self._policy = policy
@@ -120,6 +171,9 @@ class StationConsole(pimm.ControlSystem):
         self._policy_label = policy.meta().get(policy_keys.TYPE, type(policy).__name__)
         self._host = host
         self._port = port
+        self._allowed_hosts = _checked_allowed_hosts(
+            allowed_hosts if allowed_hosts is not None else _allowed_hosts_of(host)
+        )
         self.cameras = pimm.ReceiverDict(self)
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
@@ -203,6 +257,9 @@ class StationConsole(pimm.ControlSystem):
     ) -> FastAPI:
         """The console's HTTP surface. ``submit`` queues a task for the control loop."""
         app = FastAPI()
+        # A page under another name, which a DNS rebind can point at the console, gets 400 for each request and each
+        # WebSocket. So the `Host` that `sent_from_another_site` compares against is one that the console trusts.
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=self._allowed_hosts)
 
         def sent_from_another_site(connection: HTTPConnection) -> bool:
             """A browser sends ``Origin`` with each cross-site POST and each WebSocket handshake. A client that sends
