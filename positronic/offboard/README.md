@@ -423,6 +423,12 @@ cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusa
 answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
 exception of the WebSocket or gRPC library.
 
+A server that sends status updates is up. `new_session` waits `ready_deadline` for its `ready`, and then
+raises `ReadyDeadlinePassed`, a `TimeoutError`, with no retry. A new attempt would make the server prepare the
+session again. Attempts begin until `connect_deadline`, so `new_session` can take the sum of both deadlines.
+`wait_for_server()` returns once a server answers a probe, and opens no session. It retries as `new_session`
+does.
+
 A session recovers a connection that drops before the server's first answer. A later drop raises
 `wire.PeerDisconnected`.
 
