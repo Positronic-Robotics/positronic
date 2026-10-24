@@ -96,6 +96,35 @@ def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked)
     ]
 
 
+def test_a_horizon_override_rides_the_spec_and_no_override_sends_none(asked):
+    benchmarks.override(horizon_sec=120.0).instantiate().tasks()
+    benchmarks.instantiate().tasks()
+    assert asked == [
+        {mapping.SELECT_HORIZON_SEC: 120.0, mapping.WITH_RIGHT_SHOULDER: True},
+        {mapping.WITH_RIGHT_SHOULDER: True},
+    ]
+
+
+@pytest.mark.parametrize('horizon_sec', [0.0, -1.0, float('nan'), float('inf')])
+def test_an_invalid_horizon_override_is_refused(horizon_sec):
+    with pytest.raises(ValueError, match='horizon_sec must be finite and positive'):
+        benchmarks.override(horizon_sec=horizon_sec).instantiate()
+
+
+def test_the_collection_config_asks_the_pick_mini_benchmark_for_a_two_minute_horizon(asked):
+    molmo_cfg.pick_mini_collect.instantiate().tasks()
+    assert asked == [
+        {
+            'suite': 'molmospaces-bench-v2',
+            'scene_dataset': 'procthor-10k',
+            'task_config': 'FrankaPickDroidMiniBench',
+            'benchmark': 'FrankaPickDroidMiniBench_json_benchmark_20251231',
+            mapping.SELECT_HORIZON_SEC: 120.0,
+            mapping.WITH_RIGHT_SHOULDER: True,
+        }
+    ]
+
+
 def _listing_of(selection: dict[str, Any]) -> list[dict[str, Any]]:
     """What the env lists for a selection of one benchmark and pinned episodes."""
     bench = {
@@ -135,6 +164,19 @@ def test_episode_paths_list_each_benchmark_once_and_run_the_pins_in_their_order(
         ('holodeck-objaverse', 295),
         ('holodeck-objaverse', 295),
     ]
+
+
+def test_episode_paths_carry_the_horizon_override(monkeypatch):
+    specs: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        RemoteEnvControlSystem, 'tasks', lambda self, selection: specs.append(selection) or _listing_of(selection)
+    )
+    path = 'molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/pick_20251231/11'
+
+    benchmarks.override(episode_paths=[path], horizon_sec=120.0).instantiate().tasks()
+    benchmarks.override(episode_paths=[path]).instantiate().tasks()
+
+    assert [s.get(mapping.SELECT_HORIZON_SEC) for s in specs] == [120.0, None]
 
 
 @pytest.mark.parametrize('bound', [{'suite': 'molmospaces-bench-v1'}, {'episodes': [0]}, {'task_config': 'A'}])

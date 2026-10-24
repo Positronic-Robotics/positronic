@@ -1,7 +1,6 @@
 import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
-from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -26,16 +25,19 @@ from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers import roboarm
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import State as RoboarmState
-from positronic.drivers.webxr import WebXR
+from positronic.drivers.webxr import LEFT, RIGHT, WebXR
 from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+
+# TODO: Replace this module with a run of `cfg.policy.teleop`, and keep the clutch only in `positronic.teleop`.
+from positronic.teleop.clutch import OperatorPosition, Tracker
 from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
 
 
 def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
-    for side in ['left', 'right']:
+    for side in [LEFT, RIGHT]:
         if buttons[side] is None:
             continue
 
@@ -51,54 +53,6 @@ def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
 
 def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
-
-
-class _Tracker:
-    on = False
-    _offset = geom.Transform3D()
-    _teleop_t = geom.Transform3D()
-
-    def __init__(self, operator_position: geom.Transform3D | None):
-        self._operator_position = operator_position
-        self.on = self.umi_mode
-
-    @property
-    def umi_mode(self):
-        return self._operator_position is None
-
-    def turn_on(self, robot_pos: geom.Transform3D):
-        if self.umi_mode:
-            logging.info('Ignoring tracking on/off in UMI mode')
-            return
-
-        self.on = True
-        logging.info('Starting tracking')
-        self._offset = geom.Transform3D(
-            -self._teleop_t.translation + robot_pos.translation, self._teleop_t.rotation.inv * robot_pos.rotation
-        )
-
-    def turn_off(self):
-        if self.umi_mode:
-            logging.info('Ignoring tracking on/off in UMI mode')
-            return
-        self.on = False
-        logging.info('Stopped tracking')
-
-    def update(self, tracker_pos: geom.Transform3D):
-        if self.umi_mode:
-            return tracker_pos
-
-        self._teleop_t = self._operator_position * tracker_pos * self._operator_position.inv
-        return geom.Transform3D(
-            self._teleop_t.translation + self._offset.translation, self._teleop_t.rotation * self._offset.rotation
-        )
-
-
-class OperatorPosition(Enum):
-    # map xyz -> zxy
-    FRONT = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
-    # map xyz -> zxy + flip x and y
-    BACK = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
 class DataCollectionController(pimm.ControlSystem):
@@ -162,6 +116,17 @@ class DataCollectionController(pimm.ControlSystem):
             logging.error(f'The arm gives no state: {error}')
             self.sound.emit(error_wav_path)
 
+    def _toggle_control(self, tracker: Tracker) -> None:
+        if tracker.on:
+            tracker.turn_off()
+            return
+        robot_pos = self.robot_state.value.ee_pose
+        hand_pos = self.controller_positions.value.get(RIGHT)
+        if hand_pos is None:
+            logging.warning('Control needs a pose of the right controller')
+            return
+        tracker.turn_on(robot_pos, hand_pos)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         sounds = Path(package_assets_path('assets/sounds'))
         start_wav_path = sounds / 'recording-has-started.wav'
@@ -169,7 +134,7 @@ class DataCollectionController(pimm.ControlSystem):
         abort_wav_path = sounds / 'recording-has-been-aborted.wav'
         error_wav_path = sounds / 'error-occurred.wav'
 
-        tracker = _Tracker(self.operator_position)
+        tracker = Tracker(self.operator_position)
         button_handler = ButtonHandler()
 
         recording = False
@@ -190,11 +155,8 @@ class DataCollectionController(pimm.ControlSystem):
                         self.sound.emit(end_wav_path)
                     recording = not recording
                 elif button_handler.just_pressed('right_A'):
-                    if tracker.on:
-                        tracker.turn_off()
-                    else:
-                        tracker.turn_on(self.robot_state.value.ee_pose)
-                elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
+                    self._toggle_control(tracker)
+                elif button_handler.just_pressed('right_stick') and not tracker.is_umi_mode:
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
                         self.sound.emit(abort_wav_path)
@@ -209,8 +171,6 @@ class DataCollectionController(pimm.ControlSystem):
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
-                if cp_msg.updated:
-                    target_robot_pos = tracker.update(cp_msg.data['right'])
 
                 if tracker.on:
                     in_error, entered_error = _check_error(
@@ -219,7 +179,7 @@ class DataCollectionController(pimm.ControlSystem):
                     if entered_error:
                         self.sound.emit(error_wav_path)
                     if not in_error and cp_msg.updated:
-                        cmd = roboarm.command.CartesianPosition(target_robot_pos)
+                        cmd = roboarm.command.CartesianPosition(tracker.update(cp_msg.data[RIGHT]))
                         self.robot_commands.emit(cmd)
 
                 yield pimm.Sleep(0.001)

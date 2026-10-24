@@ -13,7 +13,12 @@ from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
 from positronic import telemetry, telemetry_keys
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
+from positronic.offboard.client import (
+    DEFAULT_CONNECT_DEADLINE,
+    DEFAULT_INFER_TIMEOUT,
+    InferenceClient,
+    InferenceSession,
+)
 from positronic.policy import keys as policy_keys
 from positronic.utils import flatten_dict
 
@@ -115,8 +120,9 @@ def _log_late_close_failure(closed: Future[None]) -> None:
 class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
-    ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG
-    quality of images sent to a server that asks for compressed images.
+    ``wire`` names the transport and ``address`` is the address it dials. ``connect_deadline`` bounds the retries of a
+    connect to a server that is not ready. ``jpeg_quality`` sets the JPEG quality of images sent to a server that asks
+    for compressed images.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -130,10 +136,15 @@ class RemotePolicy(Policy):
         *,
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     ):
         self._client = InferenceClient(
-            registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout
+            registry.client_wire(wire),
+            address,
+            headers=headers,
+            infer_timeout=infer_timeout,
+            connect_deadline=connect_deadline,
         )
         self._server_meta: dict[str, Any] | None = None
         self._client_meta: dict[str, Any] = {}

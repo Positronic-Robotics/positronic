@@ -24,6 +24,11 @@ def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
     return mapping.BenchmarkPath.parse(bench), int(index)
 
 
+def _require_finite_positive(arg: str, value: float | None) -> None:
+    if value is not None and (not math.isfinite(value) or value <= 0):
+        raise ValueError(f'--eval.{arg} must be finite and positive, got {value}')
+
+
 @cfn.config(
     suite=None,
     scene_dataset=None,
@@ -34,6 +39,7 @@ def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
     trial_count=1,
     timeout=None,
     seed=None,
+    horizon_sec=None,
     with_right_shoulder=True,
 )
 def benchmarks(
@@ -46,6 +52,7 @@ def benchmarks(
     trial_count: int,
     timeout: float | None,
     seed: int | None,
+    horizon_sec: float | None,
     with_right_shoulder: bool,
 ) -> Eval:
     """A DROID evaluation over selected MolmoSpaces benchmark episodes.
@@ -54,7 +61,8 @@ def benchmarks(
     ``episode_paths`` pins episodes across benchmarks instead, each as ``<benchmark path>/<index>``, and runs
     them in list order; it takes no benchmark dimension and no ``episodes``.
     ``seed=None`` follows the benchmark's seed convention. The default timeout is the benchmark horizon
-    plus a margin; an explicit timeout replaces it.
+    plus a margin; an explicit timeout replaces it. ``horizon_sec`` replaces the horizon of every selected
+    benchmark, and the default timeout follows it. It is for demonstrations by a person, not for a scored eval.
 
     The policy sees the wrist camera and two shoulder cameras, left and right, in ``image.exterior`` and
     ``image.exterior_2``. The run draws their order once from ``seed``, or at random when ``seed`` is None,
@@ -65,8 +73,8 @@ def benchmarks(
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
-    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
-        raise ValueError(f'--eval.timeout must be finite and positive, got {timeout}')
+    _require_finite_positive('timeout', timeout)
+    _require_finite_positive('horizon_sec', horizon_sec)
     if episode_paths is not None and not episode_paths:
         raise ValueError('--eval.episode_paths must name at least one episode')
     pins = None if episode_paths is None else [_parse_episode_path(path) for path in episode_paths]
@@ -92,11 +100,14 @@ def benchmarks(
             by_bench.setdefault(bench, []).append(index)
         found = {}
         for bench, indices in by_bench.items():
-            selection = {
+            selection = spec(
                 **bench._asdict(),
-                mapping.SELECT_EPISODES: list(dict.fromkeys(indices)),
-                mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
-            }
+                **{
+                    mapping.SELECT_EPISODES: list(dict.fromkeys(indices)),
+                    mapping.SELECT_HORIZON_SEC: horizon_sec,
+                    mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
+                },
+            )
             for params in proxy.tasks(selection):
                 listed_bench = mapping.BenchmarkPath(*(params[key] for key in molmo_keys.BENCHMARK_DIMENSIONS))
                 found[listed_bench, params[molmo_keys.EPISODE_INDEX]] = params
@@ -110,7 +121,11 @@ def benchmarks(
             scene_dataset=scene_dataset,
             task_config=task_config,
             benchmark=benchmark,
-            **{mapping.SELECT_EPISODES: episodes, mapping.WITH_RIGHT_SHOULDER: with_right_shoulder},
+            **{
+                mapping.SELECT_EPISODES: episodes,
+                mapping.SELECT_HORIZON_SEC: horizon_sec,
+                mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
+            },
         )
         return proxy.tasks(selection)
 
@@ -136,3 +151,13 @@ bench_v2 = benchmarks.override(suite='molmospaces-bench-v2')
 
 pick_v1 = bench_v1.override(task_config='FrankaPickDroidMiniBench')
 first_episode = pick_v1.override(episodes=0)
+
+# Demonstrations by a person on the pick mini benchmark: two minutes for each episode, not the benchmark horizon. It
+# runs the episodes that the eval selects with no `episodes`, so it leaves out each episode that hides the start
+# grasp site from the right shoulder camera.
+pick_mini_collect = bench_v2.override(
+    scene_dataset='procthor-10k',
+    task_config='FrankaPickDroidMiniBench',
+    benchmark='FrankaPickDroidMiniBench_json_benchmark_20251231',
+    horizon_sec=120.0,
+)

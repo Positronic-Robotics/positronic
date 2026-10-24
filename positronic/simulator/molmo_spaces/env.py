@@ -162,7 +162,12 @@ class MolmoSpacesEnv(EnvProtocol):
         return with_right
 
     def _build(
-        self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None, with_right_shoulder: bool
+        self,
+        bench: mapping.BenchmarkPath,
+        episode_index: int,
+        seed: int | None,
+        horizon_sec: float | None,
+        with_right_shoulder: bool,
     ) -> None:
         if self._sampler is not None:
             self._sampler.close()
@@ -172,8 +177,10 @@ class MolmoSpacesEnv(EnvProtocol):
             episode = self._with_right_shoulder_camera(episode, mapping.episode_rng(bench, episode_index))
         cfg = _DroidEvalConfig()
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
-        # MolmoSpaces resolves one horizon from the full benchmark.
-        cfg.task_horizon = determine_task_horizon(episodes, None, cfg.policy_dt_ms)
+        # MolmoSpaces resolves one horizon from the full benchmark, unless an override in steps replaces it.
+        cfg.task_horizon = determine_task_horizon(
+            episodes, mapping.horizon_steps(horizon_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
+        )
         self._sampler = _JointGraspSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
@@ -190,6 +197,7 @@ class MolmoSpacesEnv(EnvProtocol):
         """Selected episode records, with names, reset parameters and horizons in seconds."""
         cfg = _DroidEvalConfig()
         selection = spec.get(mapping.SELECT_EPISODES)
+        override_sec = spec.get(mapping.SELECT_HORIZON_SEC)
         pinned = None if selection is None else [selection] if isinstance(selection, int) else list(selection)
         records = []
         for bench in mapping.select_benchmarks(self._found, spec):
@@ -198,13 +206,17 @@ class MolmoSpacesEnv(EnvProtocol):
                 self._right_view_blocked.get(bench, frozenset()) if spec[mapping.WITH_RIGHT_SHOULDER] else frozenset()
             )
             indices = mapping.select_episodes(bench, len(episodes), pinned, blocked)
-            horizon_sec = determine_task_horizon(episodes, None, cfg.policy_dt_ms) * cfg.policy_dt_ms / 1000.0
+            horizon_steps = determine_task_horizon(
+                episodes, mapping.horizon_steps(override_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
+            )
+            horizon_sec = horizon_steps * cfg.policy_dt_ms / 1000.0
             records += [
                 {
                     **bench._asdict(),
                     mapping.TOKEN_EPISODE_INDEX: i,
                     mapping.TASK_NAME: episodes[i].language.task_description,
                     mapping.TASK_HORIZON_SEC: horizon_sec,
+                    mapping.TASK_HORIZON_OVERRIDE_SEC: override_sec,
                 }
                 for i in indices
             ]
@@ -213,7 +225,11 @@ class MolmoSpacesEnv(EnvProtocol):
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         bench = mapping.BenchmarkPath(**{d: token[d] for d in mapping.BenchmarkPath._fields})
         self._build(
-            bench, token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED), token[mapping.WITH_RIGHT_SHOULDER]
+            bench,
+            token[mapping.TOKEN_EPISODE_INDEX],
+            token.get(mapping.TOKEN_SEED),
+            token.get(mapping.TOKEN_HORIZON_SEC),
+            token[mapping.WITH_RIGHT_SHOULDER],
         )
         obs, _info = self._task.reset()  # One observation dict per environment.
         env_obs = obs[0]

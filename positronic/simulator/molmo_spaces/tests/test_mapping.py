@@ -158,6 +158,17 @@ def test_every_canonical_command_type_converts_to_joint_targets(command_type):
     assert target.shape == (_JOINTS,)
 
 
+def test_a_horizon_converts_to_policy_steps_and_none_keeps_the_benchmark_horizon():
+    assert mapping.horizon_steps(120.0, 66.0) == round(120_000 / 66)
+    assert mapping.horizon_steps(0.07, 100.0) == 1
+    assert mapping.horizon_steps(None, 100.0) is None
+
+
+def test_a_horizon_shorter_than_one_policy_step_is_refused():
+    with pytest.raises(ValueError, match='shorter than one policy step'):
+        mapping.horizon_steps(0.01, 100.0)
+
+
 def test_episode_seed_prefers_the_override_then_the_spec_then_the_index():
     spec = types.SimpleNamespace(seed=7)
     assert mapping.resolve_episode_seed(spec, 3, 99) == 99

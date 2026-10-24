@@ -33,6 +33,7 @@ from positronic.policy.codecs.observation import ObservationCodec, PackObservati
 from positronic.policy.compatibility import ChunkedScheduleV2
 from positronic.policy.processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
+from positronic.policy.teleop import TeleopClient
 from positronic.utils.versions import Version, resolve_version
 
 ComponentFactory = Callable[..., Processor | Codec]
@@ -64,6 +65,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         JointPositionAction,
         SetControlMode,
         UnpackActionChunk,
+        TeleopClient,
     )
 }
 
