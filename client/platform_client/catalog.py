@@ -17,9 +17,9 @@ from pydantic import BaseModel, Field
 class TaskSummary(BaseModel):
     """`catalog.tasks` — one task the caller may put in a plan, as the catalogue states it.
 
-    `rig_shapes` lists the rig shapes the task runs on. A plan that states the task names one of them
-    as its `rig_shape`. `tote_placement` and `external_cameras` list the sides a plan may choose, or
-    ask `random` to draw from. `external_cameras` is keyed by the mount name the task defines.
+    `rig_shapes` lists the rig shapes the task runs on. `tote_placement` and `external_cameras` list
+    the sides a plan may choose, or ask `random` to draw from. `external_cameras` is keyed by the
+    mount name the task defines.
     `default_cap_per_episode_sec` applies when the plan states no cap. `clutter` applies when the
     plan states none; a task carrying neither draws no clutter objects. `start_pose` applies when
     the plan states none.
