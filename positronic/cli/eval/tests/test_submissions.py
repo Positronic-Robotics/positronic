@@ -11,7 +11,7 @@ import pytest
 from platform_client import routes
 from platform_client.catalog import EvalListResponse, EvalSummary, TaskListResponse, TaskSummary
 from platform_client.client import PlatformClient
-from platform_client.enums import ErrorCode, SubmissionStatus
+from platform_client.enums import ErrorCode, RigShape, SubmissionStatus
 from platform_client.ids import SubmissionId
 from platform_client.requests import CancelRequest
 from platform_client.responses import (
@@ -118,7 +118,9 @@ def test_a_response_the_client_cannot_read_is_a_refusal_without_the_body(platfor
 
 
 EVAL = EvalSummary(id=EvalRef('fake.smoke'), embodiment='franka', tasks=['a'], composable=True)
-TASK = TaskSummary(id=TaskRef('eight-spoons-into-grey-tote'), embodiment='franka', task='spoons')
+TASK = TaskSummary(
+    id=TaskRef('eight-spoons-into-grey-tote'), embodiment='franka', rig_shapes=[RigShape.franka], task='spoons'
+)
 EVALS_ANSWER = (EvalListResponse(evals=[EVAL]), 200)
 TASKS_ANSWER = (TaskListResponse(tasks=[TASK]), 200)
 NO_GRANT = (refusal(ErrorCode.forbidden, 'no customer grant'), 403)
@@ -135,14 +137,19 @@ def test_catalog_prints_the_evals_where_the_key_has_no_grant_for_the_tasks(platf
 
 
 def test_catalog_prints_what_the_key_may_name(platform, run_command, capsys):
-    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: TASKS_ANSWER})
+    two_arm = TaskSummary(id=TaskRef('fold-the-towel'), embodiment='yam', rig_shapes=[RigShape.yam], task='towel')
+    tasks = TaskListResponse(tasks=[TASK, two_arm])
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: (tasks, 200)})
 
     run_command(catalog)
 
     assert platform.request.url.path == routes.CATALOG_TASKS
     out = capsys.readouterr().out
-    assert EVAL.id in out
-    assert TASK.id in out
+    decoder = json.JSONDecoder()
+    evals, end = decoder.raw_decode(out)
+    printed_tasks, _ = decoder.raw_decode(out[end:].lstrip())
+    assert EvalListResponse.model_validate(evals).evals == [EVAL]
+    assert [task['rig_shapes'] for task in printed_tasks['tasks']] == [['franka'], ['yam']]
 
 
 def test_catalog_json_prints_the_evals_and_the_tasks_as_one_value(platform, run_command, capsys):
