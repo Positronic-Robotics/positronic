@@ -1,6 +1,7 @@
 import io
 import tarfile
 
+from utilities import check_public_image
 from utilities.check_public_image import findings
 
 TRACKED = {'positronic/README.md', 'positronic/docker/run_molmospaces_eval.sh'}
@@ -85,3 +86,25 @@ def test_a_private_host_name_in_a_file_outside_the_public_sources_is_a_finding()
 def test_an_internal_word_in_the_text_of_a_file_outside_the_public_sources_is_a_finding():
     found = _findings({'root/run.yaml': 'url: http://orchestrator:8080'})
     assert found == ["/root/run.yaml: holds 'orchestrator'"]
+
+
+class _FailedExport:
+    """A `docker export` that wrote an empty tar and exited with status 1."""
+
+    returncode = 1
+
+    def __init__(self):
+        buffer = io.BytesIO()
+        tarfile.open(fileobj=buffer, mode='w').close()
+        buffer.seek(0)
+        self.stdout = buffer
+
+    def wait(self) -> int:
+        return self.returncode
+
+
+def test_a_failed_export_fails_the_check(monkeypatch):
+    monkeypatch.setattr(check_public_image, '_exported', lambda image: (_FailedExport(), 'container'))
+    monkeypatch.setattr(check_public_image.subprocess, 'run', lambda *args, **kwargs: None)
+    monkeypatch.setattr(check_public_image, 'tracked_files', lambda: set())
+    assert check_public_image.main(['positro/molmospaces:local']) == 2

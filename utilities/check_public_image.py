@@ -114,7 +114,10 @@ def main(argv: list[str] | None = None) -> int:
         assert export.stdout is not None  # stdout=PIPE
         with tarfile.open(fileobj=export.stdout, mode='r|') as image:
             found = list(findings(image, tracked_files()))
-        export.wait()
+        # A failed export can end the tar early, so its findings cover only part of the image.
+        if export.wait() != 0:
+            print(f'docker export of {args[0]} failed with exit status {export.returncode}', file=sys.stderr)
+            return 2
     finally:
         subprocess.run(['docker', 'rm', container], capture_output=True, check=False)
     for finding in found:
