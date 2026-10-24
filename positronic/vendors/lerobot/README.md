@@ -108,7 +108,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 |-----------|-------------|---------|---------|
 | subcommand | Named policy pipeline to serve — its codec must match training: `ee`, `joints`, `joints_ik`, `joints_ik_sim` | `ee` | `joints` |
 | `--model.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
-| `--pipeline.ee_frame` | The EE frame the checkpoint speaks, as an offset from a site of the rig's model. The joint pipelines set `None` | Required on `ee` | `@positronic.cfg.codecs.panda_hand_frame` |
+| `--pipeline.ee_frame` | The EE frame the checkpoint speaks, as an offset from a site of the rig's model. The IK pipelines set `None` | Required on `ee` and `joints` | `@positronic.cfg.codecs.panda_hand_frame` |
 | `--model.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
 | `--model.device` | Torch device the policy runs on | Auto-detected | `cuda`, `mps`, `cpu` |
 | `--websocket.served_address.port` | WebSocket wire port | `8000` | `8001` |

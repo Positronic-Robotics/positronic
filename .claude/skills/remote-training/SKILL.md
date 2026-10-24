@@ -183,7 +183,7 @@ bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 # Explicit checkpoint dir (the subcommand is the pipeline name, one per vendor codec).
 # Get <ckpt-dir> from the vendor's server.py preset or `aws s3 ls` under the S3
 # convention — not memorized.
-# A pose pipeline also takes the EE frame the checkpoint speaks; the joint pipelines set None themselves.
+# A pose pipeline also takes the EE frame the checkpoint speaks; a pipeline that speaks joints only sets None.
 bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
   --model.checkpoints_dir=<ckpt-dir> \
   --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame

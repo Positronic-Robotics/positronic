@@ -218,7 +218,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
 | `--model.checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
 | `--model.model_source` | GR00T: Hugging Face model or experiment directory | `hf://nvidia/GR00T-N1.7-DROID` |
 | `--model.checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
-| `--pipeline.ee_frame` | LeRobot and OpenPI: the EE frame the checkpoint speaks, as an offset from a site of the rig's model. Required on a pose pipeline; the joint pipelines set `None` | `@positronic.cfg.codecs.franka_hand_frame` |
+| `--pipeline.ee_frame` | LeRobot and OpenPI: the EE frame the checkpoint speaks, as an offset from a site of the rig's model. Required on a pose pipeline; a pipeline that speaks joints only sets `None` | `@positronic.cfg.codecs.franka_hand_frame` |
 | `--websocket.served_address.port` | WebSocket wire port | `8000` (default) |
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` (default, binds to all interfaces) |
 | `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket, which takes `.uds` and names no host and no port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |

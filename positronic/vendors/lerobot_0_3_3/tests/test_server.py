@@ -129,13 +129,13 @@ def _pipeline(name: str) -> cfn.Config:
     return lerobot_server.COMMANDS[name].kwargs['pipeline']
 
 
-@pytest.mark.parametrize('name', ['serve', 'ee', 'ee_traj', 'ee_flip'])
+@pytest.mark.parametrize('name', ['serve', 'ee', 'joints', 'ee_traj', 'ee_flip'])
 def test_a_pose_pipeline_that_states_no_frame_fails_to_build(name):
     with pytest.raises(TypeError, match='ee_frame'):
         _pipeline(name).instantiate()
 
 
-@pytest.mark.parametrize('name', ['joints', 'joints_traj', 'joints_ik', 'joints_ik_sim'])
+@pytest.mark.parametrize('name', ['joints_traj', 'joints_ik', 'joints_ik_sim'])
 def test_a_joint_pipeline_builds_with_no_frame(name):
     assert roboarm_keys.EE_FRAMES not in _pipeline(name).instantiate().meta()
 
