@@ -62,10 +62,15 @@ def _install_vendor_stub() -> None:
             self.host = host
             self.holder = holder
 
+    class ProgrammingModeError(RuntimeError):
+        def __str__(self) -> str:
+            return 'Desk is in Programming mode, so it refuses FCI.'
+
     desk = types.ModuleType(DESK)
     desk.__dict__.update(
         Desk=object,
         SafetyControllerError=type('SafetyControllerError', (RuntimeError,), {}),
+        ProgrammingModeError=ProgrammingModeError,
         ControlHeldElsewhere=ControlHeldElsewhere,
     )
 

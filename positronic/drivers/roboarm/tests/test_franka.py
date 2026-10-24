@@ -200,8 +200,9 @@ class FakeDesk:
     """In-memory ``Desk``: records every prepare, brake, FCI and reboot operation the driver asked for, records that
     the session released control, and reports whatever ``safe_inputs`` holds.
 
-    An operation named in ``raises`` raises the exception it maps to. ``safety_error``, ``fsoe_error`` and ``holder``
-    script the control box states that only a reboot clears, where ``reboot_clears`` is set. A reboot ends the
+    An operation named in ``raises`` raises the exception it maps to. ``safety_error``, ``fsoe_error``,
+    ``programming_mode`` and ``holder`` script the control box states that only a reboot clears, where
+    ``reboot_clears`` is set. A reboot ends the
     session: a later call on it raises until a new ``with Desk(...)`` enters it again.
     """
 
@@ -216,6 +217,7 @@ class FakeDesk:
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
         self.safety_error = False
         self.fsoe_error = False
+        self.programming_mode = False
         # The Desk login that holds robot control, where a session of the driver does not.
         self.holder: str | None = None
         self.reboot_clears = True
@@ -247,7 +249,7 @@ class FakeDesk:
         self.calls.append(Call.REBOOT)
         self.on_reboot()
         if self.reboot_clears:
-            self.safety_error = self.fsoe_error = False
+            self.safety_error = self.fsoe_error = self.programming_mode = False
             self.holder = None
         self.brakes = [franka._BrakeState.LOCKED] * 7
         self._ended = True
@@ -269,6 +271,8 @@ class FakeDesk:
             raise franka.SafetyControllerError(['scripted'])
         if self.fsoe_error:
             raise RuntimeError('424 Client Error: Failed Dependency for url: /desk/api/joints/unlock')
+        if self.programming_mode:
+            raise franka.ProgrammingModeError()
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
 
     def ensure_control(self) -> None:
@@ -2603,6 +2607,7 @@ class StartFailure(StrEnum):
     BRAKES = 'brakes'
     FCI = 'fci'
     FSOE = 'fsoe'
+    PROGRAMMING_MODE = 'programming mode'
     CONNECT = 'connect'
     CONFIGURATION = 'configuration'
 
@@ -2623,6 +2628,8 @@ class StartFailure(StrEnum):
                 desk.raises[Call.PREPARE] = RuntimeError(self.reason)
             case StartFailure.FSOE:
                 desk.fsoe_error = True
+            case StartFailure.PROGRAMMING_MODE:
+                desk.programming_mode = True
             case StartFailure.CONNECT:
                 del driver._robot
 
@@ -2642,6 +2649,7 @@ _START_FAILURE_REASONS = {
     StartFailure.BRAKES: "Brakes did not reach 'Unlocked' within 20.0s",
     StartFailure.FCI: 'FCI did not activate within 15.0s',
     StartFailure.FSOE: 'Failed Dependency',
+    StartFailure.PROGRAMMING_MODE: 'Programming mode',
     StartFailure.CONNECT: 'libfranka: Connection timeout',
     StartFailure.CONFIGURATION: 'libfranka: set_collision_behavior rejected',
 }
@@ -2714,7 +2722,10 @@ def test_ready_calls_on_an_arm_with_no_connection_answer_the_error_and_run_no_de
     assert run.step_names == [RecoveryStep.IDLE]
 
 
-@pytest.mark.parametrize('failure', [StartFailure.SAFETY_ERROR, StartFailure.STRANDED_TOKEN, StartFailure.FSOE])
+@pytest.mark.parametrize(
+    'failure',
+    [StartFailure.SAFETY_ERROR, StartFailure.STRANDED_TOKEN, StartFailure.FSOE, StartFailure.PROGRAMMING_MODE],
+)
 def test_a_recover_call_on_a_box_only_a_reboot_clears_reboots_it_once_and_connects(desk, world, monkeypatch, failure):
     arm = FakeArm(PARK)
     driver = _driver(arm)
