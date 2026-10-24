@@ -28,7 +28,6 @@ from positronic.offboard.client import (
     ConnectRetries,
     InferenceClient,
     InferenceSession,
-    ReadyDeadlinePassed,
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
@@ -41,6 +40,7 @@ from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 from positronic.tests.testing_inference import post, read_status, run_attended, wait
+from positronic.utils import flatten_dict
 
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}}
 
@@ -462,72 +462,6 @@ class TestADroppedConnectionReconnects:
         assert clock[0] - started <= 20.0
 
 
-class TestTheReadyDeadline:
-    """A server that sends status updates is up, so the wait for its ready has a deadline of its own."""
-
-    @staticmethod
-    def _waiting(count: int) -> list[bytes]:
-        return [legacy_protocol.serialise({protocol.STATUS: protocol.ServerStatus.WAITING})] * count
-
-    def test_a_session_waits_past_the_connect_deadline_for_a_server_that_prepares_it(self):
-        clock = [0.0]
-
-        def recv(timeout: float | None = None) -> bytes:
-            clock[0] += 5.0
-            return messages.pop(0)
-
-        messages = [*self._waiting(10), _ready('first')]
-        preparing = MagicMock(spec=wire.ClientConnection)
-        preparing.recv.side_effect = recv
-        with patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]):
-            session = InferenceClient(_FakeWire(preparing), _ADDRESS, connect_deadline=1.0).new_session()
-
-        assert session.session_id == 'first'
-
-    def test_a_server_not_ready_by_the_ready_deadline_is_not_asked_again(self):
-        """Each attempt makes the server prepare the session again."""
-        clock = [0.0]
-
-        def recv(timeout: float | None = None) -> bytes:
-            clock[0] += 5.0
-            return self._waiting(1)[0]
-
-        waits_for_ever = MagicMock(spec=wire.ClientConnection)
-        waits_for_ever.recv.side_effect = recv
-        fake = _FakeWire(waits_for_ever, _connection(_ready('second')))
-        with (
-            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
-            patch('positronic.offboard.client.time.sleep', side_effect=lambda s: clock.__setitem__(0, clock[0] + s)),
-            pytest.raises(ReadyDeadlinePassed),
-        ):
-            InferenceClient(fake, _ADDRESS, ready_deadline=20.0).new_session()
-
-        assert clock[0] <= 20.0
-        assert len(fake.dials) == 1
-        waits_for_ever.close.assert_called_once()
-
-    def test_the_ready_deadline_bounds_the_wait_for_the_first_status(self):
-        clock = [0.0]
-
-        def recv(timeout: float | None = None) -> bytes:
-            assert timeout is not None
-            clock[0] += timeout
-            raise TimeoutError
-
-        silent = MagicMock(spec=wire.ClientConnection)
-        silent.recv.side_effect = recv
-        fake = _FakeWire(silent, _connection(_ready('second')))
-        with (
-            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
-            patch('positronic.offboard.client.time.sleep', side_effect=lambda s: clock.__setitem__(0, clock[0] + s)),
-            pytest.raises(ReadyDeadlinePassed),
-        ):
-            InferenceClient(fake, _ADDRESS, ready_deadline=1.0).new_session()
-
-        assert clock[0] <= 1.0
-        assert len(fake.dials) == 1
-
-
 class TestWaitForServer:
     """Waiting for a server opens no session."""
 
@@ -684,10 +618,11 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
             run.close()
         assert len(model.ended_sessions) == episode + 1
         assert model.session_ids[-2:] == [model.ended_sessions[-1]] * 2
+        episode_meta = flatten_dict(runtime.metadata_snapshot())
+        assert episode_meta['server.model_name'] == 'fixed'
+        assert episode_meta['server.action_fps'] == 10
+        assert episode_meta['server.action_horizon_sec'] == 0.2
     assert len(set(model.ended_sessions)) == 2
-    assert policy.meta()['server.model_name'] == 'fixed'
-    assert policy.meta()['server.action_fps'] == 10
-    assert policy.meta()['server.action_horizon_sec'] == 0.2
     assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
 
 
@@ -696,8 +631,8 @@ class DeclaredPromptModel(FixedModel):
         return {'model_name': 'fixed', 'prompt': 'A prompt this deployment declares.'}
 
 
-def test_a_declared_prompt_is_in_policy_meta_and_the_task_reaches_the_model_unchanged(served):
-    """A ``prompt`` in the handshake appears unchanged in the policy's meta, under the server block. The task an
+def test_a_declared_prompt_is_in_episode_meta_and_the_task_reaches_the_model_unchanged(served):
+    """A ``prompt`` in the handshake appears unchanged in the episode metadata, under the server block. The task an
     episode sends reaches the model unchanged, with no prompt beside it."""
     address, model, _ = served(model=DeclaredPromptModel())
     policy = RemotePolicy('websocket', address)
@@ -710,7 +645,8 @@ def test_a_declared_prompt_is_in_policy_meta_and_the_task_reaches_the_model_unch
     finally:
         runtime.close()
         run.close()
-    assert policy.meta()[f'{policy_keys.SERVER}.prompt'] == 'A prompt this deployment declares.'
+    server_meta = runtime.metadata_snapshot()[policy_keys.SERVER]
+    assert server_meta['prompt'] == 'A prompt this deployment declares.'
     assert model.observations[-1][keys.TASK] == 'the task this episode sends'
     assert 'prompt' not in model.observations[-1]
 
@@ -1081,42 +1017,49 @@ def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
 
 
 @pytest.mark.parametrize('compressed', [False, True])
-def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(runtime, compressed):
+def test_a_run_records_the_jpeg_quality_only_when_images_are_compressed(runtime, compressed):
     policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
     policy._client = MagicMock()
     policy._client.new_session.return_value = _mock_session({**CHUNKED_STACK, policy_keys.COMPRESS_IMAGES: compressed})
     runtime.start(policy).close()
-    meta = policy.meta()
+    meta = runtime.metadata_snapshot()
     if compressed:
         assert meta[policy_keys.JPEG_QUALITY] == 75
     else:
         assert policy_keys.JPEG_QUALITY not in meta
 
 
-def test_policy_meta_before_a_run_waits_for_the_server_and_opens_no_session():
+def test_policy_meta_holds_only_client_values_and_makes_no_call():
     policy = RemotePolicy('websocket', _address('localhost', 0))
     client = MagicMock()
     policy._client = client
 
     assert policy.meta() == {policy_keys.TYPE: 'remote'}
+    assert client.method_calls == []
+
+
+def test_waiting_for_the_server_opens_no_session():
+    policy = RemotePolicy('websocket', _address('localhost', 0))
+    client = MagicMock()
+    policy._client = client
+
+    policy.wait_for_server()
     client.wait_for_server.assert_called_once()
     client.new_session.assert_not_called()
 
 
-def test_invalid_v3_stack_does_not_cache_metadata(runtime):
+def test_a_run_with_an_invalid_v3_stack_records_no_metadata(runtime):
     policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: spec.component('unknown_processor')})
     session.protocol_version = protocol.ProtocolVersion.V3
 
     with pytest.raises(ValueError, match='Unknown local-stack entry'):
         runtime.start(policy)
-    assert policy.meta() == {policy_keys.TYPE: 'remote'}
+    assert runtime.metadata_snapshot() == {}
     assert session.close.call_count == 1
 
     session.metadata = CHUNKED_STACK
     runtime.start(policy).close()
-    metadata = policy.meta()
-    assert metadata[ACTION_FPS] == 10
-    assert policy.meta() == metadata
+    assert runtime.metadata_snapshot()[ACTION_FPS] == 10
     assert session.close.call_count == 2
 
 

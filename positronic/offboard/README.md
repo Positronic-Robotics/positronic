@@ -184,7 +184,7 @@ This metadata tells the client:
 - `compress_images` — whether the client JPEG-encodes frames before
   sending. It is true unless the deployment sets it false.
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
-  records it in the policy metadata.
+  each run records it in the episode metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### Compatibility and deprecation
@@ -282,7 +282,7 @@ scheduler supplies timing; commands carry no timestamps or end-of-chunk sentinel
 
 A command's `type` selects the fields beside it: `cartesian_pos` (`pose`), `joint_pos` (`positions`), `joint_delta` (`velocities`), and `cartesian_delta` (`delta`, `frame`). A pose is translation followed by a row-major 3x3 rotation.
 
-Every command may carry a `mode`, itself a tagged mapping naming the control law to execute under: `{"type": "position_control", "stiffness": [...]}` or `{"type": "impedance", "kq": [...], "kqd": [...], "kx": [...], "kxd": [...]}`. Omit `stiffness` to take the arm's own gains — an empty list is refused. Omit `mode` entirely and the arm runs its native law. `positronic.offboard.protocol` reads that mapping into the typed command the drivers dispatch on, so a server written against another stack sends it as plain data; one built on positronic may instead put a `positronic.drivers.roboarm.command` instance here and let `serialise` encode it.
+Every command may carry a `mode`, itself a tagged mapping naming the control law to execute under: `{"type": "position_control", "stiffness": [...]}` or `{"type": "impedance", "kq": [...], "kqd": [...], "kx": [...], "kxd": [...], "frame": [...]}`. Omit `stiffness` to take the arm's own gains — an empty list is refused. An impedance `frame` is a pose in the same form, measured from the rig's control frame: the point where the Cartesian stiffness acts. Omit it and the stiffness acts at the control frame. Omit `mode` entirely and the arm runs its native law. `positronic.offboard.protocol` reads that mapping into the typed command the drivers dispatch on, so a server written against another stack sends it as plain data; one built on positronic may instead put a `positronic.drivers.roboarm.command` instance here and let `serialise` encode it.
 
 **Server → Client (Error):**
 ```json
@@ -423,9 +423,6 @@ cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusa
 answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
 exception of the WebSocket or gRPC library.
 
-A server that sends status updates is up. `new_session` waits `ready_deadline` for its `ready`, and then
-raises `ReadyDeadlinePassed`, a `TimeoutError`, with no retry. A new attempt would make the server prepare the
-session again. Attempts begin until `connect_deadline`, so `new_session` can take the sum of both deadlines.
 `wait_for_server()` returns once a server answers a probe, and opens no session. It retries as `new_session`
 does.
 
