@@ -86,13 +86,13 @@ def findings(image: tarfile.TarFile, tracked: set[str]) -> Iterable[str]:
             if member.isfile() and path not in tracked and not is_build_output(path):
                 yield f'/{path}: git does not track this file'
             continue
-        distro_config = path.startswith(DISTRO_CONFIG)
-        if not distro_config and (INTERNAL_WORDS.search(path) or KEY_FILE_NAMES.search(path)):
+        in_distro_config = path.startswith(DISTRO_CONFIG)
+        if not in_distro_config and (INTERNAL_WORDS.search(path) or KEY_FILE_NAMES.search(path)):
             yield f'/{path}: an internal name'
         if member.isfile() and member.size <= MAX_TEXT_BYTES:
             file = image.extractfile(member)
             text = file.read().decode(errors='replace') if file else ''
-            match = SECRET_TEXT.search(text) or (None if distro_config else INTERNAL_WORDS.search(text))
+            match = SECRET_TEXT.search(text) or (None if in_distro_config else INTERNAL_WORDS.search(text))
             if match:
                 yield f'/{path}: holds {match.group(0)!r}'
 
