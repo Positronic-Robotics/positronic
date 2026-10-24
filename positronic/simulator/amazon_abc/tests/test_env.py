@@ -333,15 +333,29 @@ def _left_command(command: dict[str, Any], grip: float = 0.0) -> dict[str, Any]:
     return action
 
 
+def _joint_position(joints: np.ndarray) -> dict:
+    return {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: joints}
+
+
+def _joint_delta(delta: np.ndarray) -> dict:
+    return {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: delta}
+
+
 @pytest.mark.parametrize(
-    'joints',
-    [np.full(mapping.ARM_JOINTS, np.nan), np.full(mapping.ARM_JOINTS, np.inf), np.zeros(mapping.ARM_JOINTS - 1)],
-    ids=['nan', 'infinite', 'too_few_joints'],
+    'command',
+    [
+        _joint_position(np.full(mapping.ARM_JOINTS, np.nan)),
+        _joint_position(np.full(mapping.ARM_JOINTS, np.inf)),
+        _joint_position(np.zeros(mapping.ARM_JOINTS - 1)),
+        _joint_delta(np.full(mapping.ARM_JOINTS, np.nan)),
+        _joint_delta(np.zeros(mapping.ARM_JOINTS - 1)),
+    ],
+    ids=['nan', 'infinite', 'too_few_joints', 'delta_nan', 'delta_too_few_joints'],
 )
-def test_a_joint_target_that_is_no_finite_pose_of_the_arm_holds_that_arm(env, scene, joints: np.ndarray):
+def test_a_joint_command_that_is_no_finite_pose_of_the_arm_holds_that_arm(env, scene, command: dict):
     env.reset(_TOKEN)
     scene.data.qpos[: mapping.ARM_JOINTS] = 0.25
-    action = _left_command({protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: joints})
+    action = _left_command(command)
     target = np.full(mapping.ARM_JOINTS, 0.2)
     action[protocol.arm_channel(protocol.ROBOT_COMMAND, 'right')] = {
         protocol.COMMAND_TYPE: protocol.JOINT_POS,

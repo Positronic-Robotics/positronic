@@ -27,6 +27,13 @@ _IK_POSITION_TOLERANCE = 1e-3  # m
 _IK_ROTATION_TOLERANCE = 1e-2  # rad
 
 
+def _joint_delta_width(command: dict[str, Any]) -> int | None:
+    """The number of joints a joint-delta command names, or None for any other command."""
+    if command[protocol.COMMAND_TYPE] != protocol.JOINT_DELTA:
+        return None
+    return np.asarray(command[protocol.COMMAND_JOINT_DELTA]).reshape(-1).shape[0]
+
+
 class _Arm:
     """One YAM chain of the ABC scene."""
 
@@ -156,8 +163,12 @@ class AbcEnv(EnvProtocol):
         for index, arm in enumerate(self._arms):
             command = action[protocol.arm_channel(protocol.ROBOT_COMMAND, arm.name)]
             measured = self._measured_q(arm)
-            joints = arm_action.wire_command_to_arm_action(
-                command, measured, ik=functools.partial(self._ik, arm), current_eef=self._measured_eef(arm)
+            joints = (
+                None
+                if _joint_delta_width(command) not in (None, measured.shape[0])
+                else arm_action.wire_command_to_arm_action(
+                    command, measured, ik=functools.partial(self._ik, arm), current_eef=self._measured_eef(arm)
+                )
             )
             # The rig's driver refuses such a command and holds, so a bad command fails the task, not the run.
             if joints is None or joints.shape != measured.shape or not np.all(np.isfinite(joints)):
