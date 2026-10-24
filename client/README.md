@@ -374,8 +374,8 @@ against any platform that serves it, but it is built for ours. You take the risk
 Each side refuses a version of the other that is too old:
 
 - Every request names the client's version in `X-Positronic-Client-Version`. The platform refuses a
-  call with an API key from a client older than the one it serves, with `bad_request` and the version
-  to install. Upgrade `positronic`, or `positronic-platform-client` alone. Your own HTTP code that
+  call with an API key from a client older than the oldest it accepts, with `bad_request` and the
+  version to install. Upgrade `positronic`, or `positronic-platform-client` alone. Your own HTTP code that
   calls with an API key sends the header too.
 - Every answer names the contract version the platform serves in `X-Positronic-Platform-Version`. The
   client refuses a successful answer that names none, or one older than

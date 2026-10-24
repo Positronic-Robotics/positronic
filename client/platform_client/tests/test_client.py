@@ -586,16 +586,16 @@ def test_a_redirect_is_a_failure_rather_than_a_body_to_parse():
     assert raised.value.http_status == 302
 
 
-def test_every_call_names_the_client_version_with_a_key_or_without():
-    gateway = Gateway(200, {'boards': []})
-    client = make_client(gateway)
-    client.list_boards()
-    with_key = gateway.request()
-    make_client(gateway, api_key=None).list_boards()
-
-    assert AUTH_HEADER in with_key.headers
-    assert with_key.headers[CLIENT_VERSION_HEADER] == gateway.request().headers[CLIENT_VERSION_HEADER]
-    assert gateway.request().headers[CLIENT_VERSION_HEADER] == str(CLIENT_VERSION)
+def test_every_call_names_the_client_version_whatever_key_its_route_takes():
+    # One route of each `Auth` kind: a key required, a key sent when set, and no key at all.
+    calls = [
+        (Gateway(200, {'tasks': []}), lambda client: client.catalog_tasks()),
+        (Gateway(200, {'boards': []}), lambda client: client.list_boards()),
+        (Gateway(200, {'github_registration': True, 'workos': None}), lambda client: client.auth_config()),
+    ]
+    for gateway, call in calls:
+        call(make_client(gateway))
+        assert gateway.request().headers[CLIENT_VERSION_HEADER] == str(CLIENT_VERSION)
 
 
 @pytest.mark.parametrize('served', [{}, {PLATFORM_VERSION_HEADER: '0.39.1'}, {PLATFORM_VERSION_HEADER: 'latest'}])

@@ -322,7 +322,8 @@ class PlatformClient:
         raise PlatformError.synthesized(
             response.status_code,
             f'{response.request.url.host} serves {serves}; positronic-platform-client {CLIENT_VERSION} '
-            f'needs {MIN_PLATFORM_VERSION} or later. Ask the platform operator, or install an older positronic',
+            f'needs {MIN_PLATFORM_VERSION} or later. Use a client older than {MIN_PLATFORM_VERSION}, or ask the '
+            'platform operator to upgrade the platform',
         )
 
     def _send(
