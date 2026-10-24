@@ -108,18 +108,21 @@ class AbcEnv(EnvProtocol):
             raise RuntimeError(f'ABC reported no task metrics for a step of a scored task: {sorted(info)}')
         return info[mapping.ABC_INFO_TASK_EVAL]
 
-    @staticmethod
-    def _ever_success(task_eval: dict[str, Any]) -> bool:
-        # A task with no evaluator reports no metrics: ABC rolls it out to its horizon and counts no success.
-        return bool(task_eval.get(mapping.ABC_EVAL_EVER_SUCCESS, False))
+    def _ever_success(self, task_eval: dict[str, Any]) -> bool:
+        """ABC's verdict: its own eval reads ``ever_success`` at the trial's last step, for every scored task.
 
-    @classmethod
-    def _trial_over(cls, task_eval: dict[str, Any]) -> bool:
-        """Whether the trial ends before its time limit, as ABC's own eval ends it."""
-        # A maintenance task succeeds from its reset, so it ends only when it fails.
+        A maintenance task sets it to ``not ever_failed``, and a count task to the count at that step."""
+        # A task with no evaluator reports no metrics: ABC rolls it out to its horizon and counts no success.
+        return bool(task_eval[mapping.ABC_EVAL_EVER_SUCCESS]) if self._scored else False
+
+    def _trial_over(self, task_eval: dict[str, Any]) -> bool:
+        """Whether the trial ends before its time limit, as ABC's own eval ends it.
+
+        A task that reports ``ever_failed`` ends on it: a maintenance task when it fails, a count task never.
+        Every other task ends at its first success."""
         if mapping.ABC_EVAL_EVER_FAILED in task_eval:
             return bool(task_eval[mapping.ABC_EVAL_EVER_FAILED])
-        return cls._ever_success(task_eval)
+        return self._ever_success(task_eval)
 
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
         (action,) = actions.values()  # ABC runs one scene per server, so this server serves one slot
