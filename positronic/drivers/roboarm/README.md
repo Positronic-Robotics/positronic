@@ -23,9 +23,11 @@ A policy trained in some other end-effector frame carries the constant transform
 (`ChangeEEFrame`, see [codec guide](../../policy/codecs/README.md#end-effector-frames)). The transform lets one
 checkpoint run on any embodiment that keeps the contract. At the start of each episode the harness compares the
 policy's `ee_frames` with the rig's. A policy observes only the poses it states at the rig's site. A policy that
-names another site is refused. A policy that states none observes each pose at the rig's legacy point, `default`, and
-its pose commands go back from that point. The harness logs a warning for each such session. This fallback is
-transitional (#550).
+names another site is refused. A policy that states none observes each pose at the rig's legacy point, the point the
+rig reported before `gripper`, and its pose commands go back from that point. The legacy point is `end_effector`
+(`models.EE_LINK`) on a model that has it, as the FR3 and the MuJoCo panda do, and the rig site on any other model,
+as YAM at `models.YAM_SITE`. The harness reads it from the rig's model and logs a warning for each such session. This
+fallback is transitional (#550).
 
 `Impedance.frame` is the stiffness point, measured from the rig site. The Franka driver accepts an offset only, and
 refuses a turned frame. `DROID_IMPEDANCE` puts it at the flange.

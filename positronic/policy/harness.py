@@ -1,6 +1,7 @@
 import logging
 import math
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
@@ -21,9 +22,9 @@ from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
-from positronic.drivers.roboarm.ik import ee_frames
-from positronic.drivers.roboarm.keys import EE_FRAMES
-from positronic.drivers.roboarm.models import EEFrame
+from positronic.drivers.roboarm.ik import ee_frames, frame_transform
+from positronic.drivers.roboarm.keys import EE_FRAMES, URDF
+from positronic.drivers.roboarm.models import EE_LINK, EEFrame
 from positronic.eval import Embodiment, Task, only_keep_written_signals
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
@@ -218,7 +219,8 @@ class Harness(pimm.ControlSystem):
         pose at the rig's legacy point (``_legacy_point_codec``). Raise when the policy states another site than the
         rig, or states frames on a rig that states none, such as an arm with no model.
         """
-        rig = ee_frames(self._statics())
+        statics = self._statics()
+        rig = ee_frames(statics)
         declared = ee_frames(policy.meta())
         if declared and not rig:
             raise ValueError(
@@ -240,24 +242,36 @@ class Harness(pimm.ControlSystem):
         if declared or not rig:
             return frozenset(poses - (declared.keys() & rig.keys())), None
         # TODO(#550): remove this fallback when every live server states its frames.
+        legacy_point_codec = self._legacy_point_codec(rig, statics)
         logging.warning(
             f'The policy states no {EE_FRAMES}, so it gets each pose at the legacy point of the rig. This fallback '
             'will be removed: state the frame of each pose that the policy reads.'
         )
-        return frozenset(poses - rig.keys()), self._legacy_point_codec(rig)
+        return frozenset(poses - rig.keys()), legacy_point_codec
 
-    def _legacy_point_codec(self, rig: dict[str, EEFrame]) -> Codec:
+    def _legacy_point_codec(self, rig: dict[str, EEFrame], statics: dict[str, Any]) -> Codec:
         """Move each pose in ``rig`` from its site to the rig's legacy point, and each pose command back.
 
-        The legacy point is ``DEFAULT_FRAME``, where every rig reports, so the offset from each site is the identity.
+        The legacy point is where the rig reported before ``GRIPPER_SITE``: ``EE_LINK`` on a model that has it, as the
+        FR3 and the sim panda do, and the site itself on a model that has none, as YAM at ``YAM_SITE`` does.
         """
+        if URDF not in statics:
+            raise ValueError(
+                f'The rig states {EE_FRAMES} but carries no {URDF}, so the harness cannot find the legacy point for a '
+                'policy that states no frames'
+            )
+        urdf = statics[URDF]
+        has_ee_link = EE_LINK in {link.get('name') for link in ET.fromstring(urdf).findall('link')}
         keys_by_site: dict[str, list[str]] = {}
         for name, frame in rig.items():
             keys_by_site.setdefault(frame.site, []).append(name)
         for channel in self._embodiment.commands:
             if (frame := rig.get(f'{channel}{keys.POSE_SUFFIX}')) is not None:
                 keys_by_site[frame.site].append(channel)
-        changes = (ChangeEEFrame(site, geom.Transform3D.identity, tuple(names)) for site, names in keys_by_site.items())
+        changes = []
+        for site, names in keys_by_site.items():
+            offset = frame_transform(urdf, site, EE_LINK) if has_ee_link else geom.Transform3D.identity
+            changes.append(ChangeEEFrame(site, offset, tuple(names)))
         return reduce(or_, changes)
 
     def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:

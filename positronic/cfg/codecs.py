@@ -63,7 +63,7 @@ gripper_ee_frame = cfn.Config(EEFrame, site=GRIPPER_SITE)
 fr3_ee_frame = gripper_ee_frame.override(offset=FR3_EE_FRAME)
 panda_ee_frame = gripper_ee_frame.override(offset=PANDA_EE_FRAME)
 # A server built for poses at the Franka Hand point, the FR3's ``F_T_EE``, states that frame with this codec in
-# its pipeline. A server that states no frame observes no pose.
+# its pipeline.
 franka_hand_frame = cfn.Config(ChangeEEFrame, site=GRIPPER_SITE, transform=FR3_EE_FRAME)
 
 

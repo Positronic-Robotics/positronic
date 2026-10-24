@@ -30,9 +30,28 @@ from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
-from positronic.drivers.roboarm.models import EE_LINK, GRIPPER_SITE, EEFrame, ee_frames_entry
+from positronic.drivers.roboarm.models import (
+    EE_LINK,
+    FR3_EE_FRAME,
+    GRIPPER_SITE,
+    PANDA_EE_FRAME,
+    YAM_SITE,
+    EEFrame,
+    bundled_franka_model,
+    bundled_panda_model,
+    bundled_yam_model,
+    ee_frames_entry,
+)
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import NO_MODEL_ROBOT_META, ROBOT_STATIC_META, Command, Embodiment, Observation, Task
+from positronic.eval import (
+    NO_MODEL_ROBOT_META,
+    ROBOT_STATIC_META,
+    Command,
+    Embodiment,
+    Observation,
+    Task,
+    robot_static_meta,
+)
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
@@ -76,8 +95,8 @@ class StubPolicy(Policy):
 class FramedPolicy(StubPolicy):
     """A ``StubPolicy`` that states ``frames`` as its ``EE_FRAMES``."""
 
-    def __init__(self, frames):
-        super().__init__()
+    def __init__(self, frames, command=None):
+        super().__init__(command)
         self.frames = frames
 
     def meta(self):
@@ -1819,19 +1838,40 @@ def _legacy_point_warnings(caplog):
     return [record for record in caplog.records if 'legacy point' in record.getMessage()]
 
 
-def test_a_policy_that_states_no_frames_observes_the_rig_poses_and_commands_them_unchanged(caplog):
+@pytest.mark.parametrize(
+    'static_meta, robot_meta, legacy_offset',
+    [
+        (ROBOT_STATIC_META, bundled_franka_model(), FR3_EE_FRAME),
+        (ROBOT_STATIC_META, bundled_panda_model(), PANDA_EE_FRAME),
+        (robot_static_meta(YAM_SITE), bundled_yam_model(), Transform3D.identity),
+    ],
+    ids=['fr3', 'panda', 'yam'],
+)
+def test_a_policy_that_states_no_frames_observes_and_commands_the_rig_at_its_legacy_point(
+    static_meta, robot_meta, legacy_offset
+):
     policy = StubPolicy()
     commands = []
-    assert _run_robot_rollout(policy, commands=commands).result()[eval_keys.TERMINATED] is True
-    np.testing.assert_allclose(policy.observations[0][keys.EE_POSE], [0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0])
+    assert _run_robot_rollout(policy, static_meta, robot_meta, commands=commands).result()[eval_keys.TERMINATED]
+    rig_pose = Transform3D(translation=np.array([0.1, 0.2, 0.3]))
+    observed = policy.observations[0][keys.EE_POSE]
+    np.testing.assert_allclose(observed, (rig_pose * legacy_offset).as_vector(Rotation.Representation.QUAT), atol=1e-9)
     assert keys.JOINTS in policy.observations[0]
-    np.testing.assert_allclose(commands[0].pose.translation, policy.command.pose.translation)
-    np.testing.assert_allclose(commands[0].pose.rotation.as_quat, policy.command.pose.rotation.as_quat)
+    expected = policy.command.pose * legacy_offset.inv
+    np.testing.assert_allclose(commands[0].pose.translation, expected.translation, atol=1e-9)
+    np.testing.assert_allclose(commands[0].pose.rotation.as_quat, expected.rotation.as_quat, atol=1e-9)
+
+
+def test_a_policy_that_states_no_frames_is_refused_on_a_rig_that_states_frames_without_a_model():
+    policy = StubPolicy()
+    with pytest.raises(ValueError, match=roboarm_keys.URDF):
+        _run_robot_rollout(policy).result()
+    assert policy.observations == []
 
 
 def test_a_policy_that_states_no_frames_gets_one_legacy_point_warning_per_session(caplog):
     policy = StubPolicy()
-    assert _run_robot_rollout(policy, ticks=250).result()[eval_keys.TERMINATED] is True
+    assert _run_robot_rollout(policy, robot_meta=bundled_franka_model(), ticks=250).result()[eval_keys.TERMINATED]
     assert len(policy.observations) > 1
     assert len(_legacy_point_warnings(caplog)) == 1
 
@@ -1980,7 +2020,8 @@ def test_episode_statics_keep_only_written_viewer_signals(command, expected_pose
         loop = world.start([harness, device])
         try:
             state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
-            answer = caller(Rollout(Task('move', None), StubPolicy(command=command), Path('recording')))
+            policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}, command=command)
+            answer = caller(Rollout(Task('move', None), policy, Path('recording')))
             next(loop)
             done.emit({eval_keys.SUCCESS: True})
             while not answer.done():
