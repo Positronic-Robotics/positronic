@@ -226,6 +226,9 @@ class FrameWriter:
                 self._hand_over(sock, ring)
             except BaseException:
                 ring.close()
+                # The server can take the ring and lose its answer, so the old ring may not be its ring now.
+                # With no ring held, the next pack hands over a new one.
+                self.close()
                 raise
         if self._ring is not None:
             # A mapping outlives the descriptor it was made from, so this frees the ring only here.
