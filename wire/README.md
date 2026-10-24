@@ -144,8 +144,6 @@ server. Its channel is a `SOCK_SEQPACKET` socket at `frame_channel_path(uds)`: t
 plus `FRAME_CHANNEL_SUFFIX`, after a symlink at that path. Each end builds the path from the socket path
 it holds. A path longer than `MAX_SOCKET_PATH_BYTES` gives that end no frame channel, and it logs why.
 
-A session that takes a frame ring sends its images raw through it and does not apply `compress_images`.
-So `compress_images` is not recommended on a server that takes frame rings over `websocket_unix`.
 `positronic/offboard/README.md` states the ring's contract.
 
 ## Whether a policy server is up

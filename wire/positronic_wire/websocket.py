@@ -410,12 +410,7 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
         return _HTTPConnectionOn(self.STANDS_FOR_THE_SERVER, partial(self._open_socket, address), deadline)
 
     def frame_channel_dialer(self, address: wire.UnixSocketAddress) -> Callable[[float], socket.socket] | None:
-        """The frame channel at ``wire.frame_channel_path``, beside the session socket.
-
-        A session that takes a frame ring sends its images raw through it and does not apply
-        ``compress_images``. So ``compress_images`` is not recommended on a server that takes frame rings on
-        this wire.
-        """
+        """The frame channel at ``wire.frame_channel_path``, beside the session socket."""
         channel = wire.frame_channel_path(address.uds)
         if channel is None:
             _logger.error('No frame channel: the path beside %r is too long for a socket address', str(address.uds))

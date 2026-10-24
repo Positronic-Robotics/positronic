@@ -138,6 +138,7 @@ class RemotePolicy(Policy):
         )
         self._server_meta: dict[str, Any] | None = None
         self._client_meta: dict[str, Any] = {}
+        self._sends_frames_through_ring = False
         self._jpeg_quality = jpeg_quality
 
     def meta(self) -> dict[str, Any]:
@@ -149,9 +150,11 @@ class RemotePolicy(Policy):
                     if session.protocol_version is ProtocolVersion.V3
                     else {}
                 )
+                through_ring = session.sends_frames_through_ring
             self._server_meta, self._client_meta = server_meta, client_meta
+            self._sends_frames_through_ring = through_ring
         meta: dict[str, Any] = {**self._client_meta, policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
-        if self._server_meta.get(policy_keys.COMPRESS_IMAGES):
+        if self._server_meta.get(policy_keys.COMPRESS_IMAGES) and not self._sends_frames_through_ring:
             meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
         return flatten_dict(meta)
 
@@ -163,6 +166,7 @@ class RemotePolicy(Policy):
             stack = declared_stack(server_meta, session.protocol_version)
             client_meta = stack.meta() if session.protocol_version is ProtocolVersion.V3 else {}
             self._server_meta, self._client_meta = server_meta, client_meta
+            self._sends_frames_through_ring = session.sends_frames_through_ring
             compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
                 server_meta.get(policy_keys.COMPRESS_IMAGES)
             )

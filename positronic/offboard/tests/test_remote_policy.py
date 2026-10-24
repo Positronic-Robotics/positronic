@@ -1217,16 +1217,30 @@ def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
     assert qualities == [75]
 
 
-@pytest.mark.parametrize('compressed', [False, True])
-def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(compressed):
+@pytest.mark.parametrize(
+    ('compress_images', 'through_ring', 'compressed'),
+    [(False, False, False), (True, False, True), (True, True, False)],
+    ids=['not-asked', 'message', 'ring'],
+)
+def test_policy_meta_records_the_jpeg_quality_only_when_images_are_compressed(
+    runtime, compress_images, through_ring, compressed
+):
+    session = _mock_session({**CHUNKED_STACK, policy_keys.COMPRESS_IMAGES: compress_images})
+    session.sends_frames_through_ring = through_ring
     policy = RemotePolicy('websocket', _address('localhost', 0), jpeg_quality=75)
     policy._client = MagicMock()
-    policy._client.new_session.return_value = _mock_session({policy_keys.COMPRESS_IMAGES: compressed})
-    meta = policy.meta()
-    if compressed:
-        assert meta[policy_keys.JPEG_QUALITY] == 75
-    else:
-        assert policy_keys.JPEG_QUALITY not in meta
+    policy._client.new_session.return_value = session
+    probed = policy.meta()
+    run = runtime.start(policy)
+    try:
+        for meta in (probed, policy.meta()):
+            if compressed:
+                assert meta[policy_keys.JPEG_QUALITY] == 75
+            else:
+                assert policy_keys.JPEG_QUALITY not in meta
+    finally:
+        runtime.close()
+        run.close()
 
 
 @pytest.mark.parametrize('start_run', [False, True], ids=['meta', 'run'])
