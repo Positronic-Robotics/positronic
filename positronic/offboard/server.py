@@ -351,6 +351,9 @@ class PolicyServer:
             finally:
                 for task in ending:
                     task.cancel()
+                # A successor that claims a released session socket also claims the frame channel's path.
+                if self._frames is not None:
+                    await asyncio.to_thread(self._frames.close)
                 for w in started:
                     await w.stop()
                 # Each wire ends the sessions it carries before this returns and the model closes.

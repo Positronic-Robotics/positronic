@@ -523,6 +523,16 @@ def test_a_slot_written_over_before_it_is_read_is_refused(frame_channel, frame_w
 
 
 @pytestmark_ring
+def test_a_closed_channel_still_resolves_the_ring_an_open_session_holds(frame_channel, frame_writer):
+    image = _image()
+    packed = _over_the_wire(_packed(frame_writer, {'image.left': image}))
+
+    frame_channel.close()
+
+    np.testing.assert_array_equal(frame_channel.resolve(SESSION_ID, packed)['image.left'], image)
+
+
+@pytestmark_ring
 def test_a_reference_that_points_outside_the_ring_is_refused(frame_channel, frame_writer):
     packed = _over_the_wire(_packed(frame_writer, {'image.left': _image()}))
     packed['image.left'][frame_ring._OFFSET] = 1 << 30

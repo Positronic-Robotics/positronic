@@ -1288,6 +1288,36 @@ def test_a_server_on_a_port_declares_no_frame_ring(stub_server):
 
 
 @pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+def test_a_successor_can_claim_the_frame_channel_once_the_wire_stops(
+    start_server, socket_path, make_mock_model, monkeypatch
+):
+    channel = wire.frame_channel_path(pathlib.Path(socket_path))
+    assert channel is not None
+    stop = websocket_wire.WebsocketWire.stop
+    claims: list[bool] = []
+    stopped = threading.Event()
+
+    async def stop_then_claim(served_wire):
+        await stop(served_wire)
+        try:
+            websocket_wire.claim_socket_path(channel, socket.SOCK_SEQPACKET).close()
+            claims.append(True)
+        except OSError:
+            claims.append(False)
+        stopped.set()
+
+    monkeypatch.setattr(websocket_wire.WebsocketWire, 'stop', stop_then_claim)
+    model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), uds=socket_path)
+    assert served.server._frames is not None
+
+    served.server.shutdown()
+
+    assert stopped.wait(timeout=10.0)
+    assert claims == [True]
+
+
+@pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
 def test_a_companion_path_too_long_to_bind_declares_no_frame_ring(start_server, socket_path, make_mock_model):
     model = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     directory = pathlib.Path(socket_path).parent

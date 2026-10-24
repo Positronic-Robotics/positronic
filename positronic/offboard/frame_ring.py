@@ -397,6 +397,7 @@ class FrameChannel:
         connection.send(_ACK)
 
     def close(self) -> None:
+        """Stop taking handovers and free the channel's path. A session reads its ring until it closes."""
         self._closing = True
         if self._socket is not None:
             self._socket.close()
@@ -405,5 +406,3 @@ class FrameChannel:
             # A handover under way holds the thread for its own deadline, so the join waits that long.
             self._thread.join(timeout=HANDOVER_TIMEOUT_SEC)
             self._thread = None
-        with self._lock:
-            self._rings.clear()
