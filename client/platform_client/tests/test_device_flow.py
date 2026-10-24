@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 from platform_client import device_flow, routes
-from platform_client.client import PlatformClient
+from platform_client.client import CLIENT_VERSION, PLATFORM_VERSION_HEADER, PlatformClient
 from platform_client.device_flow import (
     DEFAULT_GITHUB_CLIENT_ID,
     DEVICE_GRANT_TYPE,
@@ -675,6 +675,10 @@ def test_the_refresh_token_leaves_the_flow_nowhere(capsys):
 # --- step three: the registration --------------------------------------------
 
 
+# What a platform built against this client names in every answer.
+SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
+
+
 @dataclass
 class ScriptedGateway:
     """`auth.config` and `users.register`, answering scripted bodies and recording what reached them."""
@@ -700,8 +704,10 @@ class ScriptedGateway:
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.url.path == routes.AUTH_CONFIG:
-            return self.config if isinstance(self.config, httpx.Response) else httpx.Response(200, json=self.config)
-        return httpx.Response(200, json=self.body)
+            if isinstance(self.config, httpx.Response):
+                return self.config
+            return httpx.Response(200, json=self.config, headers=SERVES_THIS_CLIENT)
+        return httpx.Response(200, json=self.body, headers=SERVES_THIS_CLIENT)
 
 
 WORKOS_SETTINGS = {
@@ -719,7 +725,7 @@ def test_the_registration_carries_the_access_token_as_the_credential():
     with PlatformClient(client=gateway.client()) as platform:
         response = register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT), alias='team-rocket')
 
-    sent = gateway.requests[0]
+    sent = gateway.requests[-1]
     assert str(sent.url) == f'https://gateway.example{routes.USERS_REGISTER}'
     assert json.loads(sent.content) == {'credential': TOKEN, 'alias': 'team-rocket', 'rotate': False}
     assert response.api_key == MINTED_KEY
@@ -734,7 +740,7 @@ def test_the_registration_asks_the_gateway_to_rotate_when_told_to():
     with PlatformClient(client=gateway.client()) as platform:
         register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT), rotate=True)
 
-    assert json.loads(gateway.requests[0].content)['rotate'] is True
+    assert json.loads(gateway.requests[-1].content)['rotate'] is True
 
 
 # --- the pick: which provider `auth.config` names ------------------------------
@@ -1090,7 +1096,7 @@ def test_a_github_registration_waits_out_the_gateways_two_github_reads():
     with PlatformClient(client=gateway.client()) as platform:
         register_with_device_flow(platform, SignIn(flow, sign_in.register_timeout))
 
-    assert gateway.requests[0].extensions['timeout'] == {
+    assert gateway.requests[-1].extensions['timeout'] == {
         'connect': CONNECT_TIMEOUT_S,
         'read': 3 * MAX_REQUEST_STALL_S,
         'write': WRITE_TIMEOUT_S,
@@ -1108,7 +1114,7 @@ def test_a_workos_registration_waits_out_the_deadline_the_gateway_names():
     with PlatformClient(client=gateway.client()) as platform:
         register_with_device_flow(platform, SignIn(flow, sign_in.register_timeout))
 
-    assert gateway.requests[0].extensions['timeout'] == {
+    assert gateway.requests[-1].extensions['timeout'] == {
         'connect': CONNECT_TIMEOUT_S,
         'read': 120.0 + MAX_REQUEST_STALL_S,
         'write': WRITE_TIMEOUT_S,

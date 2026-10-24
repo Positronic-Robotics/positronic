@@ -5,9 +5,9 @@ The wrapper owns transport, sessions, serialization and cleanup. Vendor scripts 
 model directly in the same process and describe the client pipeline as plain data.
 
 ```bash
-uv pip install "positronic-model-server==0.2.3"
-uv pip install "positronic-model-server[websocket]==0.2.3"
-uv pip install "positronic-model-server[grpc]==0.2.3"
+uv pip install "positronic-model-server==0.3.0"
+uv pip install "positronic-model-server[websocket]==0.3.0"
+uv pip install "positronic-model-server[grpc]==0.3.0"
 ```
 
 The core depends on NumPy, Pillow, msgpack and `positronic-wire`'s dependency-free transport
@@ -64,6 +64,14 @@ never name Python imports. Every session gets an independent copy of the resolve
 meaning and completes configuration-specific warm-up. It returns a `Session` only when the first
 real inference needs no deferred loading or compilation. Warm-up must preserve the intended initial
 session state. A preparation that raises owns cleanup of anything it acquired.
+
+`Model.preparation_cancelled` is a `threading.Event`. The server gives each preparation its own event, and
+sets it when the session can no longer open: its opener left, or the server stops. A preparation that waits
+for an event outside the server, such as a person, watches it and raises `PreparationCancelled`. A model
+that does not wait for such an event ignores it. The server logs any other failure of a preparation with no
+opener as an error. A preparation whose opener left before it began does not run. A session whose
+preparation ends after its opener left is closed. The client sends nothing before `ready`, so the server
+reads the connection during preparation, and sees at once that the opener closed it.
 
 The server sends `waiting` messages during preparation, including while another session holds the
 model. It then sends `ready` with a session ID, protocol v3, the pipeline description and metadata:

@@ -13,7 +13,7 @@ import httpx
 import pytest
 from platform_client import config as config_module
 from platform_client import routes
-from platform_client.client import PlatformClient
+from platform_client.client import CLIENT_VERSION, PLATFORM_VERSION_HEADER, PlatformClient
 from platform_client.enums import ErrorCode
 from platform_client.errors import ApiErrorBody, ErrorEnvelope
 from platform_client.ids import ApiKey, SubmissionId, UserId
@@ -41,6 +41,8 @@ def runs_of_four(secret: str) -> set[str]:
 
 
 GITHUB_ONLY_AUTH_CONFIG = {'github_registration': True, 'workos': None}
+# What a platform built against this client names in every answer.
+SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
 
 
 class StubPlatform:
@@ -60,6 +62,8 @@ class StubPlatform:
         self.base_url: str | None = None
         self.api_key: ApiKey | None = None
         self.no_answer: httpx.TransportError | None = None
+        # The one path whose answer is lost; None loses every answer.
+        self.no_answer_on: str | None = None
 
     def answer(self, payload: object, *, status: int = 200) -> None:
         self.payload, self.status = payload, status
@@ -75,7 +79,7 @@ class StubPlatform:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.seen = request
         self.paths.append(request.url.path)
-        if self.no_answer is not None:
+        if self.no_answer is not None and self.no_answer_on in (None, request.url.path):
             raise self.no_answer
         if queued := self.in_turn.get(request.url.path):
             payload, status = queued.pop(0)
@@ -84,7 +88,7 @@ class StubPlatform:
         else:
             payload, status = self.by_route.get(request.url.path, (self.payload, self.status))
         body = payload.model_dump(mode='json') if isinstance(payload, BaseModel) else payload
-        return httpx.Response(status, json=body)
+        return httpx.Response(status, json=body, headers=SERVES_THIS_CLIENT)
 
     @property
     def request(self) -> httpx.Request:

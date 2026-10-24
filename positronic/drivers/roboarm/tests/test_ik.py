@@ -318,7 +318,7 @@ def test_the_yam_driver_solves_a_pose_at_gripper_to_joints_that_reach_it(q):
     kinematics = yam._Kinematics()
     target = kinematics.fk(q)
 
-    solved = kinematics.ik(target, q + 0.2)
+    solved = kinematics.ik(target, q + 0.2, kinematics.lower, kinematics.upper)
 
     assert solved is not None
     reached = kinematics.fk(solved)
