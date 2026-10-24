@@ -13,12 +13,12 @@ the eval names and definitions (`evals/`). So a service that only speaks to the 
 its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.38.1"
+uv add "positronic-platform-client==0.39.2"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
-The package is not on PyPI yet. Until it is, use the second line, pinned to a tag or a commit. The
-client pins `positronic-evals` exactly, and the index supplies it. So a git install of an unreleased
+The package is on PyPI, and the first line installs a released version. The second line installs from
+git, pinned to a tag or a commit. The client pins `positronic-evals` exactly, and the index supplies it. So a git install of an unreleased
 client needs that `positronic-evals` version released first. The
 platform serves the same contract as an OpenAPI schema at `<platform>/openapi.json`, and `/docs`
 browses it.
