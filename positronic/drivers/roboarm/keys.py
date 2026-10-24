@@ -3,6 +3,8 @@
 # The robot model, carried in episode statics for the transforms that solve against it (``IKJointsAction``).
 URDF = 'urdf'
 JOINT_NAMES = 'joint_names'
+# The mesh files that ``URDF`` names, by file name, as bytes.
+MESHES = 'meshes'
 # The gripper spec the viewer drives: the signal it reads, the joints it moves, their travel at full closure.
 GRIPPER = 'gripper'
 

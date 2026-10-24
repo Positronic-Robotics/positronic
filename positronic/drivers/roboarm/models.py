@@ -207,16 +207,16 @@ def _bundled_robotiq_2f85() -> dict:
     subtree = ''.join(ET.tostring(el, encoding='unicode') for el in _build_2f85_elements())
     return {
         'subtree': subtree,
-        'meshes': {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
+        roboarm_keys.MESHES: {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
         roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': _2F85_GRIP_ACTUATED_JOINTS, 'travel': 0.8},
     }
 
 
-def attach_frame(arm_root: ET.Element, name: str, parent: str, xyz: str = '0 0 0') -> None:
-    """Add a link ``name`` to a URDF in place, fixed at ``xyz`` off the ``parent`` link, with its axes."""
+def attach_frame(arm_root: ET.Element, name: str, parent: str, xyz: str = '0 0 0', rpy: str = '0 0 0') -> None:
+    """Add a link ``name`` to a URDF in place, fixed at ``xyz`` and ``rpy`` in the ``parent`` link."""
     ET.SubElement(arm_root, 'link', name=name)
     joint = ET.SubElement(arm_root, 'joint', name=f'{parent}_to_{name}', type='fixed')
-    ET.SubElement(joint, 'origin', xyz=xyz, rpy='0 0 0')
+    ET.SubElement(joint, 'origin', xyz=xyz, rpy=rpy)
     ET.SubElement(joint, 'parent', link=parent)
     ET.SubElement(joint, 'child', link=name)
 
@@ -226,7 +226,7 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     merge its meshes into ``meshes``. Returns the ``grip``-driven gripper spec for the viewer."""
     gripper = _bundled_robotiq_2f85()
     arm_root.extend(ET.fromstring(f'<robot>{gripper["subtree"]}</robot>'))
-    meshes.update(gripper['meshes'])
+    meshes.update(gripper[roboarm_keys.MESHES])
     return gripper[roboarm_keys.GRIPPER]
 
 
@@ -240,9 +240,31 @@ def bundled_franka_model() -> dict:
     gripper = attach_robotiq_2f85(arm_root, meshes)
     return {
         roboarm_keys.URDF: ET.tostring(arm_root, encoding='unicode'),
-        'meshes': meshes,
+        roboarm_keys.MESHES: meshes,
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         roboarm_keys.GRIPPER: gripper,
+    }
+
+
+YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
+_YAM_WRIST_LINK = 'link_6'
+# The YAM MJCF's ``YAM_SITE``: 134.7 mm along the wrist axis, turned -90deg about it.
+_YAM_SITE_XYZ, _YAM_SITE_RPY = '0 0 0.1347', '0 0 -1.5707963268'
+
+
+@lru_cache(maxsize=1)
+def bundled_yam_model() -> dict:
+    """i2rt YAM model metadata: its URDF and visual meshes, its joint names, and the ``YAM_SITE`` its ``ee_pose``
+    is measured at."""
+    urdf_path = Path(__file__).resolve().parents[2] / 'assets' / 'i2rt_yam' / 'yam.urdf'
+    root = ET.fromstring(urdf_path.read_text())
+    mesh_files = {mesh.attrib['filename'] for mesh in root.iter('mesh')}
+    attach_frame(root, YAM_SITE, _YAM_WRIST_LINK, _YAM_SITE_XYZ, _YAM_SITE_RPY)
+    return {
+        'robot': 'i2rt_yam',
+        roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
+        roboarm_keys.MESHES: {name: (urdf_path.parent / name).read_bytes() for name in sorted(mesh_files)},
+        roboarm_keys.JOINT_NAMES: list(YAM_JOINT_NAMES),
     }
 
 
@@ -256,10 +278,10 @@ def bundled_panda_model() -> dict:
     urdf_path = Path(__file__).resolve().parents[2] / 'assets' / 'mujoco' / 'panda.urdf'
     root = ET.fromstring(urdf_path.read_text())
     mesh_dir = urdf_path.parent / 'assets'
-    mesh_files = {mesh.get('filename') for mesh in root.iter('mesh')}
+    mesh_files = {mesh.attrib['filename'] for mesh in root.iter('mesh')}
     return {
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
-        'meshes': {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
+        roboarm_keys.MESHES: {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
         roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},

@@ -1,4 +1,5 @@
 import pickle
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import mujoco as mj
@@ -31,12 +32,16 @@ from positronic.drivers.roboarm.models import (
     PANDA_EE_FRAME,
     ROBOLAB_EE_FRAME,
     ROBOLAB_EEF_LINK,
+    YAM_JOINT_NAMES,
+    YAM_SITE,
     EEFrame,
     bundled_franka_model,
     bundled_panda_model,
+    bundled_yam_model,
     ee_frames_entry,
 )
 from positronic.drivers.roboarm.so101.driver import Robot as So101Robot
+from positronic.drivers.roboarm.yam import driver as yam
 from positronic.eval import keys as eval_keys
 from positronic.utils import package_assets_path
 
@@ -237,9 +242,13 @@ def test_frame_transform_reproduces_robolab_eef_across_configs():
         assert geom.quat_closest(got.rotation, want.rotation) == want.rotation
 
 
-@pytest.mark.parametrize('model', [bundled_franka_model(), bundled_panda_model()], ids=['franka', 'panda'])
-def test_bundled_model_has_the_site_every_embodiment_reports_at(model):
-    frame_transform(model[roboarm_keys.URDF], GRIPPER_SITE, GRIPPER_SITE)
+@pytest.mark.parametrize(
+    'model, site',
+    [(bundled_franka_model(), GRIPPER_SITE), (bundled_panda_model(), GRIPPER_SITE), (bundled_yam_model(), YAM_SITE)],
+    ids=['franka', 'panda', 'yam'],
+)
+def test_bundled_model_has_the_site_its_embodiment_reports_at(model, site):
+    frame_transform(model[roboarm_keys.URDF], site, site)
 
 
 @pytest.mark.parametrize(
@@ -256,6 +265,52 @@ def test_declared_frame_matches_the_model_geometry(model, declared, frame):
     """A checkpoint or an env states its frame as a constant; this pins it to where the model puts that frame."""
     measured = frame_transform(model[roboarm_keys.URDF], GRIPPER_SITE, frame)
     np.testing.assert_allclose(declared.as_matrix, measured.as_matrix, atol=1e-9)
+
+
+# Joint configs inside the YAM's joint range: home, and three that bend every joint.
+YAM_CONFIGS = [
+    np.zeros(6),
+    np.array([0.5, 1.2, 1.0, -0.6, 0.4, 1.5]),
+    np.array([-1.8, 2.5, 2.9, 1.2, -1.1, -0.7]),
+    np.array([2.6, 0.3, 3.4, 0.0, 1.4, 2.0]),
+]
+
+
+@pytest.mark.parametrize('q', YAM_CONFIGS)
+def test_the_bundled_yam_urdf_puts_yam_site_where_the_yam_driver_measures_its_pose(q):
+    model = bundled_yam_model()
+    urdf = model[roboarm_keys.URDF]
+    compiled = _prepare_spec(urdf, YAM_SITE).compile()
+    data = mj.MjData(compiled)  # pyright: ignore[reportAttributeAccessIssue]
+    data.qpos[[compiled.joint(name).qposadr.item() for name in model[roboarm_keys.JOINT_NAMES]]] = q
+    mj.mj_kinematics(compiled, data)  # pyright: ignore[reportAttributeAccessIssue]
+    site = mj.mj_name2id(compiled, mj.mjtObj.mjOBJ_SITE, YAM_SITE)  # pyright: ignore[reportAttributeAccessIssue]
+    quat = np.empty(4)
+    mj.mju_mat2Quat(quat, data.site_xmat[site])  # pyright: ignore[reportAttributeAccessIssue]
+
+    measured = yam._Kinematics().fk(q)
+
+    np.testing.assert_allclose(data.site_xpos[site], measured.translation, atol=1e-4)
+    assert (geom.Rotation.from_quat(quat).inv * measured.rotation).angle < 1e-3
+
+
+def test_the_bundled_yam_urdf_has_the_joint_range_of_the_yam_driver():
+    urdf = bundled_yam_model()[roboarm_keys.URDF]
+    compiled = _prepare_spec(urdf).compile()
+    kinematics = yam._Kinematics()
+
+    ranges = np.array([compiled.joint(name).range for name in YAM_JOINT_NAMES])
+
+    np.testing.assert_allclose(ranges[:, 0], kinematics.lower, atol=1e-5)
+    np.testing.assert_allclose(ranges[:, 1], kinematics.upper, atol=1e-5)
+
+
+def test_the_bundled_yam_model_carries_every_mesh_its_urdf_names():
+    model = bundled_yam_model()
+
+    named = {mesh.get('filename') for mesh in ET.fromstring(model[roboarm_keys.URDF]).iter('mesh')}
+
+    assert named == set(model[roboarm_keys.MESHES]) and all(model[roboarm_keys.MESHES].values())
 
 
 def test_panda_flange_sits_on_link7_as_on_the_fr3():
