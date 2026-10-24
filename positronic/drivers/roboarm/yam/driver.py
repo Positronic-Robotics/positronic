@@ -51,6 +51,8 @@ _PARK_JOINTS = np.zeros(6)
 _START_JOINTS = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 _OPEN_GRIP = 0.0  # positronic grip convention: 0 is open
 _CONTROL_HZ = 100
+# i2rt halts the chain once a joint reads 0.1 rad past its limits (i2rt/robots/motor_chain_robot.py:254).
+_CHAIN_LIMIT_MARGIN_RAD = 0.15
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
@@ -161,9 +163,11 @@ class _Kinematics:
         az = np.arctan2(y, x)
         return [np.array([az, 1.8, 2.2, 0.0, -0.9, 0.0]), np.array([az, 1.2, 1.2, 0.0, 0.6, 0.0])]
 
-    def ik(self, target: geom.Transform3D, current_q: np.ndarray) -> np.ndarray | None:
+    def ik(
+        self, target: geom.Transform3D, current_q: np.ndarray, lower: np.ndarray, upper: np.ndarray
+    ) -> np.ndarray | None:
         """Multi-start LM IK: the live posture first, then the reach postures toward the target's azimuth.
-        Solutions are wrapped and clamped into joint range, then FK-verified before acceptance."""
+        Solutions are wrapped and clamped into ``[lower, upper]``, then FK-verified before acceptance."""
         for start in (current_q, *self._reach_postures(*target.translation[:2])):
             self._data.qpos[:] = 0.0
             self._data.qpos[self._qpos_ids] = start
@@ -180,9 +184,9 @@ class _Kinematics:
                 continue
             q = qpos[self._qpos_ids].copy()
             # A revolute joint at q ± 2π is the same pose; wrap out-of-range entries back in when they fit.
-            q = np.where(q > self._upper, q - 2 * np.pi, q)
-            q = np.where(q < self._lower, q + 2 * np.pi, q)
-            q = np.clip(q, self._lower, self._upper)
+            q = np.where(q > upper, q - 2 * np.pi, q)
+            q = np.where(q < lower, q + 2 * np.pi, q)
+            q = np.clip(q, lower, upper)
             reached = self.fk(q)
             rot_err = (reached.rotation.inv * target.rotation).angle
             rot_err = min(rot_err, 2 * np.pi - rot_err)
@@ -221,11 +225,18 @@ class _Arm(DriverRun[command.CommandType]):
         self.state = state
         self._base_pose = base_pose
         self._kin = kinematics
+        self._lower, self._upper = kinematics.lower, kinematics.upper
         self._shutting_down = False
         self._readings_withheld = False
         self._publish_failure_logged = False
         self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
         self._sent_at = 0.0
+
+    def keep_inside_the_chain_limits(self) -> None:
+        """Narrow the joint range to the limits the chain reports, less ``_CHAIN_LIMIT_MARGIN_RAD``."""
+        limits = np.asarray(self.vendor.get_robot_info()['joint_limits'], dtype=np.float64)
+        self._lower = np.maximum(self._kin.lower, limits[:, 0] + _CHAIN_LIMIT_MARGIN_RAD)
+        self._upper = np.minimum(self._kin.upper, limits[:, 1] - _CHAIN_LIMIT_MARGIN_RAD)
 
     def observations(self) -> dict[str, np.ndarray]:
         with _chain_call():
@@ -288,7 +299,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
         """IK in the arm-base frame."""
-        solution = self._kin.ik(self._base_pose.inv * world_pose, q)
+        solution = self._kin.ik(self._base_pose.inv * world_pose, q, self._lower, self._upper)
         if solution is None:
             raise ValueError(f'{world_pose} is out of reach')
         return solution
@@ -316,7 +327,7 @@ class _Arm(DriverRun[command.CommandType]):
         target = self.to_joints(cmd, q)
         if target.shape != (len(YAM_JOINT_NAMES),) or not np.all(np.isfinite(target)):
             raise ValueError(f'joint target {target} is not a finite position of the {len(YAM_JOINT_NAMES)} joints')
-        return np.clip(target, self._kin.lower, self._kin.upper)
+        return np.clip(target, self._lower, self._upper)
 
     def _arrived(self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, tuning: SettleTuning) -> bool:
         if not np.all(np.abs(obs[_JOINT_POS] - target) < tuning.tolerance_rad):
@@ -398,7 +409,7 @@ class _Arm(DriverRun[command.CommandType]):
         correction, so the corrections accumulate. Raise ``TimeoutError`` when the passes or the bounds run out.
         """
         try:
-            reference = goal.copy()
+            reference = np.clip(goal, self._lower, self._upper) if within_joint_limits else goal.copy()
             for _ in range(tuning.attempts):
                 rest = yield from self._come_to_rest(reference, goal, grip, tuning, interrupt_on_stop=interrupt_on_stop)
                 if rest is None:
@@ -411,7 +422,7 @@ class _Arm(DriverRun[command.CommandType]):
                 bound = tuning.max_correction_rad
                 corrected = np.clip(reference - (obs[_JOINT_POS] - goal), goal - bound, goal + bound)
                 if within_joint_limits:
-                    corrected = np.clip(corrected, self._kin.lower, self._kin.upper)
+                    corrected = np.clip(corrected, self._lower, self._upper)
                 if np.array_equal(corrected, reference):
                     break
                 reference = corrected
@@ -741,6 +752,7 @@ class Robot(pimm.ControlSystem):
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 self.robot_meta.emit(meta)
+                arm.keep_inside_the_chain_limits()
                 joints, grip, missed = yield from arm.go_to_start()
                 self._answer_ready(asked, missed)
                 asked = []
@@ -908,9 +920,13 @@ class _FakeYam:
         self._pos = np.append(np.zeros(6), 1.0)  # the arm boots with the gripper open
         self._vel = np.zeros(7)
         self.last_command: np.ndarray | None = None
+        self.joint_limits = np.array([[-np.inf, np.inf]] * 6)  # the limits it reports; the echo has none
 
     def num_dofs(self) -> int:
         return 7
+
+    def get_robot_info(self) -> dict[str, Any]:
+        return {'joint_limits': self.joint_limits.copy()}
 
     def get_observations(self) -> dict[str, np.ndarray]:
         return {
@@ -1006,7 +1022,7 @@ if __name__ == '__main__':
         square = [(0.0, 0.05, 0.0), (0.0, 0.05, 0.05), (0.0, -0.05, 0.05), (0.0, -0.05, 0.0), (0.0, 0.0, 0.0)]
         for offset in square:
             target = geom.Transform3D(center.translation + np.asarray(offset), center.rotation)
-            solution = kin.ik(target, state.value.q)
+            solution = kin.ik(target, state.value.q, kin.lower, kin.upper)
             assert solution is not None, f'IK failed for {target}'
             ik_err = np.linalg.norm(kin.fk(solution).translation - target.translation)
             assert ik_err < 5e-3, ik_err  # FK↔IK consistency
