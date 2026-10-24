@@ -57,6 +57,7 @@ class FakeNebius:
         lookup_failures: int = 1,
         endpoint_states: tuple[str, ...] = ('RUNNING',),
         endpoint_details: dict[str, str] | None = None,
+        job_details: dict[str, str] | None = None,
         interrupt_on_job_get: bool = False,
     ):
         self.error = error
@@ -66,6 +67,7 @@ class FakeNebius:
         self.endpoint_states: Iterator[str] = iter(endpoint_states)
         self.endpoint_state = 'PROVISIONING'
         self.endpoint_details = endpoint_details
+        self.job_details = job_details
         self.job_states: Iterator[str] = iter(job_states)
         self.job_state = 'PROVISIONING'
         self.logs = logs
@@ -100,7 +102,7 @@ class FakeNebius:
             self.request_files.append(path)
             self.request_file_modes.append(stat.S_IMODE(os.stat(path).st_mode))
             request = json.loads(path.read_text())
-            # rules-allow: hardcoded-keys — an independent restatement of the Nebius request format is what a fake is
+            # rules-allow: hardcoded-keys — a fake restates the Nebius request format on its own, apart from the model
             name = request['metadata']['name']
             self.tokens.append(request['spec']['secret_version']['payload'][0]['string_value'])
         else:
@@ -125,14 +127,17 @@ class FakeNebius:
             urls = ['10.0.0.1:8000'] + ([f'https://{POLICY_URL_HOST}'] if self.endpoint_polls > 1 else [])
             self.endpoint_state = next(self.endpoint_states, self.endpoint_state)
             status: dict[str, Any] = {'state': self.endpoint_state, 'public_endpoints': urls}
-            if self.endpoint_details is not None:
-                status['state_details'] = self.endpoint_details
-            return {'status': status}
-        if self.interrupt_on_job_get:
-            self.interrupt_on_job_get = False
-            raise KeyboardInterrupt
-        self.job_state = next(self.job_states, self.job_state)
-        return {'status': {'state': self.job_state}}
+            details = self.endpoint_details
+        else:
+            if self.interrupt_on_job_get:
+                self.interrupt_on_job_get = False
+                raise KeyboardInterrupt
+            self.job_state = next(self.job_states, self.job_state)
+            status = {'state': self.job_state}
+            details = self.job_details
+        if details is not None:
+            status['state_details'] = details
+        return {'status': status}
 
     def _logs(self, kind: str, args: tuple[str, ...]) -> str:
         return self.logs
@@ -261,6 +266,15 @@ def test_a_job_state_unknown_to_the_api_ends_the_run_and_leaves_nothing(script):
         _run(script, fake)
     assert 'PAUSED' in str(exit_info.value)
     assert fake.resources == {'secret': {}, 'endpoint': {}, 'job': {}}
+
+
+def test_a_failed_job_reports_why(script):
+    fake = _fake(
+        script, job_states=('RUNNING', 'FAILED'), job_details={'code': 'OOM_KILLED', 'message': 'out of memory'}
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        _run(script, fake)
+    assert 'out of memory' in str(exit_info.value)
 
 
 def test_a_failed_endpoint_reports_why(script):

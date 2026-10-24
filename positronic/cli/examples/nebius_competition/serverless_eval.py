@@ -111,8 +111,16 @@ class Named(BaseModel):
     metadata: Metadata
 
 
+class StateDetails(BaseModel):
+    """Why a job or an endpoint is in its state: `JobStateDetails` and `EndpointStateDetails` of the Nebius AI API."""
+
+    code: str | None = None
+    message: str | None = None
+
+
 class JobStatus(BaseModel):
     state: JobState = JobState.STATE_UNSPECIFIED
+    state_details: StateDetails | None = None
 
 
 class Job(BaseModel):
@@ -142,13 +150,6 @@ class SecretRequest(BaseModel):
 
     metadata: SecretMetadata
     spec: SecretSpec
-
-
-class StateDetails(BaseModel):
-    """Why an endpoint is in its state: `EndpointStateDetails` of the Nebius AI API."""
-
-    code: str | None = None
-    message: str | None = None
 
 
 class EndpointStatus(BaseModel):
@@ -282,12 +283,13 @@ class ServerlessEval:
         host = self._wait_for_host(endpoint)
         print(f'The policy endpoint is at https://{host}')
         job = self._create(Kind.JOB, self.run.job_name, [*job_create_args(self.run, host, token_env), '--async'])
-        state = self._wait_for_job(job, endpoint)
+        status = self._wait_for_job(job, endpoint)
         logs = self._logs(job)
         found = last_score_line(logs)
-        if state is not JobState.COMPLETED or found is None:
+        if status.state is not JobState.COMPLETED or found is None:
             tail = '\n'.join(logs.splitlines()[-LOG_TAIL_LINES:])
-            raise RunFailed(f'The eval job ended {state} with no score. The end of its log:\n{tail}')
+            why = f' ({status.state_details})' if status.state_details else ''
+            raise RunFailed(f'The eval job ended {status.state}{why} with no score. The end of its log:\n{tail}')
         return found
 
     def _make_token_secret(self) -> None:
@@ -325,8 +327,8 @@ class ServerlessEval:
             return None
         return Named.model_validate(found).metadata.id
 
-    def _job_state(self, job: str) -> JobState:
-        return Job.model_validate(self.nebius(*Kind.JOB.value, 'get', '--id', job)).status.state
+    def _job_status(self, job: str) -> JobStatus:
+        return Job.model_validate(self.nebius(*Kind.JOB.value, 'get', '--id', job)).status
 
     def _endpoint_status(self, endpoint: str) -> EndpointStatus:
         return Endpoint.model_validate(self.nebius(*Kind.ENDPOINT.value, 'get', '--id', endpoint)).status
@@ -344,16 +346,16 @@ class ServerlessEval:
                 raise RunFailed(f'The policy endpoint got no https:// URL in {URL_WAIT_S:.0f}s')
             self.clock.sleep(POLL_S)
 
-    def _wait_for_job(self, job: str, endpoint: str) -> JobState:
+    def _wait_for_job(self, job: str, endpoint: str) -> JobStatus:
         deadline = self.clock.monotonic() + self.run.timeout_min * 60 + JOB_GRACE_S
         shown = None
         while True:
-            state = self._job_state(job)
-            if state != shown:
-                print(f'The eval job is {state}')
-                shown = state
-            if state in JOB_TERMINAL_STATES:
-                return state
+            status = self._job_status(job)
+            if status.state != shown:
+                print(f'The eval job is {status.state}')
+                shown = status.state
+            if status.state in JOB_TERMINAL_STATES:
+                return status
             status = self._endpoint_status(endpoint)
             if status.state in ENDPOINT_ENDED_STATES:
                 raise RunFailed(f'The policy endpoint is {status.state} while the eval runs: {status}')
@@ -395,7 +397,7 @@ class ServerlessEval:
             self.made[kind] = resource_id
 
     def _stop_job(self, job: str) -> None:
-        if self._job_state(job) not in JOB_TERMINAL_STATES:
+        if self._job_status(job).state not in JOB_TERMINAL_STATES:
             self.nebius(*Kind.JOB.value, 'cancel', '--id', job, structured=False)
 
     @staticmethod
