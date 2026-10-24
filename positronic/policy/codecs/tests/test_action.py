@@ -17,6 +17,7 @@ from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.codecs import (
     ACTION,
+    BimanualJointsAction,
     CartesianDeltaAction,
     Codec,
     JointPositionAction,
@@ -286,6 +287,27 @@ def test_absolute_joints_action_encode_decode():
     assert isinstance(command, cmd_module.JointPosition)
     np.testing.assert_allclose(command.positions, joints[0], atol=1e-6)
     assert np.isclose(target_grip, g[0])
+
+
+def test_bimanual_joints_action_splits_into_per_arm_joint_commands_and_positronic_grips():
+    vector = np.concatenate([np.arange(6), [1.0], np.arange(6, 12), [0.25]]).astype(np.float32)
+
+    decoded = BimanualJointsAction().decode({ACTION: vector})
+
+    left, right = (
+        decoded[obs_keys.arm_channel(obs_keys.ROBOT_COMMAND, obs_keys.LEFT_ARM)],
+        decoded[obs_keys.arm_channel(obs_keys.ROBOT_COMMAND, obs_keys.RIGHT_ARM)],
+    )
+    assert isinstance(left, cmd_module.JointPosition) and isinstance(right, cmd_module.JointPosition)
+    np.testing.assert_array_equal(left.positions, np.arange(6))
+    np.testing.assert_array_equal(right.positions, np.arange(6, 12))
+    assert decoded[obs_keys.arm_channel(obs_keys.TARGET_GRIP, obs_keys.LEFT_ARM)] == pytest.approx(0.0)
+    assert decoded[obs_keys.arm_channel(obs_keys.TARGET_GRIP, obs_keys.RIGHT_ARM)] == pytest.approx(0.75)
+
+
+def test_bimanual_joints_action_of_the_wrong_width_is_refused():
+    with pytest.raises(ValueError, match='14-D'):
+        BimanualJointsAction().decode({ACTION: np.zeros(8, dtype=np.float32)})
 
 
 IMPEDANCE = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
