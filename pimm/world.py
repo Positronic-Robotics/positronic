@@ -542,7 +542,13 @@ class _WallOnlyClock(SystemClock):
 
 
 class _PipeManager(SyncManager):
-    """A ``SyncManager`` that also serves ``deque``, the store of each queue transport."""
+    """A ``SyncManager`` that also serves ``deque``, the store of each queue transport.
+
+    The store is slow: each read and each emit to each receiver is a round trip to the manager process, and each
+    message is pickled twice, into the manager and out of it. A pickled message in a shared-memory slot, as
+    ``_SharedTime`` keeps a time, would cost one pickle and no round trip. The manager stays because it needs no server
+    code in a pimm process.
+    """
 
     deque: Callable[..., deque[Any]]
 
