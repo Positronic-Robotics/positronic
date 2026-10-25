@@ -3,6 +3,7 @@ import http.server
 import json
 import logging
 import pathlib
+import re
 import threading
 import time
 from collections.abc import Mapping
@@ -1137,6 +1138,33 @@ def test_a_remote_server_that_states_another_site_is_refused_before_it_gets_an_o
         run_robot_rollout(policy).result()
     session.infer.assert_not_called()
     session.close.assert_called_once()
+
+
+def test_a_remote_server_that_states_two_frames_for_one_pose_is_refused_before_it_gets_an_observation():
+    offset = EEFrame(site=DEFAULT_FRAME, offset=Transform3D(np.array([0.0, 0.0, 0.1])))
+    stack = Sequential(ChangeEEFrame(offset, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    metadata = {
+        offboard_keys.LOCAL_STACK: stack.to_spec(),
+        **ee_frames_entry({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)}),
+    }
+    policy, session = _mock_remote_policy(metadata)
+    session.protocol_version = protocol.ProtocolVersion.V3
+
+    with pytest.raises(ValueError, match=re.escape(keys.EE_POSE)):
+        run_robot_rollout(policy).result()
+    session.infer.assert_not_called()
+    session.close.assert_called_once()
+
+
+def test_a_remote_server_that_repeats_its_client_stack_frame_in_its_metadata_runs(runtime):
+    frame = cfg_codecs.droid_frame.instantiate()
+    stack = Sequential(ChangeEEFrame(frame, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    policy, session = _mock_remote_policy({
+        offboard_keys.LOCAL_STACK: stack.to_spec(),
+        **ee_frames_entry({keys.EE_POSE: frame}),
+    })
+    session.protocol_version = protocol.ProtocolVersion.V3
+    assert _recorded_frames(policy, runtime) == {keys.EE_POSE: DEFAULT_FRAME}
 
 
 # The handshake of a protocol v1 server that states no frames: an unversioned client stack, and no ``ee_frames``.
