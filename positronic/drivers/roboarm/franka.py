@@ -28,7 +28,8 @@ from positronic.drivers.utils import (
 )
 
 from . import RobotStatus, State, command
-from .models import EE_LINK, add_default_frame, attach_robotiq_2f85
+from .ik import frame_transform
+from .models import FLANGE_LINK, GRIPPER_SITE, attach_robotiq_2f85, bundled_franka_model
 
 with vendor_import(
     'positronic_franka',
@@ -40,6 +41,14 @@ with vendor_import(
     from positronic_franka.desk import ControlHeldElsewhere, Desk, SafetyControllerError
 
 logger = logging.getLogger(__name__)
+
+_QUAT = geom.Rotation.Representation.QUAT
+
+
+@functools.cache
+def _flange_to_gripper() -> geom.Transform3D:
+    """``GRIPPER_SITE`` measured from the flange, on the FR3 model with the 2F-85 that the driver publishes."""
+    return frame_transform(bundled_franka_model()[roboarm_keys.URDF], FLANGE_LINK, GRIPPER_SITE)
 
 
 def _check_error(is_error, was_error):
@@ -104,7 +113,8 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def encode(self, state: pf.State, status: RobotStatus):
         self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7] = state.q
         self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7] = state.dq
-        self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = state.end_effector_pose
+        gripper = geom.Transform3D.from_vector(np.asarray(state.flange_pose), _QUAT) * _flange_to_gripper()
+        self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = gripper.as_vector(_QUAT)
         self.array[FrankaState.EE_WRENCH_OFFSET : FrankaState.EE_WRENCH_OFFSET + 6] = state.ee_wrench
         self.array[FrankaState.STATUS_OFFSET] = status.value
 
@@ -496,10 +506,12 @@ class _Arm(DriverRun[command.CommandType]):
             case command.PositionControl(stiffness=stiffness):
                 return pf.InternalImpedance() if stiffness is None else pf.InternalImpedance(k_theta=list(stiffness))
             case command.Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd, frame=frame):
-                # TODO(#550): pass `frame` as the stiffness point once positronic-franka takes one.
-                if frame != geom.Transform3D.identity:
-                    raise ValueError(f'this arm runs the Cartesian stiffness at its control frame only, not at {frame}')
-                return pf.SoftwareImpedance(kq=list(kq), kqd=list(kqd), kx=list(kx), kxd=list(kxd))
+                if frame.rotation != geom.Rotation.identity:
+                    raise ValueError(f'this arm takes a stiffness point, not a turned stiffness frame: {frame}')
+                point = (_flange_to_gripper() * frame).translation
+                return pf.SoftwareImpedance(
+                    kq=list(kq), kqd=list(kqd), kx=list(kx), kxd=list(kxd), stiffness_point=point.tolist()
+                )
 
     def command_target(self, target: np.ndarray, mode: command.ControlModeType | None) -> None:
         """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between."""
@@ -664,8 +676,9 @@ class _Arm(DriverRun[command.CommandType]):
         return clamped
 
     def _ik(self, pose: geom.Transform3D) -> np.ndarray:
-        """The joints that put the end effector at ``pose``, within the arm's limits."""
-        return self.robot.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
+        """The joints that put ``GRIPPER_SITE`` at ``pose``, within the arm's limits."""
+        flange = pose * _flange_to_gripper().inv
+        return self.robot.inverse_kinematics_with_limits(flange.as_vector(_QUAT))
 
     def to_joints(self, cmd: command.CommandType) -> np.ndarray:
         """The joints ``cmd`` asks for, a margin inside the soft limits, not applied yet.
@@ -936,7 +949,6 @@ class Robot(pimm.ControlSystem):
         # TODO: The arm driver should not own the gripper. Move the 2F-85 model to the gripper driver
         # (drivers/gripper) and compose the arm and gripper together at the embodiment level.
         gripper = attach_robotiq_2f85(root, meshes)
-        add_default_frame(root, EE_LINK)
         return {
             roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
             roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),

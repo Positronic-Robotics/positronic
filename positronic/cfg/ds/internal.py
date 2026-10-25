@@ -9,6 +9,7 @@ These datasets remain on the private s3://raw/ bucket and include:
 - Full combined datasets for multi-task training
 """
 
+import xml.etree.ElementTree as ET
 from functools import partial
 from typing import Any
 
@@ -26,12 +27,18 @@ from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.ik import MoveToSite
 from positronic.drivers.roboarm.models import (
-    DEFAULT_FRAME,
+    EE_LINK,
+    FLANGE_LINK,
+    GRIPPER_2F85_XYZ,
+    GRIPPER_SITE,
     EEFrame,
+    attach_frame,
     bundled_franka_model,
     bundled_panda_model,
     ee_frames_entry,
+    parse_ee_frames,
 )
 from positronic.eval import keys as eval_keys
 from positronic.geom import Transform3D
@@ -59,9 +66,11 @@ ROBOT_SIGNAL_POINTERS = Derive(**_POINTER_VALUES)
 _REAL_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_franka_model().items()})
 _SIM_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_panda_model().items()})
 
-# The keys of the site and the codec offset of an older recording. A real one with no site sits at ``default``.
+# The keys of the site and the codec offset of an older recording, and the site that a recording with no site
+# states. Every model that carried ``default`` put it at ``EE_LINK``.
 _LEGACY_CONTROL_FRAME = 'control_frame'
 _LEGACY_EE_FRAME = 'ee_frame'
+_LEGACY_DEFAULT_SITE = 'default'
 
 
 def _legacy_ee_frames(episode, site: str) -> dict[str, Any]:
@@ -71,15 +80,34 @@ def _legacy_ee_frames(episode, site: str) -> dict[str, Any]:
 
 
 def _real_legacy_ee_frames(episode) -> dict[str, Any]:
-    site = episode[_LEGACY_CONTROL_FRAME] if _LEGACY_CONTROL_FRAME in episode else DEFAULT_FRAME
+    site = episode[_LEGACY_CONTROL_FRAME] if _LEGACY_CONTROL_FRAME in episode else _LEGACY_DEFAULT_SITE
     return _legacy_ee_frames(episode, site)
 
 
 # Each relabels only a recording that states no ``ee_frames`` of its own: the Identity before it wins the key.
 # The sim's comes from its bundled model, which always replaces the recorded one, so its site is that model's.
 _REAL_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: _real_legacy_ee_frames})
-_SIM_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: partial(_legacy_ee_frames, site=DEFAULT_FRAME)})
+_SIM_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: partial(_legacy_ee_frames, site=_LEGACY_DEFAULT_SITE)})
 _LEGACY_FRAME_KEYS = [_LEGACY_CONTROL_FRAME, _LEGACY_EE_FRAME]
+
+
+def _with_legacy_sites(episode) -> str:
+    """The episode's URDF with the sites an older recording lacks: ``GRIPPER_SITE`` at the 2F-85 grip point, and
+    ``default`` at ``EE_LINK`` where a frame names it."""
+    root = ET.fromstring(episode[roboarm_keys.URDF])
+    links = {link.get('name') for link in root.findall('link')}
+    sites = {frame.site for frame in parse_ee_frames(episode[roboarm_keys.EE_FRAMES]).values()}
+    if GRIPPER_SITE not in links:
+        attach_frame(root, GRIPPER_SITE, FLANGE_LINK, GRIPPER_2F85_XYZ)
+    if _LEGACY_DEFAULT_SITE in sites - links:
+        attach_frame(root, _LEGACY_DEFAULT_SITE, EE_LINK)
+    return ET.tostring(root, encoding='unicode')
+
+
+# Every pose comes out at ``GRIPPER_SITE``, re-expressed from the model the recording carries.
+_AT_THE_GRIPPER = Group(Derive(meta=None, **{roboarm_keys.URDF: _with_legacy_sites}), Identity()) | MoveToSite(
+    GRIPPER_SITE
+)
 
 # Backfill the canonical `robot_command.pose` from the plural name older recordings stored on
 # disk. Recordings already using the canonical name pass through the Identity, which wins on the
@@ -90,19 +118,25 @@ _RENAME_ROBOT_COMMAND = Derive(**{keys.TARGET_EE_POSE: Get('robot_commands.pose'
 # carry the arm's own driver-emitted model, so the bundled one only backfills it (Identity before
 # `_REAL_MODEL`). The sim's model always comes from the transform — older sim recordings store raw
 # MuJoCo XML under `urdf` — so the bundled panda overwrites (`_SIM_MODEL` before Identity).
-REAL_ROBOT_TRANSFORM = Group(
-    ROBOT_SIGNAL_POINTERS,
-    Identity(remove=_REMOVE_SIGNALS + _LEGACY_FRAME_KEYS),
-    _REAL_MODEL,
-    _RENAME_ROBOT_COMMAND,
-    _REAL_EE_FRAMES,
+REAL_ROBOT_TRANSFORM = (
+    Group(
+        ROBOT_SIGNAL_POINTERS,
+        Identity(remove=_REMOVE_SIGNALS + _LEGACY_FRAME_KEYS),
+        _REAL_MODEL,
+        _RENAME_ROBOT_COMMAND,
+        _REAL_EE_FRAMES,
+    )
+    | _AT_THE_GRIPPER
 )
-SIM_ROBOT_TRANSFORM = Group(
-    ROBOT_SIGNAL_POINTERS,
-    _SIM_MODEL,
-    Identity(remove=_REMOVE_SIGNALS + _LEGACY_FRAME_KEYS),
-    _RENAME_ROBOT_COMMAND,
-    _SIM_EE_FRAMES,
+SIM_ROBOT_TRANSFORM = (
+    Group(
+        ROBOT_SIGNAL_POINTERS,
+        _SIM_MODEL,
+        Identity(remove=_REMOVE_SIGNALS + _LEGACY_FRAME_KEYS),
+        _RENAME_ROBOT_COMMAND,
+        _SIM_EE_FRAMES,
+    )
+    | _AT_THE_GRIPPER
 )
 
 RECOVERY_TASK = 'Recovery cases.'

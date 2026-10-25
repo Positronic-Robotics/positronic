@@ -186,11 +186,11 @@ bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 # A pose pipeline also takes the EE frame the checkpoint speaks; a pipeline that speaks joints only sets None.
 bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
   --model.checkpoints_dir=<ckpt-dir> \
-  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 bash workflows/nebius/serve.sh openpi pi-server ee \
   --model.checkpoints_dir=<ckpt-dir> \
-  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d \
   --model.checkpoints_dir=<ckpt-dir>
@@ -271,7 +271,7 @@ CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always 
 # Custom checkpoint
 CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always \
   --service-ports lerobot-server ee --model.checkpoints_dir=<ckpt-dir> \
-  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 # GR00T inference — codec subcommand required
 CACHE_ROOT=/home/<user> docker --context notebook compose run --rm --pull always \

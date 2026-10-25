@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import time
 from collections.abc import Callable, Iterator
@@ -15,6 +16,7 @@ from positronic import geom
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import RobotStatus, command, franka
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.models import DROID_EE_FRAME
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned, RecoveryOutcome, RecoveryStep
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
@@ -32,6 +34,8 @@ def _park_with_j4(j4: float) -> np.ndarray:
 
 PAST_J4 = _park_with_j4(-0.05)
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+QUAT = geom.Rotation.Representation.QUAT
+TURN = geom.Rotation.from_euler([0.1, -0.2, 0.3])
 # The emergency stop (x31), released and pressed.
 CLEAR = 'Active'
 STOPPED = 'Inactive'
@@ -98,7 +102,7 @@ ARRIVED = _Goal(franka.pf.GoalStatus.REACHED, None)
 class _ArmState:
     q: np.ndarray
     dq: np.ndarray
-    end_effector_pose: np.ndarray
+    flange_pose: np.ndarray
     ee_wrench: np.ndarray
     error: int
     error_message: str
@@ -130,6 +134,9 @@ class FakeArm:
         self.polls_to_reach = polls_to_reach
         self._polls = 0
         self.goal_status = goal_status
+        # The flange pose every state reports, and the flange pose each IK call was asked for.
+        self.flange_pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        self.ik_targets: list[np.ndarray] = []
 
     def _record(self, call: Call) -> None:
         self.calls.append(call)
@@ -141,8 +148,9 @@ class FakeArm:
 
     def state(self) -> _ArmState:
         self._record(Call.STATE)
-        pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-        return _ArmState(self.q.copy(), np.zeros(7), pose, np.zeros(6), self.error, self.error_message)
+        return _ArmState(
+            self.q.copy(), np.zeros(7), self.flange_pose.copy(), np.zeros(6), self.error, self.error_message
+        )
 
     def goal(self) -> _Goal:
         self._record(Call.GOAL)
@@ -180,6 +188,7 @@ class FakeArm:
 
     def inverse_kinematics_with_limits(self, pose) -> np.ndarray:
         self._record(Call.INVERSE_KINEMATICS)
+        self.ik_targets.append(np.asarray(pose, dtype=np.float64))
         if self.ik_raises is not None:
             raise self.ik_raises
         return self.q.copy()
@@ -1511,14 +1520,45 @@ def test_a_commands_mode_reaches_the_arm_with_the_gains_it_named(desk):
     assert applied[-1].kq == list(IMPEDANCE.kq), 'the gains the command named did not reach the arm'
 
 
-# TODO(#550): drop these two once the driver passes the frame to the arm as its stiffness point.
-FLANGE_IMPEDANCE = command.Impedance(
-    kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6, frame=geom.Transform3D([0.0, 0.0, -0.1])
+# The grip point of the 2F-85, 155 mm along the flange approach axis.
+FLANGE_TO_GRIPPER = geom.Transform3D(np.array([0.0, 0.0, 0.155]))
+TURNED_IMPEDANCE = command.Impedance(
+    kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(400.0,) * 6, kxd=(37.0,) * 6, frame=geom.Transform3D(rotation=TURN)
 )
 
 
-def test_a_streamed_impedance_at_another_frame_leaves_the_arm_alone(desk):
-    """The arm runs its Cartesian stiffness at its control frame only, so a mode naming another point is refused."""
+def _streamed_mode(mode: command.Impedance) -> Any:
+    """The pf mode the arm runs once a streamed joint command under ``mode`` lands."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    loop = driver.run(StopFlag(), MockClock())
+    for _ in range(3):
+        next(loop)
+    feed.push(command.JointPosition(positions=JOGGED, mode=mode))
+    for _ in range(2):
+        next(loop)
+    return arm.modes[-1]
+
+
+@pytest.mark.parametrize(
+    'frame, point',
+    [
+        (geom.Transform3D.identity, [0.0, 0.0, 0.155]),
+        (DROID_EE_FRAME, [0.0, 0.0, 0.0]),
+        (geom.Transform3D(np.array([0.01, 0.0, -0.1])), [0.01, 0.0, 0.055]),
+    ],
+    ids=['gripper', 'flange', 'offset'],
+)
+def test_an_impedance_frame_reaches_the_arm_as_its_stiffness_point_on_the_flange(desk, frame, point):
+    """``Impedance.frame`` is measured from ``gripper``, and the arm takes the point in flange axes."""
+    mode = _streamed_mode(dataclasses.replace(IMPEDANCE, frame=frame))
+    np.testing.assert_allclose(mode.stiffness_point, point, atol=1e-12)
+
+
+def test_a_streamed_impedance_at_a_turned_frame_leaves_the_arm_alone(desk):
+    """The arm takes a stiffness point and no orientation, so a mode naming a turned frame is refused."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     feed = ManualCommandReceiver()
@@ -1530,7 +1570,7 @@ def test_a_streamed_impedance_at_another_frame_leaves_the_arm_alone(desk):
     for _ in range(3):
         next(loop)
     mark, targets = len(arm.modes), len(arm.targets)
-    feed.push(command.JointPosition(positions=JOGGED, mode=FLANGE_IMPEDANCE))
+    feed.push(command.JointPosition(positions=JOGGED, mode=TURNED_IMPEDANCE))
     for _ in range(2):
         next(loop)
 
@@ -1538,21 +1578,57 @@ def test_a_streamed_impedance_at_another_frame_leaves_the_arm_alone(desk):
     assert len(arm.targets) == targets, 'the arm got a target under a mode it cannot run'
 
 
-def test_a_sync_move_under_an_impedance_at_another_frame_answers_a_refusal(world):
+def test_a_sync_move_under_an_impedance_at_a_turned_frame_answers_a_refusal(world):
     arm = FakeArm(PARK)
     driver = _driver(arm, manage_desk=False)
     loop = driver.run(StopFlag(), MockClock())
 
     for _ in range(2):
         next(loop)
-    answer = _mover(world, driver)(command.JointPosition(JOGGED, mode=FLANGE_IMPEDANCE))
+    answer = _mover(world, driver)(command.JointPosition(JOGGED, mode=TURNED_IMPEDANCE))
     for _ in range(20):
         if answer.done():
             break
         next(loop)
 
-    with pytest.raises(ValueError, match='control frame only'):
+    with pytest.raises(ValueError, match='turned stiffness frame'):
         answer.result()
+
+
+def test_the_arm_state_carries_the_pose_of_the_gripper_site():
+    """The arm reports its flange, and the driver publishes the grip point of the 2F-85 on it."""
+    arm = FakeArm(PARK)
+    flange = geom.Transform3D(np.array([0.4, -0.1, 0.3]), TURN)
+    arm.flange_pose = flange.as_vector(QUAT)
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    driver.state._bind(states, clock=MockClock())
+    loop = driver.run(StopFlag(), MockClock())
+
+    for _ in range(2):
+        next(loop)
+
+    np.testing.assert_allclose(
+        states.emitted[-1][1].ee_pose.as_matrix, (flange * FLANGE_TO_GRIPPER).as_matrix, atol=1e-6
+    )
+
+
+def test_a_cartesian_command_is_solved_for_the_flange_under_the_gripper_site(desk):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    loop = driver.run(StopFlag(), MockClock())
+    target = geom.Transform3D(np.array([0.5, 0.1, 0.2]), TURN)
+
+    for _ in range(3):
+        next(loop)
+    feed.push(command.CartesianPosition(pose=target))
+    for _ in range(2):
+        next(loop)
+
+    solved = geom.Transform3D.from_vector(arm.ik_targets[-1], QUAT)
+    np.testing.assert_allclose(solved.as_matrix, (target * FLANGE_TO_GRIPPER.inv).as_matrix, atol=1e-12)
 
 
 def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):

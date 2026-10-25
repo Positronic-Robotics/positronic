@@ -5,7 +5,7 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, DROID_EE_FRAME, EEFrame
+from positronic.drivers.roboarm.models import DROID_EE_FRAME, FRANKA_HAND_FRAME, GRIPPER_SITE, PANDA_HAND_FRAME, EEFrame
 from positronic.policy import training
 from positronic.policy.codecs import (
     BinarizeGripInference,
@@ -71,13 +71,14 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
-# Every rig reports its poses at ``DEFAULT_FRAME``, so the frame of each rig is that site with no offset.
-# The FR3's Franka Hand point, where the real FR3 and the FR3 sims report.
-franka_hand_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME)
-# The hand point of the MuJoCo panda, where the MuJoCo sim reports.
-panda_hand_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME)
+# The grip point, where every Franka rig reports its poses.
+gripper_frame = cfn.Config(EEFrame, site=GRIPPER_SITE)
+# The FR3's Franka Hand point, where the real FR3 and the FR3 sims reported before ``GRIPPER_SITE``.
+franka_hand_frame = gripper_frame.override(offset=FRANKA_HAND_FRAME)
+# The hand point of the MuJoCo panda, where the MuJoCo sim reported before ``GRIPPER_SITE``.
+panda_hand_frame = gripper_frame.override(offset=PANDA_HAND_FRAME)
 # The FR3 flange, where DROID records its poses.
-droid_frame = cfn.Config(EEFrame, site=DEFAULT_FRAME, offset=DROID_EE_FRAME)
+droid_frame = gripper_frame.override(offset=DROID_EE_FRAME)
 
 
 @cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)

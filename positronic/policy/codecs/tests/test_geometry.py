@@ -13,9 +13,9 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import frame_transform
 from positronic.drivers.roboarm.models import (
-    DEFAULT_FRAME,
     EE_LINK,
     FLANGE_LINK,
+    GRIPPER_SITE,
     ROBOLAB_EEF_LINK,
     EEFrame,
     bundled_franka_model,
@@ -100,9 +100,9 @@ def test_pose_conversion_rejects_unknown_representations(input_rotation, output_
 
 QUAT = Rotation.Representation.QUAT
 FRANKA_URDF = bundled_franka_model()[roboarm_keys.URDF]
-TO_ROBOLAB = frame_transform(FRANKA_URDF, DEFAULT_FRAME, ROBOLAB_EEF_LINK)
-ROBOLAB_FRAME = EEFrame(site=DEFAULT_FRAME, offset=TO_ROBOLAB)
-AT_DEFAULT = ee_frames_entry(dict.fromkeys((obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE), EEFrame(site=DEFAULT_FRAME)))
+TO_ROBOLAB = frame_transform(FRANKA_URDF, GRIPPER_SITE, ROBOLAB_EEF_LINK)
+ROBOLAB_FRAME = EEFrame(site=GRIPPER_SITE, offset=TO_ROBOLAB)
+AT_GRIPPER = ee_frames_entry(dict.fromkeys((obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE)))
 
 
 def _assert_states(meta, keys, site, offset):
@@ -197,7 +197,7 @@ def test_decode_passes_non_cartesian_commands_through():
 def test_identity_transform_leaves_poses_alone():
     pose_c = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
     obs = {obs_keys.EE_POSE: pose_c.as_vector(QUAT)}
-    encoded = ChangeEEFrame(EEFrame(site=DEFAULT_FRAME)).encode(obs)
+    encoded = ChangeEEFrame(EEFrame(site=GRIPPER_SITE)).encode(obs)
     np.testing.assert_allclose(encoded[obs_keys.EE_POSE], pose_c.as_vector(QUAT), atol=1e-9)
 
 
@@ -230,7 +230,7 @@ def test_encode_passes_through_when_no_pose_key_is_present():
 
 def test_states_the_frame_it_speaks_for_each_key():
     codec = ChangeEEFrame(ROBOLAB_FRAME)
-    _assert_states(codec.meta, (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE), DEFAULT_FRAME, TO_ROBOLAB)
+    _assert_states(codec.meta, (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE), GRIPPER_SITE, TO_ROBOLAB)
     assert codec.training_encoder.meta == codec.meta
 
 
@@ -245,15 +245,10 @@ def test_survives_the_wire_spec_round_trip():
     assert rebuilt.meta == codec.meta
 
 
-def test_a_v1_spec_states_its_transform_from_the_default_site():
-    v1 = {
-        NAME: ChangeEEFrame.WIRE_NAME,
-        VERSION: 1,
-        ARGS: {'transform': TO_ROBOLAB.as_vector(QUAT).tolist(), 'keys': [obs_keys.EE_POSE]},
-    }
-    rebuilt = from_spec(v1)
-    assert isinstance(rebuilt, ChangeEEFrame)
-    _assert_states(rebuilt.meta, (obs_keys.EE_POSE,), DEFAULT_FRAME, TO_ROBOLAB)
+def test_a_v1_spec_is_refused_as_an_unsupported_version():
+    v1 = {NAME: ChangeEEFrame.WIRE_NAME, VERSION: 1, ARGS: {'transform': Transform3D.identity.as_vector(QUAT).tolist()}}
+    with pytest.raises(ValueError, match='Unsupported .* version 1'):
+        from_spec(v1)
 
 
 def test_training_encoder_maps_both_poses_forward():
@@ -264,7 +259,7 @@ def test_training_encoder_maps_both_poses_forward():
     episode = EpisodeContainer(
         data={
             roboarm_keys.URDF: FRANKA_URDF,
-            **AT_DEFAULT,
+            **AT_GRIPPER,
             obs_keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
             obs_keys.TARGET_EE_POSE: DummySignal(ts, np.stack([cmd_pose.as_vector(QUAT)] * 2)),
             obs_keys.GRIP: DummySignal(ts, np.array([0.0, 1.0])),
@@ -275,7 +270,7 @@ def test_training_encoder_maps_both_poses_forward():
 
     np.testing.assert_allclose(out[obs_keys.EE_POSE][0][0], (obs_pose * TO_ROBOLAB).as_vector(QUAT), atol=1e-9)
     np.testing.assert_allclose(out[obs_keys.TARGET_EE_POSE][0][0], (cmd_pose * TO_ROBOLAB).as_vector(QUAT), atol=1e-9)
-    _assert_states(out, (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE), DEFAULT_FRAME, TO_ROBOLAB)
+    _assert_states(out, (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE), GRIPPER_SITE, TO_ROBOLAB)
     assert obs_keys.GRIP in out, 'unrelated signals pass through'
 
 
@@ -297,12 +292,12 @@ def test_training_encoder_rejects_poses_that_state_no_frame():
 
 def test_training_encoder_accepts_a_rig_that_ships_no_model():
     """What frame the poses sit in is what the recording states; a model confirms that but is not the claim."""
-    out = ChangeEEFrame(ROBOLAB_FRAME).training_encoder(_episode(**AT_DEFAULT))
-    _assert_states(out, (obs_keys.EE_POSE,), DEFAULT_FRAME, TO_ROBOLAB)
+    out = ChangeEEFrame(ROBOLAB_FRAME).training_encoder(_episode(**AT_GRIPPER))
+    _assert_states(out, (obs_keys.EE_POSE,), GRIPPER_SITE, TO_ROBOLAB)
 
 
 def test_training_encoder_keeps_the_frames_of_the_poses_it_does_not_move():
-    frames = ee_frames_entry({obs_keys.EE_POSE: EEFrame(site=DEFAULT_FRAME), 'other': EEFrame(site=EE_LINK)})
+    frames = ee_frames_entry({obs_keys.EE_POSE: EEFrame(site=GRIPPER_SITE), 'other': EEFrame(site=EE_LINK)})
     out = ChangeEEFrame(ROBOLAB_FRAME).training_encoder(_episode(**frames))
     assert parse_ee_frames(out[roboarm_keys.EE_FRAMES])['other'].site == EE_LINK
 
@@ -321,7 +316,7 @@ def test_training_encoder_skips_absent_command_pose():
     episode = EpisodeContainer(
         data={
             roboarm_keys.URDF: FRANKA_URDF,
-            **AT_DEFAULT,
+            **AT_GRIPPER,
             obs_keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
             obs_keys.TARGET_JOINTS: DummySignal(ts, np.zeros((2, 7), dtype=np.float32)),
         }

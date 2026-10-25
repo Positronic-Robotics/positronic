@@ -6,7 +6,7 @@ from positronic.cfg.codecs import compose, image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, parse_ee_frames
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, parse_ee_frames
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Step
@@ -270,10 +270,10 @@ class TestCodecComposition:
     def test_two_frame_codecs_refuse_to_advertise_one_frame(self):
         """Poses come out at the product of both transforms, which neither codec's declaration names."""
         a = EEFrame(
-            site=DEFAULT_FRAME, offset=Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+            site=GRIPPER_SITE, offset=Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
         )
         b = EEFrame(
-            site=DEFAULT_FRAME, offset=Transform3D(np.array([0.01, 0.0, 0.02]), Rotation.from_euler([0.0, 0.0, -0.4]))
+            site=GRIPPER_SITE, offset=Transform3D(np.array([0.01, 0.0, 0.02]), Rotation.from_euler([0.0, 0.0, -0.4]))
         )
         with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
             _ = (ChangeEEFrame(a) | ChangeEEFrame(b)).meta
@@ -281,7 +281,7 @@ class TestCodecComposition:
     def test_the_same_frame_twice_is_still_two_moves(self):
         """The second move starts where the first left off, so the shared value names neither end of the pair."""
         a = EEFrame(
-            site=DEFAULT_FRAME, offset=Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+            site=GRIPPER_SITE, offset=Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
         )
         with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
             _ = (ChangeEEFrame(a) | ChangeEEFrame(a)).meta
@@ -289,14 +289,14 @@ class TestCodecComposition:
     def test_parallel_frame_codecs_keep_the_frame_they_share(self):
         """Both halves encode the same input, so one move happens and the shared declaration describes it."""
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        frame_a = EEFrame(site=DEFAULT_FRAME, offset=a)
+        frame_a = EEFrame(site=GRIPPER_SITE, offset=a)
         meta = (ChangeEEFrame(frame_a) & ChangeEEFrame(frame_a)).meta
         frame = parse_ee_frames(meta[roboarm_keys.EE_FRAMES])[obs_keys.EE_POSE]
         np.testing.assert_allclose(frame.offset.as_matrix, a.as_matrix, atol=1e-12)
 
     def test_sequential_frame_codecs_over_different_keys_state_both(self):
         a = EEFrame(
-            site=DEFAULT_FRAME, offset=Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+            site=GRIPPER_SITE, offset=Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
         )
         composed = ChangeEEFrame(a, keys=('left',)) | ChangeEEFrame(a, keys=('right',))
         assert parse_ee_frames(composed.meta[roboarm_keys.EE_FRAMES]).keys() == {'left', 'right'}

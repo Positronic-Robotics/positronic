@@ -268,7 +268,7 @@ Or against your own trained checkpoint:
 ```bash
 bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
   --model.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 ```
 
 Use the vendor's model option to select the matching checkpoint (`--model.model_source` for GR00T,
@@ -278,11 +278,11 @@ Use the vendor's model option to select the matching checkpoint (`--model.model_
 ```bash
 bash workflows/nebius/serve.sh lerobot smolvla-server ee \
   --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 bash workflows/nebius/serve.sh openpi my-openpi ee \
   --model.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 bash workflows/nebius/serve.sh gr00t groot-server droid \
   --model.model_source=s3://<your-bucket>/checkpoints/groot/<exp_name>/

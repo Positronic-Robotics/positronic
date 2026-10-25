@@ -182,7 +182,7 @@ Start an inference server that exposes a unified API over a WebSocket or a gRPC 
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
   --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame \
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame \
   --websocket.served_address.port=8000
 ```
 
@@ -191,7 +191,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
   --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame \
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame \
   --websocket.served_address.port=8000
 ```
 
@@ -207,7 +207,7 @@ cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" 
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server ee \
   --model.checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 ```
 
 ### Server Parameters
@@ -218,7 +218,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
 | `--model.checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
 | `--model.model_source` | GR00T: Hugging Face model or experiment directory | `hf://nvidia/GR00T-N1.7-DROID` |
 | `--model.checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
-| `--pipeline.ee_frame` | LeRobot and OpenPI: the EE frame the checkpoint speaks, as an offset from a site of the rig's model. Required on a pose pipeline; a pipeline that speaks joints only sets `None` | `@positronic.cfg.codecs.franka_hand_frame` |
+| `--pipeline.ee_frame` | LeRobot and OpenPI: the EE frame the checkpoint speaks, as an offset from a site of the rig's model. Required on a pose pipeline; a pipeline that speaks joints only sets `None` | `@positronic.cfg.codecs.gripper_frame` |
 | `--websocket.served_address.port` | WebSocket wire port | `8000` (default) |
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` (default, binds to all interfaces) |
 | `--websocket.served_address` | The address that wire binds; `@positronic.offboard.server.socket_at` binds a Unix socket, which takes `.uds` and names no host and no port | `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` |
@@ -270,7 +270,7 @@ cd docker && docker compose run --rm lerobot-train expert_only \
 # 5. Evaluate
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
   --model.checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ \
-  --pipeline.ee_frame=@positronic.cfg.codecs.panda_hand_frame &
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame &
 
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \

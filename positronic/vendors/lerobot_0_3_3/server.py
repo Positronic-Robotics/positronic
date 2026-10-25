@@ -109,7 +109,7 @@ joints_ik_sim = pipeline.override(**{
 ee_flip = pipeline.override(flip_grip=True)
 
 
-# The phail checkpoints speak the FR3's Franka Hand point, the sim_stack and demo ones the MuJoCo panda's hand point.
+# The phail checkpoints speak the real Franka's ``F_T_EE``, the sim_stack and demo ones the sim panda's ``EE_LINK``.
 phail = pipeline.override(**{
     'action': codecs.phail_v1_execution,
     'action.action': codecs.absolute_pos_action,

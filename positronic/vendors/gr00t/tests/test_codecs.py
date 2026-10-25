@@ -45,7 +45,7 @@ def test_pose_conversion_preserves_droid_convention_and_tool_frame_metadata(conf
 
     for meta in (codec.meta, recipes.droid(settings=settings).meta):
         frame = models.parse_ee_frames(meta[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
-        assert frame.site == models.DEFAULT_FRAME
+        assert frame.site == models.GRIPPER_SITE
         np.testing.assert_allclose(frame.offset.as_matrix, models.DROID_EE_FRAME.as_matrix, atol=1e-9)
 
 
@@ -90,7 +90,7 @@ def test_training_actions_align_on_the_recording_clock(timeline):
         f'settings.{model_settings.IMAGE_MAPPINGS}': {},
         f'settings.{model_settings.EE_FRAMES}': {
             keys.EE_POSE: {
-                model_settings.SITE: model_settings.DEFAULT_SITE,
+                model_settings.SITE: model_settings.GRIPPER_SITE,
                 model_settings.OFFSET: [0, 0, 0, 1, 0, 0, 0],
             }
         },
@@ -99,7 +99,7 @@ def test_training_actions_align_on_the_recording_clock(timeline):
         keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]], timelines=(timeline,)),
         keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)], timelines=(timeline,)),
         keys.GRIP: DummySignal([100, 200], [0.0, 1.0], timelines=(timeline,)),
-        **models.ee_frames_entry({keys.EE_POSE: models.EEFrame(site=models.DEFAULT_FRAME)}),
+        **models.ee_frames_entry({keys.EE_POSE: models.EEFrame(site=models.GRIPPER_SITE)}),
     })
     encoded = training(episode)
     action = encoded[ACTION]

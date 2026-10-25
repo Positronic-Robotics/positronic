@@ -7,7 +7,7 @@ from positronic_wire import wire
 
 from positronic import keys
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, parse_ee_frames
+from positronic.drivers.roboarm.models import FRANKA_HAND_FRAME, GRIPPER_SITE, PANDA_HAND_FRAME, parse_ee_frames
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import keys as policy_keys
@@ -140,7 +140,9 @@ def test_a_joint_pipeline_builds_with_no_frame(name):
     assert roboarm_keys.EE_FRAMES not in _pipeline(name).instantiate().meta()
 
 
-@pytest.mark.parametrize('name', ['phail', 'sim_stack', 'demo'])
-def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name):
+@pytest.mark.parametrize(
+    'name, offset', [('phail', FRANKA_HAND_FRAME), ('sim_stack', PANDA_HAND_FRAME), ('demo', PANDA_HAND_FRAME)]
+)
+def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name, offset):
     frame = parse_ee_frames(_pipeline(name).instantiate().meta()[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
-    assert frame == EEFrame(site=DEFAULT_FRAME)
+    assert (frame.site, frame.offset) == (GRIPPER_SITE, offset)

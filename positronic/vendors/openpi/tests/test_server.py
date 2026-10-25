@@ -8,7 +8,13 @@ import pytest
 from positronic import geom, keys
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, parse_ee_frames
+from positronic.drivers.roboarm.models import (
+    FRANKA_HAND_FRAME,
+    GRIPPER_SITE,
+    PANDA_HAND_FRAME,
+    EEFrame,
+    parse_ee_frames,
+)
 from positronic.policy.codecs import ACTION
 from positronic.policy.spec import from_spec
 from positronic.vendors import openpi
@@ -42,11 +48,19 @@ def test_the_preallocation_setting_of_the_environment_reaches_the_subprocess(mon
     assert _subprocess_env(monkeypatch)[PREALLOCATE_ENV] == 'true'
 
 
-@pytest.mark.parametrize('name', ['phail', 'sim_stack', 'libero'])
-def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name):
+@pytest.mark.parametrize('name', ['serve', 'ee', 'ee_joints', 'ee_traj', 'ee_joints_traj', 'ee_flip_grip'])
+def test_a_pose_pipeline_that_states_no_frame_fails_to_build(name):
+    with pytest.raises(TypeError, match='ee_frame'):
+        COMMANDS[name].kwargs['pipeline'].instantiate()
+
+
+@pytest.mark.parametrize(
+    'name, offset', [('phail', FRANKA_HAND_FRAME), ('sim_stack', PANDA_HAND_FRAME), ('libero', PANDA_HAND_FRAME)]
+)
+def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name, offset):
     deployment = COMMANDS[name].kwargs['pipeline'].instantiate()
     frame = parse_ee_frames(deployment.meta()[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
-    assert frame == EEFrame(site=DEFAULT_FRAME)
+    assert frame == EEFrame(site=GRIPPER_SITE, offset=offset)
 
 
 def _send_metadata_and_wait(connection: ServerConnection) -> None:

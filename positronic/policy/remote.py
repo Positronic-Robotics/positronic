@@ -162,7 +162,7 @@ class RemotePolicy(Policy):
             stack = declared_stack(server_meta, session.protocol_version)
             client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
             # Either side of the server's deployment may state the frames, so the run records both as one entry keyed
-            # by pose signal. A server older than ``EE_FRAMES`` states them only through its client stack.
+            # by pose signal.
             frames = _server_frames(
                 server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
             )

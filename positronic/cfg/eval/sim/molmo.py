@@ -5,6 +5,7 @@ import random
 import configuronic as cfn
 
 from positronic.cfg.eval import number_trials, spec
+from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.eval import Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
@@ -81,7 +82,7 @@ def benchmarks(
     adapter = MolmoAdapter(cameras)
     proxy = RemoteEnvControlSystem(adapter, serve_molmo_spaces())
     embodiment = remote_embodiment(
-        proxy, cameras, descriptor='remote.molmo_spaces.droid', static_meta=adapter.robot_model
+        proxy, cameras, descriptor='remote.molmo_spaces.droid', pose_site=GRIPPER_SITE, static_meta=adapter.robot_model
     )
     privileged = {mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE]}
 

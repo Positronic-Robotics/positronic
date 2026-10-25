@@ -50,23 +50,20 @@ def _with_grasp_pose(payload: dict, pose: geom.Transform3D) -> dict:
     return {**payload, protocol.OBS_EEF_POS: pose.translation, protocol.OBS_EEF_QUAT: pose.rotation.as_quat}
 
 
-def test_the_hand_pose_is_reported_at_the_franka_tool_point_not_the_grasp_site():
-    # The FR3 tool point is 103.4 mm and -45 deg about the approach axis from the flange; the grasp site is 155 mm.
+def test_the_hand_pose_is_reported_at_the_grasp_site():
+    """The env measures at the 2F-85 grip point, which is ``GRIPPER_SITE`` of the FR3 model the embodiment ships."""
     reported = _adapter().observations(_with_grasp_pose(_payload(), _GRASP_POSE))[keys.ROBOT_STATE].ee_pose
-    to_tool_point = geom.Transform3D(np.array([0.0, 0.0, -0.0516]), geom.Rotation.from_euler([0.0, 0.0, -np.pi / 4]))
-    np.testing.assert_allclose(reported.as_vector(_ROTMAT), (_GRASP_POSE * to_tool_point).as_vector(_ROTMAT), atol=1e-6)
+    np.testing.assert_allclose(reported.as_vector(_ROTMAT), _GRASP_POSE.as_vector(_ROTMAT), atol=1e-9)
 
 
-def test_a_delta_moves_the_hand_point_as_the_real_franka_driver_moves_it():
+def test_a_delta_reaches_the_env_as_a_delta_at_its_grasp_site():
     adapter = _adapter()
-    reported = adapter.observations(_with_grasp_pose(_payload(), _GRASP_POSE))[keys.ROBOT_STATE].ee_pose
+    adapter.observations(_with_grasp_pose(_payload(), _GRASP_POSE))
     delta = roboarm_command.CartesianDelta(
         geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
     )
     wire = adapter.action({keys.ROBOT_COMMAND: pimm.Message(delta)})[keys.ROBOT_COMMAND]
-    assert wire[protocol.COMMAND_TYPE] == protocol.CARTESIAN
-    expected = delta.apply(reported) * adapter.env_control_frame
-    np.testing.assert_allclose(wire[protocol.COMMAND_POSE], expected.as_vector(_ROTMAT), atol=1e-9)
+    assert wire[protocol.COMMAND_TYPE] == protocol.CARTESIAN_DELTA
 
 
 def test_a_reported_hand_pose_commanded_back_reaches_the_env_at_its_grasp_site():

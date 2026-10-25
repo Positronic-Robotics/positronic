@@ -23,7 +23,6 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import _prepare_spec
 from positronic.drivers.roboarm.models import (
-    DEFAULT_FRAME,
     EE_LINK,
     FLANGE_LINK,
     GRIPPER_SITE,
@@ -79,7 +78,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', FakeRenderer)
 
     # The policy states the site the sim reports its poses at, so its observation carries the pose.
-    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
 
     camera_dict = {keys.WRIST_IMAGE: 'handcam_left_ph'}
 
@@ -112,7 +111,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     assert episode.static[SCENE_XML].startswith('<mujoco')
     recorded_frames = parse_ee_frames(episode.static[roboarm_keys.EE_FRAMES])
     assert {name: frame.site for name, frame in recorded_frames.items()} == dict.fromkeys(
-        (keys.EE_POSE, keys.TARGET_EE_POSE), DEFAULT_FRAME
+        (keys.EE_POSE, keys.TARGET_EE_POSE), GRIPPER_SITE
     )
     signals = episode.signals
     assert keys.TARGET_EE_POSE in signals
@@ -215,7 +214,8 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
             keys.TARGET_GRIP: Command(producer.commands[keys.TARGET_GRIP], None),
         },
         prepare_handlers={eval_keys.SCENE: producer.env_reset},
-        static_meta=dict(ROBOT_STATIC_META),
+        # A rig that states frames carries the model they name.
+        static_meta={**ROBOT_STATIC_META, roboarm_keys.URDF: bundled_panda_model()[roboarm_keys.URDF]},
         meta_source=producer.robot_meta,
         control_systems=(producer,),
         simulated=True,

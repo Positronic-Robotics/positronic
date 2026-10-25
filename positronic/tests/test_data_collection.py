@@ -12,6 +12,7 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_SITE
 from positronic.drivers.webxr import WebXR
 from positronic.geom import Rotation, Transform3D
 from positronic.simulator.mujoco.sim import MujocoSim
@@ -178,6 +179,12 @@ def test_a_station_naming_an_arm_or_a_start_pose_without_the_other_is_refused(ro
             cameras=None,
             nominal_joints=nominal_joints,
         )
+
+
+def test_the_yam_station_states_its_poses_at_the_site_the_yam_driver_solves_at():
+    """YAM reports at its own MJCF site, so its recordings must not state the Franka ``GRIPPER_SITE``."""
+    assert data_collection.yamcfg.kwargs['pose_site'] == YAM_SITE
+    assert data_collection.droid.kwargs.get('pose_site', GRIPPER_SITE) == GRIPPER_SITE
 
 
 def test_a_spread_that_does_not_cover_every_nominal_joint_is_refused():

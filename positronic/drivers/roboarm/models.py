@@ -4,7 +4,7 @@ real arm and the live franka driver."""
 
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
-from functools import cache, lru_cache
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, NamedTuple
 
@@ -16,23 +16,31 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 
 FLANGE_LINK = 'link8'
 ROBOLAB_EEF_LINK = 'robolab_eef'
-# The franka's own tool frame, ``F_T_EE`` off the flange. TODO(#550): move ``DEFAULT_FRAME`` to the flange.
+# The Franka tool frame ``F_T_EE`` on the FR3, and the old grasp site on the sim panda: a URDF link name only.
 EE_LINK = 'end_effector'
-# The frame every embodiment publishes its poses in and every codec transform is measured from. Recommended at
-# the flange whenever the gripper can be swapped: recorded data outlives grippers, and an episode anchored to a
-# gripper frame becomes unplaceable once that gripper comes off.
-DEFAULT_FRAME = 'default'
-# The frame DROID records its poses in: the flange, ``panda_link8``, measured from ``DEFAULT_FRAME``. DROID's
-# ``cartesian_position`` equals FK at ``panda_link8``, and DROID's checkpoints speak that frame.
-# TODO(#550): the numbers are the inverse of the FR3's ``F_T_EE``, because ``DEFAULT_FRAME`` is not the flange yet.
-DROID_EE_FRAME = geom.Transform3D(
-    np.array([0.0, 0.0, -0.1033999994]), geom.Rotation.from_euler([0.0, 0.0, 0.7853981634])
-)
-# ``ROBOLAB_EEF_LINK`` measured from ``DEFAULT_FRAME``: RoboLab's ``eef_frame``, at the Robotiq 2F-85 coupler,
+# The grip point every bundled Franka model names, on the flange axes: z is the approach axis. Every Franka
+# embodiment reports its poses here, and every codec transform for a Franka is measured from here.
+GRIPPER_SITE = 'gripper'
+# The site the YAM MJCF reports and solves at. TODO(#788): move YAM to ``GRIPPER_SITE`` with its published model.
+YAM_SITE = 'default'
+# The frame DROID records its poses in: the flange, ``panda_link8``, measured from ``GRIPPER_SITE`` of the
+# FR3 with the 2F-85. DROID's ``cartesian_position`` equals FK at ``panda_link8``, and its checkpoints speak it.
+DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.155]))
+# ``ROBOLAB_EEF_LINK`` measured from ``GRIPPER_SITE``: RoboLab's ``eef_frame``, at the Robotiq 2F-85 coupler,
 # 18.17mm along the flange approach axis and +90deg about it. RoboLab measures and drives its arm there.
 ROBOLAB_EE_FRAME = geom.Transform3D(
-    np.array([0.0, 0.0, -0.085225977]), geom.Rotation.from_euler([0.0, 0.0, 2.35619449])
+    np.array([0.0, 0.0, -0.13682597739]), geom.Rotation.from_euler([0.0, 0.0, 1.5707963268])
 )
+# The FR3's Franka Hand point, ``F_T_EE`` under the Franka Hand setting in Desk, measured from ``GRIPPER_SITE``.
+# ``F_T_EE`` is 103.4mm along the flange approach axis and -45deg about it. Real-Franka recordings and checkpoints
+# older than ``GRIPPER_SITE`` speak poses there.
+FRANKA_HAND_FRAME = geom.Transform3D(
+    np.array([0.0, 0.0, -0.0516000006]), geom.Rotation.from_euler([0.0, 0.0, -0.7853981634])
+)
+# The hand point of the MuJoCo panda, its ``EE_LINK``, measured from ``GRIPPER_SITE``. ``EE_LINK`` is 58.4mm along
+# the flange approach axis and -45deg about it. Sim recordings and checkpoints older than ``GRIPPER_SITE`` speak
+# poses there.
+PANDA_HAND_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.04525]), geom.Rotation.from_euler([0.0, 0.0, -0.7853981634]))
 _QUAT = geom.Rotation.Representation.QUAT
 
 
@@ -144,16 +152,14 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
     ]
 
 
-# The grip point every bundled Franka model names, on the flange axes: z is the approach axis.
-GRIPPER_SITE = 'gripper'
 # The 2F-85's closed pads meet 155 mm along the flange approach axis.
-_2F85_GRASP_XYZ = '0 0 0.155'
+GRIPPER_2F85_XYZ = '0 0 0.155'
 
 # The coupler stays fixed: given an axis, the outer link hangs 19 mm out at full grip.
 _ROBOTIQ_2F85 = [
     _UrdfRow('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
     _UrdfRow('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
-    _UrdfRow(GRIPPER_SITE, FLANGE_LINK, None, _2F85_GRASP_XYZ, '0 0 0', None, None, None),
+    _UrdfRow(GRIPPER_SITE, FLANGE_LINK, None, GRIPPER_2F85_XYZ, '0 0 0', None, None, None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
     # RoboLab's ``eef_frame`` (``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``), measured off its DROID USD
@@ -207,13 +213,13 @@ def _bundled_robotiq_2f85() -> dict:
     }
 
 
-def add_default_frame(arm_root: ET.Element, parent: str, xyz: str = '0 0 0', rpy: str = '0 0 0') -> None:
-    """Declare ``DEFAULT_FRAME`` on a URDF in place, at ``xyz`` and ``rpy`` in the ``parent`` link."""
-    ET.SubElement(arm_root, 'link', name=DEFAULT_FRAME)
-    joint = ET.SubElement(arm_root, 'joint', name=f'{parent}_to_{DEFAULT_FRAME}', type='fixed')
+def attach_frame(arm_root: ET.Element, name: str, parent: str, xyz: str = '0 0 0', rpy: str = '0 0 0') -> None:
+    """Add a link ``name`` to a URDF in place, fixed at ``xyz`` and ``rpy`` in the ``parent`` link."""
+    ET.SubElement(arm_root, 'link', name=name)
+    joint = ET.SubElement(arm_root, 'joint', name=f'{parent}_to_{name}', type='fixed')
     ET.SubElement(joint, 'origin', xyz=xyz, rpy=rpy)
     ET.SubElement(joint, 'parent', link=parent)
-    ET.SubElement(joint, 'child', link=DEFAULT_FRAME)
+    ET.SubElement(joint, 'child', link=name)
 
 
 def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
@@ -225,15 +231,14 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     return gripper[roboarm_keys.GRIPPER]
 
 
-@cache
-def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
-    """FR3 and Robotiq 2F-85 model metadata, with ``DEFAULT_FRAME`` attached at ``default_frame_at``."""
+@lru_cache(maxsize=1)
+def bundled_franka_model() -> dict:
+    """FR3 and Robotiq 2F-85 model metadata."""
     here = Path(__file__).resolve()
     arm_root = ET.fromstring((here.parent / 'fr3.urdf').read_text())
     mesh_dir = here.parents[2] / 'assets' / 'fr3_collision'
     meshes = {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))}
     gripper = attach_robotiq_2f85(arm_root, meshes)
-    add_default_frame(arm_root, default_frame_at)
     return {
         roboarm_keys.URDF: ET.tostring(arm_root, encoding='unicode'),
         roboarm_keys.MESHES: meshes,
@@ -244,18 +249,18 @@ def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
 
 YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 _YAM_WRIST_LINK = 'link_6'
-# The YAM MJCF's ``default`` site: 134.7 mm along the wrist axis, turned -90deg about it.
-_YAM_DEFAULT_XYZ, _YAM_DEFAULT_RPY = '0 0 0.1347', '0 0 -1.5707963268'
+# The YAM MJCF's ``YAM_SITE``: 134.7 mm along the wrist axis, turned -90deg about it.
+_YAM_SITE_XYZ, _YAM_SITE_RPY = '0 0 0.1347', '0 0 -1.5707963268'
 
 
 @lru_cache(maxsize=1)
 def bundled_yam_model() -> dict:
-    """i2rt YAM model metadata: its URDF and visual meshes, its joint names, and the ``DEFAULT_FRAME`` its
-    ``ee_pose`` is measured at."""
+    """i2rt YAM model metadata: its URDF and visual meshes, its joint names, and the ``YAM_SITE`` its ``ee_pose``
+    is measured at."""
     urdf_path = Path(__file__).resolve().parents[2] / 'assets' / 'i2rt_yam' / 'yam.urdf'
     root = ET.fromstring(urdf_path.read_text())
     mesh_files = {mesh.attrib['filename'] for mesh in root.iter('mesh')}
-    add_default_frame(root, _YAM_WRIST_LINK, _YAM_DEFAULT_XYZ, _YAM_DEFAULT_RPY)
+    attach_frame(root, YAM_SITE, _YAM_WRIST_LINK, _YAM_SITE_XYZ, _YAM_SITE_RPY)
     return {
         'robot': 'i2rt_yam',
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
@@ -267,8 +272,7 @@ def bundled_yam_model() -> dict:
 @lru_cache(maxsize=1)
 def bundled_panda_model() -> dict:
     """The bundled simulated Franka panda (arm + hand) for the 3D viewer and offline IK: the panda
-    URDF, its collision meshes, the joint names, the ``DEFAULT_FRAME`` the sim measures
-    ``robot_state.ee_pose`` at, and the ``gripper`` spec that slides the fingers from the recorded
+    URDF, its collision meshes, the joint names, and the ``gripper`` spec that slides the fingers from the recorded
     ``grip`` signal. Supplied to sim datasets by ``SIM_ROBOT_TRANSFORM``, mirroring how
     ``bundled_franka_model`` backfills the real arm.
     """
@@ -276,7 +280,6 @@ def bundled_panda_model() -> dict:
     root = ET.fromstring(urdf_path.read_text())
     mesh_dir = urdf_path.parent / 'assets'
     mesh_files = {mesh.attrib['filename'] for mesh in root.iter('mesh')}
-    add_default_frame(root, EE_LINK)
     return {
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
         roboarm_keys.MESHES: {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
