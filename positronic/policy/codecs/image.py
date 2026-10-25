@@ -71,8 +71,8 @@ class TransformImages(Codec):
 
     def __init__(
         self,
-        width: int = 640,
-        height: int = 640,
+        width: int,
+        height: int,
         *,
         pad: bool = False,
         resample: Resample = Resample.BILINEAR,

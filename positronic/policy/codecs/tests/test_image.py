@@ -136,11 +136,11 @@ def test_explicit_image_paths_preserve_names_other_images_and_containers():
     assert output['cameras'][1] is untouched
     assert output['literal.key'].shape == (6, 6, 3)
     assert inputs['cameras'][0] is selected
-    assert TransformImages(paths=[]).encode(inputs) is inputs
+    assert TransformImages(6, 6, paths=[]).encode(inputs) is inputs
     with pytest.raises(KeyError):
         codec.encode({})
     with pytest.raises(ValueError, match='HWC'):
-        TransformImages(paths=[['state']]).encode({'state': [1, 2]})
+        TransformImages(6, 6, paths=[['state']]).encode({'state': [1, 2]})
 
 
 def _image(h, w):
@@ -157,9 +157,6 @@ class TestTransformImages:
         assert result['cam_a'].shape == (48, 64, 3)
         assert result['cam_b'].shape == (48, 64, 3)
         np.testing.assert_array_equal(result['state'], np.array([1.0]))
-
-    def test_defaults_to_the_standard_bound(self):
-        assert TransformImages().encode({'cam': _image(1080, 1920)})['cam'].shape == (360, 640, 3)
 
     def test_aspect_is_kept_and_images_only_shrink(self):
         result = TransformImages(160, 160).encode({'wide': _image(480, 640), 'small': _image(24, 32)})
@@ -227,8 +224,13 @@ class TestTransformImages:
         assert isinstance(restored, TransformImages)
         assert restored.to_spec() == TransformImages(64, 48).to_spec()
 
-    def test_a_v1_spec_without_bounds_takes_the_standard_bound(self):
-        restored = spec.from_spec({NAME: TransformImages.WIRE_NAME})
+    @pytest.mark.parametrize('bounds', [{}, {'width': 64}, {'height': 48}])
+    def test_transform_specs_require_both_dimensions(self, bounds):
+        with pytest.raises(TypeError, match='required positional argument'):
+            spec.from_spec(component(TransformImages.WIRE_NAME, **bounds))
+
+    def test_a_legacy_spec_without_bounds_takes_the_standard_bound(self):
+        restored = spec.from_spec({NAME: 'restrict_image_size'})
         assert isinstance(restored, TransformImages)
         assert restored.encode({'cam': _image(1080, 1920)})['cam'].shape == (360, 640, 3)
 
@@ -260,7 +262,11 @@ class TestTransformImages:
         args = bounds if resample is None else {**bounds, 'resample': resample.value}
         rebuilt = spec.from_spec(component('restrict_image_size', version=version, **args))
         assert isinstance(rebuilt, TransformImages)
-        expected = TransformImages(**bounds, resample=Resample.BILINEAR if resample is None else resample)
+        expected = TransformImages(
+            width=bounds.get('width', 640),
+            height=bounds.get('height', 640),
+            resample=Resample.BILINEAR if resample is None else resample,
+        )
         assert rebuilt.to_spec()['args'] == {
             'width': expected._width,
             'height': expected._height,

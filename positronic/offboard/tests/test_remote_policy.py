@@ -1244,7 +1244,10 @@ def test_an_end_command_in_the_codec_ends_the_client_run_when_its_element_plays(
     codec = codecs.absolute_pos_action.override(tgt_ee_pose_key='pose', tgt_grip_key='grip').instantiate()
     codec = codec & EndCommand()
     if side == 'server':  # openpi, galaxea, lerobot: the action codec is the deployment codec
-        placement = {'codec': codec, 'local': Sequential(EndOnField(), ChunkedSchedule(fps=10), TransformImages())}
+        placement = {
+            'codec': codec,
+            'local': Sequential(EndOnField(), ChunkedSchedule(fps=10), TransformImages(640, 640)),
+        }
     else:  # dreamzero: the action codec sits in the client stack, inside the schedule
         placement = {'local': Sequential(EndOnField(), ChunkedSchedule(fps=10), codec)}
     address, _, _ = served(model=_EndingModel(), transport=transport, **placement)

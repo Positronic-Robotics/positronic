@@ -65,7 +65,7 @@ def test_codec_work_is_inside_submit(nested):
             return {'value': data['value'] + 10}
 
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
-    conversion = Sequential(ThreadCodec(), TransformImages()) if nested else ThreadCodec()
+    conversion = Sequential(ThreadCodec(), TransformImages(640, 640)) if nested else ThreadCodec()
     run = runtime.start(Sequential(ChunkedSchedule(fps=10), conversion), lambda obs: [{'value': obs['encoded']}])
     try:
         first = run.send({})
@@ -108,7 +108,7 @@ def test_sequence_preserves_normal_processor_completion_and_its_return(with_code
             finally:
                 closed.append(True)
 
-    stack = Sequential(TransformImages(), Finite()) if with_codec else Sequential(Finite())
+    stack = Sequential(TransformImages(640, 640), Finite()) if with_codec else Sequential(Finite())
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
     with telemetry.timings_to(lambda *_: None) if timed else nullcontext():
         run = runtime.start(stack)
@@ -126,7 +126,7 @@ def test_sequence_preserves_normal_processor_completion_and_its_return(with_code
 @pytest.mark.parametrize('translation', [0.1, 0.2])
 def test_sequential_rejects_two_frame_conversions(translation):
     outer = ChangeEEFrame([0.1, 0, 0, 1, 0, 0, 0])
-    inner = ChangeEEFrame([translation, 0, 0, 1, 0, 0, 0]) | TransformImages()
+    inner = ChangeEEFrame([translation, 0, 0, 1, 0, 0, 0]) | TransformImages(640, 640)
     schedule = ChunkedSchedule(fps=10)
     stack = Sequential(outer, schedule)
     assert stack.meta() == outer.meta | schedule.meta()

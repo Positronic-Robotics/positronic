@@ -37,7 +37,7 @@ def molmoact2_model(hf_repo: str, device_map: str, norm_tag: str, num_steps: int
 @cfn.config(codec=molmoact2_codecs.droid)
 def pipeline(codec: Codec, fps: float = 15.0, horizon_sec: float | None = None, compress_images: bool = False):
     return PolicyDeployment(
-        Sequential(ChunkedSchedule(fps, horizon_sec), TransformImages()), codec, compress_images=compress_images
+        Sequential(ChunkedSchedule(fps, horizon_sec), TransformImages(640, 640)), codec, compress_images=compress_images
     )
 
 

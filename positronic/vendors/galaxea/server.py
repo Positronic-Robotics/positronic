@@ -192,7 +192,7 @@ def galaxea_model(
 @cfn.config(codec=cfn.Config(codecs.DroidCodec))
 def pipeline(codec: codecs.DroidCodec, execution_steps: int = 16):
     return PolicyDeployment(
-        Sequential(ChunkedSchedule(codec.fps, execution_steps / codec.fps), TransformImages()),
+        Sequential(ChunkedSchedule(codec.fps, execution_steps / codec.fps), TransformImages(640, 640)),
         codecs.droid(action=codec),
     )
 

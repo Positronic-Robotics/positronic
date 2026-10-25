@@ -1238,7 +1238,7 @@ def test_wire_names_match_the_registered_components():
         'flip_grip': FlipGrip(),
         'metadata': Metadata({'action_fps': 15}),
         'restrict_image_size': RestrictImageSizeV1(),
-        'transform_images': TransformImages(),
+        'transform_images': TransformImages(640, 640),
         'observation_codec': ObservationCodecV1(state={}, images={}),
         'state_observation': StateObservationCodec(state={}),
         'select_observation_fields': SelectObservationFields(mapping={}),
