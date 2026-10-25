@@ -5,25 +5,34 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.policy import training
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
     FlipGrip,
-    ImageObservationCodec,
     Metadata,
+    Resample,
     SetControlMode,
 )
+from positronic.policy.codecs.image import image_observation as image_inference
 from positronic.policy.codecs.observation import TASK_FIELD, StateObservationCodec
+from positronic.policy.compatibility import WithTraining
 from positronic.policy.keys import ACTION_FPS
 
 RotRep = geom.Rotation.Representation
 
 
+@cfn.config(resample=Resample.BILINEAR)
+def image_observation(images: dict[str, tuple[str, tuple[int, int]]], resample: Resample):
+    """Connect image inference and training recipes for codec-based exporters."""
+    return WithTraining(image_inference(images, resample), training.image_observation(images, resample))
+
+
 @cfn.config(task_field=TASK_FIELD)
 def observation(state: dict[str, dict[str, int]], images: dict[str, tuple[str, tuple[int, int]]], task_field: str):
     """Prepare state, prompt and images independently from the same observation."""
-    return StateObservationCodec(state, task_field) & ImageObservationCodec(images)
+    return StateObservationCodec(state, task_field) & image_observation(images=images)
 
 
 @cfn.config()

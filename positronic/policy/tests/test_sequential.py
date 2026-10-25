@@ -10,7 +10,7 @@ import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Policy, PolicyEnd, Step
-from positronic.policy.codecs import ChangeEEFrame, Codec, Metadata, RestrictImageSize
+from positronic.policy.codecs import ChangeEEFrame, Codec, Metadata, TransformImages
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
 from positronic.policy.sequential import Sequential
@@ -31,7 +31,7 @@ from positronic_model_server.spec import component, parallel, sequence
 description = sequence(
     component('chunked_schedule', fps=20),
     parallel(
-        component('restrict_image_size', width=320, height=180),
+        component('transform_images', width=320, height=180),
         component('metadata', values={'model': 'example'}),
     ),
 )
@@ -45,7 +45,7 @@ print(json.dumps(description))
     )
     stack = from_spec(json.loads(result.stdout))
     assert isinstance(stack, Sequential)
-    expected = Sequential(ChunkedSchedule(fps=20), RestrictImageSize(320, 180) & Metadata({'model': 'example'}))
+    expected = Sequential(ChunkedSchedule(fps=20), TransformImages(320, 180) & Metadata({'model': 'example'}))
     assert stack.meta() == expected.meta()
     assert stack.to_spec() == expected.to_spec()
 
@@ -65,7 +65,7 @@ def test_codec_work_is_inside_submit(nested):
             return {'value': data['value'] + 10}
 
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
-    conversion = Sequential(ThreadCodec(), RestrictImageSize()) if nested else ThreadCodec()
+    conversion = Sequential(ThreadCodec(), TransformImages()) if nested else ThreadCodec()
     run = runtime.start(Sequential(ChunkedSchedule(fps=10), conversion), lambda obs: [{'value': obs['encoded']}])
     try:
         first = run.send({})
@@ -108,7 +108,7 @@ def test_sequence_preserves_normal_processor_completion_and_its_return(with_code
             finally:
                 closed.append(True)
 
-    stack = Sequential(RestrictImageSize(), Finite()) if with_codec else Sequential(Finite())
+    stack = Sequential(TransformImages(), Finite()) if with_codec else Sequential(Finite())
     runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
     with telemetry.timings_to(lambda *_: None) if timed else nullcontext():
         run = runtime.start(stack)
@@ -126,7 +126,7 @@ def test_sequence_preserves_normal_processor_completion_and_its_return(with_code
 @pytest.mark.parametrize('translation', [0.1, 0.2])
 def test_sequential_rejects_two_frame_conversions(translation):
     outer = ChangeEEFrame([0.1, 0, 0, 1, 0, 0, 0])
-    inner = ChangeEEFrame([translation, 0, 0, 1, 0, 0, 0]) | RestrictImageSize()
+    inner = ChangeEEFrame([translation, 0, 0, 1, 0, 0, 0]) | TransformImages()
     schedule = ChunkedSchedule(fps=10)
     stack = Sequential(outer, schedule)
     assert stack.meta() == outer.meta | schedule.meta()

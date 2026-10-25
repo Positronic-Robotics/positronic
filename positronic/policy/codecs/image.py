@@ -1,70 +1,19 @@
 import collections.abc as cabc
 import os
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
 from functools import partial
 from typing import Any, Self
 
-import cv2
 import numpy as np
-from PIL import Image as PilImage
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, JpegEncoding, encode_images, encode_jpeg
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
-from positronic.dataset import Signal
-from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.episode import Derive, EpisodeTransform
+from positronic.dataset.transforms.image import Resample
 
 from .base import Codec
-from .metadata import LEROBOT_FEATURES, lerobot_image
-
-
-class ImageObservationCodec(Codec):
-    """Select RGB images and resize with bilinear interpolation and zero padding.
-
-    ``images`` maps each output name to ``(input_key, (width, height))``. The same settings
-    prepare live observations and recorded image signals, including LeRobot feature metadata.
-    """
-
-    WIRE_NAME = 'image_observation'
-
-    def __init__(self, images: dict[str, tuple[str, tuple[int, int]]]):
-        self._images = images
-
-    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
-        obs: dict[str, Any] = {}
-        for out_name, (input_key, (width, height)) in self._images.items():
-            if input_key not in data:
-                raise KeyError(f"Missing image input '{input_key}' for '{out_name}', available keys: {data.keys()}")
-            frame = data[input_key]
-            if not isinstance(frame, np.ndarray):
-                frame = np.asarray(frame)
-            if frame.ndim != 3 or frame.shape[2] != 3:
-                raise ValueError(f"Image '{input_key}' must be HWC with 3 channels, got {frame.shape}")
-            obs[out_name] = image.resize_with_pad_per_frame(width, height, PilImage.Resampling.BILINEAR, frame)
-        return obs
-
-    def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
-        input_key, (width, height) = self._images[out_name]
-        return image.resize_with_pad(width, height, signal=episode[input_key])
-
-    @property
-    def training_encoder(self) -> EpisodeTransform:
-        features = {name: lerobot_image(*size) for name, (_, size) in self._images.items()}
-        return Derive(
-            meta={LEROBOT_FEATURES: features}, **{name: partial(self._derive_image, name) for name in self._images}
-        )
-
-    @property
-    def meta(self):
-        sizes = {input_key: (w, h) for input_key, (w, h) in self._images.values()}
-        unique = set(sizes.values())
-        return {self.IMAGE_SIZES: unique.pop() if len(unique) == 1 else sizes}
-
-    def to_spec(self):
-        images = {name: [key, list(size)] for name, (key, size) in self._images.items()}
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'images': images}}
+from .metadata import Metadata
+from .observation import SelectObservationFields
 
 
 class EncodeImages(Codec):
@@ -110,47 +59,40 @@ class EncodeImages(Codec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
-class Resample(Enum):
-    """The filter that `RestrictImageSize` scales a frame with.
+class TransformImages(Codec):
+    """Transform RGB images in nested observations, including temporal frame stacks.
 
-    * `BILINEAR` is the antialiased bilinear filter of Pillow. The vendor codecs resize with it, so a bound at
-      the model's own size gives the same pixels as training.
-    * `AREA` is `cv2.INTER_AREA`. It is faster, but its pixels are not the pixels of `BILINEAR`. Use it only
-      when the model resizes the bounded frames again.
+    The default shrinks images within the bounds. ``pad=True`` resizes up or down and pads to the exact size.
+    ``paths=None`` finds arrays automatically; explicit paths require images and leave other values untouched.
+    Field names and decoded results pass through unchanged.
     """
 
-    BILINEAR = 'bilinear'
-    AREA = 'area'
-
-
-def _scaled(image: np.ndarray, width: int, height: int, resample: Resample) -> np.ndarray:
-    h, w = image.shape[:2]
-    scale = min(1.0, width / w, height / h)
-    tw, th = int(w * scale), int(h * scale)
-    if (tw, th) == (w, h):
-        return image
-    if resample is Resample.AREA:
-        return cv2.resize(np.ascontiguousarray(image), (tw, th), interpolation=cv2.INTER_AREA)
-    return np.array(PilImage.fromarray(image).resize((tw, th), resample=PilImage.Resampling.BILINEAR))
-
-
-class RestrictImageSize(Codec):
-    """Bound image dimensions while preserving aspect ratio.
-
-    Images larger than ``width`` x ``height`` are scaled down to fit it, keeping aspect ratio; anything
-    already within it passes through untouched. ``resample`` selects the filter (see `Resample`).
-    """
-
-    WIRE_NAME = 'restrict_image_size'
+    WIRE_NAME = 'transform_images'
 
     # Below this a stack scales quicker in one thread than a pool costs to raise.
     _PARALLEL_FROM = 4
     _MAX_WORKERS = 8
 
-    def __init__(self, width: int = 640, height: int = 640, resample: Resample = Resample.BILINEAR):
+    def __init__(
+        self,
+        width: int = 640,
+        height: int = 640,
+        *,
+        pad: bool = False,
+        resample: Resample = Resample.BILINEAR,
+        paths: list[list[str | int]] | None = None,
+    ):
+        if type(width) is not int or type(height) is not int or min(width, height) < 1:
+            raise ValueError('Image dimensions must be positive integers')
+        if type(pad) is not bool:
+            raise ValueError('pad must be a boolean')
+        if paths is not None and any(type(part) not in (str, int) for path in paths for part in path):
+            raise ValueError('Image paths contain only mapping keys and list indices')
         self._width = width
         self._height = height
+        self._pad = pad
         self._resample = resample
+        self._paths = None if paths is None else tuple(tuple(path) for path in paths)
 
     @classmethod
     def from_spec_args(cls, **args: Any) -> Self:
@@ -158,20 +100,39 @@ class RestrictImageSize(Codec):
         return cls(**args)
 
     def encode(self, data):
-        return {key: self._restrict(value) for key, value in data.items()}
+        if self._paths is None:
+            return self._transform_value(data)
+        for path in self._paths:
+            data = self._at(data, path)
+        return data
 
-    def _restrict(self, value: Any) -> Any:
-        # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
-        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-            # A TemporalStack emits a (T, H, W, 3) stack, so bound each frame rather than the stack's first axis.
-            if value.ndim == 4:
-                return np.stack(self._scaled_frames(value))
-            return _scaled(value, self._width, self._height, self._resample)
+    def _at(self, value: Any, path: tuple[str | int, ...]) -> Any:
+        if not path:
+            return self._transform_image(np.asarray(value))
+        key, *rest = path
         if isinstance(value, cabc.Mapping):
-            return {k: self._restrict(v) for k, v in value.items()}
+            return {**value, key: self._at(value[key], tuple(rest))}
+        if isinstance(value, list | tuple) and type(key) is int:
+            result = list(value)
+            result[key] = self._at(value[key], tuple(rest))
+            return tuple(result) if isinstance(value, tuple) else result
+        raise ValueError(f'Image path {path!r} does not match the value')
+
+    def _transform_value(self, value: Any) -> Any:
+        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+            return self._transform_image(value)
+        if isinstance(value, cabc.Mapping):
+            return {key: self._transform_value(item) for key, item in value.items()}
         if isinstance(value, list | tuple):
-            return type(value)(self._restrict(v) for v in value)
+            return type(value)(self._transform_value(item) for item in value)
         return value
+
+    def _transform_image(self, value: np.ndarray) -> np.ndarray:
+        if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
+            raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
+        if value.ndim == 4:
+            return np.stack(self._scaled_frames(value))
+        return image.transform_frame(value, self._width, self._height, pad=self._pad, resample=self._resample)
 
     @staticmethod
     def _usable_cpus() -> int:
@@ -193,7 +154,9 @@ class RestrictImageSize(Codec):
     def _scaled_frames(self, stack: np.ndarray) -> list[np.ndarray]:
         """Every frame of one stack, scaled. Pillow and OpenCV drop the GIL for a resize and the frames are
         independent, so more than one may run at a time."""
-        scale = partial(_scaled, width=self._width, height=self._height, resample=self._resample)
+        scale = partial(
+            image.transform_frame, width=self._width, height=self._height, pad=self._pad, resample=self._resample
+        )
         workers = self._workers(len(stack))
         if workers == 1:
             return [scale(frame) for frame in stack]
@@ -204,15 +167,28 @@ class RestrictImageSize(Codec):
         return data
 
     @property
-    def training_encoder(self) -> EpisodeTransform:
-        raise NotImplementedError(
-            'RestrictImageSize bounds what goes on the wire and is not part of the model contract: '
-            'training derives its columns from full-resolution episodes.'
-        )
+    def training_encoder(self):
+        raise NotImplementedError('Training recipes transform full-resolution signals with image.transform_frame')
 
     def to_spec(self):
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'width': self._width, 'height': self._height, 'resample': self._resample.value},
+            ARGS: {
+                'width': self._width,
+                'height': self._height,
+                'pad': self._pad,
+                'resample': self._resample.value,
+                'paths': None if self._paths is None else [list(path) for path in self._paths],
+            },
         }
+
+
+def image_observation(images: dict[str, tuple[str, tuple[int, int]]], resample: Resample = Resample.BILINEAR) -> Codec:
+    """Compose field selection, padded image transforms and source-camera size metadata."""
+    sizes = {source: tuple(size) for source, size in images.values()}
+    unique = set(sizes.values())
+    result = SelectObservationFields({name: source for name, (source, _) in images.items()})
+    for name, (_, (width, height)) in images.items():
+        result = result | TransformImages(width, height, pad=True, resample=resample, paths=[[name]])
+    return result | Metadata({Codec.IMAGE_SIZES: unique.pop() if len(unique) == 1 else sizes})

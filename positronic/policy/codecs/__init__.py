@@ -14,7 +14,7 @@ from .base import Codec, PolicyCommandError
 from .end import EndCommand
 from .geometry import ChangeEEFrame, ConvertPose
 from .gripper import BinarizeGripInference, BinarizeGripTraining, FlipGrip
-from .image import EncodeImages, ImageObservationCodec, Resample, RestrictImageSize
+from .image import EncodeImages, Resample, TransformImages
 from .metadata import (
     ACTION,
     GR00T_MODALITY,
@@ -25,4 +25,10 @@ from .metadata import (
     lerobot_image,
     lerobot_vector,
 )
-from .observation import TASK_FIELD, PackObservationFields, RenameObservationFields, StateObservationCodec
+from .observation import (
+    TASK_FIELD,
+    PackObservationFields,
+    RenameObservationFields,
+    SelectObservationFields,
+    StateObservationCodec,
+)

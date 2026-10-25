@@ -16,9 +16,8 @@ from positronic.policy.codecs import (
     EncodeImages,
     EndCommand,
     FlipGrip,
-    ImageObservationCodec,
     Metadata,
-    RestrictImageSize,
+    TransformImages,
 )
 from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
@@ -30,8 +29,13 @@ from positronic.policy.codecs.action import (
     UnpackActionChunk,
 )
 from positronic.policy.codecs.geometry import ConvertPose
-from positronic.policy.codecs.observation import PackObservationFields, RenameObservationFields, StateObservationCodec
-from positronic.policy.compatibility import ChunkedScheduleV2, ObservationCodecV1
+from positronic.policy.codecs.observation import (
+    PackObservationFields,
+    RenameObservationFields,
+    SelectObservationFields,
+    StateObservationCodec,
+)
+from positronic.policy.compatibility import ChunkedScheduleV2, ObservationCodecV1, RestrictImageSizeV1
 from positronic.policy.processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
@@ -52,12 +56,13 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         BinarizeGripInference,
         FlipGrip,
         Metadata,
-        RestrictImageSize,
+        TransformImages,
+        RestrictImageSizeV1,
         ChangeEEFrame,
         ConvertPose,
         ObservationCodecV1,
         StateObservationCodec,
-        ImageObservationCodec,
+        SelectObservationFields,
         PackObservationFields,
         RenameObservationFields,
         AbsolutePositionAction,

@@ -6,11 +6,12 @@ from positronic_model_server.spec import ARGS, VERSION, component
 
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys as obs_keys
+from positronic.cfg.codecs import image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
-from positronic.policy.codecs import LEROBOT_FEATURES, ImageObservationCodec
+from positronic.policy.codecs import LEROBOT_FEATURES
 from positronic.policy.codecs.observation import PackObservationFields, RenameObservationFields, StateObservationCodec
 from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.spec import from_spec
@@ -224,7 +225,7 @@ def test_observation_encode_images_and_state_shapes():
     h, w = 6, 8
     img = np.full((h, w, 3), 255, dtype=np.uint8)
 
-    enc = StateObservationCodec(state={'observation.state': {'a': 2, 'b': 1}}) & ImageObservationCodec(
+    enc = StateObservationCodec(state={'observation.state': {'a': 2, 'b': 1}}) & image_observation(
         images={'observation.images.left': ('left.image', (w, h))}
     )
     obs = enc.encode({'left.image': img, 'a': [1, 2], 'b': 3.0})

@@ -13,7 +13,7 @@ from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
@@ -67,7 +67,7 @@ def pipeline(
     ee_frame: geom.Transform3D | None = None,
 ) -> PolicyDeployment:
     return PolicyDeployment(
-        local=Sequential(ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), RestrictImageSize(224, 224)),
+        local=Sequential(ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), TransformImages(224, 224)),
         codec=codecs.compose_data(
             obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame
         ),

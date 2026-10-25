@@ -4,7 +4,7 @@ import pytest
 from positronic import keys
 from positronic.cfg import codecs as cfg_codecs
 from positronic.drivers.roboarm.command import PositionControl
-from positronic.policy.codecs import ACTION, EndCommand, ObservationCodec, PolicyCommandError, SetControlMode
+from positronic.policy.codecs import ACTION, EndCommand, PolicyCommandError, SetControlMode, StateObservationCodec
 from positronic.policy.codecs.action import AbsolutePositionAction
 from positronic.policy.keys import END
 
@@ -19,7 +19,7 @@ def _action():
     'codec',
     [
         _action() & EndCommand(),
-        ObservationCodec(state={}, images={}) & _action() & EndCommand(),
+        StateObservationCodec(state={}) & _action() & EndCommand(),
         (SetControlMode(PositionControl()) | _action()) & EndCommand(),
     ],
     ids=['action', 'observation_and_action', 'control_mode_then_action'],

@@ -17,6 +17,21 @@ from .metadata import LEROBOT_FEATURES, lerobot_vector
 TASK_FIELD = 'task'
 
 
+class SelectObservationFields(Codec):
+    """Select and rename literal input fields; contribute no decoded commands."""
+
+    WIRE_NAME = 'select_observation_fields'
+
+    def __init__(self, mapping: dict[str, str]):
+        self._mapping = dict(mapping)
+
+    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
+        return {name: data[source] for name, source in self._mapping.items()}
+
+    def to_spec(self):
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mapping': dict(self._mapping)}}
+
+
 class PackObservationFields(Codec):
     """Select fields into nested dictionaries and add leading singleton dimensions.
 

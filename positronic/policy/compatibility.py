@@ -11,10 +11,13 @@ from typing import Any, overload
 from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION
 
 from positronic import keys as obs_keys
-from positronic.dataset.transforms.episode import Derive, Get
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get
+from positronic.dataset.transforms.image import Resample
 from positronic.policy import keys as policy_keys
+from positronic.policy import training
 from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
-from positronic.policy.codecs import TASK_FIELD, Codec, ImageObservationCodec, StateObservationCodec
+from positronic.policy.codecs import TASK_FIELD, Codec, StateObservationCodec, TransformImages
+from positronic.policy.codecs.image import image_observation
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule, DurationEstimate, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
@@ -31,6 +34,48 @@ V1_SERVER_DEFAULT_ACTION_FPS = 15.0
 logger = logging.getLogger(__name__)
 
 
+class WithTraining(Codec):
+    """Expose an independent training transform through the legacy codec interface."""
+
+    # TODO: Remove when the remaining exporters take training recipes instead of Codec.training_encoder.
+    def __init__(self, inference: Codec, training: EpisodeTransform):
+        self._inference = inference
+        self._training = training
+
+    def encode(self, data):
+        return self._inference.encode(data)
+
+    def decode(self, data):
+        return self._inference.decode(data)
+
+    @property
+    def meta(self):
+        return self._inference.meta
+
+    @property
+    def training_encoder(self):
+        return self._training
+
+    def to_spec(self):
+        return self._inference.to_spec()
+
+
+class RestrictImageSizeV1(TransformImages):
+    """Read the published shrink-only image component."""
+
+    WIRE_NAME = 'restrict_image_size'
+
+    def __init__(self, width: int = 640, height: int = 640, resample: Resample = Resample.BILINEAR):
+        super().__init__(width, height, resample=resample)
+
+    def to_spec(self):
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'width': self._width, 'height': self._height, 'resample': self._resample.value},
+        }
+
+
 class ObservationCodecV1(Codec):
     """Decode the combined state/image observation schema published as version 1."""
 
@@ -43,7 +88,8 @@ class ObservationCodecV1(Codec):
         task_field: str = TASK_FIELD,
     ):
         self._state = StateObservationCodec(state, task_field)
-        self._images = ImageObservationCodec(images)
+        self._image_configs = images
+        self._images = image_observation(images)
         self._state_names = tuple(state)
         self._task_field = task_field
 
@@ -60,7 +106,7 @@ class ObservationCodecV1(Codec):
         # V1 training gives the task column precedence over images, and images over state.
         return (
             Derive(meta=None, **{TASK_FIELD: Get(obs_keys.TASK, '')})
-            & self._images.training_encoder
+            & training.image_observation(self._image_configs)
             & self._state.training_encoder
         )
 
@@ -72,7 +118,10 @@ class ObservationCodecV1(Codec):
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {**self._state.to_spec()[ARGS], **self._images.to_spec()[ARGS]},
+            ARGS: {
+                **self._state.to_spec()[ARGS],
+                'images': {name: [source, list(size)] for name, (source, size) in self._image_configs.items()},
+            },
         }
 
 

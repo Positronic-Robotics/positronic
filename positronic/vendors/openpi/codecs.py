@@ -18,7 +18,6 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
-from PIL import Image as PilImage
 
 from positronic import geom, keys
 from positronic.cfg import codecs
@@ -151,7 +150,7 @@ class LiberoObservationCodec(Codec):
     def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
         frame = np.ascontiguousarray(np.asarray(inputs[input_key])[:, ::-1])
         w, h = self._image_size
-        return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
+        return image.resize_with_pad_per_frame(w, h, image.Resample.BILINEAR, frame)
 
     @property
     def meta(self) -> dict[str, Any]:

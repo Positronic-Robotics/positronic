@@ -6,7 +6,6 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 from eval_vocabulary.timeline import recording_timeline
-from PIL import Image as PilImage
 
 from positronic import keys
 from positronic.cfg import codecs, layers
@@ -110,8 +109,8 @@ class DreamZeroObservationCodec(Codec):
             return np.zeros((h, w, 3), dtype=np.uint8)
         frame = np.asarray(frame)
         if frame.ndim == 4:
-            return np.stack([image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, f) for f in frame])
-        return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
+            return np.stack([image.resize_with_pad_per_frame(w, h, image.Resample.BILINEAR, f) for f in frame])
+        return image.resize_with_pad_per_frame(w, h, image.Resample.BILINEAR, frame)
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         joint_pos = np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(-1)

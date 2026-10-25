@@ -92,7 +92,7 @@ def test_observation_spec_round_trip_preserves_training_and_inference_layouts(pr
     episode_data = {name: DummySignal([100], [value]) for name, value in inputs.items() if name != keys.TASK}
     if task is not None:
         episode_data[keys.TASK] = task
-    encoder = codec.training_encoder
+    encoder = definition.training_encoder
     training = encoder(EpisodeContainer(episode_data))
     assert set(training) == {openpi.TRAINING_STATE, openpi.TRAINING_WRIST_IMAGE, openpi.TRAINING_IMAGE, keys.TASK}
     np.testing.assert_array_equal(training[openpi.TRAINING_STATE].values()[0], expected_state, strict=True)

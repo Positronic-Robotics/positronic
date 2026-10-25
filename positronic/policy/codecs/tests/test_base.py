@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from positronic import keys as obs_keys
-from positronic.cfg.codecs import compose
+from positronic.cfg.codecs import compose, image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -17,7 +17,6 @@ from positronic.policy.codecs import (
     ChangeEEFrame,
     Codec,
     FlipGrip,
-    ImageObservationCodec,
     Metadata,
     PolicyCommandError,
 )
@@ -63,7 +62,7 @@ def test_composed_training_encoder_uses_parallel():
 
     obs = StateObservationCodec(
         state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}}
-    ) & ImageObservationCodec(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))})
+    ) & image_observation(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))})
     action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7)
     metadata = Metadata({'action_fps': 15.0})
     composed = metadata | (obs & action)
@@ -131,7 +130,7 @@ def test_sequential_into_parallel_training():
 
     obs = StateObservationCodec(
         state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}}
-    ) & ImageObservationCodec(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))})
+    ) & image_observation(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))})
     action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7)
     binarize = BinarizeGripTraining((obs_keys.GRIP, obs_keys.TARGET_GRIP))
     composed = binarize | (obs & action)
@@ -164,7 +163,7 @@ def test_compose_training_encoder_produces_only_derived_keys():
 
     codec = compose(
         obs=StateObservationCodec(state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}})
-        & ImageObservationCodec(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))}),
+        & image_observation(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))}),
         action=AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7),
     )
 

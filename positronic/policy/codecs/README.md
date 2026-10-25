@@ -85,6 +85,7 @@ These are the public codec classes exported by this package. Each name links to 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
 | [`StateObservationCodec`](observation.py) | Concatenates state signals into float32 vectors and carries the task prompt. Shares state settings between training and inference. | Build named state vectors from raw robot observations. |
+| [`SelectObservationFields`](observation.py) | Selects and renames literal input fields. Contributes no decoded commands. | Build an observation branch that runs beside an action decoder. |
 | [`RenameObservationFields`](observation.py) | Renames literal top-level inference fields. Training columns and decoded actions pass through. | The model's inference input names differ from the training column names. |
 | [`PackObservationFields`](observation.py) | Selects fields into nested dictionaries and adds leading singleton dimensions. Arrays retain their dtype; other values gain list layers. Training and decoding pass through. | A model expects grouped fields or explicit batch/time dimensions, such as GR00T's `video`, `state` and `language` inputs. |
 
@@ -121,12 +122,13 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`ImageObservationCodec`](image.py) | Selects and renames RGB images, resizes and pads them, and describes their training features. | Prepare model images consistently during training and inference. |
-| [`RestrictImageSize`](image.py) | Inference: shrinks nested RGB images and frame stacks to fit bounds, preserving aspect ratio. Does not upscale; training encoding is unsupported. `resample=Resample.AREA` scales with OpenCV `INTER_AREA`, faster than the default Pillow bilinear filter, but with other pixels. | Cap image dimensions before sending observations over the network. Use `AREA` only when the model resizes the frames again. |
+| [`TransformImages`](image.py) | Transforms nested RGB images and frame stacks. Shrinks within bounds by default; `pad=True` resizes up or down and zero-pads to the exact size. Supports Pillow bilinear and OpenCV AREA interpolation. | Bound upload sizes or prepare model images. Use explicit `paths` to transform selected fields; names and other values stay unchanged. |
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
 
-Image transport codecs belong in the serving stack. Use `ImageObservationCodec` for image preparation
-shared with training. `IKJointsAction` requires Python construction; it does not provide a JSON component description.
+`TransformImages` defaults to bilinear interpolation. `Resample.AREA` produces different pixels; select it only when those pixels suit the model.
+Field selection and renaming are separate from pixel transforms. `EncodeImages` handles compression after image preparation.
+Training recipes call the shared pixel function in [`dataset.transforms.image`](../../dataset/transforms/image.py).
+`IKJointsAction` requires Python construction; it does not provide a JSON component description.
 
 The [metadata module](metadata.py) also provides `lerobot_vector`, `lerobot_image` and
 `lerobot_action` to describe dataset features. These helpers return metadata dictionaries, not codecs.
@@ -138,13 +140,19 @@ The two codecs that do the real work are the **observation encoder** and the **a
 **Observation encoding** combines state packing and image preparation with `&`, so both read the same raw observation:
 
 ```python
-StateObservationCodec(state={'state': {'robot_state.q': 7, 'grip': 1}}) & ImageObservationCodec(
-    images={'image': ('wrist_image', (224, 224))},
+StateObservationCodec(state={'state': {'robot_state.q': 7, 'grip': 1}}) & (
+    SelectObservationFields({'image': 'wrist_image'})
+    | TransformImages(224, 224, pad=True, paths=[['image']])
 )
 ```
 
-Each codec also builds its training columns and feature metadata. The client still accepts combined
-`observation_codec` version 1 JSON descriptions through the [compatibility module](../compatibility.py).
+The image recipe in [`policy.training`](../training.py) builds training columns and feature metadata independently.
+The shared configuration presets use an explicit `WithTraining` compatibility adapter for exporters that require `training_encoder`.
+JSON descriptions contain only inference components.
+
+The client accepts `restrict_image_size` and combined `observation_codec` version 1 descriptions through the
+[compatibility module](../compatibility.py). They delegate to `TransformImages` and preserve their sizing and interpolation defaults.
+This supports old servers with new clients. New recipes emit new component names and require an updated client.
 
 **Action encoding** chooses what the model predicts and how that maps back to a robot command. This is where the action-space decisions live. Some real examples from [`positronic/policy/codecs/action.py`](action.py):
 

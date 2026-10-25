@@ -28,10 +28,9 @@ from positronic.policy.codecs import (
     EncodeImages,
     EndCommand,
     FlipGrip,
-    ImageObservationCodec,
     Metadata,
     Resample,
-    RestrictImageSize,
+    TransformImages,
 )
 from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
@@ -43,8 +42,13 @@ from positronic.policy.codecs.action import (
     UnpackActionChunk,
 )
 from positronic.policy.codecs.geometry import ConvertPose
-from positronic.policy.codecs.observation import PackObservationFields, RenameObservationFields, StateObservationCodec
-from positronic.policy.compatibility import ObservationCodecV1
+from positronic.policy.codecs.observation import (
+    PackObservationFields,
+    RenameObservationFields,
+    SelectObservationFields,
+    StateObservationCodec,
+)
+from positronic.policy.compatibility import ObservationCodecV1, RestrictImageSizeV1
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.keys import END
 from positronic.policy.processors import (
@@ -1194,8 +1198,8 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     'definition',
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48, Resample.AREA)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), TransformImages(64, 48)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), TransformImages(64, 48, resample=Resample.AREA)),
         ChunkedSchedule(fps=10, record_stats=False),
     ],
 )
@@ -1233,10 +1237,11 @@ def test_wire_names_match_the_registered_components():
         'binarize_grip_inference': BinarizeGripInference(),
         'flip_grip': FlipGrip(),
         'metadata': Metadata({'action_fps': 15}),
-        'restrict_image_size': RestrictImageSize(),
+        'restrict_image_size': RestrictImageSizeV1(),
+        'transform_images': TransformImages(),
         'observation_codec': ObservationCodecV1(state={}, images={}),
         'state_observation': StateObservationCodec(state={}),
-        'image_observation': ImageObservationCodec(images={}),
+        'select_observation_fields': SelectObservationFields(mapping={}),
         'pack_observation_fields': PackObservationFields({'state': 'input'}),
         'rename_observation_fields': RenameObservationFields({'state': 'input'}),
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),

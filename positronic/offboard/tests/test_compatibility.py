@@ -21,7 +21,7 @@ from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Step
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import TransformImages
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.keys import ACTION_FPS
@@ -158,7 +158,7 @@ def test_v1_fault_pauses_and_keeps_the_pending_answer_and_history(controlled_run
 def test_v1_ticks_that_send_nothing_encode_no_image(controlled_runtime, monkeypatch):
     runtime, now, calls = controlled_runtime
     encoded = []
-    monkeypatch.setattr(RestrictImageSize, 'encode', lambda self, data: encoded.append(data) or data)
+    monkeypatch.setattr(TransformImages, 'encode', lambda self, data: encoded.append(data) or data)
     stack = from_v1_spec(
         {
             'seq': [
@@ -186,7 +186,7 @@ def test_v1_ticks_that_send_nothing_encode_no_image(controlled_runtime, monkeypa
 def test_v1_codec_above_a_layer_still_encodes_on_every_tick(controlled_runtime, monkeypatch):
     runtime, now, calls = controlled_runtime
     encoded = []
-    monkeypatch.setattr(RestrictImageSize, 'encode', lambda self, data: encoded.append(data) or data)
+    monkeypatch.setattr(TransformImages, 'encode', lambda self, data: encoded.append(data) or data)
     stack = from_v1_spec(
         {
             'seq': [

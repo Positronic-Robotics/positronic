@@ -346,12 +346,12 @@ from positronic.offboard.server import PolicyServer
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import TransformImages
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy.processors import ChunkedSchedule
 
 pipeline = PolicyDeployment(
-    local=Sequential(ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)),
+    local=Sequential(ChunkedSchedule(fps=15, horizon_sec=1.0), TransformImages(224, 224)),
     codec=my_model_codec,
 )
 server = PolicyServer(build_my_model, pipeline)
