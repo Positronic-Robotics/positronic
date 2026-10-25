@@ -32,57 +32,107 @@ class SelectObservationFields(Codec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mapping': dict(self._mapping)}}
 
 
-class PackObservationFields(Codec):
-    """Select fields into nested dictionaries and add leading singleton dimensions.
+class PackFields(Codec):
+    """Arrange model inputs and outputs using independent destination layouts.
 
-    Layout leaves name literal input keys. Arrays retain their dtype; other values gain list layers.
-    ``unsqueeze_dims`` is the number of size-one dimensions added at the front.
-    Training columns and decoded actions pass through unchanged.
+    Layouts are nested dictionaries with source paths at their leaves. Each path contains literal
+    string keys or integer indices; ``[]`` selects the whole source value. Only selected fields
+    appear in the result, including empty groups. An absent layout passes that direction through;
+    an empty layout produces an empty dictionary.
+
+    Encoding adds ``unsqueeze_dims`` leading size-one array dimensions or list layers. Decoding
+    removes ``squeeze_dims`` leading size-one array dimensions or list/tuple layers. Arrays retain
+    their dtype. Training passes through. Splitting a time axis into records is a separate operation.
 
     Example::
 
-        PackObservationFields(
-            {'state': {'joints': 'robot_state.q'}, 'language': {'instruction': 'task'}}, unsqueeze_dims=2
+        PackFields(
+            encode_layout={'state': {'joints': ['robot_state.q']}},
+            decode_layout={'joints': [0, 'predicted_joints']},
+            unsqueeze_dims=2,
+            squeeze_dims=1,
         )
+
+    This encodes joints ``(7,)`` as ``state.joints`` with shape ``(1, 1, 7)`` and decodes
+    ``({'predicted_joints': array_of_shape_1_T_7}, info)`` into ``{'joints': array_of_shape_T_7}``.
     """
 
-    WIRE_NAME = 'pack_observation_fields'
+    WIRE_NAME = 'pack_fields'
 
-    def __init__(self, layout: dict[str, Any], *, unsqueeze_dims: int = 0):
-        if type(unsqueeze_dims) is not int or unsqueeze_dims < 0:
-            raise ValueError('unsqueeze_dims must be a non-negative integer')
-        self._layout = self._copy_layout(layout)
+    def __init__(
+        self,
+        *,
+        encode_layout: dict[str, Any] | None = None,
+        decode_layout: dict[str, Any] | None = None,
+        unsqueeze_dims: int = 0,
+        squeeze_dims: int = 0,
+    ):
+        for name, value in (('unsqueeze_dims', unsqueeze_dims), ('squeeze_dims', squeeze_dims)):
+            if type(value) is not int or value < 0:
+                raise ValueError(f'{name} must be a non-negative integer')
+        self._encode_layout = None if encode_layout is None else self._copy_layout(encode_layout)
+        self._decode_layout = None if decode_layout is None else self._copy_layout(decode_layout)
         self._unsqueeze_dims = unsqueeze_dims
+        self._squeeze_dims = squeeze_dims
 
     @staticmethod
     def _copy_layout(layout: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(layout, dict):
+            raise ValueError('Layouts must be dictionaries')
         result = {}
         for name, source in layout.items():
-            if not isinstance(name, str) or not isinstance(source, (str, dict)):
-                raise ValueError('Layout entries must have string keys and contain input key names or dictionaries')
-            result[name] = PackObservationFields._copy_layout(source) if isinstance(source, dict) else source
+            if not isinstance(name, str):
+                raise ValueError('Layout entries must have string keys')
+            if isinstance(source, dict):
+                result[name] = PackFields._copy_layout(source)
+            elif isinstance(source, (list, tuple)) and all(type(part) in (str, int) for part in source):
+                result[name] = list(source)
+            else:
+                raise ValueError('Layout leaves must be source paths of string keys or integer indices')
         return result
 
-    def _pack(self, layout: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _reshape(value: Any, dimensions: int, field: str) -> Any:
+        """Add leading singleton dimensions for positive counts; remove them for negative counts."""
+        if dimensions >= 0:
+            if isinstance(value, np.ndarray):
+                return value.reshape((1,) * dimensions + value.shape)
+            for _ in range(dimensions):
+                value = [value]
+        elif isinstance(value, np.ndarray):
+            count = -dimensions
+            if value.ndim < count or any(size != 1 for size in value.shape[:count]):
+                raise ValueError(f'Field {field!r} requires {count} leading size-one dimensions')
+            return value.reshape(value.shape[count:])
+        else:
+            for _ in range(-dimensions):
+                if not isinstance(value, (list, tuple)) or len(value) != 1:
+                    raise ValueError(f'Field {field!r} requires {-dimensions} leading size-one dimensions')
+                value = value[0]
+        return value
+
+    @staticmethod
+    def _pack(layout: dict[str, Any], data: Any, dimensions: int) -> dict[str, Any]:
         result = {}
         for name, source in layout.items():
             if isinstance(source, dict):
-                result[name] = self._pack(source, data)
+                result[name] = PackFields._pack(source, data, dimensions)
             else:
-                value = data[source]
-                if isinstance(value, np.ndarray):
-                    value = value.reshape((1,) * self._unsqueeze_dims + value.shape)
-                else:
-                    for _ in range(self._unsqueeze_dims):
-                        value = [value]
-                result[name] = value
+                value = data
+                for part in source:
+                    value = value[part]
+                result[name] = PackFields._reshape(value, dimensions, name)
         return result
 
-    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
-        return self._pack(self._layout, data)
+    def encode(self, data: Any) -> Any:
+        if self._encode_layout is None:
+            return data
+        return self._pack(self._encode_layout, data, self._unsqueeze_dims)
 
     def decode(self, data: Any) -> Any:
-        return data
+        if self._decode_layout is None:
+            return data
+        return self._pack(self._decode_layout, data, -self._squeeze_dims)
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -92,7 +142,12 @@ class PackObservationFields(Codec):
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'layout': self._copy_layout(self._layout), 'unsqueeze_dims': self._unsqueeze_dims},
+            ARGS: {
+                'encode_layout': None if self._encode_layout is None else self._copy_layout(self._encode_layout),
+                'decode_layout': None if self._decode_layout is None else self._copy_layout(self._decode_layout),
+                'unsqueeze_dims': self._unsqueeze_dims,
+                'squeeze_dims': self._squeeze_dims,
+            },
         }
 
 
@@ -129,11 +184,28 @@ class RenameObservationFields(Codec):
 
 
 class StateObservationCodec(Codec):
-    """Pack float32 state vectors and a task prompt for training and inference.
+    """Concatenate observation fields into flat float32 state vectors.
+
+    Each output vector selects literal input keys in dictionary insertion order. Inference flattens
+    each selected value and concatenates them, without normalization or adding batch dimensions.
+    Missing state inputs raise ``KeyError``; an empty selection produces an empty float32 vector.
+    Unselected inputs are omitted, except for ``keys.TASK``, which is copied to ``task_field`` when
+    present. If a state output uses that same name, its vector takes precedence over the prompt.
 
     Args:
-        state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
-        task_field: output key carrying the language prompt at inference.
+        state: Mapping of output names to ``{input_key: dimension}`` mappings. Dimensions describe
+            LeRobot training features; they do not reshape or validate inference values.
+        task_field: Output name for the inference prompt, defaulting to ``'task'``.
+
+    Example::
+
+        codec = StateObservationCodec({'state': {'joints': 2, 'grip': 1}}, task_field='prompt')
+        codec.encode({'joints': [0.1, 0.2], 'grip': 0.8, keys.TASK: 'Pick up the cup'})
+        # {'state': array([0.1, 0.2, 0.8], dtype=float32), 'prompt': 'Pick up the cup'}
+
+    ``training_encoder`` derives concatenated float32 signals and LeRobot feature metadata.
+    Its prompt column is always ``'task'``, independently of ``task_field``, and defaults to an
+    empty string when the episode has no task. Decoding contributes no commands.
     """
 
     WIRE_NAME = 'state_observation'

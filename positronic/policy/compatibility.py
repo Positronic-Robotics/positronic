@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable, Generator, Mapping
 from typing import Any, overload
 
-from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION
+from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION, component, sequence
 
 from positronic import keys as obs_keys
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get
@@ -16,10 +16,17 @@ from positronic.dataset.transforms.image import Resample, ResizeMode
 from positronic.policy import keys as policy_keys
 from positronic.policy import training
 from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
-from positronic.policy.codecs import TASK_FIELD, Codec, StateObservationCodec, TransformImages
+from positronic.policy.codecs import (
+    TASK_FIELD,
+    Codec,
+    PackFields,
+    SplitActionChunk,
+    StateObservationCodec,
+    TransformImages,
+)
 from positronic.policy.codecs.image import image_observation
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, DurationEstimate, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 
 TIMESTAMP = 'timestamp'
@@ -64,20 +71,39 @@ class WithTraining(Codec):
         return self._inference.to_spec()
 
 
-class RestrictImageSizeV1(TransformImages):
-    """Read the published shrink-only image component."""
+def pack_observation_fields_v1(layout: dict[str, Any], *, unsqueeze_dims: int = 0) -> dict[str, Any]:
+    """Translate literal input field names into source paths for input-only packing."""
 
-    WIRE_NAME = 'restrict_image_size'
+    def paths(group: dict[str, Any]) -> dict[str, Any]:
+        result = {}
+        for name, source in group.items():
+            if not isinstance(name, str) or not isinstance(source, (str, dict)):
+                raise ValueError('Layout entries must have string keys and contain input key names or dictionaries')
+            result[name] = paths(source) if isinstance(source, dict) else [source]
+        return result
 
-    def __init__(self, width: int = 640, height: int = 640, resample: Resample = Resample.BILINEAR):
-        super().__init__(width, height, mode=ResizeMode.BOUND, resample=resample)
+    return component(PackFields.WIRE_NAME, version=1, encode_layout=paths(layout), unsqueeze_dims=unsqueeze_dims)
 
-    def to_spec(self):
-        return {
-            NAME: self.WIRE_NAME,
-            VERSION: self.WIRE_VERSION,
-            ARGS: {'width': self._width, 'height': self._height, 'resample': self._resample.value},
-        }
+
+def unpack_action_chunk_v1(fields: dict[str, list[str | int]], *, squeeze_dims: int = 0) -> dict[str, Any]:
+    """Translate prediction selection and chunk splitting into independent operations."""
+    if not fields or any(
+        not isinstance(name, str) or not isinstance(path, (list, tuple)) for name, path in fields.items()
+    ):
+        raise ValueError('Prediction fields require a non-empty mapping of source paths')
+    return sequence(
+        component(SplitActionChunk.WIRE_NAME, version=1),
+        component(PackFields.WIRE_NAME, version=1, decode_layout=fields, squeeze_dims=squeeze_dims),
+    )
+
+
+def restrict_image_size_v1(
+    width: int = 640, height: int = 640, resample: str = Resample.BILINEAR.value
+) -> dict[str, Any]:
+    """Translate shrink-only image bounds, including their published defaults."""
+    return component(
+        TransformImages.WIRE_NAME, version=1, width=width, height=height, mode=ResizeMode.BOUND.value, resample=resample
+    )
 
 
 class ObservationCodecV1(Codec):
@@ -129,22 +155,22 @@ class ObservationCodecV1(Codec):
         }
 
 
-class ChunkedScheduleV2(ChunkedSchedule):
-    WIRE_VERSION = 2
-
-    def __init__(
-        self,
-        fps: float,
-        horizon_sec: float | None = None,
-        record_stats: bool = True,
-        inference_lead: DurationEstimate | None = None,
-    ) -> None:
-        super().__init__(fps, horizon_sec, record_stats, inference_lead, replan_on_error=False)
-
-    def to_spec(self) -> dict[str, Any]:
-        node = super().to_spec()
-        del node[ARGS][self.REPLAN_ON_ERROR_ARG]
-        return node
+def chunked_schedule_v2(
+    fps: float,
+    horizon_sec: float | None = None,
+    record_stats: bool = True,
+    inference_lead: float | dict[str, Any] = 0.0,
+) -> dict[str, Any]:
+    """Translate the scheduler that keeps its pending chunk after an execution error."""
+    return component(
+        ChunkedSchedule.WIRE_NAME,
+        version=3,
+        fps=fps,
+        horizon_sec=horizon_sec,
+        record_stats=record_stats,
+        inference_lead=inference_lead,
+        replan_on_error=False,
+    )
 
 
 class StampObservationTimes(Policy):

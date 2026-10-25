@@ -8,7 +8,7 @@ from .action import (
     JointDeltaAction,
     JointPositionAction,
     SetControlMode,
-    UnpackActionChunk,
+    SplitActionChunk,
 )
 from .base import Codec, PolicyCommandError
 from .end import EndCommand
@@ -25,10 +25,4 @@ from .metadata import (
     lerobot_image,
     lerobot_vector,
 )
-from .observation import (
-    TASK_FIELD,
-    PackObservationFields,
-    RenameObservationFields,
-    SelectObservationFields,
-    StateObservationCodec,
-)
+from .observation import TASK_FIELD, PackFields, RenameObservationFields, SelectObservationFields, StateObservationCodec

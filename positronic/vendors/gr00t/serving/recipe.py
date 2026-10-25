@@ -65,16 +65,18 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
                 ),
             ),
         ),
+        component('split_action_chunk'),
         component(
-            'pack_observation_fields',
-            layout={
-                VIDEO: image_mappings,
-                STATE: {name: observation_keys[name] for name in STATE_DIMS},
-                LANGUAGE: {TASK: observation_keys[TASK]},
+            'pack_fields',
+            encode_layout={
+                VIDEO: {name: [source] for name, source in image_mappings.items()},
+                STATE: {name: [observation_keys[name]] for name in STATE_DIMS},
+                LANGUAGE: {TASK: [observation_keys[TASK]]},
             },
+            decode_layout={name: [0, name] for name in (JOINT_POSITION, GRIP)},
             unsqueeze_dims=2,
+            squeeze_dims=1,
         ),
-        component('unpack_action_chunk', fields={name: [0, name] for name in (JOINT_POSITION, GRIP)}, squeeze_dims=1),
     )
 
 

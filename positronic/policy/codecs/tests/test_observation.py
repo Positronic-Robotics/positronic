@@ -1,8 +1,9 @@
 import json
+from typing import cast
 
 import numpy as np
 import pytest
-from positronic_model_server.spec import ARGS, VERSION, component
+from positronic_model_server.spec import ARGS, component
 
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys as obs_keys
@@ -12,7 +13,7 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy.codecs import LEROBOT_FEATURES
-from positronic.policy.codecs.observation import PackObservationFields, RenameObservationFields, StateObservationCodec
+from positronic.policy.codecs.observation import PackFields, RenameObservationFields, StateObservationCodec
 from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.spec import from_spec
 
@@ -108,6 +109,91 @@ def test_observation_v1_preserves_overlapping_output_precedence(output):
     }
 
 
+@pytest.mark.parametrize('dimensions', [0, 1, 2])
+def test_packing_both_directions_preserves_values_and_shapes(dimensions):
+    codec = PackFields(
+        encode_layout={'state': {'joints': ['q']}, 'language': ['task'], 'video': {}},
+        decode_layout={'q': [0, 'predictions', 'q'], 'task': [1, 'text']},
+        unsqueeze_dims=dimensions,
+        squeeze_dims=dimensions,
+    )
+    codec = from_spec(json.loads(json.dumps(codec.to_spec())))
+    assert isinstance(codec, PackFields)
+    values = np.arange(6, dtype=np.float32).reshape(2, 3).T
+    encoded = codec.encode({'q': values, 'task': 'pick', 'unused': 42})
+    assert set(encoded) == {'state', 'language', 'video'}
+    assert encoded['video'] == {}
+    assert encoded['state']['joints'].shape == (1,) * dimensions + values.shape
+    decoded = codec.decode(({'predictions': {'q': encoded['state']['joints']}}, {'text': encoded['language']}))
+    np.testing.assert_array_equal(decoded['q'], values, strict=True)
+    assert decoded['task'] == 'pick'
+    assert values.shape == (3, 2)
+
+
+@pytest.mark.parametrize('encode', [False, True])
+def test_packing_missing_and_empty_layouts_have_distinct_behavior(encode):
+    value = ({'array': np.ones((1, 3))}, {'info': 1})
+    identity = PackFields()
+    assert (identity.encode(value) if encode else identity.decode(value)) is value
+    codec = PackFields(encode_layout={} if encode else None, decode_layout=None if encode else {})
+    assert (codec.encode(value) if encode else codec.decode(value)) == {}
+
+
+@pytest.mark.parametrize('encode', [False, True])
+def test_packing_owns_layouts_and_uses_literal_path_keys(encode):
+    layout = {'nested': {'value': ['a.b/c', 0]}}
+    codec = PackFields(encode_layout=layout if encode else None, decode_layout=None if encode else layout)
+    layout['nested']['value'][0] = 'changed'
+    description = codec.to_spec()
+    description[ARGS]['encode_layout' if encode else 'decode_layout']['nested']['value'][0] = 'changed'
+    apply = codec.encode if encode else codec.decode
+    assert apply({'a.b/c': [7]}) == {'nested': {'value': 7}}
+    with pytest.raises(KeyError, match='a.b/c'):
+        apply({'a': {'b/c': [7]}})
+    with pytest.raises(IndexError):
+        apply({'a.b/c': []})
+
+
+@pytest.mark.parametrize('value', [np.array(5, dtype=np.int16), 5, None, [1, 2], 'pick'])
+def test_packing_root_values_round_trip(value):
+    encoded = PackFields(encode_layout={'value': []}, unsqueeze_dims=2).encode(value)
+    decoded = PackFields(decode_layout={'value': ['value']}, squeeze_dims=2).decode(encoded)['value']
+    if isinstance(value, np.ndarray):
+        np.testing.assert_array_equal(decoded, value, strict=True)
+    else:
+        assert decoded == value
+
+
+def test_packing_removes_singleton_tuple_layers():
+    assert PackFields(decode_layout={'text': []}, squeeze_dims=2).decode((('pick',),)) == {'text': 'pick'}
+
+
+@pytest.mark.parametrize('value', [np.ones((2, 3)), np.ones((0, 3)), np.array(1), [], [1, 2], 1, 'x'])
+def test_packing_rejects_non_singleton_dimensions(value):
+    with pytest.raises(ValueError, match='leading size-one dimensions'):
+        PackFields(decode_layout={'value': []}, squeeze_dims=1).decode(value)
+
+
+@pytest.mark.parametrize('direction', ['encode', 'decode'])
+@pytest.mark.parametrize('layout', [[], {'value': 'key'}, {'value': [True]}, {'value': [1.5]}, {1: ['key']}])
+def test_packing_rejects_invalid_layouts(direction, layout):
+    with pytest.raises(ValueError, match='Layout'):
+        PackFields(**{f'{direction}_layout': layout})
+
+
+@pytest.mark.parametrize('parameter', ['unsqueeze_dims', 'squeeze_dims'])
+@pytest.mark.parametrize('value', [-1, True, 1.5])
+def test_packing_requires_nonnegative_dimension_counts(parameter, value):
+    with pytest.raises(ValueError, match=parameter):
+        PackFields(**{parameter: value})
+
+
+def test_packing_preserves_training_columns():
+    episode = EpisodeContainer({'q': DummySignal([0], [[1]])}, meta={'label': 'test'})
+    codec = PackFields(encode_layout={'state': ['q']}, decode_layout={'action': []})
+    assert codec.training_encoder(episode) is episode
+
+
 @pytest.mark.parametrize(
     'unsqueeze_dims, shape, prompt', [(0, (2, 3), 'pick'), (1, (1, 2, 3), ['pick']), (2, (1, 1, 2, 3), [['pick']])]
 )
@@ -118,7 +204,7 @@ def test_observation_packing_preserves_values_and_adds_dimensions(unsqueeze_dims
         unsqueeze_dims=unsqueeze_dims,
     )
     codec = from_spec(json.loads(json.dumps(description)))
-    assert isinstance(codec, PackObservationFields)
+    assert isinstance(codec, PackFields)
     values = np.arange(6, dtype=np.float32).reshape(3, 2).T
     inputs = {'robot.state': values, 'task/prompt': 'pick', 'unused': 10}
 
@@ -133,12 +219,26 @@ def test_observation_packing_preserves_values_and_adds_dimensions(unsqueeze_dims
     assert inputs['robot.state'] is values
     assert values.shape == (2, 3)
     assert inputs['task/prompt'] == 'pick'
-    assert codec.to_spec() == {**description, VERSION: 1}
+    assert (
+        codec.to_spec()
+        == PackFields(
+            encode_layout={'state': {'value': ['robot.state']}, 'language': {'text': ['task/prompt']}, 'video': {}},
+            unsqueeze_dims=unsqueeze_dims,
+        ).to_spec()
+    )
 
 
 def test_observation_packing_handles_images_and_plain_values_without_coercion():
-    codec = PackObservationFields(
-        {'image': 'rgb', 'scalar': 'zero', 'sequence': 'items', 'empty': 'none'}, unsqueeze_dims=2
+    codec = cast(
+        PackFields,
+        from_spec(
+            component(
+                'pack_observation_fields',
+                version=1,
+                layout={'image': 'rgb', 'scalar': 'zero', 'sequence': 'items', 'empty': 'none'},
+                unsqueeze_dims=2,
+            )
+        ),
     )
     pixels = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
     encoded = codec.encode({'rgb': pixels, 'zero': 0.0, 'items': [1, 2], 'none': None})
@@ -153,10 +253,10 @@ def test_observation_packing_handles_images_and_plain_values_without_coercion():
 
 def test_observation_packing_keeps_its_layout_and_requires_selected_fields():
     layout = {'state': {'value': 'input'}}
-    codec = PackObservationFields(layout)
+    codec = cast(PackFields, from_spec(component('pack_observation_fields', version=1, layout=layout)))
     layout['state']['value'] = 'changed'
     description = codec.to_spec()
-    description[ARGS]['layout']['state']['value'] = 'changed'
+    description[ARGS]['encode_layout']['state']['value'][0] = 'changed'
 
     assert codec.encode({'input': 1}) == {'state': {'value': 1}}
     with pytest.raises(KeyError, match='input'):
@@ -166,17 +266,25 @@ def test_observation_packing_keeps_its_layout_and_requires_selected_fields():
 @pytest.mark.parametrize('unsqueeze_dims', [-1, 1.5, True])
 def test_observation_packing_rejects_invalid_dimensions(unsqueeze_dims):
     with pytest.raises(ValueError, match='unsqueeze_dims'):
-        PackObservationFields({}, unsqueeze_dims=unsqueeze_dims)
+        cast(
+            PackFields,
+            from_spec(component('pack_observation_fields', version=1, layout={}, unsqueeze_dims=unsqueeze_dims)),
+        )
 
 
 @pytest.mark.parametrize('layout', [{'state': {'value': 1}}, {'value': ['input']}, {1: 'input'}])
 def test_observation_packing_rejects_invalid_layout_entries(layout):
     with pytest.raises(ValueError, match='Layout entries'):
-        PackObservationFields(layout)
+        from_spec({'name': 'pack_observation_fields', 'version': 1, ARGS: {'layout': layout}})
 
 
 def test_observation_packing_preserves_training_and_native_results():
-    codec = PackObservationFields({'state': {'value': 'input'}}, unsqueeze_dims=2)
+    codec = cast(
+        PackFields,
+        from_spec(
+            component('pack_observation_fields', version=1, layout={'state': {'value': 'input'}}, unsqueeze_dims=2)
+        ),
+    )
     episode = EpisodeContainer({'input': DummySignal([0], [1])}, meta={'label': 'test'})
     result = ({'action': np.ones((1, 3, 2))}, {'timing': 0.1})
 

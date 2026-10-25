@@ -293,11 +293,7 @@ class TestTransformImages:
             resample=Resample.BILINEAR if resample is None else resample,
             mode=ResizeMode.BOUND,
         )
-        assert rebuilt.to_spec()['args'] == {
-            'width': expected._width,
-            'height': expected._height,
-            'resample': expected._resample.value,
-        }
+        assert rebuilt.to_spec() == expected.to_spec()
         frame = self._textured(720, 960)
         np.testing.assert_array_equal(rebuilt.encode({'cam': frame})['cam'], expected.encode({'cam': frame})['cam'])
 

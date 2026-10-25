@@ -21,7 +21,7 @@ from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Step
-from positronic.policy.codecs import TransformImages
+from positronic.policy.codecs import ResizeMode, TransformImages
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.keys import ACTION_FPS
@@ -321,7 +321,10 @@ def test_component_versions_are_independent_and_exact():
             {'name': 'restrict_image_size', 'version': 1, 'args': {'width': 32, 'height': 32}},
         ]
     })
-    assert [part['version'] for part in stack.to_spec()['seq']] == [2, 1]
+    assert stack.to_spec() == sequence(
+        ChunkedSchedule(fps=10, replan_on_error=False).to_spec(),
+        TransformImages(32, 32, mode=ResizeMode.BOUND).to_spec(),
+    )
     for version in (1, 99):
         with pytest.raises(ValueError, match=f'Unsupported.*version {version}'):
             spec.from_spec({'name': 'chunked_schedule', 'version': version, 'args': {'fps': 10}})

@@ -10,7 +10,7 @@ The package root exposes public names; implementations and their tests are group
 | Module | Responsibility |
 |--------|----------------|
 | [`base`](base.py) | `Codec` and sequential/parallel composition |
-| [`observation`](observation.py) | Field names, state vectors and model input assembly |
+| [`observation`](observation.py) | Field names, state vectors and model input/output layouts |
 | [`action`](action.py) | Prediction decoding, training labels and command control modes |
 | [`geometry`](geometry.py) | Pose representations and end-effector frames |
 | [`gripper`](gripper.py) | Grip thresholds and conventions |
@@ -87,13 +87,30 @@ These are the public codec classes exported by this package. Each name links to 
 | [`StateObservationCodec`](observation.py) | Concatenates state signals into float32 vectors and carries the task prompt. Shares state settings between training and inference. | Build named state vectors from raw robot observations. |
 | [`SelectObservationFields`](observation.py) | Selects and renames literal input fields. Contributes no decoded commands. | Build an observation branch that runs beside an action decoder. |
 | [`RenameObservationFields`](observation.py) | Renames literal top-level inference fields. Training columns and decoded actions pass through. | The model's inference input names differ from the training column names. |
-| [`PackObservationFields`](observation.py) | Selects fields into nested dictionaries and adds leading singleton dimensions. Arrays retain their dtype; other values gain list layers. Training and decoding pass through. | A model expects grouped fields or explicit batch/time dimensions, such as GR00T's `video`, `state` and `language` inputs. |
+| [`PackFields`](observation.py) | Arranges inputs and outputs with independent layouts. Adds input singleton dimensions and removes output singleton dimensions; an omitted layout passes that direction through. | Describe a model’s nested input/output structure and batch dimensions. |
+
+`PackFields` layouts describe the destination structure; each leaf is a path into the source.
+For example, `{'state': {'joints': ['q']}}` places input `q` under `state.joints`, while
+`{'joints': [0, 'q']}` extracts `q` from a model response shaped like `(predictions, info)`.
+
+```python
+packing = PackFields(
+    encode_layout={'state': {'joints': ['q']}},
+    decode_layout={'joints': [0, 'q']},
+    unsqueeze_dims=2,
+    squeeze_dims=1,
+)
+codec = (observations & action) | SplitActionChunk() | packing
+```
+
+Encoding packs the model inputs. Decoding runs right-to-left: extract arrays and remove batch
+sizes of one, split the time axis into records, then construct commands.
 
 ### Actions
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`UnpackActionChunk`](action.py) | Selects prediction arrays, removes leading size-one dimensions, and splits a shared time axis into action records. Observations and training pass through. | A model returns batched or nested prediction arrays that action decoders need one timestep at a time. |
+| [`SplitActionChunk`](action.py) | Splits prediction arrays along their shared first time axis into action records. Observations and training pass through. | Decode a sequence of predictions one timestep at a time, after `PackFields` extracts the arrays. |
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
 | [`JointPositionAction`](action.py) | Decodes separate joint and grip fields into an absolute command. | The model returns named predictions; training labels are defined independently. |

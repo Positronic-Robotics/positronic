@@ -196,8 +196,10 @@ uses the session-ID envelope and explicit end-session acknowledgement described 
 `/api/v1` prefix identifies the route; it does not select the inference-message protocol.
 
 Each component leaf declares its own `version`. `seq` and `par` belong to the protocol grammar.
-The client selects the exact registered implementation; it never substitutes a newer version or
-guesses from constructor arguments. Unsupported versions fail with supported-version information.
+The client selects the exact registered version. Its factory either constructs a component or
+translates its configuration into explicitly pinned components that preserve its behavior.
+Translated stacks serialize using those replacement descriptions. Unsupported versions fail with
+supported-version information; constructor arguments never determine version selection.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
 The client runs a protocol v1 server's stack on the current processors. `positronic.offboard.server`

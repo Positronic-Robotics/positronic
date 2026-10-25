@@ -26,21 +26,27 @@ from positronic.policy.codecs.action import (
     JointDeltaAction,
     JointPositionAction,
     SetControlMode,
-    UnpackActionChunk,
+    SplitActionChunk,
 )
 from positronic.policy.codecs.geometry import ConvertPose
 from positronic.policy.codecs.observation import (
-    PackObservationFields,
+    PackFields,
     RenameObservationFields,
     SelectObservationFields,
     StateObservationCodec,
 )
-from positronic.policy.compatibility import ChunkedScheduleV2, ObservationCodecV1, RestrictImageSizeV1
+from positronic.policy.compatibility import (
+    ObservationCodecV1,
+    chunked_schedule_v2,
+    pack_observation_fields_v1,
+    restrict_image_size_v1,
+    unpack_action_chunk_v1,
+)
 from positronic.policy.processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
-ComponentFactory = Callable[..., Processor | Codec]
+ComponentFactory = Callable[..., Processor | Codec | dict[str, Any]]
 
 
 COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
@@ -57,13 +63,12 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         FlipGrip,
         Metadata,
         TransformImages,
-        RestrictImageSizeV1,
         ChangeEEFrame,
         ConvertPose,
         ObservationCodecV1,
         StateObservationCodec,
         SelectObservationFields,
-        PackObservationFields,
+        PackFields,
         RenameObservationFields,
         AbsolutePositionAction,
         CartesianDeltaAction,
@@ -71,16 +76,24 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         JointDeltaAction,
         JointPositionAction,
         SetControlMode,
-        UnpackActionChunk,
+        SplitActionChunk,
     )
 }
 
 
-COMPONENTS[ChunkedSchedule.WIRE_NAME][ChunkedScheduleV2.WIRE_VERSION] = Version(ChunkedScheduleV2.from_spec_args)
+COMPONENTS.update({
+    'pack_observation_fields': {1: Version(pack_observation_fields_v1)},
+    'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
+    'restrict_image_size': {1: Version(restrict_image_size_v1)},
+})
+COMPONENTS[ChunkedSchedule.WIRE_NAME][2] = Version(chunked_schedule_v2)
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:
-    """Resolve latest or pinned versions. Missing versions mean v1; warn once per component version."""
+    """Resolve versioned components and expand config translations before constructing their replacements.
+
+    Missing versions mean v1; deprecations warn once per component version in this stack.
+    """
     selected: dict[str, dict[int, ComponentFactory]] = {}
 
     def build(node: dict[str, Any]) -> Processor | Codec:
@@ -108,6 +121,7 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
         if type(version) is not int or version not in versions:
             factory = resolve_version(COMPONENTS[name], version, f'component {name!r}')
             versions[version] = factory
-        return versions[version](**node.get(ARGS, {}))
+        result = versions[version](**node.get(ARGS, {}))
+        return build(result) if isinstance(result, dict) else result
 
     return build(node)
