@@ -38,7 +38,7 @@ with vendor_import(
     platforms=('linux',),
 ):
     import positronic_franka._franka as pf
-    from positronic_franka.desk import ControlHeldElsewhere, Desk, SafetyControllerError
+    from positronic_franka.desk import ControlHeldElsewhere, Desk, ProgrammingModeError, SafetyControllerError
 
 logger = logging.getLogger(__name__)
 
@@ -1102,6 +1102,8 @@ class Robot(pimm.ControlSystem):
         """
         if isinstance(exc, SafetyControllerError):
             return 'the safety controller is in SafetyError'
+        if isinstance(exc, ProgrammingModeError):
+            return 'Desk is in Programming mode'
         if isinstance(exc, ControlHeldElsewhere):
             # The checker runs without the Franka package, so it cannot narrow `exc` to its error.
             holder = exc.holder  # pyright: ignore[reportAttributeAccessIssue]
