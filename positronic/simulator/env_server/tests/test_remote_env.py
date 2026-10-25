@@ -475,18 +475,15 @@ class TestSingleArm:
 class TestRemoteEmbodimentChannels:
     """The embodiment names one set of channels per arm, and reports their signals as its static meta."""
 
-    def _embodiment(self, arms, pose_site=GRIPPER_SITE):
+    def _embodiment(self, arms):
         proxy = RemoteEnvControlSystem(_CommandOnlyAdapter(), nullcontext(('localhost', 0)))
-        return remote_embodiment(
-            proxy, {keys.EXTERIOR_IMAGE: 'cam'}, descriptor='remote.test', pose_site=pose_site, arms=arms
-        )
+        return remote_embodiment(proxy, {keys.EXTERIOR_IMAGE: 'cam'}, descriptor='remote.test', arms=arms)
 
-    @pytest.mark.parametrize('site', [GRIPPER_SITE, 'default'])
-    def test_each_pose_signal_sits_at_the_site_that_the_caller_names(self, site):
-        frames = ee_frames(self._embodiment(('left', 'right'), pose_site=site).static_meta)
+    def test_each_pose_signal_sits_at_the_gripper_site(self):
+        frames = ee_frames(self._embodiment(('left', 'right')).static_meta)
 
         assert len(frames) == 4
-        assert {frame.site for frame in frames.values()} == {site}
+        assert {frame.site for frame in frames.values()} == {GRIPPER_SITE}
 
     def test_one_unnamed_arm_keeps_the_bare_names(self):
         embodiment = self._embodiment((None,))

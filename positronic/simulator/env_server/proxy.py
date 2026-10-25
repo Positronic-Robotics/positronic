@@ -16,7 +16,7 @@ from typing import Any
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm.models import EEFrame, ee_frames_entry
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.eval import Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
@@ -145,13 +145,11 @@ def remote_embodiment(
     camera_dict: Mapping[str, object],
     *,
     descriptor: str,
-    pose_site: str,
     arms: Sequence[str | None] = (None,),
     static_meta: dict[str, Any] | None = None,
 ) -> Embodiment:
     """The canonical embodiment over a remote env proxy, with one set of channels per arm in ``arms``.
 
-    Every pose signal sits at ``pose_site`` of the robot model.
     An unnamed arm keeps the bare channel names; a named arm suffixes them with its name. ``static_meta``
     adds the robot-model payload when the env server cannot import positronic to emit it via ``robot_meta``.
     """
@@ -174,7 +172,7 @@ def remote_embodiment(
     signal_meta = {
         eval_keys.JOINT_SIGNALS: [f'{name}{keys.JOINTS_SUFFIX}' for name in states],
         eval_keys.POSE_SIGNALS: pose_signals,
-        **ee_frames_entry({name: EEFrame(site=pose_site) for name in pose_signals}),
+        **ee_frames_entry({name: EEFrame(site=GRIPPER_SITE) for name in pose_signals}),
     }
     return Embodiment(
         descriptor=descriptor,

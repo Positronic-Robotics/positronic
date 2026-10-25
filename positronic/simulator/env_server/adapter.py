@@ -64,7 +64,7 @@ class EnvAdapter(ABC):
 
 
 def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D, measured: geom.Transform3D | None) -> Any:
-    """A command against the embodiment's pose site, re-expressed in the frame the env measures and drives.
+    """A command against the embodiment's ``GRIPPER_SITE``, re-expressed in the frame the env measures and drives.
 
     ``measured`` is the env's last measured pose in that frame, or None before the first observation.
     """
@@ -126,14 +126,14 @@ class WireCommandAdapter(EnvAdapter):
 
     def __init__(self, env_control_frame: geom.Transform3D | None = None):
         """``env_control_frame`` places the frame the env measures and drives relative to the embodiment's
-        pose site; the adapter re-expresses outgoing commands into it, and observations back out of it."""
+        ``GRIPPER_SITE``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
         self.env_control_frame = env_control_frame if env_control_frame is not None else geom.Transform3D.identity
         self._measured: dict[str, geom.Transform3D] = {}  # the last pose the env measured, per command channel
         self._reset_command_state()
 
     def _measure(self, env_pose: geom.Transform3D, arm: str | None = None) -> geom.Transform3D:
-        """The pose the env measures for ``arm``, at the embodiment's pose site. It also anchors that arm's next
-        Cartesian delta.
+        """The pose the env measures for ``arm``, at ``GRIPPER_SITE``. It also anchors that arm's next Cartesian
+        delta.
 
         ``arm`` is None on a one-arm robot, whose command channel has the bare name.
         """
