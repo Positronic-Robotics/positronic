@@ -85,7 +85,8 @@ ENV HF_HUB_OFFLINE=1 \
 
 EXPOSE 8000
 
-# `exec` makes the server pid 1, so it receives the stop signal.
+# `exec` makes the server pid 1, so it receives the stop signal. `droid_3cam` needs `image.exterior_2`;
+# `droid` serves an eval with one exterior view.
 ENTRYPOINT ["/bin/sh", "-c", \
-  "exec /positronic/.venv/bin/python -m positronic.vendors.molmoact2.server droid \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.molmoact2.server droid_3cam \
    --model.hf_repo=\"$MOLMOACT2_MODEL\" \"$@\"", "--"]

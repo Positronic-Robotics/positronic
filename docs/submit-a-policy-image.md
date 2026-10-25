@@ -50,7 +50,11 @@ NVIDIA Cosmos. The image carries the agreement and its notice in `/opt/gr00t`, a
 requires of each copy of the models.
 
 The MolmoAct2 recipe downloads `allenai/MolmoAct2-DROID` (21.8 GB in float32). The build needs no
-token: the repository is not gated. The image is 24.4 GB compressed.
+token: the repository is not gated. The image is 24.4 GB compressed. The image serves the
+`droid_3cam` command. It sends the policy `image.exterior`, `image.exterior_2` and the wrist view,
+the three views the checkpoint was fine-tuned on. On an eval or a rig with one exterior view, the
+server answers each observation with an error that names `image.exterior_2`. To run there, change `droid_3cam`
+to `droid` in the recipe's `ENTRYPOINT`: `droid` sends `image.exterior` in both exterior slots.
 
 Other models:
 
