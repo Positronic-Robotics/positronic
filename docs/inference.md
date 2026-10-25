@@ -84,7 +84,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`, `--model.checkpoint`, device...) is fixed at server launch, and a key that names it is an unknown key. A server serves one checkpoint; to serve another, start another server. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
 **The server declares data preparation.** Its client stack can contain
-`RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.
+`TransformImages` to bound uploaded frames and `ChangeEEFrame` to convert poses.
 The client JPEG-encodes each frame unless the deployment sets `compress_images=False`. The
 websocket wire adds no other compression: neither end accepts permessage-deflate. The model returns
 full chunks; client scheduling emits commands immediately when they become due.

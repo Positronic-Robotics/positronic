@@ -8,13 +8,25 @@ import time
 from collections.abc import Callable, Generator, Mapping
 from typing import Any, overload
 
-from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION
+from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION, component, sequence
 
+from positronic import keys as obs_keys
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get
+from positronic.dataset.transforms.image import Resample, ResizeMode
 from positronic.policy import keys as policy_keys
+from positronic.policy import training
 from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
-from positronic.policy.codecs import Codec
+from positronic.policy.codecs import (
+    TASK_FIELD,
+    Codec,
+    PackFields,
+    SplitActionChunk,
+    StateObservationCodec,
+    TransformImages,
+)
+from positronic.policy.codecs.image import image_observation
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, DurationEstimate, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
 from positronic.policy.sequential import Sequential
 
 TIMESTAMP = 'timestamp'
@@ -29,22 +41,132 @@ V1_SERVER_DEFAULT_ACTION_FPS = 15.0
 logger = logging.getLogger(__name__)
 
 
-class ChunkedScheduleV2(ChunkedSchedule):
-    WIRE_VERSION = 2
+class WithTraining(Codec):
+    """Expose an independent training transform through the legacy codec interface.
+
+    **TODO: TEMPORARY ADAPTER — MUST BE REMOVED.**
+    Migrate remaining vendor presets and training consumers to independent recipes, following GR00T.
+    Then delete this adapter together with Codec.training_encoder, its composition and apply_codec.
+    """
+
+    def __init__(self, inference: Codec, training: EpisodeTransform):
+        self._inference = inference
+        self._training = training
+
+    def encode(self, data):
+        return self._inference.encode(data)
+
+    def decode(self, data):
+        return self._inference.decode(data)
+
+    @property
+    def meta(self):
+        return self._inference.meta
+
+    @property
+    def training_encoder(self):
+        return self._training
+
+    def to_spec(self):
+        return self._inference.to_spec()
+
+
+def pack_observation_fields_v1(layout: dict[str, Any], *, unsqueeze_dims: int = 0) -> dict[str, Any]:
+    """Translate literal input field names into source paths for input-only packing."""
+
+    def paths(group: dict[str, Any]) -> dict[str, Any]:
+        result = {}
+        for name, source in group.items():
+            if not isinstance(name, str) or not isinstance(source, (str, dict)):
+                raise ValueError('Layout entries must have string keys and contain input key names or dictionaries')
+            result[name] = paths(source) if isinstance(source, dict) else [source]
+        return result
+
+    return component(PackFields.WIRE_NAME, version=1, encode_layout=paths(layout), unsqueeze_dims=unsqueeze_dims)
+
+
+def unpack_action_chunk_v1(fields: dict[str, list[str | int]], *, squeeze_dims: int = 0) -> dict[str, Any]:
+    """Translate prediction selection and chunk splitting into independent operations."""
+    if not fields or any(
+        not isinstance(name, str) or not isinstance(path, (list, tuple)) for name, path in fields.items()
+    ):
+        raise ValueError('Prediction fields require a non-empty mapping of source paths')
+    return sequence(
+        component(SplitActionChunk.WIRE_NAME, version=1),
+        component(PackFields.WIRE_NAME, version=1, decode_layout=fields, squeeze_dims=squeeze_dims),
+    )
+
+
+def restrict_image_size_v1(
+    width: int = 640, height: int = 640, resample: str = Resample.BILINEAR.value
+) -> dict[str, Any]:
+    """Translate shrink-only image bounds, including their published defaults."""
+    return component(
+        TransformImages.WIRE_NAME, version=1, width=width, height=height, mode=ResizeMode.BOUND.value, resample=resample
+    )
+
+
+class ObservationCodecV1(Codec):
+    """Decode the combined state/image observation schema published as version 1."""
+
+    WIRE_NAME = 'observation_codec'
 
     def __init__(
         self,
-        fps: float,
-        horizon_sec: float | None = None,
-        record_stats: bool = True,
-        inference_lead: DurationEstimate | None = None,
-    ) -> None:
-        super().__init__(fps, horizon_sec, record_stats, inference_lead, replan_on_error=False)
+        state: dict[str, dict[str, int]],
+        images: dict[str, tuple[str, tuple[int, int]]],
+        task_field: str = TASK_FIELD,
+    ):
+        self._state = StateObservationCodec(state, task_field)
+        self._image_configs = images
+        self._images = image_observation(images)
+        self._state_names = tuple(state)
+        self._task_field = task_field
 
-    def to_spec(self) -> dict[str, Any]:
-        node = super().to_spec()
-        del node[ARGS][self.REPLAN_ON_ERROR_ARG]
-        return node
+    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
+        # V1 inference gives state precedence over images, and images over the prompt.
+        obs = {self._task_field: data[obs_keys.TASK]} if obs_keys.TASK in data else {}
+        obs.update(self._images.encode(data))
+        state = self._state.encode(data)
+        obs.update({name: state[name] for name in self._state_names})
+        return obs
+
+    @property
+    def training_encoder(self):
+        # V1 training gives the task column precedence over images, and images over state.
+        return (
+            Derive(meta=None, **{TASK_FIELD: Get(obs_keys.TASK, '')})
+            & training.image_observation(self._image_configs)
+            & self._state.training_encoder
+        )
+
+    def to_spec(self):
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {
+                **self._state.to_spec()[ARGS],
+                'images': {name: [source, list(size)] for name, (source, size) in self._image_configs.items()},
+            },
+        }
+
+
+def chunked_schedule_v2(
+    fps: float,
+    horizon_sec: float | None = None,
+    record_stats: bool = True,
+    inference_lead: float | dict[str, Any] = 0.0,
+) -> dict[str, Any]:
+    """Translate the scheduler that keeps its pending chunk after an execution error."""
+    return component(
+        ChunkedSchedule.WIRE_NAME,
+        version=3,
+        fps=fps,
+        horizon_sec=horizon_sec,
+        record_stats=record_stats,
+        inference_lead=inference_lead,
+        replan_on_error=False,
+    )
 
 
 class StampObservationTimes(Policy):
