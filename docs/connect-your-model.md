@@ -179,8 +179,8 @@ that `RTCSchedule` skips when a new chunk starts, or when a late round replaces 
 element then carries the end. Until the run stops, the client can play about one more element and make one more call.
 The prefix that `RTCSchedule` sends to the model holds `end` like any other command, so a model that cannot read its own `end` back drops it.
 
-`EndOnField` refuses a malformed value when its element plays. `PackFields` selects prediction fields and
-`SplitActionChunk` builds elements from their arrays. Include a per-step field named `end` in the output layout.
+`EndOnField` refuses a malformed value when its element plays. When using `PackFields` with
+`SplitActionChunk`, include a per-step field named `end` in the output layout.
 
 A rig with more than one arm names every channel after the arm that owns it: observations arrive as
 `robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left` alongside
@@ -242,7 +242,6 @@ cadence and the execution horizon. Add a server codec with `codec=your_codec` if
 the model takes encoded inputs and returns model-native outputs. Client codecs
 belong in `local`, where they can mix with processors. For example,
 `TransformImages(224, 224, mode=ResizeMode.BOUND)` before the remote call limits upload volume.
-If the model resizes the frames again, `TransformImages(224, 224, mode=ResizeMode.BOUND, resample=Resample.AREA)` scales them faster.
 The client JPEG-encodes each frame before it sends it. Set `compress_images=False` on the
 deployment to receive raw frames.
 The client sets the JPEG quality with `--policy.jpeg_quality`, 90 by default.

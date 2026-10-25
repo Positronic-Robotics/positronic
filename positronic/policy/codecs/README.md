@@ -84,14 +84,12 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`StateObservationCodec`](observation.py) | Concatenates state signals into float32 vectors and carries the task prompt. Shares state settings between training and inference. | Build named state vectors from raw robot observations. |
+| [`StateObservationCodec`](observation.py) | Concatenates fields into float32 vectors and carries the task prompt. | Build model state vectors from robot observations. |
 | [`SelectObservationFields`](observation.py) | Selects and renames literal input fields. Contributes no decoded commands. | Build an observation branch that runs beside an action decoder. |
 | [`RenameObservationFields`](observation.py) | Renames literal top-level inference fields. Training columns and decoded actions pass through. | The model's inference input names differ from the training column names. |
-| [`PackFields`](observation.py) | Arranges inputs and outputs with independent layouts. Adds input singleton dimensions and removes output singleton dimensions; an omitted layout passes that direction through. | Describe a model’s nested input/output structure and batch dimensions. |
+| [`PackFields`](observation.py) | Arranges model inputs and outputs and adds or removes batch dimensions. | Match the model’s field layout in either direction. |
 
-`PackFields` layouts describe the destination structure; each leaf is a path into the source.
-For example, `{'state': {'joints': ['q']}}` places input `q` under `state.joints`, while
-`{'joints': [0, 'q']}` extracts `q` from a model response shaped like `(predictions, info)`.
+Each `PackFields` layout describes the result; its leaves are paths into the source:
 
 ```python
 packing = PackFields(
@@ -103,14 +101,13 @@ packing = PackFields(
 codec = (observations & action) | SplitActionChunk() | packing
 ```
 
-Encoding packs the model inputs. Decoding runs right-to-left: extract arrays and remove batch
-sizes of one, split the time axis into records, then construct commands.
+Decoding runs right-to-left: unpack fields, split timesteps, then construct commands.
 
 ### Actions
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`SplitActionChunk`](action.py) | Splits prediction arrays along their shared first time axis into action records. Observations and training pass through. | Decode a sequence of predictions one timestep at a time, after `PackFields` extracts the arrays. |
+| [`SplitActionChunk`](action.py) | Splits prediction arrays into one record per timestep. | Feed a chunk of predictions to action decoders. |
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
 | [`JointPositionAction`](action.py) | Decodes separate joint and grip fields into an absolute command. | The model returns named predictions; training labels are defined independently. |
@@ -139,12 +136,13 @@ sizes of one, split the time axis into records, then construct commands.
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`TransformImages`](image.py) | Transforms nested RGB images and frame stacks with an explicit width, height and `ResizeMode`: `BOUND` shrinks to fit, `PAD` fits and zero-pads to exact dimensions, `STRETCH` resizes to exact dimensions with distortion. Supports Pillow bilinear and OpenCV AREA interpolation. | Bound upload sizes or match the model's image preparation. Use explicit `paths` to select fields; names and other values stay unchanged. |
+| [`TransformImages`](image.py) | Resizes RGB images and frame stacks with explicit dimensions and mode. | Limit upload size or match the model’s image preparation. |
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
 
-`TransformImages` defaults to bilinear interpolation. `Resample.AREA` produces different pixels; select it only when those pixels suit the model.
-Field selection and renaming are separate from pixel transforms. `EncodeImages` handles compression after image preparation.
-Training recipes call the shared pixel function in [`dataset.transforms.image`](../../dataset/transforms/image.py).
+Choose `ResizeMode.BOUND` to shrink within bounds, `PAD` to fit and pad to the exact size, or
+`STRETCH` to resize exactly, allowing distortion. Bilinear is the default interpolation;
+`Resample.AREA` produces different pixels, so choose the filter to match the model.
+
 `IKJointsAction` requires Python construction; it does not provide a JSON component description.
 
 The [metadata module](metadata.py) also provides `lerobot_vector`, `lerobot_image` and
@@ -163,13 +161,9 @@ StateObservationCodec(state={'state': {'robot_state.q': 7, 'grip': 1}}) & (
 )
 ```
 
-The image recipe in [`policy.training`](../training.py) builds training columns and feature metadata independently.
-The shared configuration presets use an explicit `WithTraining` compatibility adapter for exporters that require `training_encoder`.
-JSON descriptions contain only inference components.
-
-The client accepts `restrict_image_size` and combined `observation_codec` version 1 descriptions through the
-[compatibility module](../compatibility.py). They delegate to `TransformImages` and preserve their sizing and interpolation defaults.
-This supports old servers with new clients. New recipes emit new component names and require an updated client.
+For dataset preparation, use the image training recipe in [`policy.training`](../training.py).
+New clients support published server descriptions; servers using new components require updated clients.
+See [compatibility](../../offboard/README.md#compatibility-and-deprecation).
 
 **Action encoding** chooses what the model predicts and how that maps back to a robot command. This is where the action-space decisions live. Some real examples from [`positronic/policy/codecs/action.py`](action.py):
 
