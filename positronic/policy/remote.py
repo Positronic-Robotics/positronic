@@ -15,6 +15,7 @@ from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
 from positronic import telemetry, telemetry_keys
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
 
@@ -108,6 +109,17 @@ def _log_late_close_failure(closed: Future[None]) -> None:
         logger.error('The session close failed after the run continued: %r', failure)
 
 
+def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict[str, Any]:
+    """The frame of each pose signal that a server states in its metadata or through its client stack."""
+    # A server repeats its client stack's frames in its metadata, and the harness checks only the merged copy.
+    if disagree := sorted(name for name in declared.keys() & from_stack.keys() if declared[name] != from_stack[name]):
+        raise ValueError(
+            f'The server states two different {roboarm_keys.EE_FRAMES} for {disagree}: one in its metadata and one '
+            'in its client stack'
+        )
+    return {**from_stack, **declared}
+
+
 class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
@@ -117,7 +129,8 @@ class RemotePolicy(Policy):
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
     codecs run. ``meta`` holds only the client's own values. Each run records the server's values in the episode
-    metadata, and ``wait_for_server`` waits for the server without a session.
+    metadata before its first yield, with the frames that the server and its declared stack state as ``EE_FRAMES``.
+    ``wait_for_server`` waits for the server without a session.
     """
 
     def __init__(
@@ -147,8 +160,15 @@ class RemotePolicy(Policy):
         try:
             server_meta = dict(session.metadata)
             stack = declared_stack(server_meta, session.protocol_version)
-            client_meta = stack.meta() if session.protocol_version is ProtocolVersion.V3 else {}
+            client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
+            # Either side of the server's deployment may state the frames, so the run records both as one entry keyed
+            # by pose signal. A server older than ``EE_FRAMES`` states them only through its client stack.
+            frames = _server_frames(
+                server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
+            )
             episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
+            if frames:
+                episode_meta[roboarm_keys.EE_FRAMES] = frames
             if server_meta.get(policy_keys.COMPRESS_IMAGES):
                 episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
             for name, value in episode_meta.items():

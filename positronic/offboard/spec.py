@@ -36,9 +36,23 @@ class PolicyDeployment:
     compress_images: bool = True
 
     def __post_init__(self) -> None:
-        if (
-            self.codec is not None
-            and roboarm_keys.EE_FRAME in self.codec.meta
-            and roboarm_keys.EE_FRAME in self.local.meta()
-        ):
-            raise ValueError('Only one side of a deployment may convert the end-effector frame')
+        if self.codec is None:
+            return
+        both = (
+            self.codec.meta.get(roboarm_keys.EE_FRAMES, {}).keys()
+            & self.local.meta().get(roboarm_keys.EE_FRAMES, {}).keys()
+        )
+        if both:
+            raise ValueError(
+                f'Only one side of a deployment may declare the {roboarm_keys.EE_FRAMES} of {sorted(both)}'
+            )
+
+    def meta(self) -> dict[str, Any]:
+        """The server codec's meta and the client stack's, with the frames each side states merged per signal."""
+        codec_meta = self.codec.meta if self.codec is not None else {}
+        local_meta = self.local.meta()
+        frames = {**codec_meta.get(roboarm_keys.EE_FRAMES, {}), **local_meta.get(roboarm_keys.EE_FRAMES, {})}
+        meta = {**codec_meta, **local_meta}
+        if frames:
+            meta[roboarm_keys.EE_FRAMES] = frames
+        return meta

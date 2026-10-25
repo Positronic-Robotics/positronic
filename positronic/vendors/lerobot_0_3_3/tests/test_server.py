@@ -1,9 +1,13 @@
 from unittest.mock import MagicMock
 
+import configuronic as cfn
 import pytest
 from positronic_model_server import server_wire
 from positronic_wire import wire
 
+from positronic import keys
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, parse_ee_frames
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import keys as policy_keys
@@ -119,3 +123,24 @@ def test_warmup_observation_matches_the_features_the_policy_declares():
     # The model callable accepts channels-last images.
     assert obs[CAMERA_FEATURE].shape == (224, 320, 3)
     assert obs[TASK_FIELD] == ''
+
+
+def _pipeline(name: str) -> cfn.Config:
+    return lerobot_server.COMMANDS[name].kwargs['pipeline']
+
+
+@pytest.mark.parametrize('name', ['serve', 'ee', 'joints', 'ee_traj', 'ee_flip'])
+def test_a_pose_pipeline_that_states_no_frame_fails_to_build(name):
+    with pytest.raises(TypeError, match='ee_frame'):
+        _pipeline(name).instantiate()
+
+
+@pytest.mark.parametrize('name', ['joints_traj', 'joints_ik', 'joints_ik_sim'])
+def test_a_joint_pipeline_builds_with_no_frame(name):
+    assert roboarm_keys.EE_FRAMES not in _pipeline(name).instantiate().meta()
+
+
+@pytest.mark.parametrize('name', ['phail', 'sim_stack', 'demo'])
+def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name):
+    frame = parse_ee_frames(_pipeline(name).instantiate().meta()[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
+    assert frame == EEFrame(site=DEFAULT_FRAME)

@@ -16,6 +16,7 @@ from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, JointPosition, PositionControl
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
@@ -1256,7 +1257,7 @@ def test_wire_names_match_the_registered_components():
         'joint_delta_action': JointDeltaAction(),
         'joint_position_action': JointPositionAction('joints', 'grip'),
         'set_control_mode': SetControlMode(PositionControl()),
-        'change_ee_frame': ChangeEEFrame(Transform3D.identity),
+        'change_ee_frame': ChangeEEFrame(EEFrame(site=DEFAULT_FRAME)),
         'convert_pose': ConvertPose('rot6d'),
     }
     registered = spec.COMPONENTS

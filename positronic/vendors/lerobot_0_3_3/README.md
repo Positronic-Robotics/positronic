@@ -33,9 +33,11 @@ cd docker && docker compose run --rm lerobot-0_3_3-train \
   --num_train_steps=50000 \
   --save_freq=10000
 
-# 3. Serve (the subcommand selects the codec pipeline)
+# 3. Serve (the subcommand selects the codec pipeline).
+#    --pipeline.ee_frame states the EE frame the checkpoint speaks.
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
-  --model.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
+  --pipeline.ee_frame=@positronic.cfg.codecs.panda_hand_frame
 
 # 4. Run inference
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
@@ -91,6 +93,7 @@ See [Codecs Guide](../../policy/codecs/README.md) for comprehensive codec docume
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
   --model.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
+  --pipeline.ee_frame=@positronic.cfg.codecs.panda_hand_frame \
   --websocket.served_address.port=8000 \
   --websocket.served_address.host=0.0.0.0
 ```
@@ -101,6 +104,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 |-----------|-------------|---------|---------|
 | subcommand | Named policy pipeline: the server-side codec (must match training) | `ee` | `joints` |
 | `--model.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
+| `--pipeline.ee_frame` | The EE frame the checkpoint speaks, as an offset from a site of the rig's model. `joints_traj` and the IK pipelines set `None` | Required on `ee`, `joints`, `ee_traj`, `ee_flip` | `@positronic.cfg.codecs.panda_hand_frame` |
 | `--model.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
 | `--websocket.served_address.port` | WebSocket wire port | `8000` | `8001` |
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` | Binds to all interfaces |

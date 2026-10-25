@@ -20,6 +20,8 @@ from positronic.cfg.eval.real import yam as yam_eval
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm import yam as yam_package
+from positronic.drivers.roboarm.ik import ee_frames
+from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.eval import Embodiment
@@ -465,6 +467,15 @@ def test_the_hardware_configs_give_each_arm_its_own_tuning():
     )
     arms = [system for system in bimanual.instantiate().control_systems if isinstance(system, yam.Robot)]
     assert [(arm._park_tuning, arm._move_tuning) for arm in arms] == [(wide, yam.MOVE_SETTLE), (DEFAULT_TUNING, slow)]
+
+
+def test_the_bimanual_embodiment_states_a_frame_for_each_pose_signal_of_both_arms():
+    static_meta = embodiment_cfg.yam_bimanual.override(cameras={}).instantiate().static_meta
+    frames = ee_frames(static_meta)
+    assert set(frames) == set(static_meta[eval_keys.POSE_SIGNALS])
+    for side in (keys.LEFT_ARM, keys.RIGHT_ARM):
+        assert frames[f'{keys.ROBOT_STATE}.{side}{keys.EE_POSE_SUFFIX}'].site == DEFAULT_FRAME
+        assert frames[f'{keys.ROBOT_COMMAND}.{side}{keys.POSE_SUFFIX}'].site == DEFAULT_FRAME
 
 
 def test_failed_shutdown_parking_keeps_the_arm_powered(rig, caplog):

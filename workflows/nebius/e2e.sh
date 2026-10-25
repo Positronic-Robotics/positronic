@@ -125,7 +125,8 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
-    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    # The default dataset is MuJoCo sim data, so the checkpoint states the hand frame of the MuJoCo panda.
+    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/" --pipeline.ee_frame=@positronic.cfg.codecs.panda_hand_frame)
     ;;
   lerobot)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" lerobot expert_only \
@@ -133,7 +134,8 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
-    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    # The default dataset is MuJoCo sim data, so the checkpoint states the hand frame of the MuJoCo panda.
+    SERVE_SUBCMD=(ee --model.checkpoints_dir="$CKPT_DIR$EXP_NAME/" --pipeline.ee_frame=@positronic.cfg.codecs.panda_hand_frame)
     ;;
   openpi)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" openpi \
@@ -143,11 +145,11 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       --num_train_steps=500 2>&1)
     # openpi.train writes to <output_path>/<config_name>/<exp_name>/
-    # The run trains in the rig's default frame, so the checkpoint declares no transform.
+    # The default dataset is MuJoCo sim data, so the checkpoint states the hand frame of the MuJoCo panda.
     SERVE_SUBCMD=(
       ee
       --model.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/"
-      --pipeline.ee_frame=None
+      --pipeline.ee_frame=@positronic.cfg.codecs.panda_hand_frame
     )
     ;;
   gr00t)

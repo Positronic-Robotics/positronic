@@ -22,10 +22,18 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import _prepare_spec
-from positronic.drivers.roboarm.models import EE_LINK, FLANGE_LINK, GRIPPER_SITE, bundled_panda_model
+from positronic.drivers.roboarm.models import (
+    DEFAULT_FRAME,
+    EE_LINK,
+    FLANGE_LINK,
+    GRIPPER_SITE,
+    EEFrame,
+    bundled_panda_model,
+    parse_ee_frames,
+)
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.eval import keys as eval_keys
-from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
+from positronic.policy.tests.test_harness import FramedPolicy, RemoteStubPolicy, StubPolicy
 from positronic.simulator.env_server import telemetry as env_telemetry
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION, MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
@@ -70,7 +78,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
 
     monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', FakeRenderer)
 
-    policy = StubPolicy()
+    # The policy states the site the sim reports its poses at, so its observation carries the pose.
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=DEFAULT_FRAME)})
 
     camera_dict = {keys.WRIST_IMAGE: 'handcam_left_ph'}
 
@@ -101,6 +110,10 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     # The post-loader scene description rides robot_meta into static: with eval.seed it makes
     # the episode self-contained for downstream scoring and faithful replay.
     assert episode.static[SCENE_XML].startswith('<mujoco')
+    recorded_frames = parse_ee_frames(episode.static[roboarm_keys.EE_FRAMES])
+    assert {name: frame.site for name, frame in recorded_frames.items()} == dict.fromkeys(
+        (keys.EE_POSE, keys.TARGET_EE_POSE), DEFAULT_FRAME
+    )
     signals = episode.signals
     assert keys.TARGET_EE_POSE in signals
     assert 'target_grip' in signals

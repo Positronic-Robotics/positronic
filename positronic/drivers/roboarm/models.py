@@ -1,13 +1,15 @@
-"""Self-contained robot models (URDF + collision meshes + control frame + gripper spec) for the 3D
+"""Self-contained robot models (URDF + collision meshes + gripper spec) for the 3D
 viewer, the sim ``robot_meta``, and offline IK, plus the Robotiq 2F-85 graft shared by the bundled
 real arm and the live franka driver."""
 
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from functools import cache, lru_cache
 from pathlib import Path
-from typing import NamedTuple
+from typing import Annotated, Any, NamedTuple
 
 import numpy as np
+from pydantic import BaseModel, BeforeValidator, ConfigDict, PlainSerializer, TypeAdapter
 
 from positronic import geom, keys
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -31,6 +33,45 @@ DROID_EE_FRAME = geom.Transform3D(
 ROBOLAB_EE_FRAME = geom.Transform3D(
     np.array([0.0, 0.0, -0.085225977]), geom.Rotation.from_euler([0.0, 0.0, 2.35619449])
 )
+_QUAT = geom.Rotation.Representation.QUAT
+
+
+def _transform_from_vector(value: Any) -> Any:
+    if isinstance(value, geom.Transform3D):
+        return value
+    return geom.Transform3D.from_vector(np.asarray(value, dtype=np.float64), _QUAT)
+
+
+# A ``[tx,ty,tz,qw,qx,qy,qz]`` vector in a dump.
+Offset = Annotated[
+    geom.Transform3D,
+    BeforeValidator(_transform_from_vector),
+    PlainSerializer(lambda transform: transform.as_vector(_QUAT).tolist(), return_type=list[float]),
+]
+
+
+class EEFrame(BaseModel):
+    """Where a pose signal sits: ``offset`` from ``site``, a site of the robot model."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra='forbid')
+
+    site: str
+    offset: Offset = geom.Transform3D.identity
+
+
+_EE_FRAMES_SCHEMA = TypeAdapter(dict[str, EEFrame])
+
+
+def ee_frames_entry(frames: Mapping[str, EEFrame]) -> dict[str, Any]:
+    """The ``EE_FRAMES`` entry of a meta or statics dict that states ``frames``."""
+    return {roboarm_keys.EE_FRAMES: _EE_FRAMES_SCHEMA.dump_python(dict(frames), mode='json')}
+
+
+def parse_ee_frames(entry: Any) -> dict[str, EEFrame]:
+    """The ``EEFrame`` per pose signal that an ``EE_FRAMES`` entry states."""
+    return _EE_FRAMES_SCHEMA.validate_python(entry)
+
+
 # Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
@@ -197,7 +238,6 @@ def bundled_franka_model(default_frame_at: str = EE_LINK) -> dict:
         roboarm_keys.URDF: ET.tostring(arm_root, encoding='unicode'),
         roboarm_keys.MESHES: meshes,
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
-        roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         roboarm_keys.GRIPPER: gripper,
     }
 
@@ -221,7 +261,6 @@ def bundled_yam_model() -> dict:
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
         roboarm_keys.MESHES: {name: (urdf_path.parent / name).read_bytes() for name in sorted(mesh_files)},
         roboarm_keys.JOINT_NAMES: list(YAM_JOINT_NAMES),
-        roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
     }
 
 
@@ -242,7 +281,6 @@ def bundled_panda_model() -> dict:
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
         roboarm_keys.MESHES: {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
-        roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
         roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
     }

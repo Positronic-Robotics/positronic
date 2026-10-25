@@ -149,7 +149,14 @@ class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
     def run(self, runtime: Runtime, *args: Any, **kwargs: Any) -> ProcessorRun[InputT, OutputT, ReturnT]: ...
 
     def meta(self) -> dict[str, Any]:
-        """Model and configuration metadata shared across episodes."""
+        """Model and configuration metadata shared across episodes.
+
+        The harness reads one entry: ``ee_frames``, nested and keyed by pose signal, states the frame of each pose
+        signal the policy reads. A run that learns its frames only as it starts, such as a remote run, writes the
+        same entry with ``runtime.set_metadata`` before its first yield. A policy that states entries observes only
+        those pose signals. A policy that states none observes each pose at the rig's legacy point
+        (``Harness._pose_handshake``).
+        """
         return {}
 
     def to_spec(self) -> dict[str, Any]:

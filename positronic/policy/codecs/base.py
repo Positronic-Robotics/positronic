@@ -165,10 +165,11 @@ class _ComposedCodec(Codec):
     def meta(self):
         left, right = self._left.meta, self._right.meta
         # Sequential frame transforms compose, so either transform's frame metadata alone is incorrect.
-        if roboarm_keys.EE_FRAME in left and roboarm_keys.EE_FRAME in right:
+        both = left.get(roboarm_keys.EE_FRAMES, {}).keys() & right.get(roboarm_keys.EE_FRAMES, {}).keys()
+        if both:
             raise ValueError(
-                f'sequential codecs both declare {roboarm_keys.EE_FRAME}: poses come out at the product of both '
-                f'moves, which neither {left[roboarm_keys.EE_FRAME]} nor {right[roboarm_keys.EE_FRAME]} names'
+                f'sequential codecs both declare {roboarm_keys.EE_FRAMES} for {sorted(both)}: those poses come out '
+                'at the product of both moves, which neither declaration names'
             )
         return _merged_meta(left, right)
 

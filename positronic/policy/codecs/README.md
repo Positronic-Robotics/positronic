@@ -121,7 +121,7 @@ Decoding runs right-to-left: unpack fields, split timesteps, then construct comm
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`ChangeEEFrame`](geometry.py) | Moves observation and recorded poses into a tool frame, records the frame, and converts decoded commands back. | The checkpoint uses a different physical end-effector frame from the robot's `default` frame. |
+| [`ChangeEEFrame`](geometry.py) | Moves observation and recorded poses off a site of the rig model, states the frame as `ee_frames`, and converts decoded commands back. | The checkpoint reads poses. An identity offset states a checkpoint trained at the rig site. |
 | [`ConvertPose`](geometry.py) | Converts selected observation/episode pose vectors to float32, a chosen rotation representation and a fixed rotation offset. Preserves translation and frame metadata; decoded actions pass through. | Match quaternion, Euler or 6D rotation conventions expected by a model. |
 
 ### Gripper
@@ -185,14 +185,23 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 "EE pose" has no universal meaning: our rigs report the frame their model calls `default`, DROID reports the flange (`panda_link8`), and RoboLab reports its own `eef_frame` at the gripper coupler (`robolab_eef`). A checkpoint speaks whichever frame its training data was in, so serving it on a rig whose `default` sits elsewhere misreads every pose and every command by one constant transform — silently. See [the frame contract](../../drivers/roboarm/README.md) for what `default` is and what each embodiment owes it.
 
-`ChangeEEFrame(T)` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `default`, so it belongs to the checkpoint and travels with it — nothing about the rig's model crosses the wire.
+`ChangeEEFrame(EEFrame(site=site, offset=T))` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
+
+The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
+
+- A policy that states no `ee_frames` gets each pose at the rig's legacy point, as [the frame contract](../../drivers/roboarm/README.md) says.
+- A policy that names a site the rig does not report that signal at is refused.
+
+A pose-reading checkpoint states its frame, also when the offset is the identity (`cfg.codecs.franka_hand_frame`).
 
 It is declared in two places, for the two things it does:
 
-- **Training** — `compose(ee_frame=DROID_EE_FRAME)` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it. It defaults to unset, which trains in `default`.
-- **Serving** — the OpenPI pipeline's `ee_frame=` puts `ChangeEEFrame` in the client's pipeline. It has no default: every deployment states its frame — `None` for a checkpoint trained in `default`, or one that speaks joints, which are unambiguous. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
+- **Training** — `compose(ee_frame=...)` takes an `EEFrame` and re-expresses the dataset in it, so the resulting checkpoint speaks that frame. The training transform refuses a pose that the recording does not state at that site with no offset. It defaults to unset, which trains on the poses as recorded.
+- **Serving** — the LeRobot and OpenPI pipelines take `ee_frame=`, which puts `ChangeEEFrame` in the deployment. It has no default: every pose deployment states its frame, and a pose pipeline built without one fails when the server starts. A pipeline that speaks joints only states `None` itself. Pass the frame the checkpoint was trained in: `@positronic.cfg.codecs.franka_hand_frame` for the FR3's Franka Hand point, `@positronic.cfg.codecs.panda_hand_frame` for the hand point of the MuJoCo panda, `@positronic.cfg.codecs.droid_frame` for the DROID flange, and `None` for a checkpoint that speaks joints only. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
 
-Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as a translation and wxyz quaternion.
+Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `cfg.codecs.droid_frame`, `models.DROID_EE_FRAME` from the rig site, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
+
+A server built on positronic states its frame with the same configs: a server built for poses at the Franka Hand point puts `ChangeEEFrame(cfg.codecs.franka_hand_frame.instantiate())` in its pipeline.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 
@@ -307,7 +316,8 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # Serve the matching recipe
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
+  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
 ```
 
 ## See Also
