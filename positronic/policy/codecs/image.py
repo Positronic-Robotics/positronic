@@ -1,4 +1,3 @@
-import collections.abc as cabc
 import os
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -7,6 +6,7 @@ from typing import Any, Self
 import numpy as np
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, JpegEncoding, encode_images, encode_jpeg
 from positronic_model_server.spec import ARGS, NAME, VERSION
+from positronic_model_server.tree import map_leaves, update_at
 
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.image import Resample
@@ -40,14 +40,10 @@ class EncodeImages(Codec):
             and min(value.shape[-3:-1]) > 0
         ):
             return encode_jpeg(value, self._quality)
-        if isinstance(value, cabc.Mapping):
-            return {key: self._encode_value(item) for key, item in value.items()}
-        if isinstance(value, list | tuple):
-            return type(value)(self._encode_value(item) for item in value)
         return value
 
     def encode(self, data: dict) -> dict:
-        return self._encode_value(data) if self._images is None else encode_images(data, self._images)
+        return map_leaves(data, self._encode_value) if self._images is None else encode_images(data, self._images)
 
     def decode(self, data: Any) -> Any:
         return data
@@ -101,30 +97,14 @@ class TransformImages(Codec):
 
     def encode(self, data):
         if self._paths is None:
-            return self._transform_value(data)
+            return map_leaves(data, self._transform_value)
         for path in self._paths:
-            data = self._at(data, path)
+            data = update_at(data, path, lambda value: self._transform_image(np.asarray(value)))
         return data
-
-    def _at(self, value: Any, path: tuple[str | int, ...]) -> Any:
-        if not path:
-            return self._transform_image(np.asarray(value))
-        key, *rest = path
-        if isinstance(value, cabc.Mapping):
-            return {**value, key: self._at(value[key], tuple(rest))}
-        if isinstance(value, list | tuple) and type(key) is int:
-            result = list(value)
-            result[key] = self._at(value[key], tuple(rest))
-            return tuple(result) if isinstance(value, tuple) else result
-        raise ValueError(f'Image path {path!r} does not match the value')
 
     def _transform_value(self, value: Any) -> Any:
         if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
             return self._transform_image(value)
-        if isinstance(value, cabc.Mapping):
-            return {key: self._transform_value(item) for key, item in value.items()}
-        if isinstance(value, list | tuple):
-            return type(value)(self._transform_value(item) for item in value)
         return value
 
     def _transform_image(self, value: np.ndarray) -> np.ndarray:

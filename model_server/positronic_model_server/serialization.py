@@ -20,6 +20,8 @@ import msgpack
 import numpy as np
 from PIL import Image as PilImage
 
+from .tree import update_at
+
 # The envelope each encoded value travels in: a marker naming the type, and the fields carrying it.
 _NDARRAY = b'__ndarray__'
 _NPGENERIC = b'__npgeneric__'
@@ -49,21 +51,12 @@ class JpegEncoding:
     def encode(self, value: Any) -> Any:
         """Copy the selected container path and encode its leaf, preserving unrelated values."""
 
-        def at(node: Any, path: tuple[str | int, ...]) -> Any:
-            if not path:
-                if not isinstance(node, np.ndarray):
-                    raise ValueError(f'JPEG path {self.path!r} does not select an array')
-                return encode_jpeg(node, self.quality)
-            key, *rest = path
-            if isinstance(node, cabc.Mapping):
-                return {**node, key: at(node[key], tuple(rest))}
-            if isinstance(node, list | tuple) and type(key) is int:
-                copy = list(node)
-                copy[key] = at(node[key], tuple(rest))
-                return tuple(copy) if isinstance(node, tuple) else copy
-            raise ValueError(f'JPEG path {self.path!r} does not match the value')
+        def encode(node: Any) -> Any:
+            if not isinstance(node, np.ndarray):
+                raise ValueError(f'JPEG path {self.path!r} does not select an array')
+            return encode_jpeg(node, self.quality)
 
-        return at(value, self.path)
+        return update_at(value, self.path, encode)
 
 
 def encode_images(value: Any, encodings: cabc.Sequence[JpegEncoding]) -> Any:

@@ -5,9 +5,9 @@ The wrapper owns transport, sessions, serialization and cleanup. Vendor scripts 
 model directly in the same process and describe the client pipeline as plain data.
 
 ```bash
-uv pip install "positronic-model-server==0.3.0"
-uv pip install "positronic-model-server[websocket]==0.3.0"
-uv pip install "positronic-model-server[grpc]==0.3.0"
+uv pip install "positronic-model-server==0.3.1"
+uv pip install "positronic-model-server[websocket]==0.3.1"
+uv pip install "positronic-model-server[grpc]==0.3.1"
 ```
 
 The core depends on NumPy, Pillow, msgpack and `positronic-wire`'s dependency-free transport
@@ -171,6 +171,10 @@ observations or model results, including returned images.
 selecting the whole result. Supply these selectors through `Session.output_images` for returned
 images. `serialization.encode_images` applies the same selections to observations without changing
 the source containers. A missing path fails instead of silently skipping compression.
+
+`tree.map_leaves(value, transform)` transforms leaves in nested mappings, lists and tuples.
+`tree.update_at(value, path, transform)` transforms one selected value, copying only its container path.
+These standard-library-only helpers leave image detection and conversion to the supplied function.
 
 The client component `encode_images` defaults to recursively JPEG-encoding `uint8` arrays shaped
 `(..., H, W, 3)` with positive height and width, including batches, inside mappings, lists and tuples.
