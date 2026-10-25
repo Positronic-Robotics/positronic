@@ -17,8 +17,11 @@ Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
   - No such machine? [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) creates one with one
     command. Sign up for Nebius Builder with the email address of the account that you register with.
     Nebius also has the GPUs to train your policy.
-  - Do not use a Mac with Apple silicon, or another ARM machine. Docker emulates amd64 there, and the test
-    is very slow and can fail.
+  - A Mac with Apple silicon, or another ARM machine, can build and submit the image: the build command
+    names `--platform linux/amd64`. Docker emulates amd64 there, so the build is slower. The local test
+    does not run there, because the model does not load in the time limit, and the test script stops at
+    once. Skip the test, or run it on an amd64 Linux machine. Without the test, a broken image uses one
+    submission of the day.
 - On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, Docker, and a C compiler. On Ubuntu,
   install the compiler with `sudo apt install build-essential`. The install builds one dependency, `evdev`,
   from source.
