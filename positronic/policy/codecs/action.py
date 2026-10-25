@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -20,71 +20,36 @@ from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action
 RotRep = geom.Rotation.Representation
 
 
-class UnpackActionChunk(Codec):
-    """Select prediction arrays and split their time axis into action records.
+class SplitActionChunk(Codec):
+    """Split prediction arrays along their first, shared time axis into action records.
 
-    ``fields`` maps output names to paths of literal dictionary keys or sequence indices.
-    ``squeeze_dims`` removes leading size-one dimensions before the time axis.
-    For example, ``UnpackActionChunk({'joints': [0, 'q']}, squeeze_dims=1)`` reads
-    ``({'q': array_of_shape_1_T_7}, info)`` as T records containing a ``(7,)`` joints array.
+    Every field must be an array with at least one dimension and the same number of timesteps.
+    A zero-length time axis produces no records. Trailing dimensions and dtypes are preserved.
     Observations and training columns pass through unchanged.
     """
 
-    WIRE_NAME = 'unpack_action_chunk'
-
-    def __init__(self, fields: Mapping[str, Sequence[str | int]], *, squeeze_dims: int = 0):
-        if not fields:
-            raise ValueError('At least one prediction field is required')
-        if type(squeeze_dims) is not int or squeeze_dims < 0:
-            raise ValueError('squeeze_dims must be a non-negative integer')
-        for name, path in fields.items():
-            if (
-                not isinstance(name, str)
-                or not isinstance(path, Sequence)
-                or isinstance(path, (str, bytes))
-                or any(type(part) not in (str, int) for part in path)
-            ):
-                raise ValueError('Prediction fields require string names and paths of string keys or integer indices')
-        self._fields = {name: tuple(path) for name, path in fields.items()}
-        self._squeeze_dims = squeeze_dims
+    WIRE_NAME = 'split_action_chunk'
 
     def encode(self, data: dict) -> dict:
         return data
 
-    def _array(self, data: Any, name: str, path: Sequence[str | int]) -> np.ndarray:
-        for part in path:
-            data = data[part]
-        if (
-            not isinstance(data, np.ndarray)
-            or data.ndim <= self._squeeze_dims
-            or any(size != 1 for size in data.shape[: self._squeeze_dims])
-        ):
-            raise ValueError(
-                f'Prediction {name!r} must be an array with {self._squeeze_dims} '
-                'leading size-one dimensions and a time axis'
-            )
-        return data.reshape(data.shape[self._squeeze_dims :])
-
     def decode(self, data: Any) -> list[dict[str, Any]]:
-        arrays = {name: self._array(data, name, path) for name, path in self._fields.items()}
-        horizons = {len(array) for array in arrays.values()}
+        if not isinstance(data, Mapping) or not data:
+            raise ValueError('An action chunk must be a non-empty mapping of prediction arrays')
+        for name, value in data.items():
+            if not isinstance(name, str) or not isinstance(value, np.ndarray) or value.ndim < 1:
+                raise ValueError('Action chunk fields must have string names and arrays with a time axis')
+        horizons = {len(value) for value in data.values()}
         if len(horizons) != 1:
-            raise ValueError(f'Prediction fields must share one horizon, got {sorted(horizons)}')
-        return [{name: array[index] for name, array in arrays.items()} for index in range(horizons.pop())]
+            raise ValueError('Prediction fields must share one horizon')
+        return [{name: value[index] for name, value in data.items()} for index in range(horizons.pop())]
 
     @property
     def training_encoder(self):
         return Identity()
 
     def to_spec(self):
-        return {
-            NAME: self.WIRE_NAME,
-            VERSION: self.WIRE_VERSION,
-            ARGS: {
-                'fields': {name: list(path) for name, path in self._fields.items()},
-                'squeeze_dims': self._squeeze_dims,
-            },
-        }
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
 class JointPositionAction(Codec):

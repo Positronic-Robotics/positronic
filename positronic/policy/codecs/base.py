@@ -21,15 +21,8 @@ class Codec:
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
     (action decoding). The ``training_encoder`` property
     returns an ``EpisodeTransform`` used by the training pipeline to derive dataset columns.
-
-    Reserved ``meta`` key:
-
-    ``image_sizes``
-        The image dimensions this codec encodes to. Either a ``(width, height)`` tuple (same
-        size for all images) or a dict mapping raw input keys to ``(width, height)`` tuples.
     """
 
-    IMAGE_SIZES = 'image_sizes'
     WIRE_NAME: ClassVar[str]
     WIRE_VERSION: ClassVar[int] = 1
 
