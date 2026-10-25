@@ -109,6 +109,17 @@ def _log_late_close_failure(closed: Future[None]) -> None:
         logger.error('The session close failed after the run continued: %r', failure)
 
 
+def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict[str, Any]:
+    """The frame of each pose signal that a server states in its metadata or through its client stack."""
+    # A server repeats its client stack's frames in its metadata, and the harness checks only the merged copy.
+    if disagree := sorted(name for name in declared.keys() & from_stack.keys() if declared[name] != from_stack[name]):
+        raise ValueError(
+            f'The server states two different {roboarm_keys.EE_FRAMES} for {disagree}: one in its metadata and one '
+            'in its client stack'
+        )
+    return {**from_stack, **declared}
+
+
 class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
@@ -152,7 +163,9 @@ class RemotePolicy(Policy):
             client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
             # Either side of the server's deployment may state the frames, so the run records both as one entry keyed
             # by pose signal.
-            frames = {**client_meta.pop(roboarm_keys.EE_FRAMES, {}), **server_meta.get(roboarm_keys.EE_FRAMES, {})}
+            frames = _server_frames(
+                server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
+            )
             episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
             if frames:
                 episode_meta[roboarm_keys.EE_FRAMES] = frames

@@ -79,9 +79,10 @@ To update the commands later, run `uv tool upgrade positronic`.
 Choose a team name. The command prints a sign-in link and a code, and waits while you sign in. The link
 expires in 5 minutes. If it expires, run the command again. Open the link and sign in. The link carries the
 code, so the page shows it: make sure that it is the code that the command printed. If the page asks for
-the code, enter it. The sign-in page shows the ways to sign in that the platform takes. The command saves
-your API key on this computer, and prints the path of the file. The other commands read the key from that
-file.
+the code, enter it. The sign-in page shows the ways to sign in that the platform takes. The sign-in can
+send you a code by email, from Physical AI Competition (`competition@phail.ai`). If the code is not in your
+inbox, look in your spam folder. The command saves your API key on this computer, and prints the path of
+the file. The other commands read the key from that file.
 
 ```bash
 positronic account register --alias="<team name>"

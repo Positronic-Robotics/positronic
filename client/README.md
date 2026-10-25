@@ -45,7 +45,8 @@ The platform names its identity provider at `GET /v1/auth.config`, and the comma
 flow of that provider:
 
 - WorkOS, when the platform names a WorkOS client. You sign in with the methods that the platform's
-  WorkOS environment offers, such as Google, GitHub or an email code.
+  WorkOS environment offers, such as Google, GitHub or an email code. A mail provider can put the
+  code mail in spam, so the sign-in line also tells you to look in your spam folder.
   `--workos-client-id` and `POSITRONIC_PLATFORM_WORKOS_CLIENT_ID` name another client instead.
 - GitHub, when the platform takes GitHub tokens and names no WorkOS client. The command uses the
   platform's own OAuth app, whose client id it carries as its default. `--client-id` and
