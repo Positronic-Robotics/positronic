@@ -15,7 +15,7 @@ import numpy as np
 from opentelemetry.trace import Span
 
 import pimm
-from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
+from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, emission_time
 from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.episode import EpisodeWriter
@@ -149,6 +149,9 @@ class Harness(pimm.ControlSystem):
         self._recorded_signals: set[str] = set()
         self._recorded_privileged: set[str] = set()
         self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
+        # The last instruction this episode recorded, so a sample goes in only when the instruction changes.
+        self._recorded_instruction: str | None = None
+        self._clock: pimm.Clock | None = None
         self._telemetry = _EpisodeTelemetry()
         # A ready call the harness made between episodes, by device name, until the device answers it.
         self._repairs: dict[str, pimm.calls.Answer[None]] = {}
@@ -304,6 +307,14 @@ class Harness(pimm.ControlSystem):
                 self._writer.append(name, value.copy() if isinstance(value, np.ndarray) else value, timestamps)
                 self._recorded_signals.add(name)
 
+    def _record_instruction(self, instruction: str) -> None:
+        """Record the instruction that the policy gets, at the harness's time, when it differs from the last one."""
+        if self._writer is None or instruction == self._recorded_instruction:
+            return
+        assert self._clock is not None, 'an episode records only inside run'
+        self._append({eval_keys.INSTRUCTION: instruction}, emission_time(self._clock))
+        self._recorded_instruction = instruction
+
     def _convert_and_record(
         self, name: str, message: pimm.Message, serializer: Serializer | None, step_ms: dict[str, float] | None = None
     ) -> dict[str, Any]:
@@ -348,6 +359,8 @@ class Harness(pimm.ControlSystem):
         Return ``None`` if a required signal has no message. Raise the ``pimm.SignalError`` a signal carries.
         Conversion errors propagate.
         Put each signal's read and conversion durations into ``step_ms``.
+        Record the task's instruction as the ``eval_keys.INSTRUCTION`` signal each time a returned observation
+        carries a new one.
         """
         self._sample(step_ms)
         inputs: dict[str, Any] = {}
@@ -364,7 +377,8 @@ class Harness(pimm.ControlSystem):
             return None
         for name in withheld_poses:
             inputs.pop(name, None)
-        inputs[keys.TASK] = task.instruction
+        inputs[keys.TASK] = instruction = task.instruction
+        self._record_instruction(instruction)
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return frozen_view(inputs)
 
@@ -470,6 +484,7 @@ class Harness(pimm.ControlSystem):
             self._recorded_signals.clear()
             self._recorded_privileged.clear()
             self._obs_by_signal.clear()
+            self._recorded_instruction = None
 
     def _rollout(
         self,
@@ -578,6 +593,7 @@ class Harness(pimm.ControlSystem):
         return payload
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> pimm.Run[None]:
+        self._clock = clock
         for emitter in self.commands.values():
             # A command without a device receiver still needs the world's emission timestamps.
             emitter._clock = clock

@@ -1005,6 +1005,74 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     assert answer.result()[eval_keys.TERMINATED] is True
 
 
+class ReadInstruction(Policy):
+    """Keep each instruction that the policy gets, and ask for the next observation 5 ms later."""
+
+    def __init__(self):
+        self.instructions: list[str] = []
+
+    def run(self, runtime):
+        obs = yield
+        while True:
+            self.instructions.append(obs[keys.TASK])
+            obs = yield Step({}, runtime.time_ns + 5_000_000)
+
+
+def test_each_instruction_the_policy_gets_is_recorded_at_the_time_it_changes(episode_harness, tmp_path):
+    h = episode_harness
+    h.harness._dataset_factory = LocalDatasetWriter
+    current = ['open the top drawer']
+    policy = ReadInstruction()
+    h.observation.emit(np.array([0]))
+    answer = h.caller(Rollout(Task(lambda: current[0], None), policy, tmp_path))
+    next(h.loop)
+    for at_ns, instruction in [
+        (5_000_000, 'open the top drawer'),
+        (10_000_000, 'open the middle drawer'),
+        (15_000_000, 'open the middle drawer'),
+        (20_000_000, 'open the bottom drawer'),
+    ]:
+        current[0] = instruction
+        h.world.clock.advance_to_ns(at_ns)
+        next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert answer.result()[eval_keys.TERMINATED]
+    assert policy.instructions == [
+        'open the top drawer',
+        'open the top drawer',
+        'open the middle drawer',
+        'open the middle drawer',
+        'open the bottom drawer',
+    ]
+    episode = LocalDataset(tmp_path)[0]
+    assert [(value, ts[HARNESS_WORLD]) for value, ts in episode[eval_keys.INSTRUCTION]] == [
+        ('open the top drawer', 0),
+        ('open the middle drawer', 10_000_000),
+        ('open the bottom drawer', 20_000_000),
+    ]
+    assert episode.static[keys.TASK] == 'open the bottom drawer'
+
+
+def test_an_instruction_that_never_changes_is_recorded_once_at_the_first_observation(episode_harness):
+    h = episode_harness
+    h.world.clock.advance_to_ns(1_000_000)
+    answer = h.caller(Rollout(Task('move', None), ReadInstruction(), h.output_path))
+    next(h.loop)  # no observation yet: the policy gets nothing, so nothing is recorded
+    h.world.clock.advance_to_ns(2_000_000)
+    h.observation.emit(0)
+    for at_ns in (3_000_000, 8_000_000, 13_000_000):
+        h.world.clock.advance_to_ns(at_ns)
+        next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert answer.result()[eval_keys.TERMINATED]
+    episode = h.dataset.episodes[0]
+    recorded = [(data, ts[HARNESS_WORLD]) for name, data, ts in episode.records if name == eval_keys.INSTRUCTION]
+    assert recorded == [('move', 3_000_000)]
+    assert episode.static[keys.TASK] == 'move'
+
+
 def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(episode_harness, tmp_path):
     class Record(Policy):
         def meta(self):
@@ -1543,7 +1611,7 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         answer = h.caller(Rollout(Task('sample', None), policy, h.output_path))
         next(h.loop)
         episode = h.dataset.episodes[0]
-        assert [name for name, _, _ in episode.records] == [POSITION, GROUND_TRUTH]
+        assert [name for name, _, _ in episode.records] == [POSITION, GROUND_TRUTH, eval_keys.INSTRUCTION]
 
         h.world.clock.advance_to_ns(1_000_000)
         frame = np.array([20])
@@ -1565,9 +1633,10 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         assert all(GROUND_TRUTH not in obs for obs in policy.observations)
         assert [data for name, data, _ in episode.records if name == POSITION] == [0, 1]
         assert [data.tolist() for name, data, _ in episode.records if name == GROUND_TRUTH] == [[10], [20], [30]]
-        for _, _, timestamps in episode.records:
-            assert timestamps[HARNESS_WORLD] == timestamps[RECEIVED_WORLD]
-            assert timestamps[HARNESS_WALL] == timestamps[RECEIVED_WALL]
+        for name, _, timestamps in episode.records:
+            if name in (POSITION, GROUND_TRUTH):
+                assert timestamps[HARNESS_WORLD] == timestamps[RECEIVED_WORLD]
+                assert timestamps[HARNESS_WALL] == timestamps[RECEIVED_WALL]
 
 
 def test_disabled_recording_does_not_read_privileged_data_or_add_sampling_wakeups():
@@ -1619,16 +1688,16 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
         def run(self, runtime):
             obs = yield
             while True:
-                episode = h.dataset.episodes[0]
-                assert episode.records[-1][0] == POSITION
-                assert episode.records[-1][1][0] == obs[POSITION][0]
+                inputs = [record for record in h.dataset.episodes[0].records if record[0] != eval_keys.INSTRUCTION]
+                assert inputs[-1][0] == POSITION
+                assert inputs[-1][1][0] == obs[POSITION][0]
                 commands[0] += 1
                 calls.append(obs)
                 obs = yield Step({MOTOR: commands}, runtime.time_ns + 5_000_000)
 
     frame = np.array([10])
     h.observation.emit(frame)
-    h.caller(Rollout(Task('move', None), Move(), h.output_path))
+    answer = h.caller(Rollout(Task('move', None), Move(), h.output_path))
     next(h.loop)
     episode = h.dataset.episodes[0]
     append = episode.append
@@ -1643,7 +1712,10 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
     h.world.clock.advance_to_ns(5_000_000)
     h.observation.emit(frame)
     next(h.loop)
-    assert [data.tolist() for _, data, _ in episode.records] == [[10], [1], [20], [2]]
+    assert not answer.done()
+    assert [data for name, data, _ in episode.records if name == eval_keys.INSTRUCTION] == ['move']
+    inputs_and_commands = [data.tolist() for name, data, _ in episode.records if name != eval_keys.INSTRUCTION]
+    assert inputs_and_commands == [[10], [1], [20], [2]]
     for name, _, ts in episode.records:
         expected = {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
         if name == POSITION:
@@ -1695,7 +1767,7 @@ def test_recording_keeps_first_receipt_times_and_does_not_change_messages(episod
     next(h.loop)
     h.world.clock.advance_to_ns(3_000_000)
     next(h.loop)
-    records = h.dataset.episodes[0].records
+    records = [record for record in h.dataset.episodes[0].records if record[0] == POSITION]
     assert len(records) == 1
     _, _, timestamps = records[0]
     assert timestamps[HARNESS_WORLD] == original_time[RECEIVED_WORLD] == 1_000_000

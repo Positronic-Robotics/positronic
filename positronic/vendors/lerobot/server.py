@@ -11,7 +11,7 @@ from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import ChangeEEFrame, RestrictImageSize
+from positronic.policy.codecs import ChangeEEFrame, ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot import codecs as lerobot_codecs
@@ -53,7 +53,7 @@ def lerobot_model(checkpoints_dir: str, checkpoint: str | None, device: str | No
 def pipeline(
     codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_sec: float | None = 1.0
 ) -> PolicyDeployment:
-    local = Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize(512, 512))
+    local = Sequential(ChunkedSchedule(fps, horizon_sec), TransformImages(512, 512, mode=ResizeMode.BOUND))
     if ee_frame is not None:
         local = Sequential(ChangeEEFrame(ee_frame), local)
     return PolicyDeployment(local, codec)

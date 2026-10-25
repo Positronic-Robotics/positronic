@@ -5784,12 +5784,12 @@ dev = [
 
 [[package]]
 name = "positronic-eval-vocabulary"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "vocabulary" }
 
 [[package]]
 name = "positronic-evals"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "evals" }
 dependencies = [
     { name = "positronic-eval-vocabulary" },
@@ -5817,7 +5817,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/c8/28/e733efa494edf3aba
 
 [[package]]
 name = "positronic-model-server"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },
@@ -5850,7 +5850,7 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.40.1"
+version = "0.41.0"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
