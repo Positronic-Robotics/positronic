@@ -402,7 +402,9 @@ def register_with_device_flow(
     flow = sign_in.flow
     authorization = flow.start_device_authorization()
     # To stderr: it is a prompt for the person at the terminal, and stdout carries the command's answer.
-    print(authorization.sign_in_prompt(), file=sys.stderr, flush=True)
+    line = authorization.sign_in_prompt()
+    hint = flow.provider.code_mail_hint
+    print(line if hint is None else f'{line}. {hint}', file=sys.stderr, flush=True)
     token = flow.poll_for_token(authorization)
     request = RegisterRequest(credential=token, alias=alias, rotate=rotate)
     return platform.register(request, timeout=sign_in.register_timeout)
