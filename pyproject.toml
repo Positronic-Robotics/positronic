@@ -42,17 +42,17 @@ dependencies = [
     # (.github/workflows/release.yaml). Pinned exactly, because that package guarantees no
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
-    "positronic-platform-client==0.40.1",
+    "positronic-platform-client==0.41.0",
     # The client side of every wire and the facts both ends share. A workspace member in a clone;
     # a released `positronic` resolves it from the index, so it is published first, and it is pinned
     # exactly for the same reason the client is (wire/README.md).
     "positronic-wire[websocket,grpc]==0.12.0",
     "positronic-model-server[websocket,grpc]==0.3.1",
     # The words an attended rollout records, which the rollouts viewer colours and counts.
-    "positronic-eval-vocabulary==0.5.0",
+    "positronic-eval-vocabulary==0.6.0",
     # The public evals that `positronic eval run` runs here, and the episode lists the MolmoSpaces sim server
     # reads. A workspace member in a clone; pinned exactly for the same reason the client is.
-    "positronic-evals==0.1.1",
+    "positronic-evals==0.1.2",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
@@ -326,6 +326,10 @@ extraPaths = [".", "positronic/simulator/env_server"]
 root = "positronic/simulator/molmo_spaces"
 extraPaths = [".", "positronic/simulator/env_server"]
 
+[[tool.basedpyright.executionEnvironments]]
+root = "positronic/simulator/amazon_abc"
+extraPaths = [".", "positronic/simulator/env_server"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = [
@@ -344,4 +348,5 @@ positronic = [
   "server/templates/**",
   # The launcher needs these dependency constraints in installed distributions too.
   "simulator/molmo_spaces/molmo_constraints.txt",
+  "simulator/amazon_abc/abc_constraints.txt",
 ]
