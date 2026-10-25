@@ -10,11 +10,11 @@ The package root exposes public names; implementations and their tests are group
 | Module | Responsibility |
 |--------|----------------|
 | [`base`](base.py) | `Codec` and sequential/parallel composition |
-| [`observation`](observation.py) | Field names, state vectors and model input assembly |
+| [`observation`](observation.py) | Field names, state vectors and model input/output layouts |
 | [`action`](action.py) | Prediction decoding, training labels and command control modes |
 | [`geometry`](geometry.py) | Pose representations and end-effector frames |
 | [`gripper`](gripper.py) | Grip thresholds and conventions |
-| [`image`](image.py) | Image size limits and JPEG encoding |
+| [`image`](image.py) | Image selection, resizing, padding and JPEG encoding |
 | [`metadata`](metadata.py) | Metadata attachment and dataset feature descriptors |
 
 Codec tests live in [`tests/`](tests/). Model-specific recipes compose these operations under
@@ -84,15 +84,30 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`ObservationCodec`](observation.py) | Concatenates state signals, resizes and pads RGB images, and carries the task prompt. Shares state/image settings between training and inference. | Build named state vectors and image fields from raw robot observations. |
+| [`StateObservationCodec`](observation.py) | Concatenates fields into float32 vectors and carries the task prompt. | Build model state vectors from robot observations. |
+| [`SelectObservationFields`](observation.py) | Selects and renames literal input fields. Contributes no decoded commands. | Build an observation branch that runs beside an action decoder. |
 | [`RenameObservationFields`](observation.py) | Renames literal top-level inference fields. Training columns and decoded actions pass through. | The model's inference input names differ from the training column names. |
-| [`PackObservationFields`](observation.py) | Selects fields into nested dictionaries and adds leading singleton dimensions. Arrays retain their dtype; other values gain list layers. Training and decoding pass through. | A model expects grouped fields or explicit batch/time dimensions, such as GR00T's `video`, `state` and `language` inputs. |
+| [`PackFields`](observation.py) | Arranges model inputs and outputs and adds or removes batch dimensions. | Match the model’s field layout in either direction. |
+
+Each `PackFields` layout describes the result; its leaves are paths into the source:
+
+```python
+packing = PackFields(
+    encode_layout={'state': {'joints': ['q']}},
+    decode_layout={'joints': [0, 'q']},
+    unsqueeze_dims=2,
+    squeeze_dims=1,
+)
+codec = (observations & action) | SplitActionChunk() | packing
+```
+
+Decoding runs right-to-left: unpack fields, split timesteps, then construct commands.
 
 ### Actions
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`UnpackActionChunk`](action.py) | Selects prediction arrays, removes leading size-one dimensions, and splits a shared time axis into action records. Observations and training pass through. | A model returns batched or nested prediction arrays that action decoders need one timestep at a time. |
+| [`SplitActionChunk`](action.py) | Splits prediction arrays into one record per timestep. | Feed a chunk of predictions to action decoders. |
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
 | [`JointPositionAction`](action.py) | Decodes separate joint and grip fields into an absolute command. | The model returns named predictions; training labels are defined independently. |
@@ -106,7 +121,7 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`ChangeEEFrame`](geometry.py) | Moves observation and recorded poses into a tool frame, records the frame, and converts decoded commands back. | The checkpoint uses a different physical end-effector frame from the robot's `default` frame. |
+| [`ChangeEEFrame`](geometry.py) | Moves observation and recorded poses off a site of the rig model, states the frame as `ee_frames`, and converts decoded commands back. | The checkpoint reads poses. An identity offset states a checkpoint trained at the rig site. |
 | [`ConvertPose`](geometry.py) | Converts selected observation/episode pose vectors to float32, a chosen rotation representation and a fixed rotation offset. Preserves translation and frame metadata; decoded actions pass through. | Match quaternion, Euler or 6D rotation conventions expected by a model. |
 
 ### Gripper
@@ -121,11 +136,14 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`RestrictImageSize`](image.py) | Inference: shrinks nested RGB images and frame stacks to fit bounds, preserving aspect ratio. Does not upscale; training encoding is unsupported. `resample=Resample.AREA` scales with OpenCV `INTER_AREA`, faster than the default Pillow bilinear filter, but with other pixels. | Cap image dimensions before sending observations over the network. Use `AREA` only when the model resizes the frames again. |
+| [`TransformImages`](image.py) | Resizes RGB images and frame stacks with explicit dimensions and mode. | Limit upload size or match the model’s image preparation. |
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
 
-Image transport codecs belong in the serving stack. Use `ObservationCodec` for image preparation
-shared with training. `IKJointsAction` requires Python construction; it does not provide a JSON component description.
+Choose `ResizeMode.BOUND` to shrink within bounds, `PAD` to fit and pad to the exact size, or
+`STRETCH` to resize exactly, allowing distortion. Bilinear is the default interpolation;
+`Resample.AREA` produces different pixels, so choose the filter to match the model.
+
+`IKJointsAction` requires Python construction; it does not provide a JSON component description.
 
 The [metadata module](metadata.py) also provides `lerobot_vector`, `lerobot_image` and
 `lerobot_action` to describe dataset features. These helpers return metadata dictionaries, not codecs.
@@ -134,7 +152,18 @@ The [metadata module](metadata.py) also provides `lerobot_vector`, `lerobot_imag
 
 The two codecs that do the real work are the **observation encoder** and the **action decoder**.
 
-**Observation encoding** chooses which raw fields the model sees, and in what form. `ObservationCodec` ([`positronic/policy/codecs/observation.py`](observation.py)) is configured with state vectors to assemble (e.g. concatenate `robot_state.ee_pose` + `grip`) and images to resize. The same configuration builds the training columns and encodes the live observation, so the two match by construction.
+**Observation encoding** combines state packing and image preparation with `&`, so both read the same raw observation:
+
+```python
+StateObservationCodec(state={'state': {'robot_state.q': 7, 'grip': 1}}) & (
+    SelectObservationFields({'image': 'wrist_image'})
+    | TransformImages(224, 224, mode=ResizeMode.PAD, paths=[['image']])
+)
+```
+
+For dataset preparation, use the image training recipe in [`policy.training`](../training.py).
+New clients support published server descriptions; servers using new components require updated clients.
+See [compatibility](../../offboard/README.md#compatibility-and-deprecation).
 
 **Action encoding** chooses what the model predicts and how that maps back to a robot command. This is where the action-space decisions live. Some real examples from [`positronic/policy/codecs/action.py`](action.py):
 
@@ -156,14 +185,23 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 "EE pose" has no universal meaning: our rigs report the frame their model calls `default`, DROID reports the flange (`panda_link8`), and RoboLab reports its own `eef_frame` at the gripper coupler (`robolab_eef`). A checkpoint speaks whichever frame its training data was in, so serving it on a rig whose `default` sits elsewhere misreads every pose and every command by one constant transform — silently. See [the frame contract](../../drivers/roboarm/README.md) for what `default` is and what each embodiment owes it.
 
-`ChangeEEFrame(T)` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `default`, so it belongs to the checkpoint and travels with it — nothing about the rig's model crosses the wire.
+`ChangeEEFrame(EEFrame(site=site, offset=T))` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
+
+The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
+
+- A policy that states no `ee_frames` gets each pose at the rig's legacy point, as [the frame contract](../../drivers/roboarm/README.md) says.
+- A policy that names a site the rig does not report that signal at is refused.
+
+A pose-reading checkpoint states its frame, also when the offset is the identity (`cfg.codecs.franka_hand_frame`).
 
 It is declared in two places, for the two things it does:
 
-- **Training** — `compose(ee_frame=DROID_EE_FRAME)` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it. It defaults to unset, which trains in `default`.
-- **Serving** — the OpenPI pipeline's `ee_frame=` puts `ChangeEEFrame` in the client's pipeline. It has no default: every deployment states its frame — `None` for a checkpoint trained in `default`, or one that speaks joints, which are unambiguous. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
+- **Training** — `compose(ee_frame=...)` takes an `EEFrame` and re-expresses the dataset in it, so the resulting checkpoint speaks that frame. The training transform refuses a pose that the recording does not state at that site with no offset. It defaults to unset, which trains on the poses as recorded.
+- **Serving** — the LeRobot and OpenPI pipelines take `ee_frame=`, which puts `ChangeEEFrame` in the deployment. It has no default: every pose deployment states its frame, and a pose pipeline built without one fails when the server starts. A pipeline that speaks joints only states `None` itself. Pass the frame the checkpoint was trained in: `@positronic.cfg.codecs.franka_hand_frame` for the FR3's Franka Hand point, `@positronic.cfg.codecs.panda_hand_frame` for the hand point of the MuJoCo panda, `@positronic.cfg.codecs.droid_frame` for the DROID flange, and `None` for a checkpoint that speaks joints only. Nothing checks a stated frame against how the checkpoint was trained, so it is set beside the checkpoint path it belongs to.
 
-Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as a translation and wxyz quaternion.
+Both take an `EEFrame`: a site and an offset from it. A DROID checkpoint takes `cfg.codecs.droid_frame`, `models.DROID_EE_FRAME` from the rig site, so it declares its own frame and no robot model is consulted to serve it. GR00T records its frame in the shared JSON settings as an `ee_frames` entry, with the offset as a translation and a wxyz quaternion.
+
+A server built on positronic states its frame with the same configs: a server built for poses at the Franka Hand point puts `ChangeEEFrame(cfg.codecs.franka_hand_frame.instantiate())` in its pipeline.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 
@@ -278,7 +316,8 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # Serve the matching recipe
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
+  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
 ```
 
 ## See Also

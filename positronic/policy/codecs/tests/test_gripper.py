@@ -7,7 +7,7 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.codecs import ACTION, BinarizeGripInference, BinarizeGripTraining, FlipGrip
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction
-from positronic.policy.codecs.observation import ObservationCodec
+from positronic.policy.codecs.observation import StateObservationCodec
 
 
 def test_binarize_grip_inference():
@@ -84,7 +84,7 @@ def test_flip_grip():
 
 
 def test_flip_grip_composed_with_obs_and_action():
-    obs = ObservationCodec(state={'observation.state': {obs_keys.GRIP: 1}}, images={})
+    obs = StateObservationCodec(state={'observation.state': {obs_keys.GRIP: 1}})
     action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, obs_keys.TARGET_GRIP, Rotation.Representation.QUAT)
     composed = FlipGrip() | (obs & action)
 

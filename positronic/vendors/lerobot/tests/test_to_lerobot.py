@@ -11,7 +11,7 @@ from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
-from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, AbsoluteJointsAction, ObservationCodec
+from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, AbsoluteJointsAction, StateObservationCodec
 
 lerobot = pytest.importorskip('lerobot')
 if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':
@@ -41,7 +41,7 @@ def test_export_keeps_actions_and_observations_aligned_on_the_recording_clock(tm
             time = Time(**command_time)
             writer.append(keys.TARGET_JOINTS, np.array([i * 10]), time)
             writer.append(keys.TARGET_GRIP, i / 10, time)
-    codec = ObservationCodec(state={'state': {keys.JOINTS: 1}}, images={}) & AbsoluteJointsAction(
+    codec = StateObservationCodec(state={'state': {keys.JOINTS: 1}}) & AbsoluteJointsAction(
         keys.TARGET_JOINTS, keys.TARGET_GRIP, num_joints=1
     )
     encoder = codec.training_encoder

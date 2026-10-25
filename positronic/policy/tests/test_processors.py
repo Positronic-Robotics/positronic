@@ -16,6 +16,7 @@ from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, JointPosition, PositionControl
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
@@ -25,12 +26,14 @@ from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
+    Codec,
     EncodeImages,
     EndCommand,
     FlipGrip,
     Metadata,
     Resample,
-    RestrictImageSize,
+    ResizeMode,
+    TransformImages,
 )
 from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
@@ -39,10 +42,16 @@ from positronic.policy.codecs.action import (
     JointDeltaAction,
     JointPositionAction,
     SetControlMode,
-    UnpackActionChunk,
+    SplitActionChunk,
 )
 from positronic.policy.codecs.geometry import ConvertPose
-from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
+from positronic.policy.codecs.observation import (
+    PackFields,
+    RenameObservationFields,
+    SelectObservationFields,
+    StateObservationCodec,
+)
+from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.keys import END
 from positronic.policy.processors import (
@@ -543,7 +552,7 @@ def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution):
     runtime, clock = execution
     declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 2, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
     schedule = spec.from_spec(declared)
-    assert schedule.to_spec() == declared
+    assert schedule.to_spec() == ChunkedSchedule(fps=10, replan_on_error=False).to_spec()
     infer = Mock(return_value=[{MOTOR: index} for index in range(5)])
     run = runtime.start(schedule, infer)
     try:
@@ -1192,8 +1201,12 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     'definition',
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48, Resample.AREA)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), TransformImages(64, 48, mode=ResizeMode.BOUND)),
+        Sequential(
+            PauseOnUnavailable(),
+            ChunkedSchedule(fps=10),
+            TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND),
+        ),
         ChunkedSchedule(fps=10, record_stats=False),
     ],
 )
@@ -1231,9 +1244,12 @@ def test_wire_names_match_the_registered_components():
         'binarize_grip_inference': BinarizeGripInference(),
         'flip_grip': FlipGrip(),
         'metadata': Metadata({'action_fps': 15}),
-        'restrict_image_size': RestrictImageSize(),
-        'observation_codec': ObservationCodec(state={}, images={}),
-        'pack_observation_fields': PackObservationFields({'state': 'input'}),
+        'transform_images': TransformImages(640, 640, mode=ResizeMode.BOUND),
+        'observation_codec': ObservationCodecV1(state={}, images={}),
+        'pack_fields': PackFields(encode_layout={'state': ['input']}),
+        'split_action_chunk': SplitActionChunk(),
+        'state_observation': StateObservationCodec(state={}),
+        'select_observation_fields': SelectObservationFields(mapping={}),
         'rename_observation_fields': RenameObservationFields({'state': 'input'}),
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
         'cartesian_delta_action': CartesianDeltaAction(),
@@ -1241,12 +1257,11 @@ def test_wire_names_match_the_registered_components():
         'joint_delta_action': JointDeltaAction(),
         'joint_position_action': JointPositionAction('joints', 'grip'),
         'set_control_mode': SetControlMode(PositionControl()),
-        'unpack_action_chunk': UnpackActionChunk({'action': ['prediction']}),
-        'change_ee_frame': ChangeEEFrame(Transform3D.identity),
+        'change_ee_frame': ChangeEEFrame(EEFrame(site=DEFAULT_FRAME)),
         'convert_pose': ConvertPose('rot6d'),
     }
     registered = spec.COMPONENTS
-    assert set(instances) == set(registered)
+    assert set(instances) | {'restrict_image_size', 'pack_observation_fields', 'unpack_action_chunk'} == set(registered)
     for name, instance in instances.items():
         assert instance.to_spec()['name'] == name
         factory = registered[name][instance.WIRE_VERSION].implementation
@@ -1256,18 +1271,76 @@ def test_wire_names_match_the_registered_components():
         assert spec.from_spec({**instance.to_spec(), VERSION: LATEST}).to_spec() == instance.to_spec()
 
 
+@pytest.mark.parametrize('version', [None, 1, LATEST])
+def test_legacy_configs_translate_inside_nested_compositions(version):
+    packing = {NAME: 'pack_observation_fields', ARGS: {'layout': {'q': 'joints'}}}
+    resizing = {NAME: 'restrict_image_size', ARGS: {'width': 4, 'height': 4}}
+    unpacking = {NAME: 'unpack_action_chunk', ARGS: {'fields': {'q': [0, 'q']}, 'squeeze_dims': 1}}
+    if version is not None:
+        for node in (packing, resizing, unpacking):
+            node[VERSION] = version
+    description = sequence(
+        parallel(packing, SelectObservationFields({'image': 'camera'}).to_spec()), resizing, unpacking
+    )
+    original = json.loads(json.dumps(description))
+    codec = spec.from_spec(description)
+    assert isinstance(codec, Codec)
+    assert description == original
+    canonical = codec.to_spec()
+    assert spec.from_spec(canonical).to_spec() == canonical
+    image = np.zeros((8, 16, 3), dtype=np.uint8)
+    encoded = codec.encode({'joints': np.arange(7), 'camera': image})
+    assert set(encoded) == {'q', 'image'}
+    assert encoded['image'].shape == (2, 4, 3)
+    np.testing.assert_array_equal(encoded['q'], np.arange(7))
+    predicted = np.arange(21).reshape(1, 3, 7)
+    rows = codec.decode(({'q': predicted}, {}))
+    assert len(rows) == 3
+    for index, row in enumerate(rows):
+        assert set(row) == {'q'}
+        np.testing.assert_array_equal(row['q'], predicted[0, index])
+
+
+@pytest.mark.parametrize(
+    'name', ['pack_observation_fields', 'unpack_action_chunk', 'restrict_image_size', 'chunked_schedule']
+)
+@pytest.mark.parametrize('version', [0, True, 1.5, '1', 99])
+def test_translations_do_not_bypass_version_validation(name, version):
+    with pytest.raises(ValueError, match='version'):
+        spec.from_spec({NAME: name, VERSION: version})
+
+
+def test_legacy_translation_pins_its_replacement_version(monkeypatch):
+    versions = {**spec.COMPONENTS[PackFields.WIRE_NAME], 2: Version(lambda **args: Metadata({'wrong': True}))}
+    monkeypatch.setitem(spec.COMPONENTS, PackFields.WIRE_NAME, versions)
+    codec = spec.from_spec(component('pack_observation_fields', layout={'q': 'joints'}))
+    assert isinstance(codec, PackFields)
+    assert codec.encode({'joints': 7}) == {'q': 7}
+    assert codec.to_spec()[VERSION] == 1
+
+
+@pytest.mark.parametrize('lead', [0.0, 0.25, {'statistic': 'max', 'last': 3, 'max_sec': 0.4}])
+def test_scheduler_translation_preserves_explicit_settings(lead):
+    old = component(
+        ChunkedSchedule.WIRE_NAME, version=2, fps=20, horizon_sec=0.3, record_stats=False, inference_lead=lead
+    )
+    current = component(ChunkedSchedule.WIRE_NAME, version=3, **old[ARGS], replan_on_error=False)
+    assert spec.from_spec(old).to_spec() == spec.from_spec(current).to_spec()
+    assert old[VERSION] == 2
+    assert ChunkedSchedule.REPLAN_ON_ERROR_ARG not in old[ARGS]
+
+
 def test_latest_follows_client_upgrades_while_numeric_versions_stay_pinned(monkeypatch):
-    name = ChunkedSchedule.WIRE_NAME
-    latest = json.loads(json.dumps(component(name, fps=20)))
-    pinned = component(name, version=2, fps=20)
-    current = spec.COMPONENTS[name][3]
-    versions = {2: spec.COMPONENTS[name][2]}
+    name = Metadata.WIRE_NAME
+    latest = json.loads(json.dumps(component(name)))
+    pinned = component(name, version=1)
+    versions = {1: Version(lambda: Metadata({'implementation': 1}))}
     monkeypatch.setitem(spec.COMPONENTS, name, versions)
-    assert spec.from_spec(latest).to_spec()[VERSION] == 2
-    assert spec.from_spec(pinned).to_spec()[VERSION] == 2
-    versions[3] = current
-    assert spec.from_spec(latest).to_spec()[VERSION] == 3
-    assert spec.from_spec(pinned).to_spec()[VERSION] == 2
+    assert spec.from_spec(latest).to_spec()[ARGS]['values'] == {'implementation': 1}
+    assert spec.from_spec(pinned).to_spec()[ARGS]['values'] == {'implementation': 1}
+    versions[2] = Version(lambda: Metadata({'implementation': 2}))
+    assert spec.from_spec(latest).to_spec()[ARGS]['values'] == {'implementation': 2}
+    assert spec.from_spec(pinned).to_spec()[ARGS]['values'] == {'implementation': 1}
 
 
 def test_latest_skips_removed_versions_and_fails_when_none_are_supported(monkeypatch):

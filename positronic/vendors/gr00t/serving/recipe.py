@@ -15,6 +15,7 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
     """Describe the client codec using the checkpoint's image and pose conventions."""
     image_mappings = settings[model_settings.IMAGE_MAPPINGS]
     observation_keys = settings[model_settings.OBSERVATION_KEYS]
+    ee_frame = settings[model_settings.EE_FRAMES][observation_keys[EE_POSE]]
     state = {observation_keys[name]: {observation_keys[name]: size} for name, size in STATE_DIMS.items()}
     return sequence(
         component(
@@ -25,7 +26,12 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
             },
         ),
         component('binarize_grip_inference'),
-        component('change_ee_frame', transform=settings[model_settings.EE_FRAME], keys=[observation_keys[EE_POSE]]),
+        component(
+            'change_ee_frame',
+            site=ee_frame[model_settings.SITE],
+            transform=ee_frame[model_settings.OFFSET],
+            keys=[observation_keys[EE_POSE]],
+        ),
         component(
             'convert_pose',
             output_rotation='rot6d',
@@ -35,13 +41,20 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
         parallel(
             sequence(
                 component('rename_observation_fields', mapping={observation_keys[TASK]: obs_keys.TASK}),
-                component(
-                    'observation_codec',
-                    state=state,
-                    images={
-                        source: [source, settings[model_settings.IMAGE_SIZE]] for source in image_mappings.values()
-                    },
-                    task_field=observation_keys[TASK],
+                parallel(
+                    component('state_observation', state=state, task_field=observation_keys[TASK]),
+                    sequence(
+                        component(
+                            'select_observation_fields', mapping={source: source for source in image_mappings.values()}
+                        ),
+                        component(
+                            'transform_images',
+                            width=settings[model_settings.IMAGE_SIZE][0],
+                            height=settings[model_settings.IMAGE_SIZE][1],
+                            mode='pad',
+                            paths=[[source] for source in dict.fromkeys(image_mappings.values())],
+                        ),
+                    ),
                 ),
             ),
             sequence(
@@ -54,16 +67,18 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
                 ),
             ),
         ),
+        component('split_action_chunk'),
         component(
-            'pack_observation_fields',
-            layout={
-                VIDEO: image_mappings,
-                STATE: {name: observation_keys[name] for name in STATE_DIMS},
-                LANGUAGE: {TASK: observation_keys[TASK]},
+            'pack_fields',
+            encode_layout={
+                VIDEO: {name: [source] for name, source in image_mappings.items()},
+                STATE: {name: [observation_keys[name]] for name in STATE_DIMS},
+                LANGUAGE: {TASK: [observation_keys[TASK]]},
             },
+            decode_layout={name: [0, name] for name in (JOINT_POSITION, GRIP)},
             unsqueeze_dims=2,
+            squeeze_dims=1,
         ),
-        component('unpack_action_chunk', fields={name: [0, name] for name in (JOINT_POSITION, GRIP)}, squeeze_dims=1),
     )
 
 

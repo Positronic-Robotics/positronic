@@ -1085,6 +1085,7 @@ def test_the_user_is_shown_the_code_on_stderr_before_the_poll_starts(capsys):
 
     captured = capsys.readouterr()
     assert str(DEVICE_ANSWER['user_code']) in captured.err and str(DEVICE_ANSWER['verification_uri']) in captured.err
+    assert 'spam folder' not in captured.err
     assert captured.out == ''
 
 
@@ -1098,6 +1099,22 @@ def test_the_user_is_shown_the_link_that_carries_the_code_when_the_provider_send
 
     err = capsys.readouterr().err
     assert COMPLETE_URI in err and 'expires in 5 minutes' in err
+
+
+def test_a_workos_sign_in_line_sends_the_user_to_the_spam_folder_for_the_code_mail(capsys):
+    """The WorkOS sign-in line says where to look when a mail provider files the code mail as spam."""
+    device = dict(DEVICE_ANSWER) | {'verification_uri_complete': COMPLETE_URI, 'expires_in': 300}
+    flow, _ = _flow(_workos(device=device, polls=[dict(WORKOS_GRANTED)]))
+
+    with PlatformClient(client=ScriptedGateway().client()) as platform:
+        register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT))
+
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1
+    assert lines[0].endswith(
+        'expires in 5 minutes. If the sign-in page sends you a code by email and it is not in your inbox, '
+        'look in your spam folder.'
+    )
 
 
 def test_the_registration_keeps_the_key_the_gateway_minted():

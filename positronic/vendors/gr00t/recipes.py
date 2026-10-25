@@ -11,6 +11,7 @@ from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity, map_signals
+from positronic.drivers.roboarm.models import parse_ee_frames
 from positronic.policy import training
 from positronic.policy.codecs import (
     ACTION,
@@ -46,9 +47,7 @@ def droid(settings: dict) -> EpisodeTransform:
         raise ValueError(f'Image names overlap training columns: {sorted(conflicts)}')
     observation_keys = settings[model_settings.OBSERVATION_KEYS]
     image_size = settings[model_settings.IMAGE_SIZE]
-    frame = geom.Transform3D.from_vector(
-        np.asarray(settings[model_settings.EE_FRAME]), geom.Rotation.Representation.QUAT
-    )
+    ee_frame = parse_ee_frames(settings[model_settings.EE_FRAMES])[observation_keys[gr00t.EE_POSE]]
     offset = geom.Transform3D(rotation=geom.Rotation.from_quat(settings[model_settings.ROTATION_OFFSET]))
     state_encoders = {
         gr00t.EE_POSE: partial(_derive_pose, observation_keys[gr00t.EE_POSE]),
@@ -108,7 +107,7 @@ def droid(settings: dict) -> EpisodeTransform:
 
     return (
         Identity(meta={ACTION_FPS: settings[model_settings.ACTION_FPS], MODEL_SETTINGS: settings})
-        | training.ChangeEEFrame(frame, (observation_keys[gr00t.EE_POSE],))
+        | training.ChangeEEFrame(ee_frame, (observation_keys[gr00t.EE_POSE],))
         | map_signals(encode_pose, (observation_keys[gr00t.EE_POSE],))
         | columns
     )

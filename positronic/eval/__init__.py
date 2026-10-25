@@ -5,11 +5,22 @@ from typing import Any
 import pimm
 from positronic.dataset.serializers import Serializer
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
+from positronic.drivers.roboarm.keys import EE_FRAMES
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EEFrame, ee_frames_entry
 from positronic.eval import keys as eval_keys
 from positronic.keys import EE_POSE, JOINTS, TARGET_EE_POSE
 
-# Embodiment-level static meta: how recorded signals map to the canonical robot fields.
-ROBOT_STATIC_META = {eval_keys.JOINT_SIGNALS: [JOINTS], eval_keys.POSE_SIGNALS: [EE_POSE, TARGET_EE_POSE]}
+# Embodiment-level static meta of one arm: how recorded signals map to the canonical robot fields, and the site
+# each pose signal is reported at.
+ROBOT_STATIC_META = {
+    eval_keys.JOINT_SIGNALS: [JOINTS],
+    eval_keys.POSE_SIGNALS: [EE_POSE, TARGET_EE_POSE],
+    **ee_frames_entry({signal: EEFrame(site=DEFAULT_FRAME) for signal in (EE_POSE, TARGET_EE_POSE)}),
+}
+
+
+# The meta of an arm that publishes no model: no pose signal has a frame, so its rig runs joint-only policies only.
+NO_MODEL_ROBOT_META = {eval_keys.POSE_SIGNALS: [], EE_FRAMES: {}}
 
 
 def only_keep_written_signals(static: dict[str, Any], written: set[str]) -> dict[str, Any]:

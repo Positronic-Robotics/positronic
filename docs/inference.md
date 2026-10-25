@@ -13,23 +13,26 @@ deployment configs as server subcommands, such as `groot-server droid`.
 
 **Start inference server:**
 ```bash
-# The subcommand pairs a model with a pipeline; --model.* names the checkpoint
+# The subcommand pairs a model with a pipeline; --model.* names the checkpoint.
+# A pose pipeline also takes --pipeline.ee_frame: the EE frame the checkpoint speaks.
 # LeRobot (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
+  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
 
 # LeRobot (ACT — 0.3.3)
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
-  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
+  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
 
 # GR00T
 cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
   --model.model_source=/data/checkpoints/experiment_v1/
 
-# OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`)
+# OpenPI
 cd docker && docker compose run --rm --service-ports openpi-server ee \
   --model.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
-  --pipeline.ee_frame=None
+  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
 ```
 
 Check server: `curl -X POST http://localhost:8000/api/v1/keepalive` answers once the model has loaded and warmed.
@@ -81,7 +84,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`, `--model.checkpoint`, device...) is fixed at server launch, and a key that names it is an unknown key. A server serves one checkpoint; to serve another, start another server. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
 **The server declares data preparation.** Its client stack can contain
-`RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.
+`TransformImages` to bound uploaded frames and `ChangeEEFrame` to convert poses.
 The client JPEG-encodes each frame unless the deployment sets `compress_images=False`. The
 websocket wire adds no other compression: neither end accepts permessage-deflate. The model returns
 full chunks; client scheduling emits commands immediately when they become due.

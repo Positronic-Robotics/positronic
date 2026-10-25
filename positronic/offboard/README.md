@@ -150,7 +150,6 @@ Upon connection, the server sends a ready packet with metadata:
     "port": 8000,
     "checkpoint_path": "~/checkpoints/lerobot/experiment_v1",
     "checkpoint_id": "10000",
-    "image_sizes": [224, 224],
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
@@ -171,7 +170,7 @@ owns the session and includes its ID in each inference request.
 This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
-- Codec geometry (`image_sizes`) and scheduler cadence (`action_fps`, `action_horizon_sec`).
+- Scheduler cadence (`action_fps`, `action_horizon_sec`).
 - `local_stack` — processors and codecs composed by `"seq"`, with the first outermost.
   `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
   `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits
@@ -196,8 +195,8 @@ uses the session-ID envelope and explicit end-session acknowledgement described 
 `/api/v1` prefix identifies the route; it does not select the inference-message protocol.
 
 Each component leaf declares its own `version`. `seq` and `par` belong to the protocol grammar.
-The client selects the exact registered implementation; it never substitutes a newer version or
-guesses from constructor arguments. Unsupported versions fail with supported-version information.
+The client preserves the behavior of the requested version, translating older configurations when needed.
+Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
 The client runs a protocol v1 server's stack on the current processors. `positronic.offboard.server`
@@ -315,7 +314,8 @@ any running inference finishes. Reconnecting creates a new session ID.
 ```bash
 # LeRobot server (SmolVLA — 0.4.x); the subcommand names the codec pipeline
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --model.checkpoints_dir=~/checkpoints/lerobot/exp_v1
+  --model.checkpoints_dir=~/checkpoints/lerobot/exp_v1 \
+  --pipeline.ee_frame=@positronic.cfg.codecs.franka_hand_frame
 
 # GR00T server (swap hardware code stays the same)
 cd docker && docker compose run --rm --service-ports groot-server droid \
@@ -346,12 +346,12 @@ from positronic.offboard.server import PolicyServer
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import ResizeMode, TransformImages
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy.processors import ChunkedSchedule
 
 pipeline = PolicyDeployment(
-    local=Sequential(ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)),
+    local=Sequential(ChunkedSchedule(fps=15, horizon_sec=1.0), TransformImages(224, 224, mode=ResizeMode.BOUND)),
     codec=my_model_codec,
 )
 server = PolicyServer(build_my_model, pipeline)

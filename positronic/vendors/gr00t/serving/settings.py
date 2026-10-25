@@ -13,7 +13,13 @@ MODEL_SETTINGS_PATH = Path('meta/positronic_model_settings.json')
 ACTION_FPS = 'action_fps'
 IMAGE_SIZE = 'image_size'
 IMAGE_MAPPINGS = 'image_mappings'
-EE_FRAME = 'ee_frame'
+# Where each pose signal the checkpoint reads sits: ``{signal: {SITE: <site of the rig's model>, OFFSET: <vector>}}``,
+# the dumped form of ``positronic.drivers.roboarm.models.EEFrame`` keyed by signal.
+EE_FRAMES = 'ee_frames'
+SITE = 'site'
+OFFSET = 'offset'
+# ``positronic.drivers.roboarm.models.DEFAULT_FRAME``, the site every rig reports its poses at.
+DEFAULT_SITE = 'default'
 ROTATION_OFFSET = 'rotation_offset'
 OBSERVATION_KEYS = 'observation_keys'
 CONTROL_MODE = 'control_mode'
@@ -30,9 +36,8 @@ def validate(settings: dict[str, Any], checkpoint: Path) -> None:
     recorded_path = checkpoint / MODEL_SETTINGS_PATH
     if recorded_path.exists():
         recorded = json.loads(recorded_path.read_text())
-        conflicts = [
-            name for name in (IMAGE_SIZE, EE_FRAME, ROTATION_OFFSET, ACTION_FPS) if recorded.get(name) != settings[name]
-        ]
+        compared = (IMAGE_SIZE, EE_FRAMES, ROTATION_OFFSET, ACTION_FPS)
+        conflicts = [name for name in compared if recorded.get(name) != settings[name]]
         if set(recorded[IMAGE_MAPPINGS]) != set(settings[IMAGE_MAPPINGS]):
             conflicts.append(IMAGE_MAPPINGS)
         if conflicts:
@@ -49,7 +54,12 @@ def droid() -> dict[str, Any]:
         },
         IMAGE_SIZE: [320, 180],
         IMAGE_MAPPINGS: {EXTERIOR_IMAGE: obs_keys.EXTERIOR_IMAGE, WRIST_IMAGE: obs_keys.WRIST_IMAGE},
-        EE_FRAME: [0.0, 0.0, -0.1033999994, 0.9238795325107985, 0.0, 0.0, 0.3826834323662685],
+        EE_FRAMES: {
+            obs_keys.EE_POSE: {
+                SITE: DEFAULT_SITE,
+                OFFSET: [0.0, 0.0, -0.1033999994, 0.9238795325107985, 0.0, 0.0, 0.3826834323662685],
+            }
+        },
         ROTATION_OFFSET: [0.5, 0.5, -0.5, -0.5],
         # rules-allow: hardcoded-keys — the wire form of `DROID_IMPEDANCE`; this image cannot import positronic, and
         # test_droid_control_mode_is_the_droid_impedance_on_the_wire pins it to `command.to_wire`.
