@@ -13,9 +13,19 @@ from typing import cast
 import numpy as np
 import pos3
 import pytest
-from eval_vocabulary.episode import SUBTASK_SIGNAL
+from eval_vocabulary.episode import ABC_REWARD_SIGNAL, SUBTASK_SIGNAL
 from positronic_evals.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
-from positronic_evals.labels import MOLMO_LABELER, ROBOLAB_LABELER, Fail, Label, SubtaskAchieved, Success, label
+from positronic_evals.labels import (
+    ABC_LABELER,
+    MOLMO_LABELER,
+    ROBOLAB_LABELER,
+    Fail,
+    Label,
+    SubtaskAchieved,
+    Success,
+    abc_max_progress,
+    label,
+)
 from positronic_evals.scoring import Scores, score
 
 import pimm
@@ -331,6 +341,21 @@ def test_the_robolab_labeler_reads_the_progress_that_positronic_records(tmp_path
             events=(SubtaskAchieved(seconds=1.0, achieved=1, score=0.5), Fail(seconds=2.0)),
         ),
     )
+
+
+def test_the_abc_labeler_reads_the_outcome_and_the_progress_that_positronic_records(tmp_path):
+    with LocalDatasetWriter(tmp_path) as writer, writer.new_episode() as episode:
+        episode.set_static(keys.TASK, 'put the plastic bottles in the bin')
+        episode.set_static(eval_keys.TASK, 'put_plastic_bottles_in_bin')
+        episode.set_static(eval_keys.TERMINATED, False)
+        for world_ns, reward in ((0, 0.0), (1_000_000_000, 0.5), (2_000_000_000, 0.25)):
+            episode.append(ABC_REWARD_SIGNAL, reward, Time(**{EMITTED_WORLD: world_ns, EMITTED_WALL: 10 * world_ns}))
+
+    assert label(episode.path, (ABC_LABELER,)) == (
+        ABC_LABELER,
+        Label(uid=episode.meta[META_UID], task='put_plastic_bottles_in_bin', annotator=ABC_LABELER, seconds_to_end=2.0),
+    )
+    assert abc_max_progress(episode.path) == 0.5
 
 
 @pytest.mark.parametrize('name', ['molmo.held_out', ''])
