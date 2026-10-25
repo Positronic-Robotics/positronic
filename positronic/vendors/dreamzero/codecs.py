@@ -130,10 +130,6 @@ class DreamZeroObservationCodec(Codec):
         return obs
 
     @property
-    def meta(self):
-        return {self.IMAGE_SIZES: self._image_size}
-
-    @property
     def training_encoder(self):
         return Derive(meta=self._training_meta, **self._derive_transforms)
 

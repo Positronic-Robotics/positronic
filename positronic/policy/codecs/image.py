@@ -12,7 +12,6 @@ from positronic.dataset.transforms import image
 from positronic.dataset.transforms.image import Resample, ResizeMode
 
 from .base import Codec
-from .metadata import Metadata
 from .observation import SelectObservationFields
 
 
@@ -166,10 +165,8 @@ class TransformImages(Codec):
 
 
 def image_observation(images: dict[str, tuple[str, tuple[int, int]]], resample: Resample = Resample.BILINEAR) -> Codec:
-    """Compose field selection, padded image transforms and source-camera size metadata."""
-    sizes = {source: tuple(size) for source, size in images.values()}
-    unique = set(sizes.values())
+    """Select camera fields and resize each image with padding."""
     result = SelectObservationFields({name: source for name, (source, _) in images.items()})
     for name, (_, (width, height)) in images.items():
         result = result | TransformImages(width, height, mode=ResizeMode.PAD, resample=resample, paths=[[name]])
-    return result | Metadata({Codec.IMAGE_SIZES: unique.pop() if len(unique) == 1 else sizes})
+    return result

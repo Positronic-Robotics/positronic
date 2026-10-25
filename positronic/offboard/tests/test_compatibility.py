@@ -21,7 +21,7 @@ from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Step
-from positronic.policy.codecs import ResizeMode, TransformImages
+from positronic.policy.codecs import Codec, ResizeMode, TransformImages
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.keys import ACTION_FPS
@@ -29,6 +29,17 @@ from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.remote import RemotePolicy
 from positronic.utils import flatten_dict
 from positronic.utils.versions import Deprecation, Version
+
+
+@pytest.mark.parametrize('sizes', [[224, 224], {'camera': [320, 180]}])
+def test_image_sizes_from_old_server_stacks_remain_descriptive_metadata(sizes):
+    values = {'image_sizes': sizes}
+    codec = spec.from_spec(component('metadata', version=1, values=values))
+    assert isinstance(codec, Codec)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    observation = {'camera': frame}
+    assert codec.meta == values
+    assert codec.encode(observation) is observation
 
 
 @pytest.fixture

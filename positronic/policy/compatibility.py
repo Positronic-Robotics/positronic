@@ -140,10 +140,6 @@ class ObservationCodecV1(Codec):
             & self._state.training_encoder
         )
 
-    @property
-    def meta(self):
-        return self._images.meta
-
     def to_spec(self):
         return {
             NAME: self.WIRE_NAME,

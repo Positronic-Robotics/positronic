@@ -72,7 +72,7 @@ def test_observation_v1_keeps_images_state_prompt_and_training(version, task):
     assert training['task'] == (task or '')
     np.testing.assert_array_equal(training['state'].values()[0], encoded['state'], strict=True)
     np.testing.assert_array_equal(training['image'].values()[0], encoded['image'], strict=True)
-    assert codec.meta == {codec.IMAGE_SIZES: (4, 4)}
+    assert codec.meta == {}
     assert codec.training_encoder.meta == {
         LEROBOT_FEATURES: {
             'state': {'shape': (3,), 'dtype': 'float32', 'names': ['q', 'grip']},

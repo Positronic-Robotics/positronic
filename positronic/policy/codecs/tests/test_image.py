@@ -50,7 +50,7 @@ def test_image_observations_preserve_pixels_training_timelines_and_metadata(shap
     assert list(columns['video'].timestamps(RECEIVED_WORLD)) == [10, 20]
     assert list(columns['video'].timestamps(RECEIVED_WALL)) == [100, 200]
     np.testing.assert_array_equal(columns['video'].values(), np.stack([expected, expected]), strict=True)
-    assert codec.meta == {codec.IMAGE_SIZES: [6, 6]}
+    assert codec.meta == {}
     assert recipe.meta == {
         LEROBOT_FEATURES: {'video': {'shape': (6, 6, 3), 'names': ['height', 'width', 'channel'], 'dtype': 'video'}}
     }
@@ -74,12 +74,16 @@ def test_image_observations_require_rgb_images():
         codec.encode({'camera': np.zeros((8, 8), dtype=np.uint8)})
 
 
-def test_image_observations_report_different_camera_sizes_and_support_no_images():
+def test_image_observations_support_different_camera_sizes_and_no_images():
     codec = image_observation(images={'front': ('a', (8, 6)), 'wrist': ('b', (4, 4))})
-    assert codec.meta == {codec.IMAGE_SIZES: {'a': (8, 6), 'b': (4, 4)}}
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)
+    encoded = codec.encode({'a': frame, 'b': frame})
+    assert encoded['front'].shape == (6, 8, 3)
+    assert encoded['wrist'].shape == (4, 4, 3)
+    assert codec.meta == {}
     empty = image_observation(images={})
     assert empty.encode({'unused': 1}) == {}
-    assert empty.meta == {codec.IMAGE_SIZES: {}}
+    assert empty.meta == {}
     assert len(empty.training_encoder(EpisodeContainer({}))) == 0
     assert empty.training_encoder.meta == {LEROBOT_FEATURES: {}}
 

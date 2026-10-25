@@ -150,7 +150,6 @@ Upon connection, the server sends a ready packet with metadata:
     "port": 8000,
     "checkpoint_path": "~/checkpoints/lerobot/experiment_v1",
     "checkpoint_id": "10000",
-    "image_sizes": [224, 224],
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
@@ -171,7 +170,7 @@ owns the session and includes its ID in each inference request.
 This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
-- Codec geometry (`image_sizes`) and scheduler cadence (`action_fps`, `action_horizon_sec`).
+- Scheduler cadence (`action_fps`, `action_horizon_sec`).
 - `local_stack` — processors and codecs composed by `"seq"`, with the first outermost.
   `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
   `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits

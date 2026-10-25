@@ -87,7 +87,7 @@ def test_observation_spec_round_trip_preserves_training_and_inference_layouts(pr
     np.testing.assert_array_equal(encoded[openpi.IMAGE], exterior, strict=True)
     if task is not None:
         assert encoded[openpi.PROMPT] == task
-    assert codec.meta == {Codec.IMAGE_SIZES: (8, 6)}
+    assert codec.meta == {}
 
     episode_data = {name: DummySignal([100], [value]) for name, value in inputs.items() if name != keys.TASK}
     if task is not None:

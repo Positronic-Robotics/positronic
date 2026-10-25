@@ -48,10 +48,6 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
                             mode='pad',
                             paths=[[source] for source in dict.fromkeys(image_mappings.values())],
                         ),
-                        component(
-                            'metadata',
-                            values={'image_sizes': settings[model_settings.IMAGE_SIZE] if image_mappings else {}},
-                        ),
                     ),
                 ),
             ),

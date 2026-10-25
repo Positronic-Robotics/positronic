@@ -152,10 +152,6 @@ class LiberoObservationCodec(Codec):
         w, h = self._image_size
         return image.resize_with_pad_per_frame(w, h, image.Resample.BILINEAR, frame)
 
-    @property
-    def meta(self) -> dict[str, Any]:
-        return {self.IMAGE_SIZES: self._image_size}
-
 
 libero_obs = cfn.Config(LiberoObservationCodec)
 libero_action = cfn.Config(CartesianDeltaAction)
