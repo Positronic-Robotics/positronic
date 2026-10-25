@@ -49,15 +49,6 @@ from positronic.utils.versions import Version, resolve_version
 ComponentFactory = Callable[..., Processor | Codec | dict[str, Any]]
 
 
-def _rtc_schedule(**args: Any) -> RTCSchedule:
-    if RTCSchedule.PREFIX_CODEC_ARG in args:
-        codec = from_spec(args[RTCSchedule.PREFIX_CODEC_ARG])
-        if not isinstance(codec, Codec):
-            raise ValueError('prefix_codec must describe a codec')
-        args[RTCSchedule.PREFIX_CODEC_ARG] = codec
-    return RTCSchedule.from_spec_args(**args)
-
-
 COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     component.WIRE_NAME: {component.WIRE_VERSION: Version(component.from_spec_args)}
     for component in (
@@ -88,6 +79,15 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         SplitActionChunk,
     )
 }
+
+
+def _rtc_schedule(**args: Any) -> RTCSchedule:
+    if RTCSchedule.PREFIX_CODEC_ARG in args:
+        codec = from_spec(args[RTCSchedule.PREFIX_CODEC_ARG])
+        if not isinstance(codec, Codec):
+            raise ValueError('prefix_codec must describe a codec')
+        args[RTCSchedule.PREFIX_CODEC_ARG] = codec
+    return RTCSchedule.from_spec_args(**args)
 
 
 COMPONENTS.update({

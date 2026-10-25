@@ -8,10 +8,12 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 from positronic_model_server.rtc import ActionPrefix
-from positronic_model_server.spec import resolve_params
+from positronic_model_server.spec import ARGS, SEQ, resolve_params
 
 from positronic.policy import keys as policy_keys
+from positronic.policy import spec
 from positronic.policy.codecs.metadata import MODEL_SETTINGS_PATH
+from positronic.policy.processors import DelayEstimate, RTCSchedule
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import keys, server
 from positronic.vendors.gr00t.serving import settings as model_settings
@@ -273,6 +275,11 @@ def test_rtc_launch_warms_native_overlap_before_sessions_are_ready(native_policy
     session = model.prepare_session(resolve_params(model.parameters, {}))
     assert session._sequence == 0
     assert session._previous == {}
+    schedule = spec.from_spec(json.loads(json.dumps(session.client_stack))).to_spec()[SEQ][0]
+    assert (
+        schedule[ARGS][RTCSchedule.PREFIX_DURATION_ARG]
+        == DelayEstimate.max(last=5, max_sec=rtc_settings[keys.MAX_DELAY_SEC]).to_spec()
+    )
 
 
 def test_ordinary_launch_refuses_enabling_an_unwarmed_rtc_path(model, rtc_settings):
