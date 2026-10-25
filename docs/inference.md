@@ -81,12 +81,12 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`, `--model.checkpoint`, device...) is fixed at server launch, and a key that names it is an unknown key. A server serves one checkpoint; to serve another, start another server. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
 **The server declares data preparation.** Its client stack can contain
-`RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.
+`TransformImages` to bound uploaded frames and `ChangeEEFrame` to convert poses.
 The client JPEG-encodes each frame unless the deployment sets `compress_images=False`. The
 websocket wire adds no other compression: neither end accepts permessage-deflate. The model returns
 full chunks; client scheduling emits commands immediately when they become due.
 
-**The handshake is recorded as the server sent it.** Every episode stores the server's handshake metadata under `inference.policy.server.*`. The client reads the declared stack and `compress_images` from it and records the rest without a check. A `prompt` field there is the server's own field, and positronic gives it no meaning. The instruction an episode sent is `task`.
+**The handshake is recorded as the server sent it.** Every episode stores the server's handshake metadata under `inference.policy.server.*`. The client reads the declared stack and `compress_images` from it and records the rest without a check. A `prompt` field there is the server's own field, and positronic gives it no meaning. The instruction an episode sent is `task`. The signal `eval.instruction` records each instruction that the policy got. It has a sample at the first observation and one at each change. `task` holds the instruction at the end of the episode.
 
 ## Running on the same machine
 

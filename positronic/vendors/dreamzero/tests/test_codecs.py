@@ -77,7 +77,7 @@ class TestDreamZeroObservationCodec:
         )
 
     def test_meta(self):
-        assert DreamZeroObservationCodec().meta == {'image_sizes': (320, 176)}
+        assert DreamZeroObservationCodec().meta == {}
 
     def test_custom_camera_keys(self, sample_inputs):
         sample_inputs['cam1'] = sample_inputs.pop(keys.WRIST_IMAGE)

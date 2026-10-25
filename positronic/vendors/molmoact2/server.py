@@ -7,7 +7,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import (
@@ -37,7 +37,9 @@ def molmoact2_model(hf_repo: str, device_map: str, norm_tag: str, num_steps: int
 @cfn.config(codec=molmoact2_codecs.droid)
 def pipeline(codec: Codec, fps: float = 15.0, horizon_sec: float | None = None, compress_images: bool = False):
     return PolicyDeployment(
-        Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize()), codec, compress_images=compress_images
+        Sequential(ChunkedSchedule(fps, horizon_sec), TransformImages(640, 640, mode=ResizeMode.BOUND)),
+        codec,
+        compress_images=compress_images,
     )
 
 

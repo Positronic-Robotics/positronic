@@ -14,7 +14,7 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
-from platform_client.policy_container import PROVISIONING_DEADLINE_S
+from platform_client.policy_container import WARMUP_DEADLINE_S
 
 from pimm.logging import init_logging
 from positronic import keys
@@ -25,7 +25,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codecs import ACTION, Codec, RestrictImageSize
+from positronic.policy.codecs import ACTION, Codec, ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.vendors import cosmos3
 from positronic.vendors.cosmos3 import codecs
@@ -94,10 +94,7 @@ def cosmos3_model(checkpoint: str, revision: str | None, nvidia_python: str, bac
     try:
         probe = RoboarenaClient(BACKEND_HOST, backend_port)
         wait_for_subprocess_ready(
-            lambda: probe.probe() is None,
-            partial(_exit_status, backend),
-            'Cosmos3 backend',
-            max_wait=PROVISIONING_DEADLINE_S,
+            lambda: probe.probe() is None, partial(_exit_status, backend), 'Cosmos3 backend', max_wait=WARMUP_DEADLINE_S
         )
         warmup(model, _warm_observation())
     except Exception:
@@ -109,7 +106,9 @@ def cosmos3_model(checkpoint: str, revision: str | None, nvidia_python: str, bac
 @cfn.config(codec=codecs.droid)
 def pipeline(codec: Codec) -> PolicyDeployment:
     """The client plays each chunk whole, as NVIDIA's RoboLab client does, and `codec` runs on this server."""
-    return PolicyDeployment(Sequential(ChunkedSchedule(codecs.FPS), RestrictImageSize(*codecs.VIEW_SIZE)), codec)
+    return PolicyDeployment(
+        Sequential(ChunkedSchedule(codecs.FPS), TransformImages(*codecs.VIEW_SIZE, mode=ResizeMode.BOUND)), codec
+    )
 
 
 COMMANDS = {

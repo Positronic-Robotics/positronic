@@ -2,6 +2,7 @@ import collections.abc as cabc
 import logging
 from concurrent.futures import Future, wait
 from contextlib import closing
+from functools import partial
 from threading import Lock, Thread
 from typing import Any
 
@@ -9,13 +10,13 @@ import numpy as np
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import ProtocolVersion
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
+from positronic_model_server.tree import map_leaves
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
 from positronic import telemetry, telemetry_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
-from positronic.utils import flatten_dict
 
 from .base import Policy, PolicyRun, Processor, Runtime
 from .compatibility import from_v1_spec
@@ -23,14 +24,9 @@ from .spec import from_spec
 
 
 def _prepare_value(value: Any, jpeg_quality: int) -> Any:
-    # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
     if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
         # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's message cap.
         return encode_jpeg(value, jpeg_quality)
-    if isinstance(value, cabc.Mapping):
-        return {k: _prepare_value(v, jpeg_quality) for k, v in value.items()}
-    if isinstance(value, list | tuple):
-        return type(value)(_prepare_value(v, jpeg_quality) for v in value)
     return value
 
 
@@ -39,7 +35,7 @@ def prepare_obs(
 ) -> dict[str, Any]:
     if not compress_images:
         return dict(obs)
-    return {key: _prepare_value(value, jpeg_quality) for key, value in obs.items()}
+    return map_leaves(obs, partial(_prepare_value, jpeg_quality=jpeg_quality))
 
 
 def round_trip(
@@ -120,7 +116,8 @@ class RemotePolicy(Policy):
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
-    codecs run.
+    codecs run. ``meta`` holds only the client's own values. Each run records the server's values in the episode
+    metadata, and ``wait_for_server`` waits for the server without a session.
     """
 
     def __init__(
@@ -135,24 +132,14 @@ class RemotePolicy(Policy):
         self._client = InferenceClient(
             registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout
         )
-        self._server_meta: dict[str, Any] | None = None
-        self._client_meta: dict[str, Any] = {}
         self._jpeg_quality = jpeg_quality
 
     def meta(self) -> dict[str, Any]:
-        if self._server_meta is None:
-            with closing(self._client.new_session()) as session:
-                server_meta = dict(session.metadata)
-                client_meta = (
-                    declared_stack(server_meta, session.protocol_version).meta()
-                    if session.protocol_version is ProtocolVersion.V3
-                    else {}
-                )
-            self._server_meta, self._client_meta = server_meta, client_meta
-        meta: dict[str, Any] = {**self._client_meta, policy_keys.TYPE: 'remote', policy_keys.SERVER: self._server_meta}
-        if self._server_meta.get(policy_keys.COMPRESS_IMAGES):
-            meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
-        return flatten_dict(meta)
+        return {policy_keys.TYPE: 'remote'}
+
+    def wait_for_server(self) -> None:
+        """Return once the server has loaded its model. Opens no session."""
+        self._client.wait_for_server()
 
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
@@ -161,7 +148,11 @@ class RemotePolicy(Policy):
             server_meta = dict(session.metadata)
             stack = declared_stack(server_meta, session.protocol_version)
             client_meta = stack.meta() if session.protocol_version is ProtocolVersion.V3 else {}
-            self._server_meta, self._client_meta = server_meta, client_meta
+            episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
+            if server_meta.get(policy_keys.COMPRESS_IMAGES):
+                episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
+            for name, value in episode_meta.items():
+                runtime.set_metadata(name, value)
             compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
                 server_meta.get(policy_keys.COMPRESS_IMAGES)
             )

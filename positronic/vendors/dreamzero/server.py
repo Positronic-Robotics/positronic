@@ -22,7 +22,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Policy, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codecs import ACTION, RestrictImageSize
+from positronic.policy.codecs import ACTION, ResizeMode, TransformImages
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.vendors.dreamzero import codecs, roboarena
 
@@ -273,7 +273,7 @@ def pipeline(local: Policy, codec: Codec, width: int, height: int):
 
     ``width``/``height`` bound frames on the rig and follow the codec's own geometry.
     """
-    return PolicyDeployment(Sequential(local, RestrictImageSize(width, height)), codec)
+    return PolicyDeployment(Sequential(local, TransformImages(width, height, mode=ResizeMode.BOUND)), codec)
 
 
 joints = pipeline

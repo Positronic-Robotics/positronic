@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from pimm import Time
+from pimm.time import EMITTED_PREFIX, EMITTED_WALL, EMITTED_WORLD, VirtualClock, emission_time
 
 
 class TestTime:
@@ -136,3 +137,14 @@ def test_time_pickle_preserves_coordinates_and_immutability():
     assert restored == time
     with pytest.raises(TypeError):
         operator.setitem(restored, 'camera.capture', 99)
+
+
+def test_emission_time_moves_each_clock_timeline_onto_its_emitted_twin():
+    clock = VirtualClock()
+    clock.advance_to_ns(7)
+    before = clock.time()
+    stamp = emission_time(clock)
+    after = clock.time()
+    assert stamp.timelines == tuple(f'{EMITTED_PREFIX}{name}' for name in before.timelines)
+    assert stamp[EMITTED_WORLD] == 7
+    assert before['wall'] <= stamp[EMITTED_WALL] <= after['wall']

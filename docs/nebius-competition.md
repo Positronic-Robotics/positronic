@@ -178,7 +178,9 @@ bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 - The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
   sure that your model uses less. A memory setting that is a fraction of the GPU, such as
   `XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB.
-- On the platform, machine boot, the image pull and the server's start share one deadline of 1800 s.
+- On the platform, the server's start has a deadline of 1800 s, from the end of the image pull to the
+  first answer. Machine boot and the pull have their own deadline, and a miss there is the
+  platform's fault.
 
 ### Submit
 

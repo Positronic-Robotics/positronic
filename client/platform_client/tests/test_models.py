@@ -239,7 +239,10 @@ MODELS: list[BaseModel] = [
     ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL, policy_log=POLICY_LOG_URL),
     RegisterRequest(credential='token', alias='demo', rotate=True),
     TaskSummary(
-        id=TaskRef('stack-the-cubes'), embodiment='franka', task='Stack the cubes', start_pose=StartPose.droid_reset
+        id=TaskRef('stack-the-cubes'),
+        embodiments=[RigShape.franka, RigShape.yam],
+        task='Stack the cubes',
+        start_pose=StartPose.droid_reset,
     ),
     PLAN_OF_AN_IMAGE,
     CancelRequest(id=SUB),
@@ -378,9 +381,21 @@ def test_the_published_scores_are_a_subset_of_the_record():
     assert published == {name: record[name] for name in Scores.model_fields}
 
 
+# One `catalog.tasks` entry as the wire carries it, with no optional field stated.
+TASK_SUMMARY_WIRE = {'id': 'fold-the-towel', 'embodiments': ['yam'], 'task': 'Fold the towel'}
+
+
 def test_a_task_summary_that_states_no_start_pose_reads_the_nominal():
-    summary = TaskSummary.model_validate({'id': 'stack-the-cubes', 'embodiment': 'franka', 'task': 'Stack the cubes'})
-    assert summary.start_pose is StartPose.nominal
+    assert TaskSummary.model_validate(TASK_SUMMARY_WIRE).start_pose is StartPose.nominal
+
+
+def test_a_task_summary_reads_the_embodiments_the_task_runs_on():
+    assert TaskSummary.model_validate(TASK_SUMMARY_WIRE).embodiments == [RigShape.yam]
+
+
+def test_a_task_summary_that_names_one_embodiment_and_no_list_is_refused():
+    with pytest.raises(ValidationError, match='embodiments'):
+        TaskSummary.model_validate({'id': 'fold-the-towel', 'embodiment': 'yam', 'task': 'Fold the towel'})
 
 
 def test_ids_and_statuses_leave_as_wire_values():

@@ -26,7 +26,7 @@ from positronic.cli.eval.submit import submit
 from positronic.dataset.episode import META_PATH
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.eval import Embodiment, Eval, Task
-from positronic.policy import Policy
+from positronic.policy import Policy, RemotePolicy
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.utils.git import get_package_git_state
@@ -222,9 +222,12 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     if timing:
         _validate_timing([ev.embodiment for ev in evals], output_dir)
 
-    logger.info('Warming up policy endpoints')
-    # Reading remote metadata waits for model loading and warmup, keeping startup outside the timed sweep.
-    policy.meta()
+    if isinstance(policy, RemotePolicy):
+        logger.info('Waiting for the policy server')
+        # The server loads and warms its model before it answers, which keeps the load outside the timed sweep.
+        # TODO: The preparation of each session falls inside the `eval.pass` span, and a one-time warm-up in the
+        # first one depresses the real-time factor. Time the session preparation as its own span, outside the factor.
+        policy.wait_for_server()
     with scoped_env_var(ENV_TELEMETRY_DIR):
         output_path = prepare_output_dir(output_dir)
         earlier = set() if output_path is None else _episode_paths(output_path)

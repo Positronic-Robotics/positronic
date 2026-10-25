@@ -139,8 +139,10 @@ endpoint, and counts against the daily quota. `--org` states a `private_eval` on
 or `yam`, a bimanual YAM. A plan that names none runs on a `franka`. The platform picks the rig of
 that shape. A plan that names an eval runs on the embodiment the eval pins, and it is refused when it
 names a `rig_shape` other than `franka`. The gateway refuses `sim`. The platform runs every task of a
-plan on the rig its `rig_shape` names, and it does not check that a task suits that rig: a plan of
-two-arm tasks states `rig_shape: yam`.
+plan on the rig its `rig_shape` names. Each task in `catalog.tasks` lists the shapes it runs on in
+`embodiments`. A plan that states its tasks is refused when its `rig_shape` is not one of a task's
+`embodiments`, and the error names the task and the shapes it accepts. So a plan of two-arm tasks
+states `rig_shape: yam`.
 
 ```yaml
 request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
@@ -166,13 +168,13 @@ max_cap_per_episode_sec: 300
 policy_preset: production
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
-start_pose: droid_reset                  # nominal | droid_reset
+start_pose: droid_reset                  # nominal | droid_reset | abc_init
 ```
 
-`start_pose` names where the arm starts each episode: `nominal`, the rig's own pose, or
-`droid_reset`, the reset pose of the DROID data collection. A plan that names none takes the pose
-of each task's catalogue entry. A `yam` rig opens each episode at its own pose, whatever the plan
-names.
+`start_pose` names where the arm starts each episode: `nominal`, the rig's own pose;
+`droid_reset`, the reset pose of the DROID data collection; or `abc_init`, the start pose of the
+ABC sim. `droid_reset` is a `franka` pose and `abc_init` is a `yam` pose, one per arm. A plan that
+names none takes the pose of each task's catalogue entry.
 
 An endpoint states where its policy comes from (`kind`) and the wire a session runs over (`wire`).
 Every kind names its wire. There is no default.
@@ -292,9 +294,10 @@ endpoints:
 ```
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
-names, and `catalog.tasks` the tasks a plan may compose, each with its `embodiment`. Every registered
-user sees the evals a submission can name. A customer grant adds the rig's evals and tasks, filtered
-to the entries offered to the grant's client.
+names, and `catalog.tasks` the tasks a plan may compose, each with the `embodiments` it runs on, for
+example `["franka", "yam"]` or `["yam"]`. Every registered user sees the evals a submission can name.
+A customer grant adds the rig's evals and tasks, filtered to the entries offered to the grant's
+client.
 
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
 `platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
@@ -367,6 +370,18 @@ Calls go to `https://platform.positronic.ro` with nothing set. The environment c
 The record's key and its platform are read one at a time. A command that names another platform, and
 no key, sends the record's key to the platform it names. The client speaks one wire contract and runs
 against any platform that serves it, but it is built for ours. You take the risk of another one.
+
+Each side refuses a version of the other that is too old:
+
+- Every request names the client's version in `X-Positronic-Client-Version`. The platform refuses a
+  call with an API key from a client older than the oldest it accepts, with `bad_request` and the
+  version to install. Upgrade `positronic`, or `positronic-platform-client` alone. Your own HTTP code that
+  calls with an API key sends the header too.
+- Every answer names the contract version the platform serves in `X-Positronic-Platform-Version`. The
+  client refuses a successful answer that names none, or one older than
+  `platform_client.client.MIN_PLATFORM_VERSION`.
+  Before its first write, a client reads `auth.config` and checks the version there, so it sends no
+  write to a platform it cannot read.
 
 `rankings.list` names the boards, and `rankings.get?board=<slug>` reads one. From the command line,
 `positronic/cli/examples/nebius_competition/standings.py` prints the boards, or the rows of one:

@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from enum import Enum
 from functools import partial
 
 import cv2
@@ -9,6 +10,50 @@ from positronic.utils.lazy import LazySequence
 
 from ..signal import Signal
 from .signals import Elementwise
+
+
+class Resample(Enum):
+    """Pixel interpolation: Pillow bilinear or OpenCV area averaging."""
+
+    BILINEAR = 'bilinear'
+    AREA = 'area'
+
+
+class ResizeMode(Enum):
+    """How image dimensions relate to the requested size."""
+
+    BOUND = 'bound'
+    PAD = 'pad'
+    STRETCH = 'stretch'
+
+
+def transform_frame(
+    img: np.ndarray, width: int, height: int, *, mode: ResizeMode, resample: Resample = Resample.BILINEAR
+) -> np.ndarray:
+    """Bound without enlarging, fit and zero-pad, or stretch to the exact requested size."""
+    h, w = img.shape[:2]
+    if mode is ResizeMode.PAD:
+        ratio = max(w / width, h / height)
+        tw, th = int(w / ratio), int(h / ratio)
+    elif mode is ResizeMode.BOUND:
+        scale = min(1.0, width / w, height / h)
+        tw, th = int(w * scale), int(h * scale)
+    elif mode is ResizeMode.STRETCH:
+        tw, th = width, height
+    else:
+        raise ValueError(f'Unknown resize mode: {mode!r}')
+    if (tw, th) == (w, h) and (mode is not ResizeMode.PAD or (w, h) == (width, height)):
+        return img
+    if resample is Resample.AREA:
+        resized = cv2.resize(np.ascontiguousarray(img), (tw, th), interpolation=cv2.INTER_AREA)
+    else:
+        resized = np.array(PilImage.fromarray(img).resize((tw, th), resample=PilImage.Resampling.BILINEAR))
+    if mode is not ResizeMode.PAD:
+        return resized
+    output = np.zeros((height, width, *resized.shape[2:]), dtype=resized.dtype)
+    x, y = (width - tw) // 2, (height - th) // 2
+    output[y : y + th, x : x + tw] = resized
+    return output
 
 
 def resize(
@@ -35,45 +80,20 @@ def resize(
     return Elementwise(signal, fn)
 
 
-def _resize_with_pad_pil(image: PilImage.Image, height: int, width: int, method: int) -> PilImage.Image:
-    """Replicates tf.image.resize_with_pad for one image using PIL. Resizes an image to a target height and
-    width without distortion by padding with zeros.
-    Unlike the jax version, note that PIL uses [width, height, channel] ordering instead of [batch, h, w, c].
-    """
-    cur_width, cur_height = image.size
-    if cur_width == width and cur_height == height:
-        return image  # No need to resize if the image is already the correct size.
-
-    ratio = max(cur_width / width, cur_height / height)
-    resized_height = int(cur_height / ratio)
-    resized_width = int(cur_width / ratio)
-    resized_image = image.resize((resized_width, resized_height), resample=method)
-
-    zero_image = PilImage.new(resized_image.mode, (width, height), 0)
-    pad_height = max(0, int((height - resized_height) / 2))
-    pad_width = max(0, int((width - resized_width) / 2))
-    zero_image.paste(resized_image, (pad_width, pad_height))
-    assert zero_image.size == (width, height)
-    return zero_image
-
-
-def resize_with_pad_per_frame(width: int, height: int, method, img: np.ndarray) -> np.ndarray:
-    if img.shape[0] == height and img.shape[1] == width:
-        return img  # No need to resize if the image is already the correct size.
-
-    return np.array(_resize_with_pad_pil(PilImage.fromarray(img), height, width, method=method))
+def resize_with_pad_per_frame(width: int, height: int, method: Resample, img: np.ndarray) -> np.ndarray:
+    return transform_frame(img, width, height, mode=ResizeMode.PAD, resample=method)
 
 
 def resize_with_pad(
-    width: int, height: int, signal: Signal[np.ndarray], method=PilImage.Resampling.BILINEAR
+    width: int, height: int, signal: Signal[np.ndarray], method: Resample = Resample.BILINEAR
 ) -> Signal[np.ndarray]:
-    """Return a Signal view with frames resized-with-pad using PIL.
+    """Return a Signal view with frames resized and padded.
 
     Args:
         width: Target width (W).
         height: Target height (H).
         signal: Input image Signal with frames shaped (H, W, 3), dtype uint8.
-        method: PIL resampling method (e.g., PilImage.Resampling.BILINEAR).
+        method: Pixel interpolation filter.
     """
 
     def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:

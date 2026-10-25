@@ -5,11 +5,12 @@ import hmac
 import json
 import logging
 import math
+import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from importlib.metadata import version
 from typing import Any, TypeVar
 from uuid import uuid4
@@ -47,17 +48,30 @@ class Session(ABC):
         return None
 
 
+class PreparationCancelled(Exception):
+    """A preparation stopped because the server set ``Model.preparation_cancelled``."""
+
+
 class Model(ABC):
     """Loaded, warm model resources and the operation that prepares each session.
 
     ``parameters`` declares accepted session names and their defaults. ``prepare_session`` receives
     resolved values, validates their model-specific meaning and returns only once that session is warm.
-    A preparation that raises must release any resources it acquired before returning a session.
+    A preparation that waits for an event outside the server, such as a person, watches
+    ``preparation_cancelled`` and raises ``PreparationCancelled`` when it is set. A preparation that
+    raises must release any resources it acquired before returning a session.
     """
 
     def __init__(self, *, parameters: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None):
         self.parameters = {} if parameters is None else parameters
         self.metadata = {} if metadata is None else metadata
+        self._preparation_cancelled = threading.Event()
+
+    @property
+    def preparation_cancelled(self) -> threading.Event:
+        """Set when the session that ``prepare_session`` prepares can no longer open: its opener left, or the
+        server stops. The server gives each preparation its own event."""
+        return self._preparation_cancelled
 
     @abstractmethod
     def prepare_session(self, params: dict[str, Any]) -> Session: ...
@@ -65,6 +79,13 @@ class Model(ABC):
     def close(self) -> None:
         """Release the model's resources after its sessions finish."""
         return None
+
+
+async def _outlast_cancellation(future: asyncio.Future) -> None:
+    """Wait until ``future`` is done, through every cancellation of the waiting task."""
+    while not future.done():
+        with suppress(asyncio.CancelledError):
+            await asyncio.wait({future})
 
 
 class ModelServer:
@@ -111,12 +132,16 @@ class ModelServer:
         try:
             return await asyncio.shield(pending)
         except asyncio.CancelledError:
-            await pending
+            await _outlast_cancellation(pending)
+            pending.result()
             raise
 
-    async def _answer(self, conn: server_wire.ServerConnection, session: Session, session_id: str) -> None:
+    async def _answer(
+        self, conn: server_wire.ServerConnection, session: Session, session_id: str, received: Awaitable[bytes]
+    ) -> None:
+        """Answer each request of the session. ``received`` is the receive of its first request."""
         while True:
-            raw = await conn.receive()
+            raw = await received
             self._last_activity = time.monotonic()
             started = time.perf_counter_ns()
             request = serialization.deserialise(raw)
@@ -127,6 +152,7 @@ class ModelServer:
             observation = request[protocol.OBSERVATION]
             decoded = time.perf_counter_ns()
             await conn.send(await self._infer_response(session, observation, started, decoded))
+            received = conn.receive()
 
     async def _infer_response(self, session: Session, observation: Any, started: int, decoded: int) -> bytes:
         timing = {protocol.TIMING_DECODE: (decoded - started) / 1e6}
@@ -149,33 +175,69 @@ class ModelServer:
             logger.exception('Inference failed')
             return serialization.serialise({protocol.ERROR: str(error)})
 
-    async def _prepare(self, conn: server_wire.ServerConnection, prepare: Callable[[], None]) -> None:
+    async def _prepare(
+        self,
+        conn: server_wire.ServerConnection,
+        prepare: Callable[[], None],
+        cancelled: threading.Event,
+        received: asyncio.Task[bytes],
+    ) -> None:
+        """Run ``prepare`` and send a waiting status each interval, until it ends or ``received`` finds the opener gone.
+
+        The client sends nothing before ready, so ``received`` ends early only when the opener leaves. A message
+        that a client sends early stays in ``received`` as the first request.
+        """
         pending = asyncio.create_task(self._call(prepare))
+        watched: set[asyncio.Future] = {pending, received}
         try:
             while not pending.done():
                 await conn.send(serialization.serialise({protocol.STATUS: protocol.ServerStatus.WAITING}))
-                await asyncio.wait({pending}, timeout=self.WAITING_INTERVAL_SEC)
-            await pending
-        finally:
-            # A disconnected opener still owns the session being prepared until its cleanup completes.
-            await asyncio.shield(pending)
+                await asyncio.wait(watched, timeout=self.WAITING_INTERVAL_SEC, return_when=asyncio.FIRST_COMPLETED)
+                if received in watched and received.done():
+                    received.result()  # Raises `wire.PeerDisconnected` when the opener left.
+                    watched.discard(received)
+        except BaseException as stopped:
+            logger.info('Cancelled the preparation of a session: %s (%r)', conn.peer, stopped)
+            # The opener still owns the session being prepared until its cleanup completes.
+            cancelled.set()
+            await _outlast_cancellation(pending)
+            match pending.exception():
+                case None | PreparationCancelled():
+                    pass
+                case failure:
+                    logger.error('A preparation failed after its opener left', exc_info=failure)
+            raise
+        await pending
 
     @asynccontextmanager
-    async def _prepared_session(self, conn: server_wire.ServerConnection, params: dict[str, Any]):
+    async def _prepared_session(
+        self, conn: server_wire.ServerConnection, params: dict[str, Any]
+    ) -> AsyncIterator[tuple[Session, asyncio.Task[bytes]]]:
+        """The prepared session, and the receive of its first request."""
         model = self._model
         assert model is not None
         session: Session | None = None
+        cancelled = threading.Event()
 
         def prepare() -> None:
             nonlocal session
+            # The opener can leave while its preparation waits for the worker.
+            if cancelled.is_set():
+                return
+            # Preparations run one at a time on the worker, so the event is this preparation's for its whole call.
+            model._preparation_cancelled = cancelled
             session = model.prepare_session(json.loads(json.dumps(params, allow_nan=False)))
             spec.validate(session.client_stack)
 
+        received = asyncio.create_task(conn.receive())
         try:
-            await self._prepare(conn, prepare)
+            await self._prepare(conn, prepare, cancelled, received)
             assert session is not None
-            yield session
+            yield session, received
         finally:
+            # A receive that failed with no one to await it is retrieved here, so asyncio does not log it as lost.
+            if not received.cancel() and not received.cancelled():
+                received.exception()
             if session is not None:
                 await self._call(session.close)
 
@@ -185,7 +247,7 @@ class ModelServer:
         requested = spec.parse_params(conn.query_params)
         params = spec.resolve_params(model.parameters, requested)
         session_id = uuid4().hex
-        async with self._prepared_session(conn, params) as session:
+        async with self._prepared_session(conn, params) as (session, received):
             metadata = {
                 **conn.served_address.meta,
                 **model.metadata,
@@ -203,7 +265,7 @@ class ModelServer:
                     protocol.META: metadata,
                 })
             )
-            await self._answer(conn, session, session_id)
+            await self._answer(conn, session, session_id, received)
         await conn.send(serialization.serialise({protocol.SESSION_ID: session_id, protocol.END_SESSION: True}))
 
     async def _serve_session(self, conn: server_wire.ServerConnection) -> None:

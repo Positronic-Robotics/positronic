@@ -82,7 +82,6 @@ def test_observation_layout_preserves_empty_camera_groups_and_names_shared_with_
     assert encoded[gr00t.STATE][gr00t.EE_POSE].shape == (1, 1, 9)
     for name in image_mappings:
         assert encoded[gr00t.VIDEO][name].shape == (1, 1, 180, 320, 3)
-    assert codec.meta[Codec.IMAGE_SIZES] == ((320, 180) if image_mappings else {})
 
 
 def test_observation_layout_requires_a_live_prompt(observation):
