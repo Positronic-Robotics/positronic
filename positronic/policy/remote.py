@@ -2,6 +2,7 @@ import collections.abc as cabc
 import logging
 from concurrent.futures import Future, wait
 from contextlib import closing
+from functools import partial
 from threading import Lock, Thread
 from typing import Any
 
@@ -9,6 +10,7 @@ import numpy as np
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import ProtocolVersion
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
+from positronic_model_server.tree import map_leaves
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
@@ -23,14 +25,9 @@ from .spec import from_spec
 
 
 def _prepare_value(value: Any, jpeg_quality: int) -> Any:
-    # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
     if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
         # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's message cap.
         return encode_jpeg(value, jpeg_quality)
-    if isinstance(value, cabc.Mapping):
-        return {k: _prepare_value(v, jpeg_quality) for k, v in value.items()}
-    if isinstance(value, list | tuple):
-        return type(value)(_prepare_value(v, jpeg_quality) for v in value)
     return value
 
 
@@ -39,7 +36,7 @@ def prepare_obs(
 ) -> dict[str, Any]:
     if not compress_images:
         return dict(obs)
-    return {key: _prepare_value(value, jpeg_quality) for key, value in obs.items()}
+    return map_leaves(obs, partial(_prepare_value, jpeg_quality=jpeg_quality))
 
 
 def round_trip(

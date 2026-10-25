@@ -10,11 +10,11 @@ The package root exposes public names; implementations and their tests are group
 | Module | Responsibility |
 |--------|----------------|
 | [`base`](base.py) | `Codec` and sequential/parallel composition |
-| [`observation`](observation.py) | Field names, state vectors and model input assembly |
+| [`observation`](observation.py) | Field names, state vectors and model input/output layouts |
 | [`action`](action.py) | Prediction decoding, training labels and command control modes |
 | [`geometry`](geometry.py) | Pose representations and end-effector frames |
 | [`gripper`](gripper.py) | Grip thresholds and conventions |
-| [`image`](image.py) | Image size limits and JPEG encoding |
+| [`image`](image.py) | Image selection, resizing, padding and JPEG encoding |
 | [`metadata`](metadata.py) | Metadata attachment and dataset feature descriptors |
 
 Codec tests live in [`tests/`](tests/). Model-specific recipes compose these operations under
@@ -84,15 +84,30 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`ObservationCodec`](observation.py) | Concatenates state signals, resizes and pads RGB images, and carries the task prompt. Shares state/image settings between training and inference. | Build named state vectors and image fields from raw robot observations. |
+| [`StateObservationCodec`](observation.py) | Concatenates fields into float32 vectors and carries the task prompt. | Build model state vectors from robot observations. |
+| [`SelectObservationFields`](observation.py) | Selects and renames literal input fields. Contributes no decoded commands. | Build an observation branch that runs beside an action decoder. |
 | [`RenameObservationFields`](observation.py) | Renames literal top-level inference fields. Training columns and decoded actions pass through. | The model's inference input names differ from the training column names. |
-| [`PackObservationFields`](observation.py) | Selects fields into nested dictionaries and adds leading singleton dimensions. Arrays retain their dtype; other values gain list layers. Training and decoding pass through. | A model expects grouped fields or explicit batch/time dimensions, such as GR00T's `video`, `state` and `language` inputs. |
+| [`PackFields`](observation.py) | Arranges model inputs and outputs and adds or removes batch dimensions. | Match the model’s field layout in either direction. |
+
+Each `PackFields` layout describes the result; its leaves are paths into the source:
+
+```python
+packing = PackFields(
+    encode_layout={'state': {'joints': ['q']}},
+    decode_layout={'joints': [0, 'q']},
+    unsqueeze_dims=2,
+    squeeze_dims=1,
+)
+codec = (observations & action) | SplitActionChunk() | packing
+```
+
+Decoding runs right-to-left: unpack fields, split timesteps, then construct commands.
 
 ### Actions
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`UnpackActionChunk`](action.py) | Selects prediction arrays, removes leading size-one dimensions, and splits a shared time axis into action records. Observations and training pass through. | A model returns batched or nested prediction arrays that action decoders need one timestep at a time. |
+| [`SplitActionChunk`](action.py) | Splits prediction arrays into one record per timestep. | Feed a chunk of predictions to action decoders. |
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
 | [`JointPositionAction`](action.py) | Decodes separate joint and grip fields into an absolute command. | The model returns named predictions; training labels are defined independently. |
@@ -121,11 +136,14 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`RestrictImageSize`](image.py) | Inference: shrinks nested RGB images and frame stacks to fit bounds, preserving aspect ratio. Does not upscale; training encoding is unsupported. `resample=Resample.AREA` scales with OpenCV `INTER_AREA`, faster than the default Pillow bilinear filter, but with other pixels. | Cap image dimensions before sending observations over the network. Use `AREA` only when the model resizes the frames again. |
+| [`TransformImages`](image.py) | Resizes RGB images and frame stacks with explicit dimensions and mode. | Limit upload size or match the model’s image preparation. |
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
 
-Image transport codecs belong in the serving stack. Use `ObservationCodec` for image preparation
-shared with training. `IKJointsAction` requires Python construction; it does not provide a JSON component description.
+Choose `ResizeMode.BOUND` to shrink within bounds, `PAD` to fit and pad to the exact size, or
+`STRETCH` to resize exactly, allowing distortion. Bilinear is the default interpolation;
+`Resample.AREA` produces different pixels, so choose the filter to match the model.
+
+`IKJointsAction` requires Python construction; it does not provide a JSON component description.
 
 The [metadata module](metadata.py) also provides `lerobot_vector`, `lerobot_image` and
 `lerobot_action` to describe dataset features. These helpers return metadata dictionaries, not codecs.
@@ -134,7 +152,18 @@ The [metadata module](metadata.py) also provides `lerobot_vector`, `lerobot_imag
 
 The two codecs that do the real work are the **observation encoder** and the **action decoder**.
 
-**Observation encoding** chooses which raw fields the model sees, and in what form. `ObservationCodec` ([`positronic/policy/codecs/observation.py`](observation.py)) is configured with state vectors to assemble (e.g. concatenate `robot_state.ee_pose` + `grip`) and images to resize. The same configuration builds the training columns and encodes the live observation, so the two match by construction.
+**Observation encoding** combines state packing and image preparation with `&`, so both read the same raw observation:
+
+```python
+StateObservationCodec(state={'state': {'robot_state.q': 7, 'grip': 1}}) & (
+    SelectObservationFields({'image': 'wrist_image'})
+    | TransformImages(224, 224, mode=ResizeMode.PAD, paths=[['image']])
+)
+```
+
+For dataset preparation, use the image training recipe in [`policy.training`](../training.py).
+New clients support published server descriptions; servers using new components require updated clients.
+See [compatibility](../../offboard/README.md#compatibility-and-deprecation).
 
 **Action encoding** chooses what the model predicts and how that maps back to a robot command. This is where the action-space decisions live. Some real examples from [`positronic/policy/codecs/action.py`](action.py):
 

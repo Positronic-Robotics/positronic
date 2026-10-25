@@ -22,7 +22,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codecs import ACTION, ChangeEEFrame, RestrictImageSize
+from positronic.policy.codecs import ACTION, ChangeEEFrame, ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.vendors import openpi
@@ -214,7 +214,7 @@ def pipeline(codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_
     ``ee_frame`` is the frame this checkpoint's poses live in, such as ``cfg.codecs.franka_hand_frame``; ``None``
     for one that speaks joints only.
     """
-    local = Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize(224, 224))
+    local = Sequential(ChunkedSchedule(fps, horizon_sec), TransformImages(224, 224, mode=ResizeMode.BOUND))
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
         local = Sequential(ChangeEEFrame(ee_frame), local)

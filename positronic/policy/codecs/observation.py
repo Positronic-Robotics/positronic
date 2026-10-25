@@ -3,73 +3,139 @@ from typing import Any
 
 import numpy as np
 from eval_vocabulary.timeline import recording_timeline
-from PIL import Image as PilImage
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
-from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity
 
 from .base import Codec
-from .metadata import LEROBOT_FEATURES, lerobot_image, lerobot_vector
+from .metadata import LEROBOT_FEATURES, lerobot_vector
 
 # The encoded prompt name shared by LeRobot training and inference.
 TASK_FIELD = 'task'
 
 
-class PackObservationFields(Codec):
-    """Select fields into nested dictionaries and add leading singleton dimensions.
+class SelectObservationFields(Codec):
+    """Select and rename literal input fields; contribute no decoded commands."""
 
-    Layout leaves name literal input keys. Arrays retain their dtype; other values gain list layers.
-    ``unsqueeze_dims`` is the number of size-one dimensions added at the front.
-    Training columns and decoded actions pass through unchanged.
+    WIRE_NAME = 'select_observation_fields'
+
+    def __init__(self, mapping: dict[str, str]):
+        self._mapping = dict(mapping)
+
+    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
+        return {name: data[source] for name, source in self._mapping.items()}
+
+    def to_spec(self):
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mapping': dict(self._mapping)}}
+
+
+class PackFields(Codec):
+    """Arrange model inputs and outputs using independent destination layouts.
+
+    Layouts are nested dictionaries with source paths at their leaves. Each path contains literal
+    string keys or integer indices; ``[]`` selects the whole source value. Only selected fields
+    appear in the result, including empty groups. An absent layout passes that direction through;
+    an empty layout produces an empty dictionary.
+
+    Encoding adds ``unsqueeze_dims`` leading size-one array dimensions or list layers. Decoding
+    removes ``squeeze_dims`` leading size-one array dimensions or list/tuple layers. Arrays retain
+    their dtype. Training passes through. Splitting a time axis into records is a separate operation.
 
     Example::
 
-        PackObservationFields(
-            {'state': {'joints': 'robot_state.q'}, 'language': {'instruction': 'task'}}, unsqueeze_dims=2
+        PackFields(
+            encode_layout={'state': {'joints': ['robot_state.q']}},
+            decode_layout={'joints': [0, 'predicted_joints']},
+            unsqueeze_dims=2,
+            squeeze_dims=1,
         )
+
+    This encodes joints ``(7,)`` as ``state.joints`` with shape ``(1, 1, 7)`` and decodes
+    ``({'predicted_joints': array_of_shape_1_T_7}, info)`` into ``{'joints': array_of_shape_T_7}``.
     """
 
-    WIRE_NAME = 'pack_observation_fields'
+    WIRE_NAME = 'pack_fields'
 
-    def __init__(self, layout: dict[str, Any], *, unsqueeze_dims: int = 0):
-        if type(unsqueeze_dims) is not int or unsqueeze_dims < 0:
-            raise ValueError('unsqueeze_dims must be a non-negative integer')
-        self._layout = self._copy_layout(layout)
+    def __init__(
+        self,
+        *,
+        encode_layout: dict[str, Any] | None = None,
+        decode_layout: dict[str, Any] | None = None,
+        unsqueeze_dims: int = 0,
+        squeeze_dims: int = 0,
+    ):
+        for name, value in (('unsqueeze_dims', unsqueeze_dims), ('squeeze_dims', squeeze_dims)):
+            if type(value) is not int or value < 0:
+                raise ValueError(f'{name} must be a non-negative integer')
+        self._encode_layout = None if encode_layout is None else self._copy_layout(encode_layout)
+        self._decode_layout = None if decode_layout is None else self._copy_layout(decode_layout)
         self._unsqueeze_dims = unsqueeze_dims
+        self._squeeze_dims = squeeze_dims
 
     @staticmethod
     def _copy_layout(layout: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(layout, dict):
+            raise ValueError('Layouts must be dictionaries')
         result = {}
         for name, source in layout.items():
-            if not isinstance(name, str) or not isinstance(source, (str, dict)):
-                raise ValueError('Layout entries must have string keys and contain input key names or dictionaries')
-            result[name] = PackObservationFields._copy_layout(source) if isinstance(source, dict) else source
+            if not isinstance(name, str):
+                raise ValueError('Layout entries must have string keys')
+            if isinstance(source, dict):
+                result[name] = PackFields._copy_layout(source)
+                continue
+            if not isinstance(source, (list, tuple)) or any(type(part) not in (str, int) for part in source):
+                raise ValueError('Layout leaves must be source paths of string keys or integer indices')
+            result[name] = list(source)
         return result
 
-    def _pack(self, layout: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _reshape(value: Any, dimensions: int, field: str) -> Any:
+        """Add leading singleton dimensions for positive counts; remove them for negative counts."""
+        if isinstance(value, np.ndarray):
+            if dimensions >= 0:
+                return value.reshape((1,) * dimensions + value.shape)
+            count = -dimensions
+            if value.shape[:count] != (1,) * count:
+                raise ValueError(f'Field {field!r} requires {count} leading size-one dimensions')
+            return value.reshape(value.shape[count:])
+
+        if dimensions >= 0:
+            for _ in range(dimensions):
+                value = [value]
+            return value
+
+        count = -dimensions
+        for _ in range(count):
+            if not isinstance(value, (list, tuple)) or len(value) != 1:
+                raise ValueError(f'Field {field!r} requires {count} leading size-one dimensions')
+            value = value[0]
+        return value
+
+    @staticmethod
+    def _pack(layout: dict[str, Any], data: Any, dimensions: int) -> dict[str, Any]:
         result = {}
         for name, source in layout.items():
             if isinstance(source, dict):
-                result[name] = self._pack(source, data)
+                result[name] = PackFields._pack(source, data, dimensions)
             else:
-                value = data[source]
-                if isinstance(value, np.ndarray):
-                    value = value.reshape((1,) * self._unsqueeze_dims + value.shape)
-                else:
-                    for _ in range(self._unsqueeze_dims):
-                        value = [value]
-                result[name] = value
+                value = data
+                for part in source:
+                    value = value[part]
+                result[name] = PackFields._reshape(value, dimensions, name)
         return result
 
-    def encode(self, data: dict[str, Any]) -> dict[str, Any]:
-        return self._pack(self._layout, data)
+    def encode(self, data: Any) -> Any:
+        if self._encode_layout is None:
+            return data
+        return self._pack(self._encode_layout, data, self._unsqueeze_dims)
 
     def decode(self, data: Any) -> Any:
-        return data
+        if self._decode_layout is None:
+            return data
+        return self._pack(self._decode_layout, data, -self._squeeze_dims)
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -79,7 +145,12 @@ class PackObservationFields(Codec):
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'layout': self._copy_layout(self._layout), 'unsqueeze_dims': self._unsqueeze_dims},
+            ARGS: {
+                'encode_layout': None if self._encode_layout is None else self._copy_layout(self._encode_layout),
+                'decode_layout': None if self._decode_layout is None else self._copy_layout(self._decode_layout),
+                'unsqueeze_dims': self._unsqueeze_dims,
+                'squeeze_dims': self._squeeze_dims,
+            },
         }
 
 
@@ -115,37 +186,44 @@ class RenameObservationFields(Codec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mapping': dict(self._mapping)}}
 
 
-class ObservationCodec(Codec):
-    """Encode state vectors and images for training and inference.
+class StateObservationCodec(Codec):
+    """Concatenate observation fields into flat float32 state vectors.
+
+    Each output vector selects literal input keys in dictionary insertion order. Inference flattens
+    each selected value and concatenates them, without normalization or adding batch dimensions.
+    Missing state inputs raise ``KeyError``; an empty selection produces an empty float32 vector.
+    Unselected inputs are omitted, except for ``keys.TASK``, which is copied to ``task_field`` when
+    present. If a state output uses that same name, its vector takes precedence over the prompt.
 
     Args:
-        state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
-        images: mapping from output image name to tuple (input_key, (width, height)).
-        task_field: output key carrying the language prompt at inference.
+        state: Mapping of output names to ``{input_key: dimension}`` mappings. Dimensions describe
+            LeRobot training features; they do not reshape or validate inference values.
+        task_field: Output name for the inference prompt, defaulting to ``'task'``.
+
+    Example::
+
+        codec = StateObservationCodec({'state': {'joints': 2, 'grip': 1}}, task_field='prompt')
+        codec.encode({'joints': [0.1, 0.2], 'grip': 0.8, keys.TASK: 'Pick up the cup'})
+        # {'state': array([0.1, 0.2, 0.8], dtype=float32), 'prompt': 'Pick up the cup'}
+
+    ``training_encoder`` derives concatenated float32 signals and LeRobot feature metadata.
+    Its prompt column is always ``'task'``, independently of ``task_field``, and defaults to an
+    empty string when the episode has no task. Decoding contributes no commands.
     """
 
-    WIRE_NAME = 'observation_codec'
+    WIRE_NAME = 'state_observation'
 
-    def __init__(
-        self,
-        state: dict[str, dict[str, int]],
-        images: dict[str, tuple[str, tuple[int, int]]],
-        task_field: str = TASK_FIELD,
-    ):
+    def __init__(self, state: dict[str, dict[str, int]], task_field: str = TASK_FIELD):
         self._state = state
-        self._image_configs = images
         self._task_field = task_field
 
         self._derive_transforms: dict[str, Any] = {k: partial(self._derive_state, k) for k in state.keys()}
-        self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
         self._derive_transforms[TASK_FIELD] = Get(keys.TASK, '')
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():
             if isinstance(features, dict):
                 lerobot_features[name] = lerobot_vector(sum(features.values()), list(features.keys()))
-        for name, (_, (w, h)) in images.items():
-            lerobot_features[name] = lerobot_image(w, h)
         self._training_meta = {LEROBOT_FEATURES: lerobot_features}
 
     def _derive_state(self, out_name: str, episode: Episode) -> Signal[Any]:
@@ -154,25 +232,11 @@ class ObservationCodec(Codec):
         timeline = recording_timeline({name for signal in signals for name in signal.timelines})
         return transforms.concat(*signals, dtype=np.float32, timelines=(timeline,))
 
-    def _derive_image(self, out_name: str, episode: Episode) -> Signal[Any]:
-        input_key, (width, height) = self._image_configs[out_name]
-        return image.resize_with_pad(width, height, signal=episode[input_key])
-
     def encode(self, data: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 
         if keys.TASK in data:
             obs[self._task_field] = data[keys.TASK]
-
-        for out_name, (input_key, (width, height)) in self._image_configs.items():
-            if input_key not in data:
-                raise KeyError(f"Missing image input '{input_key}' for '{out_name}', available keys: {data.keys()}")
-            frame = data[input_key]
-            if not isinstance(frame, np.ndarray):
-                frame = np.asarray(frame)
-            if frame.ndim != 3 or frame.shape[2] != 3:
-                raise ValueError(f"Image '{input_key}' must be HWC with 3 channels, got {frame.shape}")
-            obs[out_name] = image.resize_with_pad_per_frame(width, height, PilImage.Resampling.BILINEAR, frame)
 
         for out_name, feature_names in self._state.items():
             parts = []
@@ -185,20 +249,12 @@ class ObservationCodec(Codec):
         return obs
 
     @property
-    def meta(self):
-        sizes = {input_key: (w, h) for _out, (input_key, (w, h)) in self._image_configs.items()}
-        unique = set(sizes.values())
-        return {self.IMAGE_SIZES: unique.pop() if len(unique) == 1 else sizes}
-
-    @property
     def training_encoder(self):
         return Derive(meta=self._training_meta, **self._derive_transforms)
 
     def to_spec(self):
-        # Normalized to lists so the spec is identical before and after a wire round-trip.
-        images = {name: [key, list(size)] for name, (key, size) in self._image_configs.items()}
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'state': self._state, 'images': images, 'task_field': self._task_field},
+            ARGS: {'state': self._state, 'task_field': self._task_field},
         }

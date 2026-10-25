@@ -1,11 +1,8 @@
 """The server-side DROID codecs of Cosmos3-Nano. They encode an observation as a request to NVIDIA's server, and
 decode its actions as commands."""
 
-import configuronic as cfn
-
 from positronic import keys
 from positronic.cfg import codecs
-from positronic.policy.codecs.observation import ObservationCodec
 from positronic.vendors import cosmos3
 
 # The policy learned from DROID recordings at 15 Hz, and it predicts actions at that rate.
@@ -19,8 +16,7 @@ _views_3cam = {
     cosmos3.EXTERIOR_IMAGE_1: (keys.EXTERIOR_IMAGE, VIEW_SIZE),
     cosmos3.EXTERIOR_IMAGE_2: (keys.EXTERIOR_IMAGE_2, VIEW_SIZE),
 }
-_obs_3cam = cfn.Config(
-    ObservationCodec,
+_obs_3cam = codecs.observation.override(
     state={cosmos3.JOINT_POSITION: {keys.JOINTS: 7}, cosmos3.GRIPPER_POSITION: {keys.GRIP: 1}},
     images=_views_3cam,
     task_field=cosmos3.PROMPT,

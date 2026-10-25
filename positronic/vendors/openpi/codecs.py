@@ -18,13 +18,12 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
-from PIL import Image as PilImage
 
 from positronic import geom, keys
 from positronic.cfg import codecs
 from positronic.dataset.transforms import image
 from positronic.policy.codecs import CartesianDeltaAction, Codec
-from positronic.policy.codecs.observation import TASK_FIELD, ObservationCodec, RenameObservationFields
+from positronic.policy.codecs.observation import TASK_FIELD, RenameObservationFields
 from positronic.vendors import openpi
 
 
@@ -36,7 +35,7 @@ from positronic.vendors import openpi
 )
 def observation(state_features: dict[str, int], exterior_camera: str, wrist_camera: str, image_size: tuple[int, int]):
     """General OpenPI observation encoder with configurable state features."""
-    return ObservationCodec(
+    return codecs.observation(
         state={openpi.TRAINING_STATE: state_features},
         images={
             openpi.TRAINING_WRIST_IMAGE: (wrist_camera, image_size),
@@ -56,8 +55,7 @@ ee_joints_obs = observation.override(state_features={keys.EE_POSE: 7, keys.GRIP:
 
 # Pretrained DROID models read joints and gripper as separate observation keys and the language
 # prompt under `prompt` (see openpi `droid_policy.DroidInputs`).
-droid_obs = cfn.Config(
-    ObservationCodec,
+droid_obs = codecs.observation.override(
     state={openpi.JOINT_POSITION: {keys.JOINTS: 7}, openpi.GRIPPER_POSITION: {keys.GRIP: 1}},
     images={
         openpi.WRIST_IMAGE_LEFT: (keys.WRIST_IMAGE, (224, 224)),
@@ -152,11 +150,7 @@ class LiberoObservationCodec(Codec):
     def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
         frame = np.ascontiguousarray(np.asarray(inputs[input_key])[:, ::-1])
         w, h = self._image_size
-        return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return {self.IMAGE_SIZES: self._image_size}
+        return image.resize_with_pad_per_frame(w, h, image.Resample.BILINEAR, frame)
 
 
 libero_obs = cfn.Config(LiberoObservationCodec)

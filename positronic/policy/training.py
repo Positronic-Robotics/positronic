@@ -7,12 +7,28 @@ import numpy as np
 
 from positronic import geom, keys
 from positronic.dataset.episode import Episode
+from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, map_signals
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import change_frame, ee_frames
 from positronic.drivers.roboarm.models import EEFrame, ee_frames_entry
+from positronic.policy.codecs.metadata import LEROBOT_FEATURES, lerobot_image
 
 _QUAT = geom.Rotation.Representation.QUAT
+
+
+def _image_column(source: str, size: tuple[int, int], resample: image.Resample, episode: Episode):
+    return image.resize_with_pad(*size, signal=episode[source], method=resample)
+
+
+def image_observation(
+    images: dict[str, tuple[str, tuple[int, int]]], resample: image.Resample = image.Resample.BILINEAR
+) -> EpisodeTransform:
+    """Derive named padded image columns and their training feature descriptions."""
+    return Derive(
+        meta={LEROBOT_FEATURES: {name: lerobot_image(*size) for name, (_, size) in images.items()}},
+        **{name: partial(_image_column, source, size, resample) for name, (source, size) in images.items()},
+    )
 
 
 class ChangeEEFrame(EpisodeTransform):
