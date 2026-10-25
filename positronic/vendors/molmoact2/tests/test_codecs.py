@@ -5,9 +5,40 @@ from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.policy.codecs import ACTION
 from positronic.vendors import molmoact2
-from positronic.vendors.molmoact2.codecs import BimanualJointsAction, yam_bimanual
+from positronic.vendors.molmoact2.codecs import BimanualJointsAction, droid, droid_3cam, yam_bimanual
 
 TOP, LEFT, RIGHT = keys.EXTERIOR_IMAGE, 'image.wrist_left', 'image.wrist_right'
+
+
+def _droid_obs() -> dict:
+    return {
+        keys.JOINTS: np.zeros(7),
+        keys.GRIP: 0.0,
+        keys.EXTERIOR_IMAGE: np.full((4, 4, 3), 1, dtype=np.uint8),
+        keys.EXTERIOR_IMAGE_2: np.full((4, 4, 3), 2, dtype=np.uint8),
+        keys.WRIST_IMAGE: np.full((4, 4, 3), 3, dtype=np.uint8),
+        keys.TASK: 'pick up the bowl',
+    }
+
+
+def test_droid_3cam_sends_both_exterior_views_then_the_wrist():
+    encoded = droid_3cam.instantiate().encode(_droid_obs())
+
+    assert [int(img[0, 0, 0]) for img in encoded[molmoact2.IMAGES]] == [1, 2, 3]
+
+
+def test_droid_sends_the_first_exterior_view_in_both_exterior_slots():
+    encoded = droid.instantiate().encode(_droid_obs())
+
+    assert [int(img[0, 0, 0]) for img in encoded[molmoact2.IMAGES]] == [1, 1, 3]
+
+
+def test_droid_3cam_refuses_an_observation_without_a_second_exterior_view():
+    obs = _droid_obs()
+    del obs[keys.EXTERIOR_IMAGE_2]
+
+    with pytest.raises(KeyError, match=keys.EXTERIOR_IMAGE_2):
+        droid_3cam.instantiate().encode(obs)
 
 
 def _obs() -> dict:

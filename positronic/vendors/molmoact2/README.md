@@ -30,8 +30,8 @@ Or from a checkout:
 uv run --python 3.13 --extra molmoact2 python -m positronic.vendors.molmoact2.server
 ```
 
-The server serves the HuggingFace model through a named policy pipeline, the codec. MolmoAct2 ships one
-pipeline, `droid`, which is the default subcommand. The codec lives server-side, so clients send raw
+The server serves the HuggingFace model through a named policy pipeline, the codec. `droid` is the
+default subcommand; `droid_3cam` and `yam_bimanual` are the others. The codec lives server-side, so clients send raw
 observations and receive decoded joint commands. `--websocket`, `--grpc` and
 `--idle_timeout_min` are the server's flags: each wire carries the address it binds, so
 `--websocket.served_address.port` moves the WebSocket wire and
@@ -67,12 +67,16 @@ See the [offboard README](../../offboard/README.md) for the session-param rules.
 
 ## Codec
 
-A [codec](../../policy/codecs/README.md) maps raw recordings into the state/action space the model expects. MolmoAct2
-ships one, `droid` (source: [`codecs.py`](./codecs.py)):
+A [codec](../../policy/codecs/README.md) maps raw recordings into the state/action space the model expects. The DROID
+checkpoint takes three cameras, ordered `[exterior_1, exterior_2, wrist]` (source: [`codecs.py`](./codecs.py)):
 
 | Codec | Observation | Action |
 |-------|-------------|--------|
-| `droid` | 3 cameras (raw RGB, ordered `[exterior_1, exterior_2, wrist]`) + 8-D state `[joints(7), grip(1)]` + language task | Absolute joint positions (7) + grip → `JointPosition` command |
+| `droid_3cam` | `image.exterior`, `image.exterior_2`, `image.wrist` (raw RGB) + 8-D state `[joints(7), grip(1)]` + language task | Absolute joint positions (7) + grip → `JointPosition` command |
+| `droid` | `image.exterior` in both exterior slots, then `image.wrist`, for an eval with one exterior view; the rest as `droid_3cam` | as `droid_3cam` |
+
+`docker/Dockerfile.serve-molmoact2-droid` serves `droid_3cam`; its `PIPELINE` build arg, or `MOLMOACT2_PIPELINE`
+at run time, selects another.
 
 ## Bimanual YAM
 
