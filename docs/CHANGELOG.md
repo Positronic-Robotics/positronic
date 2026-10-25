@@ -1,15 +1,15 @@
 # Changelog
 
-## [0.4.0] - 2026-10-24
+## [0.4.0] - 2026-10-25
 
-This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.41.1, `positronic-evals` 0.1.2, `positronic-eval-vocabulary` 0.6.0 and `positronic-model-server` 0.3.0. `positronic-wire` 0.12.0 does not change, so the release skips it.
+This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.41.2, `positronic-evals` 0.2.0, `positronic-eval-vocabulary` 0.6.0 and `positronic-model-server` 0.3.1. `positronic-wire` 0.12.0 does not change, so the release skips it.
 
 | Distribution | Version |
 |---|---|
-| `positronic-platform-client` | 0.41.1 |
-| `positronic-evals` | 0.1.2 |
+| `positronic-platform-client` | 0.41.2 |
+| `positronic-evals` | 0.2.0 |
 | `positronic-eval-vocabulary` | 0.6.0 |
-| `positronic-model-server` | 0.3.0 |
+| `positronic-model-server` | 0.3.1 |
 | `positronic-wire` | 0.12.0 |
 
 ### Platform client
@@ -21,6 +21,7 @@ This release changes the platform API contract, and every `positronic` install o
 - `platform-register` tells an account that already has a key to set `POSITRONIC_PLATFORM_API_KEY` to it, and says that `platform-register --rotate` stops the old key
 - `competition-enter` shows what becomes public about the team and ends with `To join, run: competition-enter --yes`. It does not show the terms. The platform refuses the first submission until the team accepts the terms, and the refusal names `competition-enter --accept-terms=<version>` ([#989](https://github.com/Positronic-Robotics/positronic/pull/989))
 - `positronic account register` and `platform-register` print one sign-in line. When the identity provider sends a link that carries the code, the line gives that link, so you type no code. The line also gives the time until the code expires ([#991](https://github.com/Positronic-Robotics/positronic/pull/991))
+- When WorkOS signs the user in, the sign-in line of `positronic account register` and `platform-register` tells the user to look in the spam folder for the code mail. The competition guide names the sender, `no-reply@mail.phail.ai` ([#1027](https://github.com/Positronic-Robotics/positronic/pull/1027))
 - A submitted policy image gets one `1g.24gb` MIG slice of an RTX PRO 6000: 24192 MiB of memory and a quarter of the card's compute ([#996](https://github.com/Positronic-Robotics/positronic/pull/996))
 - A plan can state `start_pose: abc_init`, the start pose of each YAM arm in the ABC sim. `abc_init` is a `yam` pose, and `droid_reset` is a `franka` pose ([#1033](https://github.com/Positronic-Robotics/positronic/pull/1033))
 
@@ -31,12 +32,17 @@ This release changes the platform API contract, and every `positronic` install o
 - The openpi server sends no keepalive pings to its subprocess. Before, a first inference that compiled for more than about 40 s closed the connection with `1011 keepalive ping timeout`, and the server exited during its warmup ([#1010](https://github.com/Positronic-Robotics/positronic/pull/1010))
 - The Galaxea image uses FlashAttention 4 only on compute capability 9 and 10. On other cards, such as the RTX PRO 6000, its vision tower uses its own SDPA path. Before, every call failed there with `Operation creation failed` ([#1011](https://github.com/Positronic-Robotics/positronic/pull/1011))
 - A model server stops a session preparation when its client leaves. A preparation that waits for an outside event, such as a person who presses Ready, watches `Model.preparation_cancelled` and raises `PreparationCancelled`. A model that waits for no outside event needs no change ([#1008](https://github.com/Positronic-Robotics/positronic/pull/1008))
+- A rig, a recording and a pose policy state the frame of each pose signal in `ee_frames`: `{signal: {site, offset}}`, a site of the robot model and a transform from it. `ee_frames` replaces `control_frame` and `ee_frame`. No pose moves: every rig states site `default` with no offset. `REAL_ROBOT_TRANSFORM` and `SIM_ROBOT_TRANSFORM` read older recordings ([#1020](https://github.com/Positronic-Robotics/positronic/pull/1020))
+- At the start of an episode, the harness compares the `ee_frames` of the policy with those of the rig. A policy observes only the pose signals that it states at the site the rig reports. The harness refuses a policy that names another site, and a policy that states frames on a rig that states none, such as Kinova. A GR00T checkpoint that records the old `ee_frame` key is refused ([#1020](https://github.com/Positronic-Robotics/positronic/pull/1020))
+- `ChangeEEFrame` takes a site and a transform, and states the frame per key. Wire version 2 carries the site, and version 1 still decodes at `default` ([#1020](https://github.com/Positronic-Robotics/positronic/pull/1020))
+- `TransformImages` replaces `RestrictImageSize`. It takes explicit dimensions and a `ResizeMode`: `BOUND` shrinks within the bounds, `PAD` fits and pads to the exact size, and `STRETCH` resizes to the exact size. `StateObservationCodec` and `SelectObservationFields` replace `ObservationCodec`, `PackFields` replaces `PackObservationFields`, and `SplitActionChunk` replaces `UnpackActionChunk`. A remote codec of an older version still decodes. Server metadata does not carry `image_sizes` ([#975](https://github.com/Positronic-Robotics/positronic/pull/975))
 - `RemotePolicy.meta()` opens no session and returns only `type: remote`. Each run records the server metadata in the episode, under the same keys. `positronic eval run` calls `wait_for_server()` before the sweep, so a wrong stack or a refused session parameter fails at the first episode ([#1008](https://github.com/Positronic-Robotics/positronic/pull/1008))
 
 ### Evaluation
 - `positronic eval run --eval=<public eval> --output_dir=<dir>` labels the episodes that the run records and prints their score. It uses the same `positronic_evals` labelers and metric as the platform. Episodes from an earlier run in the same directory do not count ([#999](https://github.com/Positronic-Robotics/positronic/pull/999))
 - A run with `--output_dir` on an install without the telemetry extra logs one warning line with the reason, and no traceback ([#999](https://github.com/Positronic-Robotics/positronic/pull/999))
 - The static data of an eval episode names only the joint and pose signals that the episode records. Before, an episode with joint commands named `robot_command.pose`, which it does not record ([#1004](https://github.com/Positronic-Robotics/positronic/pull/1004))
+- `abc.yam_bimanual` runs the 29 ABC tasks that have a success evaluator, and `abc.yam_bimanual_multitask` the five tasks of the ABC multi-task sim policy. Each task runs 20 trials on the seeds of the ABC sim eval, and a run ranks on the mean of its task success rates. The `abc_label` labeler ends a trial on its recorded verdict ([#1019](https://github.com/Positronic-Robotics/positronic/pull/1019))
 - The harness records each instruction that the policy gets as the signal `eval.instruction`, at the first observation and at each change ([#786](https://github.com/Positronic-Robotics/positronic/pull/786))
 
 ### Simulation
