@@ -78,11 +78,9 @@ class Codec:
         @telemetry.traced(telemetry.component_name(self))
         def call(obs: Obs) -> Any:
             inputs = dict(obs)
-            prefix = inputs.pop(ACTION_PREFIX, None)
+            prefix = {ACTION_PREFIX: inputs.pop(ACTION_PREFIX)} if ACTION_PREFIX in inputs else {}
             encoded = encode(inputs)
-            if prefix is not None:
-                encoded = {**encoded, ACTION_PREFIX: prefix}
-            result = function(encoded)
+            result = function({**encoded, **prefix} if prefix else encoded)
             if result is None or (isinstance(result, Step) and not result.commands):
                 return result
             try:
