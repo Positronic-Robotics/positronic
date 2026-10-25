@@ -53,7 +53,7 @@ class IdentityProvider:
     token_url: str
     # Sent with the device-code request when set (RFC 8628 §3.1).
     scope: str | None
-    # A sign-in page that can mail the user a code names it here, so the prompt can send them to the spam folder too.
+    # Where to look for a code mail the sign-in page sends; None for a provider that sends no mail.
     code_mail_hint: str | None = None
 
 
