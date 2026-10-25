@@ -224,11 +224,14 @@ class Harness(pimm.ControlSystem):
         meta[keys.TASK] = task.instruction
         return meta
 
-    def _append(self, values: dict[str, Any], time: pimm.Time) -> None:
+    def _append(self, values: dict[str, Any], time: pimm.Time, stamp: pimm.Time | None = None) -> None:
+        """Append ``values`` at ``time``, and at ``stamp`` (default ``time``) on the harness timelines: its receipt,
+        else its emission."""
         if self._writer is None:
             return
-        world, wall = (RECEIVED_WORLD, RECEIVED_WALL) if RECEIVED_WORLD in time else (EMITTED_WORLD, EMITTED_WALL)
-        timestamps = pimm.Time(**time, **{HARNESS_WORLD: time[world], HARNESS_WALL: time[wall]})
+        stamp = time if stamp is None else stamp
+        world, wall = (RECEIVED_WORLD, RECEIVED_WALL) if RECEIVED_WORLD in stamp else (EMITTED_WORLD, EMITTED_WALL)
+        timestamps = pimm.Time(**time, **{HARNESS_WORLD: stamp[world], HARNESS_WALL: stamp[wall]})
         with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
             for name, value in values.items():
                 self._writer.append(name, value.copy() if isinstance(value, np.ndarray) else value, timestamps)
@@ -245,6 +248,11 @@ class Harness(pimm.ControlSystem):
     def _convert_and_record(
         self, name: str, message: pimm.Message, serializer: Serializer | None, step_ms: dict[str, float] | None = None
     ) -> dict[str, Any]:
+        stamp = None
+        if self._writer is not None and not message.updated:
+            assert self._clock is not None, 'an episode records only inside run'
+            # A held message arrived before this read, so it records at the read.
+            stamp = emission_time(self._clock)
         started_ns = time.perf_counter_ns()
         value = serializer(message.data) if serializer is not None else message.data
         values = {
@@ -254,7 +262,7 @@ class Harness(pimm.ControlSystem):
         }
         if step_ms is not None:
             step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = (time.perf_counter_ns() - started_ns) / 1e6
-        self._append(values, message.time)
+        self._append(values, message.time, stamp)
         return values
 
     def _sample(self, step_ms: dict[str, float] | None = None) -> None:

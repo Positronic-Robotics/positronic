@@ -1733,24 +1733,35 @@ def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_ha
     np.testing.assert_array_equal(LocalDataset(tmp_path)[0][POSITION].values(), [[10], [20]])
 
 
-def test_recording_keeps_first_receipt_times_and_does_not_change_messages(episode_harness):
-    h = episode_harness
-    h.observation.emit(1)
-    h.world.clock.advance_to_ns(1_000_000)
-    message = h.harness.observations[POSITION].read()
-    original_time = message.time
-    h.world.clock.advance_to_ns(2_000_000)
-    h.caller(Rollout(Task('move', None), Hold(), h.output_path))
-    next(h.loop)
-    h.world.clock.advance_to_ns(3_000_000)
-    next(h.loop)
-    records = [record for record in h.dataset.episodes[0].records if record[0] == POSITION]
-    assert len(records) == 1
-    _, _, timestamps = records[0]
-    assert timestamps[HARNESS_WORLD] == original_time[RECEIVED_WORLD] == 1_000_000
-    assert timestamps[HARNESS_WALL] == original_time[RECEIVED_WALL]
-    assert message.time is original_time
-    assert HARNESS_WORLD not in message.time and HARNESS_WALL not in message.time
+@pytest.mark.parametrize('name', [POSITION, GROUND_TRUTH])
+def test_a_held_input_records_once_at_the_read_and_keeps_its_receipt_times(name):
+    with _episode_ports(privileged=(GROUND_TRUTH,)) as h:
+        emitter, receiver = (
+            (h.privileged[name], h.harness.privileged[name])
+            if name == GROUND_TRUTH
+            else (h.observation, h.harness.observations[name])
+        )
+        emitter.emit(1)
+        h.world.clock.advance_to_ns(1_000_000)
+        message = receiver.read()
+        assert message is not None
+        original_time = message.time
+        h.world.clock.advance_to_ns(2_000_000)
+        h.caller(Rollout(Task('move', None), Hold(), h.output_path))
+        wall_before_ns = time.monotonic_ns()
+        next(h.loop)
+        wall_after_ns = time.monotonic_ns()
+        h.world.clock.advance_to_ns(3_000_000)
+        next(h.loop)
+        records = [record for record in h.dataset.episodes[0].records if record[0] == name]
+        assert len(records) == 1
+        _, _, timestamps = records[0]
+        assert timestamps[HARNESS_WORLD] == 2_000_000
+        assert wall_before_ns <= timestamps[HARNESS_WALL] <= wall_after_ns
+        assert timestamps[RECEIVED_WORLD] == original_time[RECEIVED_WORLD] == 1_000_000
+        assert timestamps[RECEIVED_WALL] == original_time[RECEIVED_WALL]
+        assert message.time is original_time
+        assert HARNESS_WORLD not in message.time and HARNESS_WALL not in message.time
 
 
 @pytest.mark.parametrize('timeline', [HARNESS_WORLD, HARNESS_WALL])

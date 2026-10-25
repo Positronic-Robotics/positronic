@@ -6,7 +6,8 @@ Import from `positronic.drivers.recording.ds_writer_agent`.
 
 `DsWriterAgent` records data collection and replay runs. Inference recording belongs to
 [`Harness`](../../policy/harness.py), which writes through the same dataset interfaces.
-Harness adds `harness.world` and `harness.wall`: first receipt for inputs, emission for commands.
+Harness adds `harness.world` and `harness.wall`: first receipt for a new input, the harness's read for a
+held input, emission for a command.
 These coordinates align inputs and commands while preserving the original message timestamps.
 The agent is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends updated inputs with their `pimm.Message.time` timestamps.
 
