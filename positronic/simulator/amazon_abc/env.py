@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 import abc_sim  # pyright: ignore[reportMissingImports] -- installed only in ABC's own venv
+import aperture
 import arm_action
 import mapping
 import mujoco
@@ -174,8 +175,8 @@ class AbcEnv(EnvProtocol):
             if joints is None or joints.shape != measured.shape or not np.all(np.isfinite(joints)):
                 joints = measured
             grip = action[protocol.arm_channel(protocol.TARGET_GRIP, arm.name)]
-            aperture = mapping.invert_grip(grip) if np.isfinite(grip) else self._last_reported_apertures[index]
-            per_arm.append(np.append(joints, aperture))
+            opening = aperture.flip_grip(grip) if np.isfinite(grip) else self._last_reported_apertures[index]
+            per_arm.append(np.append(joints, opening))
         return np.concatenate(per_arm).astype(np.float32)
 
     def _mounts(self) -> dict[str, list[float]]:
@@ -255,7 +256,7 @@ class AbcEnv(EnvProtocol):
                 ),
                 protocol.arm_channel(protocol.OBS_EEF_POS, arm.name): pos.astype(np.float32),
                 protocol.arm_channel(protocol.OBS_EEF_QUAT, arm.name): quat.astype(np.float32),
-                protocol.arm_channel(protocol.OBS_GRIP, arm.name): np.float32(mapping.invert_grip(per_arm[index, -1])),
+                protocol.arm_channel(protocol.OBS_GRIP, arm.name): np.float32(aperture.flip_grip(per_arm[index, -1])),
             })
         payload.update({name: np.ascontiguousarray(frame) for name, frame in obs[mapping.ABC_OBS_IMAGES].items()})
         return payload

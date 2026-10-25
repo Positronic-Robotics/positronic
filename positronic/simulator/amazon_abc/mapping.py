@@ -56,8 +56,3 @@ def task_eval_signals(task_eval: dict[str, Any]) -> dict[str, Any]:
             # A recorded signal holds a scalar or a 1-D vector per sample.
             signals[f'.{name}'] = array.ravel() if array.ndim else array[()]
     return signals
-
-
-def invert_grip(value: Any) -> float:
-    """Between positronic's closure (1 closed) and i2rt's aperture (1 open)."""
-    return 1.0 - float(np.clip(value, 0.0, 1.0))

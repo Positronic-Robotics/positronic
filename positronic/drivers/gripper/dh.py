@@ -4,6 +4,7 @@ from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
+from positronic.drivers.gripper import aperture
 from positronic.drivers.utils import Moves, grip_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
@@ -37,11 +38,11 @@ class DHGripper(pimm.ControlSystem):
     @staticmethod
     def _width(client) -> float:
         """How closed the fingers read back."""
-        return 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
+        return aperture.flip_grip(client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000)
 
     def _command(self, client, grip: float) -> None:
         """Put ``grip`` on the fingers, at the force and speed asked for."""
-        client.write_register(0x103, c_uint16(round((1 - grip) * 1000)).value, slave=1)
+        client.write_register(0x103, c_uint16(round(aperture.flip_grip(grip) * 1000)).value, slave=1)
         client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
         client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)
 

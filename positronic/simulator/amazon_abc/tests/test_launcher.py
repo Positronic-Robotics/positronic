@@ -46,6 +46,7 @@ def test_the_server_reaches_the_wire_modules_and_abc_itself(spawned):
     assert env['PYTHONPATH'].split(':') == [
         str(Path(launcher.__file__).parents[1] / 'env_server'),
         str(Path(launcher.__file__).parent),
+        str(Path(launcher.__file__).parents[2] / 'drivers' / 'gripper'),
         str(launcher._ABC_SRC),
     ]
 

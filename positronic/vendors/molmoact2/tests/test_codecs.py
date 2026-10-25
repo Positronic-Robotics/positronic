@@ -5,7 +5,7 @@ from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.policy.codecs import ACTION
 from positronic.vendors import molmoact2
-from positronic.vendors.molmoact2.codecs import BimanualJointsAction, MolmoAct2BimanualObservationCodec
+from positronic.vendors.molmoact2.codecs import BimanualJointsAction, yam_bimanual
 
 TOP, LEFT, RIGHT = keys.EXTERIOR_IMAGE, 'image.wrist_left', 'image.wrist_right'
 
@@ -24,7 +24,7 @@ def _obs() -> dict:
 
 
 def test_observation_packs_left_arm_first_with_vendor_grip_widths():
-    encoded = MolmoAct2BimanualObservationCodec().encode(_obs())
+    encoded = yam_bimanual.instantiate().encode(_obs())
 
     expected = np.concatenate([np.arange(6), [1.0], np.arange(6, 12), [0.0]]).astype(np.float32)
     np.testing.assert_array_equal(encoded[molmoact2.STATE], expected)
@@ -35,7 +35,7 @@ def test_observation_packs_left_arm_first_with_vendor_grip_widths():
 def test_action_splits_into_per_arm_joint_commands_and_positronic_grips():
     vector = np.concatenate([np.arange(6), [1.0], np.arange(6, 12), [0.25]]).astype(np.float32)
 
-    decoded = BimanualJointsAction().decode({ACTION: vector})
+    decoded = yam_bimanual.instantiate().decode({ACTION: vector})
 
     left, right = decoded['robot_command.left'], decoded['robot_command.right']
     assert isinstance(left, command.JointPosition) and isinstance(right, command.JointPosition)

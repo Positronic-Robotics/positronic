@@ -22,6 +22,7 @@ from positronic.simulator.env_server.launcher import (
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 _MAPPING_DIR = Path(__file__).parent
+_APERTURE_DIR = Path(__file__).parents[2] / 'drivers' / 'gripper'
 
 _ABC_REPO = 'https://github.com/amazon-far/abc.git'
 _ABC_COMMIT = '6c467cebcecf16a4dce79e6fd87a7ca2281c3ef0'
@@ -57,7 +58,7 @@ def ensure_abc(tasks: Sequence[str] | None) -> Path:
 def _spawn(host: str, port: int, tasks: Sequence[str] | None) -> subprocess.Popen:
     python = ensure_abc(tasks)
     command = [str(python), str(_ENV_SCRIPT), '--host', host, '--port', str(port)]
-    return subprocess.Popen(command, env=mujoco_server_env([_ENV_SERVER_DIR, _MAPPING_DIR, _ABC_SRC]))
+    return subprocess.Popen(command, env=mujoco_server_env([_ENV_SERVER_DIR, _MAPPING_DIR, _APERTURE_DIR, _ABC_SRC]))
 
 
 def serve_abc(tasks: Sequence[str] | None, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:

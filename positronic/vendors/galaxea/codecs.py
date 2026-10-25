@@ -6,13 +6,14 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm import command
-from positronic.policy.codecs import Codec
+from positronic.policy.codecs import Codec, FlipGrip
 from positronic.vendors.galaxea import protocol
 
 
 class DroidCodec(Codec):
-    """Map canonical 0=open, 1=closed grip to Galaxea's inverted convention in both directions.
+    """Map a DROID observation to G0.5 inputs, and a G0.5 prediction to a joint command and a grip target.
 
+    The grip passes through as it comes; ``droid`` composes ``FlipGrip`` for Galaxea's aperture (1 = open).
     An absent gripper prediction emits no gripper command, preserving the driver's last target.
     Arm predictions are required. The upstream processor owns resizing and normalization.
     """
@@ -61,7 +62,7 @@ class DroidCodec(Codec):
             },
             protocol.STATE: {
                 protocol.RIGHT_ARM: self._vector(data[self._joint_key], protocol.RIGHT_ARM_WIDTH, self._joint_key),
-                protocol.RIGHT_GRIPPER: 1.0 - grip,
+                protocol.RIGHT_GRIPPER: grip,
             },
             protocol.TASK: data[self._task_key],
             protocol.FREQUENCY: self.fps,
@@ -73,8 +74,11 @@ class DroidCodec(Codec):
         result = {keys.ROBOT_COMMAND: command.JointPosition(positions=joints)}
         if protocol.RIGHT_GRIPPER in data:
             grip = self._vector(data[protocol.RIGHT_GRIPPER], 1, protocol.RIGHT_GRIPPER)
-            result[keys.TARGET_GRIP] = float(np.clip(1.0 - grip[0], 0.0, 1.0))
+            result[keys.TARGET_GRIP] = float(np.clip(grip[0], 0.0, 1.0))
         return result
 
 
-droid = codecs.droid_execution.override(action=cfn.Config(DroidCodec))
+@cfn.config(codec=cfn.Config(DroidCodec))
+def droid(codec: DroidCodec):
+    """``codec`` under DROID impedance, with the grip in Galaxea's aperture."""
+    return codecs.droid_execution(action=FlipGrip() | codec)

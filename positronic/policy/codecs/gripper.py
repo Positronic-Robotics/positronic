@@ -87,12 +87,15 @@ class BinarizeGripInference(Codec):
         }
 
 
-class FlipGrip(Codec):
-    """Serve a checkpoint that speaks the inverted grip convention (1 = open) on the canonical
-    1 = closed wire: flips ``grip`` entering the model and ``target_grip`` leaving it.
+# The grip channels of a single-arm embodiment and of each arm of a two-arm one.
+_ARMS = (None, *obs_keys.BIMANUAL_ARMS)
+_GRIPS = tuple(obs_keys.arm_channel(obs_keys.GRIP, arm) for arm in _ARMS)
+_TARGET_GRIPS = tuple(obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in _ARMS)
 
-    HACK: exists only to keep checkpoints trained on inverted-grip sim data alive.
-    TODO: Drop it (and its ``flip_grip`` compose hook) when no served checkpoint needs it.
+
+class FlipGrip(Codec):
+    """Serve a model whose gripper speaks an aperture (1 = open) on positronic's 1 = closed wire: flips every
+    arm's ``grip`` entering the model and every arm's ``target_grip`` leaving it.
 
     Compose to the left of obs/action codecs::
 
@@ -103,17 +106,17 @@ class FlipGrip(Codec):
 
     def encode(self, data):
         # ``data`` belongs to the caller, so the flip goes on a copy.
-        if obs_keys.GRIP in data:
-            data = {**data, obs_keys.GRIP: 1.0 - data[obs_keys.GRIP]}
-        return data
+        flipped = {key: 1.0 - data[key] for key in _GRIPS if key in data}
+        return {**data, **flipped} if flipped else data
 
     @property
     def training_encoder(self) -> EpisodeTransform:
         return Identity()
 
     def _decode_single(self, data: dict) -> dict:
-        if obs_keys.TARGET_GRIP in data:
-            data[obs_keys.TARGET_GRIP] = 1.0 - data[obs_keys.TARGET_GRIP]
+        for key in _TARGET_GRIPS:
+            if key in data:
+                data[key] = 1.0 - data[key]
         return data
 
     def to_spec(self):

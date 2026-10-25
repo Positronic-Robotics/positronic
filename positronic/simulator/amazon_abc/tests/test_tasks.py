@@ -166,12 +166,6 @@ def test_the_task_metrics_drop_names_and_empty_lists():
     assert set(signals) == {'.reward'}
 
 
-def test_the_grip_conventions_are_inverses():
-    assert mapping.invert_grip(0.0) == 1.0
-    assert mapping.invert_grip(1.0) == 0.0
-    assert mapping.invert_grip(mapping.invert_grip(0.3)) == pytest.approx(0.3)
-
-
 def test_the_terminal_carries_the_envs_own_verdict():
     adapter = AbcAdapter(CAMERAS)
 

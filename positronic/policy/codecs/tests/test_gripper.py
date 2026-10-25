@@ -83,6 +83,18 @@ def test_flip_grip():
     ]
 
 
+def test_flip_grip_flips_the_grip_of_each_arm_of_a_two_arm_embodiment():
+    flip = FlipGrip()
+    left, right = (obs_keys.arm_channel(obs_keys.GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS)
+    obs = {left: 0.2, right: 1.0, obs_keys.TASK: 'fold'}
+    assert flip.encode(obs) == {left: pytest.approx(0.8), right: pytest.approx(0.0), obs_keys.TASK: 'fold'}
+    assert obs[left] == 0.2
+
+    targets = [obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS]
+    decoded = flip._decode_single(dict(zip(targets, (0.9, 0.25), strict=True)))
+    assert decoded == {targets[0]: pytest.approx(0.1), targets[1]: pytest.approx(0.75)}
+
+
 def test_flip_grip_composed_with_obs_and_action():
     obs = StateObservationCodec(state={'observation.state': {obs_keys.GRIP: 1}})
     action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, obs_keys.TARGET_GRIP, Rotation.Representation.QUAT)
