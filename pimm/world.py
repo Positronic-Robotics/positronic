@@ -96,16 +96,6 @@ class _SharedTime:
         self._size.value = len(payload)
 
 
-class _PipeManager(SyncManager):
-    """A ``SyncManager`` that also serves ``deque``, the store of each queue transport."""
-
-    deque: Callable[..., deque[Any]]
-
-
-# A full deque drops its oldest message in the call that appends, so a reader never finds the store empty.
-_PipeManager.register('deque', deque)
-
-
 class MultiprocessEmitter(SignalEmitter[T]):
     """Signal emitter that transparently bridges processes.
 
@@ -549,6 +539,16 @@ class _WallOnlyClock(SystemClock):
 
     def time(self) -> Time:
         return Time(wall=self.now_ns())
+
+
+class _PipeManager(SyncManager):
+    """A ``SyncManager`` that also serves ``deque``, the store of each queue transport."""
+
+    deque: Callable[..., deque[Any]]
+
+
+# A full deque drops its oldest message in the call that appends, so a reader never finds the store empty.
+_PipeManager.register('deque', deque)
 
 
 class World:

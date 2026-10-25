@@ -260,26 +260,6 @@ class DummySMValue(SMCompliant):
         self.value = struct.unpack('d', buffer[:8])[0]
 
 
-class ReadAfterEachCall:
-    """Stands for an emitter's message store, and makes ``reader`` read once after each call to the store."""
-
-    def __init__(self, store: Any, reader: SignalReceiver):
-        self._store = store
-        self._reader = reader
-        self.reads: list[Message | None] = []
-
-    def __getattr__(self, name: str) -> Any:
-        method = getattr(self._store, name)
-
-        def call(*args: Any, **kwargs: Any) -> Any:
-            try:
-                return method(*args, **kwargs)
-            finally:
-                self.reads.append(self._reader.read())
-
-        return call
-
-
 class TestEventReceiver:
     """Test the EventReceiver class."""
 
@@ -633,6 +613,25 @@ class TestWorld:
             assert self._read(reader).data == 'again'
 
     def test_a_read_during_an_emit_onto_a_full_queue_gets_the_new_message(self, monkeypatch):
+        class ReadAfterEachCall:
+            """Stands for an emitter's message store, and makes ``reader`` read once after each call to the store."""
+
+            def __init__(self, store: Any, reader: SignalReceiver):
+                self._store = store
+                self._reader = reader
+                self.reads: list[Message | None] = []
+
+            def __getattr__(self, name: str) -> Any:
+                method = getattr(self._store, name)
+
+                def call(*args: Any, **kwargs: Any) -> Any:
+                    try:
+                        return method(*args, **kwargs)
+                    finally:
+                        self.reads.append(self._reader.read())
+
+                return call
+
         with World() as world:
             emitter, reader = self._one_mp_pipe(world, TransportMode.QUEUE)
             emitter.emit('old')
