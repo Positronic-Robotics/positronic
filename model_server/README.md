@@ -172,10 +172,6 @@ selecting the whole result. Supply these selectors through `Session.output_image
 images. `serialization.encode_images` applies the same selections to observations without changing
 the source containers. A missing path fails instead of silently skipping compression.
 
-`tree.map_leaves(value, transform)` transforms leaves in nested mappings, lists and tuples.
-`tree.update_at(value, path, transform)` transforms one selected value, copying only its container path.
-These standard-library-only helpers leave image detection and conversion to the supplied function.
-
 The client component `encode_images` defaults to recursively JPEG-encoding `uint8` arrays shaped
 `(..., H, W, 3)` with positive height and width, including batches, inside mappings, lists and tuples.
 Supply `paths` to encode only selected values; `paths=[]` disables compression. `quality` sets the
