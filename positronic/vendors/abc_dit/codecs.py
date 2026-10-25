@@ -5,7 +5,6 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
-from PIL import Image as PilImage
 
 from positronic import keys
 from positronic.cfg import codecs
@@ -27,7 +26,7 @@ def _channels_first_view(key: str, inputs: dict[str, Any]) -> np.ndarray:
     if frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError(f"Image '{key}' must be HWC with 3 channels, got {frame.shape}")
     width, height = VIEW_SIZE
-    frame = image.resize_with_pad_per_frame(width, height, PilImage.Resampling.BILINEAR, frame)
+    frame = image.transform_frame(frame, width, height, mode=image.ResizeMode.PAD)
     return np.ascontiguousarray(frame.transpose(2, 0, 1))
 
 
