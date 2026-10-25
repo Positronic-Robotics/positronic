@@ -35,9 +35,13 @@ logger = logging.getLogger(__name__)
 
 
 class WithTraining(Codec):
-    """Expose an independent training transform through the legacy codec interface."""
+    """Expose an independent training transform through the legacy codec interface.
 
-    # TODO: Remove when the remaining exporters take training recipes instead of Codec.training_encoder.
+    **TODO: TEMPORARY ADAPTER — MUST BE REMOVED.**
+    Migrate remaining vendor presets and training consumers to independent recipes, following GR00T.
+    Then delete this adapter together with Codec.training_encoder, its composition and apply_codec.
+    """
+
     def __init__(self, inference: Codec, training: EpisodeTransform):
         self._inference = inference
         self._training = training
