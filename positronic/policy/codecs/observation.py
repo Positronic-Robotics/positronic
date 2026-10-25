@@ -85,30 +85,33 @@ class PackFields(Codec):
                 raise ValueError('Layout entries must have string keys')
             if isinstance(source, dict):
                 result[name] = PackFields._copy_layout(source)
-            elif isinstance(source, (list, tuple)) and all(type(part) in (str, int) for part in source):
-                result[name] = list(source)
-            else:
+                continue
+            if not isinstance(source, (list, tuple)) or any(type(part) not in (str, int) for part in source):
                 raise ValueError('Layout leaves must be source paths of string keys or integer indices')
+            result[name] = list(source)
         return result
 
     @staticmethod
     def _reshape(value: Any, dimensions: int, field: str) -> Any:
         """Add leading singleton dimensions for positive counts; remove them for negative counts."""
-        if dimensions >= 0:
-            if isinstance(value, np.ndarray):
+        if isinstance(value, np.ndarray):
+            if dimensions >= 0:
                 return value.reshape((1,) * dimensions + value.shape)
-            for _ in range(dimensions):
-                value = [value]
-        elif isinstance(value, np.ndarray):
             count = -dimensions
-            if value.ndim < count or any(size != 1 for size in value.shape[:count]):
+            if value.shape[:count] != (1,) * count:
                 raise ValueError(f'Field {field!r} requires {count} leading size-one dimensions')
             return value.reshape(value.shape[count:])
-        else:
-            for _ in range(-dimensions):
-                if not isinstance(value, (list, tuple)) or len(value) != 1:
-                    raise ValueError(f'Field {field!r} requires {-dimensions} leading size-one dimensions')
-                value = value[0]
+
+        if dimensions >= 0:
+            for _ in range(dimensions):
+                value = [value]
+            return value
+
+        count = -dimensions
+        for _ in range(count):
+            if not isinstance(value, (list, tuple)) or len(value) != 1:
+                raise ValueError(f'Field {field!r} requires {count} leading size-one dimensions')
+            value = value[0]
         return value
 
     @staticmethod
