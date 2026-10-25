@@ -184,7 +184,7 @@ This metadata tells the client:
 - `compress_images` — whether the client JPEG-encodes frames before
   sending. It is true unless the deployment sets it false.
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
-  records it in the policy metadata.
+  each run records it in the episode metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### Compatibility and deprecation
@@ -422,6 +422,9 @@ action = session.infer(observation)
 cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
 answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
 exception of the WebSocket or gRPC library.
+
+`wait_for_server()` returns once a server answers a probe, and opens no session. It retries as `new_session`
+does.
 
 A session recovers a connection that drops before the server's first answer. A later drop raises
 `wire.PeerDisconnected`.

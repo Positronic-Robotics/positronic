@@ -233,8 +233,13 @@ class RigShape(IntEnum):
 
 @unique
 class StartPose(IntEnum):
-    """Where the arm starts each episode: the rig's own pose, or the reset pose of the DROID data collection."""
+    """Where the arm starts each episode.
+
+    `nominal` is the rig's own pose. `droid_reset` is the reset pose of the DROID data collection, a
+    Franka pose. `abc_init` is the start pose of the ABC sim, a two-arm YAM pose.
+    """
 
     INVALID = 0
     nominal = 1
     droid_reset = 2
+    abc_init = 3

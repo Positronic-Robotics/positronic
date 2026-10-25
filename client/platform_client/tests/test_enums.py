@@ -103,7 +103,7 @@ REQUEST_TYPE_VALUES = {'INVALID': 0, 'nebius_competition': 1, 'private_eval': 2}
 
 RIG_SHAPE_VALUES = {'INVALID': 0, 'franka': 1, 'yam': 2, 'sim': 3}
 
-START_POSE_VALUES = {'INVALID': 0, 'nominal': 1, 'droid_reset': 2}
+START_POSE_VALUES = {'INVALID': 0, 'nominal': 1, 'droid_reset': 2, 'abc_init': 3}
 
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (BillingMode, {'INVALID': 0, 'packaged': 1, 'pay_as_you_go': 2}),

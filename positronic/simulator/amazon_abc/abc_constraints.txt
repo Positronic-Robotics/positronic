@@ -1,0 +1,23 @@
+# Dependency versions for the ABC env server's environment; ABC ships no lockfile.
+#
+# The launcher can run uv inside a positronic checkout, whose `exclude-newer` cutoff then applies, so regenerate in
+# one and check the ABC end-to-end run on the result:
+#   VIRTUAL_ENV=<abc .venv> uv pip install <the launcher's packages> && uv pip freeze   (then re-add this header)
+# The launcher pins the ABC source itself.
+absl-py==2.5.0
+cloudpickle==3.1.2
+docstring-parser==0.18.0
+etils==1.14.0
+farama-notifications==0.0.6
+fsspec==2026.6.0
+glfw==2.10.1
+gymnasium==1.3.0
+msgpack==1.2.1
+mujoco==3.8.1
+numpy==2.4.6
+pyopengl==3.1.10
+typeguard==4.5.2
+typing-extensions==4.16.0
+tyro==1.0.15
+websockets==16.1.1
+zipp==4.1.0

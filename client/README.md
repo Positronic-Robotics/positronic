@@ -13,7 +13,7 @@ the eval names and definitions (`evals/`). So a service that only speaks to the 
 its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.40.2"
+uv add "positronic-platform-client==0.41.1"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
@@ -168,13 +168,13 @@ max_cap_per_episode_sec: 300
 policy_preset: production
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
-start_pose: droid_reset                  # nominal | droid_reset
+start_pose: droid_reset                  # nominal | droid_reset | abc_init
 ```
 
-`start_pose` names where the arm starts each episode: `nominal`, the rig's own pose, or
-`droid_reset`, the reset pose of the DROID data collection. A plan that names none takes the pose
-of each task's catalogue entry. A `yam` rig opens each episode at its own pose, whatever the plan
-names.
+`start_pose` names where the arm starts each episode: `nominal`, the rig's own pose;
+`droid_reset`, the reset pose of the DROID data collection; or `abc_init`, the start pose of the
+ABC sim. `droid_reset` is a `franka` pose and `abc_init` is a `yam` pose, one per arm. A plan that
+names none takes the pose of each task's catalogue entry.
 
 An endpoint states where its policy comes from (`kind`) and the wire a session runs over (`wire`).
 Every kind names its wire. There is no default.

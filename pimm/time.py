@@ -138,6 +138,11 @@ class Clock(ABC):
         return int(self.now() * 1e9)
 
 
+def emission_time(clock: Clock) -> Time:
+    """``clock``'s time now, on the ``emitted.*`` timelines that stamp a message when it is emitted."""
+    return Time(**{f'{EMITTED_PREFIX}{name}': ns for name, ns in clock.time().items()})
+
+
 class SystemClock(Clock):
     def time(self) -> Time:
         now = self.now_ns()

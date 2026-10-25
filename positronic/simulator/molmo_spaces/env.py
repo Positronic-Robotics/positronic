@@ -36,8 +36,10 @@ _install_cgl_noop_stub()
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
+import arm_action  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
+import mujoco_state  # noqa: E402 -- positronic-free, on PYTHONPATH
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
 from server import EnvProtocol, EnvServer  # noqa: E402
@@ -229,7 +231,7 @@ class MolmoSpacesEnv(EnvProtocol):
         (action,) = actions.values()  # MolmoSpaces runs one scene per server, so this server serves one slot
         wire = protocol.single_arm(action)
         measured = self._measured_arm_q()
-        arm = mapping.wire_command_to_arm_action(
+        arm = arm_action.wire_command_to_arm_action(
             wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, current_eef=self._measured_eef_pose()
         )
         gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)
@@ -277,6 +279,7 @@ class MolmoSpacesEnv(EnvProtocol):
     def _observe(self, env_obs: dict[str, Any], *, arm_error: bool) -> dict[str, Any]:
         """Raw observations, including the grasp-site pose in the arm base frame."""
         arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
+        scene = self._robot_view.mj_data
         eef_pos, eef_rot = self._measured_eef_pose()
         eef_quat = np.zeros(4)
         mujoco.mju_mat2Quat(eef_quat, np.ascontiguousarray(eef_rot.reshape(9)))
@@ -288,21 +291,12 @@ class MolmoSpacesEnv(EnvProtocol):
             mapping.OBS_GRIP: np.float32(
                 mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
             ),
-            mapping.OBS_SIM_STATE: self._full_physics_state(),
+            mapping.OBS_SIM_STATE: mujoco_state.integration_state(scene.model, scene),
             protocol.OBS_ARM_ERROR: arm_error,
         }
         for name in self._camera_names:
             payload[name] = np.ascontiguousarray(env_obs[name])
         return payload
-
-    def _full_physics_state(self) -> np.ndarray:
-        """MuJoCo's ``mjSTATE_INTEGRATION`` vector for this scene."""
-        data = self._robot_view.mj_data
-        model = data.model
-        spec = mujoco.mjtState.mjSTATE_INTEGRATION
-        state = np.empty(mujoco.mj_stateSize(model, spec), dtype=np.float64)
-        mujoco.mj_getState(model, data, state, spec)
-        return state
 
     def close(self) -> None:
         if self._sampler is not None:

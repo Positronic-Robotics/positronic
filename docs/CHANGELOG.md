@@ -2,15 +2,15 @@
 
 ## [0.4.0] - 2026-10-24
 
-This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.40.2, `positronic-evals` 0.1.1 and `positronic-eval-vocabulary` 0.5.0. `positronic-wire` 0.12.0 and `positronic-model-server` 0.2.3 do not change, so the release skips them.
+This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.41.1, `positronic-evals` 0.1.2, `positronic-eval-vocabulary` 0.6.0 and `positronic-model-server` 0.3.0. `positronic-wire` 0.12.0 does not change, so the release skips it.
 
 | Distribution | Version |
 |---|---|
-| `positronic-platform-client` | 0.40.2 |
-| `positronic-evals` | 0.1.1 |
-| `positronic-eval-vocabulary` | 0.5.0 |
+| `positronic-platform-client` | 0.41.1 |
+| `positronic-evals` | 0.1.2 |
+| `positronic-eval-vocabulary` | 0.6.0 |
+| `positronic-model-server` | 0.3.0 |
 | `positronic-wire` | 0.12.0 |
-| `positronic-model-server` | 0.2.3 |
 
 ### Platform client
 - Every request names the client version in the `X-Positronic-Client-Version` header. The platform refuses a client older than 0.40.0, and the refusal names the version to install ([#1024](https://github.com/Positronic-Robotics/positronic/pull/1024))
@@ -22,6 +22,7 @@ This release changes the platform API contract, and every `positronic` install o
 - `competition-enter` shows what becomes public about the team and ends with `To join, run: competition-enter --yes`. It does not show the terms. The platform refuses the first submission until the team accepts the terms, and the refusal names `competition-enter --accept-terms=<version>` ([#989](https://github.com/Positronic-Robotics/positronic/pull/989))
 - `positronic account register` and `platform-register` print one sign-in line. When the identity provider sends a link that carries the code, the line gives that link, so you type no code. The line also gives the time until the code expires ([#991](https://github.com/Positronic-Robotics/positronic/pull/991))
 - A submitted policy image gets one `1g.24gb` MIG slice of an RTX PRO 6000: 24192 MiB of memory and a quarter of the card's compute ([#996](https://github.com/Positronic-Robotics/positronic/pull/996))
+- A plan can state `start_pose: abc_init`, the start pose of each YAM arm in the ABC sim. `abc_init` is a `yam` pose, and `droid_reset` is a `franka` pose ([#1033](https://github.com/Positronic-Robotics/positronic/pull/1033))
 
 ### Inference
 - A remote model can end its run. The server composes the `end_command` codec with its action codec, and the client stack declares `end_on_field`. When a played element carries `end` (`complete` or `give_up`), the run ends at the next observation ([#1006](https://github.com/Positronic-Robotics/positronic/pull/1006))
@@ -29,13 +30,17 @@ This release changes the platform API contract, and every `positronic` install o
 - The MolmoAct2 server does not start when it finds no CUDA GPU. Before, it served from the CPU, too slowly to act, and an eval scored 0 with no error. `--model.device_map=cpu` still runs it on the CPU ([#1014](https://github.com/Positronic-Robotics/positronic/pull/1014))
 - The openpi server sends no keepalive pings to its subprocess. Before, a first inference that compiled for more than about 40 s closed the connection with `1011 keepalive ping timeout`, and the server exited during its warmup ([#1010](https://github.com/Positronic-Robotics/positronic/pull/1010))
 - The Galaxea image uses FlashAttention 4 only on compute capability 9 and 10. On other cards, such as the RTX PRO 6000, its vision tower uses its own SDPA path. Before, every call failed there with `Operation creation failed` ([#1011](https://github.com/Positronic-Robotics/positronic/pull/1011))
+- A model server stops a session preparation when its client leaves. A preparation that waits for an outside event, such as a person who presses Ready, watches `Model.preparation_cancelled` and raises `PreparationCancelled`. A model that waits for no outside event needs no change ([#1008](https://github.com/Positronic-Robotics/positronic/pull/1008))
+- `RemotePolicy.meta()` opens no session and returns only `type: remote`. Each run records the server metadata in the episode, under the same keys. `positronic eval run` calls `wait_for_server()` before the sweep, so a wrong stack or a refused session parameter fails at the first episode ([#1008](https://github.com/Positronic-Robotics/positronic/pull/1008))
 
 ### Evaluation
 - `positronic eval run --eval=<public eval> --output_dir=<dir>` labels the episodes that the run records and prints their score. It uses the same `positronic_evals` labelers and metric as the platform. Episodes from an earlier run in the same directory do not count ([#999](https://github.com/Positronic-Robotics/positronic/pull/999))
 - A run with `--output_dir` on an install without the telemetry extra logs one warning line with the reason, and no traceback ([#999](https://github.com/Positronic-Robotics/positronic/pull/999))
 - The static data of an eval episode names only the joint and pose signals that the episode records. Before, an episode with joint commands named `robot_command.pose`, which it does not record ([#1004](https://github.com/Positronic-Robotics/positronic/pull/1004))
+- The harness records each instruction that the policy gets as the signal `eval.instruction`, at the first observation and at each change ([#786](https://github.com/Positronic-Robotics/positronic/pull/786))
 
 ### Simulation
+- `positronic eval run --eval=.sim.amazon_abc.all_tasks` runs a policy against ABC, the MuJoCo sim of the bimanual i2rt YAM: 33 tasks, 29 of them scored. `--eval.task` takes a task name, an alias, a prompt or a list. The ABC server runs in its own interpreter, at a pinned ABC commit ([#786](https://github.com/Positronic-Robotics/positronic/pull/786))
 - The MolmoSpaces server reports the end-effector pose relative to the arm base `fr3_link0`, as the real FR3 does. Before, `robot_state.ee_pose` was 0.58 m too high, and a `CartesianPosition` command moved the hand 0.58 m too low ([#972](https://github.com/Positronic-Robotics/positronic/pull/972))
 - The MolmoSpaces `benchmarks` eval takes `episode_paths`: episodes from several benchmarks, each as `<suite>/<scene_dataset>/<task_config>/<benchmark>/<episode index>`, run in list order ([#992](https://github.com/Positronic-Robotics/positronic/pull/992))
 - The MolmoSpaces eval reports the hand pose at the FR3 tool point, 103.4 mm from the flange, as the real FR3 does. Before, the pose was 51.6 mm further out and turned 45 deg about the approach axis. A Cartesian delta command at `default` works in the MolmoSpaces and RoboLab evals. Before, it failed on the first step ([#994](https://github.com/Positronic-Robotics/positronic/pull/994))
