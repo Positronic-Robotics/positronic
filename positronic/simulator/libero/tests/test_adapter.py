@@ -18,11 +18,11 @@ _QUAT = geom.Rotation.Representation.QUAT
 
 def _raw_obs(eef_pose: geom.Transform3D) -> dict:
     return {
-        'eef_pos': eef_pose.translation,
-        'eef_quat': eef_pose.rotation.as_quat_xyzw,
-        'joint_pos': np.zeros(7),
-        'joint_vel': np.zeros(7),
-        'grip': 0.0,
+        protocol.OBS_EEF_POS: eef_pose.translation,
+        protocol.OBS_EEF_QUAT: eef_pose.rotation.as_quat_xyzw,
+        protocol.OBS_JOINT_POS: np.zeros(7),
+        protocol.OBS_JOINT_VEL: np.zeros(7),
+        protocol.OBS_GRIP: 0.0,
     }
 
 

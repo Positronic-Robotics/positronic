@@ -5,12 +5,15 @@ from typing import Any
 import numpy as np
 import pytest
 from eval_vocabulary.episode import ABC_REWARD_SIGNAL
+from positronic_evals.evals import ABC_CONFIG, PUBLIC_EVALS, EvalRef, public_eval
 
 import pimm
 from positronic import geom, keys
 from positronic.cfg.eval.sim import amazon_abc as abc_cfg
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.ik import ee_frames
+from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
@@ -76,11 +79,11 @@ def _frame(**overrides: Any) -> dict[str, Any]:
     raw: dict[str, Any] = {mapping.OBS_SIM_STATE: np.zeros(4), mapping.OBS_TASK_EVAL: {}}
     for index, arm in enumerate(mapping.ARMS):
         raw.update({
-            protocol.arm_channel(mapping.OBS_JOINT_POS, arm): np.full(mapping.ARM_JOINTS, float(index)),
-            protocol.arm_channel(mapping.OBS_JOINT_VEL, arm): np.zeros(mapping.ARM_JOINTS),
-            protocol.arm_channel(mapping.OBS_EEF_POS, arm): np.array([0.1, 0.2 * index, 0.3]),
-            protocol.arm_channel(mapping.OBS_EEF_QUAT, arm): np.array([1.0, 0.0, 0.0, 0.0]),
-            protocol.arm_channel(mapping.OBS_GRIP, arm): np.float32(0.25 * index),
+            protocol.arm_channel(protocol.OBS_JOINT_POS, arm): np.full(mapping.ARM_JOINTS, float(index)),
+            protocol.arm_channel(protocol.OBS_JOINT_VEL, arm): np.zeros(mapping.ARM_JOINTS),
+            protocol.arm_channel(protocol.OBS_EEF_POS, arm): np.array([0.1, 0.2 * index, 0.3]),
+            protocol.arm_channel(protocol.OBS_EEF_QUAT, arm): np.array([1.0, 0.0, 0.0, 0.0]),
+            protocol.arm_channel(protocol.OBS_GRIP, arm): np.float32(0.25 * index),
         })
     for camera in CAMERAS.values():
         raw[camera] = np.zeros((3, 4, 6), dtype=np.uint8)
@@ -125,6 +128,20 @@ def test_the_eval_records_abcs_reward_under_the_signal_that_the_abc_labeler_read
     assert ABC_REWARD_SIGNAL in recorded
 
 
+@pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == ABC_CONFIG])
+def test_a_public_abc_eval_pins_the_trials_that_its_arguments_run(monkeypatch, name: EvalRef):
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{eval_keys.TASK: task} for task in spec[mapping.SELECT_TASKS]]
+
+    monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
+    definition = public_eval(name)
+
+    trials = abc_cfg.all_tasks.override(**definition.args).instantiate().tasks()
+
+    pinned = [(task.name, trial) for task in definition.tasks for trial in task.trials]
+    assert [(t.meta[eval_keys.TASK], {eval_keys.SEED: t.meta[eval_keys.SEED]}) for t in trials] == pinned
+
+
 def test_the_task_metrics_keep_every_numeric_entry_as_a_suffixed_signal():
     signals = mapping.task_eval_signals({
         'reward': 0.5,
@@ -151,12 +168,6 @@ def test_the_task_metrics_drop_names_and_empty_lists():
     assert set(signals) == {'.reward'}
 
 
-def test_the_grip_conventions_are_inverses():
-    assert mapping.invert_grip(0.0) == 1.0
-    assert mapping.invert_grip(1.0) == 0.0
-    assert mapping.invert_grip(mapping.invert_grip(0.3)) == pytest.approx(0.3)
-
-
 def test_the_terminal_carries_the_envs_own_verdict():
     adapter = AbcAdapter(CAMERAS)
 
@@ -174,6 +185,15 @@ def test_the_embodiment_takes_a_command_and_a_grip_per_arm():
         *(keys.arm_channel(keys.TARGET_GRIP, arm) for arm in mapping.ARMS),
     }
     assert ev.embodiment.simulated
+
+
+def test_the_embodiment_states_each_pose_at_the_site_of_the_yam_model_it_carries():
+    ev = abc_cfg.put_bottles.instantiate()
+
+    frames = ee_frames(ev.embodiment.static_meta)
+
+    assert frames
+    assert {frame.site for frame in frames.values()} == {GRIPPER_SITE}
 
 
 def test_an_arm_holds_its_last_command_and_the_other_arm_is_untouched():

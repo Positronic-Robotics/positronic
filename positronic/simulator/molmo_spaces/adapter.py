@@ -69,14 +69,14 @@ class MolmoAdapter(WireCommandAdapter):
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         grasp_pose = geom.Transform3D(
-            raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT])
+            raw_obs[protocol.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[protocol.OBS_EEF_QUAT])
         )
         ee_pose = self._measure(grasp_pose)
         state = MujocoFrankaState()
-        state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
+        state.encode(raw_obs[protocol.OBS_JOINT_POS], raw_obs[protocol.OBS_JOINT_VEL], ee_pose)
         if raw_obs[protocol.OBS_ARM_ERROR]:
             state.set_status(RobotStatus.ERROR)
-        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[mapping.OBS_GRIP])}
+        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[protocol.OBS_GRIP])}
         for logical, candidates in self._cameras.items():
             key = next((c for c in candidates if c in raw_obs), candidates[-1])
             obs[logical] = pimm.shared_memory.NumpySMAdapter.lazy_init(raw_obs[key], None)

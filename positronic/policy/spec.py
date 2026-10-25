@@ -87,6 +87,8 @@ COMPONENTS.update({
     'restrict_image_size': {1: Version(restrict_image_size_v1)},
 })
 COMPONENTS[ChunkedSchedule.WIRE_NAME][2] = Version(chunked_schedule_v2)
+# Version 1 takes no arguments and flips the one-arm channels.
+COMPONENTS[FlipGrip.WIRE_NAME][FlipGrip.ONE_ARM_VERSION] = Version(lambda: FlipGrip())
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:

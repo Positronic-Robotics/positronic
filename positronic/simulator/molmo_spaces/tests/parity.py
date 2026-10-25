@@ -29,12 +29,12 @@ from positronic.simulator.molmo_spaces.tests import parity_record
 # The native reference runs in the MolmoSpaces interpreter.
 _PARITY_NATIVE = Path(__file__).parent / 'parity_native.py'
 _HOLD = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
-_ARRAY_FIELDS = (mapping.OBS_JOINT_POS, mapping.OBS_JOINT_VEL, mapping.OBS_EEF_POS, mapping.OBS_EEF_QUAT)
+_ARRAY_FIELDS = (protocol.OBS_JOINT_POS, protocol.OBS_JOINT_VEL, protocol.OBS_EEF_POS, protocol.OBS_EEF_QUAT)
 
 
 def _drive_env_server(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int) -> dict:
     """Recorded observations and camera hashes from an env-server hold rollout."""
-    fields: dict[str, list] = {k: [] for k in (*_ARRAY_FIELDS, mapping.OBS_GRIP)}
+    fields: dict[str, list] = {k: [] for k in (*_ARRAY_FIELDS, protocol.OBS_GRIP)}
     camera_names: list[str] = []
     cam_hashes: dict[str, list[str]] = {}
 
@@ -67,7 +67,7 @@ def _drive_env_server(bench: mapping.BenchmarkPath, episode_index: int, seed: in
             conn.close()
     return {
         **{key: np.stack(fields[key]) for key in _ARRAY_FIELDS},
-        mapping.OBS_GRIP: np.array(fields[mapping.OBS_GRIP], dtype=np.float32),
+        protocol.OBS_GRIP: np.array(fields[protocol.OBS_GRIP], dtype=np.float32),
         parity_record.CAMERA_NAMES: camera_names,
         **{f'{parity_record.CAM_HASH_PREFIX}{name}': hashes for name, hashes in cam_hashes.items()},
         parity_record.TERMINATION_STEP: step,
@@ -121,7 +121,7 @@ def _assert_parity(native: dict, remote: dict, max_steps: int) -> None:
     assert list(native[parity_record.CAMERA_NAMES]) == remote[parity_record.CAMERA_NAMES], (
         'camera sets differ between the stacks'
     )
-    for field in (*_ARRAY_FIELDS, mapping.OBS_GRIP):
+    for field in (*_ARRAY_FIELDS, protocol.OBS_GRIP):
         n, p = native[field], remote[field]
         assert n.shape == p.shape, f'{field} shape differs: native {n.shape}, env-server {p.shape}'
         assert np.array_equal(n, p), f'{field} differs between native and env-server rollouts'

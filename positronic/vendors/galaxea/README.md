@@ -22,9 +22,9 @@ The server-side [codec](codecs.py) handles all embodiment conversion:
 | Direction | Conversion |
 | --- | --- |
 | Observation | Exterior + wrist RGB from HWC to CHW, zero dummy wrist view, 7 joint angles, instruction, 15 Hz |
-| Gripper state | Positronic `0=open, 1=closed` → Galaxea `1=open, 0=closed`, using `1 - grip` |
+| Gripper state | Positronic `0=open, 1=closed` → Galaxea `1=open, 0=closed`, using `FlipGrip` (`1 - grip`) |
 | Arm action | Absolute joint targets in radians → `JointPosition` with DROID impedance gains |
-| Gripper action | Galaxea `1=open, 0=closed` → Positronic `0=open, 1=closed`, using `clip(1 - predicted_grip, 0, 1)` |
+| Gripper action | Galaxea `1=open, 0=closed` → Positronic `0=open, 1=closed`, using `FlipGrip` on `clip(predicted_grip, 0, 1)` |
 | Missing gripper prediction | Emit no new gripper command; the driver retains its last target |
 | Missing arm / malformed prediction | Fail the request |
 

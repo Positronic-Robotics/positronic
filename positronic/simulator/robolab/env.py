@@ -452,11 +452,11 @@ class RobolabEnv(EnvProtocol):
         joint_vel = self._robot.data.joint_vel[:, self._joint_ids].cpu().numpy()
         return [
             {
-                keys.OBS_JOINT_POS: proprio['arm_joint_pos'][slot].cpu().numpy(),
-                keys.OBS_JOINT_VEL: joint_vel[slot],
-                keys.OBS_EEF_POS: proprio['eef_pos'][slot].cpu().numpy(),
-                keys.OBS_EEF_QUAT: proprio['eef_quat'][slot].cpu().numpy(),
-                keys.OBS_GRIP: float(proprio['gripper_pos'][slot, 0]),
+                protocol.OBS_JOINT_POS: proprio['arm_joint_pos'][slot].cpu().numpy(),
+                protocol.OBS_JOINT_VEL: joint_vel[slot],
+                protocol.OBS_EEF_POS: proprio['eef_pos'][slot].cpu().numpy(),
+                protocol.OBS_EEF_QUAT: proprio['eef_quat'][slot].cpu().numpy(),
+                protocol.OBS_GRIP: float(proprio['gripper_pos'][slot, 0]),
                 **{name: frame[slot].cpu().numpy() for name, frame in images.items()},
                 keys.SUBTASK: subtask[slot],
             }

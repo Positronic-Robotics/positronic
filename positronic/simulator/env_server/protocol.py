@@ -65,6 +65,13 @@ FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
 # Whether the environment reports an arm error in this observation.
 OBS_ARM_ERROR = 'arm_error'
+# The raw observation fields of one arm. A bimanual env names them per arm with ``arm_channel``. Each env states
+# the frame of its end-effector pose and the order of its quaternion.
+OBS_JOINT_POS = 'joint_pos'
+OBS_JOINT_VEL = 'joint_vel'
+OBS_EEF_POS = 'eef_pos'  # Metres.
+OBS_EEF_QUAT = 'eef_quat'
+OBS_GRIP = 'grip'  # Closure in [0, 1].
 # An env answers the server one entry per slot under this field; the wire to a client carries one slot's frame.
 SLOTS = 'slots'
 

@@ -147,9 +147,9 @@ class GalaxeaModel(Model):
 
 
 def _warm_observation() -> dict[str, Any]:
-    """A request as ``codecs.DroidCodec`` encodes one: black views, the arm at zero, the gripper open."""
+    """A request as ``codecs.droid`` encodes one: black views, the arm at zero, the gripper open."""
     view = np.zeros((224, 224, 3), dtype=np.uint8)
-    return codecs.DroidCodec().encode({
+    return codecs.droid().encode({
         keys.EXTERIOR_IMAGE: view,
         keys.WRIST_IMAGE: view,
         keys.JOINTS: np.zeros(protocol.RIGHT_ARM_WIDTH),
@@ -195,7 +195,7 @@ def pipeline(codec: codecs.DroidCodec, execution_steps: int = 16):
         Sequential(
             ChunkedSchedule(codec.fps, execution_steps / codec.fps), TransformImages(640, 640, mode=ResizeMode.BOUND)
         ),
-        codecs.droid(action=codec),
+        codecs.droid(codec=codec),
     )
 
 

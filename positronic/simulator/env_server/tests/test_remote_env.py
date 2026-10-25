@@ -26,6 +26,8 @@ from positronic.cli.eval.run import main
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.ik import ee_frames
+from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
@@ -45,7 +47,6 @@ from positronic.simulator.env_server.tests.mujoco_env import (
     remote_stack_cubes_eval,
 )
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE, SIM_STATE_INTEGRATION
-from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.tests.testing_coutils import drive_scheduler
 
@@ -474,9 +475,18 @@ class TestSingleArm:
 class TestRemoteEmbodimentChannels:
     """The embodiment names one set of channels per arm, and reports their signals as its static meta."""
 
-    def _embodiment(self, arms):
+    def _embodiment(self, arms, pose_site=GRIPPER_SITE):
         proxy = RemoteEnvControlSystem(_CommandOnlyAdapter(), nullcontext(('localhost', 0)))
-        return remote_embodiment(proxy, {keys.EXTERIOR_IMAGE: 'cam'}, descriptor='remote.test', arms=arms)
+        return remote_embodiment(
+            proxy, {keys.EXTERIOR_IMAGE: 'cam'}, descriptor='remote.test', pose_site=pose_site, arms=arms
+        )
+
+    @pytest.mark.parametrize('site', [GRIPPER_SITE, 'default'])
+    def test_each_pose_signal_sits_at_the_site_that_the_caller_names(self, site):
+        frames = ee_frames(self._embodiment(('left', 'right'), pose_site=site).static_meta)
+
+        assert len(frames) == 4
+        assert {frame.site for frame in frames.values()} == {site}
 
     def test_one_unnamed_arm_keeps_the_bare_names(self):
         embodiment = self._embodiment((None,))
@@ -566,11 +576,11 @@ class TestEnvControlFrame:
         adapter = RobolabAdapter(camera_dict={})
         eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
         adapter.observations({
-            robolab_keys.OBS_EEF_POS: eef.translation,
-            robolab_keys.OBS_EEF_QUAT: eef.rotation.as_quat,
-            robolab_keys.OBS_JOINT_POS: np.zeros(7),
-            robolab_keys.OBS_JOINT_VEL: np.zeros(7),
-            robolab_keys.OBS_GRIP: 0.0,
+            protocol.OBS_EEF_POS: eef.translation,
+            protocol.OBS_EEF_QUAT: eef.rotation.as_quat,
+            protocol.OBS_JOINT_POS: np.zeros(7),
+            protocol.OBS_JOINT_VEL: np.zeros(7),
+            protocol.OBS_GRIP: 0.0,
         })
         delta = geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
         cmd = roboarm_command.CartesianDelta(delta)
@@ -585,11 +595,11 @@ class TestEnvControlFrame:
         adapter = RobolabAdapter(camera_dict={})
         eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
         raw = {
-            'eef_pos': eef.translation,
-            'eef_quat': eef.rotation.as_quat,
-            'joint_pos': np.zeros(7),
-            'joint_vel': np.zeros(7),
-            'grip': 0.0,
+            protocol.OBS_EEF_POS: eef.translation,
+            protocol.OBS_EEF_QUAT: eef.rotation.as_quat,
+            protocol.OBS_JOINT_POS: np.zeros(7),
+            protocol.OBS_JOINT_VEL: np.zeros(7),
+            protocol.OBS_GRIP: 0.0,
         }
         reported = adapter.observations(raw)[keys.ROBOT_STATE].ee_pose
         commanded = _in_env_control_frame(
@@ -811,6 +821,17 @@ def test_the_canonical_contract_is_exactly_what_a_client_can_emit():
     ]
     tags = {_wire_command(command)[protocol.COMMAND_TYPE] for command in commands}
     assert tags == set(protocol.CANONICAL_COMMAND_TYPES)
+
+
+def test_every_sim_reports_an_arm_under_the_shared_wire_names():
+    names = (
+        protocol.OBS_JOINT_POS,
+        protocol.OBS_JOINT_VEL,
+        protocol.OBS_EEF_POS,
+        protocol.OBS_EEF_QUAT,
+        protocol.OBS_GRIP,
+    )
+    assert names == ('joint_pos', 'joint_vel', 'eef_pos', 'eef_quat', 'grip')
 
 
 @pytest.mark.timeout(60.0)

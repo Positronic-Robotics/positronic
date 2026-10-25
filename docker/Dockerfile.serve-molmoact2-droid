@@ -18,6 +18,8 @@
 ARG BASE_IMAGE=ghcr.io/astral-sh/uv:python3.13-bookworm
 ARG MODEL=allenai/MolmoAct2-DROID
 ARG MODEL_REVISION=d8c1abd8a27d8e859455bbe514df2bcc617db0fb
+# `droid_3cam` needs `image.exterior_2`; `droid` sends `image.exterior` in both exterior slots.
+ARG PIPELINE=droid_3cam
 
 # The weights stage does not build on the base, so a new base reuses the downloaded weights. Its own base is
 # pinned by digest: a moved tag would download the weights again and push them as a new layer.
@@ -83,9 +85,13 @@ ENV HF_HUB_OFFLINE=1 \
     UV_OFFLINE=1 \
     UV_NO_SYNC=1
 
+# After the weights, so another pipeline rebuilds no layer.
+ARG PIPELINE
+ENV MOLMOACT2_PIPELINE=${PIPELINE}
+
 EXPOSE 8000
 
 # `exec` makes the server pid 1, so it receives the stop signal.
 ENTRYPOINT ["/bin/sh", "-c", \
-  "exec /positronic/.venv/bin/python -m positronic.vendors.molmoact2.server droid \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.molmoact2.server \"$MOLMOACT2_PIPELINE\" \
    --model.hf_repo=\"$MOLMOACT2_MODEL\" \"$@\"", "--"]

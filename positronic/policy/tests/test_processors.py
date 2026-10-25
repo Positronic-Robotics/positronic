@@ -1242,7 +1242,7 @@ def test_wire_names_match_the_registered_components():
         'temporal_stack': TemporalStack(('v',), (0.0,)),
         'binarize_grip_training': BinarizeGripTraining(('grip',)),
         'binarize_grip_inference': BinarizeGripInference(),
-        'flip_grip': FlipGrip(),
+        'flip_grip': FlipGrip(arms=keys.BIMANUAL_ARMS),
         'metadata': Metadata({'action_fps': 15}),
         'transform_images': TransformImages(640, 640, mode=ResizeMode.BOUND),
         'observation_codec': ObservationCodecV1(state={}, images={}),
