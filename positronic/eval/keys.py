@@ -1,5 +1,6 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
+from eval_vocabulary import episode as vocabulary
 from eval_vocabulary.episode import BENCHMARK_TASK
 
 # How a trial ended, in its episode's statics: the harness's ``TERMINATED``, False when the budget ran out, the env's
@@ -34,6 +35,7 @@ CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
 # True when the operator replaced the trial's own instruction. The episode's ``keys.TASK`` holds the text that
 # the policy got.
 INSTRUCTION_OVERRIDDEN = 'eval.instruction_overridden'
+INSTRUCTION = vocabulary.INSTRUCTION
 
 # The conditions the trial ran under, stamped into its episode's statics. ``UNIVERSE`` is ``'sim'`` or
 # ``'real'``; ``TIMEOUT`` is absent from an episode whose task set no budget.
@@ -43,7 +45,7 @@ TIMEOUT = 'eval.timeout'
 
 # A trial's place in its eval's sweep, stamped into every trial's params and recorded in its episode's
 # statics. ``SEED`` also rides an env's reset token, where absent means the env draws its own.
-SEED = 'eval.seed'
+SEED = vocabulary.SEED
 TRIAL_INDEX = 'eval.trial_index'
 TRIAL_COUNT = 'eval.trial_count'
 

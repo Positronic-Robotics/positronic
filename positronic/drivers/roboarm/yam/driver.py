@@ -33,12 +33,6 @@ from ..ik import qpos_from_site_pose
 from ..models import YAM_JOINT_NAMES, YAM_SITE, bundled_yam_model
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
-# i2rt lives in the `yam` extra, which the type-check environment does not install.
-with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
-    from i2rt.motor_drivers.dm_driver import DMSingleMotorCanInterface  # pyright: ignore[reportMissingImports]
-    from i2rt.robots.get_robot import get_yam_robot  # pyright: ignore[reportMissingImports]
-    from i2rt.robots.utils import GripperType  # pyright: ignore[reportMissingImports]
-
 logger = logging.getLogger(__name__)
 
 # The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
@@ -55,6 +49,7 @@ _CONTROL_HZ = 100
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 _JOINT_LIMITS = 'joint_limits'  # the arm's (lower, upper) per joint in the vendor's get_robot_info()
+_YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 
 
 class ChainFault(RuntimeError):
@@ -77,6 +72,10 @@ def _chain_call() -> Iterator[None]:
 
 def _connect(channel: str, sim: bool, gravity_comp_factor: np.ndarray | None):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
+    # i2rt lives in the `yam` extra. Importing it here keeps the module, and `YamState` with it, loadable without it.
+    with vendor_import('i2rt', 'YAM support', hint=_YAM_EXTRA_HINT):
+        from i2rt.robots.get_robot import get_yam_robot  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+        from i2rt.robots.utils import GripperType  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
     return get_yam_robot(
         channel,
         gripper_type=GripperType.LINEAR_4310,
@@ -595,6 +594,11 @@ def _power_off(vendor: Any) -> None:
     if chain is None or not getattr(chain, 'motor_list', None):
         return  # i2rt's own sim chain and the fakes carry no motors
     motor_ids = [motor_id for motor_id, _ in chain.motor_list]
+    # Imported here for the reason `_connect` gives.
+    with vendor_import('i2rt', 'YAM support', hint=_YAM_EXTRA_HINT):
+        from i2rt.motor_drivers.dm_driver import (  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+            DMSingleMotorCanInterface,
+        )
     # rules-allow: swallowed-error — the run is over; a silent chain must not hide what ended it
     try:
         interface = DMSingleMotorCanInterface(

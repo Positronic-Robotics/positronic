@@ -22,6 +22,7 @@ import numpy as np
 
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.env_server.launcher import PYTHONPATH_ENV
 from positronic.simulator.molmo_spaces import launcher, mapping
 from positronic.simulator.molmo_spaces.tests import parity_record
 
@@ -77,7 +78,7 @@ def _drive_env_server(bench: mapping.BenchmarkPath, episode_index: int, seed: in
 def _native_env() -> dict[str, str]:
     """Subprocess environment with this test directory on PYTHONPATH."""
     env = launcher.molmo_subprocess_env()
-    return {**env, launcher.PYTHONPATH_ENV: os.pathsep.join([env[launcher.PYTHONPATH_ENV], str(Path(__file__).parent)])}
+    return {**env, PYTHONPATH_ENV: os.pathsep.join([env[PYTHONPATH_ENV], str(Path(__file__).parent)])}
 
 
 def _run_native(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int, out_path: Path) -> dict:
