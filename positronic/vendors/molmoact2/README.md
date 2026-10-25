@@ -75,7 +75,8 @@ checkpoint takes three cameras, ordered `[exterior_1, exterior_2, wrist]` (sourc
 | `droid_3cam` | `image.exterior`, `image.exterior_2`, `image.wrist` (raw RGB) + 8-D state `[joints(7), grip(1)]` + language task | Absolute joint positions (7) + grip → `JointPosition` command |
 | `droid` | `image.exterior` in both exterior slots, then `image.wrist`, for an eval with one exterior view; the rest as `droid_3cam` | as `droid_3cam` |
 
-`docker/Dockerfile.serve-molmoact2-droid` serves `droid_3cam`.
+`docker/Dockerfile.serve-molmoact2-droid` serves `droid_3cam`; its `PIPELINE` build arg, or `MOLMOACT2_PIPELINE`
+at run time, selects another.
 
 ## Bimanual YAM
 
