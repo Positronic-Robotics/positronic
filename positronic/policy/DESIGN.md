@@ -180,9 +180,9 @@ The policy run is a reader of observations and a writer of commands.
 Everything around it is asynchronous, but each resumption is synchronous:
 the run processes an observation and returns control to the framework.
 
-- Each resumption receives observations. It yields commands to execute now
-  (possibly none), together with the requested time of the next call, or it
-  returns.
+- Each resumption receives observations. It yields named outputs, together with
+  the requested time of the next call, or it returns. Outputs can include robot
+  commands and values consumed by an enclosing processor.
 - The run ends the episode when it returns. It returns a `PolicyEnd`:
   `COMPLETE` when it thinks that it did the task, and `GIVE_UP` when it stops
   before that. This is a claim, not a verdict. A return after the time limit
@@ -192,7 +192,8 @@ the run processes an observation and returns control to the framework.
 - Observations contain the latest available sensor values, task, and rig descriptor.
   They form a read-only snapshot: later sensor updates must not change an earlier
   input. Current time comes from the runtime, separately from observations.
-- Returned commands are emitted towards the robot driver immediately.
+- Outputs matching the embodiment's command ports are emitted towards the robot
+  driver immediately. Other outputs are not sent to hardware.
 - Observations and commands are named channels. A channel value can be
   of any type, structured or unstructured (a robot command, an image).
 - The episode clock never goes backwards. A completion can cause another
@@ -357,7 +358,7 @@ Commands = Mapping[str, Any]
 
 @dataclass
 class Step:
-    commands: Commands
+    outputs: Mapping[str, Any]
     resume_at_ns: int
 
 
@@ -469,6 +470,51 @@ components winning on shared keys.
 
 Sequential closes the runs it creates. External dependencies remain owned by
 their caller. `Codec.wrap` does not take ownership of the child it wraps.
+
+## Prefetching selected history
+
+`Prefetch` wraps a scheduling policy and collects the configured observation fields on every tick.
+The child publishes its next inference deadline as a named `Step.outputs` entry; no caller reads its
+internal state. The same key stamps each inference request with the planned deadline, so a fault
+that replans immediately cannot accidentally use the previous plan's cached samples. A false
+readiness input postpones inference while the scheduler continues playing its current actions.
+
+```python
+from positronic.policy.keys import NEXT_INFERENCE_NS
+from positronic.policy.processors import ChunkedSchedule, Prefetch
+
+local = Prefetch(
+    ChunkedSchedule(fps=10, timing_key=NEXT_INFERENCE_NS),
+    fields=('camera',),
+    offsets_sec=(-0.4, -0.3, -0.2, -0.1, 0.0),
+    lead_sec=0.25,
+)
+```
+
+For a deadline at 1.0 s, the upload at 0.75 s contains samples for 0.6 and 0.7 s. If inference starts
+at 1.003 s, those samples stay fixed; the remaining samples use offsets from 1.003 s. Each target
+selects the latest available frame at or before it. Only the configured samples are uploaded, not
+all frames observed during the chunk. The first inference sends its history directly.
+
+The upload is an ordinary asynchronous call to the supplied `infer`, with a `cache` argument. Its
+result maps field names to server-issued IDs. The final inference includes these IDs under
+`cached_values` and sends only the remaining array slices. The server joins the cached prefix and
+fresh tail before its observation codec or model runs. See the [cache contract](../offboard/README.md#cached-history).
+
+A pending upload postpones inference; history collection and action playback continue. An empty
+upload result declines caching. A changed inference deadline uses fresh history, as does an anchor
+more than `max_lateness_sec` old (default 1 s). A missing server reference retries once with the same
+selected samples in full. Upload failures propagate. Closing a run cancels queued uploads.
+
+Put codecs outside `Prefetch` or on the server. A codec inside it would also receive cache calls
+and scheduler control fields. `Prefetch` consumes the child's deadline output before returning the
+remaining outputs to an outer codec. Codecs decode outputs as a whole; they do not implicitly
+preserve arbitrary fields.
+
+The declaration contains constructor values and one nested child declaration. `to_spec()` produces
+JSON-compatible data; `from_spec()` reconstructs the child and wrapper, including `latest` versions.
+Runtime state, callbacks and cached IDs are not part of this declaration. `RemotePolicy` uses its
+ordinary inference path for both cache calls and action inference.
 
 ## Deferred, not to decide now
 

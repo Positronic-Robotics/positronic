@@ -20,14 +20,6 @@ from positronic.utils.versions import Version
 CURRENT_VERSION = ProtocolVersion.V2
 VERSIONS = {version.value: Version(version) for version in (ProtocolVersion.V1, ProtocolVersion.V2)}
 MESSAGE = 'message'
-# A context push: image stacks a client sends beside the session ID, in place of an observation, before the request
-# that holds their frames. The server holds the frames of the session's last push and answers with ``CONTEXT``: the
-# count of frames it holds. A request sends a held frame as its digest.
-CONTEXT = 'context'
-# The answer to a request that sends a frame as a digest the server does not hold. The model does not run.
-REFERENCE_MISS = 'reference_miss'
-# The version of the context push that a server declares in its ``META``, under ``policy.keys.CONTEXT_PUSH``.
-CONTEXT_PUSH_VERSION = 1
 
 
 _CMD = b'__cmd__'
@@ -39,10 +31,10 @@ def _pack(obj):
     return serialization.pack(obj)
 
 
-def _unpack(obj, held: cabc.Mapping[bytes, np.ndarray] | None = None, decoded: dict[bytes, np.ndarray] | None = None):
+def _unpack(obj):
     if _CMD in obj:
         return command.from_wire(obj[_CMD])
-    return serialization.unpack(obj, held, decoded)
+    return serialization.unpack(obj)
 
 
 def serialise(obj: Any) -> bytes:
@@ -52,14 +44,6 @@ def serialise(obj: Any) -> bytes:
 
 
 deserialise = functools.partial(msgpack.unpackb, object_hook=_unpack)
-
-
-def deserialise_with_frames(
-    data: bytes, held: cabc.Mapping[bytes, np.ndarray], decoded: dict[bytes, np.ndarray]
-) -> Any:
-    """One message whose JPEG frames may be digests of ``held`` frames. Each frame decoded from its bytes goes
-    into ``decoded`` under its digest; see ``serialization.unpack``."""
-    return msgpack.unpackb(data, object_hook=functools.partial(_unpack, held=held, decoded=decoded))
 
 
 def _as_wire(value: Any) -> Any:

@@ -1,7 +1,6 @@
 """Scheduling, fault gating, temporal history, and deliverable stack specifications."""
 
 import json
-import weakref
 from concurrent.futures import Future
 from datetime import date
 from sys import maxsize
@@ -20,7 +19,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, JointPosition,
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
-from positronic.policy.base import ContextPushResult, Policy, PolicyEnd, Step
+from positronic.policy.base import Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
@@ -50,10 +49,10 @@ from positronic.policy.processors import (
     DurationEstimate,
     DurationEstimateRun,
     PauseOnUnavailable,
+    Prefetch,
     PrefixSampling,
     RTCSchedule,
     TemporalStack,
-    _StackBuffer,
 )
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Deprecation, Version
@@ -109,20 +108,20 @@ def test_temporal_history_padding_sampling_and_fresh_runs(execution, pad_start):
     run = runtime.start(definition)
     frame = np.array([1])
     first = run.send({POSITION: frame})
-    np.testing.assert_array_equal(first.commands[POSITION][:, 0], [1, 1, 1] if pad_start else [1])
+    np.testing.assert_array_equal(first.outputs[POSITION][:, 0], [1, 1, 1] if pad_start else [1])
     frame[0] = 2
     clock.advance_to_ns(100_000_000)
     second = run.send({POSITION: frame})
-    np.testing.assert_array_equal(second.commands[POSITION][:, 0], [1, 1, 2] if pad_start else [1, 2])
+    np.testing.assert_array_equal(second.outputs[POSITION][:, 0], [1, 1, 2] if pad_start else [1, 2])
     frame[0] = 3
     clock.advance_to_ns(200_000_000)
     third = run.send({POSITION: frame})
-    np.testing.assert_array_equal(third.commands[POSITION][:, 0], [1, 2, 3])
+    np.testing.assert_array_equal(third.outputs[POSITION][:, 0], [1, 2, 3])
     run.close()
     fresh = runtime.start(definition)
     try:
         reset = fresh.send({POSITION: frame})
-        np.testing.assert_array_equal(reset.commands[POSITION][:, 0], [3, 3, 3] if pad_start else [3])
+        np.testing.assert_array_equal(reset.outputs[POSITION][:, 0], [3, 3, 3] if pad_start else [3])
     finally:
         fresh.close()
 
@@ -134,7 +133,7 @@ def test_temporal_history_carries_the_last_sample_before_each_offset(execution):
         for ns, value in [(0, 1), (150_000_000, 2), (300_000_000, 3)]:
             clock.advance_to_ns(ns)
             result = run.send({POSITION: np.array([value])})
-        np.testing.assert_array_equal(result.commands[POSITION][:, 0], [1, 2, 3])
+        np.testing.assert_array_equal(result.outputs[POSITION][:, 0], [1, 2, 3])
     finally:
         run.close()
 
@@ -241,7 +240,7 @@ def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(exec
     emitted = []
     for now in (0, 100_000_000, 350_000_000, 400_000_000):
         clock.advance_to_ns(now)
-        emitted.append(run.send({}).commands[MOTOR])
+        emitted.append(run.send({}).outputs[MOTOR])
     assert emitted == [0, 1, 3, 4]
     prefix = eval_keys.SCHEDULE
     assert runtime.metadata_snapshot() == {
@@ -272,7 +271,7 @@ def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
     emitted = []
     for now in (0, 600_000_000):
         clock.advance_to_ns(now)
-        emitted.append(run.send({}).commands[MOTOR])
+        emitted.append(run.send({}).outputs[MOTOR])
     run.close()
     assert emitted == [0, 0]
     prefix = eval_keys.SCHEDULE
@@ -288,7 +287,7 @@ def test_a_new_chunk_excludes_the_gap_from_the_previous_chunk(execution):
     try:
         for now in (0, 100_000_000, 300_000_000, 305_000_000):
             clock.advance_to_ns(now)
-            emitted.append(run.send({}).commands.get(MOTOR))
+            emitted.append(run.send({}).outputs.get(MOTOR))
     finally:
         run.close()
     assert emitted == [0, 1, 0, None]
@@ -341,287 +340,6 @@ def test_empty_chunks_request_an_immediate_retry(execution):
     run.close()
 
 
-def _context_schedule(
-    runtime,
-    calls,
-    offsets,
-    lead_sec=0.25,
-    *,
-    stacked=True,
-    inference_lead=None,
-    chunk_size=10,
-    outcome=ContextPushResult.PUSHED,
-):
-    """Chunks at 10 fps under ``TemporalStack``; ``calls`` records each call's time, kind and frames."""
-
-    def infer(obs, *, context_only=False):
-        frames = np.asarray(obs[POSITION])[:, 0].tolist() if stacked else None
-        calls.append((runtime.time_ns // 1_000_000, context_only, frames))
-        return outcome if context_only else [{MOTOR: i} for i in range(chunk_size)]
-
-    schedule = ChunkedSchedule(fps=10, context_lead_sec=lead_sec, inference_lead=inference_lead)
-    return runtime.start(Sequential(TemporalStack((POSITION,), offsets), schedule) if stacked else schedule, infer)
-
-
-# Every 50 ms, plus a frame at 601 ms that only a request timed from its own late tick would pick for 0.6 s.
-CONTEXT_TICKS_MS = [*range(0, 601, 50), 601, *range(650, 951, 50), 1003]
-
-
-def _drive(run, clock, ticks_ms=CONTEXT_TICKS_MS):
-    steps = {}
-    for ms in ticks_ms:
-        clock.advance_to_ns(ms * 1_000_000)
-        steps[ms] = run.send({POSITION: np.array([ms])})
-    return steps
-
-
-def test_a_context_push_sends_the_settled_frames_and_the_request_repeats_them(execution):
-    runtime, clock = execution
-    calls = []
-    run = _context_schedule(runtime, calls, (-0.4, -0.3, -0.2, -0.1, 0.0))
-    try:
-        steps = _drive(run, clock)
-    finally:
-        run.close()
-    # The push comes 0.25 s before the chunk ends at 1 s, and holds the offsets whose time counted from 1 s has
-    # passed: 0.6 s and 0.7 s. The request repeats them, and times the others from its own tick at 1.003 s.
-    assert calls == [(0, False, [0, 0, 0, 0, 0]), (750, True, [600, 700]), (1003, False, [600, 700, 800, 900, 1003])]
-    assert steps[700].resume_at_ns == 750_000_000
-
-
-def test_context_upload_precedes_early_inference_and_reuses_its_frames(execution):
-    runtime, clock = execution
-    calls = []
-    run = _context_schedule(runtime, calls, (-0.4, -0.3, -0.2, -0.1, 0.0), inference_lead=ConstantDuration(0.2))
-    try:
-        steps = _drive(run, clock, [*range(0, 401, 50), 401, *range(450, 751, 50), 803])
-    finally:
-        run.close()
-    assert steps[500].resume_at_ns == 550_000_000
-    assert calls == [(0, False, [0, 0, 0, 0, 0]), (550, True, [400, 500]), (803, False, [400, 500, 600, 700, 803])]
-
-
-def test_a_skipped_context_upload_keeps_fresh_sampling(execution):
-    runtime, clock = execution
-    calls = []
-    run = _context_schedule(runtime, calls, (-0.4, -0.3, -0.2, -0.1, 0.0), outcome=ContextPushResult.SKIPPED)
-    try:
-        _drive(run, clock)
-    finally:
-        run.close()
-    assert calls[-1] == (1003, False, [601, 700, 800, 900, 1003])
-
-
-def test_a_short_chunk_wakes_immediately_for_its_context_upload(execution):
-    runtime, clock = execution
-    calls = []
-    run = _context_schedule(runtime, calls, (-0.4, 0.0), chunk_size=1)
-    try:
-        assert run.send({POSITION: np.array([0])}) == Step({MOTOR: 0}, 0)
-        assert run.send({POSITION: np.array([0])}).resume_at_ns == 100_000_000
-        clock.advance_to_ns(100_000_000)
-        run.send({POSITION: np.array([100])})
-    finally:
-        run.close()
-    assert calls == [(0, False, [0, 0]), (0, True, [0]), (100, False, [0, 100])]
-
-
-def test_a_completed_context_upload_releases_its_observation(execution):
-    runtime, clock = execution
-    pushed = []
-
-    def infer(obs, *, context_only=False):
-        if context_only:
-            obs[POSITION]
-            pushed.append(weakref.ref(obs))
-            return ContextPushResult.PUSHED
-        return [{MOTOR: i} for i in range(10)]
-
-    run = runtime.start(
-        Sequential(TemporalStack((POSITION,), (-0.4, 0.0)), ChunkedSchedule(fps=10, context_lead_sec=0.25)), infer
-    )
-    try:
-        _drive(run, clock, [0, 750, 800])
-        assert len(pushed) == 1 and pushed[0]() is None
-    finally:
-        run.close()
-
-
-@pytest.mark.parametrize(
-    'schedule',
-    [
-        ChunkedSchedule(fps=10),
-        ChunkedSchedule(fps=10, context_lead_sec=0.025),
-        RTCSchedule(fps=10, call_after_sec=0.1, prefix_duration=ConstantDuration()),
-    ],
-)
-def test_pending_inference_releases_unsampled_history(execution, monkeypatch, schedule):
-    runtime, clock = execution
-    unused = []
-    submitted = []
-    pending = Future()
-    append = _StackBuffer.append
-
-    def record_history(buffer, now, values):
-        append(buffer, now, values)
-        if now == 0.05:
-            unused.append(weakref.ref(buffer._entries[-1][1][POSITION]))
-
-    def submit(function, obs, *args):
-        submitted.append(obs)
-        if len(submitted) == 1:
-            answered = Future()
-            answered.set_result([{MOTOR: 0}])
-            return _UnchargedAnswer(answered)
-        return _UnchargedAnswer(pending)
-
-    monkeypatch.setattr(_StackBuffer, 'append', record_history)
-    monkeypatch.setattr(runtime, 'submit', submit)
-    run = runtime.start(Sequential(TemporalStack((POSITION,), (-0.1, 0.0)), schedule), Mock())
-    try:
-        _drive(run, clock, [0, 0, 50, 100, 300])
-        assert len(unused) == 1 and unused[0]() is None
-        np.testing.assert_array_equal(submitted[1][POSITION], [[0], [100]])
-    finally:
-        run.close()
-
-
-def test_recovery_discards_the_context_anchor_and_requests_fresh_frames(execution):
-    runtime, clock = execution
-    calls = []
-    run = _context_schedule(runtime, calls, (-0.4, 0.0))
-    try:
-        _drive(run, clock, [0, 400, 500, 600, 750])
-        clock.advance_to_ns(800_000_000)
-        step = run.send({POSITION: np.array([800]), keys.ROBOT_STATUS: RobotStatus.ERROR})
-        assert step.commands == {MOTOR: 0}
-        assert calls[-1] == (800, False, [400, 800])
-    finally:
-        run.close()
-
-
-@pytest.mark.parametrize(
-    'finished_ms, expected_frames', [(1403, [600, 700, 1200, 1300, 1403]), (2503, [2100, 2200, 2300, 2400, 2503])]
-)
-def test_a_slow_context_upload_keeps_sampling_until_inference_can_start(
-    execution, monkeypatch, finished_ms, expected_frames
-):
-    runtime, clock = execution
-    upload = Future()
-    calls = []
-    submit = runtime.submit
-
-    def submit_with_delayed_upload(function, obs, *, context_only=False):
-        if context_only:
-            function(obs, context_only=True)
-            return _UnchargedAnswer(upload)
-        return submit(function, obs)
-
-    monkeypatch.setattr(runtime, 'submit', submit_with_delayed_upload)
-    run = _context_schedule(runtime, calls, (-0.4, -0.3, -0.2, -0.1, 0.0))
-    try:
-        _drive(run, clock, range(0, finished_ms, 50))
-        assert calls == [(0, False, [0, 0, 0, 0, 0]), (750, True, [600, 700])]
-        upload.set_result(ContextPushResult.PUSHED)
-        _drive(run, clock, [finished_ms])
-        assert calls[-1] == (finished_ms, False, expected_frames)
-    finally:
-        run.close()
-
-
-def test_a_context_push_waits_for_a_settled_offset(execution):
-    runtime, clock = execution
-    calls = []
-    run = _context_schedule(runtime, calls, (-0.1, 0.0))
-    try:
-        _drive(run, clock)
-    finally:
-        run.close()
-    # 0.9 s has not passed 0.25 s before the end, so there is no push, and the request is timed from its own tick.
-    assert calls == [(0, False, [0, 0]), (1003, False, [900, 1003])]
-
-
-def test_a_schedule_without_a_temporal_stack_makes_no_push_and_says_so(execution, caplog):
-    runtime, clock = execution
-    calls = []
-    run = _context_schedule(runtime, calls, (), stacked=False)
-    try:
-        _drive(run, clock)
-    finally:
-        run.close()
-    assert [(ms, context_only) for ms, context_only, _ in calls] == [(0, False), (1003, False)]
-    assert 'no context push' in caplog.text
-
-
-def test_a_failed_push_fails_the_episode(execution):
-    runtime, clock = execution
-
-    def infer(obs, *, context_only=False):
-        if context_only:
-            raise RuntimeError('push failed')
-        return [{MOTOR: i} for i in range(10)]
-
-    run = runtime.start(
-        Sequential(TemporalStack((POSITION,), (-0.4, 0.0)), ChunkedSchedule(fps=10, context_lead_sec=0.25)), infer
-    )
-    try:
-        with pytest.raises(RuntimeError, match='push failed'):
-            _drive(run, clock)
-    finally:
-        run.close()
-
-
-def test_an_unavailable_arm_stops_at_once_while_a_push_is_pending(execution, monkeypatch):
-    runtime, clock = execution
-    pending = Future()
-    submitted = []
-
-    def submit(function, *args, **kwargs):
-        submitted.append(kwargs.get('context_only', False))
-        if kwargs.get('context_only'):
-            return _UnchargedAnswer(pending)
-        done = Future()
-        done.set_result([{MOTOR: i} for i in range(10)])
-        return _UnchargedAnswer(done)
-
-    monkeypatch.setattr(runtime, 'submit', submit)
-    stack = Sequential(
-        PauseOnUnavailable(), TemporalStack((POSITION,), (-0.4, 0.0)), ChunkedSchedule(fps=10, context_lead_sec=0.25)
-    )
-    run = runtime.start(stack, Mock())
-    available = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE}
-    try:
-        run.send({**available, POSITION: np.array([0])})
-        clock.advance_to_ns(750_000_000)
-        run.send({**available, POSITION: np.array([750])})
-        assert submitted == [False, True]
-        clock.advance_to_ns(800_000_000)
-        faulted = {keys.ROBOT_STATUS: RobotStatus.ERROR, POSITION: np.array([800])}
-        assert run.send(faulted) == Step({}, 801_000_000)
-        pending.set_result(ContextPushResult.PUSHED)
-        clock.advance_to_ns(1_000_000_000)
-        assert run.send({**available, POSITION: np.array([1000])}).commands == {MOTOR: 0}
-        assert submitted == [False, True, False]
-    finally:
-        run.close()
-
-
-def test_a_pin_keeps_its_entries_until_it_falls_a_second_behind():
-    buffer = _StackBuffer((-0.1, 0.0))
-    buffer.pin(0.0)
-    for tick in range(30):
-        buffer.append(tick * 0.05, {POSITION: np.array([tick])})
-        if tick == 22:  # At 1.1 s the window starts at 1.0 s, one second after the pin.
-            assert buffer._entries[0][0] == 0.0
-    assert [round(t, 2) for t, _ in buffer._entries] == [1.35, 1.4, 1.45]
-
-
-@pytest.mark.parametrize('lead_sec', [0.0, -0.1, float('inf')])
-def test_a_context_lead_must_be_finite_and_positive(lead_sec):
-    with pytest.raises(ValueError, match='context_lead_sec'):
-        ChunkedSchedule(fps=10, context_lead_sec=lead_sec)
-
-
 PERIOD_NS = 100_000_000
 
 
@@ -664,8 +382,8 @@ class Rig:
     def tick(self, now_ns: int) -> Step:
         self._clock.advance_to_ns(now_ns)
         step = self.run.send({POSITION: self.position})
-        self.position = step.commands.get(MOTOR, self.position)
-        self.executed.append(step.commands.get(MOTOR, '--'))
+        self.position = step.outputs.get(MOTOR, self.position)
+        self.executed.append(step.outputs.get(MOTOR, '--'))
         return step
 
 
@@ -695,7 +413,7 @@ def test_errors_bring_inference_and_playback_forward_when_enabled(execution, sta
 
     run = runtime.start(ChunkedSchedule(fps=10, replan_on_error=replan_on_error), infer)
     try:
-        assert run.send({}).commands == {MOTOR: (1, 0)}
+        assert run.send({}).outputs == {MOTOR: (1, 0)}
         clock.advance_to_ns(PERIOD_NS)
         obs = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE.value, channel: status.value, POSITION: 42}
         step = run.send(obs)
@@ -719,12 +437,12 @@ def test_repeated_errors_keep_one_recovery_request_and_play_its_answer(execution
     try:
         run.send({POSITION: 0, keys.ROBOT_STATUS: initial_status})
         model.answer('a', length=5)
-        assert run.send({POSITION: 0, keys.ROBOT_STATUS: initial_status}).commands == {MOTOR: 'a0'}
+        assert run.send({POSITION: 0, keys.ROBOT_STATUS: initial_status}).outputs == {MOTOR: 'a0'}
         fault = {POSITION: 1, keys.ROBOT_STATUS: RobotStatus.ERROR}
         for now_ns in (PERIOD_NS, PERIOD_NS + 1, 2 * PERIOD_NS):
             clock.advance_to_ns(now_ns)
             step = run.send(fault)
-            assert step.commands == {}
+            assert step.outputs == {}
             assert len(model.calls) == 2
         assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 4
         assert model.seen == [0, 1]
@@ -757,16 +475,16 @@ def test_errors_keep_an_existing_request_and_execute_its_answer_immediately(exec
         fault = {POSITION: 25, keys.ROBOT_STATUS: RobotStatus.ERROR}
         step = run.send(fault)
         if not ready_at_error:
-            assert step.commands == {}
+            assert step.outputs == {}
             assert len(model.calls) == 2
             clock.advance_to_ns(3 * PERIOD_NS)
-            assert run.send(fault).commands == {}
+            assert run.send(fault).outputs == {}
             model.answer('b')
             step = run.send(fault)
-        assert step.commands == {MOTOR: 'b0'}
+        assert step.outputs == {MOTOR: 'b0'}
         assert model.seen == [0, 2]
         clock.advance_to_ns(4 * PERIOD_NS)
-        assert run.send(fault).commands == {}
+        assert run.send(fault).outputs == {}
         assert len(model.calls) == 3
     finally:
         run.close()
@@ -779,10 +497,10 @@ def test_errors_replace_a_prefetched_chunk_before_its_playback_starts(execution)
     try:
         run.send({})
         clock.advance_to_ns(2 * PERIOD_NS)
-        assert run.send({}).commands == {MOTOR: 'a'}
+        assert run.send({}).outputs == {MOTOR: 'a'}
         assert infer.call_count == 2
         clock.advance_to_ns(250_000_000)
-        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: 'fresh'}
+        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).outputs == {MOTOR: 'fresh'}
         assert infer.call_count == 3
     finally:
         run.close()
@@ -828,7 +546,7 @@ def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution):
     try:
         for tick in range(6):
             clock.advance_to_ns(tick * PERIOD_NS)
-            assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: tick % 5}
+            assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).outputs == {MOTOR: tick % 5}
         assert infer.call_count == 2
     finally:
         run.close()
@@ -919,9 +637,9 @@ def test_prefetched_chunk_resets_gap_when_execution_crosses_its_boundary(executi
     try:
         for index in range(5):
             clock.advance_to_ns(index * PERIOD_NS)
-            assert run.send({}).commands == {MOTOR: (1, index)}
+            assert run.send({}).outputs == {MOTOR: (1, index)}
         clock.advance_to_ns(first_new_ms * 1_000_000)
-        assert run.send({}).commands == {MOTOR: (2, new_index)}
+        assert run.send({}).outputs == {MOTOR: (2, new_index)}
     finally:
         run.close()
     assert calls == [0, 300_000_000]
@@ -941,16 +659,16 @@ def test_answer_between_emits_keeps_the_old_chunk_gap_history(execution, monkeyp
         run.send({})
         clock.advance_to_ns(100_000_000)
         model.answer('a', length=3)
-        assert run.send({}).commands == {MOTOR: 'a0'}
+        assert run.send({}).outputs == {MOTOR: 'a0'}
         clock.advance_to_ns(200_000_000)
-        assert run.send({}).commands == {MOTOR: 'a1'}
+        assert run.send({}).outputs == {MOTOR: 'a1'}
         clock.advance_to_ns(250_000_000)
-        assert run.send({}).commands == {}
+        assert run.send({}).outputs == {}
         clock.advance_to_ns(260_000_000)
         model.answer('b', length=3)
-        assert run.send({}).commands == {}
+        assert run.send({}).outputs == {}
         clock.advance_to_ns(350_000_000)
-        assert run.send({}).commands == {MOTOR: 'a2'}
+        assert run.send({}).outputs == {MOTOR: 'a2'}
     finally:
         run.close()
     assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.GAP_MAX_MS}'] == 150.0
@@ -1001,7 +719,7 @@ def test_a_lead_cannot_queue_more_than_the_next_chunk(execution, lead_sec):
         assert calls == [0, 0]
         for index in range(1, 9):
             clock.advance_to_ns(index * PERIOD_NS)
-            assert run.send({}).commands == {MOTOR: (index // 3 + 1, index % 3)}
+            assert run.send({}).outputs == {MOTOR: (index // 3 + 1, index % 3)}
         assert calls == [0, 0, 3 * PERIOD_NS, 6 * PERIOD_NS]
     finally:
         run.close()
@@ -1106,10 +824,10 @@ def test_an_early_empty_answer_retries_while_the_old_chunk_keeps_running(executi
         run.send({})
         clock.advance_to_ns(100_000_000)
         model.answer('a', length=5)
-        assert run.send({}).commands == {MOTOR: 'a0'}
+        assert run.send({}).outputs == {MOTOR: 'a0'}
         for tick in (2, 3):
             clock.advance_to_ns(tick * PERIOD_NS)
-            assert run.send({}).commands == {MOTOR: f'a{tick - 1}'}
+            assert run.send({}).outputs == {MOTOR: f'a{tick - 1}'}
         clock.advance_to_ns(350_000_000)
         run.send({})
         clock.advance_to_ns(360_000_000)
@@ -1121,7 +839,7 @@ def test_an_early_empty_answer_retries_while_the_old_chunk_keeps_running(executi
         assert run.send({}) == Step({}, 400_000_000)
         for now, action in ((400, 'a3'), (500, 'a4'), (600, 'b0')):
             clock.advance_to_ns(now * 1_000_000)
-            assert run.send({}).commands == {MOTOR: action}
+            assert run.send({}).outputs == {MOTOR: action}
     finally:
         run.close()
     assert [time for time, _ in model.calls] == [0, 350_000_000, 360_000_000]
@@ -1176,7 +894,7 @@ def test_rtc_follows_the_drawing(execution, monkeypatch):
             if index in answers:
                 model.answer(answers[index])
             result = step(index)
-            executed.append(result.commands.get(MOTOR, '--'))
+            executed.append(result.outputs.get(MOTOR, '--'))
             if index == 3:
                 assert result.resume_at_ns == 4 * PERIOD_NS
     finally:
@@ -1193,7 +911,7 @@ def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execut
         for index in range(10):
             if index in answers:
                 model.answer(*answers[index])
-            executed.append(step(index).commands.get(MOTOR, '--'))
+            executed.append(step(index).outputs.get(MOTOR, '--'))
     finally:
         run.close()
     assert executed == ['--', 'o0', 'o1', 'o2', 'o3', '--', '--', '--', 'n5', 'n6']
@@ -1216,7 +934,7 @@ def test_rtc_calls_at_once_after_a_late_answer(execution, monkeypatch, prefix_du
         for index in range(7):
             if index in answers:
                 model.answer(answers[index])
-            executed.append(step(index).commands.get(MOTOR, '--'))
+            executed.append(step(index).outputs.get(MOTOR, '--'))
     finally:
         run.close()
     assert executed == ['--', 'o0', 'o1', 'o2', 'o3', 'o4', 'n3']
@@ -1474,25 +1192,10 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
         Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48, Resample.AREA)),
         ChunkedSchedule(fps=10, record_stats=False),
-        Sequential(TemporalStack(('v',), (-0.4, 0.0)), ChunkedSchedule(fps=15, context_lead_sec=0.3)),
     ],
 )
 def test_stack_specs_round_trip(definition):
     assert spec.from_spec(definition.to_spec()).to_spec() == definition.to_spec()
-
-
-@pytest.mark.parametrize('context_lead_sec', [None, 0.3])
-@pytest.mark.parametrize('version', [ChunkedSchedule.WIRE_VERSION, LATEST])
-def test_context_leads_use_the_current_schedule(context_lead_sec, version):
-    schedule = ChunkedSchedule(fps=10, context_lead_sec=context_lead_sec, inference_lead=ConstantDuration(0.2))
-    description = schedule.to_spec()
-    assert description[VERSION] == ChunkedSchedule.WIRE_VERSION
-    if context_lead_sec is None:
-        assert ChunkedSchedule.CONTEXT_LEAD_SEC_ARG not in description[ARGS]
-    else:
-        assert description[ARGS][ChunkedSchedule.CONTEXT_LEAD_SEC_ARG] == context_lead_sec
-    rebuilt = spec.from_spec({**description, VERSION: version})
-    assert isinstance(rebuilt, ChunkedSchedule) and rebuilt.to_spec() == description
 
 
 @pytest.mark.parametrize(
@@ -1516,6 +1219,7 @@ def test_invalid_stack_specs_are_rejected(node, error):
 def test_wire_names_match_the_registered_components():
     instances = {
         'chunked_schedule': ChunkedSchedule(fps=10),
+        'prefetch': Prefetch(ChunkedSchedule(fps=10), ('v',), (0.0,), 0.2),
         'encode_images': EncodeImages([['camera']]),
         'stop_on_fault': PauseOnUnavailable(),
         'temporal_stack': TemporalStack(('v',), (0.0,)),

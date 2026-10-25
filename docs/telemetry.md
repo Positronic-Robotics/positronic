@@ -88,7 +88,6 @@ The span names are the contract:
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.infer` | a processor span | — | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
-| `policy.context` | a processor span | — | one context push: the JPEG encode of the frames and their round trip. Its `wire.send` holds `wire.bytes`; the `wire.send` of the request after it also holds `wire.referenced`, the count of frames it sent as digests |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
 

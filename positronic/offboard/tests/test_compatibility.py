@@ -85,7 +85,7 @@ def test_v1_timing_preserves_horizon_and_chunk_boundary(controlled_runtime, decl
     runtime, now, calls = controlled_runtime
     run = runtime.start(from_v1_spec(declared, handshake, spec.from_spec), MagicMock(return_value=answer))
     try:
-        assert run.send({}).commands == {}
+        assert run.send({}).outputs == {}
         future, obs, function = calls[0]
         future.set_result(function(obs))
         assert run.send({}) == Step({'value': 0}, 1_100_000_000)
@@ -93,7 +93,7 @@ def test_v1_timing_preserves_horizon_and_chunk_boundary(controlled_runtime, decl
         assert run.send({}) == Step({'value': 1}, 1_150_000_000)
         assert len(calls) == 1
         now[0] = 1_150_000_000
-        assert run.send({}).commands == {}
+        assert run.send({}).outputs == {}
         assert len(calls) == 2
         assert calls[0][1]['obs_time_ns'] == 1_000_000_000
         assert calls[0][1]['wall_time_ns'] > 0
@@ -141,11 +141,11 @@ def test_v1_fault_pauses_and_keeps_the_pending_answer_and_history(controlled_run
         run.send({'image': np.array([1])})
         assert len(calls) == 1
         now[0] += 100_000_000
-        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR, 'image': np.array([2])}).commands == {}
+        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR, 'image': np.array([2])}).outputs == {}
         future, obs, function = calls[0]
         future.set_result(function(obs))
         now[0] += 100_000_000
-        assert run.send({'image': np.array([3])}).commands == {'value': 'kept'}
+        assert run.send({'image': np.array([3])}).outputs == {'value': 'kept'}
         assert len(calls) == 1
         now[0] += 100_000_000
         run.send({'image': np.array([4])})
@@ -174,7 +174,7 @@ def test_v1_ticks_that_send_nothing_encode_no_image(controlled_runtime, monkeypa
     try:
         for _ in range(3):
             now[0] += 5_000_000
-            assert run.send({'image': np.zeros((4, 4, 3), np.uint8)}).commands == {}
+            assert run.send({'image': np.zeros((4, 4, 3), np.uint8)}).outputs == {}
         assert len(calls) == 1 and encoded == []
         future, obs, function = calls[0]
         future.set_result(function(obs))
@@ -240,7 +240,7 @@ def test_v1_answer_without_rows_sends_no_commands_and_asks_again(controlled_runt
         run.send({})
         future, obs, function = calls[0]
         future.set_result(function(obs))
-        assert run.send({}).commands == {}
+        assert run.send({}).outputs == {}
         now[0] += 1
         run.send({})
         assert len(calls) == 2
@@ -288,7 +288,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
     try:
         first = run.send({'image': np.array([1, 2])})
         first_sent.set()
-        assert isinstance(first, Step) and first.commands == {}
+        assert isinstance(first, Step) and first.outputs == {}
         assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
         assert run.send({'image': np.array([1, 2])}) == Step({'value': 10}, 1_100_000_000)
         if scheduled:

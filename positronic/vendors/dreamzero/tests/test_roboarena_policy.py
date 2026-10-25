@@ -161,8 +161,8 @@ def play(chunk_rows: int) -> list[tuple[int, dict]]:
         # Bounded: a stack that plays several rows in one step never emits `chunk_rows` times.
         for _ in range(chunk_rows):
             step = run.send(rig_observation())
-            if step.commands:
-                emitted.append((clock.now_ns, dict(step.commands)))
+            if step.outputs:
+                emitted.append((clock.now_ns, dict(step.outputs)))
             clock.now_ns = max(clock.now_ns, step.resume_at_ns)
     finally:
         client.released.set()
@@ -425,4 +425,4 @@ class TestTheStack:
             run.close()
 
         assert len(client.sent) == 1
-        assert rig.ROBOT_COMMAND in step.commands
+        assert rig.ROBOT_COMMAND in step.outputs

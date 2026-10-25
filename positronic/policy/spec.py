@@ -30,7 +30,7 @@ from positronic.policy.codecs.action import (
 from positronic.policy.codecs.geometry import ConvertPose
 from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
 from positronic.policy.compatibility import ChunkedScheduleV2
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, Prefetch, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
@@ -41,6 +41,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     component.WIRE_NAME: {component.WIRE_VERSION: Version(component.from_spec_args)}
     for component in (
         ChunkedSchedule,
+        Prefetch,
         EncodeImages,
         PauseOnUnavailable,
         TemporalStack,
@@ -97,6 +98,12 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
         if type(version) is not int or version not in versions:
             factory = resolve_version(COMPONENTS[name], version, f'component {name!r}')
             versions[version] = factory
-        return versions[version](**node.get(ARGS, {}))
+        args = dict(node.get(ARGS, {}))
+        if name == Prefetch.WIRE_NAME:
+            child = build(args[Prefetch.CHILD_ARG])
+            if not isinstance(child, Processor):
+                raise ValueError('Prefetch child must be a processor')
+            args[Prefetch.CHILD_ARG] = child
+        return versions[version](**args)
 
     return build(node)

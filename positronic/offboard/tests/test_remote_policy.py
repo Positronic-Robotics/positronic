@@ -1,12 +1,10 @@
 import dataclasses
-import gc
 import http.server
 import json
 import logging
 import pathlib
 import threading
 import time
-import weakref
 from collections.abc import Mapping
 from contextlib import suppress
 from unittest.mock import MagicMock, patch
@@ -15,7 +13,6 @@ import numpy as np
 import pytest
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server import protocol, spec
-from positronic_model_server.serialization import encode_jpeg
 from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
@@ -25,7 +22,6 @@ from positronic.geom import Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
-from positronic.offboard import server as server_module
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
@@ -39,8 +35,8 @@ from positronic.policy.base import Obs, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, RestrictImageSize
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, ConstantDuration, PauseOnUnavailable, TemporalStack
-from positronic.policy.remote import RemotePolicy, prepare_obs, push_context, round_trip
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration, PauseOnUnavailable, Prefetch, TemporalStack
+from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 from positronic.tests.testing_inference import post, read_status, run_attended, wait
@@ -328,44 +324,6 @@ def _observations_sent(conn: MagicMock) -> list:
     ]
 
 
-@pytest.mark.parametrize(
-    'response', [{protocol.RESULT: []}, *({legacy_protocol.CONTEXT: count} for count in (0, 2, True, 1.0, '1', None))]
-)
-def test_an_invalid_push_acknowledgment_closes_the_connection(response):
-    conn = _connection(_ready('first'), legacy_protocol.serialise(response))
-    session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
-
-    with pytest.raises(RuntimeError, match='context push'):
-        session.push_context({'image': encode_jpeg(np.zeros((2, 4, 4, 3), dtype=np.uint8))})
-
-    conn.close.assert_called_once()
-    with pytest.raises(wire.PeerDisconnected):
-        session.infer({'image': 'test'})
-
-
-def test_a_second_reference_miss_fails_the_request():
-    miss = legacy_protocol.serialise({legacy_protocol.REFERENCE_MISS: True})
-    conn = _connection(_ready('first'), legacy_protocol.serialise({legacy_protocol.CONTEXT: 2}), miss, miss)
-    session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
-    frames = np.random.default_rng(0).integers(0, 256, (3, 4, 4, 3), dtype=np.uint8)
-    session.push_context({'image': encode_jpeg(frames[:2])})
-
-    with pytest.raises(RuntimeError, match='reference miss'):
-        session.infer({'image': encode_jpeg(frames)})
-
-    assert conn.send.call_count == 3  # The push, the request with references, and the request in full.
-
-
-def test_a_v3_server_takes_no_context_push():
-    conn = _connection(_ready('first', version=protocol.ProtocolVersion.V3))
-    session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
-
-    with pytest.raises(ValueError, match='V3'):
-        session.push_context({'image': encode_jpeg(np.zeros((2, 4, 4, 3), dtype=np.uint8))})
-
-    conn.send.assert_not_called()
-
-
 class TestADroppedConnectionReconnects:
     """A connection that drops before the server's first answer opens a new session and sends the observation
     again. A new session holds no state, so this is safe only while the dropped one had answered nothing."""
@@ -546,6 +504,64 @@ def served(start_server):
     return start
 
 
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+def test_prefetch_round_trip_rebuilds_images_before_server_codec(served, transport):
+    class CameraModel(FixedModel):
+        def __call__(self, obs, *, session_id):
+            super().__call__(obs, session_id=session_id)
+            return [{'value': i} for i in range(10)]
+
+    class SelectCamera(Codec):
+        def encode(self, data):
+            return {'selected': data['camera'], 'state': data['state']}
+
+        def decode(self, data):
+            return data
+
+    local = Sequential(
+        RestrictImageSize(8, 8),
+        Prefetch(
+            ChunkedSchedule(fps=10, timing_key=policy_keys.NEXT_INFERENCE_NS),
+            ('camera',),
+            (-0.4, -0.3, -0.2, -0.1, 0.0),
+            0.25,
+        ),
+    )
+    address, model, _ = served(local=local, codec=SelectCamera(), transport=transport, model=CameraModel())
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    run = runtime.start(RemotePolicy(transport, address))
+
+    def tick(ms):
+        now[0] = ms * 1_000_000
+        step = run.send({'camera': np.full((16, 16, 3), ms // 10, np.uint8), 'state': ms})
+        assert isinstance(step, Step)
+        return step
+
+    def finish(ms):
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+        return tick(ms)
+
+    try:
+        tick(0)
+        assert finish(0).outputs == {'value': 0}
+        for ms in [*range(50, 701, 50), 710, 750]:
+            tick(ms)
+        finish(750)
+        assert len(model.observations) == 1  # Uploads never reach the model or its action codec.
+        for ms in (800, 900, 1003):
+            tick(ms)
+        assert finish(1003).outputs == {'value': 0}
+        observation = model.observations[-1]
+        assert observation['state'] == 1003
+        assert observation['selected'].shape == (5, 8, 8, 3)
+        np.testing.assert_allclose(observation['selected'][:, 0, 0, 0], [60, 70, 80, 90, 100], atol=1)
+    finally:
+        runtime.close()
+        run.close()
+    assert len(model.ended_sessions) == 1
+
+
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 def test_background_console_sends_remote_policy_rollouts_and_receives_their_results(served, make_mock_model, transport):
@@ -605,10 +621,10 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
             step = run.send(obs)
             assert isinstance(step, Step)
-            assert [commands for commands in (first.commands, step.commands) if commands] == [{'value': 0}]
+            assert [commands for commands in (first.outputs, step.outputs) if commands] == [{'value': 0}]
             now[0] = 100_000_000
             step = run.send(obs)
-            assert isinstance(step, Step) and step.commands == {'value': 1}
+            assert isinstance(step, Step) and step.outputs == {'value': 1}
             assert len(model.observations) == 2 * episode + 1
             assert model.observations[-1]['image'].shape == (8, 8, 3)
             now[0] = round((0.2 - lead_sec) * 1e9)
@@ -618,13 +634,13 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
             step = run.send(obs)
             assert isinstance(step, Step)
             if lead_sec:
-                assert first.commands == step.commands == {}
+                assert first.outputs == step.outputs == {}
                 assert step.resume_at_ns == 200_000_000
                 now[0] = 200_000_000
                 step = run.send(obs)
-                assert isinstance(step, Step) and step.commands == {'value': 0}
+                assert isinstance(step, Step) and step.outputs == {'value': 0}
             else:
-                assert [commands for commands in (first.commands, step.commands) if commands] == [{'value': 0}]
+                assert [commands for commands in (first.outputs, step.outputs) if commands] == [{'value': 0}]
             assert len(model.observations) == 2 * episode + 2
         finally:
             runtime.close()
@@ -890,219 +906,13 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
             completed = run.send(obs)
             assert isinstance(completed, Step)
-            outputs.append(legacy_protocol.serialise(dict(first.commands) | dict(completed.commands)))
+            outputs.append(legacy_protocol.serialise(dict(first.outputs) | dict(completed.outputs)))
             inputs.append(legacy_protocol.serialise(model.observations[0]))
         finally:
             runtime.close()
             run.close()
     assert inputs[0] == inputs[1] == inputs[2]
     assert outputs[0] == outputs[1] == outputs[2]
-
-
-class ImageModel(FixedModel):
-    """Answers a chunk of ten actions; ``observations`` holds the images it got."""
-
-    def __call__(self, obs: Obs, *, session_id: str):
-        super().__call__(obs, session_id=session_id)
-        return [{'value': index} for index in range(10)]
-
-
-def _solid(values) -> np.ndarray:
-    """A stack of 16x16 frames of one color each, which JPEG keeps to within a few levels."""
-    return np.stack([np.full((16, 16, 3), value, dtype=np.uint8) for value in values])
-
-
-def _record_messages(monkeypatch) -> list[tuple[str, int]]:
-    """The kind and size of every push and observation the server decodes: 'context' or 'request'."""
-    messages = []
-    decode = server_module.deserialise_with_frames
-
-    def recording(message, held, decoded):
-        request = decode(message, held, decoded)
-        if protocol.END_SESSION not in request:
-            messages.append(('context' if legacy_protocol.CONTEXT in request else 'request', len(message)))
-        return request
-
-    monkeypatch.setattr(server_module, 'deserialise_with_frames', recording)
-    return messages
-
-
-CONTEXT_STACK = Sequential(
-    TemporalStack(('image',), (-0.4, -0.3, -0.2, -0.1, 0.0)), ChunkedSchedule(fps=10, context_lead_sec=0.25)
-)
-
-
-def _drive_to_the_second_chunk(policy: RemotePolicy) -> None:
-    """Run one episode on a virtual clock past the end of the first one-second chunk."""
-    now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
-    run = runtime.start(policy)
-    try:
-        for ms in range(0, 1001, 50):
-            now[0] = ms * 1_000_000
-            run.send({'image': _solid([ms // 10])[0]})
-            if runtime.has_pending:
-                assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
-                run.send({'image': _solid([ms // 10])[0]})
-    finally:
-        runtime.close()
-        run.close()
-
-
-def test_a_declared_context_lead_pushes_the_settled_frames_and_the_model_gets_every_frame(served, monkeypatch):
-    address, model, _ = served(model=ImageModel(), local=CONTEXT_STACK)
-    messages = _record_messages(monkeypatch)
-    _drive_to_the_second_chunk(RemotePolicy('websocket', address))
-    assert [kind for kind, _ in messages] == ['request', 'context', 'request']
-    # The push holds the frames of 0.6 s and 0.7 s. The request sends them as digests, and the model gets them.
-    np.testing.assert_allclose(model.observations[-1]['image'], _solid([60, 70, 80, 90, 100]), atol=4)
-    assert messages[2][1] < messages[0][1]
-
-
-@pytest.mark.parametrize('compress_images', [False, True])
-def test_a_skipped_push_leaves_late_inference_frames_fresh(start_server, monkeypatch, compress_images):
-    model = ImageModel()
-    served = start_server(model, PolicyDeployment(CONTEXT_STACK, compress_images=compress_images))
-    policy = RemotePolicy('websocket', served.ws()[1])
-    messages = _record_messages(monkeypatch)
-    now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
-    run = runtime.start(policy)
-    try:
-        for ms in [*range(0, 601, 50), 610, *range(650, 951, 50), 1013]:
-            now[0] = ms * 1_000_000
-            # Compressed sessions receive non-image stacks, so both cases skip uploading.
-            value = np.array([ms // 10]) if compress_images else _solid([ms // 10])[0]
-            run.send({'image': value})
-            if runtime.has_pending:
-                assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
-                run.send({'image': value})
-    finally:
-        runtime.close()
-        run.close()
-    assert [kind for kind, _ in messages] == ['request', 'request']
-    expected = [61, 70, 80, 90, 101]
-    np.testing.assert_array_equal(
-        model.observations[-1]['image'], np.array(expected)[:, None] if compress_images else _solid(expected)
-    )
-
-
-def test_a_reference_the_server_does_not_hold_is_sent_again_in_full_once(served, monkeypatch):
-    address, model, _ = served(model=ImageModel(), local=CONTEXT_STACK)
-    client = InferenceClient(registry.client_wire('websocket'), address)
-    pushed, other = client.new_session(), client.new_session()
-    try:
-        assert pushed.metadata[policy_keys.CONTEXT_PUSH] == legacy_protocol.CONTEXT_PUSH_VERSION
-        frames = push_context(pushed, {'image': _solid([1, 2])}, jpeg_quality=90)
-        round_trip(pushed, {'image': _solid([1, 2, 3])}, True, 90, frames)
-        # A session holds none of the frames another session pushed.
-        other._held = pushed._held
-        sizes = []
-        send = other._conn.send
-        monkeypatch.setattr(other._conn, 'send', lambda data: sizes.append(len(data)) or send(data))
-        round_trip(other, {'image': _solid([1, 2, 3])}, True, 90, frames)
-        assert len(sizes) == 2 and sizes[0] < sizes[1] and not other._held
-    finally:
-        pushed.close()
-        other.close()
-    first, second = model.observations
-    np.testing.assert_array_equal(first['image'], second['image'])
-
-
-@pytest.mark.parametrize('pixels', [[1, 2], [1, 1]])
-def test_a_context_push_records_its_span_and_a_request_counts_its_references(served, tmp_path, pixels):
-    address, _, _ = served(model=ImageModel(), local=CONTEXT_STACK)
-    session = InferenceClient(registry.client_wire('websocket'), address).new_session()
-    try:
-        with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-context'):
-            frames = push_context(session, {'image': _solid(pixels)}, jpeg_quality=90)
-            round_trip(session, {'image': _solid([*pixels, 3])}, True, 90, frames)
-    finally:
-        session.close()
-    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
-    names = [s.name for s in spans]
-    assert telemetry_keys.SPAN_POLICY_CONTEXT in names
-    referenced = [
-        s.attrs.get(telemetry_keys.ATTR_WIRE_REFERENCED) for s in spans if s.name == telemetry_keys.SPAN_WIRE_SEND
-    ]
-    assert referenced == [None, 2]
-
-
-def test_a_stack_inside_a_mapping_or_a_list_is_pushed_and_sent_as_digests(served, monkeypatch):
-    address, model, _ = served(model=ImageModel(), local=CONTEXT_STACK)
-    session = InferenceClient(registry.client_wire('websocket'), address).new_session()
-    messages = _record_messages(monkeypatch)
-    nested = {'video': {'camera': [_solid([1, 2])]}, 'image': _solid([3, 4])}
-    full = {'video': {'camera': [_solid([1, 2, 5])]}, 'image': _solid([3, 4, 6])}
-    try:
-        frames = push_context(session, nested, jpeg_quality=90)
-        assert set(frames) == {('video', 'camera', 0), ('image',)}
-        round_trip(session, full, True, 90, frames)
-    finally:
-        session.close()
-    assert [kind for kind, _ in messages] == ['context', 'request']
-    (obs,) = model.observations
-    np.testing.assert_allclose(obs['video']['camera'][0], _solid([1, 2, 5]), atol=4)
-    np.testing.assert_allclose(obs['image'], _solid([3, 4, 6]), atol=4)
-
-
-class FrameWatchModel(ImageModel):
-    """Checks, while it runs, that the server no longer holds the frames it decoded for the request alone."""
-
-    def __init__(self):
-        super().__init__()
-        self.request_frames: list[weakref.ref] = []
-        self.held_while_running: list[bool] = []
-
-    def __call__(self, obs: Obs, *, session_id: str):
-        gc.collect()
-        self.held_while_running.append(any(ref() is not None for ref in self.request_frames))
-        return super().__call__(obs, session_id=session_id)
-
-
-def test_the_server_keeps_no_frame_a_request_decoded_while_the_model_runs(served, monkeypatch):
-    model = FrameWatchModel()
-    address, _, _ = served(model=model, local=CONTEXT_STACK)
-    decode = server_module.deserialise_with_frames
-
-    def watching(message, held, decoded):
-        request = decode(message, held, decoded)
-        if protocol.OBSERVATION in request:
-            model.request_frames += [weakref.ref(frame) for frame in decoded.values()]
-        return request
-
-    monkeypatch.setattr(server_module, 'deserialise_with_frames', watching)
-    session = InferenceClient(registry.client_wire('websocket'), address).new_session()
-    try:
-        frames = push_context(session, {'image': _solid([1, 2])}, jpeg_quality=90)
-        round_trip(session, {'image': _solid([1, 2, 3])}, True, 90, frames)
-    finally:
-        session.close()
-    # The request decoded one new frame; the observation holds it as part of its stack, not as that frame.
-    assert len(model.request_frames) == 1
-    assert model.held_while_running == [False]
-
-
-def test_the_server_keeps_no_decoded_push_stack_while_it_waits_for_the_request(served, monkeypatch):
-    address, _, _ = served(model=ImageModel(), local=CONTEXT_STACK)
-    decode = server_module.deserialise_with_frames
-    stacks: list[weakref.ref] = []
-
-    def watching(message, held, decoded):
-        request = decode(message, held, decoded)
-        if legacy_protocol.CONTEXT in request:
-            stacks.append(weakref.ref(request[legacy_protocol.CONTEXT]['image']))
-        return request
-
-    monkeypatch.setattr(server_module, 'deserialise_with_frames', watching)
-    session = InferenceClient(registry.client_wire('websocket'), address).new_session()
-    try:
-        push_context(session, {'image': _solid([1, 2])}, jpeg_quality=90)
-        # The server answered the push and now waits for the next message; only the held frames stay.
-        gc.collect()
-        assert len(stacks) == 1 and stacks[0]() is None
-    finally:
-        session.close()
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():
@@ -1213,8 +1023,7 @@ def test_compression_follows_the_handshake(runtime, compressed):
 def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):
     qualities = []
     monkeypatch.setattr(
-        'positronic.policy.remote.encode_jpeg',
-        lambda image, quality, encoded=(): qualities.append(quality) or {'jpeg': b''},
+        'positronic.policy.remote.encode_jpeg', lambda image, quality: qualities.append(quality) or {'jpeg': b''}
     )
     session = _mock_session({**CHUNKED_STACK, policy_keys.COMPRESS_IMAGES: True})
     session.infer.return_value = [{'value': 42}]
@@ -1290,7 +1099,7 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
         session.infer.side_effect = TimeoutError('server stalled')
     encoded_at = []
 
-    def encode(image, quality, encoded=()):
+    def encode(image, quality):
         encoded_at.append(time.time_ns())
         return {'jpeg': b''}
 
@@ -1321,7 +1130,7 @@ def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
             completed = run.send({})
             assert isinstance(first, Step) and isinstance(completed, Step)
-            commands = dict(first.commands) | dict(completed.commands)
+            commands = dict(first.outputs) | dict(completed.outputs)
             command = commands[keys.ROBOT_COMMAND]
             assert isinstance(command, CartesianPosition)
             np.testing.assert_allclose(command.pose.translation, [0.4, 0.0, 0.6])

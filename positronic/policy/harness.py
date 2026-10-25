@@ -324,7 +324,11 @@ class Harness(pimm.ControlSystem):
                 assert step is not None, 'a policy must yield a Step for each observation'
                 emit_started_ns = time.perf_counter_ns()
                 self._telemetry.step()
-                messages = {name: self.commands[name].emit(value) for name, value in step.commands.items()}
+                messages = {
+                    name: emitter.emit(step.outputs[name])
+                    for name, emitter in self.commands.items()
+                    if name in step.outputs
+                }
                 step_ms[telemetry_keys.ATTR_STEP_EMIT_MS] = (time.perf_counter_ns() - emit_started_ns) / 1e6
                 if self._writer is not None:
                     for name, message in messages.items():

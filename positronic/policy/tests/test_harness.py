@@ -81,10 +81,7 @@ class RemoteStubPolicy(StubPolicy):
             served_timing={},
         )
         return ChunkedSchedule(fps=10).run(
-            runtime,
-            lambda obs, *, context_only=False: cast(
-                list[dict[str, Any]], round_trip(session, obs, compress_images=False)
-            ),
+            runtime, lambda obs: cast(list[dict[str, Any]], round_trip(session, obs, compress_images=False))
         )
 
 
@@ -378,6 +375,23 @@ def ready_harness():
 def repair_harness():
     with _episode_ports(devices=(CAMERA, ARM), observed=(CAMERA,)) as ports:
         yield ports
+
+
+def test_only_outputs_connected_to_command_ports_are_emitted(episode_harness):
+    h = episode_harness
+
+    class Output(Policy):
+        def run(self, runtime):
+            yield
+            yield Step({MOTOR: 7, policy_keys.NEXT_INFERENCE_NS: 100_000_000}, 100_000_000)
+            return PolicyEnd.COMPLETE
+
+    h.observation.emit(np.array([1]))
+    call = h.caller(Rollout(Task('outputs', None), Output(), h.output_path))
+    next(h.loop)
+    assert not call.done()
+    assert h.commands.values == [(0, 7)]
+    assert set(h.harness.commands) == {MOTOR}
 
 
 def test_episode_completion_then_shutdown_with_fresh_observations(episode_harness):
@@ -1346,7 +1360,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
 
     class Move(Policy):
         def run(self, runtime):
-            def infer(obs, *, context_only=False):
+            def infer(obs):
                 observations.append(obs)
                 return [{MOTOR: 1}, {MOTOR: 2}]
 

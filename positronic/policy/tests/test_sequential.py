@@ -73,7 +73,7 @@ def test_codec_work_is_inside_submit(nested):
         assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
         completed = run.send({})
         assert isinstance(completed, Step)
-        assert dict(first.commands) | dict(completed.commands) == {'value': 52}
+        assert dict(first.outputs) | dict(completed.outputs) == {'value': 52}
         assert completed.resume_at_ns == 100_000_000
         assert len(threads) == 2
         assert all(thread != caller_thread for thread in threads)

@@ -97,7 +97,7 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     policy = pickle.loads(ForkingPickler.dumps(policy))
     assert policy.meta() == metadata
     with execution(policy) as (active, rt, clock):
-        assert not complete(active, rt, clock, observation()).commands
+        assert not complete(active, rt, clock, observation()).outputs
         assert len(clients) == 1 and not clients[0].is_closed
         assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
         meta = policy.meta() | rt.metadata_snapshot()
