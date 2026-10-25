@@ -70,6 +70,11 @@ def test_invalid_gripper_is_not_treated_as_missing(grip):
         codecs.DroidCodec().decode({protocol.RIGHT_ARM: [0.0] * 7, protocol.RIGHT_GRIPPER: grip})
 
 
+def test_the_grip_key_is_the_one_flip_grip_flips():
+    with pytest.raises(TypeError, match='grip_key'):
+        codecs.DroidCodec(grip_key='gripper')
+
+
 def test_camera_keys_are_configurable(observation):
     observation['front'] = observation.pop(keys.EXTERIOR_IMAGE)
     observation['hand'] = observation.pop(keys.WRIST_IMAGE)

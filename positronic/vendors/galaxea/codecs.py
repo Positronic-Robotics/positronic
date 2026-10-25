@@ -13,7 +13,8 @@ from positronic.vendors.galaxea import protocol
 class DroidCodec(Codec):
     """Map a DROID observation to G0.5 inputs, and a G0.5 prediction to a joint command and a grip target.
 
-    The grip passes through as it comes; ``droid`` composes ``FlipGrip`` for Galaxea's aperture (1 = open).
+    The grip passes through as it comes, under ``keys.GRIP``: ``droid`` composes ``FlipGrip``, which flips that key
+    to Galaxea's aperture (1 = open).
     An absent gripper prediction emits no gripper command, preserving the driver's last target.
     Arm predictions are required. The upstream processor owns resizing and normalization.
     """
@@ -23,7 +24,6 @@ class DroidCodec(Codec):
         exterior_camera: str = keys.EXTERIOR_IMAGE,
         wrist_camera: str = keys.WRIST_IMAGE,
         joint_key: str = keys.JOINTS,
-        grip_key: str = keys.GRIP,
         task_key: str = keys.TASK,
         fps: float = 15.0,
     ):
@@ -31,7 +31,6 @@ class DroidCodec(Codec):
             raise ValueError('fps must be finite and positive')
         self._cameras = {protocol.EXTERIOR_IMAGE: exterior_camera, protocol.WRIST_IMAGE: wrist_camera}
         self._joint_key = joint_key
-        self._grip_key = grip_key
         self._task_key = task_key
         self.fps = fps
 
@@ -52,7 +51,7 @@ class DroidCodec(Codec):
         return np.ascontiguousarray(image.transpose(2, 0, 1))
 
     def encode(self, data: dict) -> dict:
-        grip = self._vector(data[self._grip_key], 1, self._grip_key)
+        grip = self._vector(data[keys.GRIP], 1, keys.GRIP)
         if np.any((grip < 0) | (grip > 1)):
             raise ValueError('Observed grip must be in [0, 1]')
         return {
