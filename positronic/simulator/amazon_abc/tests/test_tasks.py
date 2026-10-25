@@ -77,11 +77,11 @@ def _frame(**overrides: Any) -> dict[str, Any]:
     raw: dict[str, Any] = {mapping.OBS_SIM_STATE: np.zeros(4), mapping.OBS_TASK_EVAL: {}}
     for index, arm in enumerate(mapping.ARMS):
         raw.update({
-            protocol.arm_channel(mapping.OBS_JOINT_POS, arm): np.full(mapping.ARM_JOINTS, float(index)),
-            protocol.arm_channel(mapping.OBS_JOINT_VEL, arm): np.zeros(mapping.ARM_JOINTS),
-            protocol.arm_channel(mapping.OBS_EEF_POS, arm): np.array([0.1, 0.2 * index, 0.3]),
-            protocol.arm_channel(mapping.OBS_EEF_QUAT, arm): np.array([1.0, 0.0, 0.0, 0.0]),
-            protocol.arm_channel(mapping.OBS_GRIP, arm): np.float32(0.25 * index),
+            protocol.arm_channel(protocol.OBS_JOINT_POS, arm): np.full(mapping.ARM_JOINTS, float(index)),
+            protocol.arm_channel(protocol.OBS_JOINT_VEL, arm): np.zeros(mapping.ARM_JOINTS),
+            protocol.arm_channel(protocol.OBS_EEF_POS, arm): np.array([0.1, 0.2 * index, 0.3]),
+            protocol.arm_channel(protocol.OBS_EEF_QUAT, arm): np.array([1.0, 0.0, 0.0, 0.0]),
+            protocol.arm_channel(protocol.OBS_GRIP, arm): np.float32(0.25 * index),
         })
     for camera in CAMERAS.values():
         raw[camera] = np.zeros((3, 4, 6), dtype=np.uint8)

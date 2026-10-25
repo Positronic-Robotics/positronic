@@ -249,13 +249,13 @@ class AbcEnv(EnvProtocol):
             quat = np.empty(4)
             mujoco.mju_mat2Quat(quat, np.ascontiguousarray(rot).reshape(9))
             payload.update({
-                protocol.arm_channel(mapping.OBS_JOINT_POS, arm.name): self._measured_q(arm),
-                protocol.arm_channel(mapping.OBS_JOINT_VEL, arm.name): np.asarray(
+                protocol.arm_channel(protocol.OBS_JOINT_POS, arm.name): self._measured_q(arm),
+                protocol.arm_channel(protocol.OBS_JOINT_VEL, arm.name): np.asarray(
                     self._env.data.qvel[arm.dof_ids], dtype=np.float32
                 ),
-                protocol.arm_channel(mapping.OBS_EEF_POS, arm.name): pos.astype(np.float32),
-                protocol.arm_channel(mapping.OBS_EEF_QUAT, arm.name): quat.astype(np.float32),
-                protocol.arm_channel(mapping.OBS_GRIP, arm.name): np.float32(mapping.invert_grip(per_arm[index, -1])),
+                protocol.arm_channel(protocol.OBS_EEF_POS, arm.name): pos.astype(np.float32),
+                protocol.arm_channel(protocol.OBS_EEF_QUAT, arm.name): quat.astype(np.float32),
+                protocol.arm_channel(protocol.OBS_GRIP, arm.name): np.float32(mapping.invert_grip(per_arm[index, -1])),
             })
         payload.update({name: np.ascontiguousarray(frame) for name, frame in obs[mapping.ABC_OBS_IMAGES].items()})
         return payload

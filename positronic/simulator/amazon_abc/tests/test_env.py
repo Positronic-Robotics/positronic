@@ -143,7 +143,7 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
 
     assert set(frame) == {protocol.SLOTS, protocol.FRAME_META, protocol.FRAME_ROBOT_META, protocol.FRAME_CONTROL_DT}
     (slot,) = frame[protocol.SLOTS]
-    assert protocol.arm_channel(mapping.OBS_JOINT_POS, 'right') in slot[protocol.FRAME_OBS]
+    assert protocol.arm_channel(protocol.OBS_JOINT_POS, 'right') in slot[protocol.FRAME_OBS]
     assert frame[protocol.FRAME_META] == {mapping.META_TASK: _PROMPT}
     assert frame[protocol.FRAME_CONTROL_DT] == pytest.approx(_TIMESTEP * _DECIMATION)
 

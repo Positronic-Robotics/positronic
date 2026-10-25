@@ -36,12 +36,8 @@ ABC_EVAL_EVER_FAILED = 'ever_failed'
 # and a count task is decided there.
 ABC_EVAL_STEPS = 236 * 15
 
-# The raw observation this server reports. Every name but the physics state and the task metrics is per arm.
-OBS_JOINT_POS = 'joint_pos'
-OBS_JOINT_VEL = 'joint_vel'
-OBS_EEF_POS = 'eef_pos'  # ABC world coordinates, metres.
-OBS_EEF_QUAT = 'eef_quat'  # ABC world orientation, wxyz.
-OBS_GRIP = 'grip'  # Closure in [0, 1].
+# The raw observation this server reports beside the per-arm fields of ``protocol``. Each arm reports its
+# end-effector pose in ABC world coordinates, as a wxyz quaternion.
 OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
 OBS_TASK_EVAL = 'task_eval'  # The task evaluator's numeric metrics, keyed by recording suffix.
 
