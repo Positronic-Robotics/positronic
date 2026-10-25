@@ -15,7 +15,7 @@ dependencies = [
     "packaging>=24",
     "typing-extensions>=4.12.2",
     # The eval names and the wire codec of an enum. The root pins it exactly at the same version.
-    "positronic-evals==0.1.1",
+    "positronic-evals==0.1.2",
 ]
 
 [project.scripts]

@@ -45,6 +45,7 @@ from positronic.simulator.env_server.tests.mujoco_env import (
     remote_stack_cubes_eval,
 )
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE, SIM_STATE_INTEGRATION
+from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.tests.testing_coutils import drive_scheduler
 
@@ -424,6 +425,11 @@ class TestChannelMapAction:
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.HOLD
         assert action['target_grip.right'] == 0.0
 
+    def test_a_vector_on_a_non_robot_channel_passes_through(self):
+        adapter = _CommandOnlyAdapter()
+        action = adapter.action(_held(**{'hand_command.left': np.arange(16.0)}))
+        np.testing.assert_array_equal(action['hand_command.left'], np.arange(16.0))
+
     def test_a_delta_fires_once_on_its_own_channel_only(self):
         adapter = _CommandOnlyAdapter()
         commands = _held(**{
@@ -444,6 +450,10 @@ class TestSingleArm:
     def test_the_wire_names_mirror_the_positronic_keys(self):
         assert protocol.ROBOT_COMMAND == keys.ROBOT_COMMAND
         assert protocol.TARGET_GRIP == keys.TARGET_GRIP
+        assert protocol.arm_channel(protocol.ROBOT_COMMAND, 'left') == keys.arm_channel(keys.ROBOT_COMMAND, 'left')
+        assert protocol.ROBOT_STATE == keys.ROBOT_STATE
+        assert protocol.JOINTS_SUFFIX == keys.JOINTS_SUFFIX
+        assert protocol.MOUNTS == eval_keys.MOUNTS
 
     def test_it_returns_the_two_channels(self):
         action = protocol.single_arm(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.5))
@@ -551,6 +561,25 @@ class TestEnvControlFrame:
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         with pytest.raises(ValueError, match='measured pose'):
             _in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame, None)
+
+    def test_a_one_arm_adapter_composes_a_delta_at_the_pose_its_observation_measured(self):
+        adapter = RobolabAdapter(camera_dict={})
+        eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+        adapter.observations({
+            robolab_keys.OBS_EEF_POS: eef.translation,
+            robolab_keys.OBS_EEF_QUAT: eef.rotation.as_quat,
+            robolab_keys.OBS_JOINT_POS: np.zeros(7),
+            robolab_keys.OBS_JOINT_VEL: np.zeros(7),
+            robolab_keys.OBS_GRIP: 0.0,
+        })
+        delta = geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
+        cmd = roboarm_command.CartesianDelta(delta)
+
+        wired = adapter.action({keys.ROBOT_COMMAND: pimm.Message(cmd)})[keys.ROBOT_COMMAND]
+
+        expected = cmd.apply(eef * adapter.env_control_frame.inv) * adapter.env_control_frame
+        assert wired[protocol.COMMAND_TYPE] == protocol.CARTESIAN
+        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], expected.as_vector(self.rotmat), atol=1e-12)
 
     def test_robolab_reports_and_drives_the_same_frame(self):
         adapter = RobolabAdapter(camera_dict={})
@@ -740,6 +769,35 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
         assert task.instruction == 'countdown'
         drive_scheduler(scheduler, steps=4)
         assert task.instruction == 'countdown'
+
+
+class _PromptPerStepEnv(_CountdownEnv):
+    """Moves its prompt to ``step <n>`` at each step, as a task with several targets in turn does."""
+
+    def __init__(self):
+        super().__init__()
+        self.prompts: list[str] = []
+
+    def step(self, actions):
+        frame = super().step(actions)
+        self.prompts.append(f'step {self._steps}')
+        frame[protocol.SLOTS][0][protocol.FRAME_META] = {'task': self.prompts[-1]}
+        return frame
+
+
+@pytest.mark.timeout(60.0)
+def test_a_prompt_the_env_moves_in_the_episode_is_the_live_instruction():
+    env = _PromptPerStepEnv()
+    with serve_env(env) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
+        task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
+        scheduler = world.start([proxy])
+
+        proxy.reset({eval_keys.SEED: 0})
+        assert task.instruction == _COUNTDOWN
+        drive_scheduler(scheduler, steps=4)
+        assert env.prompts
+        assert task.instruction == env.prompts[-1]
 
 
 def test_the_canonical_contract_is_exactly_what_a_client_can_emit():
