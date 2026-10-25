@@ -13,7 +13,7 @@ from positronic.cfg.eval.sim import amazon_abc as abc_cfg
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import ee_frames
-from positronic.drivers.roboarm.models import GRIPPER_SITE
+from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_GRASP_SITE_FRAME
 from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
@@ -100,7 +100,8 @@ def test_every_arm_reports_its_own_state_and_grip():
     }
     right = obs[keys.arm_channel(keys.ROBOT_STATE, 'right')]
     assert np.array_equal(right.q, np.ones(mapping.ARM_JOINTS, dtype=np.float32))
-    assert right.ee_pose.translation == pytest.approx([0.1, 0.2, 0.3])
+    grasp_site = geom.Transform3D(np.array([0.1, 0.2, 0.3]), geom.Rotation.identity)
+    assert right.ee_pose.translation == pytest.approx((grasp_site * YAM_GRASP_SITE_FRAME.inv).translation)
     assert obs[keys.arm_channel(keys.GRIP, 'right')] == pytest.approx(0.25)
 
 
