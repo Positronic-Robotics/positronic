@@ -140,8 +140,8 @@ ABC_TRIALS_PER_TASK = 20
 # The render size changes what a policy sees, so a definition pins it rather than take a config default.
 ABC_CAMERA_HEIGHT, ABC_CAMERA_WIDTH = 260, 416
 ABC_SCORING = Scoring(labelers=(ABC_LABELER,), primary=MeanEpisodeScore(per_task=True))
-# TODO: name the commit on `main` that holds the ABC backend.
-ABC_POSITRONIC_REVISION = 'd4ebf4166cf37b6f623f06203b663d8047ee53a4'
+# The `main` commit that merged the ABC backend.
+ABC_POSITRONIC_REVISION = 'c1e5853f2f0c1291bc5bd6e19fa80da2ce3233e3'
 
 
 def _abc(tasks: tuple[str, ...], time_limit_s: int) -> EvalDefinition:
