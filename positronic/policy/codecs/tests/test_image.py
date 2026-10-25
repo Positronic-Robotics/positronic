@@ -12,7 +12,7 @@ from positronic.cfg.codecs import image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.policy import spec, training
-from positronic.policy.codecs import LEROBOT_FEATURES, Codec, EncodeImages, Resample, TransformImages
+from positronic.policy.codecs import LEROBOT_FEATURES, Codec, EncodeImages, Resample, ResizeMode, TransformImages
 
 
 @pytest.mark.parametrize(
@@ -83,20 +83,27 @@ def test_image_observations_report_different_camera_sizes_and_support_no_images(
     assert empty.training_encoder.meta == {LEROBOT_FEATURES: {}}
 
 
-@pytest.mark.parametrize('pad', [False, True])
+@pytest.mark.parametrize('mode', list(ResizeMode))
 @pytest.mark.parametrize('resample', list(Resample))
 @pytest.mark.parametrize('stacked', [False, True])
-def test_transforms_use_the_selected_interpolation_for_frames_and_history(pad, resample, stacked):
-    frames = np.random.default_rng(30).integers(0, 256, (25, 8, 12, 3), dtype=np.uint8)
+@pytest.mark.parametrize('shape', [(8, 12), (2, 3)])
+def test_transforms_use_the_selected_interpolation_for_frames_and_history(mode, resample, stacked, shape):
+    frames = np.random.default_rng(30).integers(0, 256, (25, *shape, 3), dtype=np.uint8)
     expected = []
+    if mode is ResizeMode.STRETCH:
+        size = (6, 6)
+    elif mode is ResizeMode.BOUND and shape == (2, 3):
+        size = (3, 2)
+    else:
+        size = (6, 4)
     for frame in frames:
         pixels = (
-            cv2.resize(frame, (6, 4), interpolation=cv2.INTER_AREA)
+            cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
             if resample is Resample.AREA
-            else np.asarray(PilImage.fromarray(frame).resize((6, 4), PilImage.Resampling.BILINEAR))
+            else np.asarray(PilImage.fromarray(frame).resize(size, PilImage.Resampling.BILINEAR))
         )
-        expected.append(np.pad(pixels, ((1, 1), (0, 0), (0, 0))) if pad else pixels)
-    codec = TransformImages(6, 6, pad=pad, resample=resample)
+        expected.append(np.pad(pixels, ((1, 1), (0, 0), (0, 0))) if mode is ResizeMode.PAD else pixels)
+    codec = TransformImages(6, 6, mode=mode, resample=resample)
     restored = spec.from_spec(json.loads(json.dumps(codec.to_spec())))
     assert isinstance(restored, TransformImages)
     assert restored.to_spec() == codec.to_spec()
@@ -105,7 +112,13 @@ def test_transforms_use_the_selected_interpolation_for_frames_and_history(pad, r
     np.testing.assert_array_equal(output['video']['wrist'], np.stack(expected) if stacked else expected[0], strict=True)
     assert output['state'] is inputs['state']
     assert output['task'] == 'pick'
-    assert inputs['video']['wrist'].shape == ((25, 8, 12, 3) if stacked else (8, 12, 3))
+    assert inputs['video']['wrist'].shape == ((25, *shape, 3) if stacked else (*shape, 3))
+
+
+@pytest.mark.parametrize('mode', list(ResizeMode))
+def test_exact_size_frame_is_unchanged(mode):
+    frame = np.random.default_rng(5).integers(0, 256, (4, 6, 3), dtype=np.uint8)
+    assert TransformImages(6, 4, mode=mode).encode({'cam': frame})['cam'] is frame
 
 
 @pytest.mark.parametrize('resample', list(Resample))
@@ -126,7 +139,7 @@ def test_explicit_image_paths_preserve_names_other_images_and_containers():
     selected = np.zeros((8, 12, 3), dtype=np.uint8)
     untouched = np.ones((8, 12, 3), dtype=np.uint8)
     inputs = {'cameras': (selected, untouched), 'literal.key': selected}
-    codec = TransformImages(6, 6, pad=True, paths=[['cameras', 0], ['literal.key']])
+    codec = TransformImages(6, 6, mode=ResizeMode.PAD, paths=[['cameras', 0], ['literal.key']])
     restored = spec.from_spec(json.loads(json.dumps(codec.to_spec())))
     assert isinstance(restored, TransformImages)
     output = restored.encode(inputs)
@@ -136,11 +149,11 @@ def test_explicit_image_paths_preserve_names_other_images_and_containers():
     assert output['cameras'][1] is untouched
     assert output['literal.key'].shape == (6, 6, 3)
     assert inputs['cameras'][0] is selected
-    assert TransformImages(6, 6, paths=[]).encode(inputs) is inputs
+    assert TransformImages(6, 6, paths=[], mode=ResizeMode.BOUND).encode(inputs) is inputs
     with pytest.raises(KeyError):
         codec.encode({})
     with pytest.raises(ValueError, match='HWC'):
-        TransformImages(6, 6, paths=[['state']]).encode({'state': [1, 2]})
+        TransformImages(6, 6, paths=[['state']], mode=ResizeMode.BOUND).encode({'state': [1, 2]})
 
 
 def _image(h, w):
@@ -149,7 +162,7 @@ def _image(h, w):
 
 class TestTransformImages:
     def test_bounds_every_image(self):
-        result = TransformImages(64, 48).encode({
+        result = TransformImages(64, 48, mode=ResizeMode.BOUND).encode({
             'cam_a': _image(480, 640),
             'cam_b': _image(240, 320),
             'state': np.array([1.0]),
@@ -159,75 +172,87 @@ class TestTransformImages:
         np.testing.assert_array_equal(result['state'], np.array([1.0]))
 
     def test_aspect_is_kept_and_images_only_shrink(self):
-        result = TransformImages(160, 160).encode({'wide': _image(480, 640), 'small': _image(24, 32)})
+        result = TransformImages(160, 160, mode=ResizeMode.BOUND).encode({
+            'wide': _image(480, 640),
+            'small': _image(24, 32),
+        })
         assert result['wide'].shape == (120, 160, 3)
         assert result['small'].shape == (24, 32, 3)
 
     def test_image_within_bound_is_the_same_object(self):
         img = _image(48, 64)
-        assert TransformImages(64, 48).encode({'cam': img})['cam'] is img
+        assert TransformImages(64, 48, mode=ResizeMode.BOUND).encode({'cam': img})['cam'] is img
 
     def test_stacked_frames_are_bounded_per_frame(self):
         stack = np.zeros((3, 480, 640, 3), dtype=np.uint8)
-        assert TransformImages(64, 48).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
+        assert TransformImages(64, 48, mode=ResizeMode.BOUND).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
 
     def test_a_threaded_stack_scales_to_the_same_pixels_as_one_thread(self):
         rng = np.random.default_rng(0)
         stack = rng.integers(0, 256, size=(TransformImages._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
-        codec = TransformImages(64, 48)
+        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
         one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
         np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
 
     def test_a_single_usable_cpu_stays_serial(self, monkeypatch):
         """A pool wins nothing on a single core, and costs threads to raise."""
         monkeypatch.setattr(TransformImages, '_usable_cpus', staticmethod(lambda: 1))
-        codec = TransformImages(64, 48)
+        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
         assert codec._workers(codec._PARALLEL_FROM + 4) == 1
 
     def test_the_pool_is_bounded_by_the_cpus_the_process_may_run_on(self, monkeypatch):
         monkeypatch.setattr(TransformImages, '_usable_cpus', staticmethod(lambda: 2))
-        codec = TransformImages(64, 48)
+        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
         assert codec._workers(codec._MAX_WORKERS * 4) == 2
 
     def test_a_stack_under_the_parallel_bar_still_scales(self):
         stack = np.zeros((TransformImages._PARALLEL_FROM - 1, 480, 640, 3), dtype=np.uint8)
-        assert TransformImages(64, 48).encode({'cam': stack})['cam'].shape[1:] == (48, 64, 3)
+        assert TransformImages(64, 48, mode=ResizeMode.BOUND).encode({'cam': stack})['cam'].shape[1:] == (48, 64, 3)
 
     def test_nested_images_are_reached(self):
-        result = TransformImages(64, 48).encode({'video': {'cam': _image(480, 640)}, 'seq': [_image(480, 640)]})
+        result = TransformImages(64, 48, mode=ResizeMode.BOUND).encode({
+            'video': {'cam': _image(480, 640)},
+            'seq': [_image(480, 640)],
+        })
         assert result['video']['cam'].shape == (48, 64, 3)
         assert result['seq'][0].shape == (48, 64, 3)
 
     def test_non_image_values_pass_through(self):
         obs = {'state': np.array([1.0, 2.0]), 'task': 'pick cube', 'flag': True}
-        result = TransformImages(64, 48).encode(obs)
+        result = TransformImages(64, 48, mode=ResizeMode.BOUND).encode(obs)
         np.testing.assert_array_equal(result['state'], obs['state'])
         assert result['task'] == 'pick cube'
         assert result['flag'] is True
 
     def test_actions_pass_through_untouched(self):
         actions = [{'target_grip': 0.5}, {'target_grip': 1.0}]
-        assert TransformImages(64, 48).decode(actions) == actions
+        assert TransformImages(64, 48, mode=ResizeMode.BOUND).decode(actions) == actions
 
     def test_training_encoder_refuses(self):
         with pytest.raises(NotImplementedError, match='full-resolution'):
-            _ = TransformImages(64, 48).training_encoder
+            _ = TransformImages(64, 48, mode=ResizeMode.BOUND).training_encoder
 
     def test_survives_a_wire_round_trip(self):
-        rebuilt = spec.from_spec(TransformImages(64, 48).to_spec())
+        rebuilt = spec.from_spec(TransformImages(64, 48, mode=ResizeMode.BOUND).to_spec())
         assert isinstance(rebuilt, TransformImages)
         assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
 
     def test_a_spec_without_a_filter_uses_bilinear(self):
-        description = component(TransformImages.WIRE_NAME, version=1, width=64, height=48)
+        description = component(TransformImages.WIRE_NAME, version=1, width=64, height=48, mode='bound')
         restored = spec.from_spec(description)
         assert isinstance(restored, TransformImages)
-        assert restored.to_spec() == TransformImages(64, 48).to_spec()
+        assert restored.to_spec() == TransformImages(64, 48, mode=ResizeMode.BOUND).to_spec()
 
     @pytest.mark.parametrize('bounds', [{}, {'width': 64}, {'height': 48}])
     def test_transform_specs_require_both_dimensions(self, bounds):
         with pytest.raises(TypeError, match='required positional argument'):
-            spec.from_spec(component(TransformImages.WIRE_NAME, **bounds))
+            spec.from_spec(component(TransformImages.WIRE_NAME, mode='bound', **bounds))
+
+    def test_transform_specs_require_a_known_mode(self):
+        with pytest.raises(TypeError, match='mode'):
+            spec.from_spec(component(TransformImages.WIRE_NAME, width=64, height=48))
+        with pytest.raises(ValueError, match='unknown'):
+            spec.from_spec(component(TransformImages.WIRE_NAME, width=64, height=48, mode='unknown'))
 
     def test_a_legacy_spec_without_bounds_takes_the_standard_bound(self):
         restored = spec.from_spec({NAME: 'restrict_image_size'})
@@ -235,14 +260,14 @@ class TestTransformImages:
         assert restored.encode({'cam': _image(1080, 1920)})['cam'].shape == (360, 640, 3)
 
     def test_area_survives_a_wire_round_trip(self):
-        description = TransformImages(64, 48, resample=Resample.AREA).to_spec()
+        description = TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND).to_spec()
         assert description == component(
             TransformImages.WIRE_NAME,
             version=1,
             width=64,
             height=48,
             resample=Resample.AREA.value,
-            pad=False,
+            mode=ResizeMode.BOUND.value,
             paths=None,
         )
         rebuilt = spec.from_spec(description)
@@ -266,6 +291,7 @@ class TestTransformImages:
             width=bounds.get('width', 640),
             height=bounds.get('height', 640),
             resample=Resample.BILINEAR if resample is None else resample,
+            mode=ResizeMode.BOUND,
         )
         assert rebuilt.to_spec()['args'] == {
             'width': expected._width,
@@ -284,21 +310,21 @@ class TestTransformImages:
     @pytest.mark.parametrize('bound', [(320, 320), (160, 160), (64, 48)])
     def test_area_gives_the_bilinear_shape_and_near_pixels(self, bound):
         image = self._textured(480, 640)
-        bilinear = TransformImages(*bound).encode({'cam': image})['cam']
-        area = TransformImages(*bound, resample=Resample.AREA).encode({'cam': image})['cam']
+        bilinear = TransformImages(*bound, mode=ResizeMode.BOUND).encode({'cam': image})['cam']
+        area = TransformImages(*bound, resample=Resample.AREA, mode=ResizeMode.BOUND).encode({'cam': image})['cam']
         assert area.shape == bilinear.shape and area.dtype == bilinear.dtype
         assert np.abs(area.astype(int) - bilinear.astype(int)).mean() < 2
 
     def test_area_scales_a_frame_that_is_not_contiguous(self):
         image = self._textured(480, 640)[:, ::-1]
-        codec = TransformImages(64, 48, resample=Resample.AREA)
+        codec = TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND)
         expected = codec.encode({'cam': np.ascontiguousarray(image)})['cam']
         np.testing.assert_array_equal(codec.encode({'cam': image})['cam'], expected)
 
     def test_a_threaded_area_stack_scales_to_the_same_pixels_as_one_thread(self):
         rng = np.random.default_rng(0)
         stack = rng.integers(0, 256, size=(TransformImages._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
-        codec = TransformImages(64, 48, resample=Resample.AREA)
+        codec = TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND)
         one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
         np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
 

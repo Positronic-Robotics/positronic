@@ -12,7 +12,7 @@ from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION
 
 from positronic import keys as obs_keys
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get
-from positronic.dataset.transforms.image import Resample
+from positronic.dataset.transforms.image import Resample, ResizeMode
 from positronic.policy import keys as policy_keys
 from positronic.policy import training
 from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
@@ -70,7 +70,7 @@ class RestrictImageSizeV1(TransformImages):
     WIRE_NAME = 'restrict_image_size'
 
     def __init__(self, width: int = 640, height: int = 640, resample: Resample = Resample.BILINEAR):
-        super().__init__(width, height, resample=resample)
+        super().__init__(width, height, mode=ResizeMode.BOUND, resample=resample)
 
     def to_spec(self):
         return {

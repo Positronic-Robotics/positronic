@@ -32,7 +32,7 @@ from positronic.offboard.client import (
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd, Step
-from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, TransformImages
+from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, ResizeMode, TransformImages
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
@@ -576,7 +576,7 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
 @pytest.mark.parametrize('resize_first', [False, True])
 @pytest.mark.parametrize('lead_sec', [0.0, 0.05])
 def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_first, lead_sec):
-    resize = TransformImages(8, 8)
+    resize = TransformImages(8, 8, mode=ResizeMode.BOUND)
     schedule = ChunkedSchedule(fps=10, horizon_sec=0.2, inference_lead=ConstantDuration(lead_sec))
     local = (
         Sequential(resize, PauseOnUnavailable(), schedule)
@@ -1246,7 +1246,9 @@ def test_an_end_command_in_the_codec_ends_the_client_run_when_its_element_plays(
     if side == 'server':  # openpi, galaxea, lerobot: the action codec is the deployment codec
         placement = {
             'codec': codec,
-            'local': Sequential(EndOnField(), ChunkedSchedule(fps=10), TransformImages(640, 640)),
+            'local': Sequential(
+                EndOnField(), ChunkedSchedule(fps=10), TransformImages(640, 640, mode=ResizeMode.BOUND)
+            ),
         }
     else:  # dreamzero: the action codec sits in the client stack, inside the schedule
         placement = {'local': Sequential(EndOnField(), ChunkedSchedule(fps=10), codec)}

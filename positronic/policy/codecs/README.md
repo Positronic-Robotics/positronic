@@ -122,7 +122,7 @@ These are the public codec classes exported by this package. Each name links to 
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`TransformImages`](image.py) | Transforms nested RGB images and frame stacks. Shrinks within bounds by default; `pad=True` resizes up or down and zero-pads to the exact size. Supports Pillow bilinear and OpenCV AREA interpolation. | Bound upload sizes or prepare model images. Use explicit `paths` to transform selected fields; names and other values stay unchanged. |
+| [`TransformImages`](image.py) | Transforms nested RGB images and frame stacks with an explicit width, height and `ResizeMode`: `BOUND` shrinks to fit, `PAD` fits and zero-pads to exact dimensions, `STRETCH` resizes to exact dimensions with distortion. Supports Pillow bilinear and OpenCV AREA interpolation. | Bound upload sizes or match the model's image preparation. Use explicit `paths` to select fields; names and other values stay unchanged. |
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
 
 `TransformImages` defaults to bilinear interpolation. `Resample.AREA` produces different pixels; select it only when those pixels suit the model.
@@ -142,7 +142,7 @@ The two codecs that do the real work are the **observation encoder** and the **a
 ```python
 StateObservationCodec(state={'state': {'robot_state.q': 7, 'grip': 1}}) & (
     SelectObservationFields({'image': 'wrist_image'})
-    | TransformImages(224, 224, pad=True, paths=[['image']])
+    | TransformImages(224, 224, mode=ResizeMode.PAD, paths=[['image']])
 )
 ```
 

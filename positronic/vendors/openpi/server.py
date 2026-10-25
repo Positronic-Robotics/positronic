@@ -21,7 +21,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codecs import ACTION, ChangeEEFrame, TransformImages
+from positronic.policy.codecs import ACTION, ChangeEEFrame, ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.vendors import openpi
@@ -213,7 +213,7 @@ def pipeline(codec: Codec, ee_frame: geom.Transform3D | None, fps: float = 15.0,
     ``ee_frame`` places the end-effector frame this checkpoint's poses live in relative to ``DEFAULT_FRAME``
     (``models.DROID_EE_FRAME``); ``None`` for a checkpoint trained in ``default``, or one speaking joints.
     """
-    local = Sequential(ChunkedSchedule(fps, horizon_sec), TransformImages(224, 224))
+    local = Sequential(ChunkedSchedule(fps, horizon_sec), TransformImages(224, 224, mode=ResizeMode.BOUND))
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
         local = Sequential(ChangeEEFrame(ee_frame), local)

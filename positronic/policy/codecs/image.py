@@ -9,7 +9,7 @@ from positronic_model_server.spec import ARGS, NAME, VERSION
 from positronic_model_server.tree import map_leaves, update_at
 
 from positronic.dataset.transforms import image
-from positronic.dataset.transforms.image import Resample
+from positronic.dataset.transforms.image import Resample, ResizeMode
 
 from .base import Codec
 from .metadata import Metadata
@@ -58,7 +58,8 @@ class EncodeImages(Codec):
 class TransformImages(Codec):
     """Transform RGB images in nested observations, including temporal frame stacks.
 
-    The default shrinks images within the bounds. ``pad=True`` resizes up or down and pads to the exact size.
+    ``BOUND`` only shrinks to fit. ``PAD`` fits and pads to the exact size, preserving aspect ratio.
+    ``STRETCH`` resizes to the exact size, allowing distortion. Width, height and mode are required.
     ``paths=None`` finds arrays automatically; explicit paths require images and leave other values untouched.
     Field names and decoded results pass through unchanged.
     """
@@ -74,25 +75,25 @@ class TransformImages(Codec):
         width: int,
         height: int,
         *,
-        pad: bool = False,
+        mode: ResizeMode,
         resample: Resample = Resample.BILINEAR,
         paths: list[list[str | int]] | None = None,
     ):
         if type(width) is not int or type(height) is not int or min(width, height) < 1:
             raise ValueError('Image dimensions must be positive integers')
-        if type(pad) is not bool:
-            raise ValueError('pad must be a boolean')
         if paths is not None and any(type(part) not in (str, int) for path in paths for part in path):
             raise ValueError('Image paths contain only mapping keys and list indices')
         self._width = width
         self._height = height
-        self._pad = pad
+        self._mode = mode
         self._resample = resample
         self._paths = None if paths is None else tuple(tuple(path) for path in paths)
 
     @classmethod
     def from_spec_args(cls, **args: Any) -> Self:
         args['resample'] = Resample(args.get('resample', Resample.BILINEAR.value))
+        if 'mode' in args:
+            args['mode'] = ResizeMode(args['mode'])
         return cls(**args)
 
     def encode(self, data):
@@ -112,7 +113,7 @@ class TransformImages(Codec):
             raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
         if value.ndim == 4:
             return np.stack(self._scaled_frames(value))
-        return image.transform_frame(value, self._width, self._height, pad=self._pad, resample=self._resample)
+        return image.transform_frame(value, self._width, self._height, mode=self._mode, resample=self._resample)
 
     @staticmethod
     def _usable_cpus() -> int:
@@ -135,7 +136,7 @@ class TransformImages(Codec):
         """Every frame of one stack, scaled. Pillow and OpenCV drop the GIL for a resize and the frames are
         independent, so more than one may run at a time."""
         scale = partial(
-            image.transform_frame, width=self._width, height=self._height, pad=self._pad, resample=self._resample
+            image.transform_frame, width=self._width, height=self._height, mode=self._mode, resample=self._resample
         )
         workers = self._workers(len(stack))
         if workers == 1:
@@ -157,7 +158,7 @@ class TransformImages(Codec):
             ARGS: {
                 'width': self._width,
                 'height': self._height,
-                'pad': self._pad,
+                'mode': self._mode.value,
                 'resample': self._resample.value,
                 'paths': None if self._paths is None else [list(path) for path in self._paths],
             },
@@ -170,5 +171,5 @@ def image_observation(images: dict[str, tuple[str, tuple[int, int]]], resample: 
     unique = set(sizes.values())
     result = SelectObservationFields({name: source for name, (source, _) in images.items()})
     for name, (_, (width, height)) in images.items():
-        result = result | TransformImages(width, height, pad=True, resample=resample, paths=[[name]])
+        result = result | TransformImages(width, height, mode=ResizeMode.PAD, resample=resample, paths=[[name]])
     return result | Metadata({Codec.IMAGE_SIZES: unique.pop() if len(unique) == 1 else sizes})

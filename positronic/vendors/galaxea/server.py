@@ -21,7 +21,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codecs import TransformImages
+from positronic.policy.codecs import ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.vendors.galaxea import codecs, protocol
 
@@ -192,7 +192,9 @@ def galaxea_model(
 @cfn.config(codec=cfn.Config(codecs.DroidCodec))
 def pipeline(codec: codecs.DroidCodec, execution_steps: int = 16):
     return PolicyDeployment(
-        Sequential(ChunkedSchedule(codec.fps, execution_steps / codec.fps), TransformImages(640, 640)),
+        Sequential(
+            ChunkedSchedule(codec.fps, execution_steps / codec.fps), TransformImages(640, 640, mode=ResizeMode.BOUND)
+        ),
         codecs.droid(action=codec),
     )
 

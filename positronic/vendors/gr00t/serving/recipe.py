@@ -45,7 +45,7 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
                             'transform_images',
                             width=settings[model_settings.IMAGE_SIZE][0],
                             height=settings[model_settings.IMAGE_SIZE][1],
-                            pad=True,
+                            mode='pad',
                             paths=[[source] for source in dict.fromkeys(image_mappings.values())],
                         ),
                         component(

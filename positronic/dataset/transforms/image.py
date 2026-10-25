@@ -19,24 +19,36 @@ class Resample(Enum):
     AREA = 'area'
 
 
+class ResizeMode(Enum):
+    """How image dimensions relate to the requested size."""
+
+    BOUND = 'bound'
+    PAD = 'pad'
+    STRETCH = 'stretch'
+
+
 def transform_frame(
-    img: np.ndarray, width: int, height: int, *, pad: bool = False, resample: Resample = Resample.BILINEAR
+    img: np.ndarray, width: int, height: int, *, mode: ResizeMode, resample: Resample = Resample.BILINEAR
 ) -> np.ndarray:
-    """Shrink within bounds, or resize and zero-pad to an exact size when ``pad`` is true."""
+    """Bound without enlarging, fit and zero-pad, or stretch to the exact requested size."""
     h, w = img.shape[:2]
-    if pad:
+    if mode is ResizeMode.PAD:
         ratio = max(w / width, h / height)
         tw, th = int(w / ratio), int(h / ratio)
-    else:
+    elif mode is ResizeMode.BOUND:
         scale = min(1.0, width / w, height / h)
         tw, th = int(w * scale), int(h * scale)
-    if (tw, th) == (w, h) and (not pad or (w, h) == (width, height)):
+    elif mode is ResizeMode.STRETCH:
+        tw, th = width, height
+    else:
+        raise ValueError(f'Unknown resize mode: {mode!r}')
+    if (tw, th) == (w, h) and (mode is not ResizeMode.PAD or (w, h) == (width, height)):
         return img
     if resample is Resample.AREA:
         resized = cv2.resize(np.ascontiguousarray(img), (tw, th), interpolation=cv2.INTER_AREA)
     else:
         resized = np.array(PilImage.fromarray(img).resize((tw, th), resample=PilImage.Resampling.BILINEAR))
-    if not pad:
+    if mode is not ResizeMode.PAD:
         return resized
     output = np.zeros((height, width, *resized.shape[2:]), dtype=resized.dtype)
     x, y = (width - tw) // 2, (height - th) // 2
@@ -69,7 +81,7 @@ def resize(
 
 
 def resize_with_pad_per_frame(width: int, height: int, method: Resample, img: np.ndarray) -> np.ndarray:
-    return transform_frame(img, width, height, pad=True, resample=method)
+    return transform_frame(img, width, height, mode=ResizeMode.PAD, resample=method)
 
 
 def resize_with_pad(

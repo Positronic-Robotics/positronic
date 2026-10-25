@@ -30,6 +30,7 @@ from positronic.policy.codecs import (
     FlipGrip,
     Metadata,
     Resample,
+    ResizeMode,
     TransformImages,
 )
 from positronic.policy.codecs.action import (
@@ -1198,8 +1199,12 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     'definition',
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), TransformImages(64, 48)),
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), TransformImages(64, 48, resample=Resample.AREA)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), TransformImages(64, 48, mode=ResizeMode.BOUND)),
+        Sequential(
+            PauseOnUnavailable(),
+            ChunkedSchedule(fps=10),
+            TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND),
+        ),
         ChunkedSchedule(fps=10, record_stats=False),
     ],
 )
@@ -1238,7 +1243,7 @@ def test_wire_names_match_the_registered_components():
         'flip_grip': FlipGrip(),
         'metadata': Metadata({'action_fps': 15}),
         'restrict_image_size': RestrictImageSizeV1(),
-        'transform_images': TransformImages(640, 640),
+        'transform_images': TransformImages(640, 640, mode=ResizeMode.BOUND),
         'observation_codec': ObservationCodecV1(state={}, images={}),
         'state_observation': StateObservationCodec(state={}),
         'select_observation_fields': SelectObservationFields(mapping={}),
