@@ -5,6 +5,7 @@ from eval_vocabulary.episode import SUBTASK_SIGNAL
 
 from positronic import keys
 from positronic.cfg.eval import number_trials, spec
+from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.eval import Eval, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.robolab import keys as robolab_keys
@@ -64,7 +65,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_ser
     proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve)
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
-    embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
+    embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid', pose_site=GRIPPER_SITE)
 
     def tasks() -> list[Task]:
         trials = []

@@ -12,6 +12,8 @@ from positronic import geom, keys
 from positronic.cfg.eval.sim import amazon_abc as abc_cfg
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.ik import ee_frames
+from positronic.drivers.roboarm.models import YAM_SITE
 from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
@@ -189,6 +191,15 @@ def test_the_embodiment_takes_a_command_and_a_grip_per_arm():
         *(keys.arm_channel(keys.TARGET_GRIP, arm) for arm in mapping.ARMS),
     }
     assert ev.embodiment.simulated
+
+
+def test_the_embodiment_states_each_pose_at_the_site_of_the_yam_model_it_carries():
+    ev = abc_cfg.put_bottles.instantiate()
+
+    frames = ee_frames(ev.embodiment.static_meta)
+
+    assert frames
+    assert {frame.site for frame in frames.values()} == {YAM_SITE}
 
 
 def test_an_arm_holds_its_last_command_and_the_other_arm_is_untouched():
