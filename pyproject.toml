@@ -328,7 +328,7 @@ extraPaths = [".", "positronic/simulator/env_server"]
 
 [[tool.basedpyright.executionEnvironments]]
 root = "positronic/simulator/amazon_abc"
-extraPaths = [".", "positronic/simulator/env_server"]
+extraPaths = [".", "positronic/simulator/env_server", "positronic/drivers/gripper"]
 
 [tool.setuptools.packages.find]
 where = ["."]

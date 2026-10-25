@@ -70,10 +70,10 @@ _FRAME_ROT_TOL = math.radians(0.05)
 
 # The cameras follow ``--cameras``, so a run of any set checks the set that run renders.
 _OBS_SPECS = {
-    keys.OBS_JOINT_POS: ((7,), np.float32),
-    keys.OBS_JOINT_VEL: ((7,), np.float32),
-    keys.OBS_EEF_POS: ((3,), np.float32),
-    keys.OBS_EEF_QUAT: ((4,), np.float32),
+    protocol.OBS_JOINT_POS: ((7,), np.float32),
+    protocol.OBS_JOINT_VEL: ((7,), np.float32),
+    protocol.OBS_EEF_POS: ((3,), np.float32),
+    protocol.OBS_EEF_QUAT: ((4,), np.float32),
     **dict.fromkeys(keys.CAMERA_SETS[args.cameras], ((720, 1280, 3), np.uint8)),
     keys.SUBTASK: ((4,), np.float32),
 }
@@ -135,9 +135,9 @@ def _check_obs_contract(env: RobolabEnv) -> None:
             )
         rendered = {k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
         assert rendered == set(keys.CAMERA_SETS[args.cameras]), f'rendered cameras {sorted(rendered)}'
-        grip = obs[keys.OBS_GRIP]
+        grip = obs[protocol.OBS_GRIP]
         assert isinstance(grip, float) and 0.0 <= grip <= 1.0, f'grip {grip!r}'
-        quat = obs[keys.OBS_EEF_QUAT]
+        quat = obs[protocol.OBS_EEF_QUAT]
         assert abs(float(np.linalg.norm(quat)) - 1.0) < 1e-3, f'eef_quat norm {quat}'
     print('  obs contract: OK (keys, camera set, shapes, dtypes, quat norm, grip range)')
 
@@ -146,11 +146,11 @@ def _check_grip(env: RobolabEnv) -> None:
     out = _reset(env, _TOKEN)
     for _ in range(_HOLD_STEPS):
         out = _step(env, protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))
-    closed = out[protocol.FRAME_OBS][keys.OBS_GRIP]
+    closed = out[protocol.FRAME_OBS][protocol.OBS_GRIP]
     assert closed > 0.9, f'closed grip {closed}'
     for _ in range(_HOLD_STEPS):
         out = _step(env, _HOLD)
-    opened = out[protocol.FRAME_OBS][keys.OBS_GRIP]
+    opened = out[protocol.FRAME_OBS][protocol.OBS_GRIP]
     assert opened < 0.1, f'open grip {opened}'
     print('  grip: OK (closed > 0.9, open < 0.1)')
 
@@ -165,7 +165,7 @@ def _check_joint_pos_passthrough(env: RobolabEnv) -> None:
     assert np.array_equal(applied, target), f'joint_pos not passed through bit-identically: {applied} vs {target}'
     for _ in range(59):
         out = _step(env, protocol.single_arm_action(joints, 0.0))
-    err = float(np.max(np.abs(out[protocol.FRAME_OBS][keys.OBS_JOINT_POS] - target)))
+    err = float(np.max(np.abs(out[protocol.FRAME_OBS][protocol.OBS_JOINT_POS] - target)))
     assert err < 0.05, f'joint_pos convergence err {err} rad'
     print(f'  joint_pos: OK (bit-identical pass-through; converged to {err:.4f} rad)')
 
@@ -183,7 +183,7 @@ def _check_joint_vel_anchoring(env: RobolabEnv) -> None:
 
 def _check_eef_offset(env: RobolabEnv) -> None:
     out = _reset(env, _TOKEN)
-    eef_quat = torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_QUAT]).reshape(1, 4)
+    eef_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT]).reshape(1, 4)
     base_quat = env._robot.data.body_quat_w[:1, env._body_idx].cpu()
     recovered = quat_mul(eef_quat, quat_inv(_EEF_OFFSET_ROT_T))
     err = min(float((recovered - base_quat).abs().max()), float((recovered + base_quat).abs().max()))
@@ -198,8 +198,8 @@ def _check_flange_to_eef(env: RobolabEnv) -> None:
     flange = robot.data.body_names.index(_FLANGE_BODY)
     flange_pos = (robot.data.body_pos_w[:1, flange] - sim.scene.env_origins[:1, 0:3]).cpu()
     flange_quat = robot.data.body_quat_w[:1, flange].cpu()
-    eef_pos = torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_POS]).reshape(1, 3)
-    eef_quat = torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_QUAT]).reshape(1, 4)
+    eef_pos = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS]).reshape(1, 3)
+    eef_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT]).reshape(1, 4)
 
     rel_quat = quat_mul(quat_inv(flange_quat), eef_quat)
     rel_pos = quat_apply(quat_inv(flange_quat), eef_pos - flange_pos)[0]
@@ -216,8 +216,8 @@ def _run_cartesian_cases(env: RobolabEnv) -> int:
     """The run_abs_ik_demo protocol over the wire ``cartesian`` path; returns the count of non-known failures."""
     _reset(env, _TOKEN)
     out = _settle(env)
-    init_pos = torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_POS])
-    init_quat = torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_QUAT])
+    init_pos = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS])
+    init_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT])
     zero = torch.zeros(3)
     identity = torch.tensor([1.0, 0.0, 0.0, 0.0])
     d, r = _POS_DELTA, _ROT_DELTA
@@ -257,12 +257,12 @@ def _run_cartesian_cases(env: RobolabEnv) -> int:
         if terminated:
             _reset(env, _TOKEN)
             out = _settle(env)
-            init_pos = torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_POS])
-            init_quat = torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_QUAT])
+            init_pos = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS])
+            init_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT])
             print(f'    {name:<14} {"SKIPPED":<10} {"-":>10} {"-":>11}')
             continue
-        pos_err = float(np.linalg.norm(out[protocol.FRAME_OBS][keys.OBS_EEF_POS] - target_pos.numpy()))
-        rot_err = _quat_angle(torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_QUAT]), target_quat)
+        pos_err = float(np.linalg.norm(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS] - target_pos.numpy()))
+        rot_err = _quat_angle(torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT]), target_quat)
         if pos_err <= _POS_TOL and rot_err <= _ROT_TOL:
             result = 'PASS'
         elif name in _KNOWN_DIVERGENT:
@@ -277,8 +277,8 @@ def _run_cartesian_cases(env: RobolabEnv) -> int:
 def _check_cartesian_delta(env: RobolabEnv) -> None:
     _reset(env, _TOKEN)
     out = _settle(env)
-    cur_pos = torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_POS])
-    cur_quat = torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_QUAT])
+    cur_pos = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS])
+    cur_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT])
     dpos = torch.tensor([0.0, 0.0, -0.05])
     dquat = _quat_about_axis(math.radians(10.0), 2)
     # The contract compose: translation adds, rotation left-multiplies onto the measured pose (world frame).
@@ -294,8 +294,8 @@ def _check_cartesian_delta(env: RobolabEnv) -> None:
     out = _step(env, protocol.single_arm_action(delta_cmd, 0.0))
     for _ in range(_HOLD_STEPS - 1):
         out = _step(env, protocol.single_arm_action(pose_cmd, 0.0))
-    pos_err = float(np.linalg.norm(out[protocol.FRAME_OBS][keys.OBS_EEF_POS] - target_pos.numpy()))
-    rot_err = _quat_angle(torch.as_tensor(out[protocol.FRAME_OBS][keys.OBS_EEF_QUAT]), target_quat)
+    pos_err = float(np.linalg.norm(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS] - target_pos.numpy()))
+    rot_err = _quat_angle(torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT]), target_quat)
     assert pos_err <= _POS_TOL and rot_err <= _ROT_TOL, (
         f'composed delta target missed: {pos_err * 1000:.2f} mm / {math.degrees(rot_err):.2f} deg'
     )
@@ -383,7 +383,7 @@ def _check_batch(num_envs: int) -> None:
     assert len(out[protocol.SLOTS]) == num_envs, f'the step answered {len(out[protocol.SLOTS])} of {num_envs} clones'
     for slot, frame in enumerate(out[protocol.SLOTS]):
         assert frame.keys() == {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS}, sorted(frame)
-        observed = frame[protocol.FRAME_OBS][keys.OBS_JOINT_POS]
+        observed = frame[protocol.FRAME_OBS][protocol.OBS_JOINT_POS]
         nearest = int(np.argmin(np.abs(measured - observed).max(axis=1)))
         assert nearest == slot, f'slot {slot} answered the joints of clone {nearest}'
     print(f'  batch: OK ({num_envs} clones answer their own frames, take their own commands, and hold without one)')

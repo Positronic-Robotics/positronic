@@ -284,11 +284,11 @@ class MolmoSpacesEnv(EnvProtocol):
         eef_quat = np.zeros(4)
         mujoco.mju_mat2Quat(eef_quat, np.ascontiguousarray(eef_rot.reshape(9)))
         payload = {
-            mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
-            mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
-            mapping.OBS_EEF_POS: eef_pos.astype(np.float32),
-            mapping.OBS_EEF_QUAT: eef_quat.astype(np.float32),
-            mapping.OBS_GRIP: np.float32(
+            protocol.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
+            protocol.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
+            protocol.OBS_EEF_POS: eef_pos.astype(np.float32),
+            protocol.OBS_EEF_QUAT: eef_quat.astype(np.float32),
+            protocol.OBS_GRIP: np.float32(
                 mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
             ),
             mapping.OBS_SIM_STATE: mujoco_state.integration_state(scene.model, scene),

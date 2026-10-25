@@ -20,11 +20,11 @@ _EEF = {
 def _raw_obs() -> dict:
     raw: dict = {}
     for arm, eef in _EEF.items():
-        raw[protocol.arm_channel(mapping.OBS_EEF_POS, arm)] = eef.translation
-        raw[protocol.arm_channel(mapping.OBS_EEF_QUAT, arm)] = eef.rotation.as_quat
-        raw[protocol.arm_channel(mapping.OBS_JOINT_POS, arm)] = np.zeros(mapping.ARM_JOINTS)
-        raw[protocol.arm_channel(mapping.OBS_JOINT_VEL, arm)] = np.zeros(mapping.ARM_JOINTS)
-        raw[protocol.arm_channel(mapping.OBS_GRIP, arm)] = 0.0
+        raw[protocol.arm_channel(protocol.OBS_EEF_POS, arm)] = eef.translation
+        raw[protocol.arm_channel(protocol.OBS_EEF_QUAT, arm)] = eef.rotation.as_quat
+        raw[protocol.arm_channel(protocol.OBS_JOINT_POS, arm)] = np.zeros(mapping.ARM_JOINTS)
+        raw[protocol.arm_channel(protocol.OBS_JOINT_VEL, arm)] = np.zeros(mapping.ARM_JOINTS)
+        raw[protocol.arm_channel(protocol.OBS_GRIP, arm)] = 0.0
     return raw
 
 

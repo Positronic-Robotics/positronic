@@ -58,7 +58,7 @@ def _load_fixture(path: str) -> list[tuple[np.ndarray, dict]]:
 def _replay_episode(conn: EnvConnection, actions: np.ndarray, initial_state: dict, task: str) -> bool:
     # Exact-state reset: the token carries the task plus the demo's own recorded initial scene state.
     out = conn.reset({'task': task, 'instruction_type': 'default', 'state': initial_state})
-    drift = float(np.abs(out['obs']['joint_pos'] - actions[0][:7]).max())
+    drift = float(np.abs(out[protocol.FRAME_OBS][protocol.OBS_JOINT_POS] - actions[0][:7]).max())
     print(f'  reset joints vs first action: {drift:.4f} rad')
     assert drift < _RESET_DRIFT_TOL, f'exact-state reset missed the demo start: {drift:.4f} rad'
     for action in [*actions, *([actions[-1]] * _HOLD_TAIL_STEPS)]:

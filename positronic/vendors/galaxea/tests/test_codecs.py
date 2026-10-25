@@ -18,7 +18,7 @@ def observation():
 
 
 def test_observation_preserves_rgb_pixels_and_maps_state(observation):
-    encoded = codecs.DroidCodec().encode(observation)
+    encoded = codecs.droid().encode(observation)
     np.testing.assert_array_equal(
         encoded[protocol.IMAGES][protocol.EXTERIOR_IMAGE], observation[keys.EXTERIOR_IMAGE].transpose(2, 0, 1)
     )
@@ -34,7 +34,7 @@ def test_observation_preserves_rgb_pixels_and_maps_state(observation):
 
 @pytest.mark.parametrize('grip', [0.0, 0.2, 1.0])
 def test_gripper_round_trip_keeps_canonical_endpoints(observation, grip):
-    codec = codecs.DroidCodec()
+    codec = codecs.droid()
     observation[keys.GRIP] = grip
     state = codec.encode(observation)[protocol.STATE]
     action = codec.decode(state)
@@ -44,7 +44,7 @@ def test_gripper_round_trip_keeps_canonical_endpoints(observation, grip):
 
 @pytest.mark.parametrize(('prediction', 'target'), [(-0.2, 1.0), (1.2, 0.0)])
 def test_gripper_predictions_are_clipped_after_inversion(prediction, target):
-    action = codecs.DroidCodec().decode({protocol.RIGHT_ARM: [0.0] * 7, protocol.RIGHT_GRIPPER: [prediction]})
+    action = codecs.droid().decode({protocol.RIGHT_ARM: [0.0] * 7, protocol.RIGHT_GRIPPER: [prediction]})
     assert action[keys.TARGET_GRIP] == target
 
 
@@ -70,6 +70,11 @@ def test_invalid_gripper_is_not_treated_as_missing(grip):
         codecs.DroidCodec().decode({protocol.RIGHT_ARM: [0.0] * 7, protocol.RIGHT_GRIPPER: grip})
 
 
+def test_the_grip_key_is_the_one_flip_grip_flips():
+    with pytest.raises(TypeError, match='grip_key'):
+        codecs.DroidCodec(grip_key='gripper')
+
+
 def test_camera_keys_are_configurable(observation):
     observation['front'] = observation.pop(keys.EXTERIOR_IMAGE)
     observation['hand'] = observation.pop(keys.WRIST_IMAGE)
@@ -91,7 +96,7 @@ def test_invalid_frequency_fails(fps):
 
 
 def test_full_chunk_uses_droid_control_mode(observation):
-    codec = codecs.droid(action=codecs.DroidCodec(fps=10))
+    codec = codecs.droid(codec=codecs.DroidCodec(fps=10))
     raw = [{protocol.RIGHT_ARM: [float(i)] * 7, protocol.RIGHT_GRIPPER: [i / 31]} for i in range(32)]
     trajectory = codec.decode(raw)
     assert len(trajectory) == 32
