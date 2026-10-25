@@ -32,6 +32,7 @@ from platform_client.device_flow import (
     register_with_device_flow,
     sign_in_flow,
 )
+from platform_client.enums import KeyStatus
 from platform_client.errors import PlatformError
 from platform_client.identity_providers import (
     CONNECT_TIMEOUT_S,
@@ -46,6 +47,7 @@ from platform_client.identity_providers import (
     IdentityProvider,
     max_stall_s,
 )
+from platform_client.ids import UserId
 from platform_client.responses import RegisterResponse
 
 CLIENT_ID = 'Iv1.testclientid'
@@ -994,22 +996,43 @@ def test_the_flag_admits_a_platform_the_command_would_otherwise_refuse():
     assert len(picked.rotations) == 1
 
 
+def _answer_the_command_as(patch: pytest.MonkeyPatch, gateway: ScriptedGateway, flow: DeviceFlow | None) -> None:
+    """Make every client the command opens answer as `gateway`, and sign in through `flow` when one is given."""
+    real_client = httpx.Client
+    if flow is not None:
+        patch.setattr(device_flow, 'sign_in_flow', lambda *_args, **_kwargs: SignIn(flow, GITHUB_REGISTER_TIMEOUT))
+    patch.setattr(
+        httpx, 'Client', lambda **kwargs: real_client(**{**kwargs, 'transport': httpx.MockTransport(gateway.handle)})
+    )
+    patch.setattr(sys, 'argv', ['platform-register', '--client-id=x', '--platform-url=https://gateway.example'])
+
+
 def _main_against(gateway: ScriptedGateway, flow: DeviceFlow | None = None) -> SystemExit:
     """Run the command with every client it opens answering as `gateway`, and return how it exited."""
-    real_client = httpx.Client
     with pytest.MonkeyPatch.context() as patch:
-        if flow is not None:
-            patch.setattr(device_flow, 'sign_in_flow', lambda *_args, **_kwargs: SignIn(flow, GITHUB_REGISTER_TIMEOUT))
-        patch.setattr(
-            httpx,
-            'Client',
-            lambda **kwargs: real_client(**{**kwargs, 'transport': httpx.MockTransport(gateway.handle)}),
-        )
-        patch.setattr(sys, 'argv', ['platform-register', '--client-id=x', '--platform-url=https://gateway.example'])
+        _answer_the_command_as(patch, gateway, flow)
 
         with pytest.raises(SystemExit) as raised:
             device_flow.main()
     return raised.value
+
+
+def test_the_command_tells_an_existing_account_to_set_its_key_and_that_rotate_stops_it(capsys):
+    flow, _ = _flow(ScriptedProvider(polls=[dict(GRANTED)]))  # built before the patch, so GitHub keeps its transport
+    existing = RegisterResponse(
+        user_id=UserId(0xA1), artifact_location='s3://artifacts/a1', key_status=KeyStatus.existing
+    )
+    gateway = ScriptedGateway(body=existing.model_dump(mode='json'))
+
+    with pytest.MonkeyPatch.context() as patch:
+        _answer_the_command_as(patch, gateway, flow)
+        device_flow.main()
+
+    # rules-allow: hardcoded-keys — the test pins the exact text that a person reads.
+    assert capsys.readouterr().out.endswith(
+        'You already have an API key. Set POSITRONIC_PLATFORM_API_KEY to it. '
+        'Lost it? Run platform-register --rotate. This stops the old key.\n'
+    )
 
 
 def test_a_success_that_is_no_registration_exits_with_one_line():

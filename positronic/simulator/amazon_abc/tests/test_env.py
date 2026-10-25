@@ -18,6 +18,7 @@ from positronic.simulator.env_server.tests.mujoco_chain import hinge_chain_xml
 
 _ABC_DIR = Path(__file__).parents[1]
 _SERVER_DIR = _ABC_DIR.parent / 'env_server'
+_APERTURE_PATH = _ABC_DIR.parents[1] / 'drivers' / 'gripper' / 'aperture.py'
 _TIMESTEP, _DECIMATION = 0.002, 17
 _PROMPT = 'put the plastic bottles in the bin'
 _TOKEN = {
@@ -127,6 +128,7 @@ def env(monkeypatch, scene: _FakeScene) -> Any:
     for name in ('protocol', 'arm_action', 'mujoco_state', 'server'):
         monkeypatch.setitem(sys.modules, name, _load(name, _SERVER_DIR / f'{name}.py'))
     monkeypatch.setitem(sys.modules, 'mapping', _load('mapping', _ABC_DIR / 'mapping.py'))
+    monkeypatch.setitem(sys.modules, 'aperture', _load('aperture', _APERTURE_PATH))
     return _load('abc_env', _ABC_DIR / 'env.py').AbcEnv()
 
 
@@ -143,7 +145,7 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
 
     assert set(frame) == {protocol.SLOTS, protocol.FRAME_META, protocol.FRAME_ROBOT_META, protocol.FRAME_CONTROL_DT}
     (slot,) = frame[protocol.SLOTS]
-    assert protocol.arm_channel(mapping.OBS_JOINT_POS, 'right') in slot[protocol.FRAME_OBS]
+    assert protocol.arm_channel(protocol.OBS_JOINT_POS, 'right') in slot[protocol.FRAME_OBS]
     assert frame[protocol.FRAME_META] == {mapping.META_TASK: _PROMPT}
     assert frame[protocol.FRAME_CONTROL_DT] == pytest.approx(_TIMESTEP * _DECIMATION)
 

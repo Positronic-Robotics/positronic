@@ -37,8 +37,8 @@ def test_observations_assemble_robot_state():
     payload = _payload()
     obs = _adapter().observations(payload)
     state = obs[keys.ROBOT_STATE]
-    assert np.allclose(state.q, payload[mapping.OBS_JOINT_POS])
-    assert np.allclose(state.dq, payload[mapping.OBS_JOINT_VEL])
+    assert np.allclose(state.q, payload[protocol.OBS_JOINT_POS])
+    assert np.allclose(state.dq, payload[protocol.OBS_JOINT_VEL])
     assert obs[keys.GRIP] == 0.5
 
 
@@ -47,7 +47,7 @@ _ROTMAT = geom.Rotation.Representation.ROTATION_MATRIX
 
 
 def _with_grasp_pose(payload: dict, pose: geom.Transform3D) -> dict:
-    return {**payload, mapping.OBS_EEF_POS: pose.translation, mapping.OBS_EEF_QUAT: pose.rotation.as_quat}
+    return {**payload, protocol.OBS_EEF_POS: pose.translation, protocol.OBS_EEF_QUAT: pose.rotation.as_quat}
 
 
 def test_the_hand_pose_is_reported_at_the_grasp_site():

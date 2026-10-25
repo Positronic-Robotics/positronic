@@ -326,11 +326,11 @@ class LiberoEnv(EnvProtocol):
         return {
             'agentview_image': raw['agentview_image'],
             'eye_in_hand_image': raw['robot0_eye_in_hand_image'],
-            'joint_pos': raw['robot0_joint_pos'],
-            'joint_vel': raw['robot0_joint_vel'],
-            'eef_pos': eef_pos,
-            'eef_quat': mat2quat(eef_rot),
-            'grip': float(np.clip(grip, 0.0, 1.0)),
+            protocol.OBS_JOINT_POS: raw['robot0_joint_pos'],
+            protocol.OBS_JOINT_VEL: raw['robot0_joint_vel'],
+            protocol.OBS_EEF_POS: eef_pos,
+            protocol.OBS_EEF_QUAT: mat2quat(eef_rot),  # xyzw, robosuite's order
+            protocol.OBS_GRIP: float(np.clip(grip, 0.0, 1.0)),
             keys.SIM_STATE: self._sim.get_state().flatten(),
         }
 

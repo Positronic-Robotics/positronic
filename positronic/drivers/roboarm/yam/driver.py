@@ -25,6 +25,7 @@ import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
+from positronic.drivers.gripper import aperture
 from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
 from positronic.utils import package_assets_path
 
@@ -247,7 +248,7 @@ class _Arm(DriverRun[command.CommandType]):
     @staticmethod
     def read_grip(obs: dict[str, np.ndarray]) -> float:
         """Convert measured open width to the closed-fraction grip convention."""
-        return 1.0 - float(obs[_GRIPPER_POS][0])
+        return aperture.flip_grip(obs[_GRIPPER_POS][0])
 
     def publish(self, obs: dict[str, np.ndarray], status: RobotStatus | None = None) -> None:
         """Publish the measured state: ERROR after a failed move, else AVAILABLE. In shutdown a failed publish is
@@ -277,7 +278,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def command_target(self, joints: np.ndarray, grip: float) -> None:
         """Command the joints and the grip; the vendor takes the grip as open width."""
-        self._send(joints, 1.0 - grip)
+        self._send(joints, aperture.flip_grip(grip))
 
     def command_step_toward(self, target: np.ndarray, grip: float) -> None:
         """Command the grip, and the joints toward ``target`` as far as the speed cap allows since the last joints

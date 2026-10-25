@@ -39,20 +39,20 @@ class AbcAdapter(WireCommandAdapter):
         for arm in mapping.ARMS:
             pose = self._measure(
                 geom.Transform3D(
-                    raw_obs[protocol.arm_channel(mapping.OBS_EEF_POS, arm)],
-                    geom.Rotation.from_quat(raw_obs[protocol.arm_channel(mapping.OBS_EEF_QUAT, arm)]),
+                    raw_obs[protocol.arm_channel(protocol.OBS_EEF_POS, arm)],
+                    geom.Rotation.from_quat(raw_obs[protocol.arm_channel(protocol.OBS_EEF_QUAT, arm)]),
                 ),
                 arm,
             )
             state = YamState()
             state.encode(
-                raw_obs[protocol.arm_channel(mapping.OBS_JOINT_POS, arm)],
-                raw_obs[protocol.arm_channel(mapping.OBS_JOINT_VEL, arm)],
+                raw_obs[protocol.arm_channel(protocol.OBS_JOINT_POS, arm)],
+                raw_obs[protocol.arm_channel(protocol.OBS_JOINT_VEL, arm)],
                 pose,
                 RobotStatus.AVAILABLE,
             )
             obs[keys.arm_channel(keys.ROBOT_STATE, arm)] = state
-            obs[keys.arm_channel(keys.GRIP, arm)] = float(raw_obs[protocol.arm_channel(mapping.OBS_GRIP, arm)])
+            obs[keys.arm_channel(keys.GRIP, arm)] = float(raw_obs[protocol.arm_channel(protocol.OBS_GRIP, arm)])
         for logical, camera in self._camera_dict.items():
             # ABC renders channels-first; the wire carries images as height, width, channels.
             frame = np.ascontiguousarray(raw_obs[camera].transpose(1, 2, 0))

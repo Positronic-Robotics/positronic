@@ -97,8 +97,9 @@ uv run --locked --extra yam positronic eval run --eval=.real.yam.bimanual \
 |-------|-------------|--------|
 | `yam_bimanual` | 3 cameras `[top, left wrist, right wrist]` + 14-D state, per arm `[joints(6), gripper width(1)]`, left first | 14-D, split into a `JointPosition` and a grip target per arm |
 
-The checkpoint speaks the i2rt gripper width (1 open, 0 closed), so the codec inverts the grip both ways. It
-predicts 30 steps at 30 Hz, and the client executes the first 25, as the upstream YAM example does.
+The checkpoint speaks the i2rt gripper width (1 open, 0 closed), so the codec composes `FlipGrip(arms=…)`, which
+inverts the grip of each arm both ways. It predicts 30 steps at 30 Hz, and the client executes the first 25, as the upstream YAM example
+does.
 
 ## Technical details
 

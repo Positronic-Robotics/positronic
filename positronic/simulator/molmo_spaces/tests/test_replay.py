@@ -190,14 +190,14 @@ def test_the_reported_ee_pose_is_forward_kinematics_of_the_joints_on_the_recorde
         conn = EnvConnection(host, port)
         try:
             observations = [conn.reset(_episode_token(_OPEN_BENCHMARK))[protocol.FRAME_OBS]]
-            start = np.asarray(observations[0][mapping.OBS_JOINT_POS], dtype=np.float64)
+            start = np.asarray(observations[0][protocol.OBS_JOINT_POS], dtype=np.float64)
             for sign in (1.0, -1.0):
                 observations.append(conn.step(_joint_pos_action(start + sign * _JOINT_STEP))[protocol.FRAME_OBS])
         finally:
             conn.close()
     for obs in observations:
         reported = _reported_ee_pose(obs)
-        expected = _recorded_model_fk(np.asarray(obs[mapping.OBS_JOINT_POS], dtype=np.float64))
+        expected = _recorded_model_fk(np.asarray(obs[protocol.OBS_JOINT_POS], dtype=np.float64))
         np.testing.assert_allclose(reported.translation, expected.translation, atol=_FK_POS_ATOL)
         assert (reported.rotation * expected.rotation.inv).angle < _FK_ROT_ATOL
 
@@ -207,7 +207,7 @@ def test_a_cartesian_target_on_the_recorded_model_drives_the_joints_to_it():
     with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
-            start = conn.reset(_episode_token(_OPEN_BENCHMARK))[protocol.FRAME_OBS][mapping.OBS_JOINT_POS]
+            start = conn.reset(_episode_token(_OPEN_BENCHMARK))[protocol.FRAME_OBS][protocol.OBS_JOINT_POS]
             target = _recorded_model_fk(np.asarray(start, dtype=np.float64) + _JOINT_STEP)
             steps = [conn.step(_cartesian_action(target))[protocol.FRAME_OBS] for _ in range(_REACH_STEPS)]
         finally:
@@ -215,5 +215,5 @@ def test_a_cartesian_target_on_the_recorded_model_drives_the_joints_to_it():
     assert not any(obs[protocol.OBS_ARM_ERROR] for obs in steps), (
         'the server found no IK solution for a reachable target'
     )
-    reached = _recorded_model_fk(np.asarray(steps[-1][mapping.OBS_JOINT_POS], dtype=np.float64))
+    reached = _recorded_model_fk(np.asarray(steps[-1][protocol.OBS_JOINT_POS], dtype=np.float64))
     np.testing.assert_allclose(reached.translation, target.translation, atol=_REACH_POS_ATOL)

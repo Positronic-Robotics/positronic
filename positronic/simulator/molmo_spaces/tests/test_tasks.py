@@ -278,7 +278,7 @@ class _MolmoObservationEnv(EnvProtocol):
 @pytest.mark.parametrize(('done_after', 'timeout', 'seed'), [(5, None, 7), (None, 0.3, None)])
 def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch, tmp_path, done_after, timeout, seed):
     env = _MolmoObservationEnv(done_after)
-    joints = env.observation[mapping.OBS_JOINT_POS]
+    joints = env.observation[protocol.OBS_JOINT_POS]
     policy = StubPolicy(command=JointPosition(joints), target_grip=0.0)
     with serve_env(env) as address, pos3.mirror():
         monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
@@ -300,7 +300,7 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
     last_obs = policy.observations[-1]
     assert last_obs[keys.TASK] == env.INSTRUCTION
     np.testing.assert_array_equal(last_obs[keys.JOINTS], joints)
-    assert last_obs[keys.GRIP] == env.observation[mapping.OBS_GRIP]
+    assert last_obs[keys.GRIP] == env.observation[protocol.OBS_GRIP]
     dataset = LocalDataset(tmp_path)
     assert len(dataset) == 1
     episode = dataset[0]
