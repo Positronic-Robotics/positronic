@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from positronic_model_server.rtc import ACTION_PREFIX, ActionPrefix
 from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component, parallel, sequence
 
 import pimm
@@ -362,9 +363,12 @@ class SlowModel:
         self._runtime = runtime
         self.calls: list[tuple[int, list]] = []
         self.prefixes: list[list] = []
+        self.requests: list[dict] = []
         self._pending: Future | None = None
 
-    def submit(self, function, obs, prefix=()):
+    def submit(self, function, obs):
+        self.requests.append(dict(obs))
+        prefix = ActionPrefix.from_observation(obs).actions if ACTION_PREFIX in obs else []
         self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
         self.prefixes.append(list(prefix))
         self._pending = Future()
@@ -406,9 +410,9 @@ class ObservingModel(SlowModel):
         super().__init__(runtime)
         self.seen: list = []
 
-    def submit(self, function, obs, prefix=()):
+    def submit(self, function, obs):
         self.seen.append(obs[POSITION])
-        return super().submit(function, obs, prefix)
+        return super().submit(function, obs)
 
 
 @pytest.mark.parametrize('status', list(RobotStatus))
@@ -1266,6 +1270,7 @@ def test_wire_names_match_the_registered_components():
         'observation_codec': ObservationCodecV1(state={}, images={}),
         'pack_fields': PackFields(encode_layout={'state': ['input']}),
         'split_action_chunk': SplitActionChunk(),
+        'rtc_schedule': RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=DelayEstimate.max()),
         'state_observation': StateObservationCodec(state={}),
         'select_observation_fields': SelectObservationFields(mapping={}),
         'rename_observation_fields': RenameObservationFields({'state': 'input'}),
@@ -1396,7 +1401,8 @@ class _EndingModel:
         self.calls: list[int] = []
         self.prefixes: list[list] = []
 
-    def __call__(self, obs, prefix=()):
+    def __call__(self, obs):
+        prefix = ActionPrefix.from_observation(obs).actions if ACTION_PREFIX in obs else []
         call = len(self.calls)
         self.calls.append(self._runtime.time_ns)
         self.prefixes.append(list(prefix))
@@ -1584,3 +1590,83 @@ def test_the_rtc_prefix_carries_end_like_any_other_command(execution):
     finally:
         run.close()
     assert model.prefixes == [[], [{MOTOR: 1}, _ending(2), {MOTOR: 3}]]
+
+
+def test_rtc_sends_frozen_and_blend_steps_with_positions_and_session_sequence(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    schedule = RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=ConstantDuration(0.2), blend_sec=0.3)
+    run = runtime.start(schedule, Mock())
+    try:
+        run.send({})
+        model.answer('old')
+        clock.advance_to_ns(100_000_000)
+        run.send({})
+        clock.advance_to_ns(600_000_000)
+        run.send({})
+        first = ActionPrefix.from_observation(model.requests[0])
+        second = ActionPrefix.from_observation(model.requests[1])
+        assert (first.sequence, first.positions, first.frozen_steps) == (0, [], 0)
+        assert (second.sequence, second.positions, second.frozen_steps) == (1, [5, 6, 7, 8, 9], 2)
+        assert [action[MOTOR] for action in second.actions] == ['old5', 'old6', 'old7', 'old8', 'old9']
+    finally:
+        run.close()
+
+
+def test_rtc_description_rebuilds_native_prefix_encoder(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    description = RTCSchedule(
+        fps=10,
+        call_after_sec=0.5,
+        prefix_duration=ConstantDuration(0.2),
+        blend_sec=0.5,
+        prefix_codec=JointPositionAction('joints', 'grip', num_joints=2),
+    ).to_spec()
+    restored = spec.from_spec(description)
+    assert restored.to_spec() == description
+    run = runtime.start(restored, Mock())
+    try:
+        run.send({})
+        model.answer_with([
+            {keys.ROBOT_COMMAND: JointPosition(np.array([i, i + 1])), keys.TARGET_GRIP: float(i % 2)} for i in range(10)
+        ])
+        clock.advance_to_ns(100_000_000)
+        run.send({})
+        clock.advance_to_ns(600_000_000)
+        run.send({})
+        prefix = ActionPrefix.from_observation(model.requests[-1])
+        np.testing.assert_array_equal(
+            [action['joints'] for action in prefix.actions], [[i, i + 1] for i in range(5, 10)]
+        )
+        np.testing.assert_array_equal([action['grip'] for action in prefix.actions], [[1], [0], [1], [0], [1]])
+        assert all(action['joints'].dtype == np.float32 for action in prefix.actions)
+    finally:
+        run.close()
+
+
+def test_rtc_keeps_camera_history_lazy_until_inference(execution, monkeypatch):
+    runtime, _ = execution
+    submitted = []
+
+    def submit(function, observation):
+        submitted.append(observation)
+        return _UnchargedAnswer(Future())
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+    stack = Mock(wraps=np.stack)
+    monkeypatch.setattr(np, 'stack', stack)
+    schedule = Sequential(
+        TemporalStack(('camera',), (-0.1, 0.0)),
+        RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=ConstantDuration()),
+    )
+    run = runtime.start(schedule, Mock())
+    try:
+        run.send({'camera': np.zeros((2, 3, 3), dtype=np.uint8)})
+        stack.assert_not_called()
+        assert submitted[0]['camera'].shape == (2, 2, 3, 3)
+        stack.assert_called_once()
+    finally:
+        run.close()

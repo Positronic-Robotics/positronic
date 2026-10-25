@@ -2,6 +2,7 @@ import collections.abc as cabc
 from typing import Any, ClassVar, Self, final, overload
 
 import numpy as np
+from positronic_model_server.rtc import ACTION_PREFIX
 from positronic_model_server.spec import PAR, SEQ
 
 from positronic import telemetry, telemetry_keys
@@ -36,6 +37,10 @@ class Codec:
 
     def _decode_single(self, data: dict) -> dict:
         return {}
+
+    def encode_commands(self, commands: cabc.Sequence[cabc.Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """Express scheduled commands in model units for an RTC request."""
+        raise ValueError(f'{type(self).__name__} cannot encode scheduled commands')
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -72,7 +77,11 @@ class Codec:
 
         @telemetry.traced(telemetry.component_name(self))
         def call(obs: Obs) -> Any:
-            encoded = encode(dict(obs))
+            inputs = dict(obs)
+            prefix = inputs.pop(ACTION_PREFIX, None)
+            encoded = encode(inputs)
+            if prefix is not None:
+                encoded = {**encoded, ACTION_PREFIX: prefix}
             result = function(encoded)
             if result is None or (isinstance(result, Step) and not result.commands):
                 return result

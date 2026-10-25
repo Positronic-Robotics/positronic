@@ -16,16 +16,17 @@ Describe a local stack without creating episode state::
 
 from abc import ABC, abstractmethod
 from bisect import insort
-from collections import deque
+from collections import ChainMap, deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from math import isfinite
+from math import ceil, isfinite
 from statistics import fmean
 from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
+from positronic_model_server.rtc import ActionPrefix
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -46,6 +47,7 @@ from positronic.policy.base import (
     Runtime,
     Step,
 )
+from positronic.policy.codecs.base import Codec
 from positronic.policy.keys import ACTION_FPS, END
 
 
@@ -488,36 +490,39 @@ class _TimedChunk:
         """The index of the action that runs at ``time_ns``, or ``len(actions)`` after the chunk ends."""
         return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
 
-    def prefix(self, now_ns: int, duration_sec: float, sampling: PrefixSampling) -> list[Commands]:
-        """This chunk sampled at ``now_ns + k / fps`` for each k that falls before ``now_ns + duration_sec``.
-
-        Stops at the first time that ``sampling`` gives no action for.
-        """
+    def prefix(self, now_ns: int, duration_sec: float, sampling: PrefixSampling) -> tuple[list[float], list[Commands]]:
+        """Sample source positions and targets on a new chunk's time grid."""
         end_ns = now_ns + round(duration_sec * 1e9)
-        prefix: list[Commands] = []
-        while (slot_ns := now_ns + round(len(prefix) * 1e9 / self._fps)) < end_ns:
-            action = self._sample(slot_ns, sampling)
-            if action is None:
-                break
-            prefix.append(action)
-        return prefix
+        positions: list[float] = []
+        actions: list[Commands] = []
+        while (slot_ns := now_ns + round(len(positions) * 1e9 / self._fps)) < end_ns:
+            position = self._position(slot_ns, sampling)
+            if position is None:
+                return positions, actions
+            positions.append(position)
+            low = int(position)
+            fraction = position - low
+            actions.append(
+                interpolate_commands(self._actions[low], self._actions[low + 1], fraction)
+                if fraction
+                else self._actions[low]
+            )
+        return positions, actions
 
-    def _sample(self, time_ns: int, sampling: PrefixSampling) -> Commands | None:
-        """The action ``sampling`` gives at ``time_ns``, or ``None`` after the chunk ends."""
+    def _position(self, time_ns: int, sampling: PrefixSampling) -> float | None:
         running = self._running_index(time_ns)
         last = len(self._actions) - 1
         if running > last:
             return None
         if sampling is PrefixSampling.PREVIOUS or (running == last and sampling is not PrefixSampling.NEXT):
-            return self._actions[running]
+            return float(running)
         if sampling is PrefixSampling.NEXT:
             following = running if self._due_ns(running) == time_ns else running + 1
-            return self._actions[following] if following <= last else None
+            return float(following) if following <= last else None
         since_ns, until_ns = time_ns - self._due_ns(running), self._due_ns(running + 1) - time_ns
         if sampling is PrefixSampling.NEAREST:
-            return self._actions[running + 1 if until_ns < since_ns else running]
-        fraction = since_ns / (since_ns + until_ns)
-        return interpolate_commands(self._actions[running], self._actions[running + 1], fraction)
+            return float(running + 1 if until_ns < since_ns else running)
+        return running + since_ns / (since_ns + until_ns)
 
     def take_due(self, now_ns: int) -> dict[str, Any]:
         """The merged commands of every action due by ``now_ns`` and not taken yet."""
@@ -555,8 +560,7 @@ class RTCSchedule(Policy):
     The call also gets a prefix: the old chunk read at the new chunk's due times T1,
     T1 + 1 / `fps`, ..., for the duration estimated by `prefix_duration`, and not past
     the end of the old chunk. The prefix tells the model what the robot does while the model
-    computes. Its length is the delay estimate: the server reads it as the number of
-    prefix actions / `fps`. The server decides how to use the prefix.
+    computes. ``blend_sec`` adds a revisable overlap after this frozen prefix.
 
     When T1 falls between two old due times, each new due time falls between two old
     actions. `prefix_sampling` decides which value the prefix holds there; see
@@ -572,13 +576,23 @@ class RTCSchedule(Policy):
     The first call has no old chunk, so its prefix is empty, and the robot executes no
     action until its answer arrives (-- in the drawing).
 
-    `infer` gets the observation and the prefix, in the command format that `infer`
-    returns, and converts both to the model's format.
+    ``infer`` receives the observation with an ``action_prefix`` description. It includes source
+    positions in the preceding answer, scheduled targets and the number of frozen steps. ``blend_sec``
+    adds a revisable overlap after the frozen prefix. ``prefix_codec`` converts scheduled targets to
+    model units; without it they remain commands for a local callable. Call sequences start at zero
+    for each run. The server must validate them against its session's prediction history.
 
-    Only a model with absolute actions works with this policy. No codec converts a
-    command back to a relative model action, so the prefix cannot be given to a
-    model with relative actions.
+    Prefix targets use absolute commands. A model with relative actions must convert these targets
+    against the current observation before inference.
     """
+
+    WIRE_NAME = 'rtc_schedule'
+    WIRE_VERSION = 1
+    CALL_AFTER_ARG = 'call_after_sec'
+    PREFIX_DURATION_ARG = 'prefix_duration'
+    PREFIX_SAMPLING_ARG = 'prefix_sampling'
+    BLEND_SEC_ARG = 'blend_sec'
+    PREFIX_CODEC_ARG = 'prefix_codec'
 
     def __init__(
         self,
@@ -586,6 +600,9 @@ class RTCSchedule(Policy):
         call_after_sec: float,
         prefix_duration: DurationEstimate,
         prefix_sampling: PrefixSampling = PrefixSampling.PREVIOUS,
+        *,
+        blend_sec: float = 0.0,
+        prefix_codec: Codec | None = None,
     ) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
@@ -594,15 +611,32 @@ class RTCSchedule(Policy):
         self._fps = fps
         self._call_after_ns = round(call_after_sec * 1e9)
         self._prefix_duration = prefix_duration
+        if not isfinite(blend_sec) or blend_sec < 0:
+            raise ValueError('blend_sec must be finite and not negative')
         self._prefix_sampling = prefix_sampling
+        self._blend_sec = blend_sec
+        self._prefix_codec = prefix_codec
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs, Sequence[Commands]], Sequence[Commands]]) -> PolicyRun:
+    def _prefix(self, chunk: _TimedChunk | None, now_ns: int, delay_sec: float, sequence: int) -> ActionPrefix:
+        positions, actions = (
+            ([], []) if chunk is None else chunk.prefix(now_ns, delay_sec + self._blend_sec, self._prefix_sampling)
+        )
+        frozen = min(len(actions), ceil(round(delay_sec * 1e9) * self._fps / 1e9))
+        encoded = (
+            self._prefix_codec.encode_commands(actions)
+            if self._prefix_codec is not None
+            else [dict(action) for action in actions]
+        )
+        return ActionPrefix(sequence, positions, frozen, encoded)
+
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         duration = self._prefix_duration.run()
         prefix_sec = 0.0
         answer: Answer[Sequence[Commands]] | None = None
         called_at_ns = 0
         chunk: _TimedChunk | None = None
         next_call_ns = 0
+        sequence = 0
         obs = yield
         try:
             while True:
@@ -616,11 +650,10 @@ class RTCSchedule(Policy):
                     next_call_ns = start_ns + self._call_after_ns
 
                 if answer is None and now_ns >= next_call_ns:
-                    prefix = []
-                    if chunk is not None:
-                        prefix = chunk.prefix(now_ns, prefix_sec, self._prefix_sampling)
+                    prefix = self._prefix(chunk, now_ns, prefix_sec, sequence)
                     called_at_ns = now_ns
-                    answer = runtime.submit(infer, obs, prefix)
+                    answer = runtime.submit(infer, ChainMap(prefix.to_observation(), obs))
+                    sequence += 1
 
                 commands = {} if chunk is None else chunk.take_due(now_ns)
                 next_due_ns = None if chunk is None else chunk.next_due_ns()
@@ -638,6 +671,24 @@ class RTCSchedule(Policy):
 
     def meta(self) -> dict[str, Any]:
         return {ACTION_FPS: self._fps}
+
+    def to_spec(self) -> dict[str, Any]:
+        args = {
+            ChunkedSchedule.FPS_ARG: self._fps,
+            self.CALL_AFTER_ARG: self._call_after_ns / 1e9,
+            self.PREFIX_DURATION_ARG: self._prefix_duration.to_spec(),
+            self.PREFIX_SAMPLING_ARG: self._prefix_sampling.value,
+            self.BLEND_SEC_ARG: self._blend_sec,
+        }
+        if self._prefix_codec is not None:
+            args[self.PREFIX_CODEC_ARG] = self._prefix_codec.to_spec()
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+
+    @classmethod
+    def from_spec_args(cls, **args: Any) -> Self:
+        args[cls.PREFIX_DURATION_ARG] = DurationEstimate.from_spec(args[cls.PREFIX_DURATION_ARG])
+        args[cls.PREFIX_SAMPLING_ARG] = PrefixSampling(args.get(cls.PREFIX_SAMPLING_ARG, PrefixSampling.PREVIOUS.value))
+        return cls(**args)
 
 
 class _StackedObs(Mapping[str, Any]):

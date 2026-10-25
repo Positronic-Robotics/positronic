@@ -169,7 +169,7 @@ Camera source names, observation source keys and controller settings can differ 
 Native loading, warm-up and inference run on the wrapper's model thread, in the same process.
 The `ready` handshake includes the client recipe and resolved session parameters.
 The client performs pose conversion, image resize, optional JPEG encoding, action decoding and scheduling.
-The server deserializes the model input and calls `Gr00tPolicy.get_action` directly.
+The server deserializes the model input and runs the native processor and model directly.
 
 Session query parameters can override `fps`, `horizon_sec`, `image_mappings`, `compress_images` and `jpeg_quality`.
 The camera mapping must keep the checkpoint's camera roles. It can select different source observations for those roles.
@@ -181,6 +181,24 @@ WebSocket listens on port 8000. Set `--websocket.served_address.port=9000` to ch
 Add `--grpc=@gr00t_serving.server.grpc --grpc.served_address.port=8001` to serve gRPC too.
 `AUTH_TOKEN` enables bearer authentication. `--idle_timeout_min=20` enables idle shutdown.
 Keepalive requests renew the idle timer. Docker stop sends SIGINT so the wrapper finishes active work and closes sessions.
+
+### Real-time chunking
+
+Use `droid_rtc` to predict the next chunk while the client executes the current one:
+
+```bash
+docker compose run --rm --service-ports groot-server droid_rtc
+```
+
+The client estimates inference delay and sends the actions due during that delay as a frozen prefix.
+The model also blends a later overlap before predicting new actions. Each session keeps its own prediction history.
+Native checkpoint transforms prepare the overlap for inference. Both inference paths are warm before the server accepts sessions.
+
+The preset starts a new prediction every **0.5 seconds**, with **0.5 seconds** of blend overlap.
+Set `--pipeline.rtc.call_after_sec` and `--pipeline.rtc.blend_sec` to change these durations.
+`--pipeline.rtc.max_delay_sec` caps the estimated frozen duration; `--pipeline.rtc.ramp_rate` controls native blending.
+RTC requires `horizon_sec=None`. A session can override `rtc` or disable it with `rtc=null`.
+An ordinary `droid` launch cannot enable RTC through a session request because its RTC path is not warmed.
 
 ## Adapter parity tests
 

@@ -42,11 +42,20 @@ from positronic.policy.compatibility import (
     restrict_image_size_v1,
     unpack_action_chunk_v1,
 )
-from positronic.policy.processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, RTCSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
 ComponentFactory = Callable[..., Processor | Codec | dict[str, Any]]
+
+
+def _rtc_schedule(**args: Any) -> RTCSchedule:
+    if RTCSchedule.PREFIX_CODEC_ARG in args:
+        codec = from_spec(args[RTCSchedule.PREFIX_CODEC_ARG])
+        if not isinstance(codec, Codec):
+            raise ValueError('prefix_codec must describe a codec')
+        args[RTCSchedule.PREFIX_CODEC_ARG] = codec
+    return RTCSchedule.from_spec_args(**args)
 
 
 COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
@@ -82,6 +91,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
 
 
 COMPONENTS.update({
+    RTCSchedule.WIRE_NAME: {RTCSchedule.WIRE_VERSION: Version(_rtc_schedule)},
     'pack_observation_fields': {1: Version(pack_observation_fields_v1)},
     'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
     'restrict_image_size': {1: Version(restrict_image_size_v1)},

@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from positronic_model_server import serialization
+from positronic_model_server.rtc import ActionPrefix
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
@@ -18,7 +19,7 @@ from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
 from positronic.policy import spec
-from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec
+from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec, EncodeImages
 from positronic.policy.codecs.metadata import MODEL_SETTINGS
 from positronic.policy.keys import ACTION_FPS
 from positronic.vendors.gr00t import recipes
@@ -220,3 +221,23 @@ def test_droid_frame_and_pixels_match_upstream_robot_client(observation):
     for name, source in {gr00t.EXTERIOR_IMAGE: keys.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE: keys.WRIST_IMAGE}.items():
         expected = loaded['image'].resize_with_pad(observation[source], 180, 320)
         np.testing.assert_array_equal(encoded[gr00t.VIDEO][name][0, 0], expected)
+
+
+def test_rtc_targets_survive_observation_packing_and_image_compression(observation):
+    definition = spec.from_spec(recipe.inference(model_settings.droid()))
+    assert isinstance(definition, Codec)
+    codec = definition | EncodeImages()
+    targets = [{gr00t.JOINT_POSITION: np.ones(7, dtype=np.float32), gr00t.GRIP: np.array([1.0], dtype=np.float32)}]
+    prefix = ActionPrefix(1, [3], 1, targets)
+    received = []
+
+    def infer(encoded):
+        received.append(encoded)
+        return ({gr00t.JOINT_POSITION: np.zeros((1, 40, 7)), gr00t.GRIP: np.zeros((1, 40, 1))}, {})
+
+    result = codec.wrap(infer)({**observation, **prefix.to_observation()})
+    assert len(result) == 40
+    restored = ActionPrefix.from_observation(received[0])
+    assert restored.sequence == 1
+    assert restored.positions == [3]
+    np.testing.assert_array_equal(restored.actions[0][gr00t.JOINT_POSITION], targets[0][gr00t.JOINT_POSITION])

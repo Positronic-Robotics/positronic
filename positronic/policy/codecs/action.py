@@ -70,6 +70,18 @@ class JointPositionAction(Codec):
             keys.TARGET_GRIP: np.asarray(data[self._grip_key]).item(),
         }
 
+    def encode_commands(self, commands):
+        result = []
+        for values in commands:
+            target = values[keys.ROBOT_COMMAND]
+            if not isinstance(target, command.JointPosition):
+                raise ValueError('JointPositionAction requires absolute joint targets')
+            result.append({
+                self._joints_key: np.asarray(target.positions, dtype=np.float32).reshape(self._num_joints),
+                self._grip_key: np.asarray([values[keys.TARGET_GRIP]], dtype=np.float32),
+            })
+        return result
+
     def to_spec(self):
         return {
             NAME: self.WIRE_NAME,
