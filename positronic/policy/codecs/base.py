@@ -25,8 +25,8 @@ class Codec:
     Reserved ``meta`` key:
 
     ``image_sizes``
-        The image dimensions this codec encodes to. Either a ``(width, height)`` tuple (same
-        size for all images) or a dict mapping raw input keys to ``(width, height)`` tuples.
+        The image dimensions this codec encodes to. Either a ``(width, height)`` pair (same
+        size for all images) or a dict mapping raw input keys to pairs. Pairs may be tuples or lists.
     """
 
     IMAGE_SIZES = 'image_sizes'

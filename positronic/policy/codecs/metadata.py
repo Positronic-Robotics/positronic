@@ -40,11 +40,6 @@ class Metadata(Codec):
 
     def __init__(self, values: dict[str, Any]):
         self._values = dict(values)
-        if self.IMAGE_SIZES in self._values:
-            sizes = self._values[self.IMAGE_SIZES]
-            self._values[self.IMAGE_SIZES] = (
-                {name: tuple(size) for name, size in sizes.items()} if isinstance(sizes, dict) else tuple(sizes)
-            )
 
     def encode(self, data):
         return data

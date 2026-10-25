@@ -22,9 +22,10 @@ from positronic.policy.codecs import LEROBOT_FEATURES, Codec, EncodeImages, Resa
 def test_image_observations_preserve_pixels_training_timelines_and_metadata(shape, resized, pad):
     frame = np.random.default_rng(42).integers(0, 256, (*shape, 3), dtype=np.uint8)
     definition = image_observation(images={'video': ('camera', (6, 6))})
-    codec = spec.from_spec(json.loads(json.dumps(definition.to_spec())))
+    description = json.loads(json.dumps(definition.to_spec()))
+    codec = spec.from_spec(description)
     assert isinstance(codec, Codec)
-    assert codec.to_spec() == definition.to_spec()
+    assert codec.to_spec() == description
     expected = np.zeros((6, 6, 3), dtype=np.uint8)
     x, y = pad
     w, h = resized
@@ -49,7 +50,7 @@ def test_image_observations_preserve_pixels_training_timelines_and_metadata(shap
     assert list(columns['video'].timestamps(RECEIVED_WORLD)) == [10, 20]
     assert list(columns['video'].timestamps(RECEIVED_WALL)) == [100, 200]
     np.testing.assert_array_equal(columns['video'].values(), np.stack([expected, expected]), strict=True)
-    assert codec.meta == {codec.IMAGE_SIZES: (6, 6)}
+    assert codec.meta == {codec.IMAGE_SIZES: [6, 6]}
     assert recipe.meta == {
         LEROBOT_FEATURES: {'video': {'shape': (6, 6, 3), 'names': ['height', 'width', 'channel'], 'dtype': 'video'}}
     }
