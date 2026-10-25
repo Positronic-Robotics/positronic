@@ -1,5 +1,8 @@
+import json
+
 import numpy as np
 import pytest
+from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys as obs_keys
 from positronic.dataset.episode import EpisodeContainer
@@ -8,6 +11,7 @@ from positronic.geom import Rotation
 from positronic.policy.codecs import ACTION, BinarizeGripInference, BinarizeGripTraining, FlipGrip
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction
 from positronic.policy.codecs.observation import StateObservationCodec
+from positronic.policy.spec import from_spec
 
 
 def test_binarize_grip_inference():
@@ -83,16 +87,57 @@ def test_flip_grip():
     ]
 
 
-def test_flip_grip_flips_the_grip_of_each_arm_of_a_two_arm_embodiment():
-    flip = FlipGrip()
-    left, right = (obs_keys.arm_channel(obs_keys.GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS)
-    obs = {left: 0.2, right: 1.0, obs_keys.TASK: 'fold'}
-    assert flip.encode(obs) == {left: pytest.approx(0.8), right: pytest.approx(0.0), obs_keys.TASK: 'fold'}
-    assert obs[left] == 0.2
+_LEFT, _RIGHT = (obs_keys.arm_channel(obs_keys.GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS)
+_TARGETS = [obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS]
 
-    targets = [obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS]
-    decoded = flip._decode_single(dict(zip(targets, (0.9, 0.25), strict=True)))
-    assert decoded == {targets[0]: pytest.approx(0.1), targets[1]: pytest.approx(0.75)}
+
+def test_flip_grip_with_arms_flips_the_grip_of_each_arm():
+    flip = FlipGrip(arms=obs_keys.BIMANUAL_ARMS)
+    obs = {_LEFT: 0.2, _RIGHT: 1.0, obs_keys.GRIP: 0.3, obs_keys.TASK: 'fold'}
+    assert flip.encode(obs) == {
+        _LEFT: pytest.approx(0.8),
+        _RIGHT: pytest.approx(0.0),
+        obs_keys.GRIP: 0.3,
+        obs_keys.TASK: 'fold',
+    }
+    assert obs[_LEFT] == 0.2
+
+    decoded = flip._decode_single(dict(zip(_TARGETS, (0.9, 0.25), strict=True)))
+    assert decoded == {_TARGETS[0]: pytest.approx(0.1), _TARGETS[1]: pytest.approx(0.75)}
+
+
+def test_flip_grip_without_arms_leaves_the_channels_of_each_arm():
+    flip = FlipGrip()
+    assert flip.encode({_LEFT: 0.2, _RIGHT: 1.0}) == {_LEFT: 0.2, _RIGHT: 1.0}
+    assert flip._decode_single({_TARGETS[0]: 0.9}) == {_TARGETS[0]: 0.9}
+
+
+def test_flip_grip_without_arms_publishes_version_1_with_no_arguments():
+    assert FlipGrip().to_spec() == {NAME: 'flip_grip', VERSION: 1}
+
+
+def test_flip_grip_with_arms_publishes_version_2_with_the_arms():
+    spec = FlipGrip(arms=obs_keys.BIMANUAL_ARMS).to_spec()
+    assert spec == {NAME: 'flip_grip', VERSION: 2, ARGS: {'arms': ['left', 'right']}}
+
+
+@pytest.mark.parametrize('flip', [FlipGrip(), FlipGrip(arms=obs_keys.BIMANUAL_ARMS)], ids=['v1', 'v2'])
+def test_a_client_builds_each_flip_grip_version_from_its_spec(flip):
+    rebuilt = from_spec(json.loads(json.dumps(flip.to_spec())))
+    assert isinstance(rebuilt, FlipGrip)
+    assert rebuilt.to_spec() == flip.to_spec()
+    obs = {obs_keys.GRIP: 0.2, _LEFT: 0.2, _RIGHT: 0.6}
+    assert rebuilt.encode(obs) == flip.encode(obs)
+
+
+def test_flip_grip_version_1_refuses_arguments():
+    with pytest.raises(TypeError):
+        from_spec({NAME: 'flip_grip', VERSION: 1, ARGS: {'arms': ['left', 'right']}})
+
+
+def test_an_unknown_flip_grip_version_is_refused():
+    with pytest.raises(ValueError, match='Unsupported component .flip_grip. version 3; supported versions: \\[1, 2\\]'):
+        from_spec({NAME: 'flip_grip', VERSION: 3})
 
 
 def test_flip_grip_composed_with_obs_and_action():

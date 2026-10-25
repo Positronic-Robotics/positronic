@@ -8,7 +8,7 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm import command
-from positronic.policy.codecs import ACTION, Codec
+from positronic.policy.codecs import ACTION, Codec, FlipGrip
 from positronic.vendors import molmoact2
 
 
@@ -117,10 +117,11 @@ class BimanualJointsAction(Codec):
         return out
 
 
-# The upstream YAM example records and runs at 30 Hz. The checkpoint speaks the i2rt gripper width (1 = open).
-yam_bimanual = codecs.compose.override(
-    obs=cfn.Config(MolmoAct2BimanualObservationCodec),
-    action=cfn.Config(BimanualJointsAction),
-    training_fps=30.0,
-    flip_grip=True,
-)
+# The upstream YAM example records and runs at 30 Hz.
+@cfn.config(training_fps=30.0)
+def yam_bimanual(training_fps: float):
+    """The bimanual YAM codec, with each arm's grip in the i2rt gripper width (1 = open) the checkpoint speaks."""
+    pair = codecs.compose(
+        obs=MolmoAct2BimanualObservationCodec(), action=BimanualJointsAction(), training_fps=training_fps
+    )
+    return FlipGrip(arms=keys.BIMANUAL_ARMS) | pair

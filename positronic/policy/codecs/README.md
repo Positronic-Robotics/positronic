@@ -130,7 +130,7 @@ Decoding runs right-to-left: unpack fields, split timesteps, then construct comm
 |-------|--------------|----------------|
 | [`BinarizeGripTraining`](gripper.py) | Training: thresholds selected signals to 0 or 1. Inference: passes through. | Recordings contain continuous grip values but the model should learn binary grip labels or inputs. |
 | [`BinarizeGripInference`](gripper.py) | Inference: thresholds the decoded grip command. Training: passes through. | The model predicts continuous grip values but execution needs open/closed commands. |
-| [`FlipGrip`](gripper.py) | Inference: maps the observed grip and the decoded target grip of every arm to `1 - value`. Training: passes through. | Serve a model that speaks an aperture (`1 = open`) on Positronic's `1 = closed` convention. |
+| [`FlipGrip`](gripper.py) | Inference: maps the observed grip and the decoded target grip to `1 - value`. `FlipGrip(arms=…)` maps those of each named arm and publishes version 2. Training: passes through. | Serve a model that speaks an aperture (`1 = open`) on Positronic's `1 = closed` convention. |
 
 ### Images
 

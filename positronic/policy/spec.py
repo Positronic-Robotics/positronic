@@ -90,6 +90,8 @@ COMPONENTS.update({
 COMPONENTS[ChunkedSchedule.WIRE_NAME][2] = Version(chunked_schedule_v2)
 # A v1 ``change_ee_frame`` states its transform from ``DEFAULT_FRAME``, the site every rig reports its poses at.
 COMPONENTS[ChangeEEFrame.WIRE_NAME][1] = Version(partial(ChangeEEFrame.from_spec_args, site=DEFAULT_FRAME))
+# Version 1 takes no arguments and flips the one-arm channels.
+COMPONENTS[FlipGrip.WIRE_NAME][FlipGrip.ONE_ARM_VERSION] = Version(lambda: FlipGrip())
 
 
 def from_spec(node: dict[str, Any]) -> Processor | Codec:

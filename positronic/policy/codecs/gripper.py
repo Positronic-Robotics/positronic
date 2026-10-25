@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import numpy as np
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
@@ -87,26 +89,29 @@ class BinarizeGripInference(Codec):
         }
 
 
-# The grip channels of a single-arm embodiment and of each arm of a two-arm one.
-_ARMS = (None, *obs_keys.BIMANUAL_ARMS)
-_GRIPS = tuple(obs_keys.arm_channel(obs_keys.GRIP, arm) for arm in _ARMS)
-_TARGET_GRIPS = tuple(obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in _ARMS)
-
-
 class FlipGrip(Codec):
-    """Serve a model whose gripper speaks an aperture (1 = open) on positronic's 1 = closed wire: flips every
-    arm's ``grip`` entering the model and every arm's ``target_grip`` leaving it.
+    """Serve a model whose gripper speaks an aperture (1 = open) on positronic's 1 = closed wire: flips ``grip``
+    entering the model and ``target_grip`` leaving it.
 
-    Compose to the left of obs/action codecs::
+    With ``arms`` it flips ``grip.{arm}`` and ``target_grip.{arm}`` of each arm named, and publishes version 2.
+    Without, it flips the one-arm channels and publishes version 1. Compose to the left of obs/action codecs::
 
         FlipGrip() | obs & action
     """
 
     WIRE_NAME = 'flip_grip'
+    WIRE_VERSION = 2
+    ONE_ARM_VERSION = 1
+
+    def __init__(self, arms: Sequence[str] | None = None):
+        self._arms = None if arms is None else tuple(arms)
+        names = (None,) if self._arms is None else self._arms
+        self._grips = tuple(obs_keys.arm_channel(obs_keys.GRIP, arm) for arm in names)
+        self._target_grips = tuple(obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in names)
 
     def encode(self, data):
         # ``data`` belongs to the caller, so the flip goes on a copy.
-        flipped = {key: 1.0 - data[key] for key in _GRIPS if key in data}
+        flipped = {key: 1.0 - data[key] for key in self._grips if key in data}
         return {**data, **flipped} if flipped else data
 
     @property
@@ -114,10 +119,12 @@ class FlipGrip(Codec):
         return Identity()
 
     def _decode_single(self, data: dict) -> dict:
-        for key in _TARGET_GRIPS:
+        for key in self._target_grips:
             if key in data:
                 data[key] = 1.0 - data[key]
         return data
 
     def to_spec(self):
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
+        if self._arms is None:
+            return {NAME: self.WIRE_NAME, VERSION: self.ONE_ARM_VERSION}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'arms': list(self._arms)}}
