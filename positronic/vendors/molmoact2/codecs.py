@@ -99,7 +99,10 @@ class MolmoAct2BimanualObservationCodec(Codec):
 
 
 class BimanualJointsAction(Codec):
-    """Decodes the 14-D bimanual action into one ``JointPosition`` and one grip target per arm."""
+    """Decodes the 14-D bimanual action into one ``JointPosition`` and one grip target per arm.
+
+    The grip target is the gripper width the checkpoint predicts. ``FlipGrip`` turns it into positronic's grip.
+    """
 
     def _decode_single(self, data: dict) -> dict:
         vector = np.asarray(data[ACTION], dtype=np.float64)
