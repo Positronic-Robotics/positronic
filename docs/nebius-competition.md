@@ -161,7 +161,7 @@ than on a GPU. Then it prints one of these lines, and the end of the log:
 
 - `the server answered: {"alive_seconds": ...}`: the server loaded its weights. The test passed.
 - `the server exited`: read the log. An image that needs a GPU stops with an error about CUDA. The GR00T
-  N1.7, FLUX 3 Action and Cosmos3-Nano example images stop in this way. Test such an image on a GPU.
+  N1.7 example image stops in this way. Test such an image on a GPU.
 - `the server answered HTTP <code>`: the server runs, but it refused the request. A `401` means that the
   server does not accept the token in `AUTH_TOKEN`. On the platform, this fails the run with
   `policy_setup_crash`.

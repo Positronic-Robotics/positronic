@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # A policy image the platform can run: FLUX 3 Action DROID with Black Forest Labs' serving code, its encoders
 # and every weight in the image. It serves positronic's session protocol on port 8000 with no arguments and no
-# network. docs/submit-a-policy-image.md § FLUX 3 Action says what it serves.
+# network. The GPU memory peaks at about 33 000 MiB.
 #
 # Usage (from the repository root)
 #   HF_TOKEN=<a read token> make -C docker build-serve-flux3-action        # positro/flux3-action:local

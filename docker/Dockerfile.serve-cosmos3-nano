@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # A policy image the platform can run: Cosmos3-Nano-Policy-DROID with NVIDIA's action server, its environment,
 # and the two Hugging Face repositories it loads. It serves positronic's session protocol on port 8000 with no
-# arguments and no network. docs/submit-a-policy-image.md § Cosmos3-Nano says what it serves and its licences.
+# arguments and no network. The GPU memory peaks at about 32 500 MiB.
 #
 # Usage (from the repository root)
 #   make -C docker build-serve-cosmos3-nano        # positro/cosmos3-nano:local

@@ -14,20 +14,17 @@ test that the image starts with the network denied before you submit
 
 The openpi and GR00T recipes build on a `positro/<vendor>-base` image on Docker Hub, which carries
 the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: MolmoAct2 has no
-vendor stack. The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves. Each
-recipe adds the weights, the positronic source with an offline environment, `EXPOSE 8000` and a
-start command. The layers go from the least often changed to the most: base, dependencies, source,
-weights. The source and the weights come in through `COPY --link` with no step after them, so a
-source change builds one new layer and reuses the rest from a cache. CI publishes all five images
-to Docker Hub. Build from the root of a positronic checkout:
+vendor stack. Each recipe adds the weights, the positronic source with an offline environment,
+`EXPOSE 8000` and a start command. The layers go from the least often changed to the most: base,
+dependencies, source, weights. The source and the weights come in through `COPY --link` with no
+step after them, so a source change builds one new layer and reuses the rest from a cache. CI
+publishes the three images to Docker Hub. Build from the root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
 | openpi π0.5 DROID | [`docker/Dockerfile.serve-pi05-droid`](../docker/Dockerfile.serve-pi05-droid), published as `positro/pi05-droid` | `positro/openpi-base` | `pi05_droid_jointpos`, the public checkpoint |
 | GR00T N1.7 DROID | [`docker/Dockerfile.serve-gr00t-n17-droid`](../docker/Dockerfile.serve-gr00t-n17-droid), published as `positro/gr00t-n17-droid` | `positro/gr00t-base` | `nvidia/GR00T-N1.7-DROID` at a pinned revision |
 | MolmoAct2 DROID | [`docker/Dockerfile.serve-molmoact2-droid`](../docker/Dockerfile.serve-molmoact2-droid), published as `positro/molmoact2-droid` | `ghcr.io/astral-sh/uv:python3.13-bookworm` | `allenai/MolmoAct2-DROID` at a pinned revision |
-| FLUX 3 Action DROID | [`docker/Dockerfile.serve-flux3-action`](../docker/Dockerfile.serve-flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
-| Cosmos3-Nano DROID | [`docker/Dockerfile.serve-cosmos3-nano`](../docker/Dockerfile.serve-cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
 
 CI builds each image when its recipe or the code it installs changes, and tags each build `main`, `latest`
 and the commit. A release also tags each of them `v<version>`. CI does not test an
@@ -69,15 +66,13 @@ Other models:
 ### What the example images use
 
 Approximate values, from one run of each image in October 2026. A later build of an image can use
-different values. The platform gives each image 24 GB of GPU memory, so the last two images do not fit.
+different values. The platform gives each image 24 GB of GPU memory.
 
 | Image | Disk, pulled image | Memory, test without a GPU | GPU memory |
 |---|---|---|---|
 | `positro/pi05-droid` | 50 GB | 20 GB | 10 GB |
 | `positro/gr00t-n17-droid` | 40 GB | needs a GPU | 10 GB |
 | `positro/molmoact2-droid` | 35 GB | 12 GB | 15 GB |
-| `positro/flux3-action` | 40 GB | needs a GPU | 35 GB, over the 24 GB |
-| `positro/cosmos3-nano` | 55 GB | needs a GPU | 35 GB, over the 24 GB |
 
 ### Three traps in the `positro/*` bases
 
@@ -102,44 +97,6 @@ of the hostname into `/etc/hosts`, and the server dies with `socket.gaierror: Te
 name resolution`. A Docker network with no egress has the record, so only `--network none` shows
 the trap. The openpi recipe installs `libnss-myhostname`, which resolves the hostname to a local
 address.
-
-### FLUX 3 Action
-
-`positro/flux3-action` holds FLUX 3 Action DROID, the serving code of Black Forest Labs (BFL), and
-every weight the server loads. It serves the session protocol, and the platform runs the published image as a
-submission.
-
-- The image holds two Python environments. positronic's server answers on port 8000. It starts BFL's
-  own server in BFL's environment, on port 9000 inside the container, and sends it each observation.
-- The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
-  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
-  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
-  `droid_3cam` in the recipe's `ENTRYPOINT`.
-- BFL's server compiles the model for about 140 s, and port 8000 binds after it. The GPU memory peaks
-  at about 33 000 MiB.
-- `black-forest-labs/flux-3-action-droid` and `black-forest-labs/flux-3-action-base` are gated. Accept
-  BFL's terms on the Hub page of each, then put a read token in `$HOME/.hf_token`, or in `HF_TOKEN` for
-  `make -C docker build-serve-flux3-action`. The build reads the token through a secret mount, and it
-  enters no layer.
-
-### Cosmos3-Nano
-
-`positro/cosmos3-nano` holds Cosmos3-Nano-Policy-DROID, NVIDIA's action server with its environment,
-and the Wan2.2 VAE the model loads. It serves the session protocol, and the platform runs the
-published image as a submission.
-
-- The image holds two Python environments. positronic's server answers on port 8000. It starts
-  NVIDIA's server in NVIDIA's environment, on port 9000 inside the container, and sends it each
-  observation.
-- The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
-  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
-  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
-  `droid_3cam` in the recipe's `ENTRYPOINT`.
-- The client plays each chunk of 32 actions in full, and a gripper value above 0.5 closes the
-  gripper, as in NVIDIA's RoboLab client.
-- The guardrails are off. Their model repository is gated, and they serve only the video and text
-  generation paths, which the action server does not use.
-- The GPU memory peaks at about 32 500 MiB.
 
 ### Build and push
 
@@ -313,12 +270,10 @@ after the image name, and it loads the model on the CPU and serves:
 ```bash
 bash docker/test_policy_image.sh docker.io/<you>/molmoact2-droid:v1 --model.device_map=cpu
 ```
- The GR00T recipe stops on the missing GPU
-with `Flash Attention 2 is not available on CPU`. For the FLUX 3 Action recipe, BFL's server exits on
-the missing GPU, and the server reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano
-recipe, NVIDIA's server exits the same way, and the server reports `Cosmos3 backend exited with code 1`.
-These three stop before they read the weights, so for them, also run the test on a GPU below. The log
-must not show `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
+
+The GR00T recipe stops on the missing GPU with `Flash Attention 2 is not available on CPU`. It stops
+before it reads the weights, so for GR00T, also run the test on a GPU below. The log must not show
+`NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
 albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints
 `A new version of the following files was downloaded` when `transformers` copies the model's code
 into its module cache; no download occurs.
@@ -329,9 +284,8 @@ On a machine with a GPU, add `--gpu`:
 bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
-The script then waits up to 600 s: FLUX 3 Action binds port 8000 after about 140 s, and GR00T loads in
-about 151 s. `no answer in 600 s` means a hung server, or a slow one. The platform gives the server's start
-1800 s from the end of the pull.
+The script then waits up to 600 s: GR00T loads in about 151 s. `no answer in 600 s` means a hung
+server, or a slow one. The platform gives the server's start 1800 s from the end of the pull.
 
 The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
 sure that your model uses less. A memory setting that is a fraction of the GPU, such as
