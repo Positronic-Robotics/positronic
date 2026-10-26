@@ -149,13 +149,18 @@ def test_timeout_defaults_to_each_benchmark_horizon_plus_a_margin(asked, caplog)
     assert not caplog.records
 
 
-def test_an_explicit_timeout_replaces_the_backstop_and_warns(asked, caplog):
+def test_each_trial_scene_carries_its_benchmark_horizon(asked):
+    scenes = [trial.prepare_args[eval_keys.SCENE] for trial in benchmarks.instantiate().tasks()]
+    assert [scene[molmo_keys.TASK_HORIZON] for scene in scenes] == [_PICK_HORIZON_SEC, _PLACE_HORIZON_SEC]
+
+
+@pytest.mark.parametrize('timeout', [20.0, 999.0])
+def test_an_explicit_timeout_replaces_the_benchmark_horizon_and_warns(asked, caplog, timeout):
     with caplog.at_level(logging.WARNING):
-        short = benchmarks.override(timeout=20.0).instantiate().tasks()
-        long = benchmarks.override(timeout=999.0).instantiate().tasks()
-    assert [trial.timeout_sec for trial in short] == [20.0, 20.0]
-    assert [trial.timeout_sec for trial in long] == [999.0, 999.0]
-    assert len(caplog.records) == 2
+        trials = list(benchmarks.override(timeout=timeout).instantiate().tasks())
+    assert [trial.prepare_args[eval_keys.SCENE][molmo_keys.TASK_HORIZON] for trial in trials] == [timeout, timeout]
+    assert [trial.timeout_sec for trial in trials] == [timeout + _TIMEOUT_MARGIN_SEC] * 2
+    assert len(caplog.records) == 1
 
 
 class _MolmoObservationEnv(EnvProtocol):
@@ -231,6 +236,7 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
             **env.BENCHMARK._asdict(),
             mapping.TOKEN_EPISODE_INDEX: 3,
             mapping.TOKEN_SEED: seed,
+            mapping.TOKEN_HORIZON_SEC: timeout if timeout is not None else env.HORIZON_STEPS * env.CONTROL_DT,
             mapping.WITH_RIGHT_SHOULDER: True,
         }
     ]

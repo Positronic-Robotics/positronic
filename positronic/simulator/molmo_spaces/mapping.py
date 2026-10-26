@@ -95,6 +95,8 @@ def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[
 
 TOKEN_EPISODE_INDEX = 'episode_index'
 TOKEN_SEED = 'seed'
+# In a reset token: the trial horizon in seconds. None runs the benchmark horizon.
+TOKEN_HORIZON_SEC = 'horizon_sec'
 
 SELECT_EPISODES = 'episodes'
 # In a selection and a reset token: whether the server adds the right shoulder camera.

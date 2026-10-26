@@ -66,6 +66,7 @@ class MolmoAdapter(WireCommandAdapter):
             **{dimension: params[key] for dimension, key in self._DIMENSION_KEYS.items()},
             mapping.TOKEN_EPISODE_INDEX: params[molmo_keys.EPISODE_INDEX],
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
+            mapping.TOKEN_HORIZON_SEC: params[molmo_keys.TASK_HORIZON],
             mapping.WITH_RIGHT_SHOULDER: self._with_right_shoulder,
         }
 

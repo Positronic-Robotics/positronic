@@ -162,7 +162,12 @@ class MolmoSpacesEnv(EnvProtocol):
         return with_right
 
     def _build(
-        self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None, with_right_shoulder: bool
+        self,
+        bench: mapping.BenchmarkPath,
+        episode_index: int,
+        seed: int | None,
+        with_right_shoulder: bool,
+        horizon_sec: float | None,
     ) -> None:
         if self._sampler is not None:
             self._sampler.close()
@@ -173,7 +178,11 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg = _DroidEvalConfig()
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark.
-        cfg.task_horizon = determine_task_horizon(episodes, None, cfg.policy_dt_ms)
+        cfg.task_horizon = (
+            determine_task_horizon(episodes, None, cfg.policy_dt_ms)
+            if horizon_sec is None
+            else round(horizon_sec * 1000.0 / cfg.policy_dt_ms)
+        )
         self._sampler = _JointGraspSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
@@ -213,7 +222,11 @@ class MolmoSpacesEnv(EnvProtocol):
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         bench = mapping.BenchmarkPath(**{d: token[d] for d in mapping.BenchmarkPath._fields})
         self._build(
-            bench, token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED), token[mapping.WITH_RIGHT_SHOULDER]
+            bench,
+            token[mapping.TOKEN_EPISODE_INDEX],
+            token.get(mapping.TOKEN_SEED),
+            token[mapping.WITH_RIGHT_SHOULDER],
+            token.get(mapping.TOKEN_HORIZON_SEC),
         )
         obs, _info = self._task.reset()  # One observation dict per environment.
         env_obs = obs[0]

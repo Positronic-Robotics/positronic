@@ -42,8 +42,8 @@ def benchmarks(
     """A DROID evaluation over selected MolmoSpaces benchmark episodes.
 
     Each benchmark dimension accepts a name, a list or None (all found); ``episodes`` accepts indices.
-    ``seed=None`` follows the benchmark's seed convention. The default timeout is the benchmark horizon
-    plus a margin; an explicit timeout replaces it.
+    ``seed=None`` follows the benchmark's seed convention. ``timeout`` replaces the benchmark horizon in the simulator
+    and in the harness; the harness deadline is the horizon plus a margin.
 
     The policy sees the wrist camera and two shoulder cameras, left and right, in ``image.exterior`` and
     ``image.exterior_2``. The run draws their order once from ``seed``, or at random when ``seed`` is None,
@@ -74,15 +74,21 @@ def benchmarks(
             **{mapping.SELECT_EPISODES: episodes, mapping.WITH_RIGHT_SHOULDER: with_right_shoulder},
         )
         if timeout is not None:
-            logging.warning('--eval.timeout %ss replaces the benchmark horizon backstop', timeout)
+            logging.warning('--eval.timeout %ss replaces the benchmark horizon', timeout)
         trials = []
         for params in proxy.tasks(selection):
-            deadline = timeout if timeout is not None else params[molmo_keys.TASK_HORIZON] + _TIMEOUT_MARGIN_SEC
+            horizon = timeout if timeout is not None else params[molmo_keys.TASK_HORIZON]
             # The env ends a trial on its first successful step, so a trial that the policy ends has failed.
             task = Task(
-                instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=deadline, policy_end_success=False
+                instruction_source=lambda: proxy.meta[mapping.META_TASK],
+                timeout_sec=horizon + _TIMEOUT_MARGIN_SEC,
+                policy_end_success=False,
             )
-            scene = {**params, molmo_keys.EXTERIOR_SIDES: [side.value for side in exterior_sides]}
+            scene = {
+                **params,
+                molmo_keys.TASK_HORIZON: horizon,
+                molmo_keys.EXTERIOR_SIDES: [side.value for side in exterior_sides],
+            }
             trials += [
                 (task, {**scene, **({eval_keys.SEED: seed + t} if seed is not None else {})})
                 for t in range(trial_count)
