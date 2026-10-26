@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.1] - 2026-10-25
+
+This release moves every Franka arm to the grip point `gripper`. A server that states its frame with `cfg.codecs.franka_hand_frame` must build that entry with 0.4.1 or later: in 0.4.0 the preset names the site `default`, and a 0.4.1 client refuses it. No workspace distribution changes, so the release publishes `positronic` only.
+
+| Distribution | Version |
+|---|---|
+| `positronic-platform-client` | 0.41.2 |
+| `positronic-evals` | 0.2.0 |
+| `positronic-eval-vocabulary` | 0.6.0 |
+| `positronic-model-server` | 0.3.1 |
+| `positronic-wire` | 0.12.0 |
+
+### Inference
+- Every Franka arm reports `robot_state.ee_pose` at `gripper` and solves Cartesian commands there: the FR3, the MuJoCo sim, LIBERO, MolmoSpaces and RoboLab. The `default` site is gone ([#1021](https://github.com/Positronic-Robotics/positronic/pull/1021))
+- `cfg.codecs.franka_hand_frame` is the Franka Hand point `F_T_EE` measured from `gripper`, and `cfg.codecs.panda_hand_frame` is the hand point of the sim panda. A server trained on poses at one of these points puts it in its stack ([#1021](https://github.com/Positronic-Robotics/positronic/pull/1021))
+- A policy that states no `ee_frames` gets each pose at the legacy point of the rig, read from the rig's model, and the harness logs a warning. This fallback is temporary ([#1021](https://github.com/Positronic-Robotics/positronic/pull/1021))
+- A version 1 `change_ee_frame` spec is refused as an unsupported version ([#1021](https://github.com/Positronic-Robotics/positronic/pull/1021))
+- `FlipGrip(arms=...)` flips the grip of each named arm and publishes `flip_grip` version 2. `FlipGrip()` still publishes version 1 for one arm, and an older client refuses version 2 ([#1034](https://github.com/Positronic-Robotics/positronic/pull/1034))
+- The published MolmoAct2 DROID image serves `droid_3cam`, which gives the model both exterior views. The `PIPELINE` build argument or `MOLMOACT2_PIPELINE` at run time selects `droid` for one exterior view ([#1037](https://github.com/Positronic-Robotics/positronic/pull/1037))
+
+### Datasets
+- `REAL_ROBOT_TRANSFORM` and `SIM_ROBOT_TRANSFORM` read a recording made before `gripper` and give each pose signal at `gripper`, from the model that the recording carries ([#1021](https://github.com/Positronic-Robotics/positronic/pull/1021))
+
+### Simulation
+- `env_server/protocol.py` defines the raw arm observation names `OBS_JOINT_POS`, `OBS_JOINT_VEL`, `OBS_EEF_POS`, `OBS_EEF_QUAT` and `OBS_GRIP`. ABC, LIBERO, MolmoSpaces and RoboLab read them from there ([#1034](https://github.com/Positronic-Robotics/positronic/pull/1034))
+
+### Hardware
+- The Franka driver reboots the control box once when Desk is in Programming mode, as for the other faults that only a reboot clears. The `franka` extra requires `positronic-franka` 0.12.0 or later ([#1023](https://github.com/Positronic-Robotics/positronic/pull/1023))
+
+### Docs
+- The competition guide says that a Mac or another ARM computer can build and submit a policy image. Only the local image test needs an amd64 Linux computer ([#1038](https://github.com/Positronic-Robotics/positronic/pull/1038))
+
 ## [0.4.0] - 2026-10-25
 
 This release changes the platform API contract, and every `positronic` install older than 0.4.0 must upgrade to use the platform. A client from this release and the platform each refuse a version of the other that is too old. This release publishes `positronic-platform-client` 0.41.2, `positronic-evals` 0.2.0, `positronic-eval-vocabulary` 0.6.0 and `positronic-model-server` 0.3.1. `positronic-wire` 0.12.0 does not change, so the release skips it.
