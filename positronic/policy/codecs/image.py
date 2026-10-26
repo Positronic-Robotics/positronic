@@ -1,3 +1,4 @@
+import collections.abc as cabc
 import os
 import threading
 from collections import OrderedDict
@@ -157,6 +158,15 @@ class TransformImages(Codec):
         if value.ndim == 4:
             return np.stack(self._scaled_frames(value))
         return self._transform_frame(value)
+
+    def transform_frames(self, frames: cabc.Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Each ``(H, W, 3)`` frame of ``frames``, transformed as ``encode`` transforms it at the top level of an
+        observation: every frame with ``paths=None``, and the frames at the one-key paths otherwise."""
+        chosen = None if self._paths is None else {path[0] for path in self._paths if len(path) == 1}
+        return {
+            key: self._transform_frame(frame) if chosen is None or key in chosen else frame
+            for key, frame in frames.items()
+        }
 
     def _transform_frame(self, frame: np.ndarray) -> np.ndarray:
         if self._cache is None:
