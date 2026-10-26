@@ -322,6 +322,41 @@ def test_an_endpoint_without_a_session_limit_omits_it_from_its_dump(mode: str):
     assert stated['max_concurrent_sessions'] == 3
 
 
+_IMAGE_ENTRY = {'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket'}
+
+
+def test_an_image_endpoint_states_the_least_gpu_memory_it_needs():
+    entry = Endpoint.model_validate({**_IMAGE_ENTRY, 'min_vram_gb': 40})
+    assert entry.min_vram_gb == 40
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+    assert Endpoint.model_validate(_IMAGE_ENTRY).min_vram_gb is None
+
+
+@pytest.mark.parametrize('need', [0, -1])
+def test_a_memory_need_below_one_gb_is_refused(need: int):
+    with pytest.raises(ValidationError, match='greater than or equal to 1'):
+        Endpoint.model_validate({**_IMAGE_ENTRY, 'min_vram_gb': need})
+
+
+def test_a_remote_or_a_served_endpoint_states_no_memory_need():
+    with pytest.raises(ValidationError, match='which only an image endpoint carries'):
+        Endpoint.model_validate(remote('baseline', min_vram_gb=40))
+    with pytest.raises(ValidationError, match='which only an image endpoint carries'):
+        Endpoint(name='candidate', kind=EndpointKind.served, spec='pi05', wire=Wire.grpc, min_vram_gb=40)
+
+
+@pytest.mark.parametrize('label', [{'name': 'policy'}, {'name': 'policy', 'kind': 'image'}])
+def test_a_label_states_no_memory_need_of_its_own(label: dict[str, str]):
+    with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
+        Endpoint.model_validate({**label, 'min_vram_gb': 40})
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_an_endpoint_without_a_memory_need_omits_it_from_its_dump(mode: str):
+    assert 'min_vram_gb' not in Endpoint.model_validate(_IMAGE_ENTRY).model_dump(mode=mode)
+    assert Endpoint.model_validate({**_IMAGE_ENTRY, 'min_vram_gb': 48}).model_dump(mode=mode)['min_vram_gb'] == 48
+
+
 def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():
     entry = Endpoint(
         name='policy', kind=EndpointKind.image, wire=Wire.websocket, image=PolicyImage('org/policy@sha256:abc')

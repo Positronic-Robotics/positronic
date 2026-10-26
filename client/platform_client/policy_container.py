@@ -19,7 +19,7 @@ IMAGE_FETCH_DEADLINE_S = 1800.0
 # The deadline for the server's start, from the end of the image pull to the first readiness answer.
 WARMUP_DEADLINE_S = 1800.0
 
-# The GPU: one MIG slice of an RTX PRO 6000, and the memory it carries.
+# The published GPU: one MIG slice of an RTX PRO 6000, and the memory it carries.
 MIG_PROFILE = '1g.24gb'
 VRAM_MIB = 24192
 

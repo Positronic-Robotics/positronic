@@ -1017,6 +1017,15 @@ def test_create_submission_sends_the_session_limit_a_remote_endpoint_states():
     assert gateway.body()['endpoints'][0]['max_concurrent_sessions'] == 1
 
 
+def test_create_submission_sends_the_memory_need_an_image_endpoint_states():
+    gateway = Gateway(200, {'submission_id': '2b', 'status': 'pending'})
+    image = {'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket', 'min_vram_gb': 40}
+    plan = EvalPlan.model_validate({**PLAN.model_dump(), 'endpoints': [image]})
+    make_client(gateway).create_submission(plan)
+
+    assert gateway.body()['endpoints'][0]['min_vram_gb'] == 40
+
+
 def test_a_run_carries_its_episode_counts_into_the_view():
     gateway = Gateway(
         200,
