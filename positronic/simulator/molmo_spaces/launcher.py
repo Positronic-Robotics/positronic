@@ -32,6 +32,8 @@ _MOLMO_SRC = Path.home() / '.cache' / 'positronic' / 'molmospaces' / 'src'
 
 # Version constraints compensate for MolmoSpaces' missing lockfile; the file documents how to regenerate them.
 _MOLMO_CONSTRAINTS = Path(__file__).parent / 'molmo_constraints.txt'
+# Packages that upstream requires and the eval never imports, removed so that the install needs no C compiler.
+_MOLMO_OVERRIDES = Path(__file__).parent / 'molmo_overrides.txt'
 
 # MolmoSpaces requires Python 3.11. Filament benchmarks need the alternative mujoco-filament extra.
 _MOLMO_PYTHON = '3.11'
@@ -45,7 +47,8 @@ def ensure_molmo_venv() -> Path:
         venv = _MOLMO_SRC / '.venv'
         python = ensure_venv(venv, _MOLMO_PYTHON)
         # uv sync also resolves upstream's unused curobo extra, which requires CUDA to build.
-        uv_pip_install(venv, ['-c', str(_MOLMO_CONSTRAINTS), '-e', f'.[{_MOLMO_EXTRA}]', *SERVER_DEPS], cwd=src)
+        pins = ['-c', str(_MOLMO_CONSTRAINTS), '--override', str(_MOLMO_OVERRIDES)]
+        uv_pip_install(venv, [*pins, '-e', f'.[{_MOLMO_EXTRA}]', *SERVER_DEPS], cwd=src)
     return python
 
 

@@ -5570,7 +5570,6 @@ dependencies = [
     { name = "pyturbojpeg" },
     { name = "pyyaml" },
     { name = "rerun-sdk" },
-    { name = "robosuite" },
     { name = "ruckig" },
     { name = "scipy" },
     { name = "starlette" },
@@ -5648,6 +5647,9 @@ molmoact2 = [
 openpi = [
     { name = "openpi-client" },
 ]
+scenes = [
+    { name = "robosuite" },
+]
 telemetry = [
     { name = "nvidia-ml-py" },
     { name = "opentelemetry-exporter-otlp-json-file" },
@@ -5665,7 +5667,7 @@ dev = [
     { name = "ipython" },
     { name = "jupyter" },
     { name = "opencv-python" },
-    { name = "positronic", extra = ["telemetry"] },
+    { name = "positronic", extra = ["scenes", "telemetry"] },
     { name = "pybind11-stubgen" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -5742,7 +5744,7 @@ requires-dist = [
     { name = "pyzed", marker = "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'hardware'", url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl" },
     { name = "requests", marker = "extra == 'molmoact2'" },
     { name = "rerun-sdk", specifier = "==0.30.0" },
-    { name = "robosuite" },
+    { name = "robosuite", marker = "extra == 'scenes'" },
     { name = "ruckig" },
     { name = "scipy" },
     { name = "sentencepiece", marker = "extra == 'molmoact2'" },
@@ -5761,7 +5763,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
-provides-extras = ["openpi", "hardware", "franka", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "llm", "llm-openai", "llm-anthropic", "llm-google"]
+provides-extras = ["openpi", "hardware", "franka", "scenes", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "llm", "llm-openai", "llm-anthropic", "llm-google"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5771,6 +5773,7 @@ dev = [
     { name = "ipython" },
     { name = "jupyter" },
     { name = "opencv-python" },
+    { name = "positronic", extras = ["scenes"] },
     { name = "positronic", extras = ["telemetry"] },
     { name = "pybind11-stubgen" },
     { name = "pytest" },
