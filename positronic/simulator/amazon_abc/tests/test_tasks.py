@@ -1,5 +1,6 @@
 """Which tasks an ABC eval runs, and how each arm's signals map onto the canonical contract."""
 
+import xml.etree.ElementTree as ET
 from typing import Any
 
 import numpy as np
@@ -12,8 +13,9 @@ from positronic import geom, keys
 from positronic.cfg.eval.sim import amazon_abc as abc_cfg
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import ee_frames
-from positronic.drivers.roboarm.models import YAM_SITE
+from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_GRASP_SITE_FRAME
 from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
@@ -100,7 +102,8 @@ def test_every_arm_reports_its_own_state_and_grip():
     }
     right = obs[keys.arm_channel(keys.ROBOT_STATE, 'right')]
     assert np.array_equal(right.q, np.ones(mapping.ARM_JOINTS, dtype=np.float32))
-    assert right.ee_pose.translation == pytest.approx([0.1, 0.2, 0.3])
+    grasp_site = geom.Transform3D(np.array([0.1, 0.2, 0.3]), geom.Rotation.identity)
+    assert right.ee_pose.translation == pytest.approx((grasp_site * YAM_GRASP_SITE_FRAME.inv).translation)
     assert obs[keys.arm_channel(keys.GRIP, 'right')] == pytest.approx(0.25)
 
 
@@ -188,12 +191,13 @@ def test_the_embodiment_takes_a_command_and_a_grip_per_arm():
 
 
 def test_the_embodiment_states_each_pose_at_the_site_of_the_yam_model_it_carries():
-    ev = abc_cfg.put_bottles.instantiate()
+    static_meta = abc_cfg.put_bottles.instantiate().embodiment.static_meta
+    links = {link.get('name') for link in ET.fromstring(static_meta[roboarm_keys.URDF]).iter('link')}
 
-    frames = ee_frames(ev.embodiment.static_meta)
+    sites = {frame.site for frame in ee_frames(static_meta).values()}
 
-    assert frames
-    assert {frame.site for frame in frames.values()} == {YAM_SITE}
+    assert sites == {GRIPPER_SITE}
+    assert sites <= links
 
 
 def test_an_arm_holds_its_last_command_and_the_other_arm_is_untouched():

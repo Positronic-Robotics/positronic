@@ -5,6 +5,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.models import YAM_GRASP_SITE_FRAME
 from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.amazon_abc.adapter import AbcAdapter
 from positronic.simulator.env_server import protocol
@@ -41,4 +42,28 @@ def test_a_framed_delta_on_each_arm_composes_at_that_arms_measured_pose():
     for arm, channel in channels.items():
         wired = action[channel]
         assert wired[protocol.COMMAND_TYPE] == protocol.CARTESIAN
-        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], cmd.apply(_EEF[arm]).as_vector(_ROTMAT), atol=1e-12)
+        expected = cmd.apply(_EEF[arm] * YAM_GRASP_SITE_FRAME.inv) * YAM_GRASP_SITE_FRAME
+        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], expected.as_vector(_ROTMAT), atol=1e-12)
+
+
+def test_each_arm_reports_its_pose_at_the_gripper_site_of_the_yam():
+    obs = AbcAdapter({}).observations(_raw_obs())
+
+    for arm in mapping.ARMS:
+        reported = obs[keys.arm_channel(keys.ROBOT_STATE, arm)].ee_pose
+        np.testing.assert_allclose(reported.as_matrix, (_EEF[arm] * YAM_GRASP_SITE_FRAME.inv).as_matrix, atol=1e-6)
+
+
+def test_a_reported_pose_commanded_back_reaches_the_env_at_its_grasp_site():
+    adapter = AbcAdapter({})
+    obs = adapter.observations(_raw_obs())
+    channels = {arm: keys.arm_channel(keys.ROBOT_COMMAND, arm) for arm in mapping.ARMS}
+    commands: dict[str, pimm.Message | None] = {
+        channel: pimm.Message(roboarm_command.CartesianPosition(obs[keys.arm_channel(keys.ROBOT_STATE, arm)].ee_pose))
+        for arm, channel in channels.items()
+    }
+
+    action = adapter.action(commands)
+
+    for arm, channel in channels.items():
+        np.testing.assert_allclose(action[channel][protocol.COMMAND_POSE], _EEF[arm].as_vector(_ROTMAT), atol=1e-6)

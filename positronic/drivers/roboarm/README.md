@@ -26,24 +26,27 @@ policy's `ee_frames` with the rig's. A remote policy gets its `ee_frames` from i
 the harness compares them then, before the first observation goes to the server. A policy observes only the poses it
 states at the rig's site. A policy that names another site is refused. A policy that states none observes each pose at
 the rig's legacy point, the point the rig reported before `gripper`, and its pose commands go back from that point. The
-legacy point is `end_effector` (`models.EE_LINK`) on a model that has it, as the FR3 and the MuJoCo panda do, and the
-rig site on any other model, as YAM at `models.YAM_SITE`. The harness reads it from the rig's model and logs a warning
-for each such session. This fallback is transitional (#550).
+legacy point is `end_effector` (`models.EE_LINK`) on a model that names it, as the FR3, the MuJoCo panda and YAM do,
+and the rig site on any other model, such as SO-101. The harness reads it from the rig's model and logs a warning for
+each such session. This fallback is transitional (#550).
 
 `Impedance.frame` is the stiffness point, measured from the rig site. The Franka driver accepts an offset only, and
 refuses a turned frame. `DROID_IMPEDANCE` puts it at the flange.
 
 ## Old recordings
 
-Recordings made before `gripper` state their poses at `default`, which every Franka model put at `end_effector`,
-or before `ee_frames` at the site that `control_frame` names, with a codec offset in `ee_frame`.
-`cfg.ds.internal.REAL_ROBOT_TRANSFORM` and `SIM_ROBOT_TRANSFORM` relabel these as `ee_frames`, and then re-express
-every pose signal at `gripper` from the model the recording carries (`ik.MoveToSite`). A model with no `gripper`
-gets one at the 2F-85 grip point.
+Recordings made before `gripper` state their poses at `default`, the point each model now names `end_effector` (the
+first YAM recordings name it `grasp_site`), or before `ee_frames` at the site that `control_frame` names, with a
+codec offset in `ee_frame`. `cfg.ds.internal.REAL_ROBOT_TRANSFORM`, `SIM_ROBOT_TRANSFORM` and `YAM_ROBOT_TRANSFORM`
+relabel these as `ee_frames`, and then re-express every pose signal at `gripper` from the model the recording
+carries (`ik.MoveToSite`). A model with no `gripper` gets one at the grip point of its gripper. A YAM recording with
+no model gets the bundled YAM model.
 
 Checkpoints trained on those recordings speak the old frame. They state it as an offset from `gripper`:
-`models.FRANKA_HAND_FRAME` (the FR3's `F_T_EE`, 51.6 mm short of `gripper` and −45°) and `models.PANDA_HAND_FRAME` (the
-sim panda's `end_effector`, 45.25 mm short of `gripper` and −45°). `test_ik.py` pins each constant to the model.
+`models.FRANKA_HAND_FRAME` (the FR3's `F_T_EE`, 51.6 mm short of `gripper` and −45°), `models.PANDA_HAND_FRAME`
+(the sim panda's `end_effector`, 45.25 mm short of `gripper` and −45°) and `models.YAM_GRASP_SITE_FRAME` (the
+YAM's i2rt `grasp_site`, on the wrist axis, 40.8 mm to the side of `gripper`, 3.3 mm short of it and −90°).
+Each model names that old point `end_effector`. `test_ik.py` pins each constant to the model.
 
 | Embodiment | Reports at | Note |
 | --- | --- | --- |
@@ -52,7 +55,7 @@ sim panda's `end_effector`, 45.25 mm short of `gripper` and −45°). `test_ik.p
 | RoboLab (`simulator/robolab/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at `robolab_eef`; `RobolabAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
 | MolmoSpaces (`simulator/molmo_spaces/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at the 2F-85 grasp site, in the arm base `fr3_link0`. MolmoSpaces' own robot base is at the bottom of the stand below it. |
 | LIBERO (`simulator/libero/`) | `gripper` | `LiberoAdapter` takes the env's grip site to be the panda's `end_effector` (`PANDA_HAND_FRAME`); it is not ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)). |
-| YAM (`yam/driver.py`) | the `default` site in `yam.xml` (`models.YAM_SITE`) | Coincident with the vendor's `grasp_site`. It moves to `gripper` with a published YAM model. |
+| YAM (`yam/driver.py`) | `gripper` | The site in `yam.xml` and the link in the bundled URDF, where the closed fingertips meet: 40.8 mm off the wrist axis. The vendor's `grasp_site` is on the axis. |
 | SO-101 (`so101/driver.py`) | `gripper` | Coincident with `gripper_frame_link`. |
 
 ## Adding an embodiment

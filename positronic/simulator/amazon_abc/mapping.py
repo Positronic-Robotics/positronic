@@ -11,7 +11,7 @@ import numpy as np
 # The arms ABC drives, in the order its 14-value action concatenates them.
 ARMS = ('left', 'right')
 ARM_JOINTS = 6
-# The site each arm is measured and driven at; it coincides with the YAM driver's ``YAM_SITE``.
+# The site each arm is measured and driven at: the YAM's ``grasp_site``, ``YAM_GRASP_SITE_FRAME`` from ``GRIPPER_SITE``.
 CONTROL_SITE = '{arm}_grasp_site'
 JOINT = '{arm}_joint{index}'
 

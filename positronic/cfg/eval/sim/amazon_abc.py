@@ -2,7 +2,7 @@ import configuronic as cfn
 from eval_vocabulary.episode import ABC_TASK_EVAL_SIGNAL
 
 from positronic.cfg.eval import build_tasks, spec
-from positronic.drivers.roboarm.models import YAM_SITE, bundled_yam_model
+from positronic.drivers.roboarm.models import bundled_yam_model
 from positronic.eval import Eval, Task
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
@@ -28,12 +28,7 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     """
     proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(mapping.task_names(task)))
     embodiment = remote_embodiment(
-        proxy,
-        camera_dict,
-        descriptor='remote.abc.yam_bimanual',
-        pose_site=YAM_SITE,
-        arms=mapping.ARMS,
-        static_meta=bundled_yam_model(),
+        proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()
     )
     privileged = {
         mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE],

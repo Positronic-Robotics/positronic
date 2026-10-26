@@ -260,8 +260,8 @@ class Harness(pimm.ControlSystem):
     def _legacy_point_codec(self, rig: dict[str, EEFrame], statics: dict[str, Any]) -> Codec:
         """Move each pose in ``rig`` from its site to the rig's legacy point, and each pose command back.
 
-        The legacy point is where the rig reported before ``GRIPPER_SITE``: ``EE_LINK`` on a model that has it, as the
-        FR3 and the sim panda do, and the site itself on a model that has none, as YAM at ``YAM_SITE`` does.
+        The legacy point is where the rig reported before ``GRIPPER_SITE``: ``EE_LINK`` on a model that names it, as
+        the FR3, the sim panda and YAM do, and the site itself on a model that names none, such as SO-101.
         """
         if URDF not in statics:
             raise ValueError(

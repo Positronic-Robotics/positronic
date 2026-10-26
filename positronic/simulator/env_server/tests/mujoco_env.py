@@ -20,7 +20,6 @@ import positronic.cfg.simulator
 from pimm.world import LocalQueueEmitter, LocalQueueReceiver, VirtualClock
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.eval import Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
@@ -215,6 +214,6 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
     """Build the remote ``stack_cubes`` eval (embodiment + task) wired to a running env server."""
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
-    embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka', pose_site=GRIPPER_SITE)
+    embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
     plan = [Task(instruction_source='Pick up the green cube and place it on the red cube.', timeout_sec=15.0)]
     return Eval(embodiment, partial(iter, plan), privileged={SIM_STATE: proxy.privileged[SIM_STATE]}, done=proxy.done)

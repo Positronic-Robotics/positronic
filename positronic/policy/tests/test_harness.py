@@ -35,7 +35,7 @@ from positronic.drivers.roboarm.models import (
     FRANKA_HAND_FRAME,
     GRIPPER_SITE,
     PANDA_HAND_FRAME,
-    YAM_SITE,
+    YAM_GRASP_SITE_FRAME,
     EEFrame,
     bundled_franka_model,
     bundled_panda_model,
@@ -43,15 +43,7 @@ from positronic.drivers.roboarm.models import (
     ee_frames_entry,
 )
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import (
-    NO_MODEL_ROBOT_META,
-    ROBOT_STATIC_META,
-    Command,
-    Embodiment,
-    Observation,
-    Task,
-    robot_static_meta,
-)
+from positronic.eval import NO_MODEL_ROBOT_META, ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
@@ -1926,7 +1918,7 @@ def legacy_point_warnings(caplog):
     [
         (ROBOT_STATIC_META, bundled_franka_model(), FRANKA_HAND_FRAME),
         (ROBOT_STATIC_META, bundled_panda_model(), PANDA_HAND_FRAME),
-        (robot_static_meta(YAM_SITE), bundled_yam_model(), Transform3D.identity),
+        (ROBOT_STATIC_META, bundled_yam_model(), YAM_GRASP_SITE_FRAME),
     ],
     ids=['fr3', 'panda', 'yam'],
 )

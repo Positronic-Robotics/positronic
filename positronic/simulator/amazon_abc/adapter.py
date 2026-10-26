@@ -7,6 +7,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm.models import YAM_GRASP_SITE_FRAME
 from positronic.drivers.roboarm.yam import YamState
 from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import keys as abc_keys
@@ -20,7 +21,7 @@ CAMERAS = {keys.EXTERIOR_IMAGE: 'top', keys.WRIST_LEFT_IMAGE: _LEFT, keys.WRIST_
 
 class AbcAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
-        super().__init__()
+        super().__init__(YAM_GRASP_SITE_FRAME)
         self._camera_dict = camera_dict  # logical observation name -> the ABC camera name
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:

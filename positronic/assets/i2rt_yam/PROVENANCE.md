@@ -6,7 +6,7 @@
 `LICENSE`.
 
 The MJCF in `assets/mujoco/i2rt_yam` comes from the same URDF, so the two models have the same
-kinematics. The YAM driver solves FK and IK against that MJCF. At `YAM_SITE`, the two models agree to
+kinematics. The YAM driver solves FK and IK against that MJCF. At `gripper`, the two models agree to
 within 0.01 mm and 0.0001 rad over the joint range. The i2rt URDF at commit
 `120c3c81400171174604e503943f8d1ebc891058`, `i2rt/robot_models/arm/yam/v1`, has other link names and other
 link offsets, so it does not match the MJCF. For example, its `joint1` is 68.0 mm above the base, not 63.1 mm.

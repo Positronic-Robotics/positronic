@@ -1,6 +1,6 @@
 """Driver for the real i2rt YAM arm: one CAN chain with six joints and the gripper.
 
-The driver solves FK/IK against the vendored MJCF (``assets/mujoco/i2rt_yam/yam.xml``) at ``YAM_SITE``.
+The driver solves FK/IK against the vendored MJCF (``assets/mujoco/i2rt_yam/yam.xml``) at ``GRIPPER_SITE``.
 The chain reads the gripper as 0=closed/1=open, the inverse of positronic's grip.
 
 Check on the rig after bring-up: the CAN interface (``ip link set can0 up type can bitrate 1000000``), motor
@@ -31,7 +31,7 @@ from positronic.utils import package_assets_path
 
 from .. import RobotStatus, State, command
 from ..ik import qpos_from_site_pose
-from ..models import YAM_JOINT_NAMES, YAM_SITE, bundled_yam_model
+from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, bundled_yam_model
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
 logger = logging.getLogger(__name__)
@@ -125,7 +125,7 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
 
 
 class _Kinematics:
-    """FK/IK on the vendored YAM MJCF at ``YAM_SITE``, in the arm-base frame.
+    """FK/IK on the vendored YAM MJCF at ``GRIPPER_SITE``, in the arm-base frame.
 
     ``mujoco`` exports every symbol below from a compiled extension, so a type checker cannot see them.
     """
@@ -135,7 +135,7 @@ class _Kinematics:
         self._model = mj.MjModel.from_xml_path(model_path)
         self._data = mj.MjData(self._model)
         site = mj.mjtObj.mjOBJ_SITE
-        self._site_id = mj.mj_name2id(self._model, site, YAM_SITE)
+        self._site_id = mj.mj_name2id(self._model, site, GRIPPER_SITE)
         self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES])
         self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES])
         ranges = np.array([self._model.joint(name).range for name in YAM_JOINT_NAMES])

@@ -1,13 +1,14 @@
 """The robot transforms read every recording at ``GRIPPER_SITE``, from the model it was recorded on."""
 
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from positronic import geom, keys
-from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, SIM_ROBOT_TRANSFORM
+from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, SIM_ROBOT_TRANSFORM, YAM_ROBOT_TRANSFORM
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -19,32 +20,39 @@ from positronic.drivers.roboarm.models import (
     FRANKA_HAND_FRAME,
     GRIPPER_SITE,
     PANDA_HAND_FRAME,
+    YAM_GRASP_SITE_FRAME,
+    YAM_WRIST_LINK,
     EEFrame,
     attach_frame,
     bundled_franka_model,
     bundled_panda_model,
+    bundled_yam_model,
     ee_frames_entry,
 )
+from positronic.eval import keys as eval_keys
 from positronic.policy.training import ChangeEEFrame
 from positronic.utils import package_assets_path
 
 QUAT = geom.Rotation.Representation.QUAT
 OFFSET = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.from_euler([0.0, 0.0, 0.3]))
 POSE = geom.Transform3D(np.array([0.3, 0.1, 0.4]), geom.Rotation.from_euler([0.2, -0.1, 0.5]))
-# rules-allow: hardcoded-keys — the keys and the site a recording wrote before ``gripper``, which no code writes now
-CONTROL_FRAME, EE_FRAME, DEFAULT = 'control_frame', 'ee_frame', 'default'
+# rules-allow: hardcoded-keys — the keys and the sites a recording wrote before ``gripper``, which no code writes now
+CONTROL_FRAME, EE_FRAME, DEFAULT, YAM_GRASP_SITE = 'control_frame', 'ee_frame', 'default', 'grasp_site'
 POSE_SIGNALS = (keys.EE_POSE, keys.TARGET_EE_POSE)
+ONE_ARM_POSES: dict[str, geom.Transform3D] = dict.fromkeys(POSE_SIGNALS, POSE)
 
 
-def _recording(**statics):
-    poses = DummySignal([1000, 2000], np.tile(POSE.as_vector(QUAT), (2, 1)))
-    return EpisodeContainer(data={keys.EE_POSE: poses, keys.TARGET_EE_POSE: poses, **statics})
+def _recording(poses: Mapping[str, geom.Transform3D] = ONE_ARM_POSES, /, **statics):
+    data = {signal: DummySignal([1000, 2000], np.tile(pose.as_vector(QUAT), (2, 1))) for signal, pose in poses.items()}
+    return EpisodeContainer(data={**data, **statics})
 
 
-def _assert_reads_at_the_gripper(episode, gripper_to_recorded: geom.Transform3D) -> None:
+def _assert_reads_at_the_gripper(
+    episode, gripper_to_recorded: geom.Transform3D, recorded: Mapping[str, geom.Transform3D] = ONE_ARM_POSES
+) -> None:
     """Every pose signal of ``episode`` sits at ``GRIPPER_SITE``, moved off the frame the recording was made in."""
-    want = POSE * gripper_to_recorded.inv
-    for signal in POSE_SIGNALS:
+    for signal, pose in recorded.items():
+        want = pose * gripper_to_recorded.inv
         for value, _ in episode[signal]:
             got = geom.Transform3D.from_vector(np.asarray(value), QUAT)
             np.testing.assert_allclose(got.translation, want.translation, atol=1e-9)
@@ -88,12 +96,20 @@ def test_a_real_model_with_no_gripper_gets_one_at_the_2f85_grip_point():
 
 @pytest.mark.parametrize(
     'transform, model',
-    [(REAL_ROBOT_TRANSFORM, bundled_franka_model()), (SIM_ROBOT_TRANSFORM, bundled_panda_model())],
-    ids=['real', 'sim'],
+    [
+        (REAL_ROBOT_TRANSFORM, bundled_franka_model()),
+        (SIM_ROBOT_TRANSFORM, bundled_panda_model()),
+        (YAM_ROBOT_TRANSFORM, bundled_yam_model()),
+    ],
+    ids=['real', 'sim', 'yam'],
 )
 def test_a_recording_at_the_gripper_keeps_its_poses(transform, model):
     stated = ee_frames_entry(dict.fromkeys(POSE_SIGNALS, EEFrame(site=GRIPPER_SITE)))
-    recording = _recording(**{roboarm_keys.URDF: model[roboarm_keys.URDF], **stated})
+    recording = _recording(**{
+        roboarm_keys.URDF: model[roboarm_keys.URDF],
+        eval_keys.POSE_SIGNALS: list(POSE_SIGNALS),
+        **stated,
+    })
 
     read = transform(recording)
 
@@ -135,3 +151,53 @@ def test_training_moves_a_recording_from_before_485_off_the_gripper():
     want = POSE * FRANKA_HAND_FRAME.inv * OFFSET
     got = geom.Transform3D.from_vector(np.asarray(trained[keys.EE_POSE][0][0]), QUAT)
     np.testing.assert_allclose(got.as_matrix, want.as_matrix, atol=1e-9)
+
+
+def _yam_urdf_with_default() -> str:
+    """The URDF a YAM recording carried before ``gripper``: ``default`` at the MJCF ``grasp_site``, no ``gripper``."""
+    root = ET.fromstring(Path(package_assets_path('assets/i2rt_yam/yam.urdf')).read_text())
+    attach_frame(root, DEFAULT, YAM_WRIST_LINK, '0 0 0.1347', '0 0 -1.5707963268')
+    return ET.tostring(root, encoding='unicode')
+
+
+@pytest.mark.parametrize(
+    'statics', [{CONTROL_FRAME: YAM_GRASP_SITE}, {CONTROL_FRAME: DEFAULT}], ids=['grasp_site', 'default']
+)
+def test_a_yam_recording_with_no_model_gets_the_bundled_one_and_reads_at_the_gripper(statics):
+    read = YAM_ROBOT_TRANSFORM(_recording(**{eval_keys.POSE_SIGNALS: list(POSE_SIGNALS), **statics}))
+
+    _assert_reads_at_the_gripper(read, YAM_GRASP_SITE_FRAME)
+    assert read[roboarm_keys.MESHES] == bundled_yam_model()[roboarm_keys.MESHES]
+    assert CONTROL_FRAME not in read
+
+
+@pytest.mark.parametrize(
+    'statics',
+    [{CONTROL_FRAME: DEFAULT}, ee_frames_entry(dict.fromkeys(POSE_SIGNALS, EEFrame(site=DEFAULT)))],
+    ids=['control_frame', 'ee_frames'],
+)
+def test_a_yam_recording_moves_from_the_default_site_of_the_model_it_carries(statics):
+    recording = _recording(**{
+        roboarm_keys.URDF: _yam_urdf_with_default(),
+        eval_keys.POSE_SIGNALS: list(POSE_SIGNALS),
+        **statics,
+    })
+    _assert_reads_at_the_gripper(YAM_ROBOT_TRANSFORM(recording), YAM_GRASP_SITE_FRAME)
+
+
+def test_a_bimanual_yam_recording_reads_each_pose_of_both_arms_at_the_gripper():
+    signals = [
+        f'{channel}.{side}{suffix}'
+        for channel, suffix in ((keys.ROBOT_STATE, keys.EE_POSE_SUFFIX), (keys.ROBOT_COMMAND, keys.POSE_SUFFIX))
+        for side in (keys.LEFT_ARM, keys.RIGHT_ARM)
+    ]
+    poses = {signal: POSE * geom.Transform3D(np.array([0.0, 0.1 * i, 0.0])) for i, signal in enumerate(signals)}
+    stated = ee_frames_entry(dict.fromkeys(signals, EEFrame(site=DEFAULT)))
+    recording = _recording(
+        poses, **{roboarm_keys.URDF: _yam_urdf_with_default(), eval_keys.POSE_SIGNALS: signals, **stated}
+    )
+
+    read = YAM_ROBOT_TRANSFORM(recording)
+
+    _assert_reads_at_the_gripper(read, YAM_GRASP_SITE_FRAME, poses)
+    assert set(ee_frames(read)) == set(signals)
