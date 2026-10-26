@@ -79,6 +79,61 @@ def test_a_task_gets_the_prompt_the_checkpoint_trained_under():
     assert _encode(_obs(**{keys.TASK: 'hang mug on mug rack'}))[abc_dit.PROMPT] == 'sim hang the mug on the mug rack'
 
 
+def test_the_no_sim_prefix_config_sends_the_trained_prompt_without_the_sim_prefix():
+    obs = _obs(**{keys.TASK: 'hang mug on mug rack'})
+
+    assert codecs.multitask_200k_yambox_crop_no_sim_prefix.instantiate().encode(obs)[abc_dit.PROMPT] == (
+        'hang the mug on the mug rack'
+    )
+    assert codecs.multitask_200k_yambox_crop.instantiate().encode(obs)[abc_dit.PROMPT] == (
+        'sim hang the mug on the mug rack'
+    )
+
+
+def _framed_view(box: codecs.CropBox, height: int = 600, width: int = 960) -> np.ndarray:
+    """A black frame with a white rectangle that fills `box`."""
+    view = np.zeros((height, width, 3), dtype=np.uint8)
+    view[round(box.top * height) : round(box.bottom * height), round(box.left * width) : round(box.right * width)] = 255
+    return view
+
+
+@pytest.mark.parametrize('size', [(600, 960), (280, 448)])
+def test_each_yambox_view_is_cropped_to_its_box_and_fills_abcs_view(size):
+    obs = _obs(**{key: _framed_view(box, *size) for key, box in codecs.YAMBOX_CROPS.items()})
+
+    images = codecs.multitask_200k_yambox_crop.instantiate().encode(obs)[abc_dit.IMAGES]
+
+    for view in images.values():
+        assert view.shape == (3, 168, 224)
+        # The 4:3 box fills the 4:3 view, so no black frame or pad survives, up to one row of rounding.
+        assert (view[:, 1:-1, :] == 255).all()
+
+
+def test_a_crop_box_keeps_only_the_part_of_the_view_inside_it():
+    box = codecs.CropBox(0.5, 0.0, 1.0, 1.0)
+    view = np.zeros((300, 400, 3), dtype=np.uint8)
+    view[:, 200:] = 200
+    codec = codecs.AbcObservationCodec({TASK: 'p'}, crops={keys.EXTERIOR_IMAGE: box})
+
+    images = codec.encode(_obs(**{keys.EXTERIOR_IMAGE: view}))[abc_dit.IMAGES]
+
+    # The 200x300 crop pads to 224x168 with black columns; its content is the right half only.
+    assert images[abc_dit.TOP_CAMERA][:, :, 60:-60].min() == 200
+    # A view with no box goes whole: the uniform wrist view keeps its colour after the pad.
+    assert images[abc_dit.LEFT_CAMERA][:, 84, 112].tolist() == [20, 100, 200]
+
+
+@pytest.mark.parametrize('box', [(0.5, 0.0, 0.5, 1.0), (-0.1, 0.0, 1.0, 1.0), (0.0, 0.0, 1.0, 1.2), (0.6, 0, 0.4, 1)])
+def test_a_crop_box_outside_the_frame_or_without_area_is_refused(box):
+    with pytest.raises(ValueError, match='inside the frame'):
+        codecs.CropBox(*box)
+
+
+def test_a_crop_box_for_a_camera_the_codec_does_not_read_is_refused():
+    with pytest.raises(ValueError, match='name no camera'):
+        codecs.AbcObservationCodec({TASK: 'p'}, crops={'image.side': codecs.FULL_FRAME})
+
+
 def test_a_task_the_checkpoint_did_not_train_on_is_refused():
     with pytest.raises(ValueError, match='no prompt for the task'):
         _encode(_obs(**{keys.TASK: 'fold the towel'}))

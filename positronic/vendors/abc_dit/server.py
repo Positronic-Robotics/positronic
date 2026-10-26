@@ -2,6 +2,8 @@
 
 The policy runs in ABC's own interpreter, as ABC's policy server started by `backend.py`, on this machine.
 `multitask_200k` serves `abc_dit_xl_200k_model.pt`, ABC's multi-task sim policy, with the prompts it trained under.
+`multitask_200k_yambox_crop` serves it with the yambox views cropped to the field of view of ABC's cameras, and
+`multitask_200k_yambox_crop_no_sim_prefix` does the same with the prompts of its sim tasks sent without the sim prefix.
 
 Usage
   python -m positronic.vendors.abc_dit.server multitask_200k --model.abc_python=<ABC's python> \
@@ -136,15 +138,28 @@ def abc_dit_model(checkpoint: str, abc_python: str, fast_inference: bool, noise_
 EXECUTED_ACTIONS = 15
 
 
-@cfn.config(codec=codecs.multitask_200k)
-def pipeline(codec: Codec) -> PolicyDeployment:
-    """The client plays the first half of each chunk, as ABC's synchronous sim eval does, and `codec` runs on this
-    server."""
+# A crop box down to half of a frame's width and height still holds ABC's view size when the client sends this bound.
+CROPPED_UPLOAD_SIZE = (2 * codecs.VIEW_SIZE[0], 2 * codecs.VIEW_SIZE[1])
+
+
+@cfn.config(codec=codecs.multitask_200k, upload_size=codecs.VIEW_SIZE)
+def pipeline(codec: Codec, upload_size: tuple[int, int]) -> PolicyDeployment:
+    """The client plays the first half of each chunk, as ABC's synchronous sim eval does, and shrinks each view to fit
+    `upload_size`. `codec` runs on this server."""
     schedule = ChunkedSchedule(codecs.FPS, horizon_sec=EXECUTED_ACTIONS / codecs.FPS)
-    return PolicyDeployment(Sequential(schedule, TransformImages(*codecs.VIEW_SIZE, mode=ResizeMode.BOUND)), codec)
+    return PolicyDeployment(Sequential(schedule, TransformImages(*upload_size, mode=ResizeMode.BOUND)), codec)
 
 
-COMMANDS = {'multitask_200k': serve.override(model=abc_dit_model, pipeline=pipeline)}
+yambox_crop_pipeline = pipeline.override(codec=codecs.multitask_200k_yambox_crop, upload_size=CROPPED_UPLOAD_SIZE)
+
+COMMANDS = {
+    'multitask_200k': serve.override(model=abc_dit_model, pipeline=pipeline),
+    'multitask_200k_yambox_crop': serve.override(model=abc_dit_model, pipeline=yambox_crop_pipeline),
+    'multitask_200k_yambox_crop_no_sim_prefix': serve.override(
+        model=abc_dit_model,
+        pipeline=yambox_crop_pipeline.override(codec=codecs.multitask_200k_yambox_crop_no_sim_prefix),
+    ),
+}
 
 
 if __name__ == '__main__':

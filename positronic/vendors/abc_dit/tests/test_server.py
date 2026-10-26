@@ -19,7 +19,7 @@ from positronic import keys
 from positronic.offboard import roboarena
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
-from positronic.vendors.abc_dit import server
+from positronic.vendors.abc_dit import codecs, server
 from positronic.vendors.abc_dit.tests import abc_stand_in
 
 TOKEN = 'run-token'
@@ -213,3 +213,31 @@ def test_a_backend_that_exits_fails_the_load(tmp_path):
     exits.chmod(0o755)
     with pytest.raises(RuntimeError, match='exited with code 3'):
         server.abc_dit_model(checkpoint=CHECKPOINT, abc_python=str(exits), backend_port=_free_port())
+
+
+def test_the_yambox_crop_pipeline_sends_each_cropped_view_to_abc_without_pad(tmp_path):
+    model = server.abc_dit_model.override(
+        checkpoint=CHECKPOINT, abc_python=_abc_python(tmp_path, abc_stand_in.Mode.SERVE), backend_port=_free_port()
+    )
+    # A 960x600 frame whose crop box is white and whose rest is black: a view that misses the box shows black.
+    views = {}
+    for key, box in codecs.YAMBOX_CROPS.items():
+        frame = np.zeros((600, 960, 3), dtype=np.uint8)
+        frame[round(box.top * 600) : round(box.bottom * 600), round(box.left * 960) : round(box.right * 960)] = 255
+        views[key] = frame
+    obs = {
+        keys.arm_channel(keys.ROBOT_STATE, keys.LEFT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, dtype=np.float32),
+        keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, 12, dtype=np.float32),
+        keys.arm_channel(keys.GRIP, keys.LEFT_ARM): 0.0,
+        keys.arm_channel(keys.GRIP, keys.RIGHT_ARM): 1.0,
+        **views,
+        keys.TASK: 'turn mug right side up',
+    }
+
+    _infer_in_a_session(PolicyServer(model, server.yambox_crop_pipeline, auth_token=TOKEN), obs)
+
+    request = _log(tmp_path)[-1]['request']
+    assert request['prompt'] == 'sim turn mug right side up'
+    for view in request['images'].values():
+        assert view['shape'] == [3, 168, 224]
+        assert view['mean'] > 250

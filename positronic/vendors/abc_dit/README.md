@@ -47,7 +47,21 @@ this adapter does not do, so its numbers can differ from ABC's published numbers
 
 ABC renders its sim training views at 224x168. A view of another aspect ratio is padded, not stretched, so the scene
 fills less of the image than in training. Render the cameras at 224x168, or at the same 4:3 aspect ratio, to match
-the training data.
+the training data, or crop each view with a `CropBox` in the codec's `crops`.
+
+ABC's cameras are RealSense D405s with a 58 degree vertical field of view, at 640x480. The `multitask_200k_yambox_crop`
+config crops the views of the yambox ZED cameras (960x600, focal length 367 px) to 4:3 before the resize:
+
+| View | Crop, in pixels of 960x600 | Why |
+| --- | --- | --- |
+| `image.exterior` | x 256-800, y 192-600 | 58 degrees vertical, the field of view of ABC's top view, over the arms and the table |
+| `image.wrist_left`, `image.wrist_right` | x 80-880, y 0-600 | the open fingertips lie as far apart, as a share of the width, as in ABC's wrist views |
+
+That config has the client send each view at up to 448x336, so each crop still holds at least 224x168 pixels.
+
+ABC trained the five sim tasks under prompts that start with `sim `, within about 3553 hours of real teleoperation
+data and 98 hours of sim data. The codec's `prompt_prefix` sets that prefix. `multitask_200k_yambox_crop_no_sim_prefix`
+sends the same prompts without it.
 
 ## Setup
 
