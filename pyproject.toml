@@ -59,7 +59,6 @@ dependencies = [
     "pyturbojpeg<2",
     "pyyaml",
     "rerun-sdk==0.30.0",
-    "robosuite",
     "ruckig",
     "scipy",
     "uvicorn[standard]>=0.35",
@@ -96,6 +95,11 @@ hardware = [
 # libfranka that the machine must already carry. A station with no Franka installs `hardware` without it.
 franka = [
     "positronic-franka>=0.12.0; sys_platform == 'linux'",
+]
+# The MuJoCo scene builder (`simulator/mujoco/scene_builder.py`). It is not in the core: on Linux, `robosuite`
+# needs `pynput`, which needs `evdev`, and `evdev` ships no wheel, so its build needs a C compiler.
+scenes = [
+    "robosuite",
 ]
 lerobot_0_3_3 = [
     "lerobot==0.3.3",
@@ -163,6 +167,7 @@ dev = [
     "rerun-sdk[notebook]",
     "cryptography",  # the server's certificate tests read the certificate itself
     "positronic[telemetry]",  # the telemetry tests exercise the SDK and the samplers
+    "positronic[scenes]",  # the type check reads the scene builder's imports
 ]
 
 [tool.uv.workspace]
@@ -348,5 +353,6 @@ positronic = [
   "server/templates/**",
   # The launcher needs these dependency constraints in installed distributions too.
   "simulator/molmo_spaces/molmo_constraints.txt",
+  "simulator/molmo_spaces/molmo_overrides.txt",
   "simulator/amazon_abc/abc_constraints.txt",
 ]

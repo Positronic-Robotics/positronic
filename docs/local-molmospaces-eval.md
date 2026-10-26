@@ -15,8 +15,7 @@ scores other episodes, and its episodes are not public.
 
 - Linux on amd64, with an NVIDIA GPU for the policy server and the
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
-- git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, Docker, and a C compiler. On Ubuntu, install the
-  compiler with `sudo apt install build-essential`. The install builds one dependency, `evdev`, from source.
+- git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, and Docker.
 - About 80 GB of free disk space: about 50 GB for the `positro/pi05-droid` image of step 3, 13 GB for the
   MolmoSpaces assets, about 2.5 GB for `positronic`, and about 7 GB for the simulator's Python environment.
 
@@ -26,8 +25,7 @@ scores other episodes, and its episodes are not public.
 uv tool install --managed-python --python 3.13 'positronic @ git+https://github.com/Positronic-Robotics/positronic'
 ```
 
-`--managed-python --python 3.13` makes uv install Python 3.13 and use it. The Python of Ubuntu cannot
-build one of the dependencies.
+`--managed-python --python 3.13` makes uv install Python 3.13 and use it, whatever Python the machine has.
 
 ## 2. Choose where the MolmoSpaces assets go
 

@@ -1,0 +1,5 @@
+# Requirements that override upstream MolmoSpaces' own, passed to `uv pip install --override`.
+#
+# `pynput` requires `evdev` on Linux. `evdev` ships no wheel, so an install builds it and needs a C compiler.
+# The eval imports neither, and a marker that is never true keeps `evdev` out.
+evdev; sys_platform == 'never'

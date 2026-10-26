@@ -283,3 +283,24 @@ jobs:
         run: uv venv --python ${{ matrix.python }}
       - name: uv sync --locked succeeds on ${{ matrix.os }} (py${{ matrix.python }})
         run: uv sync --locked
+
+  install-without-compiler:
+    # The guides install with `uv tool install` on a machine that may have no C compiler and no X libraries.
+    runs-on: ubuntu-latest
+    container: debian:bookworm-slim
+    timeout-minutes: 20
+    steps:
+      - name: Install git and uv
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+      - name: No C compiler is present
+        run: "! command -v cc gcc clang"
+      - name: The guide's install succeeds
+        run: uv tool install --managed-python --python 3.13 .
+      - name: The commands start
+        run: |
+          positronic --help
+          "$(uv tool dir)/positronic/bin/python" -c 'import positronic.cfg.eval.sim.molmo'

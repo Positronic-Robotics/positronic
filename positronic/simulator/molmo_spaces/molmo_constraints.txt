@@ -29,7 +29,6 @@ dill==0.4.1
 docstring-parser==0.18.0
 einops==0.8.2
 etils==1.14.0
-evdev==1.9.3
 farama-notifications==0.0.6
 fastjsonschema==2.21.2
 ffmpeg-python==0.2.0

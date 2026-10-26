@@ -22,9 +22,7 @@ Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
     does not run there, because the model does not load in the time limit, and the test script stops at
     once. Skip the test, or run it on an amd64 Linux machine. Without the test, a broken image uses one
     submission of the day.
-- On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, Docker, and a C compiler. On Ubuntu,
-  install the compiler with `sudo apt install build-essential`. The install builds one dependency, `evdev`,
-  from source.
+- On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, and Docker.
 - Push access to a container registry, such as Docker Hub.
 
 You can install the commands, register, enter and submit on any computer. Do these four steps on the same
@@ -72,8 +70,8 @@ space.
 uv tool install --managed-python --python 3.13 'positronic @ git+https://github.com/Positronic-Robotics/positronic'
 ```
 
-`--managed-python --python 3.13` makes uv install Python 3.13 and use it. The Python of Ubuntu cannot
-build one of the dependencies, and `positronic` does not run on Python 3.14 or later.
+`--managed-python --python 3.13` makes uv install Python 3.13 and use it, whatever Python the machine has.
+`positronic` does not run on Python 3.14 or later.
 
 To update the commands later, run `uv tool upgrade positronic`.
 
