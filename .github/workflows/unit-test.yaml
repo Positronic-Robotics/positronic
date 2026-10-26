@@ -297,7 +297,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@v4
       - name: No C compiler is present
-        run: "! command -v cc gcc clang"
+        run: if command -v cc gcc clang; then exit 1; fi
       - name: The guide's install succeeds
         run: uv tool install --managed-python --python 3.13 .
       - name: The commands start
