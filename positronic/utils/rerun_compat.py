@@ -29,11 +29,13 @@ def log_numeric_series(base_path: str, value: Any) -> None:
     rr.log(base_path, rr.Scalars(arr))
 
 
-def log_series_styles(base_path: str, names: Sequence[str], *, static: bool = True) -> None:
+def log_series_styles(
+    base_path: str, names: Sequence[str], *, static: bool = True, recording: rr.RecordingStream | None = None
+) -> None:
     """Log per-channel series styling information at *base_path*."""
     if not names:
         return
-    rr.log(base_path, rr.SeriesLines(names=list(names)), static=static)
+    rr.log(base_path, rr.SeriesLines(names=list(names)), static=static, recording=recording)
 
 
 def _to_nanos(timestamp: Any) -> int | None:
