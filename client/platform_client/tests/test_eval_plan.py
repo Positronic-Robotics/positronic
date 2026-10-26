@@ -345,9 +345,10 @@ def test_a_remote_or_a_served_endpoint_states_no_memory_need():
         Endpoint(name='candidate', kind=EndpointKind.served, spec='pi05', wire=Wire.grpc, min_vram_gb=40)
 
 
-def test_a_label_states_no_memory_need_of_its_own():
+@pytest.mark.parametrize('label', [{'name': 'policy'}, {'name': 'policy', 'kind': 'image'}])
+def test_a_label_states_no_memory_need_of_its_own(label: dict[str, str]):
     with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
-        Endpoint.model_validate({'name': 'policy', 'kind': 'image', 'min_vram_gb': 40})
+        Endpoint.model_validate({**label, 'min_vram_gb': 40})
 
 
 @pytest.mark.parametrize('mode', ['python', 'json'])

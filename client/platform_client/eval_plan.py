@@ -393,15 +393,15 @@ class Endpoint(Cascade, Generic[Credential]):
     def _a_memory_need_sizes_an_image(self) -> Self:
         if self.min_vram_gb is None:
             return self
+        if not self.names_a_locator:
+            raise ValueError(
+                f'endpoint {self.name!r} states min_vram_gb and names no image: state it on the plan endpoint '
+                'this label names'
+            )
         if self.kind is not EndpointKind.image:
             raise ValueError(
                 f'{slug_of(self.kind)} endpoint {self.name!r} states min_vram_gb, which only an image endpoint '
                 'carries: the platform sizes the GPU of the image it runs'
-            )
-        if self.image is None:
-            raise ValueError(
-                f'endpoint {self.name!r} states min_vram_gb and names no image: state it on the plan endpoint '
-                'this label names'
             )
         return self
 
