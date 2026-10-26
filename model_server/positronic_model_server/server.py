@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
+from enum import Enum
+from functools import partial
 from importlib.metadata import version
 from typing import Any, TypeVar
 from uuid import uuid4
@@ -23,10 +25,24 @@ logger = logging.getLogger(__name__)
 T = TypeVar('T')
 
 
+class SessionEnd(Enum):
+    """How a session ended."""
+
+    # The client sent ``protocol.END_SESSION``.
+    CLIENT_ENDED = 'client_ended'
+    # The client left without ``protocol.END_SESSION``.
+    DISCONNECTED = 'disconnected'
+    # The session raised an error, such as for a malformed request.
+    FAILED = 'failed'
+    # The server stopped.
+    SHUT_DOWN = 'shut_down'
+
+
 class Session(ABC):
     """A prepared, warm session that owns its state while sharing loaded weights.
 
-    ``close`` releases that state. ``output_images`` selects result values for JPEG serialization.
+    ``close`` releases that state and receives how the session ended. ``output_images`` selects result values for
+    JPEG serialization.
     """
 
     def __init__(
@@ -43,7 +59,7 @@ class Session(ABC):
     @abstractmethod
     def infer(self, observation: Any) -> Any: ...
 
-    def close(self) -> None:
+    def close(self, end: SessionEnd) -> None:
         """Release this session's resources after its operations finish."""
         return None
 
@@ -113,6 +129,8 @@ class ModelServer:
         self._worker: ThreadPoolExecutor | None = None
         self._stop: Future[None] = Future()
         self._sessions: set[asyncio.Task] = set()
+        # True from the start of `_finish`: a session that ends then ends as `SessionEnd.SHUT_DOWN`.
+        self._stopping = False
         self._last_activity = time.monotonic()
 
     def _authorized(self, headers: Mapping[str, str]) -> bool:
@@ -234,12 +252,25 @@ class ModelServer:
             await self._prepare(conn, prepare, cancelled, received)
             assert session is not None
             yield session, received
+            end = SessionEnd.CLIENT_ENDED
+        except BaseException as error:
+            end = self._session_end(error)
+            raise
         finally:
             # A receive that failed with no one to await it is retrieved here, so asyncio does not log it as lost.
             if not received.cancel() and not received.cancelled():
                 received.exception()
             if session is not None:
-                await self._call(session.close)
+                await self._call(partial(session.close, end))
+
+    def _session_end(self, error: BaseException) -> SessionEnd:
+        """The end of a session that ``error`` stopped."""
+        match error:
+            # A stopping transport closes its connections, and a gRPC server cancels the session of a cancelled call.
+            case wire.PeerDisconnected() | asyncio.CancelledError():
+                return SessionEnd.SHUT_DOWN if self._stopping else SessionEnd.DISCONNECTED
+            case _:
+                return SessionEnd.FAILED
 
     async def _exchange_session(self, conn: server_wire.ServerConnection) -> None:
         model = self._model
@@ -328,6 +359,7 @@ class ModelServer:
             await self._finish(started, serving)
 
     async def _finish(self, started: Sequence[server_wire.Wire], serving: Sequence[asyncio.Task]) -> None:
+        self._stopping = True
         stops = await asyncio.gather(*(transport.stop() for transport in started), return_exceptions=True)
         for stopped, task in zip(stops, serving, strict=False):
             if isinstance(stopped, BaseException):
@@ -365,6 +397,7 @@ class ModelServer:
             finally:
                 self._worker = None
                 self._stop = Future()
+                self._stopping = False
 
     def shutdown(self) -> None:
         """Request shutdown from any thread; running model work finishes before cleanup."""

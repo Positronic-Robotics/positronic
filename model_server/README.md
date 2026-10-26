@@ -49,8 +49,10 @@ server.serve([WebsocketWire(ServedHostPort("0.0.0.0", 8000))])
 ```
 
 Implement `Model.prepare_session` and `Session.infer` in subclasses. Each `Session` owns its state
-and may reference the loaded model. Override `close()` to release owned resources; its default does
-nothing. The constructors accept the client description, parameters, metadata and output image settings.
+and may reference the loaded model. Override `close(end)` to release owned resources; its default does
+nothing. `end` is a `SessionEnd`: the client ended the session, the client disconnected, the session
+failed, or the server shut down. The constructors accept the client description, parameters, metadata
+and output image settings.
 
 Each vendor supplies its own script and argument parsing. The factory passed to `ModelServer` can be
 a model class or a function. It loads weights and finishes shared warm-up before returning.

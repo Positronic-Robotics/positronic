@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pytest
 from positronic_model_server import keys, protocol, serialization, server_wire, spec
-from positronic_model_server.server import Model, ModelServer, PreparationCancelled, Session
+from positronic_model_server.server import Model, ModelServer, PreparationCancelled, Session, SessionEnd
 from positronic_wire import wire
 
 TRANSPORTS = []
@@ -44,6 +44,7 @@ class Probe(Model):
         self.inferring = threading.Event()
         self.infer_release = threading.Event()
         self.cleaned = threading.Event()
+        self.ends: list[SessionEnd] = []
         self.cancelled: list[threading.Event] = []
         for gate in (self.load_release, self.prepare_release, self.infer_release):
             gate.set()
@@ -87,8 +88,9 @@ class ProbeSession(Session):
         self._count += 1
         return {'count': self._count, 'scaled': self._scale * observation.get('value', 1), 'native': observation}
 
-    def close(self):
+    def close(self, end: SessionEnd):
         self._probe.record('close_session')
+        self._probe.ends.append(end)
         self._probe.cleaned.set()
 
 
@@ -211,6 +213,7 @@ def test_sessions_keep_parameters_history_and_native_results(start):
     operations, processes, threads = zip(*running.probe.calls, strict=True)
     assert operations.count('load') == operations.count('close_model') == 1
     assert operations.count('close_session') == 2
+    assert running.probe.ends == [SessionEnd.CLIENT_ENDED, SessionEnd.CLIENT_ENDED]
     assert set(processes) == {os.getpid()}
     assert len(set(threads)) == 1
 
@@ -242,6 +245,43 @@ def test_a_wrong_session_id_closes_only_the_requesting_session(start):
     assert 'session ID' in message[protocol.ERROR]
     assert second.infer({})[protocol.RESULT]['count'] == 1
     second.close()
+    assert running.probe.ends == [SessionEnd.FAILED, SessionEnd.CLIENT_ENDED]
+
+
+def test_a_client_that_leaves_an_open_session_ends_it_as_disconnected(start):
+    running = start()
+    peer = running.session()
+    assert peer.infer({})[protocol.RESULT]['count'] == 1
+    peer.connection.close()
+    assert running.probe.cleaned.wait(5)
+    assert running.probe.ends == [SessionEnd.DISCONNECTED]
+
+
+def test_a_cancelled_grpc_call_ends_its_session_as_disconnected(start, transport_types):
+    _, client_type = transport_types
+    if client_type.NAME != 'grpc':
+        pytest.skip('A call cancel belongs to the gRPC transport')
+    grpc = pytest.importorskip('grpc')
+    client_grpc = pytest.importorskip('positronic_wire.grpc')
+    running = start()
+    address = running.transport.served_address
+    assert isinstance(address, server_wire.ServedHostPort)
+    # The requests stay open, so the server sees the cancel and not a half-close.
+    released = threading.Event()
+
+    def requests():
+        released.wait(5)
+        yield from ()
+
+    with grpc.insecure_channel(client_grpc.target(address.host, address.port)) as channel:
+        session = channel.stream_stream(client_grpc.METHOD_PATH, request_serializer=None, response_deserializer=None)
+        responses = session(requests())
+        while serialization.deserialise(next(responses))[protocol.STATUS] != protocol.ServerStatus.READY:
+            pass
+        responses.cancel()
+        assert running.probe.cleaned.wait(5)
+        released.set()
+    assert running.probe.ends == [SessionEnd.DISCONNECTED]
 
 
 def test_shared_warmup_precedes_binding_and_shutdown_is_not_lost(start):
@@ -359,6 +399,7 @@ def test_shutdown_waits_for_inference_before_session_and_model_cleanup(start):
     running.thread.join(10)
     assert not running.thread.is_alive()
     assert [name for name, *_ in probe.calls][-3:] == ['infer', 'close_session', 'close_model']
+    assert probe.ends == [SessionEnd.SHUT_DOWN]
 
 
 def test_an_operation_outlasts_every_cancellation_of_its_caller():
@@ -395,6 +436,7 @@ def test_disconnect_during_preparation_cancels_it_and_releases_the_prepared_sess
     assert probe.cancelled[0].wait(1)
     probe.prepare_release.set()
     assert probe.cleaned.wait(5)
+    assert probe.ends == [SessionEnd.DISCONNECTED]
     closing_thread.join(5)
 
 
@@ -410,6 +452,7 @@ def test_a_session_prepared_after_its_opener_closed_the_connection_is_released(s
     connection.close()
     probe.prepare_release.set()
     assert probe.cleaned.wait(5)
+    assert probe.ends == [SessionEnd.DISCONNECTED]
 
 
 class PersonWait(Probe):
