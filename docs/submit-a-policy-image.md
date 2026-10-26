@@ -244,7 +244,8 @@ give the full path to that interpreter.
 ## The container
 
 [`client/platform_client/policy_container.py`](../client/platform_client/policy_container.py)
-holds each value below. The platform runs every image under them.
+holds each value below. The platform runs every image under them. An endpoint that states
+`min_vram_gb` gets a larger GPU slice ([GPU memory](#gpu-memory)).
 
 | Limit | Value | Constant |
 |---|---|---|
@@ -252,8 +253,8 @@ holds each value below. The platform runs every image under them.
 | The one variable the platform sets | `AUTH_TOKEN` | `AUTH_TOKEN_ENV` |
 | The deadline for VM boot and the pull | 1800 s | `IMAGE_FETCH_DEADLINE_S` |
 | The deadline for the server's start, from the end of the pull | 1800 s | `WARMUP_DEADLINE_S` |
-| The GPU slice | `1g.24gb` | `MIG_PROFILE` |
-| VRAM | 24192 MiB | `VRAM_MIB` |
+| The GPU slice, with no `min_vram_gb` | `1g.24gb` | `MIG_PROFILE` |
+| VRAM, with no `min_vram_gb` | 24192 MiB | `VRAM_MIB` |
 | The compressed image | 50 GB | `COMPRESSED_IMAGE_BYTES` |
 | The unpacked image | 55 GB | `UNPACKED_IMAGE_BYTES` |
 | The files in the image | 3,300,000 | `IMAGE_FILES` |
