@@ -3,7 +3,7 @@ import threading
 import time
 import typing
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -210,7 +210,7 @@ def test_threads_never_start_a_recording_while_another_sweeps_orphans(tmp_path, 
     active: list[str] = []
     overlaps: list[tuple[str, ...]] = []
     state = threading.Lock()
-    # The real calls run one at a time, so a test of the code without the fix fails and does not hang.
+    # The real calls run one at a time, so a deadlock shows as an overlap and not as a hung test.
     one_real_call = threading.Lock()
 
     def spy(name: str, call: Any) -> Any:
@@ -253,10 +253,8 @@ def test_threads_never_start_a_recording_while_another_sweeps_orphans(tmp_path, 
     assert overlaps == []
 
 
-@pytest.mark.parametrize('end', ['read to the end', 'closed after one chunk', 'raised in a signal'])
-def test_every_orphan_sweep_of_a_stream_runs_under_the_recording_list_lock(tmp_path, monkeypatch, end):
-    # A sweep outside the lock can run while another thread creates a recording.
-    ds = _numeric_dataset(tmp_path / 'ds')
+def _spy_on_sweeps_outside_the_lock(monkeypatch) -> list[str]:
+    """The names of the orphan sweeps that run while the recording list lock is free, as they run."""
     outside: list[str] = []
 
     def spy(name: str, call: Any) -> Any:
@@ -269,22 +267,40 @@ def test_every_orphan_sweep_of_a_stream_runs_under_the_recording_list_lock(tmp_p
 
     for name in ('flush_and_cleanup_orphaned_recordings', 'disconnect_orphaned_recordings'):
         monkeypatch.setattr(rerun_bindings, name, spy(name, getattr(rerun_bindings, name)))
+    return outside
+
+
+def _read_to_the_end(stream: Iterator[bytes]) -> None:
+    b''.join(stream)
+
+
+def _close_after_one_chunk(stream: Generator[bytes, None, None]) -> None:
+    next(stream)
+    stream.close()
+
+
+@pytest.mark.parametrize('consume', [_read_to_the_end, _close_after_one_chunk])
+def test_every_orphan_sweep_of_a_stream_runs_under_the_recording_list_lock(tmp_path, monkeypatch, consume):
+    # A sweep outside the lock can run while another thread creates a recording.
+    ds = _numeric_dataset(tmp_path / 'ds')
+    outside = _spy_on_sweeps_outside_the_lock(monkeypatch)
+
+    consume(stream_episode_rrd(ds, 0))
+
+    assert outside == []
+
+
+def test_a_stream_that_raises_sweeps_its_recording_under_the_lock(tmp_path, monkeypatch):
+    ds = _numeric_dataset(tmp_path / 'ds')
+    outside = _spy_on_sweeps_outside_the_lock(monkeypatch)
 
     def failing_text(*args: Any, **kwargs: Any) -> Iterator[bytes]:
         yield b''
         raise RuntimeError('a text signal failed')
 
-    if end == 'raised in a signal':
-        monkeypatch.setattr(dataset_utils, '_log_text_signals', failing_text)
-    stream = stream_episode_rrd(ds, 0)
-    if end == 'closed after one chunk':
-        next(stream)
-        stream.close()
-    elif end == 'raised in a signal':
-        with pytest.raises(RuntimeError, match='a text signal failed'):
-            b''.join(stream)
-    else:
-        b''.join(stream)
+    monkeypatch.setattr(dataset_utils, '_log_text_signals', failing_text)
+    with pytest.raises(RuntimeError, match='a text signal failed'):
+        b''.join(stream_episode_rrd(ds, 0))
 
     assert outside == []
 
