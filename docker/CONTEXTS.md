@@ -21,8 +21,8 @@
 checkpoint, its weights inside, offline, serving on `:8000`. `pi05-droid` and `gr00t-n17-droid`
 build on `positro/openpi-base` and `positro/gr00t-base`, `molmoact2-droid` on a Python 3.13
 image with uv, and `flux3-action` and `cosmos3-nano` build the vendor stack themselves. CI
-publishes each one; `make build-serve-<name>` builds it. A submission can start from `pi05-droid`,
-`gr00t-n17-droid` or `molmoact2-droid`: see [Submit a policy image](../docs/submit-a-policy-image.md).
+publishes each one; `make build-serve-<name>` builds it. See
+[Submit a policy image](../docs/submit-a-policy-image.md).
 
 Build and push all: `make push`
 
