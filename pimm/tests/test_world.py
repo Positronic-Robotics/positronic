@@ -13,9 +13,8 @@ from collections.abc import Generator, Iterator
 from contextlib import nullcontext
 from functools import partial
 from multiprocessing.context import SpawnProcess
-from queue import Empty, Full
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -47,7 +46,6 @@ from pimm.world import (
     LocalQueueEmitter,
     MultiprocessEmitter,
     MultiprocessReceiver,
-    QueueEmitter,
     SystemClock,
     TransportMode,
     VirtualClock,
@@ -260,66 +258,6 @@ class DummySMValue(SMCompliant):
 
     def read_from_buffer(self, buffer: memoryview | bytes) -> None:
         self.value = struct.unpack('d', buffer[:8])[0]
-
-
-class TestQueueEmitter:
-    """Test the QueueEmitter class."""
-
-    def test_queue_emitter_emit_success(self):
-        """Test successful emission to queue."""
-        queue = mp.Manager().Queue()
-        emitter = QueueEmitter(queue, SystemClock())
-
-        emitter.emit('test_data')
-        # Verify the message was added to the queue
-        message = queue.get_nowait()
-        assert isinstance(message, Message)
-        assert message.data == 'test_data'
-        assert isinstance(message.time[EMITTED_WALL], int)
-
-    def test_queue_emitter_emit_with_timestamp(self):
-        """Test emission with explicit timestamp."""
-        queue = mp.Manager().Queue()
-        emitter = QueueEmitter(queue, SystemClock())
-        timestamp = 1234567890
-
-        emitter.emit('test_data', time=Time(source=timestamp))
-
-        message = queue.get_nowait()
-        assert message.data == 'test_data'
-        assert message is not None
-        assert message.time['source'] == timestamp
-
-    def test_queue_emitter_full_queue_removes_old_message(self):
-        """Test that full queue removes old message before adding new one."""
-        queue = mp.Manager().Queue(maxsize=1)
-        emitter = QueueEmitter(queue, SystemClock())
-
-        # Fill the queue
-        emitter.emit('old_data')
-
-        # Add another message (should remove old one)
-        emitter.emit('new_data')
-
-        # Only new message should be in queue
-        message = queue.get_nowait()
-        assert message.data == 'new_data'
-
-        # Queue should be empty now
-        with pytest.raises(Empty):
-            queue.get_nowait()
-
-    @patch('multiprocessing.Queue')
-    def test_queue_emitter_handles_full_exception(self, mock_queue_class):
-        """Test handling of Full exception when queue put fails."""
-        mock_queue = Mock()
-        mock_queue.put_nowait.side_effect = Full()  # put fails
-        mock_queue.get_nowait.side_effect = Full()  # get also fails (queue behavior)
-        mock_queue_class.return_value = mock_queue
-
-        emitter = QueueEmitter(mock_queue, SystemClock())
-        emitter.emit('test_data')
-        mock_queue.put_nowait.assert_called_once()  # Only called once since get_nowait fails
 
 
 class TestEventReceiver:
@@ -673,6 +611,37 @@ class TestWorld:
 
             emitter.emit('again', time=Time(capture=3))
             assert self._read(reader).data == 'again'
+
+    def test_a_read_during_an_emit_onto_a_full_queue_gets_the_new_message(self, monkeypatch):
+        class ReadAfterEachCall:
+            """Stands for an emitter's message store, and makes ``reader`` read once after each call to the store."""
+
+            def __init__(self, store: Any, reader: SignalReceiver):
+                self._store = store
+                self._reader = reader
+                self.reads: list[Message | None] = []
+
+            def __getattr__(self, name: str) -> Any:
+                method = getattr(self._store, name)
+
+                def call(*args: Any, **kwargs: Any) -> Any:
+                    try:
+                        return method(*args, **kwargs)
+                    finally:
+                        self.reads.append(self._reader.read())
+
+                return call
+
+        with World() as world:
+            emitter, reader = self._one_mp_pipe(world, TransportMode.QUEUE)
+            emitter.emit('old')
+            store = ReadAfterEachCall(emitter._queues[0], reader)
+            monkeypatch.setattr(emitter, '_queues', [store])
+
+            emitter.emit('new')
+
+            assert all(message is not None and message.updated for message in store.reads)
+            assert self._read(reader).data == 'new'
 
 
 class TestWorldControlSystems:

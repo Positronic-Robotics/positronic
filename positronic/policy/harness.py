@@ -297,11 +297,9 @@ class Harness(pimm.ControlSystem):
         meta[keys.TASK] = task.instruction
         return meta
 
-    def _append(self, values: dict[str, Any], time: pimm.Time) -> None:
+    def _append(self, values: dict[str, Any], timestamps: pimm.Time) -> None:
         if self._writer is None:
             return
-        world, wall = (RECEIVED_WORLD, RECEIVED_WALL) if RECEIVED_WORLD in time else (EMITTED_WORLD, EMITTED_WALL)
-        timestamps = pimm.Time(**time, **{HARNESS_WORLD: time[world], HARNESS_WALL: time[wall]})
         with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
             for name, value in values.items():
                 self._writer.append(name, value.copy() if isinstance(value, np.ndarray) else value, timestamps)
@@ -312,12 +310,21 @@ class Harness(pimm.ControlSystem):
         if self._writer is None or instruction == self._recorded_instruction:
             return
         assert self._clock is not None, 'an episode records only inside run'
-        self._append({eval_keys.INSTRUCTION: instruction}, emission_time(self._clock))
+        emitted = emission_time(self._clock)
+        timestamps = pimm.Time(
+            **emitted, **{HARNESS_WORLD: emitted[EMITTED_WORLD], HARNESS_WALL: emitted[EMITTED_WALL]}
+        )
+        self._append({eval_keys.INSTRUCTION: instruction}, timestamps)
         self._recorded_instruction = instruction
 
     def _convert_and_record(
         self, name: str, message: pimm.Message, serializer: Serializer | None, step_ms: dict[str, float] | None = None
     ) -> dict[str, Any]:
+        stamp = message.time
+        if self._writer is not None and not message.updated:
+            assert self._clock is not None, 'an episode records only inside run'
+            # A held message arrived before this read, so it records at the read.
+            stamp = emission_time(self._clock)
         started_ns = time.perf_counter_ns()
         value = serializer(message.data) if serializer is not None else message.data
         values = {
@@ -327,7 +334,10 @@ class Harness(pimm.ControlSystem):
         }
         if step_ms is not None:
             step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = (time.perf_counter_ns() - started_ns) / 1e6
-        self._append(values, message.time)
+        if self._writer is not None:
+            world, wall = (RECEIVED_WORLD, RECEIVED_WALL) if RECEIVED_WORLD in stamp else (EMITTED_WORLD, EMITTED_WALL)
+            timestamps = pimm.Time(**message.time, **{HARNESS_WORLD: stamp[world], HARNESS_WALL: stamp[wall]})
+            self._append(values, timestamps)
         return values
 
     def _sample(self, step_ms: dict[str, float] | None = None) -> None:

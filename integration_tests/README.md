@@ -22,7 +22,7 @@ The default checks:
   their episode-relative timestamps match the committed reference arrays. The comparison reports the
   first differing field, sample time and value.
 
-Traces use `harness.world`: command emission and input receipt time. Recordings without it use
+Traces use `harness.world`: command emission and the harness's read of each input. Recordings without it use
 `received.world` or legacy `recorded`. Comparisons exclude wall time, which varies between runs.
 
 The references are tied to the environment in `fixtures/act_stack/provenance.json`. Exact matching
