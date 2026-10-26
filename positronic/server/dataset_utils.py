@@ -4,6 +4,8 @@ import functools
 import io
 import logging
 import tempfile
+import threading
+import traceback
 import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -117,14 +119,14 @@ def _infer_dims(sig) -> int:
     return int(arr.size) if arr is not None else 1
 
 
-def _log_static_trail(entity_path: str, positions: np.ndarray, base_rgb: list[int]) -> None:
+def _log_static_trail(rec: rr.RecordingStream, entity_path: str, positions: np.ndarray, base_rgb: list[int]) -> None:
     """Log the full trajectory as a thin, muted static background."""
     if len(positions) < 2:
         return
     segments = np.stack([positions[:-1], positions[1:]], axis=1)
     muted = [c // 3 + 40 for c in base_rgb]  # blend toward gray; rerun 3D doesn't do alpha
     colors = np.tile([*muted, 255], (len(segments), 1)).astype(np.uint8)
-    rr.log(entity_path, rr.LineStrips3D(segments, colors=colors, radii=0.0005), static=True)
+    rr.log(entity_path, rr.LineStrips3D(segments, colors=colors, radii=0.0005), static=True, recording=rec)
 
 
 def _format_value(value: Any, formatter: str | None, default: Any) -> Any:
@@ -599,16 +601,16 @@ def _build_blueprint(
     )
 
 
-def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
+def _setup_series_names(rec: rr.RecordingStream, signals: EpisodeSignals, ep: Episode) -> None:
     for key, dim in signals.plotted.items():
         names = _value_names(key, signals, ep)
         if dim == 1:
             if names:
-                log_series_styles(f'/signals/{key}', [names[0]], static=True)
+                log_series_styles(f'/signals/{key}', [names[0]], static=True, recording=rec)
         else:
             for i in range(dim):
                 label = names[i] if names else str(i)
-                log_series_styles(f'/signals/{key}/{i}', [label], static=True)
+                log_series_styles(f'/signals/{key}/{i}', [label], static=True, recording=rec)
 
 
 class _BinaryStreamDrainer:
@@ -676,7 +678,12 @@ def _sample_indices(timestamps: dict[str, np.ndarray], max_hz: float) -> np.ndar
 
 
 def _encode_frames_as_video(
-    entity_path: str, sig: Signal, columns: dict[str, np.ndarray], max_resolution: int, max_hz: float
+    rec: rr.RecordingStream,
+    entity_path: str,
+    sig: Signal,
+    columns: dict[str, np.ndarray],
+    max_resolution: int,
+    max_hz: float,
 ) -> None:
     codec = rr.VideoCodec.H265
     # A frame may produce 0, 1 or more packets, and so may the final flush.
@@ -688,7 +695,10 @@ def _encode_frames_as_video(
             index = index_by_pts[packet.pts]
             timestamps = {name: values[index : index + 1] for name, values in columns.items()}
             rr.send_columns(
-                entity_path, indexes=_rerun_indexes(timestamps), columns=rr.VideoStream.columns(sample=[bytes(packet)])
+                entity_path,
+                indexes=_rerun_indexes(timestamps),
+                columns=rr.VideoStream.columns(sample=[bytes(packet)]),
+                recording=rec,
             )
 
     first_frame = np.asarray(sig[0][0])
@@ -702,7 +712,7 @@ def _encode_frames_as_video(
         stream.max_b_frames = 0
         stream.codec_context.time_base = _FRAME_INDEX_TIME_BASE
 
-        rr.log(entity_path, rr.VideoStream(codec=codec), static=True)
+        rr.log(entity_path, rr.VideoStream(codec=codec), static=True, recording=rec)
 
         for position, (index, (val, _)) in enumerate((i, sample) for i, sample in enumerate(sig) if i in kept):
             frame = av.VideoFrame.from_ndarray(np.asarray(val), format='rgb24')
@@ -749,6 +759,7 @@ def _mp4_reduced_to(src: Path, max_resolution: int) -> bytes:
 
 
 def _log_video_signals(
+    rec: rr.RecordingStream,
     ep: Episode,
     signals: EpisodeSignals,
     drainer: _BinaryStreamDrainer,
@@ -766,24 +777,31 @@ def _log_video_signals(
         if isinstance(sig, VideoSignal):
             video_bytes = _mp4_reduced_to(sig.video_path, max_resolution)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
-            rr.log(name, asset, static=True)
+            rr.log(name, asset, static=True, recording=rec)
 
             frame_pts_ns = asset.read_frame_timestamps_nanos()
             rr.send_columns(
-                name, indexes=_rerun_indexes(timestamps), columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns)
+                name,
+                indexes=_rerun_indexes(timestamps),
+                columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
+                recording=rec,
             )
         else:
-            _encode_frames_as_video(name, sig, timestamps, max_resolution, max_hz)
+            _encode_frames_as_video(rec, name, sig, timestamps, max_resolution, max_hz)
         yield from drainer.drain()
 
 
-def _send_scalar_columns(key: str, timestamps: dict[str, np.ndarray], vals: np.ndarray) -> None:
+def _send_scalar_columns(
+    rec: rr.RecordingStream, key: str, timestamps: dict[str, np.ndarray], vals: np.ndarray
+) -> None:
     time_idx = _rerun_indexes(timestamps)
     if vals.shape[1] == 1:
-        rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
+        columns = rr.Scalars.columns(scalars=vals.ravel())
+        rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=columns, recording=rec)
         return
     for i in range(vals.shape[1]):
-        rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
+        columns = rr.Scalars.columns(scalars=vals[:, i])
+        rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=columns, recording=rec)
 
 
 # Integer nanoseconds put a source recorded at the cap a hair above it.
@@ -806,7 +824,12 @@ def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
 
 
 def _log_numeric_signals(
-    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_hz: float, recorded_also_on: str | None
+    rec: rr.RecordingStream,
+    ep: Episode,
+    signals: EpisodeSignals,
+    drainer: _BinaryStreamDrainer,
+    max_hz: float,
+    recorded_also_on: str | None,
 ) -> Generator[bytes, None, dict[str, tuple[dict[str, np.ndarray], np.ndarray]]]:
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging.
 
@@ -840,7 +863,7 @@ def _log_numeric_signals(
         timestamps, vals = {name: values[keep] for name, values in timestamps.items()}, vals[keep]
 
         if key not in unplotted:
-            _send_scalar_columns(key, timestamps, vals)
+            _send_scalar_columns(rec, key, timestamps, vals)
 
         if key in stash_keys:
             pose_data[key] = (timestamps, vals)
@@ -886,7 +909,9 @@ def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path, name
     return urdf_path
 
 
-def _animate_joint(joint, q_column: np.ndarray, timestamps: dict[str, np.ndarray], entity_path: str) -> None:
+def _animate_joint(
+    rec: rr.RecordingStream, joint, q_column: np.ndarray, timestamps: dict[str, np.ndarray], entity_path: str
+) -> None:
     """Compute and log transforms for a single URDF joint across all timesteps."""
     n = len(q_column)
     translations = np.empty((n, 3), dtype=np.float64)
@@ -904,6 +929,7 @@ def _animate_joint(joint, q_column: np.ndarray, timestamps: dict[str, np.ndarray
             child_frame=[joint.child_link] * n,
             parent_frame=[joint.parent_link] * n,
         ),
+        recording=rec,
     )
 
 
@@ -911,6 +937,7 @@ _URDF_ANIM_HZ = 15
 
 
 def _log_urdf_robot(
+    rec: rr.RecordingStream,
     ep: Episode,
     joint_sig: str,
     numeric_data: dict[str, tuple[dict[str, np.ndarray], np.ndarray]],
@@ -937,11 +964,12 @@ def _log_urdf_robot(
 
     with tempfile.TemporaryDirectory() as tmp:
         urdf_path = _write_urdf_to_dir(urdf_str, meshes, Path(tmp), namespace)
-        rr.log_file_from_path(str(urdf_path), entity_path_prefix=prefix, static=True)
+        rr.log_file_from_path(str(urdf_path), entity_path_prefix=prefix, static=True, recording=rec)
         tree = UrdfTree.from_file_path(str(urdf_path), entity_path_prefix=prefix)
 
     # An unattached root link frame shares no space with the poses, and the loader leaves it that way.
-    rr.log(prefix, rr.Transform3D(translation=mount or np.zeros(3), child_frame=tree.root_link().name), static=True)
+    root = rr.Transform3D(translation=mount or np.zeros(3), child_frame=tree.root_link().name)
+    rr.log(prefix, root, static=True, recording=rec)
     yield from drainer.drain()
 
     keep = _sample_indices(timestamps, _URDF_ANIM_HZ)
@@ -952,7 +980,7 @@ def _log_urdf_robot(
         for j_idx, name in enumerate(joint_names):
             joint = tree.get_joint_by_name(namespace + name)
             if joint is not None:
-                _animate_joint(joint, q_ds[:, j_idx], ts_ds, link_path(joint))
+                _animate_joint(rec, joint, q_ds[:, j_idx], ts_ds, link_path(joint))
                 yield from drainer.drain()
 
         # A single ``grip`` signal in [0, 1] drives the gripper joints, each joint's axis sign setting
@@ -968,11 +996,12 @@ def _log_urdf_robot(
             for name in gripper['joints']:
                 joint = tree.get_joint_by_name(namespace + name)
                 if joint is not None:
-                    _animate_joint(joint, finger_pos, grip_times, link_path(joint))
+                    _animate_joint(rec, joint, finger_pos, grip_times, link_path(joint))
                     yield from drainer.drain()
 
 
 def _log_pose_signals(
+    rec: rr.RecordingStream,
     ep: Episode,
     signals: EpisodeSignals,
     numeric_data: dict[str, tuple[dict[str, np.ndarray], np.ndarray]],
@@ -981,7 +1010,7 @@ def _log_pose_signals(
     """Log 3D pose: static full trajectory + current position ball + a URDF model per joint signal."""
     for joint_sig in signals.joints:
         if joint_sig in numeric_data:
-            yield from _log_urdf_robot(ep, joint_sig, numeric_data, drainer)
+            yield from _log_urdf_robot(rec, ep, joint_sig, numeric_data, drainer)
 
     for key in signals.poses:
         if key not in numeric_data:
@@ -992,7 +1021,7 @@ def _log_pose_signals(
         positions = vals[:, :3]
         color = _pose_color(key)
 
-        _log_static_trail(f'/3d/{key}/trail', positions, color)
+        _log_static_trail(rec, f'/3d/{key}/trail', positions, color)
 
         rr.send_columns(
             f'/3d/{key}',
@@ -1002,6 +1031,7 @@ def _log_pose_signals(
                 *rr.Points3D.columns(colors=np.tile(color, (len(vals), 1))).partition([1] * len(vals)),
                 *rr.Points3D.columns(radii=np.full(len(vals), 0.01)),
             ],
+            recording=rec,
         )
         yield from drainer.drain()
 
@@ -1012,7 +1042,11 @@ def _changes(values: np.ndarray) -> np.ndarray:
 
 
 def _log_text_signals(
-    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, recorded_also_on: str | None
+    rec: rr.RecordingStream,
+    ep: Episode,
+    signals: EpisodeSignals,
+    drainer: _BinaryStreamDrainer,
+    recorded_also_on: str | None,
 ) -> Iterator[bytes]:
     """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
 
@@ -1028,26 +1062,32 @@ def _log_text_signals(
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
         time_idx = _rerun_indexes({name: values[changes] for name, values in timestamps.items()})
-        rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=rr.TextLog.columns(text=texts[changes]))
+        text_columns = rr.TextLog.columns(text=texts[changes])
+        rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=text_columns, recording=rec)
 
         if key in plotted:
             values = plotted[key]
             style = rr.SeriesLines(
                 names=[_value_legend(values)], interpolation_mode=rr.components.InterpolationMode.StepAfter
             )
-            rr.log(f'/signals/{key}', style, static=True)
+            rr.log(f'/signals/{key}', style, static=True, recording=rec)
             # The last sample holds the final value to the end of the episode.
             shown = np.union1d(changes, [len(texts) - 1])
             index_of = {value: index for index, value in enumerate(values)}
             indices = np.asarray([index_of[text] for text in texts[shown]], dtype=np.float64)
             _send_scalar_columns(
-                key, {name: values[shown] for name, values in timestamps.items()}, indices.reshape(-1, 1)
+                rec, key, {name: values[shown] for name, values in timestamps.items()}, indices.reshape(-1, 1)
             )
         yield from drainer.drain()
 
 
 DEFAULT_MAX_HZ = 30.0
 DEFAULT_MAX_RESOLUTION = 640
+
+
+# A new rerun stream waits for rerun's global recording list with the GIL held, and an orphan sweep holds the list
+# while it flushes. Threads that start, drop or sweep recordings only under this lock cannot deadlock.
+_RERUN_RECORDING_LIST_LOCK = threading.Lock()
 
 
 def _releases_orphaned_recordings(stream: Callable[..., Iterator[bytes]]) -> Callable[..., Generator[bytes]]:
@@ -1058,7 +1098,8 @@ def _releases_orphaned_recordings(stream: Callable[..., Iterator[bytes]]) -> Cal
         try:
             yield from stream(*args, **kwargs)
         finally:
-            rerun_bindings.flush_and_cleanup_orphaned_recordings()
+            with _RERUN_RECORDING_LIST_LOCK:
+                rerun_bindings.flush_and_cleanup_orphaned_recordings()
 
     return wrapper
 
@@ -1081,8 +1122,43 @@ def _send_blueprint(rec: rr.RecordingStream, blueprint: rrb.Blueprint) -> None:
     stream.disconnect()
 
 
+def _log_episode(
+    rec: rr.RecordingStream,
+    ep: Episode,
+    episode_id: int,
+    max_hz: float,
+    max_resolution: int,
+    layout: ReplayLayout | None,
+    timeline: str | None,
+) -> Iterator[bytes]:
+    # Each call takes the recording explicitly: `with rec` swaps the thread's recording, and the handle that
+    # the swap returns runs an orphan sweep when it dies, outside the lock.
+    drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
+    signals = _collect_signal_groups(ep)
+    opening = _opening_timeline(ep, timeline)
+    recorded_also_on = opening if opening in _RECORDED_CLOCK_TIMELINES else None
+    blueprint = _build_blueprint(signals, ep, layout, opening)
+    with _RERUN_RECORDING_LIST_LOCK:
+        _send_blueprint(rec, blueprint)
+    if signals.unplotted:
+        logging.warning(f'Episode {episode_id}: not plotting {signals.unplotted}')
+        notice = _unplotted_notice(signals.unplotted)
+        document = rr.TextDocument(notice, media_type=rr.MediaType.MARKDOWN)
+        rr.log(_UNPLOTTED_ENTITY, document, static=True, recording=rec)
+    yield from drainer.drain()
+
+    _setup_series_names(rec, signals, ep)
+    yield from drainer.drain()
+
+    yield from _log_video_signals(rec, ep, signals, drainer, max_resolution, max_hz, recorded_also_on)
+    pose_data = yield from _log_numeric_signals(rec, ep, signals, drainer, max_hz, recorded_also_on)
+    yield from _log_text_signals(rec, ep, signals, drainer, recorded_also_on)
+    yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
+    yield from _log_pose_signals(rec, ep, signals, pose_data, drainer)
+    yield from drainer.drain(force=True)
+
+
 @_releases_orphaned_recordings
-@rr.recording_stream.recording_stream_generator_ctx
 def stream_episode_rrd(
     ds: Dataset,
     episode_id: int,
@@ -1107,30 +1183,18 @@ def stream_episode_rrd(
     dataset_root = get_dataset_root(ds)
     dataset_name = Path(dataset_root).name if dataset_root else 'unknown'
     recording_id = f'positronic_ds_{dataset_name}_episode_{episode_id}'
-    rec = rr.RecordingStream(application_id=recording_id)
-    drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
-
-    with rec:
-        signals = _collect_signal_groups(ep)
-        opening = _opening_timeline(ep, timeline)
-        recorded_also_on = opening if opening in _RECORDED_CLOCK_TIMELINES else None
-        _send_blueprint(rec, _build_blueprint(signals, ep, layout, opening))
-        if signals.unplotted:
-            logging.warning(f'Episode {episode_id}: not plotting {signals.unplotted}')
-            notice = _unplotted_notice(signals.unplotted)
-            rr.log(_UNPLOTTED_ENTITY, rr.TextDocument(notice, media_type=rr.MediaType.MARKDOWN), static=True)
-        yield from drainer.drain()
-
-        _setup_series_names(signals, ep)
-        yield from drainer.drain()
-
-        yield from _log_video_signals(ep, signals, drainer, max_resolution, max_hz, recorded_also_on)
-        pose_data = yield from _log_numeric_signals(ep, signals, drainer, max_hz, recorded_also_on)
-        yield from _log_text_signals(ep, signals, drainer, recorded_also_on)
-        yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
-        yield from _log_pose_signals(ep, signals, pose_data, drainer)
-
-    yield from drainer.drain(force=True)
+    with _RERUN_RECORDING_LIST_LOCK:
+        rec = rr.RecordingStream(application_id=recording_id)
+    try:
+        yield from _log_episode(rec, ep, episode_id, max_hz, max_resolution, layout, timeline)
+    except BaseException as error:
+        # A traceback keeps the locals of its frames, so the recording would die after the lock below.
+        traceback.clear_frames(error.__traceback__)
+        raise
+    finally:
+        # The handle runs an orphan sweep when it dies.
+        with _RERUN_RECORDING_LIST_LOCK:
+            del rec
 
 
 def get_dataset_root(dataset: Dataset) -> str | None:
