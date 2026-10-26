@@ -709,6 +709,18 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
             'in-range targets and the stack would be empty'
         )
 
+    @property
+    def keys(self) -> tuple[str, ...]:
+        return self._keys
+
+    @property
+    def offsets_sec(self) -> tuple[float, ...]:
+        return self._offsets_sec
+
+    @property
+    def pad_start(self) -> bool:
+        return self._pad_start
+
     def run(self, runtime: Runtime, inner: ProcessorRun[Obs, OutputT, ReturnT]) -> ProcessorRun[Obs, OutputT, ReturnT]:
         buffer = _StackBuffer(self._offsets_sec, pad_start=self._pad_start)
         obs = yield

@@ -4,7 +4,8 @@ from concurrent.futures import Future, wait
 from contextlib import closing
 from functools import partial
 from threading import Lock, Thread
-from typing import Any
+from types import MappingProxyType
+from typing import Any, ParamSpec, TypeVar
 
 import numpy as np
 from positronic_model_server import keys as offboard_keys
@@ -16,12 +17,19 @@ from positronic_wire.wire import SessionAddress
 
 from positronic import telemetry, telemetry_keys
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
+from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, FrameMiss, InferenceClient, InferenceSession
+from positronic.offboard.frame_stream import FrameCodec, FrameStreamer, declared_codecs
 from positronic.policy import keys as policy_keys
 
-from .base import Policy, PolicyRun, Processor, Runtime
+from .base import Answer, Policy, PolicyRun, Processor, Runtime
+from .codecs import TransformImages
+from .codecs.image import ResizeCache
 from .compatibility import from_v1_spec
-from .spec import from_spec
+from .processors import TemporalStack
+from .spec import ComponentFactory, from_spec
+
+P = ParamSpec('P')
+T = TypeVar('T')
 
 
 def _prepare_value(value: Any, jpeg_quality: int) -> Any:
@@ -59,15 +67,23 @@ def round_trip(
             telemetry.set_attrs(span, **served)
 
 
-def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:
-    """The client stack a server's handshake declares, in the form ``protocol_version`` runs."""
+def declared_stack(
+    meta: cabc.Mapping[str, Any],
+    protocol_version: ProtocolVersion,
+    overrides: cabc.Mapping[ComponentFactory, ComponentFactory] = MappingProxyType({}),
+) -> Processor:
+    """The client stack a server's handshake declares, in the form ``protocol_version`` runs.
+
+    ``overrides`` maps a registered factory to the factory that this client builds in its place (``from_spec``).
+    """
     declared = meta.get(offboard_keys.LOCAL_STACK)
     if declared is None:
         raise ValueError('Server declares no client processor stack')
+    build = partial(from_spec, overrides=overrides)
     if protocol_version is ProtocolVersion.V1:
-        stack = from_v1_spec(declared, meta, from_spec)
+        stack = from_v1_spec(declared, meta, build)
     else:
-        stack = from_spec(declared)
+        stack = build(declared)
     if not isinstance(stack, Processor):
         raise ValueError('The declared client stack must be a processor')
     return stack
@@ -109,6 +125,68 @@ def _log_late_close_failure(closed: Future[None]) -> None:
         logger.error('The session close failed after the run continued: %r', failure)
 
 
+class _ReportingAnswer(Answer[T]):
+    """``answer``, reporting its result to ``on_read`` at the first read."""
+
+    def __init__(self, answer: Answer[T], on_read: cabc.Callable[[T], None]) -> None:
+        self._answer = answer
+        self._on_read = on_read
+        self._reported = False
+
+    def done(self) -> bool:
+        return self._answer.done()
+
+    def result(self) -> T:
+        result = self._answer.result()
+        if not self._reported:
+            self._reported = True
+            self._on_read(result)
+        return result
+
+    def cancel(self) -> None:
+        self._answer.cancel()
+
+
+class _ReportingRuntime(Runtime):
+    """``inner``, with each answer reporting its result to ``on_read`` at the first read."""
+
+    def __init__(self, inner: Runtime, on_read: cabc.Callable[[Any], None]) -> None:
+        self._inner = inner
+        self._on_read = on_read
+
+    def set_metadata(self, name: str, value: Any) -> None:
+        self._inner.set_metadata(name, value)
+
+    @property
+    def time_ns(self) -> int:
+        return self._inner.time_ns
+
+    @property
+    def tick(self) -> int:
+        return self._inner.tick
+
+    def submit(self, function: cabc.Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+        return _ReportingAnswer(self._inner.submit(function, *args, **kwargs), self._on_read)
+
+
+def _recorded(factory: ComponentFactory, built: list[Any]) -> ComponentFactory:
+    """``factory``, recording each component it builds in ``built``, in build order."""
+
+    def build(**args: Any) -> Any:
+        component = factory(**args)
+        built.append(component)
+        return component
+
+    return build
+
+
+def _transform_row(transforms: cabc.Sequence[TransformImages], images: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """The frames of one row, transformed as the declared stack transforms them, in its order."""
+    for transform in transforms:
+        images = transform.transform_frames(images)
+    return images
+
+
 def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict[str, Any]:
     """The frame of each pose signal that a server states in its metadata or through its client stack."""
     # A server repeats its client stack's frames in its metadata, and the harness checks only the merged copy.
@@ -124,7 +202,8 @@ class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
     ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG
-    quality of images sent to a server that asks for compressed images.
+    quality of images sent to a server that asks for compressed images. ``frame_stream`` names the codec
+    (``jpeg`` or ``h264``) of a frame stream (``positronic.offboard.frame_stream``), for a server that declares one.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -141,10 +220,12 @@ class RemotePolicy(Policy):
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+        frame_stream: str | None = None,
     ):
         self._client = InferenceClient(
             registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout
         )
+        self._frame_codec = None if frame_stream is None else FrameCodec(frame_stream)
         self._jpeg_quality = jpeg_quality
 
     def meta(self) -> dict[str, Any]:
@@ -157,9 +238,13 @@ class RemotePolicy(Policy):
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
         connection_lock = Lock()
+        streamer: FrameStreamer | None = None
         try:
             server_meta = dict(session.metadata)
-            stack = declared_stack(server_meta, session.protocol_version)
+            compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
+                server_meta.get(policy_keys.COMPRESS_IMAGES)
+            )
+            stack, streamer = self._stack_and_streamer(session, compress_images, connection_lock, runtime)
             client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
             # Either side of the server's deployment may state the frames, so the run records both as one entry keyed
             # by pose signal.
@@ -173,23 +258,78 @@ class RemotePolicy(Policy):
                 episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
             for name, value in episode_meta.items():
                 runtime.set_metadata(name, value)
-            compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
-                server_meta.get(policy_keys.COMPRESS_IMAGES)
-            )
+            policy_runtime = runtime if streamer is None else _ReportingRuntime(runtime, streamer.on_answer)
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
+                if streamer is None or streamer.call == 0:
+                    with connection_lock:
+                        return round_trip(session, obs, compress_images, self._jpeg_quality)
+                streamed = streamer.request(obs)
                 with connection_lock:
-                    return round_trip(session, obs, compress_images, self._jpeg_quality)
+                    try:
+                        return round_trip(session, streamed, compress_images, self._jpeg_quality)
+                    except FrameMiss as miss:
+                        # The protocol takes the request in full after a frame_miss answer.
+                        logger.warning(
+                            'The server does not have the streamed rows %s; sending the request in full', miss.missing
+                        )
+                        return round_trip(session, obs, compress_images, self._jpeg_quality)
 
-            with closing(runtime.start(stack, infer)) as run:
+            with closing(policy_runtime.start(stack, infer)) as run:
                 obs = yield
                 while True:
+                    if streamer is not None:
+                        streamer.on_tick(obs)
                     try:
                         step = run.send(obs)
                     except StopIteration as end:
                         return end.value
                     obs = yield step
         finally:
+            if streamer is not None:
+                streamer.close()
             # Generator failure can reach cleanup while inference still owns the connection.
             with connection_lock:
                 _close_within_bound(session)
+
+    def _stack_and_streamer(
+        self, session: InferenceSession, compress_images: bool, connection_lock: Lock, runtime: Runtime
+    ) -> tuple[Processor, FrameStreamer | None]:
+        """The declared stack of ``session``, and its frame streamer when this policy streams frames on it."""
+        meta, version = session.metadata, session.protocol_version
+        if self._frame_codec is None:
+            return declared_stack(meta, version), None
+        if not (compress_images and version is ProtocolVersion.V1 and self._frame_codec in declared_codecs(meta)):
+            logger.warning('The session offers no %s frame stream; requests go in full', self._frame_codec.value)
+            return declared_stack(meta, version), None
+        # The streamer mirrors the declared temporal stack, and transforms each row as the stack transforms its
+        # frames. The stack's transforms share one cache with the streamer, so a frame is resized once.
+        cache = ResizeCache()
+        temporal: list[TemporalStack] = []
+        transforms: list[TransformImages] = []
+        overrides: dict[ComponentFactory, ComponentFactory] = {
+            TemporalStack.from_spec_args: _recorded(TemporalStack.from_spec_args, temporal),
+            TransformImages.from_spec_args: _recorded(partial(TransformImages.from_spec_args, cache=cache), transforms),
+        }
+        stack = declared_stack(meta, version, overrides)
+        if len(temporal) != 1:
+            raise ValueError('A frame stream needs one temporal_stack in the declared local stack')
+        (stacked,) = temporal
+        stack_meta = stack.meta()
+
+        def send(message: dict[str, Any]) -> None:
+            with connection_lock:
+                session.send_message(message)
+
+        return stack, FrameStreamer(
+            send,
+            lambda: runtime.time_ns,
+            codec=self._frame_codec,
+            keys=stacked.keys,
+            offsets_sec=stacked.offsets_sec,
+            pad_start=stacked.pad_start,
+            fps=stack_meta[policy_keys.ACTION_FPS],
+            horizon_sec=stack_meta.get(policy_keys.ACTION_HORIZON_SEC),
+            resize=partial(_transform_row, transforms) if transforms else None,
+            jpeg_quality=self._jpeg_quality,
+        )
