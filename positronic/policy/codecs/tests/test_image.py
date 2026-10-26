@@ -14,6 +14,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.policy import spec, training
 from positronic.policy.codecs import LEROBOT_FEATURES, Codec, EncodeImages, Resample, ResizeMode, TransformImages
+from positronic.policy.codecs.image import ResizeCache
 from positronic.policy.keys import RTC
 
 
@@ -348,6 +349,79 @@ class TestTransformImages:
         codec = TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND)
         one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
         np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
+
+
+class TestResizeCache:
+    def test_a_codec_without_a_cache_transforms_a_frame_that_comes_again(self):
+        frame = np.random.default_rng(1).integers(0, 256, size=(480, 640, 3), dtype=np.uint8)
+        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
+        first = codec.encode({'cam': frame})['cam']
+        again = codec.encode({'cam': frame.copy()})['cam']
+        assert again is not first
+        assert first.flags.writeable
+
+    @pytest.mark.parametrize('resample', list(Resample))
+    def test_a_frame_that_comes_again_gets_the_pixels_of_a_transform_without_a_second_one(self, resample):
+        frame = np.random.default_rng(1).integers(0, 256, size=(480, 640, 3), dtype=np.uint8)
+        codec = TransformImages(64, 48, mode=ResizeMode.BOUND, resample=resample, cache=ResizeCache())
+        first = codec.encode({'cam': frame})['cam']
+        again = codec.encode({'cam': frame.copy()})['cam']
+        assert again is first
+        plain = TransformImages(64, 48, mode=ResizeMode.BOUND, resample=resample).encode({'cam': frame})['cam']
+        np.testing.assert_array_equal(again, plain)
+
+    def test_codecs_that_share_a_cache_transform_a_frame_once(self):
+        frame = np.random.default_rng(3).integers(0, 256, size=(480, 640, 3), dtype=np.uint8)
+        cache = ResizeCache()
+        first = TransformImages(64, 48, mode=ResizeMode.BOUND, cache=cache).encode({'cam': frame})['cam']
+        stack = TransformImages(64, 48, mode=ResizeMode.BOUND, cache=cache).encode({'cam': np.stack([frame, frame])})
+        np.testing.assert_array_equal(stack['cam'], np.stack([first, first]))
+
+    def test_transforms_of_one_frame_are_kept_apart(self):
+        frame = np.random.default_rng(4).integers(0, 256, size=(48, 64, 3), dtype=np.uint8)
+        cache = ResizeCache()
+        bound = TransformImages(32, 32, mode=ResizeMode.BOUND, cache=cache).encode({'cam': frame})['cam']
+        padded = TransformImages(32, 32, mode=ResizeMode.PAD, cache=cache).encode({'cam': frame})['cam']
+        assert bound.shape == (24, 32, 3) and padded.shape == (32, 32, 3)
+
+    def test_a_frame_that_needs_no_transform_stays_the_caller_s_writable_array(self):
+        frame = np.zeros((8, 8, 3), dtype=np.uint8)
+        out = TransformImages(16, 16, mode=ResizeMode.BOUND, cache=ResizeCache()).encode({'cam': frame})['cam']
+        assert out is frame and frame.flags.writeable
+
+    def test_a_frame_that_differs_off_the_fingerprint_sample_is_not_a_hit(self):
+        frame = np.random.default_rng(2).integers(0, 255, size=(480, 640, 3), dtype=np.uint8)
+        other = frame.copy()
+        other[1, 1] += 1  # the sample takes every 20th row and every 26th column
+        cache = ResizeCache()
+        cache.put(frame, (64, 48), np.zeros((48, 64, 3), dtype=np.uint8))
+        assert cache.get(other, (64, 48)) is None
+        assert cache.get(frame, (64, 48)) is not None
+
+    def test_the_least_recently_used_frame_goes_first_past_the_capacity(self):
+        frames = [np.full((48, 64, 3), value, dtype=np.uint8) for value in (1, 2, 3)]
+        cache = ResizeCache(capacity=2)
+        for frame in frames:
+            cache.put(frame, (32, 24), frame[::2, ::2].copy())
+            assert cache.get(frames[0], (32, 24)) is not None
+        assert cache.get(frames[1], (32, 24)) is None
+        assert cache.get(frames[2], (32, 24)) is not None
+
+    def test_a_cached_transform_is_read_only(self):
+        frame = np.full((48, 64, 3), 5, dtype=np.uint8)
+        cache = ResizeCache()
+        cache.put(frame, (32, 24), np.zeros((24, 32, 3), dtype=np.uint8))
+        hit = cache.get(frame, (32, 24))
+        assert hit is not None
+        with pytest.raises(ValueError, match='read-only'):
+            hit[0, 0, 0] = 1
+
+    def test_a_frame_changed_after_its_transform_is_not_a_hit(self):
+        frame = np.full((48, 64, 3), 5, dtype=np.uint8)
+        cache = ResizeCache()
+        cache.put(frame, (32, 24), np.zeros((24, 32, 3), dtype=np.uint8))
+        frame[1, 1] = 6
+        assert cache.get(frame, (32, 24)) is None
 
 
 class TestEncodeImages:
