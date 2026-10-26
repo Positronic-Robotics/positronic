@@ -1,7 +1,8 @@
 """The container the platform runs a submitted policy image in: its limits and its image budgets.
 
 Each value is a published contract value. The platform runs every image under it, and
-`docs/submit-a-policy-image.md` states it.
+`docs/submit-a-policy-image.md` states it. An image endpoint that states `min_vram_gb` gets a larger
+GPU slice than `MIG_PROFILE` where its run is not a competition run.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ IMAGE_FETCH_DEADLINE_S = 1800.0
 # The deadline for the server's start, from the end of the image pull to the first readiness answer.
 WARMUP_DEADLINE_S = 1800.0
 
-# The GPU: one MIG slice of an RTX PRO 6000, and the memory it carries.
+# The published GPU: one MIG slice of an RTX PRO 6000, and the memory it carries.
 MIG_PROFILE = '1g.24gb'
 VRAM_MIB = 24192
 

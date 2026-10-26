@@ -209,6 +209,12 @@ holds at most that many sessions open to the policy at once. A server that serve
 time states 1. With no value, the platform picks the count. Only an entry that names its `address`
 states it: a label on a task takes the value of the plan endpoint it names.
 
+An `image` endpoint may state `min_vram_gb`, the least GPU memory the image needs, in GB of 10^9
+bytes. The platform gives the run the smallest GPU slice that holds it. With no value, the image gets
+the published slice of 24192 MiB. A need that no slice of the run's GPU holds is refused at submit,
+and a competition plan is refused a need above the published slice. Only an entry that names its
+`image` states it.
+
 Each address field holds one grammar. The wire writes each value into what it dials with no change,
 so the grammar admits only a value the wire can write as it is:
 

@@ -69,7 +69,9 @@ Other models:
 ### What the example images use
 
 Approximate values, from one run of each image in October 2026. A later build of an image can use
-different values. The platform gives each image 24 GB of GPU memory, so the last two images do not fit.
+different values. The platform gives an image 24 GB of GPU memory unless its endpoint states a larger
+need ([GPU memory](#gpu-memory)). The last two images need more, so a competition run of them does
+not fit.
 
 | Image | Disk, pulled image | Memory, test without a GPU | GPU memory |
 |---|---|---|---|
@@ -220,8 +222,8 @@ What the platform does with the credential:
 7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
    servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
 8. The GPU is one `1g.24gb` slice of an RTX PRO 6000: 24192 MiB of VRAM and a quarter of the card's
-   compute. The container runs under the
-   limits in [The container](#the-container).
+   compute, unless the endpoint states a larger need ([GPU memory](#gpu-memory)). The container runs
+   under the limits in [The container](#the-container).
 
 The RTX PRO 6000 is a Blackwell card with compute capability 12.0 (`sm_120`). Each framework in the
 image needs kernels for `sm_120`. Without them, the first inference fails with
@@ -333,9 +335,34 @@ The script then waits up to 600 s: FLUX 3 Action binds port 8000 after about 140
 about 151 s. `no answer in 600 s` means a hung server, or a slow one. The platform gives the server's start
 1800 s from the end of the pull.
 
-The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
-sure that your model uses less. A memory setting that is a fraction of the GPU, such as
-`XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB.
+The platform gives the image one GPU with 24 GB of memory, or the slice that holds the need its
+endpoint states ([GPU memory](#gpu-memory)). On a larger GPU, use `nvidia-smi` to make sure that your
+model uses less. A memory setting that is a fraction of the GPU, such as
+`XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the slice.
+
+### GPU memory
+
+An `image` endpoint may state `min_vram_gb`: the least GPU memory the image needs, in GB of 10^9
+bytes. The platform then gives the run the smallest slice that holds it:
+
+| Slice | VRAM | Holds `min_vram_gb` up to |
+|---|---|---|
+| `1g.24gb` (the published slice) | 24192 MiB | 25 |
+| `2g.48gb` | 48512 MiB | 50 |
+| `4g.96gb` | 97280 MiB | 102 |
+
+`nvidia-smi` reports MiB. Convert a peak you measured with MiB × 2^20 / 10^9, round up, and add
+headroom. The largest slice depends on the GPU the run is placed on. A need that no slice of that GPU
+holds is refused when you submit. A competition run keeps the published slice: a competition plan
+whose `min_vram_gb` is more than 25 is refused.
+
+```yaml
+endpoints:
+  - name: policy
+    kind: image
+    image: docker.io/<you>/<image>@sha256:<digest>
+    min_vram_gb: 40
+```
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
@@ -477,7 +504,7 @@ fault is not.
 | `image_too_large` | caller | the compressed size, against 50 GB |
 | `policy_setup_crash` | caller | `policy_log`: the server did not come up, or refused the run's own token |
 | `policy_inference_crash` | caller | `policy_log`: the server died after it served |
-| `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against the 24192 MiB slice |
+| `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against its slice (`vram_capacity_mib`) |
 | `latency_budget_exceeded` | caller | inference time per step |
 | `wall_clock_exceeded` | caller | the run passed its ceiling |
 | `invalid_flags` | caller | the plan the platform recorded |

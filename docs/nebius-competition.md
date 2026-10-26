@@ -179,7 +179,8 @@ On a machine with a GPU, add `--gpu`. The script then gives the server 600 s:
 bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
-- The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
+- The platform gives the image one GPU with 24 GB of memory. A competition plan whose image endpoint
+  states `min_vram_gb` above 25 is refused. On a larger GPU, use `nvidia-smi` to make
   sure that your model uses less. A memory setting that is a fraction of the GPU, such as
   `XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB.
 - On the platform, the server's start has a deadline of 1800 s, from the end of the image pull to the

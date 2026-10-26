@@ -296,12 +296,17 @@ class Endpoint(Cascade, Generic[Credential]):
     image_credential: Credential | None = None
     # The most sessions the platform holds open to a remote policy at once. None leaves the count to the platform.
     max_concurrent_sessions: int | None = Field(default=None, ge=1)
+    # The least GPU memory an image needs, in GB of 10**9 bytes. The platform gives the run a GPU slice that
+    # holds it. None takes the published slice.
+    min_vram_gb: int | None = Field(default=None, ge=1)
 
     @model_serializer(mode='wrap')
-    def _without_an_unstated_session_limit(self, handler: SerializerFunctionWrapHandler):
+    def _without_an_unstated_limit(self, handler: SerializerFunctionWrapHandler):
         serialized: dict[str, object] = handler(self)
         if self.max_concurrent_sessions is None:
             serialized.pop('max_concurrent_sessions', None)
+        if self.min_vram_gb is None:
+            serialized.pop('min_vram_gb', None)
         return serialized
 
     @model_validator(mode='before')
@@ -381,6 +386,22 @@ class Endpoint(Cascade, Generic[Credential]):
             raise ValueError(
                 f'endpoint {self.name!r} states max_concurrent_sessions and names no address: state it on the plan '
                 'endpoint this label names'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _a_memory_need_sizes_an_image(self) -> Self:
+        if self.min_vram_gb is None:
+            return self
+        if self.kind is not EndpointKind.image:
+            raise ValueError(
+                f'{slug_of(self.kind)} endpoint {self.name!r} states min_vram_gb, which only an image endpoint '
+                'carries: the platform sizes the GPU of the image it runs'
+            )
+        if self.image is None:
+            raise ValueError(
+                f'endpoint {self.name!r} states min_vram_gb and names no image: state it on the plan endpoint '
+                'this label names'
             )
         return self
 
