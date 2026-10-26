@@ -82,8 +82,9 @@ def _server_connection(send: AsyncMock, receive: AsyncMock) -> websocket_wire.We
 
 def test_a_send_after_the_session_closed_says_the_peer_is_gone():
     sent = AsyncMock()
-    conn = _server_connection(sent, AsyncMock())
+    conn = _server_connection(sent, AsyncMock(return_value={'type': 'websocket.receive', 'bytes': b'a frame'}))
     asyncio.run(conn.refuse('Session refused'))
+    asyncio.run(conn.finish(timeout=1))
 
     with pytest.raises(wire.PeerDisconnected):
         asyncio.run(conn.send(b'a frame nobody is there to read'))

@@ -16,7 +16,15 @@ from urllib.parse import parse_qsl
 import uvicorn
 from positronic_wire import wire
 from positronic_wire.wire import KEEPALIVE_PATH, SESSION_PATH
-from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent, HTTPScope, Scope, WebSocketScope
+from uvicorn._types import (
+    ASGIReceiveCallable,
+    ASGISendCallable,
+    ASGISendEvent,
+    HTTPScope,
+    Scope,
+    WebSocketCloseEvent,
+    WebSocketScope,
+)
 
 from . import keys, server_wire
 
@@ -47,6 +55,7 @@ class WebsocketServerConnection(server_wire.ServerConnection):
         self._asgi_send = send
         self._served_address = served_address
         self._closed = False
+        self._close_event: WebSocketCloseEvent = {'type': 'websocket.close', 'code': 1000}
 
     @property
     def peer(self) -> str:
@@ -89,7 +98,7 @@ class WebsocketServerConnection(server_wire.ServerConnection):
     async def refuse(self, reason: str) -> None:
         # A close frame leaves 123 bytes for its UTF-8 reason after the status code.
         reason = reason.encode('utf-8')[:123].decode('utf-8', errors='ignore')
-        await self._send({'type': 'websocket.close', 'code': 1008, 'reason': reason})
+        self._close_event = {'type': 'websocket.close', 'code': 1008, 'reason': reason}
 
     async def finish(self, timeout: float) -> None:
         if self._closed:
@@ -98,7 +107,7 @@ class WebsocketServerConnection(server_wire.ServerConnection):
         with suppress(TimeoutError, wire.PeerDisconnected):
             await asyncio.wait_for(self.receive(), timeout=timeout)
         if not self._closed:
-            await self._send({'type': 'websocket.close', 'code': 1000})
+            await self._send(self._close_event)
 
 
 # The kernel picks a port free on the first address only, and another process can hold it on the next one.

@@ -64,7 +64,7 @@ class ServerConnection(abc.ABC):
 
     @abc.abstractmethod
     async def refuse(self, reason: str) -> None:
-        """End a session the server cannot serve, and tell the client why."""
+        """Refuse a session the server cannot serve: it ends with ``reason`` once the session handler returns."""
 
 
 # What a wire hands the server for each session it accepts.
