@@ -1,8 +1,7 @@
 """The container the platform runs a submitted policy image in: its limits and its image budgets.
 
 Each value is a published contract value. The platform runs every image under it, and
-`docs/submit-a-policy-image.md` states it. An image endpoint that states `min_vram_gb` can get a
-larger GPU slice than `MIG_PROFILE`.
+`docs/submit-a-policy-image.md` states it.
 """
 
 from __future__ import annotations
