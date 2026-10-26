@@ -5,11 +5,6 @@ from packaging.requirements import Requirement
 from positronic.simulator.molmo_spaces import launcher
 
 
-def _overrides() -> list[Requirement]:
-    lines = launcher._MOLMO_OVERRIDES.read_text().splitlines()
-    return [Requirement(line) for line in lines if line.strip() and not line.startswith('#')]
-
-
 def test_the_install_passes_the_overrides(tmp_path, monkeypatch):
     installs: list[list[str]] = []
     monkeypatch.setattr(launcher, '_MOLMO_SRC', tmp_path / 'src')
@@ -21,6 +16,11 @@ def test_the_install_passes_the_overrides(tmp_path, monkeypatch):
 
     (args,) = installs
     assert args[args.index('--override') + 1] == str(launcher._MOLMO_OVERRIDES)
+
+
+def _overrides() -> list[Requirement]:
+    lines = launcher._MOLMO_OVERRIDES.read_text().splitlines()
+    return [Requirement(line) for line in lines if line.strip() and not line.startswith('#')]
 
 
 def test_the_overrides_keep_out_evdev_on_every_platform():
