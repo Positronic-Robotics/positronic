@@ -1,4 +1,4 @@
-.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
+.PHONY: all build tag push clean prune help build-molmospaces tag-molmospaces push-molmospaces build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
 
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
@@ -7,6 +7,8 @@ IMAGE_NAME_DREAMZERO := positro/dreamzero
 IMAGE_NAME_DREAMZERO_BASE := positro/dreamzero-base
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 IMAGE_NAME_ROBOLAB := positro/robolab
+# The public MolmoSpaces eval image. Not in `build` or `push`: CI publishes it from a job of its own.
+IMAGE_NAME_MOLMOSPACES := positro/molmospaces
 # One serving image per checkpoint, the weights inside, starting with no network: positro/<name>, from
 # Dockerfile.serve-<name>. Not in `build` or `push`.
 SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid flux3-action cosmos3-nano
@@ -52,6 +54,7 @@ help:
 	@echo "  make build-training  Build the training image"
 	@echo "  make build-serve-<name>  Build a serving image: $(SERVE_IMAGES)"
 	@echo "  make build-serve-galaxea  Build the private Galaxea serving image (needs HF_TOKEN)"
+	@echo "  make build-molmospaces  Build the public MolmoSpaces eval image"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
 	@echo "  make tag-training    Tag the training image (depends on build-training)"
@@ -98,6 +101,9 @@ build-dreamzero:
 build-robolab:
 	@echo "Building $(IMAGE_NAME_ROBOLAB)..."
 	docker build --platform linux/amd64 -f Dockerfile.robolab -t $(IMAGE_NAME_ROBOLAB):local ..
+
+build-molmospaces:
+	docker build --platform linux/amd64 -f Dockerfile.molmospaces -t $(IMAGE_NAME_MOLMOSPACES):local ..
 
 # The GR00T backbone and the FLUX 3 Action weights are gated on the Hub. BuildKit reads the token from HF_TOKEN,
 # and it enters no layer. Every image's Dockerfile mounts the secret by this id.
@@ -197,6 +203,16 @@ ifdef PUBLISH_RELEASE
 endif
 	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
 
+tag-molmospaces: build-molmospaces
+	docker tag $(IMAGE_NAME_MOLMOSPACES):local $(IMAGE_NAME_MOLMOSPACES):$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_MOLMOSPACES):local $(IMAGE_NAME_MOLMOSPACES):$(GIT_SHA)
+ifdef CI
+	docker tag $(IMAGE_NAME_MOLMOSPACES):local $(IMAGE_NAME_MOLMOSPACES):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker tag $(IMAGE_NAME_MOLMOSPACES):local $(IMAGE_NAME_MOLMOSPACES):v$(VERSION)
+endif
+
 tag: tag-training tag-openpi tag-groot tag-dreamzero tag-robolab
 
 push-training: tag-training
@@ -261,6 +277,16 @@ ifdef PUBLISH_RELEASE
 endif
 	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
 
+push-molmospaces: tag-molmospaces
+	docker push $(IMAGE_NAME_MOLMOSPACES):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_MOLMOSPACES):$(GIT_SHA)
+ifdef CI
+	docker push $(IMAGE_NAME_MOLMOSPACES):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker push $(IMAGE_NAME_MOLMOSPACES):v$(VERSION)
+endif
+
 push: push-training push-openpi push-groot push-dreamzero push-robolab
 
 # Log docker/podman in to the Nebius registry using the nebius CLI credential
@@ -307,6 +333,9 @@ clean:
 	-docker rmi $(IMAGE_NAME_ROBOLAB):local
 	-docker rmi $(IMAGE_NAME_ROBOLAB):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_ROBOLAB):$(GIT_SHA)
+	-docker rmi $(IMAGE_NAME_MOLMOSPACES):local
+	-docker rmi $(IMAGE_NAME_MOLMOSPACES):$(IMAGE_TAG)
+	-docker rmi $(IMAGE_NAME_MOLMOSPACES):$(GIT_SHA)
 	-docker rmi $(GALAXEA_REPO):local
 	-for name in $(SERVE_IMAGES); do docker rmi positro/$$name:local; done
 	@echo "Image cleanup attempts complete. Check the output for removal errors."

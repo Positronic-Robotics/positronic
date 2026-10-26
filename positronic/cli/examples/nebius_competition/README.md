@@ -9,6 +9,8 @@ Walkthroughs for the competition's sim qualifier, on top of the same client ever
   `competition.accept_terms`, because the client package carries no engagement words. A test pins their field
   names.
 - `standings.py` — print the public leaderboards, or every row of one of them. No key is needed.
+- `serverless_eval.py` — score a policy image on a public MolmoSpaces eval on Nebius Serverless, with no GPU of
+  your own, and delete what it made. `docs/local-molmospaces-eval.md` tells how.
 - `submit_sample.py` — submit a policy image to one eval, wait for it to finish, and report what it
   scored. `--eval` names the eval; `standings.py` prints the evals the leaderboards rank.
 

@@ -39,6 +39,7 @@ htmlcov
 # Docker
 docker/*
 !docker/install-gr00t-server-deps.sh
+!docker/run_molmospaces_eval.sh
 
 # Outputs and datasets (shouldn't be in source anyway)
 outputs/

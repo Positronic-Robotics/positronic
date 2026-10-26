@@ -15,6 +15,7 @@
 | `positro/openpi` | OpenPI training and inference |
 | `positro/dreamzero` | DreamZero inference (1+ GPU, H100 80GB recommended) |
 | `positro/robolab` | RoboLab (Isaac Lab) eval — runs `positronic eval run`, which spawns the Isaac sim subprocess in-container; needs an RTX-class GPU |
+| `positro/molmospaces` | The public MolmoSpaces eval: runs `positronic eval run` against a served policy, and downloads the assets at start; `docker/run_molmospaces_eval.sh` is its entrypoint |
 | `galaxea` | G0.5-DROID inference with its gated weights, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
 
 `Dockerfile.serve-<name>` builds `positro/<name>`, a policy image the platform runs: one

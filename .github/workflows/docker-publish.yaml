@@ -35,3 +35,10 @@ jobs:
         working-directory: docker
         run: |
           make push IMAGE_TAG=main
+
+  # The public MolmoSpaces eval image, on a runner of its own: it does not fit on the disk beside the images above.
+  molmospaces:
+    uses: ./.github/workflows/docker-molmospaces.yaml
+    with:
+      push: true
+    secrets: inherit
