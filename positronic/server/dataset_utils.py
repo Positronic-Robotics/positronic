@@ -868,6 +868,9 @@ def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path, name
         if filename in meshes:
             mesh_el.set('filename', str(dest / filename))
     for visual_el in root.iter('visual'):
+        # The URDF loader refuses a visual with two materials.
+        for own_material_el in visual_el.findall('material'):
+            visual_el.remove(own_material_el)
         material_el = ET.SubElement(visual_el, 'material', name='viewer_translucent')
         ET.SubElement(material_el, 'color', rgba=_ROBOT_VISUAL_RGBA)
     for el in root.iter():

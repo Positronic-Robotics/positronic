@@ -15,6 +15,7 @@ import rerun.blueprint as rrb
 import rerun.recording as rr_recording
 from eval_vocabulary.episode import LEGACY_TIME_COLUMN
 from eval_vocabulary.progress import STATE_SIGNAL
+from rerun.urdf import UrdfTree
 
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys
@@ -111,6 +112,44 @@ def test_urdf_link_and_joint_names_carry_the_namespace(tmp_path):
     assert [el.get('name') for el in root.iter('joint')] == ['robot_state.left.q.shoulder']
     assert [el.get('link') for el in root.iter('parent')] == ['robot_state.left.q.base']
     assert [el.get('link') for el in root.iter('child')] == ['robot_state.left.q.arm']
+
+
+_TWO_VISUAL_URDF = """<robot name="toy">
+  <link name="painted">
+    <visual>
+      <geometry><box size="1 1 1"/></geometry>
+      <material name="red"><color rgba="1 0 0 1"/></material>
+    </visual>
+  </link>
+  <link name="bare">
+    <visual>
+      <geometry><box size="1 1 1"/></geometry>
+    </visual>
+  </link>
+  <joint name="fixed" type="fixed">
+    <parent link="painted"/>
+    <child link="bare"/>
+  </joint>
+</robot>"""
+
+
+def _visual_materials(urdf_path: Path, link: str) -> list[tuple[str | None, list[str | None]]]:
+    """Each material of the link's visual, as its name and the rgba of its colors."""
+    materials = ET.fromstring(urdf_path.read_text()).iterfind(f"link[@name='{link}']/visual/material")
+    return [(material.get('name'), [color.get('rgba') for color in material.iter('color')]) for material in materials]
+
+
+def test_urdf_visual_with_its_own_material_keeps_only_the_tint(tmp_path):
+    urdf_path = _write_urdf_to_dir(_TWO_VISUAL_URDF, {}, tmp_path, 'robot.')
+
+    assert _visual_materials(urdf_path, 'robot.painted') == [('viewer_translucent', ['1 1 1 0.5'])]
+    UrdfTree.from_file_path(str(urdf_path), entity_path_prefix='/robot')
+
+
+def test_urdf_visual_without_a_material_gets_the_tint(tmp_path):
+    urdf_path = _write_urdf_to_dir(_TWO_VISUAL_URDF, {}, tmp_path, 'robot.')
+
+    assert _visual_materials(urdf_path, 'robot.bare') == [('viewer_translucent', ['1 1 1 0.5'])]
 
 
 def test_notice_names_every_unplotted_signal_and_its_width():
