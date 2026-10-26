@@ -360,6 +360,7 @@ whose `min_vram_gb` is more than 25 is refused.
 endpoints:
   - name: policy
     kind: image
+    wire: websocket
     image: docker.io/<you>/<image>@sha256:<digest>
     min_vram_gb: 40
 ```
