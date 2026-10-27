@@ -12,12 +12,13 @@ import numpy as np
 from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import warmup
-from positronic.offboard.spec import Model
+from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy.base import Obs
-from positronic.policy.codecs import ACTION
+from positronic.policy.codecs import ACTION, BinarizeGripInference
 from positronic.vendors import molmoact2
+from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import MolmoAct2Model, warm_observation
-from positronic.vendors.molmoact2.server import DEFAULT_HF_REPO, droid_3cam
+from positronic.vendors.molmoact2.server import DEFAULT_HF_REPO, pipeline
 
 # Knobs. The values here make the server act as the published example image.
 
@@ -36,8 +37,6 @@ GRIP_THRESHOLD: float | None = None
 # The denoising steps of one prediction. More steps take more time on the GPU.
 NUM_STEPS = 10
 
-GRIP = 7  # The index of the grip in an action. Indices 0 to 6 are the joint positions, in radians.
-
 
 def instruction(task: str) -> str:
     """The text the model reads for the eval task `task`."""
@@ -45,15 +44,12 @@ def instruction(task: str) -> str:
 
 
 def adjust(action: np.ndarray) -> np.ndarray:
-    """One action of a chunk, as the robot executes it: 7 absolute joint positions, then the grip."""
-    action = action.copy()
-    if GRIP_THRESHOLD is not None:
-        action[GRIP] = 1.0 if action[GRIP] > GRIP_THRESHOLD else 0.0
+    """One action of a chunk, as the robot executes it: 7 absolute joint positions in radians, then the grip."""
     return action
 
 
 class StarterModel(Model):
-    """The MolmoAct2 model, with the knobs above applied to what it reads and what it returns."""
+    """The MolmoAct2 model, with `instruction` applied to what it reads and `adjust` to each action it returns."""
 
     def __init__(self, model: Model):
         self._model = model
@@ -73,14 +69,6 @@ class StarterModel(Model):
         self._model.close()
 
 
-ACTION_FPS = 15.0  # The rate of the actions in a chunk of the DROID checkpoint.
-
-
-def horizon_sec() -> float | None:
-    """How long the robot executes each chunk: the first ACTIONS_PER_CHUNK actions, or all of them."""
-    return None if ACTIONS_PER_CHUNK is None else ACTIONS_PER_CHUNK / ACTION_FPS
-
-
 @cfn.config(hf_repo=DEFAULT_HF_REPO, device_map='auto')
 def starter_model(hf_repo: str, device_map: str) -> Model:
     model = StarterModel(MolmoAct2Model(hf_repo, device_map=device_map, num_steps=NUM_STEPS))
@@ -88,7 +76,19 @@ def starter_model(hf_repo: str, device_map: str) -> Model:
     return model
 
 
+ACTION_FPS = 15.0  # The rate of the actions in a chunk of the DROID checkpoint.
+
+
+@cfn.config()
+def starter_pipeline() -> PolicyDeployment:
+    """The `droid_3cam` pipeline, with ACTIONS_PER_CHUNK and GRIP_THRESHOLD applied."""
+    codec = molmoact2_codecs.droid_3cam.instantiate()
+    if GRIP_THRESHOLD is not None:
+        codec = BinarizeGripInference(GRIP_THRESHOLD) | codec
+    horizon_sec = None if ACTIONS_PER_CHUNK is None else ACTIONS_PER_CHUNK / ACTION_FPS
+    return pipeline(codec=codec, fps=ACTION_FPS, horizon_sec=horizon_sec)
+
+
 if __name__ == '__main__':
     init_logging()
-    pipeline = droid_3cam.override(fps=ACTION_FPS, horizon_sec=horizon_sec())
-    cfn.cli(serve.override(model=starter_model, pipeline=pipeline))
+    cfn.cli(serve.override(model=starter_model, pipeline=starter_pipeline))
