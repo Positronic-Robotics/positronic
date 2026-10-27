@@ -33,16 +33,41 @@ logger = logging.getLogger(__name__)
 PREALLOCATE_ENV = 'XLA_PYTHON_CLIENT_PREALLOCATE'
 
 
-class PinglessWebsocketClientPolicy(WebsocketClientPolicy):
-    """A websocket policy client that sends no keepalive pings. It talks to the openpi subprocess on the loopback.
+class DeadlineWebsocketClientPolicy(WebsocketClientPolicy):
+    """A websocket policy client for the openpi subprocess on the loopback, with a deadline on each inference."""
 
-    The subprocess runs ``infer`` on its event loop, so it answers no ping until the inference returns. A first
-    inference compiles the model and can take longer than a keepalive window. A dead subprocess closes the socket.
-    """
+    # The subprocess answers pings while an inference runs, so a missed pong means a dead subprocess or a half-open
+    # connection. FOOTGUN: an openpi server that runs ``infer`` on its event loop answers no ping until it returns.
+    PING_INTERVAL_S = 5.0
+    PING_TIMEOUT_S = 10.0
+
+    def __init__(self, host: str, port: int, infer_timeout: float):
+        self._infer_timeout = infer_timeout
+        super().__init__(host=host, port=port)
 
     def _wait_for_server(self) -> tuple[ClientConnection, dict]:
-        connection = connect(self._uri, compression=None, max_size=None, ping_interval=None)
+        connection = connect(
+            self._uri,
+            compression=None,
+            max_size=None,
+            ping_interval=self.PING_INTERVAL_S,
+            ping_timeout=self.PING_TIMEOUT_S,
+        )
         return connection, msgpack_numpy.unpackb(connection.recv())
+
+    def infer(self, obs: dict) -> dict:
+        self._ws.send(self._packer.pack(obs))
+        try:
+            response = self._ws.recv(timeout=self._infer_timeout)
+        except TimeoutError:
+            # The late result would answer the next observation.
+            self._ws.close()
+            raise TimeoutError(
+                f'The openpi subprocess sent no inference result within infer_timeout={self._infer_timeout}s'
+            ) from None
+        if isinstance(response, str):
+            raise RuntimeError(f'Error in inference server:\n{response}')
+        return msgpack_numpy.unpackb(response)
 
 
 class OpenpiSubprocess:
@@ -52,17 +77,19 @@ class OpenpiSubprocess:
         self,
         checkpoint_dir: str,
         config_name: str,
+        infer_timeout: float,
         openpi_root: Path | None = None,
         ws_port: int = 8001,
         uv_path: str | None = None,
     ):
         self.checkpoint_dir = checkpoint_dir
         self.config_name = config_name
+        self.infer_timeout = infer_timeout
         self.openpi_root = openpi_root or Path(__file__).parents[4] / 'openpi'
         self.ws_port = ws_port
         self.uv_path = uv_path or 'uv'
         self.process: subprocess.Popen | None = None
-        self._client: PinglessWebsocketClientPolicy | None = None
+        self._client: DeadlineWebsocketClientPolicy | None = None
 
     def _build_command(self) -> list[str]:
         return [
@@ -109,11 +136,13 @@ class OpenpiSubprocess:
         )
 
     @property
-    def client(self) -> PinglessWebsocketClientPolicy:
+    def client(self) -> DeadlineWebsocketClientPolicy:
         """Get or create WebSocket client for inference."""
         if self._client is None:
             logger.info(f'Creating WebSocket client to OpenPI subprocess on port {self.ws_port}...')
-            self._client = PinglessWebsocketClientPolicy(host='127.0.0.1', port=self.ws_port)
+            self._client = DeadlineWebsocketClientPolicy(
+                host='127.0.0.1', port=self.ws_port, infer_timeout=self.infer_timeout
+            )
             logger.info('WebSocket client created successfully')
         return self._client
 
@@ -158,12 +187,14 @@ class OpenpiModel(Model):
         self._subproc.stop()
 
 
-@cfn.config(config_name='pi05_positronic_lowmem', checkpoint=None, openpi_ws_port=8001)
+# ``infer_timeout`` bounds one inference. The first one compiles the model, about 45 s on an RTX PRO 6000.
+@cfn.config(config_name='pi05_positronic_lowmem', checkpoint=None, openpi_ws_port=8001, infer_timeout=120.0)
 def openpi_model(
     checkpoints_dir: str,
     config_name: str,
     checkpoint: str | None,
     openpi_ws_port: int,
+    infer_timeout: float,
     transform_actions: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> Model:
     """One OpenPI checkpoint under ``checkpoints_dir``: ``checkpoint``, else the latest one, served by a
@@ -183,7 +214,9 @@ def openpi_model(
         checkpoint_dir = run_with_progress(
             lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {checkpoint_id}'
         )
-    subproc = OpenpiSubprocess(checkpoint_dir=str(checkpoint_dir), config_name=config_name, ws_port=openpi_ws_port)
+    subproc = OpenpiSubprocess(
+        checkpoint_dir=str(checkpoint_dir), config_name=config_name, infer_timeout=infer_timeout, ws_port=openpi_ws_port
+    )
     try:
         subproc.start()
         policy = OpenpiModel(

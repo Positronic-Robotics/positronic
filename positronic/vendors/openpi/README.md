@@ -153,6 +153,8 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
   WebSocket wire to a Unix socket for a client on the same machine; that address names no host and no port
 - `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=<port>`: (Optional) serve the gRPC wire beside the websocket one
 - `--model.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
+- `--model.infer_timeout`: (Optional) Seconds the server waits for one inference from the OpenPI subprocess
+  (default: 120). It covers the first inference, which compiles the model
 - `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity
 
 ### Serving More Than One Policy On One GPU

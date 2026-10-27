@@ -127,7 +127,14 @@ The image size describes preprocessing before the native checkpoint processor, w
 `--learning_rate`, `--num_train_steps`, `--save_steps`, `--num_workers` and `--resume=True`.
 Resume restores the latest saved training state in the experiment directory.
 The fork retains checkpoint architecture and preprocessing while applying upstream's standard
-fine-tuning settings. Dataset statistics are computed by GR00T.
+fine-tuning settings. Training normalizes state and action with the base checkpoint's statistics.
+`--override_pretraining_statistics=True` normalizes them with statistics that GR00T computes from the dataset.
+With the base statistics, GR00T logs `new stats DISCARDED`; that is expected. It clips each value outside the base
+q01..q99, so a dataset that moves outside the DROID range loses that part of its range.
+The checkpoint's `statistics.json` holds the statistics that training and serving use.
+`experiment_cfg/dataset_statistics.json` holds the dataset's own statistics.
+Training records this choice and `--base_model` in the experiment directory and refuses a resume with other values.
+A run with no such record used the dataset statistics, so resume it with `--override_pretraining_statistics=True`.
 
 ## Serve
 
