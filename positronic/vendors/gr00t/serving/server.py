@@ -11,7 +11,7 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 import pos3
-from positronic_model_server.rtc import ACTION_PREFIX, ActionPrefix
+from positronic_model_server.rtc import ACTION_PREFIX, ESTIMATED_LATENCY_SEC, ActionPrefix, estimated_latency
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.server_wire import ServedHostPort
@@ -103,14 +103,15 @@ def resolve_checkpoint(
 
 
 class Gr00tSession(Session):
-    def __init__(self, policy: Any, client_stack: dict[str, Any], rtc: dict[str, float] | None = None):
+    def __init__(self, policy: Any, client_stack: dict[str, Any], rtc: dict[str, float] | None = None, *, fps: float):
         super().__init__(client_stack)
         self._policy = policy
         self._rtc = rtc
+        self._fps = fps
         self._sequence = 0
         self._previous: dict[str, np.ndarray] = {}
 
-    def _rtc_options(self, prefix: ActionPrefix) -> dict[str, Any] | None:
+    def _rtc_options(self, prefix: ActionPrefix, latency_sec: float) -> dict[str, Any] | None:
         if prefix.sequence != self._sequence:
             raise ValueError(f'RTC sequence {prefix.sequence} does not match session sequence {self._sequence}')
         if not prefix.positions:
@@ -123,6 +124,13 @@ class Gr00tSession(Session):
         if not self._previous:
             raise ValueError('RTC overlap requires a preceding prediction in this session')
         indices = np.asarray(prefix.positions, dtype=int)
+        if np.any(np.diff(indices) != 1):
+            raise ValueError('GR00T RTC requires consecutive source positions')
+        assert self._rtc is not None
+        frozen = min(len(indices), math.ceil(round(latency_sec * 1e9) * self._fps / 1e9))
+        blend_steps = math.ceil(self._rtc[keys.BLEND_SEC] * self._fps)
+        following = int(indices[-1]) + 1
+        indices = np.concatenate((indices, np.arange(following, min(horizon, following + blend_steps))))
         actions = {name: values[0, indices].copy() for name, values in self._previous.items()}
         for index, targets in enumerate(prefix.actions):
             if set(targets) != {JOINT_POSITION, GRIP}:
@@ -136,12 +144,11 @@ class Gr00tSession(Session):
         actions = {
             name: np.pad(values, ((0, horizon - len(values)), (0, 0)), mode='edge') for name, values in actions.items()
         }
-        assert self._rtc is not None
         return {
             ACTION: actions,
             keys.ACTION_HORIZON: len(indices),
             keys.RTC_OVERLAP_STEPS: len(indices),
-            keys.RTC_FROZEN_STEPS: prefix.frozen_steps,
+            keys.RTC_FROZEN_STEPS: frozen,
             keys.RTC_RAMP_RATE: self._rtc[keys.RAMP_RATE],
         }
 
@@ -151,8 +158,10 @@ class Gr00tSession(Session):
                 raise ValueError('This session does not enable RTC')
             return self._policy.get_action(observation)
         prefix = ActionPrefix.from_observation(observation)
-        options = self._rtc_options(prefix)
-        inputs = {name: value for name, value in observation.items() if name != ACTION_PREFIX}
+        options = self._rtc_options(prefix, estimated_latency(observation))
+        inputs = {
+            name: value for name, value in observation.items() if name not in (ACTION_PREFIX, ESTIMATED_LATENCY_SEC)
+        }
         result = self._policy.get_action(inputs, options=options)
         self._previous = {name: value.copy() for name, value in result[0].items()}
         self._sequence += 1
@@ -210,11 +219,15 @@ class Gr00tModel(Model):
             if actions[name].shape != expected:
                 raise ValueError(f'Checkpoint action {name} has shape {actions[name].shape}, expected {expected}')
         if rtc is not None:
-            warm = Gr00tSession(policy, {}, rtc)
-            warm.infer({**observation, **ActionPrefix(0, [], 0, []).to_observation()})
+            warm = Gr00tSession(policy, {}, rtc, fps=self.parameters[keys.FPS])
+            warm.infer({**observation, **ActionPrefix(0, [], []).to_observation(), ESTIMATED_LATENCY_SEC: 0.0})
             positions = list(range(min(2, action_horizon)))
             targets = [{name: actions[name][0, index] for name in (JOINT_POSITION, GRIP)} for index in positions]
-            warm.infer({**observation, **ActionPrefix(1, positions, 1, targets).to_observation()})
+            warm.infer({
+                **observation,
+                **ActionPrefix(1, positions, targets).to_observation(),
+                ESTIMATED_LATENCY_SEC: 1 / self.parameters[keys.FPS],
+            })
             warm.close()
         policy.reset()
         logger.info('GR00T model is warm')
@@ -267,7 +280,7 @@ class Gr00tModel(Model):
             raise ValueError('jpeg_quality must be an integer between 0 and 100')
         if type(params[keys.COMPRESS_IMAGES]) is not bool:
             raise ValueError('compress_images must be a boolean')
-        return Gr00tSession(self._policy, recipe.client_stack(self._settings, **params), rtc)
+        return Gr00tSession(self._policy, recipe.client_stack(self._settings, **params), rtc, fps=fps)
 
     def close(self) -> None:
         del self._policy

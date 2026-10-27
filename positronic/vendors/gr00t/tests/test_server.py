@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server.rtc import ActionPrefix
+from positronic_model_server.rtc import ESTIMATED_LATENCY_SEC, ActionPrefix
 from positronic_model_server.spec import ARGS, SEQ, resolve_params
 
 from positronic.policy import keys as policy_keys
@@ -209,36 +209,41 @@ def rtc_settings():
     return {keys.CALL_AFTER_SEC: 0.5, keys.BLEND_SEC: 0.5, keys.MAX_DELAY_SEC: 1.0, keys.RAMP_RATE: 5.0}
 
 
+def _rtc_request(sequence, positions, actions, latency=0.0):
+    return {**ActionPrefix(sequence, positions, actions).to_observation(), ESTIMATED_LATENCY_SEC: latency}
+
+
 def test_rtc_reuses_native_pose_and_overrides_scheduled_joint_and_grip_targets(native_policy, rtc_settings):
-    session = server.Gr00tSession(native_policy, {}, rtc_settings)
+    session = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
     previous = native_policy.get_action.return_value[0]
     for values in previous.values():
         values[:] = np.arange(40)[None, :, None]
-    session.infer(ActionPrefix(0, [], 0, []).to_observation())
+    session.infer(_rtc_request(0, [], []))
     targets = [
         {gr00t.JOINT_POSITION: np.full(7, 0.25), gr00t.GRIP: np.array([1.0])},
         {gr00t.JOINT_POSITION: np.full(7, 0.5), gr00t.GRIP: np.array([0.0])},
     ]
-    session.infer(ActionPrefix(1, [5, 6], 1, targets).to_observation())
+    session.infer(_rtc_request(1, [5, 6], targets, latency=0.1))
     options = native_policy.get_action.call_args.kwargs['options']
     assert options[keys.RTC_FROZEN_STEPS] == 1
-    assert options[keys.RTC_OVERLAP_STEPS] == options[keys.ACTION_HORIZON] == 2
+    assert options[keys.RTC_OVERLAP_STEPS] == options[keys.ACTION_HORIZON] == 7
     assert options[keys.RTC_RAMP_RATE] == 5.0
     actions = options[gr00t.ACTION]
     np.testing.assert_array_equal(actions[gr00t.EE_POSE][:2, 0], [5, 6])
     np.testing.assert_array_equal(actions[gr00t.JOINT_POSITION][:2, 0], [0.25, 0.5])
     np.testing.assert_array_equal(actions[gr00t.GRIP][:2, 0], [1, 0])
+    np.testing.assert_array_equal(actions[gr00t.JOINT_POSITION][2:7, 0], [7, 8, 9, 10, 11])
     assert all(values.shape == (40, gr00t.STATE_DIMS[name]) for name, values in actions.items())
     np.testing.assert_array_equal(previous[gr00t.JOINT_POSITION][0, :2, 0], [0, 1])
 
 
 def test_rtc_cache_is_session_local_and_copies_model_buffers(native_policy, rtc_settings):
-    first = server.Gr00tSession(native_policy, {}, rtc_settings)
-    second = server.Gr00tSession(native_policy, {}, rtc_settings)
-    first.infer(ActionPrefix(0, [], 0, []).to_observation())
+    first = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
+    second = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
+    first.infer(_rtc_request(0, [], []))
     native_policy.get_action.return_value[0][gr00t.EE_POSE][:] = 99
     targets = [{gr00t.JOINT_POSITION: np.zeros(7), gr00t.GRIP: np.zeros(1)}]
-    request = ActionPrefix(1, [0], 0, targets).to_observation()
+    request = _rtc_request(1, [0], targets)
     with pytest.raises(ValueError, match='sequence'):
         second.infer(request)
     first.infer(request)
@@ -247,25 +252,61 @@ def test_rtc_cache_is_session_local_and_copies_model_buffers(native_policy, rtc_
     assert first._previous == {}
 
 
-@pytest.mark.parametrize('positions', [[0.5], [40], [1] * 41])
+@pytest.mark.parametrize(('latency', 'frozen'), [(0.0, 0), (0.1, 1), (0.11, 2), (0.4, 2)])
+def test_rtc_freezes_from_latency_and_limits_overlap_to_available_actions(native_policy, rtc_settings, latency, frozen):
+    session = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
+    session.infer(_rtc_request(0, [], []))
+    targets = [{gr00t.JOINT_POSITION: np.zeros(7), gr00t.GRIP: np.zeros(1)} for _ in range(2)]
+    session.infer(_rtc_request(1, [38, 39], targets, latency=latency))
+    options = native_policy.get_action.call_args.kwargs['options']
+    assert options[keys.RTC_FROZEN_STEPS] == frozen
+    assert options[keys.RTC_OVERLAP_STEPS] == 2
+    inputs = native_policy.get_action.call_args.args[0]
+    assert ESTIMATED_LATENCY_SEC not in inputs
+
+
+@pytest.mark.parametrize(
+    ('fps', 'blend_sec', 'expected_frozen', 'expected_overlap'), [(10, 0.2, 1, 4), (20, 0.3, 2, 8)]
+)
+def test_rtc_uses_session_rate_and_blend_settings(
+    native_policy, rtc_settings, fps, blend_sec, expected_frozen, expected_overlap
+):
+    session = server.Gr00tSession(native_policy, {}, {**rtc_settings, keys.BLEND_SEC: blend_sec}, fps=fps)
+    session.infer(_rtc_request(0, [], []))
+    targets = [{gr00t.JOINT_POSITION: np.zeros(7), gr00t.GRIP: np.zeros(1)} for _ in range(2)]
+    session.infer(_rtc_request(1, [0, 1], targets, latency=0.1))
+    options = native_policy.get_action.call_args.kwargs['options']
+    assert options[keys.RTC_FROZEN_STEPS] == expected_frozen
+    assert options[keys.RTC_OVERLAP_STEPS] == expected_overlap
+
+
+@pytest.mark.parametrize('latency', [None, True, -0.1, float('nan'), float('inf')])
+def test_rtc_rejects_invalid_latency_before_native_inference(native_policy, rtc_settings, latency):
+    session = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
+    with pytest.raises(ValueError, match='estimated_latency_sec'):
+        session.infer(_rtc_request(0, [], [], latency=latency))
+    native_policy.get_action.assert_not_called()
+
+
+@pytest.mark.parametrize('positions', [[0.5], [40], [1] * 41, [4, 3], [1, 3]])
 def test_rtc_rejects_unavailable_source_positions(native_policy, rtc_settings, positions):
-    session = server.Gr00tSession(native_policy, {}, rtc_settings)
-    session.infer(ActionPrefix(0, [], 0, []).to_observation())
+    session = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
+    session.infer(_rtc_request(0, [], []))
     with pytest.raises(ValueError, match='positions'):
-        session.infer(ActionPrefix(1, positions, 0, [{} for _ in positions]).to_observation())
+        session.infer(_rtc_request(1, positions, [{} for _ in positions]))
 
 
 def test_rtc_empty_overlap_uses_an_unconditioned_prediction(native_policy, rtc_settings):
-    session = server.Gr00tSession(native_policy, {}, rtc_settings)
+    session = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
     for sequence in range(2):
-        session.infer(ActionPrefix(sequence, [], 0, []).to_observation())
+        session.infer(_rtc_request(sequence, [], []))
         assert native_policy.get_action.call_args.kwargs['options'] is None
 
 
 def test_ordinary_session_refuses_rtc_instead_of_ignoring_it(native_policy):
-    session = server.Gr00tSession(native_policy, {})
+    session = server.Gr00tSession(native_policy, {}, fps=10)
     with pytest.raises(ValueError, match='does not enable RTC'):
-        session.infer(ActionPrefix(0, [], 0, []).to_observation())
+        session.infer(_rtc_request(0, [], []))
     native_policy.get_action.assert_not_called()
 
 

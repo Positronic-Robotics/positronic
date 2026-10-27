@@ -2,7 +2,6 @@ import collections.abc as cabc
 from typing import Any, ClassVar, Self, final, overload
 
 import numpy as np
-from positronic_model_server.rtc import ACTION_PREFIX
 from positronic_model_server.spec import PAR, SEQ
 
 from positronic import telemetry, telemetry_keys
@@ -77,10 +76,8 @@ class Codec:
 
         @telemetry.traced(telemetry.component_name(self))
         def call(obs: Obs) -> Any:
-            inputs = dict(obs)
-            prefix = {ACTION_PREFIX: inputs.pop(ACTION_PREFIX)} if ACTION_PREFIX in inputs else {}
-            encoded = encode(inputs)
-            result = function({**encoded, **prefix} if prefix else encoded)
+            encoded = encode(dict(obs))
+            result = function(encoded)
             if result is None or (isinstance(result, Step) and not result.commands):
                 return result
             try:

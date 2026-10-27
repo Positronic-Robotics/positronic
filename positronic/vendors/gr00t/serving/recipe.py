@@ -94,16 +94,16 @@ def client_stack(
     settings = deepcopy(settings)
     settings[model_settings.IMAGE_MAPPINGS] = image_mappings
     schedule = component('chunked_schedule', fps=fps, horizon_sec=horizon_sec)
+    codec = inference(settings)
     if rtc is not None:
         schedule = component(
             'rtc_schedule',
             fps=fps,
             call_after_sec=rtc[obs_keys.CALL_AFTER_SEC],
-            blend_sec=rtc[obs_keys.BLEND_SEC],
             prefix_duration={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.MAX_DELAY_SEC]},
-            prefix_codec=_joint_action(),
         )
-    parts = [schedule, inference(settings), component('metadata', values={model_settings.ACTION_FPS: fps})]
+        codec = component('encode_action_prefix', codec=codec, action=_joint_action())
+    parts = [schedule, codec, component('metadata', values={model_settings.ACTION_FPS: fps})]
     if compress_images:
         parts.append(component('encode_images', quality=jpeg_quality))
     return sequence(*parts)

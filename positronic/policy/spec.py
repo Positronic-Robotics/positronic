@@ -23,6 +23,7 @@ from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
     CartesianDeltaAction,
+    EncodeActionPrefix,
     JointDeltaAction,
     JointPositionAction,
     SetControlMode,
@@ -57,6 +58,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         EndCommand,
         EndOnField,
         PauseOnUnavailable,
+        RTCSchedule,
         TemporalStack,
         BinarizeGripTraining,
         BinarizeGripInference,
@@ -81,17 +83,17 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
 }
 
 
-def _rtc_schedule(**args: Any) -> RTCSchedule:
-    if RTCSchedule.PREFIX_CODEC_ARG in args:
-        codec = from_spec(args[RTCSchedule.PREFIX_CODEC_ARG])
+def _encode_action_prefix(**args: Any) -> EncodeActionPrefix:
+    for name in (EncodeActionPrefix.CODEC_ARG, EncodeActionPrefix.ACTION_ARG):
+        codec = from_spec(args[name])
         if not isinstance(codec, Codec):
-            raise ValueError('prefix_codec must describe a codec')
-        args[RTCSchedule.PREFIX_CODEC_ARG] = codec
-    return RTCSchedule.from_spec_args(**args)
+            raise ValueError(f'{name} must describe a codec')
+        args[name] = codec
+    return EncodeActionPrefix(**args)
 
 
 COMPONENTS.update({
-    RTCSchedule.WIRE_NAME: {RTCSchedule.WIRE_VERSION: Version(_rtc_schedule)},
+    EncodeActionPrefix.WIRE_NAME: {EncodeActionPrefix.WIRE_VERSION: Version(_encode_action_prefix)},
     'pack_observation_fields': {1: Version(pack_observation_fields_v1)},
     'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
     'restrict_image_size': {1: Version(restrict_image_size_v1)},

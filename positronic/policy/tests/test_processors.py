@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server.rtc import ACTION_PREFIX, ActionPrefix
+from positronic_model_server.rtc import ACTION_PREFIX, ESTIMATED_LATENCY_SEC, ActionPrefix
 from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component, parallel, sequence
 
 import pimm
@@ -40,6 +40,7 @@ from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
     CartesianDeltaAction,
+    EncodeActionPrefix,
     JointDeltaAction,
     JointPositionAction,
     SetControlMode,
@@ -1279,6 +1280,7 @@ def test_wire_names_match_the_registered_components():
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
         'joint_delta_action': JointDeltaAction(),
         'joint_position_action': JointPositionAction('joints', 'grip'),
+        'encode_action_prefix': EncodeActionPrefix(PackFields(), JointPositionAction('joints', 'grip')),
         'set_control_mode': SetControlMode(PositionControl()),
         'change_ee_frame': ChangeEEFrame(EEFrame(site=GRIPPER_SITE)),
         'convert_pose': ConvertPose('rot6d'),
@@ -1592,11 +1594,11 @@ def test_the_rtc_prefix_carries_end_like_any_other_command(execution):
     assert model.prefixes == [[], [{MOTOR: 1}, _ending(2), {MOTOR: 3}]]
 
 
-def test_rtc_sends_frozen_and_blend_steps_with_positions_and_session_sequence(execution, monkeypatch):
+def test_rtc_sends_latency_and_commands_with_positions_and_session_sequence(execution, monkeypatch):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    schedule = RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=ConstantDuration(0.2), blend_sec=0.3)
+    schedule = RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=ConstantDuration(0.2))
     run = runtime.start(schedule, Mock())
     try:
         run.send({})
@@ -1607,24 +1609,20 @@ def test_rtc_sends_frozen_and_blend_steps_with_positions_and_session_sequence(ex
         run.send({})
         first = ActionPrefix.from_observation(model.requests[0])
         second = ActionPrefix.from_observation(model.requests[1])
-        assert (first.sequence, first.positions, first.frozen_steps) == (0, [], 0)
-        assert (second.sequence, second.positions, second.frozen_steps) == (1, [5, 6, 7, 8, 9], 2)
-        assert [action[MOTOR] for action in second.actions] == ['old5', 'old6', 'old7', 'old8', 'old9']
+        assert (first.sequence, first.positions) == (0, [])
+        assert (second.sequence, second.positions) == (1, [5, 6])
+        assert model.requests[0][ESTIMATED_LATENCY_SEC] == 0.0
+        assert model.requests[1][ESTIMATED_LATENCY_SEC] == 0.2
+        assert [action[MOTOR] for action in second.actions] == ['old5', 'old6']
     finally:
         run.close()
 
 
-def test_rtc_description_rebuilds_native_prefix_encoder(execution, monkeypatch):
+def test_rtc_description_preserves_commands_without_a_model_codec(execution, monkeypatch):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    description = RTCSchedule(
-        fps=10,
-        call_after_sec=0.5,
-        prefix_duration=ConstantDuration(0.2),
-        blend_sec=0.5,
-        prefix_codec=JointPositionAction('joints', 'grip', num_joints=2),
-    ).to_spec()
+    description = RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=ConstantDuration(0.2)).to_spec()
     restored = spec.from_spec(description)
     assert restored.to_spec() == description
     run = runtime.start(restored, Mock())
@@ -1639,10 +1637,9 @@ def test_rtc_description_rebuilds_native_prefix_encoder(execution, monkeypatch):
         run.send({})
         prefix = ActionPrefix.from_observation(model.requests[-1])
         np.testing.assert_array_equal(
-            [action['joints'] for action in prefix.actions], [[i, i + 1] for i in range(5, 10)]
+            [action[keys.ROBOT_COMMAND].positions for action in prefix.actions], [[5, 6], [6, 7]]
         )
-        np.testing.assert_array_equal([action['grip'] for action in prefix.actions], [[1], [0], [1], [0], [1]])
-        assert all(action['joints'].dtype == np.float32 for action in prefix.actions)
+        assert [action[keys.TARGET_GRIP] for action in prefix.actions] == [1.0, 0.0]
     finally:
         run.close()
 

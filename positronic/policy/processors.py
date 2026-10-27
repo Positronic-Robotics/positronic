@@ -20,13 +20,13 @@ from collections import ChainMap, deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from math import ceil, isfinite
+from math import isfinite
 from statistics import fmean
 from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
-from positronic_model_server.rtc import ActionPrefix
+from positronic_model_server.rtc import ESTIMATED_LATENCY_SEC, ActionPrefix
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -47,7 +47,6 @@ from positronic.policy.base import (
     Runtime,
     Step,
 )
-from positronic.policy.codecs.base import Codec
 from positronic.policy.keys import ACTION_FPS, END
 
 
@@ -560,7 +559,8 @@ class RTCSchedule(Policy):
     The call also gets a prefix: the old chunk read at the new chunk's due times T1,
     T1 + 1 / `fps`, ..., for the duration estimated by `prefix_duration`, and not past
     the end of the old chunk. The prefix tells the model what the robot does while the model
-    computes. ``blend_sec`` adds a revisable overlap after this frozen prefix.
+    computes. The request also carries this duration as ``estimated_latency_sec``.
+    The server decides how to use the prefix and latency estimate.
 
     When T1 falls between two old due times, each new due time falls between two old
     actions. `prefix_sampling` decides which value the prefix holds there; see
@@ -577,10 +577,8 @@ class RTCSchedule(Policy):
     action until its answer arrives (-- in the drawing).
 
     ``infer`` receives the observation with an ``action_prefix`` description. It includes source
-    positions in the preceding answer, scheduled targets and the number of frozen steps. ``blend_sec``
-    adds a revisable overlap after the frozen prefix. ``prefix_codec`` converts scheduled targets to
-    model units; without it they remain commands for a local callable. Call sequences start at zero
-    for each run. The server must validate them against its session's prediction history.
+    positions in the preceding answer and scheduled targets. Codecs convert targets to model units.
+    Call sequences start at zero for each run. The server must validate them against its session's prediction history.
 
     Prefix targets use absolute commands. A model with relative actions must convert these targets
     against the current observation before inference.
@@ -591,8 +589,6 @@ class RTCSchedule(Policy):
     CALL_AFTER_ARG = 'call_after_sec'
     PREFIX_DURATION_ARG = 'prefix_duration'
     PREFIX_SAMPLING_ARG = 'prefix_sampling'
-    BLEND_SEC_ARG = 'blend_sec'
-    PREFIX_CODEC_ARG = 'prefix_codec'
 
     def __init__(
         self,
@@ -600,9 +596,6 @@ class RTCSchedule(Policy):
         call_after_sec: float,
         prefix_duration: DurationEstimate,
         prefix_sampling: PrefixSampling = PrefixSampling.PREVIOUS,
-        *,
-        blend_sec: float = 0.0,
-        prefix_codec: Codec | None = None,
     ) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
@@ -611,23 +604,7 @@ class RTCSchedule(Policy):
         self._fps = fps
         self._call_after_ns = round(call_after_sec * 1e9)
         self._prefix_duration = prefix_duration
-        if not isfinite(blend_sec) or blend_sec < 0:
-            raise ValueError('blend_sec must be finite and not negative')
         self._prefix_sampling = prefix_sampling
-        self._blend_sec = blend_sec
-        self._prefix_codec = prefix_codec
-
-    def _prefix(self, chunk: _TimedChunk | None, now_ns: int, delay_sec: float, sequence: int) -> ActionPrefix:
-        positions, actions = (
-            ([], []) if chunk is None else chunk.prefix(now_ns, delay_sec + self._blend_sec, self._prefix_sampling)
-        )
-        frozen = min(len(actions), ceil(round(delay_sec * 1e9) * self._fps / 1e9))
-        encoded = (
-            self._prefix_codec.encode_commands(actions)
-            if self._prefix_codec is not None
-            else [dict(action) for action in actions]
-        )
-        return ActionPrefix(sequence, positions, frozen, encoded)
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         duration = self._prefix_duration.run()
@@ -650,9 +627,13 @@ class RTCSchedule(Policy):
                     next_call_ns = start_ns + self._call_after_ns
 
                 if answer is None and now_ns >= next_call_ns:
-                    prefix = self._prefix(chunk, now_ns, prefix_sec, sequence)
+                    positions, actions = (
+                        ([], []) if chunk is None else chunk.prefix(now_ns, prefix_sec, self._prefix_sampling)
+                    )
+                    prefix = ActionPrefix(sequence, positions, [dict(action) for action in actions])
                     called_at_ns = now_ns
-                    answer = runtime.submit(infer, ChainMap(prefix.to_observation(), obs))
+                    context = {**prefix.to_observation(), ESTIMATED_LATENCY_SEC: prefix_sec}
+                    answer = runtime.submit(infer, ChainMap(context, obs))
                     sequence += 1
 
                 commands = {} if chunk is None else chunk.take_due(now_ns)
@@ -678,10 +659,7 @@ class RTCSchedule(Policy):
             self.CALL_AFTER_ARG: self._call_after_ns / 1e9,
             self.PREFIX_DURATION_ARG: self._prefix_duration.to_spec(),
             self.PREFIX_SAMPLING_ARG: self._prefix_sampling.value,
-            self.BLEND_SEC_ARG: self._blend_sec,
         }
-        if self._prefix_codec is not None:
-            args[self.PREFIX_CODEC_ARG] = self._prefix_codec.to_spec()
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
     @classmethod

@@ -8,7 +8,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from positronic_model_server import serialization
-from positronic_model_server.rtc import ActionPrefix
+from positronic_model_server.rtc import ESTIMATED_LATENCY_SEC, ActionPrefix
+from positronic_model_server.spec import SEQ
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
@@ -18,6 +19,7 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
+from positronic.drivers.roboarm.command import JointPosition
 from positronic.policy import spec
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec, EncodeImages
 from positronic.policy.codecs.metadata import MODEL_SETTINGS
@@ -224,20 +226,31 @@ def test_droid_frame_and_pixels_match_upstream_robot_client(observation):
 
 
 def test_rtc_targets_survive_observation_packing_and_image_compression(observation):
-    definition = spec.from_spec(recipe.inference(model_settings.droid()))
+    settings = model_settings.droid()
+    stack = recipe.client_stack(
+        settings,
+        fps=15,
+        horizon_sec=None,
+        image_mappings=settings[model_settings.IMAGE_MAPPINGS],
+        compress_images=True,
+        rtc={serving_keys.CALL_AFTER_SEC: 0.5, serving_keys.MAX_DELAY_SEC: 1.0},
+    )
+    definition = spec.from_spec(stack[SEQ][1])
     assert isinstance(definition, Codec)
     codec = definition | EncodeImages()
-    targets = [{gr00t.JOINT_POSITION: np.ones(7, dtype=np.float32), gr00t.GRIP: np.array([1.0], dtype=np.float32)}]
-    prefix = ActionPrefix(1, [3], 1, targets)
+    targets = [{keys.ROBOT_COMMAND: JointPosition(np.ones(7)), keys.TARGET_GRIP: 1.0}]
+    prefix = ActionPrefix(1, [3], targets)
     received = []
 
     def infer(encoded):
         received.append(encoded)
         return ({gr00t.JOINT_POSITION: np.zeros((1, 40, 7)), gr00t.GRIP: np.zeros((1, 40, 1))}, {})
 
-    result = codec.wrap(infer)({**observation, **prefix.to_observation()})
+    result = codec.wrap(infer)({**observation, **prefix.to_observation(), ESTIMATED_LATENCY_SEC: 0.2})
     assert len(result) == 40
     restored = ActionPrefix.from_observation(received[0])
     assert restored.sequence == 1
     assert restored.positions == [3]
-    np.testing.assert_array_equal(restored.actions[0][gr00t.JOINT_POSITION], targets[0][gr00t.JOINT_POSITION])
+    np.testing.assert_array_equal(restored.actions[0][gr00t.JOINT_POSITION], np.ones(7, dtype=np.float32))
+    np.testing.assert_array_equal(restored.actions[0][gr00t.GRIP], [1.0])
+    assert received[0][ESTIMATED_LATENCY_SEC] == 0.2

@@ -84,6 +84,9 @@ model. It then sends `ready` with a session ID, protocol v3, the pipeline descri
 The client may report any additional metadata and owns how it records or combines that information.
 The server checks description structure without importing client components.
 
+An RTC observation carries an `action_prefix` and `estimated_latency_sec`, the client's estimated
+end-to-end inference latency. The adapter decides how the model uses them, including any frozen or blended overlap.
+
 All model operations run on one worker thread in the server process: load, preparation, inference,
 session cleanup and model cleanup. Each session retains its own settings and history.
 Inference is serialized across all listeners. Queue time is reported separately from model

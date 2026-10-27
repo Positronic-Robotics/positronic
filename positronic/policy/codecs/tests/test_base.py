@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-from positronic_model_server.rtc import ACTION_PREFIX
 
 from positronic import keys as obs_keys
 from positronic.cfg.codecs import compose, image_observation
@@ -198,13 +197,6 @@ def test_operator_precedence():
 class _DoublingCodec(Codec):
     def _decode_single(self, data):
         return {name: 2 * value for name, value in data.items()}
-
-
-@pytest.mark.parametrize('prefix', [None, {}, {'sequence': 0}])
-def test_wrapping_preserves_rtc_fields_for_server_validation(prefix):
-    received = []
-    Codec().wrap(received.append)({ACTION_PREFIX: prefix})
-    assert received == [{ACTION_PREFIX: prefix}]
 
 
 def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned():

@@ -4,6 +4,7 @@ from typing import cast
 import numpy as np
 import pytest
 from positronic_model_server import serialization
+from positronic_model_server.rtc import ESTIMATED_LATENCY_SEC, ActionPrefix
 from positronic_model_server.spec import ARGS, component
 
 import positronic.drivers.roboarm.command as cmd_module
@@ -20,6 +21,7 @@ from positronic.policy.codecs import (
     ACTION,
     CartesianDeltaAction,
     Codec,
+    EncodeActionPrefix,
     JointPositionAction,
     PackFields,
     SetControlMode,
@@ -28,6 +30,27 @@ from positronic.policy.codecs import (
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
 from positronic.policy.spec import from_spec
+
+
+def test_action_prefix_encoding_round_trips_the_recipe_and_keeps_request_timing():
+    codec = EncodeActionPrefix(
+        PackFields(encode_layout={'state': ['q']}), JointPositionAction('joints', 'grip', num_joints=2)
+    )
+    codec = from_spec(json.loads(json.dumps(codec.to_spec())))
+    assert isinstance(codec, Codec)
+    commands = [{obs_keys.ROBOT_COMMAND: cmd_module.JointPosition(np.array([0.1, 0.2])), obs_keys.TARGET_GRIP: 1.0}]
+    prefix = ActionPrefix(1, [3], commands)
+    encoded = codec.encode({'q': [0.3, 0.4], **prefix.to_observation(), ESTIMATED_LATENCY_SEC: 0.15})
+    encoded = serialization.deserialise(serialization.serialise(encoded))
+    assert encoded['state'] == [0.3, 0.4]
+    assert encoded[ESTIMATED_LATENCY_SEC] == 0.15
+    restored = ActionPrefix.from_observation(encoded)
+    assert (restored.sequence, restored.positions) == (1, [3])
+    np.testing.assert_allclose(restored.actions[0]['joints'], [0.1, 0.2])
+    np.testing.assert_array_equal(restored.actions[0]['grip'], [1.0])
+    assert isinstance(prefix.actions[0][obs_keys.ROBOT_COMMAND], cmd_module.JointPosition)
+    result = [{'joints': [1, 2]}]
+    assert codec.decode(result) is result
 
 
 @pytest.mark.parametrize('positions', [False, True])

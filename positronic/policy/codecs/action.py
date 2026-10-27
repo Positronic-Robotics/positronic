@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 from eval_vocabulary.timeline import recording_timeline
+from positronic_model_server.rtc import ACTION_PREFIX, ESTIMATED_LATENCY_SEC, ActionPrefix, estimated_latency
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom, keys
@@ -18,6 +19,39 @@ from .base import Codec
 from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action
 
 RotRep = geom.Rotation.Representation
+
+
+class EncodeActionPrefix(Codec):
+    """A codec with scheduled-command encoding for RTC requests."""
+
+    WIRE_NAME = 'encode_action_prefix'
+    CODEC_ARG = 'codec'
+    ACTION_ARG = 'action'
+
+    def __init__(self, codec: Codec, action: Codec):
+        self._codec = codec
+        self._action = action
+
+    def encode(self, data: dict) -> dict:
+        prefix = ActionPrefix.from_observation(data)
+        latency = estimated_latency(data)
+        inputs = {name: value for name, value in data.items() if name not in (ACTION_PREFIX, ESTIMATED_LATENCY_SEC)}
+        prefix = replace(prefix, actions=self._action.encode_commands(prefix.actions))
+        return {**self._codec.encode(inputs), **prefix.to_observation(), ESTIMATED_LATENCY_SEC: latency}
+
+    def decode(self, data: Any) -> Any:
+        return self._codec.decode(data)
+
+    @property
+    def meta(self):
+        return self._codec.meta
+
+    def to_spec(self):
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {self.CODEC_ARG: self._codec.to_spec(), self.ACTION_ARG: self._action.to_spec()},
+        }
 
 
 class SplitActionChunk(Codec):

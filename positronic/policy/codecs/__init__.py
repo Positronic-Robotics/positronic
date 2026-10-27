@@ -4,6 +4,7 @@ from .action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
     CartesianDeltaAction,
+    EncodeActionPrefix,
     IKJointsAction,
     JointDeltaAction,
     JointPositionAction,

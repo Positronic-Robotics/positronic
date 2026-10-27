@@ -190,13 +190,14 @@ Use `droid_rtc` to predict the next chunk while the client executes the current 
 docker compose run --rm --service-ports groot-server droid_rtc
 ```
 
-The client estimates inference delay and sends the actions due during that delay as a frozen prefix.
-The model also blends a later overlap before predicting new actions. Each session keeps its own prediction history.
+The client sends its estimated inference latency and the actions due during that delay.
+GR00T uses the estimate to select frozen steps, then blends a later overlap from its cached prediction.
+Each session keeps its own prediction history.
 Native checkpoint transforms prepare the overlap for inference. Both inference paths are warm before the server accepts sessions.
 
 The preset starts a new prediction every **0.5 seconds**, with **0.5 seconds** of blend overlap.
 Set `--pipeline.rtc.call_after_sec` and `--pipeline.rtc.blend_sec` to change these durations.
-`--pipeline.rtc.max_delay_sec` caps the estimated frozen duration; `--pipeline.rtc.ramp_rate` controls native blending.
+`--pipeline.rtc.max_delay_sec` caps the client's latency estimate; `--pipeline.rtc.ramp_rate` controls native blending.
 RTC requires `horizon_sec=None`. A session can override `rtc` or disable it with `rtc=null`.
 An ordinary `droid` launch cannot enable RTC through a session request because its RTC path is not warmed.
 
