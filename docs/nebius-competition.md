@@ -29,6 +29,48 @@ You can install the commands, register, enter and submit on any computer. Do the
 computer, because the API key stays on the computer that registered. Build and test, and run your coding
 agent, on the build machine.
 
+## Quickstart
+
+Run these commands in order. [Fill in the placeholders](#fill-in-the-placeholders) says what goes in
+each `<...>`. Each step of [Get started by hand](#get-started-by-hand) tells more.
+
+```bash
+# 1 Install
+uv tool install --managed-python --python 3.13 'positronic @ git+https://github.com/Positronic-Robotics/positronic'
+# 2 Register: open the sign-in link within 5 minutes
+positronic account register --alias="<team name>"
+# 3 Enter: read what becomes public, then enter
+competition-enter
+competition-enter --yes
+# 4 Build and push an example image (π0.5 DROID)
+git clone https://github.com/Positronic-Robotics/positronic
+cd positronic
+docker login
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+    -f docker/Dockerfile.serve-pi05-droid -t docker.io/<you>/<image>:v1 --push .
+# 5 Test with the network denied (uses no submission)
+bash docker/test_policy_image.sh docker.io/<you>/<image>:v1
+# 6 Submit, pinned by digest
+positronic eval catalog
+docker buildx imagetools inspect docker.io/<you>/<image>:v1
+positronic eval run --eval=<eval> \
+    --policy-image=docker.io/<you>/<image>@sha256:<digest> \
+    --transaction-key=<a name for this attempt>
+positronic eval status --id=<submission id>
+```
+
+The first submission of your team asks it to accept the terms. [Submit](#submit) tells how.
+
+## Fill in the placeholders
+
+| Placeholder | What goes there |
+|---|---|
+| `<team name>` | The name of your team. The competition publishes it. |
+| `<you>/<image>` | Your repository in a container registry, such as Docker Hub. A private repository needs a credential: [A private image](#a-private-image). |
+| `<eval>` | The name of the competition eval, from `positronic eval catalog`. |
+| `<digest>` | The digest of your image, from `docker buildx imagetools inspect docker.io/<you>/<image>:v1`. A tag can move to an image that you did not test. |
+| `<a name for this attempt>` | The transaction key. Use a new key for a new image or another eval. The same key only retries the same submission. |
+
 ## Use a coding agent
 
 Paste this prompt into Claude Code, Codex or a similar agent:
@@ -228,8 +270,10 @@ the platform's [HTTP API](https://platform.positronic.ro/docs), and your own too
 
 ---
 
-<!-- The competition site shows the sections above this line in full, and each section below it as a block
-that opens and closes. -->
+<!-- The competition site reads this file at its start page. It finds the sections above this line by
+their headings: keep "Quickstart", "Fill in the placeholders", "Use a coding agent", "Get started by hand"
+and the six step headings under it. It shows each section below this line as a block that opens and
+closes. -->
 
 ## Your policy image
 
