@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import configuronic as cfn
 import pytest
 from platform_client import routes
+from platform_client.boards import BoardRef
 from platform_client.enums import BoardVisibility, ErrorCode, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
 from platform_client.errors import EVALS_DETAIL, QUOTA_DETAIL, TASKS_DETAIL
 from platform_client.ids import SubmissionId
@@ -16,6 +17,7 @@ from platform_client.responses import (
     QuotaLimit,
     SubmissionCreateResponse,
 )
+from positronic_evals.evals import EvalRef
 
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.conftest import ID, KEY, SUBMISSION, refusal, runs_of_four
@@ -121,17 +123,20 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
     assert f'  {EVALS_DETAIL}: ["fake.smoke", "robolab.public_subset"]' in str(exit_info.value)
 
 
+BOARD_EVAL = 'fake.board'
+
+
 def _boards(*evals: str) -> BoardListResponse:
     """What `rankings.list` answers: one public board for each of `evals`."""
     return BoardListResponse(
         boards=[
-            BoardSummary.model_validate({
-                'board': f'board-{index}',
-                'title': f'Board {index}',
-                'eval': name,
-                'primary_metric': 'success_rate',
-                'visibility': BoardVisibility.public.name,
-            })
+            BoardSummary(
+                board=BoardRef(f'board-{index}'),
+                title=f'Board {index}',
+                eval=EvalRef(name),
+                primary_metric='success_rate',
+                visibility=BoardVisibility.public,
+            )
             for index, name in enumerate(evals)
         ]
     )
@@ -139,26 +144,26 @@ def _boards(*evals: str) -> BoardListResponse:
 
 def test_a_run_that_names_no_eval_runs_the_eval_that_the_board_ranks(platform, run_command, capsys):
     platform.answer_by_route({
-        routes.RANKINGS_LIST: (_boards('fake.board'), 200),
+        routes.RANKINGS_LIST: (_boards(BOARD_EVAL), 200),
         routes.SUBMISSIONS_CREATE: (_created(SubmissionStatus.pending), 200),
     })
 
     run_command(run, policy_image='org/p:v1', transaction_key='retry-1')
 
     assert platform.paths == [routes.RANKINGS_LIST, routes.SUBMISSIONS_CREATE]
-    assert platform.body['eval'] == 'fake.board'
-    assert 'eval fake.board, which the board ranks' in capsys.readouterr().out
+    assert platform.body['eval'] == BOARD_EVAL
+    assert f'eval {BOARD_EVAL}, which the board ranks' in capsys.readouterr().out
 
 
 def test_two_boards_over_one_eval_name_that_eval(platform, run_command):
     platform.answer_by_route({
-        routes.RANKINGS_LIST: (_boards('fake.board', 'fake.board'), 200),
+        routes.RANKINGS_LIST: (_boards(BOARD_EVAL, BOARD_EVAL), 200),
         routes.SUBMISSIONS_CREATE: (_created(SubmissionStatus.pending), 200),
     })
 
     run_command(run, policy_image='org/p:v1')
 
-    assert platform.body['eval'] == 'fake.board'
+    assert platform.body['eval'] == BOARD_EVAL
 
 
 @pytest.mark.parametrize(
