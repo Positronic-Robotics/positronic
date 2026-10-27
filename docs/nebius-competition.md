@@ -70,8 +70,9 @@ The first submission of your team asks it to accept the terms. [Submit](#submit)
 | `<team name>` | The name of your team. The competition publishes it. |
 | `<you>/<image>` | Your repository in a container registry, such as Docker Hub. A private repository needs a credential: [A private image](#a-private-image). |
 | `<eval>` | The name of the competition eval, from `positronic eval catalog`. |
-| `<digest>` | The digest of your image, from `docker buildx imagetools inspect docker.io/<you>/<image>:v1`. A tag can move to an image that you did not test. |
+| `<digest>` | The digest of your image, from `docker buildx imagetools inspect docker.io/<you>/<image>:v1`, without its `sha256:` prefix, because `--policy-image` already has `@sha256:`. A tag can move to an image that you did not test. |
 | `<a name for this attempt>` | The transaction key. Use a new key for a new image or another eval. The same key only retries the same submission. |
+| `<submission id>` | The id that `positronic eval run` prints. |
 
 ## Use a coding agent
 
