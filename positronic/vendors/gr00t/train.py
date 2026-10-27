@@ -12,6 +12,8 @@ from positronic.policy.codecs import GR00T_MODALITY_PATH
 from positronic.policy.codecs.metadata import MODEL_SETTINGS_PATH
 from positronic.vendors.gr00t import serving as gr00t
 
+NORMALIZATION_PATH = Path('meta/positronic_normalization.json')
+
 
 def cleanup_old_optimizers(output_dir: Path, keep_last_n: int = 2):
     """Delete optimizer.pt from all but the last N checkpoints to save space."""
@@ -40,6 +42,7 @@ def main(
     resume: bool = False,
     num_workers: int | None = None,
     keep_optimizers_for_last_n: int = 2,
+    override_pretraining_statistics: bool = False,
 ):
     exp_name = str(exp_name)
     groot_root = Path(__file__).parents[4] / 'gr00t'
@@ -52,16 +55,25 @@ def main(
     output_dir = pos3.sync(output_path + '/' + exp_name, delete_remote=not resume)
     settings_path = Path(dataset_local_path) / MODEL_SETTINGS_PATH
     output_settings = output_dir / MODEL_SETTINGS_PATH
+    normalization_path = output_dir / NORMALIZATION_PATH
+    normalization = {'base_model': base_model, 'override_pretraining_statistics': override_pretraining_statistics}
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else None
     if resume:
         recorded_settings = json.loads(output_settings.read_text()) if output_settings.exists() else None
         if settings_path.exists() != output_settings.exists() or recorded_settings != settings:
             raise ValueError('Dataset model settings do not match the resumed training run')
+        # A run with no recorded normalization used the dataset statistics.
+        unrecorded = {**normalization, 'override_pretraining_statistics': True}
+        recorded = json.loads(normalization_path.read_text()) if normalization_path.exists() else unrecorded
+        if recorded != normalization:
+            raise ValueError(f'The resumed training run normalized with {recorded}, not {normalization}')
     if settings is not None:
         output_settings.parent.mkdir(parents=True, exist_ok=True)
         output_settings.write_text(json.dumps(settings, indent=2, allow_nan=False))
     elif not resume:
         output_settings.unlink(missing_ok=True)
+    normalization_path.parent.mkdir(parents=True, exist_ok=True)
+    normalization_path.write_text(json.dumps(normalization))
     prefix = 'resume_metadata' if resume else 'run_metadata'
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix=prefix)
 
@@ -84,6 +96,11 @@ def main(
         command.extend(['--save_steps', str(save_steps)])
     if num_workers is not None:
         command.extend(['--dataloader_num_workers', str(num_workers)])
+    command.append(
+        '--override-pretraining-statistics'
+        if override_pretraining_statistics
+        else '--no-override-pretraining-statistics'
+    )
     command.append('--use-wandb')
 
     env = os.environ.copy()

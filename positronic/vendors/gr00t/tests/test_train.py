@@ -100,8 +100,11 @@ def test_training_rejects_image_names_that_overwrite_other_columns(image_name):
 
 @pytest.mark.parametrize('resume', [False, True])
 @pytest.mark.parametrize('has_settings', [False, True])
-def test_finetuning_forwards_dataset_cameras_and_resume_to_gr00t(
-    tmp_path, monkeypatch, resume, has_settings, prepared_dataset
+@pytest.mark.parametrize(
+    'statistics', [{}, {'override_pretraining_statistics': True}, {'override_pretraining_statistics': False}]
+)
+def test_finetuning_forwards_dataset_cameras_resume_and_statistics_to_gr00t(
+    tmp_path, monkeypatch, resume, has_settings, statistics, prepared_dataset
 ):
     dataset = tmp_path / 'dataset'
     (dataset / 'meta').mkdir(parents=True)
@@ -116,19 +119,34 @@ def test_finetuning_forwards_dataset_cameras_and_resume_to_gr00t(
         (output / MODEL_SETTINGS_PATH).write_text(
             json.dumps(prepared_dataset.meta[MODEL_SETTINGS] if resume else {'stale': True})
         )
+    override = statistics.get('override_pretraining_statistics', False)
+    normalization = {'base_model': gr00t.BASE_MODEL, 'override_pretraining_statistics': override}
+    if resume:
+        (output / train.NORMALIZATION_PATH).parent.mkdir(exist_ok=True)
+        (output / train.NORMALIZATION_PATH).write_text(json.dumps(normalization))
     sync = Mock(return_value=output)
     run = Mock(side_effect=lambda *args, **kwargs: (output / 'checkpoint-2').mkdir())
     monkeypatch.setattr(train.pos3, 'download', lambda _: dataset)
     monkeypatch.setattr(train.pos3, 'sync', sync)
     monkeypatch.setattr(train.utils, 'save_run_metadata', Mock())
     monkeypatch.setattr(train.subprocess, 'run', run)
-    train.main(input_path=str(dataset), output_path=str(output), exp_name='droid', resume=resume, num_train_steps=2)
+    train.main(
+        input_path=str(dataset),
+        output_path=str(output),
+        exp_name='droid',
+        resume=resume,
+        num_train_steps=2,
+        **statistics,
+    )
     arguments = run.call_args.args[0]
     assert arguments[arguments.index('--base-model-path') + 1] == gr00t.BASE_MODEL
     offset = arguments.index('--video-keys') + 1
     assert arguments[offset : offset + 3] == cameras
     assert ('--resume-from-checkpoint' in arguments) == resume
+    assert ('--override-pretraining-statistics' in arguments) == override
+    assert ('--no-override-pretraining-statistics' in arguments) == (not override)
     assert sync.call_args.kwargs['delete_remote'] == (not resume)
+    assert json.loads((output / train.NORMALIZATION_PATH).read_text()) == normalization
     assert run.call_args.kwargs['check'] is True
     assert (output / MODEL_SETTINGS_PATH).exists() == has_settings
     assert (output / 'checkpoint-2' / MODEL_SETTINGS_PATH).exists() == has_settings
@@ -166,3 +184,47 @@ def test_resume_rejects_different_or_missing_settings(
     save_metadata.assert_not_called()
     assert {path.relative_to(output): path.read_bytes() for path in output.rglob('*') if path.is_file()} == before
     assert list(checkpoint.iterdir()) == []
+
+
+def _resume(tmp_path, monkeypatch, prepared_dataset, recorded, **kwargs):
+    dataset = tmp_path / 'dataset'
+    (dataset / 'meta').mkdir(parents=True)
+    (dataset / GR00T_MODALITY_PATH).write_text(json.dumps(prepared_dataset.meta[GR00T_MODALITY]))
+    output = tmp_path / 'output'
+    (output / 'meta').mkdir(parents=True)
+    if recorded is not None:
+        (output / train.NORMALIZATION_PATH).write_text(json.dumps(recorded))
+    run = Mock()
+    monkeypatch.setattr(train.pos3, 'download', lambda _: dataset)
+    monkeypatch.setattr(train.pos3, 'sync', lambda *args, **kwargs: output)
+    monkeypatch.setattr(train.subprocess, 'run', run)
+    monkeypatch.setattr(train.utils, 'save_run_metadata', Mock())
+    train.main(input_path=str(dataset), output_path=str(output), exp_name='droid', resume=True, **kwargs)
+    return output, run
+
+
+_BASE = {'base_model': gr00t.BASE_MODEL, 'override_pretraining_statistics': False}
+
+
+@pytest.mark.parametrize(
+    'recorded, requested',
+    [
+        (None, {}),
+        ({**_BASE, 'override_pretraining_statistics': True}, {}),
+        (_BASE, {'override_pretraining_statistics': True}),
+        (_BASE, {'base_model': 'nvidia/another-checkpoint'}),
+    ],
+)
+def test_resume_rejects_another_normalization(tmp_path, monkeypatch, prepared_dataset, recorded, requested):
+    with pytest.raises(ValueError, match='normalized with'):
+        _resume(tmp_path, monkeypatch, prepared_dataset, recorded, **requested)
+    record = tmp_path / 'output' / train.NORMALIZATION_PATH
+    assert (json.loads(record.read_text()) if record.exists() else None) == recorded
+
+
+def test_resume_of_a_run_with_no_recorded_normalization_keeps_the_dataset_statistics(
+    tmp_path, monkeypatch, prepared_dataset
+):
+    output, run = _resume(tmp_path, monkeypatch, prepared_dataset, None, override_pretraining_statistics=True)
+    assert '--override-pretraining-statistics' in run.call_args.args[0]
+    assert json.loads((output / train.NORMALIZATION_PATH).read_text())['override_pretraining_statistics'] is True
