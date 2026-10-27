@@ -355,7 +355,8 @@ def run(
     With ``--output_dir`` it then prints the score that the platform gives the episodes it recorded.
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
     eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
-    since the platform owns the evals it offers. ``--from-file`` files an eval plan for the lab rig,
+    since the platform owns the evals it offers. With no ``--eval``, it runs the eval that the
+    platform's boards rank. ``--from-file`` files an eval plan for the lab rig,
     as a YAML or JSON file. Two or more endpoints in it make one blind sample. ``--org`` names the
     organisation a private run is for: beside ``--from-file`` it states the plan's request type, and
     with ``--policy-image`` it makes a private run instead of a `nebius_competition` one. A filed run —
@@ -427,7 +428,9 @@ def run(
     if policy_image is not None:
         # The platform owns its own trial sweep, its own output and its own telemetry.
         _refuse({**local_only, '--from-file': from_file}, 'platform')
-        if not isinstance(eval, str):
+        if eval is None and org is not None:
+            raise CommandFailed('a private run names its eval: pass --eval=<name>', Fault.USAGE)
+        if eval is not None and not isinstance(eval, str):
             raise CommandFailed(
                 'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer',
                 Fault.USAGE,

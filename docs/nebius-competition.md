@@ -233,18 +233,17 @@ bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 
 ### Submit
 
-Read the name of the competition eval, and the digest of your image:
+Read the digest of your image:
 
 ```bash
-positronic eval catalog
 docker buildx imagetools inspect docker.io/<you>/<image>:v1
 ```
 
-Submit the image to the competition eval, pinned by its digest. Then follow the submission:
+Submit the image, pinned by its digest. The command runs the eval that the leaderboard ranks, and prints
+its name. Then follow the submission:
 
 ```bash
-positronic eval run --eval=<eval> \
-    --policy-image=docker.io/<you>/<image>@sha256:<digest> \
+positronic eval run --policy-image=docker.io/<you>/<image>@sha256:<digest> \
     --transaction-key="<a name for this attempt>"
 positronic eval status --id=<submission id>
 positronic eval list
@@ -261,6 +260,7 @@ positronic eval list
   request under a used key with `transaction_conflict`.
 - You can make one submission per day. [Submissions per day](#submissions-per-day) says what counts.
 - [Read the outcome](#read-the-outcome) says what the status tells you.
+- To run another eval, add `--eval=<name>`. `positronic eval catalog` lists the evals that you can name.
 
 ### Choose your final entry
 

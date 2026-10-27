@@ -6,10 +6,18 @@ from datetime import UTC, datetime
 import configuronic as cfn
 import pytest
 from platform_client import routes
-from platform_client.enums import ErrorCode, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
+from platform_client.boards import BoardRef
+from platform_client.enums import BoardVisibility, ErrorCode, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
 from platform_client.errors import EVALS_DETAIL, QUOTA_DETAIL, TASKS_DETAIL
 from platform_client.ids import SubmissionId
-from platform_client.responses import QUOTA_SUBMISSIONS_DAY, QuotaLimit, SubmissionCreateResponse
+from platform_client.responses import (
+    QUOTA_SUBMISSIONS_DAY,
+    BoardListResponse,
+    BoardSummary,
+    QuotaLimit,
+    SubmissionCreateResponse,
+)
+from positronic_evals.evals import EvalRef
 
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.conftest import ID, KEY, SUBMISSION, refusal, runs_of_four
@@ -113,6 +121,110 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
         run_command(run, eval='fake.smokey', policy_image='org/p:v1')
 
     assert f'  {EVALS_DETAIL}: ["fake.smoke", "robolab.public_subset"]' in str(exit_info.value)
+
+
+BOARD_EVAL = 'fake.board'
+
+
+def _boards(*evals: str, visibility: BoardVisibility = BoardVisibility.public) -> BoardListResponse:
+    """What `rankings.list` answers: one board for each of `evals`."""
+    return BoardListResponse(
+        boards=[
+            BoardSummary(
+                board=BoardRef(f'board-{index}'),
+                title=f'Board {index}',
+                eval=EvalRef(name),
+                primary_metric='success_rate',
+                visibility=visibility,
+            )
+            for index, name in enumerate(evals)
+        ]
+    )
+
+
+def test_a_run_that_names_no_eval_runs_the_eval_that_the_board_ranks(platform, run_command, capsys):
+    platform.answer_by_route({
+        routes.RANKINGS_LIST: (_boards(BOARD_EVAL), 200),
+        routes.SUBMISSIONS_CREATE: (_created(SubmissionStatus.pending), 200),
+    })
+
+    run_command(run, policy_image='org/p:v1', transaction_key='retry-1')
+
+    assert platform.paths == [routes.RANKINGS_LIST, routes.SUBMISSIONS_CREATE]
+    assert platform.body['eval'] == BOARD_EVAL
+    assert f'eval {BOARD_EVAL}, which the board ranks' in capsys.readouterr().out
+
+
+def test_two_boards_over_one_eval_name_that_eval(platform, run_command):
+    platform.answer_by_route({
+        routes.RANKINGS_LIST: (_boards(BOARD_EVAL, BOARD_EVAL), 200),
+        routes.SUBMISSIONS_CREATE: (_created(SubmissionStatus.pending), 200),
+    })
+
+    run_command(run, policy_image='org/p:v1')
+
+    assert platform.body['eval'] == BOARD_EVAL
+
+
+@pytest.mark.parametrize(
+    ('evals', 'named'), [((), 'no eval'), (('fake.one', 'fake.two'), 'fake.one, fake.two')], ids=['none', 'two']
+)
+def test_boards_that_rank_no_single_eval_leave_the_eval_to_the_caller(platform, run_command, evals, named):
+    platform.answer_by_route({routes.RANKINGS_LIST: (_boards(*evals), 200)})
+
+    with pytest.raises(CommandFailed, match=f'the boards rank {named}: pass --eval=<name>') as exit_info:
+        run_command(run, policy_image='org/p:v1')
+
+    assert exit_info.value.fault is Fault.USAGE
+    assert platform.paths == [routes.RANKINGS_LIST]
+
+
+def test_a_tenant_board_over_another_eval_does_not_count(platform, run_command):
+    public = _boards(BOARD_EVAL).boards
+    tenant = _boards('fake.private', visibility=BoardVisibility.tenant).boards
+    platform.answer_by_route({
+        routes.RANKINGS_LIST: (BoardListResponse(boards=public + tenant), 200),
+        routes.SUBMISSIONS_CREATE: (_created(SubmissionStatus.pending), 200),
+    })
+
+    run_command(run, policy_image='org/p:v1')
+
+    assert platform.body['eval'] == BOARD_EVAL
+
+
+def test_only_tenant_boards_leave_the_eval_to_the_caller(platform, run_command):
+    platform.answer_by_route({routes.RANKINGS_LIST: (_boards('fake.private', visibility=BoardVisibility.tenant), 200)})
+
+    with pytest.raises(CommandFailed, match='the boards rank no eval: pass --eval=<name>'):
+        run_command(run, policy_image='org/p:v1')
+
+
+def test_a_board_answer_the_client_cannot_read_is_the_platforms_fault(platform, run_command):
+    platform.answer_by_route({routes.RANKINGS_LIST: ({'boards': [{'board': 'board-0'}]}, 200)})
+
+    with pytest.raises(
+        CommandFailed, match='the platform answered with a response the client cannot read'
+    ) as exit_info:
+        run_command(run, policy_image='org/p:v1')
+
+    assert exit_info.value.fault is Fault.PLATFORM
+    assert platform.paths == [routes.RANKINGS_LIST]
+
+
+def test_a_run_that_names_its_eval_does_not_read_the_boards(platform, run_command):
+    platform.answer(_created(SubmissionStatus.pending))
+
+    run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+
+    assert routes.RANKINGS_LIST not in platform.paths
+
+
+def test_a_private_run_that_names_no_eval_is_refused_before_anything_is_sent(platform, run_command):
+    with pytest.raises(CommandFailed, match='a private run names its eval') as exit_info:
+        run_command(run, policy_image='org/p:v1', org='acme')
+
+    assert exit_info.value.fault is Fault.USAGE
+    assert platform.seen is None
 
 
 @pytest.mark.parametrize(
