@@ -27,8 +27,8 @@ INSTRUCTIONS: dict[str, str] = {
 }
 
 # The model predicts 15 actions, 1/15 s apart. The robot executes the first ACTIONS_PER_CHUNK of them, and then
-# the server predicts a new chunk from a new observation. A smaller value replans more often.
-ACTIONS_PER_CHUNK = 15
+# the server predicts a new chunk from a new observation. A smaller value replans more often. None executes all 15.
+ACTIONS_PER_CHUNK: int | None = None
 
 # The model predicts a grip from 0 (open) to 1 (closed). With a threshold, the grip is 1 above it and 0 below it.
 GRIP_THRESHOLD: float | None = None
@@ -61,8 +61,7 @@ class StarterModel(Model):
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
         # `obs` holds the views [exterior, exterior_2, wrist], the state [7 joint positions, grip] and the task.
         obs = {**obs, molmoact2.TASK: instruction(obs[molmoact2.TASK])}
-        chunk = self._model(obs, session_id=session_id)
-        return [{ACTION: adjust(step[ACTION])} for step in chunk[:ACTIONS_PER_CHUNK]]
+        return [{ACTION: adjust(step[ACTION])} for step in self._model(obs, session_id=session_id)]
 
     def end_session(self, session_id: str) -> None:
         self._model.end_session(session_id)
@@ -74,6 +73,14 @@ class StarterModel(Model):
         self._model.close()
 
 
+ACTION_FPS = 15.0  # The rate of the actions in a chunk of the DROID checkpoint.
+
+
+def horizon_sec() -> float | None:
+    """How long the robot executes each chunk: the first ACTIONS_PER_CHUNK actions, or all of them."""
+    return None if ACTIONS_PER_CHUNK is None else ACTIONS_PER_CHUNK / ACTION_FPS
+
+
 @cfn.config(hf_repo=DEFAULT_HF_REPO, device_map='auto')
 def starter_model(hf_repo: str, device_map: str) -> Model:
     model = StarterModel(MolmoAct2Model(hf_repo, device_map=device_map, num_steps=NUM_STEPS))
@@ -83,4 +90,5 @@ def starter_model(hf_repo: str, device_map: str) -> Model:
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli(serve.override(model=starter_model, pipeline=droid_3cam))
+    pipeline = droid_3cam.override(fps=ACTION_FPS, horizon_sec=horizon_sec())
+    cfn.cli(serve.override(model=starter_model, pipeline=pipeline))

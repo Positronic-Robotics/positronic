@@ -5,6 +5,7 @@ pytest.importorskip('transformers')
 
 from positronic.offboard.spec import Model
 from positronic.policy.codecs import ACTION
+from positronic.policy.processors import ChunkedSchedule
 from positronic.vendors import molmoact2
 from positronic.vendors.molmoact2 import starter
 from positronic.vendors.molmoact2.server import molmoact2_model
@@ -57,12 +58,17 @@ def test_an_instruction_replaces_the_text_of_its_task_only(monkeypatch):
     assert [obs[molmoact2.TASK] for obs in fake.observations] == ['grasp the red bowl', 'open the drawer.']
 
 
-def test_actions_per_chunk_keeps_the_first_actions_of_the_chunk(monkeypatch):
+def test_the_unedited_starter_executes_the_whole_chunk_of_each_prediction():
+    assert starter.horizon_sec() is None
+
+
+def test_actions_per_chunk_cuts_the_schedule_after_that_many_actions(monkeypatch):
     monkeypatch.setattr(starter, 'ACTIONS_PER_CHUNK', 4)
+    schedule = ChunkedSchedule(starter.ACTION_FPS, starter.horizon_sec())
 
-    actions = _call(starter.StarterModel(FakeMolmoAct2()))
+    waypoints, _ = schedule._plan_chunk([{ACTION: i} for i in range(CHUNK)], start_ns=0)
 
-    assert [int(a[0]) for a in actions] == [0, 1, 2, 3]
+    assert [w.commands[ACTION] for w in waypoints] == [0, 1, 2, 3]
 
 
 def test_a_grip_threshold_closes_the_grip_above_it_and_opens_it_below_it(monkeypatch):
