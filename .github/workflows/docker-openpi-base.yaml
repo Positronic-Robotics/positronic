@@ -56,7 +56,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Only main moves `latest`. A dispatch on another ref pushes the commit tag alone.
+      # Only main moves `latest`. Any other ref, such as a release tag, pushes the commit tag alone.
       - name: Build and push
         if: inputs.push
         run: |

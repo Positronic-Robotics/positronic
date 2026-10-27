@@ -219,10 +219,17 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
 
+  # `positro/openpi` and `positro/pi05-droid` build on this base.
+  openpi-base:
+    uses: ./.github/workflows/docker-openpi-base.yaml
+    with:
+      push: true
+    secrets: inherit
+
   publish-docker:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: publish-pypi
+    needs: [publish-pypi, openpi-base]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -258,7 +265,7 @@ jobs:
 
   # Each serving image holds its weights, so each builds on a runner of its own.
   publish-serve-images:
-    needs: publish-pypi
+    needs: [publish-pypi, openpi-base]
     strategy:
       fail-fast: false
       matrix:
