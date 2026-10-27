@@ -263,10 +263,12 @@ eval against the server in the image.
 
 ### Start from an example image
 
-Each example image serves a public DROID checkpoint, such as π0.5 DROID or GR00T N1.7 DROID. CI publishes
-each one to Docker Hub as a `positro/` image, from a recipe in the positronic repository.
+Three example images fit the 24 GB of GPU memory that a competition run gets: π0.5 DROID, GR00T N1.7 DROID
+and MolmoAct2 DROID. Each one serves a public DROID checkpoint. CI publishes each one to Docker Hub as a
+`positro/` image, from a recipe in the positronic repository.
 [Example images](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#example-images)
-lists them, with the recipe for each.
+lists all five example images, with the recipe for each. FLUX 3 Action DROID and Cosmos3-Nano DROID need
+about 35 GB of GPU memory, so a competition run of them does not fit.
 
 - The comments in each recipe say where a checkpoint of your own goes.
 - The GR00T recipe needs a Hugging Face read token, because the repository of its backbone is gated.
