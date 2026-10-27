@@ -58,7 +58,7 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 
 ## Get started by hand
 
-### Hack the starter policy
+### Edit the starter policy
 
 The starter is a MolmoAct2 DROID policy in one Python file,
 [`positronic/vendors/molmoact2/starter.py`](https://github.com/Positronic-Robotics/positronic/blob/main/positronic/vendors/molmoact2/starter.py).

@@ -84,7 +84,7 @@ at run time, selects another.
 model reads for each task, how many actions of each chunk the robot executes, a grip threshold, the denoising
 steps, and a change to each action. With no edit, it serves what the published image serves.
 `docker/Dockerfile.serve-molmoact2-starter` adds the file to the published image. The quick start is in
-[the competition guide](../../../docs/nebius-competition.md#hack-the-starter-policy).
+[the competition guide](../../../docs/nebius-competition.md#edit-the-starter-policy).
 
 ## Bimanual YAM
 

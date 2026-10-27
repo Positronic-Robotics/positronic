@@ -38,7 +38,7 @@ pin it.
 To change the behaviour of MolmoAct2 by hand, with no model of your own, start from
 [`docker/Dockerfile.serve-molmoact2-starter`](../docker/Dockerfile.serve-molmoact2-starter): it adds one Python
 file to `positro/molmoact2-droid`
-([Hack the starter policy](nebius-competition.md#hack-the-starter-policy)).
+([Edit the starter policy](nebius-competition.md#edit-the-starter-policy)).
 
 The header of each recipe gives its build command. The comments in each recipe say where a
 checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM
