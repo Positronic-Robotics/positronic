@@ -272,8 +272,9 @@ See [`positronic/vendors/gr00t/recipes.py`](../../vendors/gr00t/recipes.py).
 | `droid_three_cameras` | Two exteriors + wrist | Same as `droid` | Same as `droid` |
 
 Images use the upstream DROID client's 320×180 padded resize, then the checkpoint's native
-preprocessing. GR00T owns pose-relative and joint-relative conversion. Training labels are
-recorded state trajectories. Use the same camera layout for conversion and inference;
+preprocessing. GR00T owns pose-relative and joint-relative conversion. The arm training labels are
+the recorded state `action_lead_sec` later, and the gripper label is `target_grip`.
+Use the same camera layout for conversion and inference;
 the published DROID checkpoint uses two cameras. See the [Docker workflow](../../vendors/gr00t/README.md).
 
 ### OpenPI
