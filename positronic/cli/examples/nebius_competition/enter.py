@@ -80,14 +80,6 @@ def entry_line(entry: CompetitionEntry) -> str:
     return f'entered the competition on {day}, and accepted the terms version {entry.terms_version}'
 
 
-def terms_lines(terms: CompetitionTerms) -> str:
-    return (
-        f'The terms of the competition, version {terms.version}: {terms.url}\n'
-        'Your team accepts them with its first submission.\n'
-        f'To accept them now, run: competition-enter --accept-terms={terms.version}'
-    )
-
-
 def run(client: CompetitionClient, *, confirmed: bool, accepted_version: str | None) -> None:
     """`accepted_version` is the terms version that the team approved, or None. The gateway refuses a version
     that is not current, so a version published after the approval is never accepted in its place."""
@@ -96,7 +88,12 @@ def run(client: CompetitionClient, *, confirmed: bool, accepted_version: str | N
         'It publishes your scores and the videos of your runs when they are scored.\n'
         'All of this stays public after the competition.'
     )
-    print(terms_lines(client.terms()))
+    terms = client.terms()
+    print(
+        f'The terms of the competition, version {terms.version}: {terms.url}\n'
+        'Your team accepts them with its first submission.\n'
+        f'To accept them now, run: competition-enter --accept-terms={terms.version}'
+    )
     if not confirmed and accepted_version is None:
         print('To join, run: competition-enter --yes')
         return
