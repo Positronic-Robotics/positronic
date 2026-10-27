@@ -6,7 +6,15 @@ on:
       - main
 
 jobs:
+  # `positro/openpi` builds on this base.
+  openpi-base:
+    uses: ./.github/workflows/docker-openpi-base.yaml
+    with:
+      push: true
+    secrets: inherit
+
   build-and-push:
+    needs: openpi-base
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

@@ -1,4 +1,4 @@
-.PHONY: all build tag push clean prune help build-molmospaces tag-molmospaces push-molmospaces build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
+.PHONY: all build tag push clean prune help build-molmospaces tag-molmospaces push-molmospaces build-training tag-training push-training build-openpi-base push-openpi-base build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
 
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
@@ -38,8 +38,11 @@ LOCAL_TAG_TRAINING := $(IMAGE_NAME_TRAINING):local
 # Base image tags (not parameterized — these are heavy foundational images)
 TAG_DREAMZERO_BASE_LATEST := $(IMAGE_NAME_DREAMZERO_BASE):latest
 
-# OpenPI base image (pulled from registry)
-TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):latest
+# The commit of the openpi fork that positro/openpi-base carries. positro/openpi and positro/pi05-droid build on
+# that base. CI builds the base from this commit when Docker Hub has no image of it.
+OPENPI_REPO := https://github.com/Positronic-Robotics/openpi.git
+OPENPI_REF := 00f1f4e6f26ce041972864b505e5dd2dafc19246
+TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):$(shell printf %.7s $(OPENPI_REF))
 
 help:
 	@echo "Positronic Docker Build System - Makefile"
@@ -54,6 +57,7 @@ help:
 	@echo "  make build-training  Build the training image"
 	@echo "  make build-serve-<name>  Build a serving image: $(SERVE_IMAGES)"
 	@echo "  make build-serve-galaxea  Build the private Galaxea serving image (needs HF_TOKEN)"
+	@echo "  make build-openpi-base  Build positro/openpi-base from the openpi fork at OPENPI_REF"
 	@echo "  make build-molmospaces  Build the public MolmoSpaces eval image"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
@@ -78,9 +82,27 @@ build-training:
 	fi
 	docker build --platform linux/amd64 -f Dockerfile.training.cloud -t $(LOCAL_TAG_TRAINING) ..
 
-build-openpi:
+# The base builds from the fork's own recipe. A published tag is never built again, so a moved OPENPI_REF is the only
+# change that rebuilds it. Under CI, `push-openpi-base` also points `latest` at the published tag.
+OPENPI_BASE_PUBLISHED = docker manifest inspect $(TAG_OPENPI_BASE) > /dev/null 2>&1
+OPENPI_BASE_BUILD = src="$$(mktemp -d)" && trap 'rm -rf "$$src"' EXIT && \
+	git -C "$$src" init -q && git -C "$$src" fetch -q --depth 1 $(OPENPI_REPO) $(OPENPI_REF) && \
+	git -C "$$src" checkout -q FETCH_HEAD && \
+	docker buildx build --platform linux/amd64 --provenance=false --sbom=false -t $(TAG_OPENPI_BASE) $(1) \
+		-f "$$src/docker/Dockerfile.training.cloud" "$$src"
+
+build-openpi-base:
+	$(OPENPI_BASE_PUBLISHED) || { $(call OPENPI_BASE_BUILD,--load); }
+
+push-openpi-base:
+	$(OPENPI_BASE_PUBLISHED) || { $(call OPENPI_BASE_BUILD,--push); }
+ifdef CI
+	docker buildx imagetools create --tag $(IMAGE_NAME_OPENPI_BASE):latest $(TAG_OPENPI_BASE)
+endif
+
+build-openpi: build-openpi-base
 	@echo "Building $(IMAGE_NAME_OPENPI) using base $(TAG_OPENPI_BASE)..."
-	docker build --pull --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_OPENPI_BASE) -f Dockerfile.openpi -t $(IMAGE_NAME_OPENPI):local ..
+	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_OPENPI_BASE) -f Dockerfile.openpi -t $(IMAGE_NAME_OPENPI):local ..
 
 build-groot: build-training
 	@echo "Building $(IMAGE_NAME_GROOT)..."
@@ -110,6 +132,7 @@ build-molmospaces:
 HF_TOKEN_BUILD_FLAGS := --secret id=hf_token,env=HF_TOKEN
 SERVE_BUILD_FLAGS_gr00t-n17-droid := $(HF_TOKEN_BUILD_FLAGS)
 SERVE_BUILD_FLAGS_flux3-action := $(HF_TOKEN_BUILD_FLAGS)
+SERVE_BUILD_FLAGS_pi05-droid := --build-arg BASE_IMAGE=$(TAG_OPENPI_BASE)
 
 # `push-serve-<name>` builds and pushes in one BuildKit run, which needs a docker-container builder
 # (`docker buildx create --use`). The second argument of SERVE_IMAGE is the repository. The cache at
@@ -133,6 +156,10 @@ push-serve-$(1):
 endef
 
 $(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name),positro/$(name))))
+
+# A docker-container builder reads a base from the registry only, so the push needs the base published.
+build-serve-pi05-droid: build-openpi-base
+push-serve-pi05-droid: push-openpi-base
 
 # Galaxea's weights are gated and its licence allows internal evaluation only, so its image goes to a private
 # registry, built and pushed by hand. It is not in SERVE_IMAGES, which CI publishes to Docker Hub.
