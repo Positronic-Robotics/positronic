@@ -61,6 +61,16 @@ def test_a_plan_file_is_filed_whole(platform, run_command, tmp_path: Path, capsy
     assert json.loads(capsys.readouterr().out)['submission_id'] == '2a'
 
 
+def test_a_plan_file_s_clutter_seed_is_filed_with_the_plan(platform, run_command, tmp_path: Path):
+    platform.answer(FILED)
+    seeded = PLAN_YAML.replace(f'  - {SPOONS}\n', f'  - {{task_id: {SPOONS}, clutter_seed: table-b}}\n')
+
+    run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', seeded + 'clutter_seed: table-a\n'))
+
+    assert platform.body['clutter_seed'] == 'table-a'
+    assert platform.body['tasks'][0]['clutter_seed'] == 'table-b'
+
+
 def test_a_plan_file_naming_a_url_is_refused_before_it_is_filed(platform, run_command, tmp_path: Path):
     by_url = PLAN_YAML.replace(
         '    wire: websocket_tls\n    address: {host: baseline.example, port: 443, path: /api/v1/session}\n',
