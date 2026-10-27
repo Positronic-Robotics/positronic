@@ -2,6 +2,8 @@
 
 import asyncio
 import hmac
+import inspect
+import json
 import logging
 import math
 import os
@@ -144,6 +146,25 @@ class PolicyServer:
         timeout_s = self._idle_timeout_s()
         return None if timeout_s is None else math.floor(timeout_s)
 
+    def _effective_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """The data arguments of the session's pipeline config: each argument that the config, ``params`` or the
+        signature of its target sets to a JSON value. A config-launched pipeline only; empty otherwise."""
+        if self._pipeline_cfg is None:
+            return {}
+        config = self._pipeline_cfg.override_data(**params)
+        defaults = {
+            name: parameter.default
+            for name, parameter in inspect.signature(config.target).parameters.items()
+            if parameter.default is not inspect.Parameter.empty
+        }
+        effective = {}
+        for name, value in {**defaults, **config.kwargs}.items():
+            try:
+                effective[name] = json.loads(json.dumps(value, allow_nan=False))
+            except (TypeError, ValueError):
+                continue
+        return effective
+
     def _session_pipeline(self, params: dict[str, Any]) -> PolicyDeployment:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
         if not params:
@@ -204,7 +225,8 @@ class PolicyServer:
         try:
             model = self._model
             assert model is not None, 'A session arrived before the model loaded'
-            pipeline = self._session_pipeline(spec.parse_params(conn.query_params))
+            params = spec.parse_params(conn.query_params)
+            pipeline = self._session_pipeline(params)
             session_id = uuid4().hex
             meta = {
                 **conn.served_address.meta,
@@ -212,6 +234,8 @@ class PolicyServer:
                 **(pipeline.codec.meta if pipeline.codec is not None else {}),
                 **pipeline.local.meta(),
                 offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
+                offboard_keys.SESSION_PARAMS: params,
+                offboard_keys.EFFECTIVE_PARAMS: self._effective_params(params),
                 policy_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }

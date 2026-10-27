@@ -19,6 +19,7 @@ from positronic import keys
 from positronic.offboard import roboarena
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
+from positronic.vendors import abc_dit
 from positronic.vendors.abc_dit import codecs, server
 from positronic.vendors.abc_dit.tests import abc_stand_in
 
@@ -54,8 +55,10 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _infer_in_a_session(policy_server: PolicyServer, obs: dict[str, Any]) -> list[dict[str, Any]]:
-    """The commands one session gets for `obs`, from `policy_server` behind the run's token."""
+def _session(
+    policy_server: PolicyServer, obs: dict[str, Any], query: str = '', calls: int = 1
+) -> tuple[dict[str, Any], list[list[dict[str, Any]]]]:
+    """The metadata and the commands of `calls` inferences of one session on `query`, behind the run's token."""
     wires = [websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))]
     ready = threading.Event()
     thread = threading.Thread(target=policy_server.serve, args=(wires, ready.set), daemon=True)
@@ -64,18 +67,23 @@ def _infer_in_a_session(policy_server: PolicyServer, obs: dict[str, Any]) -> lis
         assert ready.wait(timeout=30)
         served = wires[0].served_address
         assert isinstance(served, server_wire.ServedHostPort)
-        address = wire.HostPortAddress('127.0.0.1', served.port, wire.SESSION_PATH, '')
+        address = wire.HostPortAddress('127.0.0.1', served.port, wire.SESSION_PATH, query)
         client = InferenceClient(websocket.WebsocketClientWire(), address, headers={AUTH_HEADER: bearer(TOKEN)})
         client.keepalive()
         session = client.new_session()
         try:
-            return session.infer(obs)
+            return session.metadata, [session.infer(obs) for _ in range(calls)]
         finally:
             session.close()
     finally:
         policy_server.shutdown()
         thread.join(timeout=30)
         assert not thread.is_alive()
+
+
+def _infer_in_a_session(policy_server: PolicyServer, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """The commands one session gets for `obs`, from `policy_server` behind the run's token."""
+    return _session(policy_server, obs)[1][0]
 
 
 def _view(level: int) -> np.ndarray:
@@ -241,3 +249,105 @@ def test_the_yambox_crop_pipeline_sends_each_cropped_view_to_abc_without_pad(tmp
     for view in request['images'].values():
         assert view['shape'] == [3, 168, 224]
         assert view['mean'] > 250
+
+
+def _yambox_obs() -> dict[str, Any]:
+    frame = np.zeros((600, 960, 3), dtype=np.uint8)
+    return {
+        keys.arm_channel(keys.ROBOT_STATE, keys.LEFT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, dtype=np.float32),
+        keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, 12, dtype=np.float32),
+        keys.arm_channel(keys.GRIP, keys.LEFT_ARM): 0.0,
+        keys.arm_channel(keys.GRIP, keys.RIGHT_ARM): 1.0,
+        keys.EXTERIOR_IMAGE: frame,
+        keys.WRIST_LEFT_IMAGE: frame,
+        keys.WRIST_RIGHT_IMAGE: frame,
+        keys.TASK: 'load plates into tabletop dish rack',
+    }
+
+
+def _prefix_model(directory: Path):
+    return server.model_with_prefix.override(
+        checkpoint=CHECKPOINT, abc_python=_abc_python(directory, abc_stand_in.Mode.SERVE), backend_port=_free_port()
+    )
+
+
+def test_a_session_query_sets_the_crop_the_schedule_and_the_prompt_prefix_and_the_metadata_names_them(tmp_path):
+    query = 'crop=yambox_wide_top&schedule=rtc&sim_prefix=false'
+    policy_server = PolicyServer(_prefix_model(tmp_path), server.yambox_crop_pipeline, auth_token=TOKEN)
+
+    meta, replies = _session(policy_server, _yambox_obs(), query, calls=2)
+
+    assert meta['effective_params'] == {'crop': 'yambox_wide_top', 'schedule': 'rtc', 'sim_prefix': False}
+    schedule = meta['local_stack']['seq'][0]
+    assert schedule['name'] == 'chunked_schedule'
+    assert schedule['args'] == {
+        'fps': 30.0,
+        'horizon_sec': pytest.approx(16 / 30),
+        'inference_lead': pytest.approx(7 / 30),
+    }
+    assert meta[codecs.CROPS_META][keys.EXTERIOR_IMAGE] == [0.0, 0.0, 1.0, 1.0]
+    assert meta[codecs.PROMPT_PREFIX_META] == ''
+    assert meta[codecs.PREFIX_LENGTH_META] == 4
+    # Each reply holds the 16 actions after the 4 of the prefix.
+    for reply in replies:
+        assert len(reply) == 16
+        np.testing.assert_allclose(
+            reply[0][keys.arm_channel(keys.ROBOT_COMMAND, keys.LEFT_ARM)].positions, abc_stand_in.CHUNK[4, :6]
+        )
+    first, second = (entry['request'] for entry in _log(tmp_path)[-2:])
+    assert first['prompt'] == 'load plates into tabletop dish rack'
+    assert abc_dit.EXECUTED_ACTIONS not in first
+    # The first prefix is the state, four times; the second is the last four actions the client played.
+    state = [*range(6), 1.0, *range(6, 12), 0.0]
+    assert first[abc_dit.PREFIX_LENGTH] == 4 and first[abc_dit.ACTION_PREFIX]['shape'] == [4, 14]
+    assert first[abc_dit.ACTION_PREFIX]['sum'] == pytest.approx(4 * sum(state))
+    assert second[abc_dit.ACTION_PREFIX]['sum'] == pytest.approx(float(abc_stand_in.CHUNK[16:20].sum()), rel=1e-5)
+
+
+def test_a_session_with_no_query_gets_the_launch_pipeline(tmp_path):
+    policy_server = PolicyServer(_prefix_model(tmp_path), server.yambox_crop_pipeline, auth_token=TOKEN)
+
+    meta, (reply,) = _session(policy_server, _yambox_obs())
+
+    assert meta['effective_params'] == {'crop': 'yambox', 'schedule': 'sync', 'sim_prefix': True}
+    assert meta['local_stack']['seq'][0]['args'] == {'fps': 30.0, 'horizon_sec': 0.5}
+    assert len(reply) == len(abc_stand_in.CHUNK)
+    request = _log(tmp_path)[-1]['request']
+    assert request['prompt'] == 'sim load plates into tabletop dish rack'
+    assert abc_dit.PREFIX_LENGTH not in request and abc_dit.ACTION_PREFIX not in request
+
+
+@pytest.mark.parametrize('query', ['crop=wider', 'schedule=async', 'sim_prefix=maybe', 'fps=10'])
+def test_a_session_query_with_an_unknown_value_or_name_is_refused(tmp_path, query):
+    policy_server = PolicyServer(_prefix_model(tmp_path), server.yambox_crop_pipeline, auth_token=TOKEN)
+
+    with pytest.raises(RuntimeError, match='Server error'):
+        _session(policy_server, _yambox_obs(), query)
+
+
+def test_a_backend_with_a_prefix_warms_it_and_refuses_a_prefix_of_another_length(tmp_path):
+    model = _prefix_model(tmp_path).instantiate()
+    request = {**server._warm_observation(), abc_dit.PREFIX_LENGTH: 5, abc_dit.EXECUTED_ACTIONS: 16}
+    try:
+        with pytest.raises(ValueError, match='serves an action prefix of 4, not 5'):
+            model(request, session_id='session')
+    finally:
+        model.close()
+    assert f'--policy.rtc-prefix-length={server.PREFIX_LENGTH}' in _log(tmp_path)[0]['argv']
+
+
+def test_an_ended_session_starts_its_next_prefix_from_the_state(tmp_path):
+    model = _prefix_model(tmp_path).instantiate()
+    request = {**server._warm_observation(), abc_dit.PREFIX_LENGTH: 4, abc_dit.EXECUTED_ACTIONS: 16}
+    try:
+        model(request, session_id='a')
+        model(request, session_id='b')
+        model.end_session('a')
+        model(request, session_id='a')
+        model(request, session_id='b')
+    finally:
+        model.close()
+    sums = [entry['request'][abc_dit.ACTION_PREFIX]['sum'] for entry in _log(tmp_path)[-4:]]
+    played = pytest.approx(float(abc_stand_in.CHUNK[16:20].sum()), rel=1e-5)
+    # The warm state is zero, so a prefix from the state sums to zero.
+    assert sums == [0.0, 0.0, 0.0, played]

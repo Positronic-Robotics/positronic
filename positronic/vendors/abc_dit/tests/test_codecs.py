@@ -109,6 +109,47 @@ def test_each_yambox_view_is_cropped_to_its_box_and_fills_abcs_view(size):
         assert (view[:, 1:-1, :] == 255).all()
 
 
+def test_the_wide_top_crop_sends_the_whole_exterior_frame_and_crops_the_wrist_views():
+    frames = {key: _framed_view(box) for key, box in codecs.YAMBOX_CROPS.items()}
+    codec = codecs.AbcObservationCodec({TASK: 'p'}, crops=codecs.CROPS['yambox_wide_top'])
+
+    images = codec.encode(_obs(**frames))[abc_dit.IMAGES]
+
+    # The 16:10 frame pads to 224x140 inside 224x168, so 14 black rows lie above and below it.
+    top = images[abc_dit.TOP_CAMERA]
+    assert top[:, :13, :].max() == 0 and top[:, -13:, :].max() == 0
+    # The whole frame reaches the view: its black left part and its white yambox box both show.
+    assert top[:, 84, :50].max() == 0 and top[:, 140, 120].min() == 255
+    for camera in (abc_dit.LEFT_CAMERA, abc_dit.RIGHT_CAMERA):
+        assert (images[camera][:, 1:-1, :] == 255).all()
+
+
+def test_a_codec_with_an_action_prefix_tells_the_server_the_prefix_and_the_played_actions():
+    prefix = codecs.ActionPrefix(length=4, executed=16)
+    codec = codecs.AbcObservationCodec({TASK: 'p'}, action_prefix=prefix)
+
+    request = codec.encode(_obs())
+
+    assert request[abc_dit.PREFIX_LENGTH] == 4
+    assert request[abc_dit.EXECUTED_ACTIONS] == 16
+    assert codec.meta[codecs.PREFIX_LENGTH_META] == 4
+    without = codecs.AbcObservationCodec({TASK: 'p'})
+    assert abc_dit.PREFIX_LENGTH not in without.encode(_obs()) and without.meta[codecs.PREFIX_LENGTH_META] == 0
+
+
+@pytest.mark.parametrize(('length', 'executed'), [(0, 16), (8, 16), (4, 3), (7, 24)])
+def test_an_action_prefix_the_checkpoint_did_not_train_on_or_that_overflows_a_chunk_is_refused(length, executed):
+    with pytest.raises(ValueError):
+        codecs.ActionPrefix(length=length, executed=executed)
+
+
+def test_the_codec_metadata_names_its_crop_boxes_and_prompt_prefix():
+    meta = codecs.multitask_200k_yambox_crop_no_sim_prefix.instantiate().meta
+
+    assert meta[codecs.CROPS_META][keys.EXTERIOR_IMAGE] == pytest.approx([4 / 15, 0.32, 5 / 6, 1.0])
+    assert meta[codecs.PROMPT_PREFIX_META] == ''
+
+
 def test_a_crop_box_keeps_only_the_part_of_the_view_inside_it():
     box = codecs.CropBox(0.5, 0.0, 1.0, 1.0)
     view = np.zeros((300, 400, 3), dtype=np.uint8)
