@@ -86,7 +86,7 @@ The settings also contain the control mode, which only inference uses.
 The training transform labels each frame with the absolute pose and joints `action_lead_sec` later and with
 the commanded grip. `droid.override(action_lead_sec=0, binarize_grip=False)` keeps the arm label at the frame and
 the raw `target_grip`. A frame before the first `target_grip` sample has no label, so the converted episode
-starts at the first command, as with the action codecs of the other vendors.
+starts at the first command, as with `absolute_pos_action`.
 GR00T's checkpoint processor converts these labels to relative actions and restores absolute actions during inference.
 
 The launcher reads camera keys from `meta/modality.json`; no separate modality selection is needed.

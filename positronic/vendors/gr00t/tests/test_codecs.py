@@ -154,7 +154,7 @@ def test_training_actions_start_at_the_first_gripper_command():
         keys.EE_POSE: DummySignal(ts, [[0, 0, 0, 1, 0, 0, 0]] * 5),
         keys.JOINTS: DummySignal(ts, [np.zeros(7)] * 5),
         keys.GRIP: DummySignal(ts, [0.0] * 5),
-        keys.TARGET_GRIP: DummySignal(ts[2:], [1.0] * 3),
+        keys.TARGET_GRIP: DummySignal(ts[2:3], [1.0]),
         **models.ee_frames_entry({keys.EE_POSE: models.EEFrame(site=models.GRIPPER_SITE)}),
     })
     encoded = _arm_training()(episode)
