@@ -244,7 +244,7 @@ its name. Then follow the submission:
 
 ```bash
 positronic eval run --policy-image=docker.io/<you>/<image>@sha256:<digest> \
-    --transaction-key=<a name for this attempt>
+    --transaction-key="<a name for this attempt>"
 positronic eval status --id=<submission id>
 positronic eval list
 ```

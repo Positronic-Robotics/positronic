@@ -6,7 +6,7 @@ Not a command of its own: running an eval is one act, and where it runs is an ar
 from pathlib import Path
 
 from platform_client.client import PlatformClient
-from platform_client.enums import NO_RESULT_STATUSES
+from platform_client.enums import NO_RESULT_STATUSES, BoardVisibility
 from platform_client.eval_plan import RegistryCredential, Sample, password_from_file, plan_of_image
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.policy_images import PolicyImage
@@ -36,12 +36,14 @@ def _credential(username: str | None, password_file: object | None) -> RegistryC
 
 
 def board_eval(client: PlatformClient) -> EvalRef:
-    """The eval that the platform's boards rank, for a run to the platform that names no eval.
+    """The eval that the platform's public boards rank, for a run to the platform that names no eval.
 
     The platform publishes its boards, so the name follows each change of the boards with no new install.
-    No board, or boards over more than one eval, leave the choice to the caller.
+    A board of the caller's tenant does not count. No public board, or public boards over more than one eval,
+    leave the choice to the caller.
     """
-    ranked = sorted({board.eval for board in client.list_boards().boards})
+    boards = client.list_boards().boards
+    ranked = sorted({board.eval for board in boards if board.visibility is BoardVisibility.public})
     if len(ranked) != 1:
         named = ', '.join(ranked) if ranked else 'no eval'
         raise CommandFailed(
@@ -76,10 +78,16 @@ def submit(
     `eval_name`, the run takes the eval that the boards rank (`board_eval`).
     """
     with gateway(platform_url) as client:
+        if eval_name is None:
+            # Outside `refusing_bad_input`: a board answer that the client cannot read is the platform's fault.
+            eval_ref = board_eval(client)
+        else:
+            with refusing_bad_input():
+                eval_ref = EvalRef(eval_name)
         with refusing_bad_input():
             plan = plan_of_image(
                 PolicyImage(policy_image),
-                EvalRef(eval_name) if eval_name is not None else board_eval(client),
+                eval_ref,
                 alias=alias,
                 transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
                 credential=_credential(registry_username, registry_password_file),

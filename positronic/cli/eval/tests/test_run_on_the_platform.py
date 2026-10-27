@@ -126,8 +126,8 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
 BOARD_EVAL = 'fake.board'
 
 
-def _boards(*evals: str) -> BoardListResponse:
-    """What `rankings.list` answers: one public board for each of `evals`."""
+def _boards(*evals: str, visibility: BoardVisibility = BoardVisibility.public) -> BoardListResponse:
+    """What `rankings.list` answers: one board for each of `evals`."""
     return BoardListResponse(
         boards=[
             BoardSummary(
@@ -135,7 +135,7 @@ def _boards(*evals: str) -> BoardListResponse:
                 title=f'Board {index}',
                 eval=EvalRef(name),
                 primary_metric='success_rate',
-                visibility=BoardVisibility.public,
+                visibility=visibility,
             )
             for index, name in enumerate(evals)
         ]
@@ -176,6 +176,38 @@ def test_boards_that_rank_no_single_eval_leave_the_eval_to_the_caller(platform, 
         run_command(run, policy_image='org/p:v1')
 
     assert exit_info.value.fault is Fault.USAGE
+    assert platform.paths == [routes.RANKINGS_LIST]
+
+
+def test_a_tenant_board_over_another_eval_does_not_count(platform, run_command):
+    public = _boards(BOARD_EVAL).boards
+    tenant = _boards('fake.private', visibility=BoardVisibility.tenant).boards
+    platform.answer_by_route({
+        routes.RANKINGS_LIST: (BoardListResponse(boards=public + tenant), 200),
+        routes.SUBMISSIONS_CREATE: (_created(SubmissionStatus.pending), 200),
+    })
+
+    run_command(run, policy_image='org/p:v1')
+
+    assert platform.body['eval'] == BOARD_EVAL
+
+
+def test_only_tenant_boards_leave_the_eval_to_the_caller(platform, run_command):
+    platform.answer_by_route({routes.RANKINGS_LIST: (_boards('fake.private', visibility=BoardVisibility.tenant), 200)})
+
+    with pytest.raises(CommandFailed, match='the boards rank no eval: pass --eval=<name>'):
+        run_command(run, policy_image='org/p:v1')
+
+
+def test_a_board_answer_the_client_cannot_read_is_the_platforms_fault(platform, run_command):
+    platform.answer_by_route({routes.RANKINGS_LIST: ({'boards': [{'board': 'board-0'}]}, 200)})
+
+    with pytest.raises(
+        CommandFailed, match='the platform answered with a response the client cannot read'
+    ) as exit_info:
+        run_command(run, policy_image='org/p:v1')
+
+    assert exit_info.value.fault is Fault.PLATFORM
     assert platform.paths == [routes.RANKINGS_LIST]
 
 
