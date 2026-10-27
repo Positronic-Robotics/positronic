@@ -240,6 +240,12 @@ def test_a_level_without_a_clutter_seed_omits_it_from_its_dump(mode: str):
     assert stated['tasks'][0]['clutter_seed'] == 'table-a' and 'clutter_seed' not in stated
 
 
+@pytest.mark.parametrize('model', [Cascade, TaskNode, Endpoint, EvalPlan])
+def test_every_field_a_dump_omits_while_none_is_a_field_of_the_model(model: type[Cascade]):
+    """The serializer reads these names off the dump, so a renamed field would be sent as null."""
+    assert set(model._OMITTED_WHEN_NONE) <= set(model.model_fields)
+
+
 def test_a_scene_value_outside_the_closed_set_is_refused():
     with pytest.raises(ValidationError):
         a_plan(tote_placement='middle')
