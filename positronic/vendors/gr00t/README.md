@@ -125,6 +125,12 @@ Resume restores the latest saved training state in the experiment directory.
 The fork retains checkpoint architecture and preprocessing while applying upstream's standard
 fine-tuning settings. Training normalizes state and action with the base checkpoint's statistics.
 `--override_pretraining_statistics=True` normalizes them with statistics that GR00T computes from the dataset.
+With the base statistics, GR00T logs `new stats DISCARDED`; that is expected. It clips each value outside the base
+q01..q99, so a dataset that moves outside the DROID range loses that part of its range.
+The checkpoint's `statistics.json` holds the statistics that training and serving use.
+`experiment_cfg/dataset_statistics.json` holds the dataset's own statistics.
+Resume a run with the `--override_pretraining_statistics` value it started with. A run that started before this
+option existed used the dataset statistics, so resume it with `--override_pretraining_statistics=True`.
 
 ## Serve
 
