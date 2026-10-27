@@ -1,5 +1,9 @@
+import asyncio
+import contextlib
 import json
 import threading
+import time
+from collections.abc import Awaitable, Callable, Iterator
 from unittest import mock
 
 import numpy as np
@@ -23,16 +27,19 @@ from positronic.vendors.openpi import codecs
 pytest.importorskip('openpi_client')
 
 from openpi_client import msgpack_numpy
-from websockets.sync.server import ServerConnection, serve
+from websockets.asyncio.server import Server, ServerConnection, serve
+from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 
-from positronic.vendors.openpi.server import COMMANDS, PREALLOCATE_ENV, OpenpiSubprocess, PinglessWebsocketClientPolicy
+from positronic.vendors.openpi.server import COMMANDS, PREALLOCATE_ENV, DeadlineWebsocketClientPolicy, OpenpiSubprocess
 
 
 def _subprocess_env(monkeypatch) -> dict[str, str]:
     """The environment ``start`` gives the openpi subprocess."""
     monkeypatch.setattr(OpenpiSubprocess, '_wait_for_ready', lambda self: None)
     with mock.patch('subprocess.Popen') as popen:
-        OpenpiSubprocess(checkpoint_dir='/checkpoints/exp/1000', config_name='pi05_positronic_lowmem').start()
+        OpenpiSubprocess(
+            checkpoint_dir='/checkpoints/exp/1000', config_name='pi05_positronic_lowmem', infer_timeout=120.0
+        ).start()
     return popen.call_args.kwargs['env']
 
 
@@ -63,22 +70,70 @@ def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name, offset):
     assert frame == EEFrame(site=GRIPPER_SITE, offset=offset)
 
 
-def _send_metadata_and_wait(connection: ServerConnection) -> None:
-    connection.send(msgpack_numpy.Packer().pack({}))
-    for _ in connection:
-        pass
+@contextlib.contextmanager
+def _openpi_server(before_answer: Callable[[], Awaitable[None]]) -> Iterator[int]:
+    """The port of a server that speaks openpi's protocol. It awaits ``before_answer`` before each answer."""
+
+    async def handler(connection: ServerConnection) -> None:
+        await connection.send(msgpack_numpy.Packer().pack({}))
+        async for message in connection:
+            obs = msgpack_numpy.unpackb(message)
+            await before_answer()
+            with contextlib.suppress(ConnectionClosed):
+                await connection.send(msgpack_numpy.Packer().pack({'echo': obs['value']}))
+
+    async def start() -> Server:
+        return await serve(handler, '127.0.0.1', 0)
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    server = asyncio.run_coroutine_threadsafe(start(), loop).result(timeout=5)
+    try:
+        yield server.sockets[0].getsockname()[1]
+    finally:
+        loop.call_soon_threadsafe(server.close)
+        asyncio.run_coroutine_threadsafe(server.wait_closed(), loop).result(timeout=5)
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+        loop.close()
 
 
-def test_the_subprocess_client_sends_no_keepalive_pings():
-    with serve(_send_metadata_and_wait, '127.0.0.1', 0) as server:
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        client = PinglessWebsocketClientPolicy(host='127.0.0.1', port=server.socket.getsockname()[1])
+@pytest.fixture
+def short_keepalive(monkeypatch):
+    monkeypatch.setattr(DeadlineWebsocketClientPolicy, 'PING_INTERVAL_S', 0.1)
+    monkeypatch.setattr(DeadlineWebsocketClientPolicy, 'PING_TIMEOUT_S', 0.1)
+
+
+@pytest.mark.usefixtures('short_keepalive')
+def test_the_subprocess_client_closes_when_the_subprocess_answers_no_ping():
+    async def block_the_event_loop() -> None:
+        time.sleep(1.0)
+
+    with _openpi_server(block_the_event_loop) as port:
+        client = DeadlineWebsocketClientPolicy(host='127.0.0.1', port=port, infer_timeout=30.0)
+        with pytest.raises(ConnectionClosedError, match='keepalive ping timeout'):
+            client.infer({'value': 1})
+
+
+@pytest.mark.usefixtures('short_keepalive')
+def test_an_inference_that_outlasts_the_keepalive_window_returns_within_the_deadline():
+    with _openpi_server(lambda: asyncio.sleep(0.6)) as port:
+        client = DeadlineWebsocketClientPolicy(host='127.0.0.1', port=port, infer_timeout=5.0)
         try:
-            assert client._ws.ping_interval is None
-            assert client._ws.keepalive_thread is None
+            assert client.infer({'value': 7}) == {'echo': 7}
         finally:
             client._ws.close()
-            server.shutdown()
+
+
+@pytest.mark.usefixtures('short_keepalive')
+def test_an_inference_past_the_deadline_fails_and_closes_the_connection():
+    with _openpi_server(lambda: asyncio.sleep(1.5)) as port:
+        client = DeadlineWebsocketClientPolicy(host='127.0.0.1', port=port, infer_timeout=0.5)
+        with pytest.raises(TimeoutError, match=r'no inference result within infer_timeout=0\.5s'):
+            client.infer({'value': 1})
+        with pytest.raises(ConnectionClosed):
+            client.infer({'value': 2})
 
 
 @pytest.mark.parametrize('dtype', [np.float32, np.float64])
