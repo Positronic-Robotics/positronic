@@ -83,27 +83,26 @@ build-training:
 	docker build --platform linux/amd64 -f Dockerfile.training.cloud -t $(LOCAL_TAG_TRAINING) ..
 
 # The base builds from the fork's own recipe. A published tag is never built again, so a moved OPENPI_REF is the only
-# change that rebuilds it. Under CI, `push-openpi-base` also moves `latest` to the build.
-OPENPI_BASE_TAGS = $(TAG_OPENPI_BASE) $(if $(CI),$(IMAGE_NAME_OPENPI_BASE):latest)
-
-define OPENPI_BASE_BUILD
-	@if docker manifest inspect $(TAG_OPENPI_BASE) > /dev/null 2>&1; then echo "$(TAG_OPENPI_BASE) is published"; exit 0; fi; \
-	src="$$(mktemp -d)" && trap 'rm -rf "$$src"' EXIT && \
+# change that rebuilds it. Under CI, `push-openpi-base` also points `latest` at the published tag.
+OPENPI_BASE_PUBLISHED = docker manifest inspect $(TAG_OPENPI_BASE) > /dev/null 2>&1
+OPENPI_BASE_BUILD = src="$$(mktemp -d)" && trap 'rm -rf "$$src"' EXIT && \
 	git -C "$$src" init -q && git -C "$$src" fetch -q --depth 1 $(OPENPI_REPO) $(OPENPI_REF) && \
 	git -C "$$src" checkout -q FETCH_HEAD && \
-	docker buildx build --platform linux/amd64 --provenance=false --sbom=false $(1) \
+	docker buildx build --platform linux/amd64 --provenance=false --sbom=false -t $(TAG_OPENPI_BASE) $(1) \
 		-f "$$src/docker/Dockerfile.training.cloud" "$$src"
-endef
 
 build-openpi-base:
-	$(call OPENPI_BASE_BUILD,-t $(TAG_OPENPI_BASE))
+	$(OPENPI_BASE_PUBLISHED) || { $(call OPENPI_BASE_BUILD,--load); }
 
 push-openpi-base:
-	$(call OPENPI_BASE_BUILD,$(foreach tag,$(OPENPI_BASE_TAGS),-t $(tag)) --push)
+	$(OPENPI_BASE_PUBLISHED) || { $(call OPENPI_BASE_BUILD,--push); }
+ifdef CI
+	docker buildx imagetools create --tag $(IMAGE_NAME_OPENPI_BASE):latest $(TAG_OPENPI_BASE)
+endif
 
-build-openpi:
+build-openpi: build-openpi-base
 	@echo "Building $(IMAGE_NAME_OPENPI) using base $(TAG_OPENPI_BASE)..."
-	docker build --pull --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_OPENPI_BASE) -f Dockerfile.openpi -t $(IMAGE_NAME_OPENPI):local ..
+	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_OPENPI_BASE) -f Dockerfile.openpi -t $(IMAGE_NAME_OPENPI):local ..
 
 build-groot: build-training
 	@echo "Building $(IMAGE_NAME_GROOT)..."
@@ -157,6 +156,10 @@ push-serve-$(1):
 endef
 
 $(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name),positro/$(name))))
+
+# A docker-container builder reads a base from the registry only, so the push needs the base published.
+build-serve-pi05-droid: build-openpi-base
+push-serve-pi05-droid: push-openpi-base
 
 # Galaxea's weights are gated and its licence allows internal evaluation only, so its image goes to a private
 # registry, built and pushed by hand. It is not in SERVE_IMAGES, which CI publishes to Docker Hub.
