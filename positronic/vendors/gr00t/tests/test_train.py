@@ -26,6 +26,7 @@ def raw_dataset():
         keys.EE_POSE: [[0, 0, 0, 1, 0, 0, 0]] * 2,
         keys.JOINTS: [np.zeros(7), np.ones(7)],
         keys.GRIP: [0.25, 0.75],
+        keys.TARGET_GRIP: [0.25, 0.75],
         keys.WRIST_IMAGE: [np.zeros((180, 320, 3), dtype=np.uint8)] * 2,
         keys.EXTERIOR_IMAGE: [np.ones((180, 320, 3), dtype=np.uint8)] * 2,
         keys.EXTERIOR_IMAGE_2: [np.full((180, 320, 3), 73, dtype=np.uint8)] * 2,
@@ -76,8 +77,8 @@ def test_recipe_preserves_dataset_features_labels_and_recording_metadata(prepare
     assert list(action.timestamps(RECORDED_TIME)) == [0, 100_000_000]
     values = np.asarray(action.values())
     assert values.dtype == np.float32
-    np.testing.assert_array_equal(values[:, 9], [0.25, 0.75])
-    np.testing.assert_array_equal(values[:, 10:], [np.zeros(7), np.ones(7)])
+    np.testing.assert_array_equal(values[:, 9], [0, 1])
+    np.testing.assert_array_equal(values[:, 10:], [np.ones(7), np.ones(7)])
 
 
 def test_training_builds_and_materializes_without_inference_or_codec_training(monkeypatch, raw_dataset):

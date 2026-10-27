@@ -9,6 +9,7 @@ from eval_vocabulary.timeline import recording_timeline
 from positronic import geom, keys
 from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
+from positronic.dataset.time import Time
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity, map_signals
 from positronic.drivers.roboarm.models import parse_ee_frames
@@ -38,8 +39,12 @@ def _derive_grip(source: str, episode: Episode):
     return tf.Elementwise(episode[source], lambda values: np.asarray(values, dtype=np.float32).reshape(-1, 1))
 
 
-@cfn.config(settings=model_settings.droid())
-def droid(settings: dict) -> EpisodeTransform:
+def _binary_grip(values):
+    return (np.asarray(values) > 0.5).astype(np.float32)
+
+
+@cfn.config(settings=model_settings.droid(), action_lead_sec=0.14, binarize_grip=True)
+def droid(settings: dict, action_lead_sec: float, binarize_grip: bool) -> EpisodeTransform:
     """Prepare recorded absolute trajectories and metadata for GR00T fine-tuning."""
     image_mappings = settings[model_settings.IMAGE_MAPPINGS]
     conflicts = image_mappings.keys() & (gr00t.STATE_DIMS.keys() | {ACTION, keys.TASK})
@@ -80,9 +85,17 @@ def droid(settings: dict) -> EpisodeTransform:
     }
 
     def derive_action(episode):
-        signals = [derive(episode) for derive in state_encoders.values()]
-        timeline = recording_timeline({name for signal in signals for name in signal.timelines})
-        return tf.concat(*signals, timelines=(timeline,), dtype=np.float32)
+        signals = {name: derive(episode) for name, derive in state_encoders.items()}
+        timeline = recording_timeline({name for signal in signals.values() for name in signal.timelines})
+        # The arm reaches a target about `action_lead_sec` after the command, so the arm action is the measured state
+        # that much later. The recorded command is not used: a rig commands poses or joints, not both. The measured
+        # grip stays low when the fingers stop on an object, so the gripper action is the command.
+        lead = Time(**{timeline: round(action_lead_sec * 1e9)})
+        for name in (gr00t.EE_POSE, gr00t.JOINT_POSITION):
+            signals[name] = tf.TimeOffsets(signals[name], lead)
+        grip = _derive_grip(keys.TARGET_GRIP, episode)
+        signals[gr00t.GRIP] = tf.Elementwise(grip, _binary_grip) if binarize_grip else grip
+        return tf.concat(*signals.values(), timelines=(timeline,), dtype=np.float32)
 
     columns = Derive(
         meta=meta,

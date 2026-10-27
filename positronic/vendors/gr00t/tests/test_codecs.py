@@ -84,9 +84,8 @@ def test_training_cadence_metadata(config):
     assert config().meta[ACTION_FPS] == 15
 
 
-@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
-def test_training_actions_align_on_the_recording_clock(timeline):
-    training = recipes.droid(**{
+def _arm_training(**overrides):
+    return recipes.droid(**{
         f'settings.{model_settings.IMAGE_MAPPINGS}': {},
         f'settings.{model_settings.EE_FRAMES}': {
             keys.EE_POSE: {
@@ -94,11 +93,28 @@ def test_training_actions_align_on_the_recording_clock(timeline):
                 model_settings.OFFSET: [0, 0, 0, 1, 0, 0, 0],
             }
         },
+        **overrides,
     })
+
+
+def _arm_episode(ts, joints, grip, target_grip, poses=([0, 0, 0, 1, 0, 0, 0],)):
+    return EpisodeContainer({
+        keys.EE_POSE: DummySignal(ts[: len(poses)], poses),
+        keys.JOINTS: DummySignal(ts, joints),
+        keys.GRIP: DummySignal(ts, grip),
+        keys.TARGET_GRIP: DummySignal(ts, target_grip),
+        **models.ee_frames_entry({keys.EE_POSE: models.EEFrame(site=models.GRIPPER_SITE)}),
+    })
+
+
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+def test_training_actions_align_on_the_recording_clock(timeline):
+    training = _arm_training(action_lead_sec=0)
     episode = EpisodeContainer({
         keys.EE_POSE: DummySignal([100], [[0, 0, 0, 1, 0, 0, 0]], timelines=(timeline,)),
         keys.JOINTS: DummySignal([100, 300], [np.zeros(7), np.ones(7)], timelines=(timeline,)),
         keys.GRIP: DummySignal([100, 200], [0.0, 1.0], timelines=(timeline,)),
+        keys.TARGET_GRIP: DummySignal([100, 200], [0.0, 1.0], timelines=(timeline,)),
         **models.ee_frames_entry({keys.EE_POSE: models.EEFrame(site=models.GRIPPER_SITE)}),
     })
     encoded = training(episode)
@@ -108,3 +124,25 @@ def test_training_actions_align_on_the_recording_clock(timeline):
     np.testing.assert_array_equal(values[:, :9], np.repeat(encoded[gr00t.EE_POSE].values(), 3, axis=0))
     np.testing.assert_array_equal(values[:, 9], [0, 1, 1])
     np.testing.assert_array_equal(values[:, 10:], [np.zeros(7), np.zeros(7), np.ones(7)])
+
+
+@pytest.mark.parametrize('step_ns', [66_000_000, 66_666_667])
+def test_training_arm_actions_are_the_state_two_steps_ahead_and_hold_the_last_state(step_ns):
+    ts = [step * step_ns for step in range(5)]
+    joints = [np.full(7, step, dtype=float) for step in range(5)]
+    poses = [[step / 10, 0, 0, 1, 0, 0, 0] for step in range(5)]
+    encoded = _arm_training()(_arm_episode(ts, joints, [0.0] * 5, [0.0] * 5, poses))
+    values = np.asarray(encoded[ACTION].values())
+    ahead = [2, 3, 4, 4, 4]
+    np.testing.assert_array_equal(values[:, :9], np.asarray(encoded[gr00t.EE_POSE].values())[ahead])
+    np.testing.assert_array_equal(values[:, 10:], np.asarray(encoded[gr00t.JOINT_POSITION].values())[ahead])
+    np.testing.assert_array_equal(np.asarray(encoded[gr00t.JOINT_POSITION].values())[:, 0], [0, 1, 2, 3, 4])
+
+
+@pytest.mark.parametrize(('binarize_grip', 'expected'), [(True, [0, 0, 1, 1]), (False, [0.2, 0.5, 0.7, 1.0])])
+def test_training_gripper_action_is_the_commanded_grip(binarize_grip, expected):
+    ts = [0, 1, 2, 3]
+    training = _arm_training(binarize_grip=binarize_grip)
+    encoded = training(_arm_episode(ts, [np.zeros(7)] * 4, [0.0, 0.1, 0.3, 0.3], [0.2, 0.5, 0.7, 1.0]))
+    np.testing.assert_allclose(np.asarray(encoded[ACTION].values())[:, 9], expected)
+    np.testing.assert_allclose(np.asarray(encoded[gr00t.GRIP].values())[:, 0], [0.0, 0.1, 0.3, 0.3])

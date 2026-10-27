@@ -48,6 +48,7 @@ def _episode(observation, task_key=keys.TASK, pose_key=keys.EE_POSE):
             name: value if name == task_key else DummySignal([0, 1], [value, value])
             for name, value in observation.items()
         },
+        keys.TARGET_GRIP: DummySignal([0, 1], [1.0, 1.0]),
         **models.ee_frames_entry({pose_key: models.EEFrame(site=models.GRIPPER_SITE)}),
     })
 
@@ -72,8 +73,8 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
     for name, frames in encoded[gr00t.VIDEO].items():
         assert frames.shape == (1, 1, 180, 320, 3)
         np.testing.assert_array_equal(training[name][0][0], frames[0, 0])
-    expected_action = np.concatenate([encoded[gr00t.STATE][name][0, 0] for name in gr00t.STATE_DIMS])
-    np.testing.assert_allclose(training[ACTION][0][0], expected_action)
+    expected_action = {**{name: value[0, 0] for name, value in encoded[gr00t.STATE].items()}, gr00t.GRIP: [1.0]}
+    np.testing.assert_allclose(training[ACTION][0][0], np.concatenate([expected_action[n] for n in gr00t.STATE_DIMS]))
 
 
 @pytest.mark.parametrize('image_mappings', [{}, {gr00t.EE_POSE: keys.WRIST_IMAGE}])
@@ -122,7 +123,8 @@ def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monk
     encoded = encoder(_episode(observation))
     action = encoded[ACTION][0][0]
     for name, bounds in encoder.meta[GR00T_MODALITY][ACTION].items():
-        np.testing.assert_allclose(action[bounds[gr00t.START] : bounds[gr00t.END]], encoded[name][0][0])
+        expected = [1.0] if name == gr00t.GRIP else encoded[name][0][0]
+        np.testing.assert_allclose(action[bounds[gr00t.START] : bounds[gr00t.END]], expected)
 
 
 def test_standalone_observation_names_match_the_client():

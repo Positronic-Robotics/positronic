@@ -15,9 +15,10 @@ The adapter follows [upstream's DROID robot client](https://github.com/NVIDIA/Is
 - State is absolute tool position + row-based 6D rotation, gripper position and seven joint positions.
   Poses move from the rig's `gripper` site to `DROID_EE_FRAME`, the flange, then receive upstream's
   DROID rotation correction. Gripper convention is **1 = closed**.
-- Conversion writes recorded state trajectories as absolute action labels. The checkpoint processor
-  computes pose-relative EEF actions and joint offsets for training, then restores absolute actions
-  at inference. Positronic does not subtract poses or rotations itself.
+- Conversion writes absolute action labels. The arm label is the measured pose and joints
+  `action_lead_sec` later (default 0.14 s), and the gripper label is `target_grip` thresholded at 0.5.
+  The checkpoint processor computes pose-relative EEF actions and joint offsets for training, then
+  restores absolute actions at inference. Positronic does not subtract poses or rotations itself.
 - Inference executes the first **15 of 40** predicted joint targets at **15 Hz**, with the DROID
   impedance settings and a gripper threshold of **0.5**, matching upstream's default execution horizon.
 
@@ -82,7 +83,9 @@ This module uses only the standard library; the common model-server wrapper has 
 The standalone recipe's observation names live in [`serving/keys.py`](serving/keys.py).
 Tests check their agreement with the Positronic client without adding a server dependency on Positronic.
 The settings also contain the control mode, which only inference uses.
-The training transform preserves the recorded absolute pose, grip, and joint trajectories as action labels.
+The training transform labels each frame with the absolute pose and joints `action_lead_sec` later and with
+the commanded grip. `droid.override(action_lead_sec=0, binarize_grip=False)` keeps the arm label at the frame and
+the raw `target_grip`.
 GR00T's checkpoint processor converts these labels to relative actions and restores absolute actions during inference.
 
 The launcher reads camera keys from `meta/modality.json`; no separate modality selection is needed.
