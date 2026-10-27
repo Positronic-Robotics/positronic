@@ -31,8 +31,10 @@ agent, on the build machine.
 
 ## Quickstart
 
-Run these commands in order. [Fill in the placeholders](#fill-in-the-placeholders) says what goes in
-each `<...>`. Each step of [Get started by hand](#get-started-by-hand) tells more.
+These are the commands of the six steps, in order. Replace each `<...>` first:
+[Fill in the placeholders](#fill-in-the-placeholders) says what goes there. Run one step at a time, and
+read what it prints. Step 3 shows what becomes public before `competition-enter --yes` enters your team.
+Each step of [Get started by hand](#get-started-by-hand) tells more.
 
 ```bash
 # 1 Install
