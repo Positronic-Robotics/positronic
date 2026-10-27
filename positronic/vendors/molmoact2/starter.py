@@ -1,7 +1,6 @@
-"""A MolmoAct2 DROID policy server to edit by hand.
+"""A MolmoAct2 DROID policy server to edit by hand, and to build with `docker/Dockerfile.serve-molmoact2-starter`.
 
-Change a knob or a function below, then build `docker/Dockerfile.serve-molmoact2-starter`. With no edit, the
-server serves what `positro/molmoact2-droid` serves. `docs/nebius-competition.md` gives the commands.
+With no edit, it serves what `positro/molmoact2-droid` serves. `docs/nebius-competition.md` gives the commands.
 """
 
 from typing import Any
@@ -28,7 +27,7 @@ INSTRUCTIONS: dict[str, str] = {
 }
 
 # The model predicts 15 actions, 1/15 s apart. The robot executes the first ACTIONS_PER_CHUNK of them, and then
-# the server predicts a new chunk from a new observation. A smaller value replans more often. None executes all 15.
+# the server predicts a new chunk from a new observation. None executes all 15.
 ACTIONS_PER_CHUNK: int | None = None
 
 # The model predicts a grip from 0 (open) to 1 (closed). With a threshold, the grip is 1 above it and 0 below it.
