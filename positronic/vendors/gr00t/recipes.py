@@ -39,10 +39,6 @@ def _derive_grip(source: str, episode: Episode):
     return tf.Elementwise(episode[source], lambda values: np.asarray(values, dtype=np.float32).reshape(-1, 1))
 
 
-def _binary_grip(values):
-    return (np.asarray(values) > 0.5).astype(np.float32)
-
-
 @cfn.config(settings=model_settings.droid(), action_lead_sec=0.14, binarize_grip=True)
 def droid(settings: dict, action_lead_sec: float, binarize_grip: bool) -> EpisodeTransform:
     """Prepare recorded absolute trajectories and metadata for GR00T fine-tuning."""
@@ -87,15 +83,20 @@ def droid(settings: dict, action_lead_sec: float, binarize_grip: bool) -> Episod
     def derive_action(episode):
         signals = {name: derive(episode) for name, derive in state_encoders.items()}
         timeline = recording_timeline({name for signal in signals.values() for name in signal.timelines})
+        grip = _derive_grip(keys.TARGET_GRIP, episode)
+        if binarize_grip:
+            grip = tf.Elementwise(grip, lambda values: (np.asarray(values) > 0.5).astype(np.float32))
+        signals[gr00t.GRIP] = grip
         # The arm reaches a target about `action_lead_sec` after the command, so the arm action is the measured state
         # that much later. The recorded command is not used: a rig commands poses or joints, not both. The measured
         # grip stays low when the fingers stop on an object, so the gripper action is the command.
-        lead = Time(**{timeline: round(action_lead_sec * 1e9)})
-        for name in (gr00t.EE_POSE, gr00t.JOINT_POSITION):
-            signals[name] = tf.TimeOffsets(signals[name], lead)
-        grip = _derive_grip(keys.TARGET_GRIP, episode)
-        signals[gr00t.GRIP] = tf.Elementwise(grip, _binary_grip) if binarize_grip else grip
-        return tf.concat(*signals.values(), timelines=(timeline,), dtype=np.float32)
+        current = tf.concat(*signals.values(), timelines=(timeline,), dtype=np.float32)
+        ahead = tf.TimeOffsets(current, Time(**{timeline: round(action_lead_sec * 1e9)}))
+        parts = [
+            tf.view(current if name == gr00t.GRIP else ahead, slice(bounds[gr00t.START], bounds[gr00t.END]))
+            for name, bounds in action_meta.items()
+        ]
+        return tf.concat(*parts, timelines=(timeline,), dtype=np.float32)
 
     columns = Derive(
         meta=meta,

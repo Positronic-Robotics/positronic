@@ -160,3 +160,19 @@ def test_training_actions_start_at_the_first_gripper_command():
     encoded = _arm_training()(episode)
     assert list(encoded[ACTION].timestamps(RECORDED_TIME)) == ts[2:]
     np.testing.assert_array_equal(np.asarray(encoded[ACTION].values())[:, 9], [1, 1, 1])
+
+
+def test_training_arm_actions_take_every_arm_signal_at_one_time_ahead():
+    poses = [[0, 0, 0, 1, 0, 0, 0], [0.5, 0, 0, 1, 0, 0, 0]]
+    episode = EpisodeContainer({
+        keys.EE_POSE: DummySignal([0, 130_000_000], poses),
+        keys.JOINTS: DummySignal([0, 50_000_000], [np.zeros(7), np.ones(7)]),
+        keys.GRIP: DummySignal([0], [0.0]),
+        keys.TARGET_GRIP: DummySignal([0], [0.0]),
+        **models.ee_frames_entry({keys.EE_POSE: models.EEFrame(site=models.GRIPPER_SITE)}),
+    })
+    encoded = _arm_training(action_lead_sec=0.1)(episode)
+    action = encoded[ACTION]
+    assert list(action.timestamps(RECORDED_TIME)) == [0, 50_000_000, 130_000_000]
+    pose_at_130_ms = np.asarray(encoded[gr00t.EE_POSE].values())[-1]
+    np.testing.assert_array_equal(np.asarray(action.values())[1, :9], pose_at_130_ms)
