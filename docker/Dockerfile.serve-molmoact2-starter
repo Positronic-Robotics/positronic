@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1.7
+# A policy image to edit by hand: `positro/molmoact2-droid`, served through
+# `positronic/vendors/molmoact2/starter.py`. The build adds the one file, so it pulls the base and builds in minutes.
+#
+# Usage (from the repository root)
+#   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+#       -f docker/Dockerfile.serve-molmoact2-starter -t docker.io/<you>/molmoact2-starter:v1 --push .
+#   bash docker/test_policy_image.sh docker.io/<you>/molmoact2-starter:v1 --model.device_map=cpu
+#
+# The base is the release that the starter matches, pinned by digest. A newer base can run other positronic code.
+ARG BASE_IMAGE=docker.io/positro/molmoact2-droid:v0.4.1@sha256:93f2209dfee61d3318746668b5472731c49e75cae82a34a4550385aee098eef4
+
+FROM ${BASE_IMAGE}
+COPY --link positronic/vendors/molmoact2/starter.py /positronic/positronic/vendors/molmoact2/starter.py
+
+# `exec` makes the server pid 1, so it receives the stop signal.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.molmoact2.starter \
+   --model.hf_repo=\"$MOLMOACT2_MODEL\" \"$@\"", "--"]

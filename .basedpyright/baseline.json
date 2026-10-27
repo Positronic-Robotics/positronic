@@ -2806,14 +2806,6 @@
             {
                 "code": "reportMissingImports",
                 "range": {
-                    "startColumn": 7,
-                    "endColumn": 12,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportMissingImports",
-                "range": {
                     "startColumn": 5,
                     "endColumn": 17,
                     "lineCount": 1
@@ -2935,14 +2927,6 @@
             }
         ],
         "./positronic/simulator/robolab/validate.py": [
-            {
-                "code": "reportMissingImports",
-                "range": {
-                    "startColumn": 7,
-                    "endColumn": 12,
-                    "lineCount": 1
-                }
-            },
             {
                 "code": "reportMissingImports",
                 "range": {

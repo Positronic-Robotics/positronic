@@ -78,6 +78,14 @@ checkpoint takes three cameras, ordered `[exterior_1, exterior_2, wrist]` (sourc
 `docker/Dockerfile.serve-molmoact2-droid` serves `droid_3cam`; its `PIPELINE` build arg, or `MOLMOACT2_PIPELINE`
 at run time, selects another.
 
+## Starter
+
+[`starter.py`](./starter.py) serves `droid_3cam` through knobs and two functions to edit by hand: the text the
+model reads for each task, how many actions of each chunk the robot executes, a grip threshold, the denoising
+steps, and a change to each action. With no edit, it serves what the published image serves.
+`docker/Dockerfile.serve-molmoact2-starter` adds the file to the published image. The quick start is in
+[the competition guide](../../../docs/nebius-competition.md#hack-the-starter-policy).
+
 ## Bimanual YAM
 
 `yam_bimanual` serves [MolmoAct2-BimanualYAM](https://huggingface.co/allenai/MolmoAct2-BimanualYAM) for a

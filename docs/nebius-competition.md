@@ -58,6 +58,66 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 
 ## Get started by hand
 
+### Hack the starter policy
+
+The starter is a MolmoAct2 DROID policy in one Python file,
+[`positronic/vendors/molmoact2/starter.py`](https://github.com/Positronic-Robotics/positronic/blob/main/positronic/vendors/molmoact2/starter.py).
+Its knobs are at the top of the file:
+
+- `INSTRUCTIONS`: the text that the model reads for each task.
+- `ACTIONS_PER_CHUNK`: how many of the 15 actions of each prediction the robot executes.
+- `GRIP_THRESHOLD`: a threshold that makes the grip fully open or fully closed.
+- `NUM_STEPS`: the denoising steps of each prediction.
+
+Below the knobs, `instruction` changes what the model reads, and `adjust` changes each action before the robot
+executes it.
+
+With no edit, the starter serves what the MolmoAct2 baseline serves: the same checkpoint and the same three
+camera views. The MolmoAct2 row of the leaderboard is that baseline, and its score is the score of the
+starter with no edit. Two runs of one image do not always get the same score.
+
+Do [Install](#install-the-commands), [Register](#register) and [Enter](#enter-the-competition) first. Then
+edit the file, build the image and push it. The build pulls `positro/molmoact2-droid` and adds the one file,
+so the push uploads one small layer:
+
+```bash
+git clone https://github.com/Positronic-Robotics/positronic
+cd positronic
+$EDITOR positronic/vendors/molmoact2/starter.py
+docker login
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+    -f docker/Dockerfile.serve-molmoact2-starter -t docker.io/<you>/molmoact2-starter:v1 --push .
+```
+
+Test the image with the network denied. With no GPU, add `--model.device_map=cpu`. The test then needs
+about 12 GB of memory:
+
+```bash
+bash docker/test_policy_image.sh --gpu docker.io/<you>/molmoact2-starter:v1
+bash docker/test_policy_image.sh docker.io/<you>/molmoact2-starter:v1 --model.device_map=cpu
+```
+
+Score your edit on your own GPU before you use a submission. Serve the image, and run the 20 public
+episodes of `molmo.franka_pick_mini` against it.
+[Score a policy on MolmoSpaces on your machine](https://github.com/Positronic-Robotics/positronic/blob/main/docs/local-molmospaces-eval.md)
+tells how to set up the simulator:
+
+```bash
+docker run --rm --gpus all -p 8000:8000 docker.io/<you>/molmoact2-starter:v1
+positronic eval run --eval=molmo.franka_pick_mini \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
+  --output_dir=~/evals/starter_v1
+```
+
+Then submit the image, pinned by its digest, as [Submit](#submit) tells. `positronic eval catalog` names the
+competition eval:
+
+```bash
+docker buildx imagetools inspect docker.io/<you>/molmoact2-starter:v1
+positronic eval run --eval=molmo.competition_v2 \
+    --policy-image=docker.io/<you>/molmoact2-starter@sha256:<digest> --transaction-key=starter-v1
+```
+
 ### Install the commands
 
 The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later. Run `uv --version` to check. To update
