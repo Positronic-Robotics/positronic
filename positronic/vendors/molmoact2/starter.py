@@ -19,8 +19,7 @@ from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import MolmoAct2Model, warm_observation
 from positronic.vendors.molmoact2.server import DEFAULT_HF_REPO, pipeline
 
-# Knobs: the defaults of the server's config. The values here make the server act as the published example image.
-# The platform starts the image with no arguments, so a submission uses these values.
+# Knobs: the defaults of the server's config. A submission runs with these values.
 
 # The text the model reads for an eval task. A task that is not here goes to the model unchanged.
 INSTRUCTIONS: dict[str, str] = {
