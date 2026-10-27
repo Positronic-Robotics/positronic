@@ -40,6 +40,7 @@ def main(
     resume: bool = False,
     num_workers: int | None = None,
     keep_optimizers_for_last_n: int = 2,
+    override_pretraining_statistics: bool = False,
 ):
     exp_name = str(exp_name)
     groot_root = Path(__file__).parents[4] / 'gr00t'
@@ -84,6 +85,11 @@ def main(
         command.extend(['--save_steps', str(save_steps)])
     if num_workers is not None:
         command.extend(['--dataloader_num_workers', str(num_workers)])
+    command.append(
+        '--override-pretraining-statistics'
+        if override_pretraining_statistics
+        else '--no-override-pretraining-statistics'
+    )
     command.append('--use-wandb')
 
     env = os.environ.copy()

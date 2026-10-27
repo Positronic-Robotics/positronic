@@ -100,8 +100,11 @@ def test_training_rejects_image_names_that_overwrite_other_columns(image_name):
 
 @pytest.mark.parametrize('resume', [False, True])
 @pytest.mark.parametrize('has_settings', [False, True])
-def test_finetuning_forwards_dataset_cameras_and_resume_to_gr00t(
-    tmp_path, monkeypatch, resume, has_settings, prepared_dataset
+@pytest.mark.parametrize(
+    'statistics', [{}, {'override_pretraining_statistics': True}, {'override_pretraining_statistics': False}]
+)
+def test_finetuning_forwards_dataset_cameras_resume_and_statistics_to_gr00t(
+    tmp_path, monkeypatch, resume, has_settings, statistics, prepared_dataset
 ):
     dataset = tmp_path / 'dataset'
     (dataset / 'meta').mkdir(parents=True)
@@ -122,12 +125,22 @@ def test_finetuning_forwards_dataset_cameras_and_resume_to_gr00t(
     monkeypatch.setattr(train.pos3, 'sync', sync)
     monkeypatch.setattr(train.utils, 'save_run_metadata', Mock())
     monkeypatch.setattr(train.subprocess, 'run', run)
-    train.main(input_path=str(dataset), output_path=str(output), exp_name='droid', resume=resume, num_train_steps=2)
+    train.main(
+        input_path=str(dataset),
+        output_path=str(output),
+        exp_name='droid',
+        resume=resume,
+        num_train_steps=2,
+        **statistics,
+    )
     arguments = run.call_args.args[0]
     assert arguments[arguments.index('--base-model-path') + 1] == gr00t.BASE_MODEL
     offset = arguments.index('--video-keys') + 1
     assert arguments[offset : offset + 3] == cameras
     assert ('--resume-from-checkpoint' in arguments) == resume
+    override = statistics.get('override_pretraining_statistics', False)
+    assert ('--override-pretraining-statistics' in arguments) == override
+    assert ('--no-override-pretraining-statistics' in arguments) == (not override)
     assert sync.call_args.kwargs['delete_remote'] == (not resume)
     assert run.call_args.kwargs['check'] is True
     assert (output / MODEL_SETTINGS_PATH).exists() == has_settings

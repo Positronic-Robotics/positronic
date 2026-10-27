@@ -123,7 +123,8 @@ The image size describes preprocessing before the native checkpoint processor, w
 `--learning_rate`, `--num_train_steps`, `--save_steps`, `--num_workers` and `--resume=True`.
 Resume restores the latest saved training state in the experiment directory.
 The fork retains checkpoint architecture and preprocessing while applying upstream's standard
-fine-tuning settings. Dataset statistics are computed by GR00T.
+fine-tuning settings. Training normalizes state and action with the base checkpoint's statistics.
+`--override_pretraining_statistics=True` normalizes them with statistics that GR00T computes from the dataset.
 
 ## Serve
 
