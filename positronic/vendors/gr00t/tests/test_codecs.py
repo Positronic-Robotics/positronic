@@ -77,15 +77,17 @@ def test_droid_control_mode_is_the_droid_impedance_on_the_wire():
     assert model_settings.droid()[model_settings.CONTROL_MODE] == command.to_wire(DROID_IMPEDANCE)
 
 
-@pytest.mark.parametrize('config', [recipes.droid, recipes.droid_three_cameras])
+@pytest.mark.parametrize(
+    'config', [recipes.droid, recipes.droid_three_cameras, recipes.droid_molmo, recipes.droid_molmo_three_cameras]
+)
 def test_training_cadence_metadata(config):
     training = config(**{f'settings.{model_settings.ACTION_FPS}': 20})
     assert training.meta[ACTION_FPS] == 20
     assert config().meta[ACTION_FPS] == 15
 
 
-def _arm_training(**overrides):
-    return recipes.droid(**{
+def _arm_training(recipe=recipes.droid, **overrides):
+    return recipe(**{
         f'settings.{model_settings.IMAGE_MAPPINGS}': {},
         f'settings.{model_settings.EE_FRAMES}': {
             keys.EE_POSE: {
@@ -127,11 +129,11 @@ def test_training_actions_align_on_the_recording_clock(timeline):
 
 
 @pytest.mark.parametrize('step_ns', [66_000_000, 66_666_667])
-def test_training_arm_actions_are_the_state_two_steps_ahead_and_hold_the_last_state(step_ns):
+def test_molmo_arm_actions_are_the_state_two_steps_ahead_and_hold_the_last_state(step_ns):
     ts = [step * step_ns for step in range(5)]
     joints = [np.full(7, step, dtype=float) for step in range(5)]
     poses = [[step / 10, 0, 0, 1, 0, 0, 0] for step in range(5)]
-    encoded = _arm_training()(_arm_episode(ts, joints, [0.0] * 5, [0.0] * 5, poses))
+    encoded = _arm_training(recipes.droid_molmo)(_arm_episode(ts, joints, [0.0] * 5, [0.0] * 5, poses))
     values = np.asarray(encoded[ACTION].values())
     ahead = [2, 3, 4, 4, 4]
     np.testing.assert_array_equal(values[:, :9], np.asarray(encoded[gr00t.EE_POSE].values())[ahead])

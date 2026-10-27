@@ -270,10 +270,13 @@ See [`positronic/vendors/gr00t/recipes.py`](../../vendors/gr00t/recipes.py).
 |-------|---------|----------------------------|-------------------|
 | `droid` | Exterior + wrist | Absolute EEF pose (XYZ + row-based rot6d), gripper, 7 joints | Absolute joint targets + binary gripper |
 | `droid_three_cameras` | Two exteriors + wrist | Same as `droid` | Same as `droid` |
+| `droid_molmo` | Exterior + wrist | `droid` with the MolmoSpaces lead (0.14 s) and a binary gripper label | Same as `droid` |
+| `droid_molmo_three_cameras` | Two exteriors + wrist | Same as `droid_molmo` | Same as `droid` |
 
 Images use the upstream DROID client's 320×180 padded resize, then the checkpoint's native
 preprocessing. GR00T owns pose-relative and joint-relative conversion. The arm training labels are
-the recorded state `action_lead_sec` later, and the gripper label is `target_grip`.
+the recorded state `action_lead_sec` later, and the gripper label is `target_grip`. `droid` labels each
+frame with its own state and the raw `target_grip`; the `_molmo` presets carry the values of MolmoSpaces.
 Use the same camera layout for conversion and inference;
 the published DROID checkpoint uses two cameras. See the [Docker workflow](../../vendors/gr00t/README.md).
 

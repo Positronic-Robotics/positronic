@@ -9,6 +9,8 @@ The adapter follows [upstream's DROID robot client](https://github.com/NVIDIA/Is
 
 - `droid`: wrist + one exterior camera, matching the published checkpoint.
 - `droid_three_cameras`: wrist + two exterior cameras. Fine-tune with this layout, then serve that checkpoint.
+- `droid_molmo` and `droid_molmo_three_cameras`: the same camera layouts with the action labels of MolmoSpaces
+  recordings. Serve their checkpoints with `droid` and `droid_three_cameras`.
 - RGB images first use the client's bilinear padded resize to **320×180**. The checkpoint processor
   resizes the shortest edge to **256**, crops **95%**, resizes the shortest edge again, then runs
   its vision processor. Positronic does not apply an additional square crop.
@@ -16,7 +18,8 @@ The adapter follows [upstream's DROID robot client](https://github.com/NVIDIA/Is
   Poses move from the rig's `gripper` site to `DROID_EE_FRAME`, the flange, then receive upstream's
   DROID rotation correction. Gripper convention is **1 = closed**.
 - Conversion writes absolute action labels. The arm label is the measured pose and joints
-  `action_lead_sec` later (default 0.14 s), and the gripper label is `target_grip` thresholded at 0.5.
+  `action_lead_sec` later, and the gripper label is `target_grip`, thresholded at 0.5 with `binarize_grip`.
+  Both depend on the rig: `droid` uses a lead of 0 and the raw command, `droid_molmo` 0.14 s and the threshold.
   The checkpoint processor computes pose-relative EEF actions and joint offsets for training, then
   restores absolute actions at inference. Positronic does not subtract poses or rotations itself.
 - Inference executes the first **15 of 40** predicted joint targets at **15 Hz**, with the DROID
@@ -74,6 +77,7 @@ docker compose run --rm --pull never -v "$PWD/groot-data:/data" groot-train \
 
 Set `--dataset.base.path` to your recordings, or select another dataset configuration with `--dataset.base`.
 For three views, set `--dataset.transforms='["@positronic.vendors.gr00t.recipes.droid_three_cameras"]'`.
+For MolmoSpaces recordings, use `droid_molmo` or `droid_molmo_three_cameras`.
 The [training recipe](recipes.py) builds an episode transform. The [inference recipe](serving/recipe.py)
 builds a JSON-compatible description using only the lightweight wrapper.
 Both use [shared Python settings](serving/settings.py): observation keys, image size, camera mappings, tool frame,
@@ -84,9 +88,10 @@ The standalone recipe's observation names live in [`serving/keys.py`](serving/ke
 Tests check their agreement with the Positronic client without adding a server dependency on Positronic.
 The settings also contain the control mode, which only inference uses.
 The training transform labels each frame with the absolute pose and joints `action_lead_sec` later and with
-the commanded grip. `droid.override(action_lead_sec=0, binarize_grip=False)` keeps the arm label at the frame and
-the raw `target_grip`. A frame before the first `target_grip` sample has no label, so the converted episode
-starts at the first command, as with `absolute_pos_action`.
+the commanded grip. The lead is the time the rig's arm controller takes to reach a target: on MolmoSpaces it is
+2 steps of 66 ms, so `droid_molmo` sets 0.14 s. A rig with another controller needs its own preset, for example
+`droid.override(action_lead_sec=..., binarize_grip=True)`. A frame before the first `target_grip` sample has no
+label, so the converted episode starts at the first command, as with `absolute_pos_action`.
 GR00T's checkpoint processor converts these labels to relative actions and restores absolute actions during inference.
 
 The launcher reads camera keys from `meta/modality.json`; no separate modality selection is needed.

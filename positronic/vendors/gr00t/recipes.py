@@ -39,9 +39,12 @@ def _derive_grip(source: str, episode: Episode):
     return tf.Elementwise(episode[source], lambda values: np.asarray(values, dtype=np.float32).reshape(-1, 1))
 
 
-@cfn.config(settings=model_settings.droid(), action_lead_sec=0.14, binarize_grip=True)
+@cfn.config(settings=model_settings.droid(), action_lead_sec=0.0, binarize_grip=False)
 def droid(settings: dict, action_lead_sec: float, binarize_grip: bool) -> EpisodeTransform:
-    """Prepare recorded absolute trajectories and metadata for GR00T fine-tuning."""
+    """Prepare recorded absolute trajectories and metadata for GR00T fine-tuning.
+
+    The lead and the grip threshold belong to the rig that recorded the data; a preset per rig sets them.
+    """
     image_mappings = settings[model_settings.IMAGE_MAPPINGS]
     conflicts = image_mappings.keys() & (gr00t.STATE_DIMS.keys() | {ACTION, keys.TASK})
     if conflicts:
@@ -128,3 +131,7 @@ def droid(settings: dict, action_lead_sec: float, binarize_grip: bool) -> Episod
 
 
 droid_three_cameras = droid.override(settings=model_settings.droid_three_cameras())
+
+# The MolmoSpaces arm controller tracks a joint target best 2 steps (0.14 s) after the command.
+droid_molmo = droid.override(action_lead_sec=0.14, binarize_grip=True)
+droid_molmo_three_cameras = droid_molmo.override(settings=model_settings.droid_three_cameras())
