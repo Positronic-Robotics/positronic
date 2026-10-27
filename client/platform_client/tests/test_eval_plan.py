@@ -163,7 +163,7 @@ A_PER_TASK_VALUE = {
     'camera_vantage': 'phail',
     'external_cameras': {'side': 'left'},
     'clutter': {'count_min': 1, 'count_max': 2},
-    'clutter_seed': 'table-a',
+    'scene_seed': 'scene-a',
     'start_pose': 'droid_reset',
 }
 
@@ -213,31 +213,31 @@ def test_a_plan_and_a_task_each_state_a_start_pose():
         a_plan(start_pose='home')
 
 
-def test_a_plan_and_a_task_each_state_a_clutter_seed():
-    plan = a_plan(clutter_seed='table-a', tasks=[SPOONS, {'task_id': MUG, 'clutter_seed': 'table-b'}])
-    assert (plan.clutter_seed, plan.tasks[0].clutter_seed, plan.tasks[1].clutter_seed) == ('table-a', None, 'table-b')
+def test_a_plan_and_a_task_each_state_a_scene_seed():
+    plan = a_plan(scene_seed='scene-a', tasks=[SPOONS, {'task_id': MUG, 'scene_seed': 'scene-b'}])
+    assert (plan.scene_seed, plan.tasks[0].scene_seed, plan.tasks[1].scene_seed) == ('scene-a', None, 'scene-b')
     sent = plan.model_dump(mode='json')
-    assert sent['clutter_seed'] == 'table-a' and sent['tasks'][1]['clutter_seed'] == 'table-b'
+    assert sent['scene_seed'] == 'scene-a' and sent['tasks'][1]['scene_seed'] == 'scene-b'
     assert EvalPlan.model_validate(sent) == plan
 
 
-def test_an_empty_clutter_seed_is_refused_at_every_level():
+def test_an_empty_scene_seed_is_refused_at_every_level():
     with pytest.raises(ValidationError, match='at least 1 character'):
-        a_plan(clutter_seed='')
+        a_plan(scene_seed='')
     with pytest.raises(ValidationError, match='at least 1 character'):
-        a_plan(tasks=[{'task_id': SPOONS, 'clutter_seed': ''}])
+        a_plan(tasks=[{'task_id': SPOONS, 'scene_seed': ''}])
 
 
 @pytest.mark.parametrize('mode', ['python', 'json'])
-def test_a_level_without_a_clutter_seed_omits_it_from_its_dump(mode: str):
+def test_a_level_without_a_scene_seed_omits_it_from_its_dump(mode: str):
     """A platform that does not declare the field refuses it as unknown, so a plan that states no seed
     must send none."""
     sent = a_plan().model_dump(mode=mode)
-    assert 'clutter_seed' not in sent
-    assert 'clutter_seed' not in sent['tasks'][0]
-    assert not any('clutter_seed' in entry for entry in sent['endpoints'])
-    stated = a_plan(tasks=[{'task_id': SPOONS, 'clutter_seed': 'table-a'}]).model_dump(mode=mode)
-    assert stated['tasks'][0]['clutter_seed'] == 'table-a' and 'clutter_seed' not in stated
+    assert 'scene_seed' not in sent
+    assert 'scene_seed' not in sent['tasks'][0]
+    assert not any('scene_seed' in entry for entry in sent['endpoints'])
+    stated = a_plan(tasks=[{'task_id': SPOONS, 'scene_seed': 'scene-a'}]).model_dump(mode=mode)
+    assert stated['tasks'][0]['scene_seed'] == 'scene-a' and 'scene_seed' not in stated
 
 
 @pytest.mark.parametrize('model', [Cascade, TaskNode, Endpoint, EvalPlan])

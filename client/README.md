@@ -127,7 +127,7 @@ An eval is a list of tasks. The platform offers named evals, and a customer comp
 episodes each endpoint takes on each task. A plan either states its own `tasks` or names an `eval`
 the catalogue expands into them; both arrive at the same set. The plan states the count once. A task may override it for that task, and an endpoint may
 override it for that endpoint, so a 10 + 10 + 2 round is one plan. The scene fields sit on the
-plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras`, `clutter`, `clutter_seed`
+plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras`, `clutter`, `scene_seed`
 and `start_pose`. An endpoint states only its count. `episodes_total` is a checksum a caller may state.
 `max_cap_per_episode_sec` is the upper bound on every task's cap.
 
@@ -169,7 +169,7 @@ max_cap_per_episode_sec: 300
 policy_preset: production
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
-clutter_seed: spoons-table-a             # the table draws from this seed, not the transaction key
+scene_seed: spoons-scene-a               # every random part of the scene draws from this seed alone
 start_pose: droid_reset                  # nominal | droid_reset | abc_init
 ```
 
@@ -256,13 +256,13 @@ the plan lays out that scene and that table, and runs the episodes in that order
 names each task and what it lacks. Name a preset the rig carries: `production` serves each
 episode from one of the plan's endpoints.
 
-Each plan draws its table again, so two plans of one task can lay out different tables. A plan or a task
-that states `clutter_seed` draws its table from that seed in place of the `transaction_key`. Two plans
-that state one `clutter_seed` lay out one table for a task at one place in the task list, with one
-`clutter` block. A `clutter_seed` equal to the `transaction_key` of an earlier plan lays out the table
-of that plan. The seed keeps a table only while the object kit and the task catalogue stay the same.
-A change to either changes the table that the seed draws, and the platform gives no warning. The seed
-changes no other draw: the sides and the episode order come from the plan's own draws.
+Each plan draws its scene again, so two plans of one task can lay out different scenes. A plan or a task
+that states `scene_seed` draws every random part of the task's scene from that seed alone. These parts are
+the table, the tote side and each camera side, where no level states the side or a level states `random`.
+Two plans that state one `scene_seed` lay out one scene for a task, at any place in the task list and under
+any `transaction_key`, while they state the same scene fields. The seed keeps a scene only while the object
+kit and the task catalogue stay the same. A change to either changes the scene that the seed draws, and the
+platform gives no warning. The episode order does not come from the seed: each plan draws its own.
 
 `submissions.resolve` takes the same plan and answers with `resolved` alone. For a pay_as_you_go
 organization, that `ResolvedPlan` carries a `credit_quote`. It files nothing, spends no quota and

@@ -70,7 +70,7 @@ class Cascade(BaseModel):
 
     # A dump leaves out each of these while it holds None, so a plan that states none of them reads the same to a
     # platform that does not declare them.
-    _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = ('clutter_seed',)
+    _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = ('scene_seed',)
 
     # Episodes each endpoint of each task under this level takes.
     episodes_per_endpoint: int | None = Field(default=None, ge=1)
@@ -81,9 +81,9 @@ class Cascade(BaseModel):
     # Per external camera the task defines, keyed by the mount name the task gives it.
     external_cameras: dict[str, Slugged[Placement]] = Field(default_factory=dict)
     clutter: Clutter | None = None
-    # The clutter draw takes this seed in place of the transaction key, so plans that state one seed lay out one
-    # table for a task at one place in the task list. A change to the kit or the catalogue changes that table.
-    clutter_seed: str | None = Field(default=None, min_length=1)
+    # Every random part of a task's scene draws from this seed alone, so plans that state one seed lay out one scene
+    # for a task. A change to the kit or the catalogue changes that scene.
+    scene_seed: str | None = Field(default=None, min_length=1)
     start_pose: Slugged[StartPose] | None = None
 
     @model_serializer(mode='wrap')
