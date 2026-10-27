@@ -176,3 +176,4 @@ def test_training_arm_actions_take_every_arm_signal_at_one_time_ahead():
     assert list(action.timestamps(RECORDED_TIME)) == [0, 50_000_000, 130_000_000]
     pose_at_130_ms = np.asarray(encoded[gr00t.EE_POSE].values())[-1]
     np.testing.assert_array_equal(np.asarray(action.values())[1, :9], pose_at_130_ms)
+    np.testing.assert_array_equal(np.asarray(action.values())[0, 10:], np.ones(7))
