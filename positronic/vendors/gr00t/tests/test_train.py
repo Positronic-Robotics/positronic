@@ -119,6 +119,10 @@ def test_finetuning_forwards_dataset_cameras_resume_and_statistics_to_gr00t(
         (output / MODEL_SETTINGS_PATH).write_text(
             json.dumps(prepared_dataset.meta[MODEL_SETTINGS] if resume else {'stale': True})
         )
+    override = statistics.get('override_pretraining_statistics', False)
+    if resume:
+        (output / train.STATISTICS_CHOICE_PATH).parent.mkdir(exist_ok=True)
+        (output / train.STATISTICS_CHOICE_PATH).write_text(json.dumps(override))
     sync = Mock(return_value=output)
     run = Mock(side_effect=lambda *args, **kwargs: (output / 'checkpoint-2').mkdir())
     monkeypatch.setattr(train.pos3, 'download', lambda _: dataset)
@@ -138,10 +142,10 @@ def test_finetuning_forwards_dataset_cameras_resume_and_statistics_to_gr00t(
     offset = arguments.index('--video-keys') + 1
     assert arguments[offset : offset + 3] == cameras
     assert ('--resume-from-checkpoint' in arguments) == resume
-    override = statistics.get('override_pretraining_statistics', False)
     assert ('--override-pretraining-statistics' in arguments) == override
     assert ('--no-override-pretraining-statistics' in arguments) == (not override)
     assert sync.call_args.kwargs['delete_remote'] == (not resume)
+    assert json.loads((output / train.STATISTICS_CHOICE_PATH).read_text()) == override
     assert run.call_args.kwargs['check'] is True
     assert (output / MODEL_SETTINGS_PATH).exists() == has_settings
     assert (output / 'checkpoint-2' / MODEL_SETTINGS_PATH).exists() == has_settings
@@ -179,3 +183,28 @@ def test_resume_rejects_different_or_missing_settings(
     save_metadata.assert_not_called()
     assert {path.relative_to(output): path.read_bytes() for path in output.rglob('*') if path.is_file()} == before
     assert list(checkpoint.iterdir()) == []
+
+
+@pytest.mark.parametrize('recorded, requested', [(None, False), (True, False), (False, True)])
+def test_resume_rejects_another_statistics_choice(tmp_path, monkeypatch, prepared_dataset, recorded, requested):
+    dataset = tmp_path / 'dataset'
+    (dataset / 'meta').mkdir(parents=True)
+    (dataset / GR00T_MODALITY_PATH).write_text(json.dumps(prepared_dataset.meta[GR00T_MODALITY]))
+    output = tmp_path / 'output'
+    (output / 'meta').mkdir(parents=True)
+    if recorded is not None:
+        (output / train.STATISTICS_CHOICE_PATH).write_text(json.dumps(recorded))
+    run = Mock()
+    monkeypatch.setattr(train.pos3, 'download', lambda _: dataset)
+    monkeypatch.setattr(train.pos3, 'sync', lambda *args, **kwargs: output)
+    monkeypatch.setattr(train.subprocess, 'run', run)
+    monkeypatch.setattr(train.utils, 'save_run_metadata', Mock())
+    with pytest.raises(ValueError, match='override_pretraining_statistics'):
+        train.main(
+            input_path=str(dataset),
+            output_path=str(output),
+            exp_name='droid',
+            resume=True,
+            override_pretraining_statistics=requested,
+        )
+    run.assert_not_called()

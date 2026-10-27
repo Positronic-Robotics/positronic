@@ -12,6 +12,8 @@ from positronic.policy.codecs import GR00T_MODALITY_PATH
 from positronic.policy.codecs.metadata import MODEL_SETTINGS_PATH
 from positronic.vendors.gr00t import serving as gr00t
 
+STATISTICS_CHOICE_PATH = Path('meta/positronic_override_pretraining_statistics.json')
+
 
 def cleanup_old_optimizers(output_dir: Path, keep_last_n: int = 2):
     """Delete optimizer.pt from all but the last N checkpoints to save space."""
@@ -53,16 +55,25 @@ def main(
     output_dir = pos3.sync(output_path + '/' + exp_name, delete_remote=not resume)
     settings_path = Path(dataset_local_path) / MODEL_SETTINGS_PATH
     output_settings = output_dir / MODEL_SETTINGS_PATH
+    statistics_choice = output_dir / STATISTICS_CHOICE_PATH
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else None
     if resume:
         recorded_settings = json.loads(output_settings.read_text()) if output_settings.exists() else None
         if settings_path.exists() != output_settings.exists() or recorded_settings != settings:
             raise ValueError('Dataset model settings do not match the resumed training run')
+        # A run that started before this file existed used the dataset statistics.
+        recorded_choice = json.loads(statistics_choice.read_text()) if statistics_choice.exists() else True
+        if recorded_choice != override_pretraining_statistics:
+            raise ValueError(
+                f'The resumed training run used override_pretraining_statistics={recorded_choice}; resume it with that'
+            )
     if settings is not None:
         output_settings.parent.mkdir(parents=True, exist_ok=True)
         output_settings.write_text(json.dumps(settings, indent=2, allow_nan=False))
     elif not resume:
         output_settings.unlink(missing_ok=True)
+    statistics_choice.parent.mkdir(parents=True, exist_ok=True)
+    statistics_choice.write_text(json.dumps(override_pretraining_statistics))
     prefix = 'resume_metadata' if resume else 'run_metadata'
     utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'], prefix=prefix)
 

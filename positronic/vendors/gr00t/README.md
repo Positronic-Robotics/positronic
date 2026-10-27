@@ -129,8 +129,9 @@ With the base statistics, GR00T logs `new stats DISCARDED`; that is expected. It
 q01..q99, so a dataset that moves outside the DROID range loses that part of its range.
 The checkpoint's `statistics.json` holds the statistics that training and serving use.
 `experiment_cfg/dataset_statistics.json` holds the dataset's own statistics.
-Resume a run with the `--override_pretraining_statistics` value it started with. A run that started before this
-option existed used the dataset statistics, so resume it with `--override_pretraining_statistics=True`.
+Training records this choice in the experiment directory and refuses a resume with another value. A run that
+started before this option existed used the dataset statistics, so resume it with
+`--override_pretraining_statistics=True`.
 
 ## Serve
 
