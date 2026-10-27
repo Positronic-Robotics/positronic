@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.4.2] - 2026-10-27
+
+This release shows the competition terms when a team enters, and `positronic eval run` with no `--eval` runs the eval that the public leaderboard ranks. It publishes `positronic-platform-client` 0.43.0, and `positronic` requires that version. `robosuite` moves to the new `scenes` extra, so the default install needs no C compiler. Code that imports the MuJoCo scene builder installs `positronic[scenes]`.
+
+| Distribution | Version |
+|---|---|
+| `positronic-platform-client` | 0.43.0 |
+| `positronic-evals` | 0.2.0 |
+| `positronic-eval-vocabulary` | 0.6.0 |
+| `positronic-model-server` | 0.3.1 |
+| `positronic-wire` | 0.12.0 |
+
+### Competition
+- `competition-enter` prints the current version of the competition terms, their page, and the command that accepts that version. It reads the public route `GET /v1/competition.terms`, so the preview needs no API key ([#1051](https://github.com/Positronic-Robotics/positronic/pull/1051))
+- `positronic eval run` with no `--eval` reads `rankings.list` and runs the eval of the public board, and prints its name. No public board, or public boards over more than one eval, refuse the run and ask for `--eval`. A private run (`--org`) still names its eval ([#1054](https://github.com/Positronic-Robotics/positronic/pull/1054))
+- `serverless_eval.py` in the competition examples scores a policy image on a public MolmoSpaces eval with Nebius Serverless, with no local GPU. It deletes the endpoint, the job and the token secret when it ends ([#1031](https://github.com/Positronic-Robotics/positronic/pull/1031))
+
+### Platform client
+- An `image` endpoint can state `min_vram_gb`, the least GPU memory that the image needs. The platform gives the run the smallest GPU slice that holds it ([#1044](https://github.com/Positronic-Robotics/positronic/pull/1044))
+- A plan or a task can state `scene_seed`. The platform then draws every random part of that task's scene from the seed alone ([#1048](https://github.com/Positronic-Robotics/positronic/pull/1048))
+
+### Inference
+- YAM reports and solves its poses at `gripper`, as every Franka arm does since 0.4.1. A policy that states no frame keeps the old YAM point ([#1032](https://github.com/Positronic-Robotics/positronic/pull/1032))
+- The openpi subprocess client sends keepalive pings again, and a separate deadline bounds each inference ([#1047](https://github.com/Positronic-Robotics/positronic/pull/1047))
+- The first `grip` sample of an episode on a real robot no longer carries the reading from the end of the previous episode ([#1035](https://github.com/Positronic-Robotics/positronic/pull/1035))
+- `positro/openpi` builds on a `positro/openpi-base` that CI builds from a pinned commit of the openpi fork ([#1049](https://github.com/Positronic-Robotics/positronic/pull/1049))
+
+### Datasets
+- The rows of a LeRobot conversion are picklable, so a conversion with video or with a GR00T recipe runs with DataLoader workers ([#998](https://github.com/Positronic-Robotics/positronic/pull/998))
+- Recording starts and orphan sweeps of rerun run one at a time across threads, so a build of recordings in many threads does not deadlock ([#1043](https://github.com/Positronic-Robotics/positronic/pull/1043))
+- The episode viewer keeps one material per URDF visual when it tints the robot ([#1042](https://github.com/Positronic-Robotics/positronic/pull/1042))
+
+### Install
+- `robosuite` moves from the core dependencies to the `scenes` extra, and the MolmoSpaces install keeps `evdev` out. The install in the competition guide and the local MolmoSpaces eval guide needs no C compiler ([#1045](https://github.com/Positronic-Robotics/positronic/pull/1045))
+
+### Docs
+- The competition guide has a Quickstart with the commands of the six steps, and a table that says what goes in each placeholder ([#1053](https://github.com/Positronic-Robotics/positronic/pull/1053))
+- The competition guide names only the example images that fit a submission, and lists the five example images where a reader looks for them ([#1041](https://github.com/Positronic-Robotics/positronic/pull/1041)) ([#1052](https://github.com/Positronic-Robotics/positronic/pull/1052))
+
 ## [0.4.1] - 2026-10-25
 
 This release moves every Franka arm to the grip point `gripper`. A server that states its frame with `cfg.codecs.franka_hand_frame` must build that entry with 0.4.1 or later: in 0.4.0 the preset names the site `default`, and a 0.4.1 client refuses it. No workspace distribution changes, so the release publishes `positronic` only.
