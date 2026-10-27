@@ -25,6 +25,9 @@ image with uv, and `flux3-action` and `cosmos3-nano` build the vendor stack them
 publishes each one; `make build-serve-<name>` builds it. See
 [Submit a policy image](../docs/submit-a-policy-image.md).
 
+`positro/openpi-base` is the openpi fork at the commit `OPENPI_REF` in the Makefile names. CI builds it
+when Docker Hub has no image of that commit (`docker-openpi-base.yaml`).
+
 Build and push all: `make push`
 
 `Dockerfile.serve-galaxea` builds `galaxea` in the same form, and the image is private by licence.

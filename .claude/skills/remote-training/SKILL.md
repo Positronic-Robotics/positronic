@@ -85,13 +85,14 @@ running the **old** `:latest` image — the change silently won't take effect.
 ```bash
 cd docker
 make push-training  # positro/positronic
-make push-openpi    # positro/openpi (rebuild positro/openpi-base first if ../openpi changed)
+make push-openpi    # positro/openpi, on positro/openpi-base at OPENPI_REF
 make push-groot     # positro/gr00t (rebuild positro/gr00t-base first if ../gr00t changed)
 make push           # all images
 ```
 
-Cross-repo base rebuilds: `cd ../openpi/docker && make push` (or `../gr00t/docker`),
-then `cd ../positronic/docker && make push-openpi`. See `docker/CONTEXTS.md`.
+An openpi fork commit reaches `positro/openpi` when `OPENPI_REF` in `docker/Makefile` names it: CI
+then builds `positro/openpi-base` from that commit. A gr00t base rebuild: `cd ../gr00t/docker && make push`,
+then `cd ../positronic/docker && make push-groot`. See `docker/CONTEXTS.md`.
 
 ## One-time setup
 
