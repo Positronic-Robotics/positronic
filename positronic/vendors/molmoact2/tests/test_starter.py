@@ -35,7 +35,7 @@ def _call(model: Model) -> list[np.ndarray]:
 def test_the_unedited_starter_passes_the_task_and_the_whole_chunk_through_unchanged():
     fake = FakeMolmoAct2()
 
-    actions = _call(starter.StarterModel(fake))
+    actions = _call(starter.StarterModel(fake, starter.INSTRUCTIONS))
 
     assert fake.observations[0][molmoact2.TASK] == 'pick up the bowl.'
     assert len(actions) == CHUNK
@@ -45,14 +45,15 @@ def test_the_unedited_starter_passes_the_task_and_the_whole_chunk_through_unchan
 def test_the_unedited_starter_loads_the_model_as_the_example_server_does():
     defaults = molmoact2_model.kwargs
 
-    assert starter.starter_model.kwargs == {k: defaults[k] for k in ('hf_repo', 'device_map')}
-    assert starter.NUM_STEPS == defaults['num_steps']
+    assert starter.starter_model.kwargs == {
+        **{k: defaults[k] for k in ('hf_repo', 'device_map', 'num_steps')},
+        'instructions': {},
+    }
 
 
-def test_an_instruction_replaces_the_text_of_its_task_only(monkeypatch):
-    monkeypatch.setattr(starter, 'INSTRUCTIONS', {'pick up the bowl.': 'grasp the red bowl'})
+def test_an_instruction_replaces_the_text_of_its_task_only():
     fake = FakeMolmoAct2()
-    model = starter.StarterModel(fake)
+    model = starter.StarterModel(fake, {'pick up the bowl.': 'grasp the red bowl'})
 
     _call(model)
     model({molmoact2.TASK: 'open the drawer.'}, session_id='s')
@@ -64,10 +65,10 @@ def test_the_unedited_starter_pipeline_is_the_example_pipeline():
     assert starter.starter_pipeline.instantiate().meta() == droid_3cam.instantiate().meta()
 
 
-def test_actions_per_chunk_cuts_the_schedule_after_that_many_actions(monkeypatch):
-    monkeypatch.setattr(starter, 'ACTIONS_PER_CHUNK', 4)
-
-    horizon_sec = starter.starter_pipeline.instantiate().meta()[policy_keys.ACTION_HORIZON_SEC]
+def test_actions_per_chunk_cuts_the_schedule_after_that_many_actions():
+    horizon_sec = (
+        starter.starter_pipeline.override(actions_per_chunk=4).instantiate().meta()[policy_keys.ACTION_HORIZON_SEC]
+    )
     waypoints, _ = ChunkedSchedule(starter.ACTION_FPS, horizon_sec)._plan_chunk(
         [{ACTION: i} for i in range(CHUNK)], start_ns=0
     )
@@ -84,7 +85,5 @@ def test_the_unedited_starter_passes_the_grip_through():
     assert _decoded_grips(starter.starter_pipeline.instantiate().codec) == pytest.approx([0.4, 0.6])
 
 
-def test_a_grip_threshold_closes_the_grip_above_it_and_opens_it_below_it(monkeypatch):
-    monkeypatch.setattr(starter, 'GRIP_THRESHOLD', 0.5)
-
-    assert _decoded_grips(starter.starter_pipeline.instantiate().codec) == [0.0, 1.0]
+def test_a_grip_threshold_closes_the_grip_above_it_and_opens_it_below_it():
+    assert _decoded_grips(starter.starter_pipeline.override(grip_threshold=0.5).instantiate().codec) == [0.0, 1.0]

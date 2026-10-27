@@ -19,7 +19,8 @@ from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import MolmoAct2Model, warm_observation
 from positronic.vendors.molmoact2.server import DEFAULT_HF_REPO, pipeline
 
-# Knobs. The values here make the server act as the published example image.
+# Knobs: the defaults of the server's config. The values here make the server act as the published example image.
+# The platform starts the image with no arguments, so a submission uses these values.
 
 # The text the model reads for an eval task. A task that is not here goes to the model unchanged.
 INSTRUCTIONS: dict[str, str] = {
@@ -37,9 +38,9 @@ GRIP_THRESHOLD: float | None = None
 NUM_STEPS = 10
 
 
-def instruction(task: str) -> str:
+def instruction(task: str, instructions: dict[str, str]) -> str:
     """The text the model reads for the eval task `task`."""
-    return INSTRUCTIONS.get(task, task)
+    return instructions.get(task, task)
 
 
 def adjust(action: np.ndarray) -> np.ndarray:
@@ -50,12 +51,13 @@ def adjust(action: np.ndarray) -> np.ndarray:
 class StarterModel(Model):
     """The MolmoAct2 model, with `instruction` applied to what it reads and `adjust` to each action it returns."""
 
-    def __init__(self, model: Model):
+    def __init__(self, model: Model, instructions: dict[str, str]):
         self._model = model
+        self._instructions = instructions
 
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
         # `obs` holds the views [exterior, exterior_2, wrist], the state [7 joint positions, grip] and the task.
-        obs = {**obs, molmoact2.TASK: instruction(obs[molmoact2.TASK])}
+        obs = {**obs, molmoact2.TASK: instruction(obs[molmoact2.TASK], self._instructions)}
         return [{ACTION: adjust(step[ACTION])} for step in self._model(obs, session_id=session_id)]
 
     def end_session(self, session_id: str) -> None:
@@ -68,9 +70,9 @@ class StarterModel(Model):
         self._model.close()
 
 
-@cfn.config(hf_repo=DEFAULT_HF_REPO, device_map='auto')
-def starter_model(hf_repo: str, device_map: str) -> Model:
-    model = StarterModel(MolmoAct2Model(hf_repo, device_map=device_map, num_steps=NUM_STEPS))
+@cfn.config(hf_repo=DEFAULT_HF_REPO, device_map='auto', instructions=INSTRUCTIONS, num_steps=NUM_STEPS)
+def starter_model(hf_repo: str, device_map: str, instructions: dict[str, str], num_steps: int) -> Model:
+    model = StarterModel(MolmoAct2Model(hf_repo, device_map=device_map, num_steps=num_steps), instructions)
     warmup(model, warm_observation())
     return model
 
@@ -78,13 +80,13 @@ def starter_model(hf_repo: str, device_map: str) -> Model:
 ACTION_FPS = 15.0  # The rate of the actions in a chunk of the DROID checkpoint.
 
 
-@cfn.config()
-def starter_pipeline() -> PolicyDeployment:
-    """The `droid_3cam` pipeline, with ACTIONS_PER_CHUNK and GRIP_THRESHOLD applied."""
+@cfn.config(actions_per_chunk=ACTIONS_PER_CHUNK, grip_threshold=GRIP_THRESHOLD)
+def starter_pipeline(actions_per_chunk: int | None, grip_threshold: float | None) -> PolicyDeployment:
+    """The `droid_3cam` pipeline, with the chunk cut after `actions_per_chunk` and the grip thresholded."""
     codec = molmoact2_codecs.droid_3cam.instantiate()
-    if GRIP_THRESHOLD is not None:
-        codec = BinarizeGripInference(GRIP_THRESHOLD) | codec
-    horizon_sec = None if ACTIONS_PER_CHUNK is None else ACTIONS_PER_CHUNK / ACTION_FPS
+    if grip_threshold is not None:
+        codec = BinarizeGripInference(grip_threshold) | codec
+    horizon_sec = None if actions_per_chunk is None else actions_per_chunk / ACTION_FPS
     return pipeline(codec=codec, fps=ACTION_FPS, horizon_sec=horizon_sec)
 
 

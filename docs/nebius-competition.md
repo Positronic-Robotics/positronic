@@ -109,6 +109,10 @@ positronic eval run --eval=molmo.franka_pick_mini \
   --output_dir=~/evals/starter_v1
 ```
 
+To try another value of a knob with no new build, give it to the server, for example
+`--pipeline.grip_threshold=0.6`, `--pipeline.actions_per_chunk=8` or `--model.num_steps=5`, after the image name
+in `docker run`. The platform starts the image with no arguments, so put the value that you submit in the file.
+
 Then submit the image, pinned by its digest, as [Submit](#submit) tells. `positronic eval catalog` names the
 competition eval:
 
