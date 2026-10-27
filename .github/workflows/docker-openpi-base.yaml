@@ -1,8 +1,7 @@
 name: Build the OpenPI Base Image
 
-# Builds positro/openpi-base from the openpi fork at the commit `OPENPI_REF` in docker/Makefile names. It builds
-# nothing where Docker Hub already holds that build. A pull request that touches the Makefile builds it and pushes
-# nothing. A caller passes `push` to publish it.
+# Builds positro/openpi-base from the openpi fork at `OPENPI_REF` in docker/Makefile, unless Docker Hub holds it.
+# A pull request builds it and pushes nothing. A caller passes `push` to publish it.
 on:
   pull_request:
     paths:
