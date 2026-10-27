@@ -1017,6 +1017,22 @@ def test_create_submission_sends_the_session_limit_a_remote_endpoint_states():
     assert gateway.body()['endpoints'][0]['max_concurrent_sessions'] == 1
 
 
+def test_create_submission_sends_the_scene_seed_a_plan_states():
+    gateway = Gateway(200, {'submission_id': '2c', 'status': 'pending'})
+    plan = EvalPlan.model_validate({**PLAN.model_dump(), 'scene_seed': 'scene-a'})
+    make_client(gateway).create_submission(plan)
+
+    assert gateway.body()['scene_seed'] == 'scene-a'
+
+
+def test_create_submission_sends_no_scene_seed_for_a_plan_that_states_none():
+    gateway = Gateway(200, {'submission_id': '2d', 'status': 'pending'})
+    make_client(gateway).create_submission(PLAN)
+
+    body = gateway.body()
+    assert 'scene_seed' not in body and 'scene_seed' not in body['tasks'][0]
+
+
 def test_create_submission_sends_the_memory_need_an_image_endpoint_states():
     gateway = Gateway(200, {'submission_id': '2b', 'status': 'pending'})
     image = {'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket', 'min_vram_gb': 40}

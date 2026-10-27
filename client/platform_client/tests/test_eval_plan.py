@@ -163,6 +163,7 @@ A_PER_TASK_VALUE = {
     'camera_vantage': 'phail',
     'external_cameras': {'side': 'left'},
     'clutter': {'count_min': 1, 'count_max': 2},
+    'scene_seed': 'scene-a',
     'start_pose': 'droid_reset',
 }
 
@@ -210,6 +211,39 @@ def test_a_plan_and_a_task_each_state_a_start_pose():
     assert EvalPlan.model_validate(sent) == plan
     with pytest.raises(ValidationError):
         a_plan(start_pose='home')
+
+
+def test_a_plan_and_a_task_each_state_a_scene_seed():
+    plan = a_plan(scene_seed='scene-a', tasks=[SPOONS, {'task_id': MUG, 'scene_seed': 'scene-b'}])
+    assert (plan.scene_seed, plan.tasks[0].scene_seed, plan.tasks[1].scene_seed) == ('scene-a', None, 'scene-b')
+    sent = plan.model_dump(mode='json')
+    assert sent['scene_seed'] == 'scene-a' and sent['tasks'][1]['scene_seed'] == 'scene-b'
+    assert EvalPlan.model_validate(sent) == plan
+
+
+def test_an_empty_scene_seed_is_refused_at_every_level():
+    with pytest.raises(ValidationError, match='at least 1 character'):
+        a_plan(scene_seed='')
+    with pytest.raises(ValidationError, match='at least 1 character'):
+        a_plan(tasks=[{'task_id': SPOONS, 'scene_seed': ''}])
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_a_level_without_a_scene_seed_omits_it_from_its_dump(mode: str):
+    """A platform that does not declare the field refuses it as unknown, so a plan that states no seed
+    must send none."""
+    sent = a_plan().model_dump(mode=mode)
+    assert 'scene_seed' not in sent
+    assert 'scene_seed' not in sent['tasks'][0]
+    assert not any('scene_seed' in entry for entry in sent['endpoints'])
+    stated = a_plan(tasks=[{'task_id': SPOONS, 'scene_seed': 'scene-a'}]).model_dump(mode=mode)
+    assert stated['tasks'][0]['scene_seed'] == 'scene-a' and 'scene_seed' not in stated
+
+
+@pytest.mark.parametrize('model', [Cascade, TaskNode, Endpoint, EvalPlan])
+def test_every_field_a_dump_omits_while_none_is_a_field_of_the_model(model: type[Cascade]):
+    """The serializer reads these names off the dump, so a renamed field would be sent as null."""
+    assert set(model._OMITTED_WHEN_NONE) <= set(model.model_fields)
 
 
 def test_a_scene_value_outside_the_closed_set_is_refused():
