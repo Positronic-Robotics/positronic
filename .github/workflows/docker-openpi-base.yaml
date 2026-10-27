@@ -2,8 +2,7 @@ name: Build the OpenPI Base Image
 
 # Builds positro/openpi-base from the openpi fork at the commit `OPENPI_REF` in docker/Makefile names. It builds
 # nothing where Docker Hub already holds that build. A pull request that touches the Makefile builds it and pushes
-# nothing. `docker-publish.yaml` and `docker-serve-pi05-droid.yaml` call this on main with `push`, before they build
-# an image on the base.
+# nothing. A caller passes `push` to publish it.
 on:
   pull_request:
     paths:
