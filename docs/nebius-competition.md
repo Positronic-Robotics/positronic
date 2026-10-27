@@ -52,11 +52,9 @@ docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
     -f docker/Dockerfile.serve-pi05-droid -t docker.io/<you>/<image>:v1 --push .
 # 5 Test with the network denied (uses no submission)
 bash docker/test_policy_image.sh docker.io/<you>/<image>:v1
-# 6 Submit, pinned by digest
-positronic eval catalog
+# 6 Submit, pinned by digest, to the eval that the leaderboard ranks
 docker buildx imagetools inspect docker.io/<you>/<image>:v1
-positronic eval run --eval=<eval> \
-    --policy-image=docker.io/<you>/<image>@sha256:<digest> \
+positronic eval run --policy-image=docker.io/<you>/<image>@sha256:<digest> \
     --transaction-key="<a name for this attempt>"
 positronic eval status --id=<submission id>
 ```
@@ -69,7 +67,6 @@ The first submission of your team asks it to accept the terms. [Submit](#submit)
 |---|---|
 | `<team name>` | The name of your team. The competition publishes it. |
 | `<you>/<image>` | Your repository on Docker Hub. For another registry, replace `docker.io` with the host of that registry in each command, and log in with `docker login <host>`. A private repository needs a credential: [A private image](#a-private-image). |
-| `<eval>` | The name of the competition eval, from `positronic eval catalog`. |
 | `<digest>` | The digest of your image, from `docker buildx imagetools inspect docker.io/<you>/<image>:v1`, without its `sha256:` prefix, because `--policy-image` already has `@sha256:`. A tag can move to an image that you did not test. |
 | `<a name for this attempt>` | The transaction key. Keep the quotes, because a name can contain spaces. Use a new key for a new image or another eval. The same key only retries the same submission. |
 | `<submission id>` | The id that `positronic eval run` prints. |
