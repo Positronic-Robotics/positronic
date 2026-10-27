@@ -105,6 +105,7 @@ competition-enter
 competition-enter --yes
 ```
 
+- The command prints the current version of the terms. `competition-enter --accept-terms=<version>` enters and accepts it.
 - When you enter, the competition publishes your team name and the date you entered. When a run is
   scored, it publishes the scores and the videos of the run. All of this stays public after the
   competition.

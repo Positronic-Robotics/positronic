@@ -1,12 +1,13 @@
 """Enter your team in the Physical AI Competition.
 
 Usage
-  competition-enter                           # show what becomes public about your team
+  competition-enter                           # show what becomes public about your team, and the terms
   competition-enter --yes                     # the same, then enter your team
   competition-enter --accept-terms=<version>  # the same, then enter your team and accept that version
 
 The key comes from POSITRONIC_PLATFORM_API_KEY, else from the record `positronic account register` saves.
 A team accepts the terms at its first submission: the platform refuses it until then, and names the version.
+The command reads the current version of the terms and their page from the platform.
 """
 
 from __future__ import annotations
@@ -16,14 +17,22 @@ import os
 import sys
 
 import httpx
-from platform_client.client import API_KEY_ENV, API_URL_ENV, PlatformClient
+from platform_client.client import API_KEY_ENV, API_URL_ENV, Auth, PlatformClient
 from platform_client.config import REGISTER_COMMAND, api_key_from, platform_url_from, record_if_needed
 from platform_client.errors import PlatformError
 from platform_client.routes import API_PREFIX
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
+COMPETITION_TERMS = f'{API_PREFIX}/competition.terms'
 COMPETITION_ENTER = f'{API_PREFIX}/competition.enter'
 COMPETITION_ACCEPT_TERMS = f'{API_PREFIX}/competition.accept_terms'
+
+
+class CompetitionTerms(BaseModel):
+    """`competition.terms`: the current version of the terms, and the page that holds them."""
+
+    version: str = Field(min_length=1)
+    url: str
 
 
 class EnterRequest(BaseModel):
@@ -50,7 +59,10 @@ class CompetitionEntry(BaseModel):
 
 
 class CompetitionClient(PlatformClient):
-    """The platform client, with the competition's two routes."""
+    """The platform client, with the competition's routes."""
+
+    def terms(self) -> CompetitionTerms:
+        return self._get(COMPETITION_TERMS, CompetitionTerms, auth=Auth.NONE)
 
     def enter(self, request: EnterRequest) -> CompetitionEntry:
         return self._post(COMPETITION_ENTER, request, CompetitionEntry)
@@ -68,6 +80,14 @@ def entry_line(entry: CompetitionEntry) -> str:
     return f'entered the competition on {day}, and accepted the terms version {entry.terms_version}'
 
 
+def terms_lines(terms: CompetitionTerms) -> str:
+    return (
+        f'The terms of the competition, version {terms.version}: {terms.url}\n'
+        'Your team accepts them with its first submission.\n'
+        f'To accept them now, run: competition-enter --accept-terms={terms.version}'
+    )
+
+
 def run(client: CompetitionClient, *, confirmed: bool, accepted_version: str | None) -> None:
     """`accepted_version` is the terms version that the team approved, or None. The gateway refuses a version
     that is not current, so a version published after the approval is never accepted in its place."""
@@ -76,6 +96,7 @@ def run(client: CompetitionClient, *, confirmed: bool, accepted_version: str | N
         'It publishes your scores and the videos of your runs when they are scored.\n'
         'All of this stays public after the competition.'
     )
+    print(terms_lines(client.terms()))
     if not confirmed and accepted_version is None:
         print('To join, run: competition-enter --yes')
         return
@@ -94,7 +115,7 @@ def main() -> None:
         '--accept-terms',
         metavar='VERSION',
         default=None,
-        help='enter your team, and accept this version of the terms for your team',
+        help='enter your team, and accept this version of the terms, which the command prints',
     )
     parser.add_argument('--platform-url', default=None, help=f'the platform to enter on, else {API_URL_ENV}')
     args = parser.parse_args()
