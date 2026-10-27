@@ -1,3 +1,4 @@
+import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -395,3 +396,10 @@ def test_legacy_video_queries(video_paths):
     frame, ts = signal.time[Time(**{RECORDED_TIME: 1000})]
     assert ts == Time(**{RECORDED_TIME: 1000})
     assert_frames_equal(frame, create_frame(40))
+
+
+def test_a_video_signal_pickles_after_it_reads_its_frames_index(video_paths):
+    signal = create_video_signal(video_paths, [(create_frame(10), 1000), (create_frame(200), 2000)])
+    assert signal.bounds(RECORDED_TIME) == (1000, 2000)
+    copy = pickle.loads(pickle.dumps(signal))
+    assert_frames_equal(copy[1][0], create_frame(200))
