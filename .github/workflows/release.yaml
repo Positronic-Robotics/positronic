@@ -221,6 +221,7 @@ jobs:
 
   # `positro/openpi` and `positro/pi05-droid` build on this base.
   openpi-base:
+    needs: verify-release
     uses: ./.github/workflows/docker-openpi-base.yaml
     with:
       push: true
