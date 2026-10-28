@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Teleop</title>
+  <style>
+    body { font-family: sans-serif; background: #111; color: #eee; margin: 24px; }
+    #state { font-size: 28px; margin-bottom: 8px; }
+    #state.task-running { display: inline-block; padding: 4px 12px; background: #06d6a0; color: #111; }
+    #control { font-size: 20px; margin-bottom: 8px; }
+    #task { font-size: 20px; margin-bottom: 16px; }
+    button { font-size: 22px; padding: 12px 28px; margin-right: 12px; }
+    #error { color: #f88; min-height: 1.5em; }
+    #cameras { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-top: 16px; }
+    figure { margin: 0; }
+    figure img { display: block; width: 100%; }
+    figcaption { font-size: 14px; opacity: 0.8; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div id="state">Waiting for a trial</div>
+  <div id="control"></div>
+  <div id="task"></div>
+  <button id="cancel" disabled>Cancel</button>
+  <div id="error"></div>
+  <div id="cameras"></div>
+  <script>
+    const ROUTES = {
+      status: '/status',
+      cancel: '/cancel',
+      camera: (name) => `/camera/${encodeURIComponent(name)}.jpg`,
+    };
+    const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
+    const STATE = {
+      [PHASE.idle]: 'Waiting for a trial',
+      [PHASE.readyWait]: 'Human trial: put on the headset, then press Ready on the headset or the phone',
+      [PHASE.running]: 'Task running',
+      [PHASE.ended]: 'The trial ended: give the verdict on the console',
+    };
+    // The fields of `/status`, as the server names them. `parseStatus` reads them once.
+    const STATUS_FIELD = {
+      phase: 'phase', task: 'task', control: 'control', cameras: 'cameras',
+    };
+    function parseStatus(json) {
+      return Object.fromEntries(Object.entries(STATUS_FIELD).map(([name, field]) => [name, json[field]]));
+    }
+    let shownPhase = null;
+    // The phase in which the last error came, or 'unreachable'. The error stays until a poll shows another phase.
+    let errorPhase = null;
+
+    async function post(path) {
+      const answer = await fetch(path, { method: 'POST' });
+      document.getElementById('error').textContent = answer.ok ? '' : (await answer.json()).detail;
+      errorPhase = answer.ok ? null : shownPhase;
+      render(answer.ok ? parseStatus(await answer.json()) : null);
+    }
+
+    function render(status) {
+      if (status === null) return;
+      if (errorPhase !== null && status.phase !== errorPhase) {
+        document.getElementById('error').textContent = '';
+        errorPhase = null;
+      }
+      const running = status.phase === PHASE.running;
+      const state = document.getElementById('state');
+      state.textContent = STATE[status.phase];
+      state.className = running ? 'task-running' : '';
+      document.getElementById('control').textContent = !running ? '' : status.control ? 'Control on' : 'Control off';
+      document.getElementById('task').textContent = status.task;
+      const waiting = status.phase === PHASE.readyWait;
+      document.getElementById('cancel').disabled = !waiting;
+      if (waiting && shownPhase !== PHASE.readyWait) {
+        document.title = 'Human trial';
+        window.focus();
+      } else if (!waiting) {
+        document.title = 'Teleop';
+      }
+      shownPhase = status.phase;
+    }
+
+    // One tile for each camera of the run, with its name, as the camera list of the status gives them.
+    let shownCameras = '';
+    function showCameras(cameras) {
+      const grid = document.getElementById('cameras');
+      if (cameras.join('\n') !== shownCameras) {
+        grid.replaceChildren(...cameras.map((name) => {
+          const figure = document.createElement('figure');
+          const image = document.createElement('img');
+          image.alt = name;
+          image.dataset.camera = name;
+          const caption = document.createElement('figcaption');
+          caption.textContent = name;
+          figure.append(image, caption);
+          return figure;
+        }));
+        shownCameras = cameras.join('\n');
+      }
+      for (const image of grid.querySelectorAll('img')) {
+        image.src = ROUTES.camera(image.dataset.camera) + '?t=' + Date.now();
+      }
+    }
+
+    async function poll() {
+      try {
+        const status = parseStatus(await (await fetch(ROUTES.status)).json());
+        render(status);
+        showCameras(status.cameras);
+      } catch (e) {
+        document.getElementById('error').textContent = 'The teleop service does not answer';
+        errorPhase = 'unreachable';
+      }
+      setTimeout(poll, 200);
+    }
+
+    document.getElementById('cancel').onclick = () => post(ROUTES.cancel);
+    poll();
+  </script>
+</body>
+</html>
