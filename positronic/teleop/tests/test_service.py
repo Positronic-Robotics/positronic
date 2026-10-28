@@ -790,7 +790,7 @@ def test_a_world_that_closes_the_loop_in_the_ready_wait_hides_the_notice():
 
 
 MACOS_DIALOG = ['osascript', '-e', 'display alert "positronic teleop" message "Press \\"Ready\\""']
-LINUX_NOTICE = ['notify-send', '--urgency=critical', 'positronic teleop', 'Press "Ready"']
+LINUX_DIALOG = ['zenity', '--info', '--no-markup', '--title=positronic teleop', '--text=Press "Ready"']
 LINUX_SOUND = ['paplay', '/usr/share/sounds/freedesktop/stereo/complete.oga']
 
 
@@ -806,7 +806,7 @@ class _Process:
 
 @pytest.mark.parametrize(
     'platform, commands',
-    [('darwin', [['afplay', command.DesktopNotice.MACOS_SOUND], MACOS_DIALOG]), ('linux', [LINUX_NOTICE, LINUX_SOUND])],
+    [('darwin', [['afplay', command.DesktopNotice.MACOS_SOUND], MACOS_DIALOG]), ('linux', [LINUX_DIALOG, LINUX_SOUND])],
     ids=['macos', 'linux'],
 )
 def test_the_desktop_notice_runs_the_notice_commands_of_the_platform(monkeypatch, platform, commands):
@@ -817,26 +817,27 @@ def test_the_desktop_notice_runs_the_notice_commands_of_the_platform(monkeypatch
     assert started == commands
 
 
-def test_hide_closes_the_macos_dialog(monkeypatch):
+@pytest.mark.parametrize('platform, dialog', [('darwin', 'osascript'), ('linux', 'zenity')], ids=['macos', 'linux'])
+def test_hide_closes_the_dialog(monkeypatch, platform, dialog):
     processes: list[_Process] = []
 
     def start(argv: list[str]) -> _Process:
         processes.append(_Process(argv, []))
         return processes[-1]
 
-    monkeypatch.setattr(command.sys, 'platform', 'darwin')
+    monkeypatch.setattr(command.sys, 'platform', platform)
     monkeypatch.setattr(command.subprocess, 'Popen', start)
     notice = command.DesktopNotice()
     notice.show('Press Ready')
     notice.hide()
-    assert [process.terminated for process in processes] == [False, True]
+    assert [process.command[0] for process in processes if process.terminated] == [dialog]
 
 
 def test_a_notice_program_that_is_missing_is_logged_and_the_next_one_runs(monkeypatch, caplog):
     started: list[list[str]] = []
 
     def start(argv: list[str]) -> _Process:
-        if argv[0] == 'notify-send':
+        if argv[0] == 'zenity':
             raise FileNotFoundError(argv[0])
         return _Process(argv, started)
 
@@ -844,7 +845,7 @@ def test_a_notice_program_that_is_missing_is_logged_and_the_next_one_runs(monkey
     monkeypatch.setattr(command.subprocess, 'Popen', start)
     command.DesktopNotice().show('Press Ready')
     assert [argv[0] for argv in started] == ['paplay']
-    assert 'Cannot show the notice with notify-send' in caplog.text
+    assert 'Cannot show the notice with zenity' in caplog.text
 
 
 @pytest.mark.parametrize('ending', ['give_up', 'time_limit'])

@@ -111,8 +111,8 @@ def _start(command: Sequence[str]) -> subprocess.Popen | None:
 
 
 class DesktopNotice:
-    """A notice with a sound on the desktop of this computer. On macOS it is a dialog in the centre of the screen,
-    with ``afplay``. Elsewhere it is a notification of ``notify-send``, with ``sound`` played by ``paplay``."""
+    """A dialog with a sound in the centre of the screen of this computer: ``osascript`` and ``afplay`` on macOS,
+    else ``zenity`` on ``DISPLAY`` and ``sound`` played by ``paplay``."""
 
     MACOS_SOUND = '/System/Library/Sounds/Glass.aiff'
 
@@ -129,11 +129,10 @@ class DesktopNotice:
             script = f'display alert {_applescript_string(self._title)} message {_applescript_string(text)}'
             self._dialog = _start(['osascript', '-e', script])
         else:
-            _start(['notify-send', '--urgency=critical', self._title, text])
+            self._dialog = _start(['zenity', '--info', '--no-markup', f'--title={self._title}', f'--text={text}'])
             _start(['paplay', str(self._sound)])
 
     def hide(self) -> None:
-        """Close the dialog. A notification of ``notify-send`` stays until the teleoperator closes it."""
         if self._dialog is not None:
             self._dialog.terminate()
             self._dialog = None
