@@ -25,7 +25,7 @@ checkpoint run on any embodiment that keeps the contract. At the start of each e
 policy's `ee_frames` with the rig's. A remote policy gets its `ee_frames` from its server when its session opens, so
 the harness compares them then, before the first observation goes to the server. A policy observes only the poses it
 states at the rig's site. A policy that names another site is refused. A policy that states none speaks joints only: it
-observes no pose signal and must not send a pose command.
+observes no pose signal, and the harness fails the episode at its first pose command.
 
 `Impedance.frame` is the stiffness point, measured from the rig site. The Franka driver accepts an offset only, and
 refuses a turned frame. `DROID_IMPEDANCE` puts it at the flange.

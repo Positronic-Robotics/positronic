@@ -168,7 +168,7 @@ def observed_harness():
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
-        step = partial(harness._step, Task('test', None), frozenset(), runtime, policy_run, None)
+        step = partial(harness._step, Task('test', None), frozenset(), True, runtime, policy_run, None)
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
@@ -1879,6 +1879,30 @@ def test_a_policy_that_states_no_frames_observes_no_pose():
     assert keys.JOINTS in policy.observations[0]
 
 
+POSE_COMMANDS = [
+    CartesianPosition(pose=Transform3D(translation=np.array([0.4, 0.5, 0.6]))),
+    CartesianDelta(delta=Transform3D(translation=np.array([0.0, 0.0, 0.01]))),
+]
+
+
+@pytest.mark.parametrize('command', POSE_COMMANDS, ids=['position', 'delta'])
+def test_a_policy_that_states_no_frames_fails_at_its_first_pose_command(command):
+    policy = StubPolicy(command=command)
+    commands = []
+    with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
+        run_robot_rollout(policy, commands=commands).result()
+    assert len(policy.observations) == 1
+    assert commands == []
+
+
+@pytest.mark.parametrize('command', POSE_COMMANDS, ids=['position', 'delta'])
+def test_a_policy_that_states_its_frames_sends_a_pose_command(command):
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}, command=command)
+    commands = []
+    assert run_robot_rollout(policy, commands=commands).result()[eval_keys.TERMINATED] is True
+    assert commands == [command]
+
+
 def test_a_policy_that_states_frames_sees_no_other_signal_the_rig_states_as_a_pose_whatever_its_name():
     framed = {signal: EEFrame(site=GRIPPER_SITE) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.JOINTS)}
     static_meta = {**ROBOT_STATIC_META, **ee_frames_entry(framed)}
@@ -1889,10 +1913,10 @@ def test_a_policy_that_states_frames_sees_no_other_signal_the_rig_states_as_a_po
 
 
 class ExtraChannelPolicy(StubPolicy):
-    """A ``StubPolicy`` whose step also names ``channel``."""
+    """A joint ``StubPolicy`` whose step also names ``channel``."""
 
     def __init__(self, channel):
-        super().__init__()
+        super().__init__(command=JointPosition(positions=np.zeros(7)))
         self.channel = channel
 
     def run(self, runtime) -> PolicyRun:
@@ -1903,16 +1927,14 @@ class ExtraChannelPolicy(StubPolicy):
 
 def test_a_step_that_names_a_channel_the_embodiment_lacks_fails_the_episode_as_a_policy_command_error():
     with pytest.raises(PolicyCommandError, match="'timestamp'"):
-        run_robot_rollout(ExtraChannelPolicy('timestamp'), robot_meta=bundled_franka_model()).result()
+        run_robot_rollout(ExtraChannelPolicy('timestamp')).result()
 
 
 def test_a_step_that_names_only_channels_the_embodiment_takes_reaches_the_rig():
     commands = []
     policy = ExtraChannelPolicy(keys.TARGET_GRIP)
-    assert run_robot_rollout(policy, robot_meta=bundled_franka_model(), commands=commands).result()[
-        eval_keys.TERMINATED
-    ]
-    assert isinstance(commands[0], CartesianPosition)
+    assert run_robot_rollout(policy, commands=commands).result()[eval_keys.TERMINATED]
+    assert isinstance(commands[0], JointPosition)
 
 
 def test_a_policy_that_states_the_rig_site_sees_the_pose():
@@ -2010,7 +2032,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
     try:
-        assert h.harness._step(Task('test', None), frozenset(), runtime, run, None) == expected_ns
+        assert h.harness._step(Task('test', None), frozenset(), True, runtime, run, None) == expected_ns
     finally:
         runtime.close()
         run.close()
@@ -2039,11 +2061,11 @@ def test_robot_observation_serialization_and_typed_command_emission():
         harness.commands[keys.TARGET_GRIP]._bind(Trace(world.clock), clock=world.clock)
         state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         emitter.emit(state)
-        policy = StubPolicy()
+        policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), frozenset(), runtime, run, None)
+            harness._step(Task('move', None), frozenset(), False, runtime, run, None)
         finally:
             runtime.close()
             run.close()
