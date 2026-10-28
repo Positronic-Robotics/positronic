@@ -332,6 +332,38 @@ checkpoints, start one server for each.
 
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
+## Real-time chunking
+
+Real-time chunking (RTC) predicts a new action chunk while the client executes
+queued commands. Its responsibilities follow the policy API's
+[ownership principles](../policy/DESIGN.md#ownership-of-decisions).
+
+TODO: Align RTC request fields and command encoding with the contract below.
+
+The client supplies the remaining planned actions at the observation moment,
+alongside measured and expected end-to-end call latency. The server decides how
+to use that context, including which actions to freeze or blend. Supplying the
+whole remaining plan lets models choose their own conditioning window.
+
+The prefix represents planned commands in model action units. If command
+preparation changes a grip prediction from `0.7` to `1.0`, the prefix reflects
+`1.0`. It describes intended commands, not measured physical motion.
+
+Latency and offsets are in seconds. The prefix's start within the preceding
+prediction identifies its source actions; its start relative to the observation
+says when they are due. With the original action spacing preserved, the server
+knows the remaining times from its action rate. Relative offsets avoid requiring
+synchronized client and server clocks.
+
+Action codecs encode commands at a configured input path through ordinary
+`encode()` calls. Observation codecs, field selection and packing compose with
+them to prepare the request explicitly. Neither a separate command-encoding
+interface nor RTC-specific handling in `Codec.wrap` is needed.
+
+A complete prefix can support stateless inference, but models may retain session
+history. [GR00T](../vendors/gr00t/README.md#real-time-chunking) uses cached pose
+predictions alongside client-supplied joint and grip targets.
+
 ## Classes
 
 ### `server.PolicyServer`

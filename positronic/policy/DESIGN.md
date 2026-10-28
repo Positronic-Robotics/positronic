@@ -142,6 +142,25 @@ run and its server session. The record remains.
 
 The sections below describe each piece.
 
+### Ownership of decisions
+
+Each component owns the decisions for which it has the necessary knowledge.
+The local policy knows the robot's planned commands and execution timing;
+the model implementation knows how to use that context when predicting.
+Inputs should carry enough context for their consumer to decide, without
+requiring the producer to implement the consumer's algorithm.
+
+Representation changes belong in codecs, scheduling belongs in policies,
+and model-specific interpretation belongs with the model. Compose these
+operations explicitly so the recipe shows which data reaches each component.
+A reusable operation should describe the data it transforms rather than
+require a separate interface for each algorithm that uses it.
+
+Shared interfaces permit implementation-specific needs without imposing them
+on every implementation. A model may retain session history without requiring
+all models to be stateful. State ownership and lifetime must be explicit;
+whether history is needed remains an implementation choice.
+
 ### Processors and runs
 
 One algorithm may drive several robots at once.
@@ -210,6 +229,12 @@ Playback belongs to the policy; the framework emits its commands immediately.
 For example, a scheduling processor can play an action chunk before requesting
 another, a fault guard can withhold commands, and a history processor can collect
 sensor samples while inference is pending. These are composable policy choices.
+
+`ChunkedSchedule(replan_on_error=True)` clears queued commands when it observes
+an arm's `ERROR` and makes inference due immediately. It retains an already
+pending call and uses its answer. An outer `PauseOnUnavailable` withholds child
+calls during an error, so the scheduler cannot react to a status it never sees.
+Recovery therefore depends on which component receives the robot's status.
 
 ### Submitted work
 
@@ -320,50 +345,6 @@ A server deployment brings together the model to load, the client stack, and
 any data conversion performed on the server. Loading and serving models belong
 to the server; the policy run sees an ordinary function call. See the
 [offboard interfaces](../offboard/spec.py) for the server configuration types.
-
-### Real-time chunking: who owns the plan
-
-Real-time chunking (RTC) generates a new action chunk while the robot continues
-executing its queued commands. The model needs enough context to continue that
-motion coherently. The design assigns decisions to the component that has the
-knowledge to make them.
-
-TODO: Align the RTC request fields and command encoding with the contract below.
-
-**The client supplies its plan; the server decides how to use it.** The request
-describes the observation moment, including the remaining planned actions and
-measured and expected call latency. The client knows its queue and call timings;
-the server knows how its model conditions predictions. Choosing frozen and
-blending regions therefore belongs to the server. The client supplies the
-remaining plan rather than trimming it to a particular model's conditioning window.
-
-**The prefix describes planned commands.** A model prediction can change during
-command preparation: a gripper value may be binarized, for example. Conditioning
-should reflect the commands the client plans to issue. The prefix is expressed
-in the model's action representation, but encoding it does not attempt to recover
-values discarded during command preparation. Planned commands are not a claim
-about the physical motion the robot will achieve.
-
-**Time is expressed in seconds.** Latency includes the submitted call's full
-duration, not just model computation. The prefix carries both its start time
-within the preceding prediction and its start time relative to the observation.
-The first locates source actions; the second says when they are due. With the
-prediction's fixed action spacing preserved, the server's known action rate
-determines the remaining times without synchronized machine clocks.
-
-**Conversion belongs in codecs.** Action codecs understand both robot commands
-and model action values. Their ordinary encoding operation converts commands at
-a configured input path; observation codecs prepare sensor inputs alongside
-them. Selection and packing explicitly carry the timing context. This keeps RTC
-handling out of the generic callable wrapper and avoids a separate command-encoding
-interface. A command path describes data to convert, not the algorithm using it.
-
-**A supplied prefix permits stateless inference without requiring it.** GR00T's
-tested DROID checkpoint also requires end-effector poses, which joint commands
-do not retain. Its session cache supplies those predicted poses while client
-values supply planned joints and grip. This avoids requiring pose reconstruction
-for every client. Cached poses remain model predictions and need not exactly
-match modified joint targets; that limitation belongs to the GR00T integration.
 
 ### Recording and logging
 
@@ -522,7 +503,9 @@ their caller. `Codec.wrap` does not take ownership of the child it wraps.
 
 ## Deferred, not to decide now
 
-- Plan invalidation and recovery after robot unavailability; [#789](https://github.com/Positronic-Robotics/positronic/issues/789).
+- Coordinating recovery across guards and schedulers, including pending inference
+  and whether temporal history or server session state needs resetting;
+  [#789](https://github.com/Positronic-Robotics/positronic/issues/789).
 - TODO: Let a policy select which answers may wake it early with `wake_on`.
 - The shape of the robot description, and a server's ability to refuse one.
 - Inference input/output recording and custom signal recording.
