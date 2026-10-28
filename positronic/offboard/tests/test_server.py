@@ -22,7 +22,7 @@ from positronic_wire import registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
 from websockets.datastructures import Headers
-from websockets.exceptions import ConnectionClosedOK, InvalidStatus
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK, InvalidStatus
 from websockets.http11 import Response
 from websockets.sync.client import connect, unix_connect
 
@@ -517,6 +517,20 @@ def test_session_end_leaves_time_to_read_the_ack(unix_stub_server, socket_path, 
         else:
             with pytest.raises(ConnectionClosedOK):
                 conn.recv(timeout=5)
+
+
+@pytest.mark.parametrize('client_closes', [True, False])
+def test_a_refused_session_leaves_time_to_read_the_error(unix_stub_server, socket_path, monkeypatch, client_closes):
+    if not client_closes:
+        monkeypatch.setattr(websocket_wire.WebsocketWire, 'CLOSE_TIMEOUT_SEC', 0.05)
+    with unix_connect(socket_path, uri=f'ws://localhost{wire.SESSION_PATH}?scale=1') as conn:
+        assert deserialise(conn.recv(timeout=5))[protocol.STATUS] == protocol.ServerStatus.ERROR
+        if client_closes:
+            assert conn.ping().wait(5), 'The server closed before the client could read the error'
+        else:
+            with pytest.raises(ConnectionClosedError) as closed:
+                conn.recv(timeout=5)
+            assert closed.value.rcvd is not None and closed.value.rcvd.code == 1008
 
 
 def test_a_probe_over_a_socket_answers_for_the_server_that_bound_it(unix_stub_server):

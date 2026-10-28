@@ -77,17 +77,35 @@ def _server_connection(send: AsyncMock, receive: AsyncMock) -> websocket_wire.We
         receive,
         send,
         server_wire.ServedHostPort('localhost', 8000),
+        close_timeout=0.05,
     )
+
+
+async def _no_event() -> None:
+    await asyncio.sleep(3600)
 
 
 def test_a_send_after_the_session_closed_says_the_peer_is_gone():
     sent = AsyncMock()
-    conn = _server_connection(sent, AsyncMock())
+    conn = _server_connection(sent, AsyncMock(side_effect=_no_event))
     asyncio.run(conn.refuse('Session refused'))
 
     with pytest.raises(wire.PeerDisconnected):
         asyncio.run(conn.send(b'a frame nobody is there to read'))
     sent.assert_awaited_once_with({'type': 'websocket.close', 'code': 1008, 'reason': 'Session refused'})
+
+
+def test_a_refusal_waits_for_the_client_to_close_first():
+    sent = AsyncMock()
+    received = AsyncMock(
+        side_effect=[{'type': 'websocket.receive', 'bytes': b'a frame'}, {'type': 'websocket.disconnect'}]
+    )
+    conn = _server_connection(sent, received)
+    asyncio.run(conn.refuse('Session refused'))
+
+    sent.assert_not_awaited()
+    with pytest.raises(wire.PeerDisconnected):
+        asyncio.run(conn.send(b'a frame nobody is there to read'))
 
 
 def test_a_send_on_a_live_session_goes_out():
