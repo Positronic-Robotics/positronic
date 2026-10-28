@@ -154,8 +154,8 @@ class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
         The harness reads one entry: ``ee_frames``, nested and keyed by pose signal, states the frame of each pose
         signal the policy reads. A run that learns its frames only as it starts, such as a remote run, writes the
         same entry with ``runtime.set_metadata`` before its first yield. A policy that states entries observes only
-        those pose signals. A policy that states none speaks joints only: it observes no pose signal and must not send
-        a pose command.
+        those pose signals. A policy that states none speaks joints only: it observes no pose signal, and its first pose
+        command fails the episode.
         """
         return {}
 

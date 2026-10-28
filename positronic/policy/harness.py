@@ -17,12 +17,14 @@ from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.keys import EE_FRAMES
+from positronic.drivers.roboarm.models import EEFrame
 from positronic.eval import Embodiment, Task, only_keep_written_signals
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun
+from positronic.policy.base import Answer, Commands, Obs, Policy, PolicyEnd, PolicyRun
 from positronic.policy.codecs import PolicyCommandError
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.utils import flatten_dict, frozen_view
@@ -199,20 +201,25 @@ class Harness(pimm.ControlSystem):
     def _statics(self) -> dict[str, Any]:
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
 
-    def _withheld_poses(self, policy: Policy, runtime: Executor) -> frozenset[str]:
-        """The rig's pose signals that ``policy`` does not observe. Call it after ``runtime.start(policy)``, before
-        the first observation.
+    @staticmethod
+    def _policy_frames(policy: Policy, runtime: Executor) -> dict[str, EEFrame]:
+        """The frames that ``policy`` states. Call it after ``runtime.start(policy)``, before the first observation.
 
         The policy states its frames as ``EE_FRAMES`` in ``meta()``, or its run writes them to ``runtime`` as it
-        starts, as a remote run does once its session opens. A policy observes only the poses it states. A policy that
-        states none speaks joints only and observes no pose. Raise when the policy states another site than the rig,
-        or states frames on a rig that states none, such as an arm with no model.
+        starts, as a remote run does once its session opens. Raise when both state the frame of one pose signal.
         """
-        rig = ee_frames(self._statics())
         stated, recorded = ee_frames(policy.meta()), ee_frames(runtime.metadata_snapshot())
         if both := stated.keys() & recorded.keys():
             raise ValueError(f'Only one component of the policy may state the {EE_FRAMES} of {sorted(both)}')
-        declared = stated | recorded
+        return stated | recorded
+
+    def _withheld_poses(self, declared: dict[str, EEFrame]) -> frozenset[str]:
+        """The rig's pose signals that a policy that states ``declared`` does not observe.
+
+        A policy observes only the poses it states. Raise when the policy states another site than the rig, or states
+        frames on a rig that states none, such as an arm with no model.
+        """
+        rig = ee_frames(self._statics())
         if declared and not rig:
             raise ValueError(
                 f'The rig states no {EE_FRAMES}, so it runs only a policy that speaks joints, and the policy states '
@@ -342,14 +349,32 @@ class Harness(pimm.ControlSystem):
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return frozen_view(inputs)
 
+    @staticmethod
+    def _refuse_pose_commands(commands: Commands) -> None:
+        """Raise when ``commands`` holds a pose command, which a policy that states no frames may not send."""
+        posed = sorted(
+            name for name, command in commands.items() if isinstance(command, CartesianPosition | CartesianDelta)
+        )
+        if posed:
+            raise ValueError(
+                f'The policy states no {EE_FRAMES}, so it speaks joints only, and it sends a pose command on {posed}. '
+                'State the frame of each pose that the policy reads or commands.'
+            )
+
     def _step(
-        self, task: Task, withheld_poses: frozenset[str], runtime: Executor, policy_run: PolicyRun, due_ns: int | None
+        self,
+        task: Task,
+        withheld_poses: frozenset[str],
+        joint_only: bool,
+        runtime: Executor,
+        policy_run: PolicyRun,
+        due_ns: int | None,
     ) -> int | _PolicyEnded | None:
         """Read sensors, call the policy, emit commands, and return its clamped next wake-up time. Return a
         ``_PolicyEnded`` when the policy run returns, and ``None`` without an observation.
 
         ``due_ns`` is the wake-up time the previous step returned, or ``None`` for the first step. The step span
-        records the step's durations.
+        records the step's durations. A ``joint_only`` policy that sends a pose command fails the step.
         """
         step_ms: dict[str, float] = {}
         with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP) as span:
@@ -377,6 +402,8 @@ class Harness(pimm.ControlSystem):
                     raise PolicyCommandError(
                         f'The step names {unknown}, and the embodiment takes only {sorted(self._embodiment.commands)}'
                     )
+                if joint_only:
+                    self._refuse_pose_commands(step.commands)
                 emit_started_ns = time.perf_counter_ns()
                 self._telemetry.step()
                 messages = {name: self.commands[name].emit(value) for name, value in step.commands.items()}
@@ -455,6 +482,7 @@ class Harness(pimm.ControlSystem):
         should_stop: pimm.SignalReceiver,
         task: Task,
         withheld_poses: frozenset[str],
+        joint_only: bool,
         runtime: Executor,
         policy_run: PolicyRun,
         deadline_ns: int | None,
@@ -467,7 +495,7 @@ class Harness(pimm.ControlSystem):
         while not should_stop.value and payload is None:
             sampled_ns = runtime.time_ns
             if completed or resume_at_ns is None or sampled_ns >= resume_at_ns:
-                stepped = self._step(task, withheld_poses, runtime, policy_run, resume_at_ns)
+                stepped = self._step(task, withheld_poses, joint_only, runtime, policy_run, resume_at_ns)
                 if isinstance(stepped, _PolicyEnded):
                     ended = stepped
                 else:
@@ -516,14 +544,15 @@ class Harness(pimm.ControlSystem):
         policy_run = None
         try:
             policy_run = runtime.start(rollout.policy)
-            withheld_poses = self._withheld_poses(rollout.policy, runtime)
+            frames = self._policy_frames(rollout.policy, runtime)
+            withheld_poses = self._withheld_poses(frames)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
             try:
                 with self._recording(rollout.writer):
                     payload = yield from self._rollout(
-                        should_stop, task, withheld_poses, runtime, policy_run, deadline_ns
+                        should_stop, task, withheld_poses, not frames, runtime, policy_run, deadline_ns
                     )
                     if self._writer is not None:
                         static = only_keep_written_signals(
