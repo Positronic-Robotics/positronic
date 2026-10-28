@@ -218,6 +218,9 @@ class ResolvedTask(BaseModel):
     clutter: Clutter | None = None
     # The kit objects the draw puts on the table beside the task's own.
     clutter_objects: list[str] = Field(default_factory=list)
+    # Each object of a recorded table that this table does not hold, by name, and the object in its
+    # place, or None where no object fits the caps (`README.md` §Eval plans).
+    clutter_replaced: dict[str, str | None] = Field(default_factory=dict)
     # The endpoint name each episode runs against, in the order the episodes run.
     episode_order: list[str] = Field(default_factory=list)
 

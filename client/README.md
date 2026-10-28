@@ -259,10 +259,15 @@ episode from one of the plan's endpoints.
 Each plan draws its scene again, so two plans of one task can lay out different scenes. A plan or a task
 that states `scene_seed` draws every random part of the task's scene from that seed alone. These parts are
 the table, the tote side and each camera side, where no level states the side or a level states `random`.
-Two plans that state one `scene_seed` lay out one scene for a task, at any place in the task list and under
-any `transaction_key`, while they state the same scene fields. The seed keeps a scene only while the object
-kit and the task catalogue stay the same. A change to either changes the scene that the seed draws, and the
-platform gives no warning. The episode order does not come from the seed: each plan draws its own.
+The platform records each part the first time a plan of the organization draws it for that task under that
+seed. Every later plan of the organization with that seed and task lays out the recorded part, at any place in
+the task list and under any `transaction_key`. The recorded scene holds when the object kit or the task
+catalogue changes. A level that states a side lays out that side, and a recorded side that the task no longer
+offers is drawn again from the seed. A recorded table is laid out whatever clutter bounds a later plan states.
+When an object of the recorded table has left the kit, or the task now names it, the table takes the next
+object in the seed's own order that fits the recorded size caps. `clutter_replaced` names each object that
+the table replaced. Another organization draws its own scene from the same seed. `submissions.resolve` shows
+the recorded scene and records nothing. The episode order does not come from the seed: each plan draws its own.
 
 `submissions.resolve` takes the same plan and answers with `resolved` alone. For a pay_as_you_go
 organization, that `ResolvedPlan` carries a `credit_quote`. It files nothing, spends no quota and
