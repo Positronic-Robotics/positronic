@@ -104,7 +104,9 @@ class DesktopNotice:
     ``DISPLAY`` and ``paplay``."""
 
     def __init__(
-        self, title: str = 'positronic teleop', sound: str = _MACOS_SOUND if sys.platform == 'darwin' else _LINUX_SOUND
+        self,
+        title: str = 'Teleoperation trial',
+        sound: str = _MACOS_SOUND if sys.platform == 'darwin' else _LINUX_SOUND,
     ):
         self._title = title
         self._sound = Path(sound)
@@ -185,7 +187,10 @@ def serve(
         served_address, ready_limit, silence_limit, hold_sec, press_threshold, auth_token=auth_token
     )
     headset = _Headset(service, view_fps)
-    text = f'A trial waits for Ready. Press Ready (B on a Quest) within {ready_limit:g} s.'
+    text = (
+        f'A teleoperation trial waits for Ready. Within {ready_limit:g} s, press B on the Quest, '
+        'or tap Ready on the phone page.'
+    )
     ready_notice = None if notice is None else _ReadyNotice(notice, text)
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)

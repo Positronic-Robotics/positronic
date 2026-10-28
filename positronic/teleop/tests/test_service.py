@@ -789,8 +789,8 @@ def test_a_world_that_closes_the_loop_in_the_ready_wait_hides_the_notice():
     assert notice.calls == ['show Press Ready', 'hide']
 
 
-MACOS_DIALOG = ['osascript', '-e', 'display alert "positronic teleop" message "Press \\"Ready\\""']
-LINUX_DIALOG = ['zenity', '--info', '--no-markup', '--width=700', '--title=positronic teleop', '--text=Press "Ready"']
+MACOS_DIALOG = ['osascript', '-e', 'display alert "Teleoperation trial" message "Press \\"Ready\\""']
+LINUX_DIALOG = ['zenity', '--info', '--no-markup', '--width=700', '--title=Teleoperation trial', '--text=Press "Ready"']
 LINUX_SOUND = ['paplay', '/sounds/ready.wav']
 
 
