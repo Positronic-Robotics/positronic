@@ -365,6 +365,7 @@ class FrameStreamer:
         self._snap_sec = snap_sec
         self._t_pred: float | None = None
         self._ticks: deque[tuple[float, cabc.Mapping[str, np.ndarray]]] = deque()
+        self._pruned = False  # whether a tick has left ``_ticks``
         self._image_keys: tuple[str, ...] | None = None
         self.call = 0
         self._targets: list[tuple[int, float]] = []  # (back, target time), oldest first
@@ -386,7 +387,7 @@ class FrameStreamer:
         """Record the frames of one raw observation of the run."""
         now = self._clock() / 1e9
         image_keys = self._find_image_keys(obs)
-        self._record(now, {key: obs[key] for key in image_keys if key in obs})
+        self._record(now, {key: obs[key] for key in image_keys if key in obs}, keep_sec=1.0)
         self._dispatch_due(now)
 
     def on_entry(self, t: float, entry: cabc.Mapping[str, np.ndarray] | None) -> tuple[str, ...]:
@@ -398,7 +399,9 @@ class FrameStreamer:
         """
         if entry is not None:
             self._find_image_keys(entry)
-            self._record(t, entry)
+            # An entry holds a copy of every camera, so the feed keeps a shorter margin: a row goes out within a few
+            # milliseconds of its target, and a row whose entry has left is not streamed (it goes inline).
+            self._record(t, entry, keep_sec=0.25)
         self._dispatch_due(t)
         return self._image_keys or ()
 
@@ -412,13 +415,14 @@ class FrameStreamer:
             )
         return self._image_keys
 
-    def _record(self, now: float, entry: cabc.Mapping[str, np.ndarray]) -> None:
-        """Keep ``entry`` with the ticks back to one second before the oldest offset."""
+    def _record(self, now: float, entry: cabc.Mapping[str, np.ndarray], keep_sec: float) -> None:
+        """Keep ``entry`` with the ticks back to ``keep_sec`` before the oldest offset."""
         with self._lock:
             self._ticks.append((now, entry))
-            keep = now + self._offsets[0] - 1.0
+            keep = now + self._offsets[0] - keep_sec
             while len(self._ticks) > 2 and self._ticks[1][0] <= keep:
                 self._ticks.popleft()
+                self._pruned = True
 
     def on_submit(self) -> None:
         """Record the time the schedule submits a call."""
@@ -553,8 +557,8 @@ class FrameStreamer:
             times = [t for t, _ in self._ticks]
             while self._targets and now >= self._targets[0][1]:
                 back, target = self._targets.pop(0)
-                if not self._ticks or (not self._pad_start and target < self._ticks[0][0]):
-                    continue  # TemporalStack drops an offset before its first entry
+                if not self._ticks or (target < self._ticks[0][0] and (self._pruned or not self._pad_start)):
+                    continue  # TemporalStack drops an offset before its first entry; or its tick has left
                 index = max(int(np.searchsorted(times, target, side='right')) - 1, 0)
                 self._queue.put((self.call, back, self._ticks[index][1]))
 

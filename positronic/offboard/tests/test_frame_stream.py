@@ -572,3 +572,16 @@ def test_snap_refers_to_the_streamed_rows_of_stack_rows_by_shape():
         rows = StackRows(KEY, [entries[11], entries[13], entries[15]])  # tick 11 where the stream sent 12
         assert streamer.request({KEY: rows})[KEY][b'rows'] == [2, 1]
         assert streamer.counts['snapped'] == 1
+
+
+def test_a_row_whose_entry_has_left_the_feed_is_not_streamed():
+    with _streamer(call_after_sec=0.3) as (streamer, clock, sent):
+        streamer.on_entry(0.0, {KEY: _frame(0)})
+        streamer.on_answer([{}] * 24)  # the first answer at 0.0 s: the next call at 0.3 s, its rows at 0.05 s, 0.15 s
+        with streamer._lock:
+            streamer._targets = [(2, 0.05), (1, 0.15)]
+        for index in range(1, 20):  # the rows were not due until the entry of 0.05 s had left
+            streamer._record(index * 0.1, {KEY: _frame(index)}, keep_sec=0.25)
+        streamer._dispatch_due(1.9)
+        streamer.flush()
+        assert sent == []
