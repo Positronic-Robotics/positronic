@@ -81,7 +81,8 @@ class Cascade(BaseModel):
     # Per external camera the task defines, keyed by the mount name the task gives it.
     external_cameras: dict[str, Slugged[Placement]] = Field(default_factory=dict)
     clutter: Clutter | None = None
-    # The organization's plans with this seed replay one recorded scene per task (`README.md` §Eval plans).
+    # Later plans of the organization with this seed replay the sides recorded for a task, and the table recorded for
+    # a task and its `clutter` block; another block draws its own table (`README.md` §Eval plans).
     scene_seed: str | None = Field(default=None, min_length=1)
     start_pose: Slugged[StartPose] | None = None
 

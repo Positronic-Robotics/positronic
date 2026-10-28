@@ -169,7 +169,7 @@ max_cap_per_episode_sec: 300
 policy_preset: production
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
-scene_seed: spoons-scene-a               # the organization's plans with this seed lay out one scene per task
+scene_seed: spoons-scene-a               # the organization's later plans with this seed replay the recorded parts
 start_pose: droid_reset                  # nominal | droid_reset | abc_init
 ```
 
