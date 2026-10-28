@@ -12,6 +12,7 @@ from positronic import keys
 from positronic.cfg.codecs import image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
+from positronic.offboard.frame_stream import StackRows
 from positronic.policy import spec, training
 from positronic.policy.codecs import LEROBOT_FEATURES, Codec, EncodeImages, Resample, ResizeMode, TransformImages
 from positronic.policy.codecs.image import ResizeCache
@@ -422,6 +423,21 @@ class TestResizeCache:
         cache.put(frame, (32, 24), np.zeros((24, 32, 3), dtype=np.uint8))
         frame[1, 1] = 6
         assert cache.get(frame, (32, 24)) is None
+
+
+@pytest.mark.parametrize('mode', list(ResizeMode))
+@pytest.mark.parametrize('paths', [None, [['cam']]], ids=['found', 'by-path'])
+@pytest.mark.parametrize('shape', [(48, 64, 3), (20, 30, 3), (64, 48, 3)])
+def test_stack_rows_defer_a_transform_to_the_frames_and_the_shape_it_gives(mode, paths, shape):
+    rng = np.random.default_rng(5)
+    entries = [{'cam': rng.integers(0, 256, shape, dtype=np.uint8)} for _ in range(3)]
+    codec = TransformImages(32, 24, mode=mode, paths=paths)
+    deferred = codec.encode({'cam': StackRows('cam', entries)})['cam']
+    expected = codec.encode({'cam': np.stack([entry['cam'] for entry in entries])})['cam']
+    assert isinstance(deferred, StackRows)
+    assert [deferred.row_shape(i) for i in range(3)] == [expected.shape[1:]] * 3
+    np.testing.assert_array_equal(deferred.stack(), expected, strict=True)
+    np.testing.assert_array_equal(deferred.stack(1), expected[1:], strict=True)
 
 
 class TestEncodeImages:

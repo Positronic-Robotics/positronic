@@ -35,6 +35,14 @@ plan goes at once. An answer whose next request is due at once, such as an empty
 The request compares each row of its stack with the streamed row, and it refers only to equal rows. A
 wrong prediction costs bytes, but it never changes an observation.
 
+When the client knows every component of the declared stack (``RemotePolicy``), the stack's ``TemporalStack`` feeds
+the streamer the entries that its buffer stores (``on_entry``), and the request gets each image stack as
+``StackRows``: the buffer entries that its rows sample, not stacked or sized yet. The streamer streams those entries.
+A request row equals a streamed row when the stream sent the very entry that the row samples, so the two hold the
+same frame and the same sized pixels by construction, without a pixel compare. The request sizes and stacks only
+the rows it carries: the current frame and the rows after the first one that differs. A request that goes in full
+(the first of a session, or after ``frame_miss``) stacks every row, as the stack does without a stream.
+
 ``RTCSchedule`` calls ``call_after_sec`` after its previous call, whenever the answer arrives in time. With
 ``call_after_sec`` the streamer predicts ``T`` as the submit time of the current call plus ``call_after_sec`` (after
 the first answer: its read time plus ``call_after_sec``, as the schedule counts the first chunk from its answer).
@@ -56,15 +64,18 @@ import queue
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from fractions import Fraction
-from typing import Any
+from functools import partial
+from typing import Any, TypeVar
 
 import av
 import numpy as np
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
 
 logger = logging.getLogger(__name__)
+T = TypeVar('T')
 
 ROW = '__stream_row__'
 REF = b'__stream_rows__'
@@ -104,6 +115,56 @@ def streams_stack(keys: cabc.Sequence[str], offsets_sec: cabc.Sequence[float]) -
         and len(offsets_sec) - 1 <= StreamedRows.MAX_BACK
         and len(keys) <= StreamedRows.MAX_IMAGES
     )
+
+
+class StackRows:
+    """One key's temporal stack before it is stacked: the buffer entries that its rows sample, oldest first.
+
+    A ``TemporalStack`` with ``on_entry`` (``FrameStreamer.on_entry``) gives this in place of the stacked array, so
+    that a frame streamer finds the rows it streamed by the entry they sample, and sizes and stacks only the rows a
+    request carries. Each entry is the buffer's stored dict, the same object for every row and request that samples
+    it. ``sized_by`` defers a codec's sizing of every frame: ``stack`` gives the array that sizing the stacked array
+    gives.
+    """
+
+    def __init__(
+        self,
+        key: str,
+        entries: cabc.Sequence[cabc.Mapping[str, np.ndarray]],
+        size: cabc.Callable[[list[np.ndarray]], list[np.ndarray]] | None = None,
+        shape: cabc.Callable[[tuple[int, ...]], tuple[int, ...]] | None = None,
+    ) -> None:
+        self.key = key
+        self.entries = tuple(entries)
+        self._size = size
+        self._shape = shape
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+    def sized_by(
+        self,
+        size: cabc.Callable[[list[np.ndarray]], list[np.ndarray]],
+        shape: cabc.Callable[[tuple[int, ...]], tuple[int, ...]],
+    ) -> 'StackRows':
+        """These rows with ``size`` applied to their frames after the sizing they carry; ``shape`` gives a sized
+        frame's shape from the frame's shape, without sizing it."""
+        before_size, before_shape = self._size, self._shape
+        if before_size is None or before_shape is None:
+            return StackRows(self.key, self.entries, size, shape)
+        return StackRows(
+            self.key, self.entries, lambda frames: size(before_size(frames)), lambda s: shape(before_shape(s))
+        )
+
+    def row_shape(self, index: int) -> tuple[int, ...]:
+        """The shape of row ``index`` once sized, without sizing it."""
+        shape = tuple(self.entries[index][self.key].shape)
+        return shape if self._shape is None else self._shape(shape)
+
+    def stack(self, start: int = 0) -> np.ndarray:
+        """The sized rows from ``start`` on, stacked."""
+        frames = [entry[self.key] for entry in self.entries[start:]]
+        return np.stack(frames if self._size is None else self._size(frames))
 
 
 class _VideoEncoder:
@@ -303,15 +364,17 @@ class FrameStreamer:
         self._call_after_sec = call_after_sec
         self._snap_sec = snap_sec
         self._t_pred: float | None = None
-        self._ticks: deque[tuple[float, dict[str, np.ndarray]]] = deque()
+        self._ticks: deque[tuple[float, cabc.Mapping[str, np.ndarray]]] = deque()
         self._image_keys: tuple[str, ...] | None = None
         self.call = 0
         self._targets: list[tuple[int, float]] = []  # (back, target time), oldest first
-        self._streamed: dict[int, dict[str, np.ndarray]] = {}
+        self._streamed: dict[int, dict[str, np.ndarray]] = {}  # back: the sized frames that went out
+        self._streamed_entries: dict[int, cabc.Mapping[str, np.ndarray]] = {}  # back: the tick they came from
         self._video: dict[str, _VideoEncoder] = {}
-        self._queue: queue.Queue[tuple[int, int, dict[str, np.ndarray]] | None] = queue.Queue()
+        self._queue: queue.Queue[tuple[int, int, cabc.Mapping[str, np.ndarray]] | None] = queue.Queue()
         self._failed: BaseException | None = None
         self._lock = threading.Lock()
+        self._pool: ThreadPoolExecutor | None = None
         self._wake = threading.Event()
         self._closed = False
         self._rows_sent = self._rows_referred = self._frames_inline = 0
@@ -322,18 +385,40 @@ class FrameStreamer:
     def on_tick(self, obs: cabc.Mapping[str, Any]) -> None:
         """Record the frames of one raw observation of the run."""
         now = self._clock() / 1e9
+        image_keys = self._find_image_keys(obs)
+        self._record(now, {key: obs[key] for key in image_keys if key in obs})
+        self._dispatch_due(now)
+
+    def on_entry(self, t: float, entry: cabc.Mapping[str, np.ndarray] | None) -> tuple[str, ...]:
+        """Record the entry that the declared ``TemporalStack``'s buffer stored at ``t`` (None: the tick repeated
+        the last entry), in place of ``on_tick``. Returns the keys of the stacks to give as ``StackRows``.
+
+        The rows then go out as those entries, and a request refers to a row of a ``StackRows`` when the stream
+        sent the very entry that the row samples (see the module docstring).
+        """
+        if entry is not None:
+            self._find_image_keys(entry)
+            self._record(t, entry)
+        self._dispatch_due(t)
+        return self._image_keys or ()
+
+    def _find_image_keys(self, values: cabc.Mapping[str, Any]) -> tuple[str, ...]:
+        """The stacked keys that hold images, found on the first values recorded."""
         if self._image_keys is None:
             self._image_keys = tuple(
                 key
                 for key in self._keys
-                if isinstance(obs.get(key), np.ndarray) and obs[key].ndim == 3 and obs[key].shape[-1] == 3
+                if isinstance(values.get(key), np.ndarray) and values[key].ndim == 3 and values[key].shape[-1] == 3
             )
+        return self._image_keys
+
+    def _record(self, now: float, entry: cabc.Mapping[str, np.ndarray]) -> None:
+        """Keep ``entry`` with the ticks back to one second before the oldest offset."""
         with self._lock:
-            self._ticks.append((now, {key: obs[key] for key in self._image_keys if key in obs}))
-            keep = now + self._offsets[0] - 1.0  # one second before the oldest offset
+            self._ticks.append((now, entry))
+            keep = now + self._offsets[0] - 1.0
             while len(self._ticks) > 2 and self._ticks[1][0] <= keep:
                 self._ticks.popleft()
-        self._dispatch_due(now)
 
     def on_submit(self) -> None:
         """Record the time the schedule submits a call."""
@@ -355,6 +440,7 @@ class FrameStreamer:
         with self._lock:
             self.call += 1
             self._streamed = {}
+            self._streamed_entries = {}
             planned = t_next is not None and t_next > now
             self._t_pred = t_next if planned else None
             if planned and t_next is not None:
@@ -397,14 +483,32 @@ class FrameStreamer:
                 and self._t_pred - SNAP_EARLY_SEC <= called <= self._t_pred + self._snap_sec
             )
         self.flush()
-        out = dict(obs)
-        for key in self._image_keys or ():
-            stack = obs.get(key)
-            if isinstance(stack, np.ndarray) and stack.ndim == 4:
-                out[key] = self._refer(key, stack, snap)
+        stacks = {
+            key: stack
+            for key in self._image_keys or ()
+            if isinstance(stack := obs.get(key), StackRows) or (isinstance(stack, np.ndarray) and stack.ndim == 4)
+        }
+        refer = partial(self._refer, snap=snap)
+        # The stacks are independent: the cameras' inline frames are sized and encoded at the same time.
+        values = list(self._map(refer, list(stacks), list(stacks.values())))
+        for stack, value in zip(stacks.values(), values, strict=True):
+            self._rows_referred += len(value[b'rows'])
+            self._frames_inline += len(stack) - len(value[b'rows'])
         if snap:
             self._snapped += 1
-        return out
+        return {**obs, **dict(zip(stacks, values, strict=True))}
+
+    def _map(self, function: cabc.Callable[..., T], *items: cabc.Sequence[Any]) -> cabc.Iterator[T]:
+        """``map(function, *items)``, each call on its own thread when there are several."""
+        if len(items[0]) < 2:
+            return map(function, *items)
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(len(self._keys), thread_name_prefix='FrameStreamerWork')
+        return self._pool.map(function, *items)
+
+    def _size_and_encode(self, key: str, image: np.ndarray) -> tuple[str, np.ndarray, dict[bytes, Any]]:
+        sized = image if self._resize is None else self._resize({key: image})[key]
+        return key, sized, self._encode(key, sized)
 
     def flush(self) -> None:
         """Wait until every queued row is on the wire."""
@@ -417,6 +521,8 @@ class FrameStreamer:
         self._closed = True
         self._wake.set()
         self._queue.put(None)
+        if self._pool is not None:
+            self._pool.shutdown(wait=False)
         logger.info(
             'Frame stream closed: %d rows sent, %d rows referred to, %d frames inline, %d snapped requests, '
             '%d answers whose next request went in full at once, %d frame_miss answers',
@@ -468,29 +574,38 @@ class FrameStreamer:
                 continue
             self._dispatch_due(self._clock() / 1e9)
 
-    def _refer(self, key: str, stack: np.ndarray, snap: bool = False) -> dict[bytes, Any]:
+    def _refer(self, key: str, stack: np.ndarray | StackRows, snap: bool = False) -> dict[bytes, Any]:
         """The request value of one stack: its oldest rows that equal the streamed rows, then the other frames.
 
-        With ``snap`` a streamed row stands for the stack's row by shape alone (the module docstring).
+        A ``StackRows`` row equals a streamed row when both sample the same buffer entry; it is sized and stacked
+        only when the request carries it. With ``snap`` a streamed row stands for the stack's row by shape alone
+        (the module docstring).
         """
         n = len(stack)
         rows: list[int] = []
         for j in range(n - 1):
             back = n - 1 - j
             row = self._streamed.get(back, {}).get(key)
-            if row is None or row.shape != stack[j].shape or not (snap or np.array_equal(row, stack[j])):
+            if row is None or not self._streamed_as(row, back, stack, j, snap):
                 break
             rows.append(back)
         if self._codec is FrameCodec.H264 and len(rows) == n - 1:
-            tail = self._encode(key, stack[-1])
+            tail = self._encode(key, _rows_from(stack, n - 1)[0])
         elif self._codec is FrameCodec.H264:
             rows = []  # an H.264 stream cannot carry an inline frame out of order
-            tail = encode_jpeg(stack, self._quality)
+            tail = encode_jpeg(_rows_from(stack, 0), self._quality)
         else:
-            tail = encode_jpeg(stack[len(rows) :], self._quality)
-        self._rows_referred += len(rows)
-        self._frames_inline += n - len(rows)
+            tail = encode_jpeg(_rows_from(stack, len(rows)), self._quality)
         return {REF: True, b'call': self.call, b'rows': rows, b'tail': tail}
+
+    def _streamed_as(self, row: np.ndarray, back: int, stack: np.ndarray | StackRows, index: int, snap: bool) -> bool:
+        """Whether the streamed ``row`` stands for row ``index`` of ``stack``."""
+        if isinstance(stack, StackRows):
+            if row.shape != stack.row_shape(index):
+                return False
+            # The same entry: the stack would size the very frame that the stream sized.
+            return snap or self._streamed_entries.get(back) is stack.entries[index]
+        return row.shape == stack[index].shape and (snap or np.array_equal(row, stack[index]))
 
     def _encode(self, key: str, image: np.ndarray) -> dict[bytes, Any]:
         if self._codec is FrameCodec.JPEG:
@@ -514,11 +629,20 @@ class FrameStreamer:
             finally:
                 self._queue.task_done()
 
-    def _send_row(self, call: int, back: int, images: dict[str, np.ndarray]) -> None:
-        sized = images if self._resize is None else self._resize(images)
-        encoded = {key: self._encode(key, image) for key, image in sized.items()}
+    def _send_row(self, call: int, back: int, entry: cabc.Mapping[str, np.ndarray]) -> None:
+        keys = [key for key in self._image_keys or () if key in entry]
+        # The cameras are independent: each is sized and encoded at the same time, so the row goes out sooner.
+        done = list(self._map(self._size_and_encode, keys, [entry[key] for key in keys]))
+        sized = {key: image for key, image, _ in done}
+        encoded = {key: unit for key, _, unit in done}
         self._send({ROW: {'call': call, 'back': back, 't_ns': time.time_ns(), 'images': encoded}})
         self._rows_sent += 1
         with self._lock:
             if call == self.call:
                 self._streamed[back] = sized
+                self._streamed_entries[back] = entry
+
+
+def _rows_from(stack: np.ndarray | StackRows, start: int) -> np.ndarray:
+    """The rows of ``stack`` from ``start`` on, sized and stacked."""
+    return stack.stack(start) if isinstance(stack, StackRows) else stack[start:]

@@ -18,6 +18,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import JointPosition, PositionControl
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
+from positronic.offboard.frame_stream import StackRows
 from positronic.policy import spec
 from positronic.policy.base import Answer, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
@@ -1609,3 +1610,32 @@ def test_rtc_keeps_camera_history_lazy_until_inference(execution, monkeypatch):
         stack.assert_called_once()
     finally:
         run.close()
+
+
+def test_a_temporal_stack_with_an_entry_feed_gives_each_stored_entry_and_the_rows_unstacked(execution):
+    runtime, clock = execution
+    fed = []
+
+    def on_entry(t, entry):
+        fed.append((t, entry))
+        return (POSITION,)
+
+    plain = runtime.start(Sequential(TemporalStack((POSITION,), (-0.2, -0.1, 0.0)), Echo()))
+    rows = runtime.start(Sequential(TemporalStack((POSITION,), (-0.2, -0.1, 0.0), on_entry=on_entry), Echo()))
+    try:
+        for ns, value in [(0, 1), (100_000_000, 1), (150_000_000, 2), (300_000_000, 3)]:
+            clock.advance_to_ns(ns)
+            expected = plain.send({POSITION: np.array([value])}).commands[POSITION]
+            got = rows.send({POSITION: np.array([value])}).commands[POSITION]
+            assert isinstance(got, StackRows)
+            np.testing.assert_array_equal(got.stack(), expected)
+        assert [(t, None if e is None else int(e[POSITION][0])) for t, e in fed] == [
+            (0.0, 1),
+            (0.1, None),
+            (0.15, 2),
+            (0.3, 3),
+        ]
+        assert got.entries[-1] is fed[-1][1] and got.entries[-2] is fed[2][1]
+    finally:
+        plain.close()
+        rows.close()

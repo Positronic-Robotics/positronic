@@ -13,6 +13,7 @@ from positronic_model_server.tree import map_leaves, update_at
 
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.image import Resample, ResizeMode
+from positronic.offboard.frame_stream import StackRows
 
 from .base import Codec
 from .observation import SelectObservationFields
@@ -103,7 +104,9 @@ class TransformImages(Codec):
     ``BOUND`` only shrinks to fit. ``PAD`` fits and pads to the exact size, preserving aspect ratio.
     ``STRETCH`` resizes to the exact size, allowing distortion. Width, height and mode are required.
     ``paths=None`` finds arrays automatically; explicit paths require images and leave other values untouched.
-    Field names and decoded results pass through unchanged. ``cache`` keeps the most recent transforms.
+    Field names and decoded results pass through unchanged. ``cache`` keeps the most recent transforms. A stack
+    that comes as ``StackRows`` (a streaming session's) goes on with its transform deferred to the frames a request
+    carries.
     """
 
     WIRE_NAME = 'transform_images'
@@ -144,13 +147,26 @@ class TransformImages(Codec):
         if self._paths is None:
             return map_leaves(data, self._transform_value)
         for path in self._paths:
-            data = update_at(data, path, lambda value: self._transform_image(np.asarray(value)))
+            data = update_at(data, path, self._transform_selected)
         return data
 
+    def _transform_selected(self, value: Any) -> Any:
+        return self._deferred(value) if isinstance(value, StackRows) else self._transform_image(np.asarray(value))
+
     def _transform_value(self, value: Any) -> Any:
+        if isinstance(value, StackRows):
+            return self._deferred(value)
         if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
             return self._transform_image(value)
         return value
+
+    def _deferred(self, rows: StackRows) -> StackRows:
+        """A streaming session's stack: its frames are transformed when the request stacks the rows it carries."""
+        return rows.sized_by(self._scaled_frames, self.transformed_shape)
+
+    def transformed_shape(self, shape: tuple[int, ...]) -> tuple[int, ...]:
+        """The shape of an ``(H, W, 3)`` frame of ``shape`` once this codec transforms it, without transforming it."""
+        return image.transformed_shape(shape, self._width, self._height, mode=self._mode)
 
     def _transform_image(self, value: np.ndarray) -> np.ndarray:
         if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
@@ -197,7 +213,7 @@ class TransformImages(Codec):
             return 1
         return max(1, min(frames, self._MAX_WORKERS, self._usable_cpus()))
 
-    def _scaled_frames(self, stack: np.ndarray) -> list[np.ndarray]:
+    def _scaled_frames(self, stack: np.ndarray | cabc.Sequence[np.ndarray]) -> list[np.ndarray]:
         """Every frame of one stack, scaled. Pillow and OpenCV drop the GIL for a resize and the frames are
         independent, so more than one may run at a time."""
         scale = self._transform_frame

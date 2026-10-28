@@ -20,6 +20,7 @@ from positronic.offboard.frame_stream import (
     FrameCodec,
     FrameStreamer,
     RowsMissing,
+    StackRows,
     StreamedRows,
     _VideoEncoder,
     declared_codecs,
@@ -504,3 +505,70 @@ def test_snap_reads_the_submit_time_not_the_time_the_request_is_built():
         clock.ns = 1_560_000_000
         stack = np.stack([_frame(11), _frame(13), _frame(15)])
         assert streamer.request({KEY: stack})[KEY][b'rows'] == [2, 1]
+
+
+@contextmanager
+def _fed_call_1(**overrides: Any) -> Iterator[tuple[FrameStreamer, list[dict[str, np.ndarray]]]]:
+    """``_streamed_call_1`` with the ticks given as the entries of a temporal stack's buffer (``on_entry``)."""
+    with _streamer(**overrides) as (streamer, clock, _):
+        entries = []
+        for index in range(16):
+            clock.ns = index * 100_000_000
+            entries.append({KEY: _frame(index)})
+            assert streamer.on_entry(clock.ns / 1e9, entries[-1]) == (KEY,)
+            if index == 10:
+                streamer.on_answer([{}] * 5)
+        streamer.flush()
+        yield streamer, entries
+
+
+def test_a_stack_entry_feed_streams_the_entries_that_temporal_stack_samples():
+    with _fed_call_1() as (streamer, entries):
+        rows = streamer._streamed_entries
+        assert rows[2] is entries[12] and rows[1] is entries[13]
+
+
+def test_a_request_refers_to_the_rows_of_stack_rows_that_sample_the_streamed_entries():
+    with _fed_call_1() as (streamer, entries):
+        value = streamer.request({KEY: StackRows(KEY, [entries[12], entries[13], entries[15]])})[KEY]
+        assert (value[b'call'], value[b'rows']) == (1, [2, 1])
+        # Equal pixels in another entry: not the streamed row, so it goes inline.
+        value = streamer.request({KEY: StackRows(KEY, [entries[12], {KEY: _frame(13)}, entries[15]])})[KEY]
+        assert value[b'rows'] == [2]
+
+
+@pytest.mark.parametrize('codec', [FrameCodec.JPEG, FrameCodec.H264])
+@pytest.mark.parametrize('picks', [(12, 13, 15), (12, 14, 15), (11, 13, 15)], ids=['all', 'one', 'none'])
+def test_a_request_of_stack_rows_carries_the_bytes_that_the_stacked_array_carries(codec, picks):
+    resize = TransformImages(6, 4, mode=ResizeMode.BOUND)
+    with (
+        _fed_call_1(codec=codec, resize=resize.encode) as (fed, entries),
+        _streamed_call_1(codec=codec, resize=resize.encode) as (stacked, _, _),
+    ):
+        rows = resize.encode({KEY: StackRows(KEY, [entries[i] for i in picks])})[KEY]
+        array = resize.encode({KEY: np.stack([_frame(i) for i in picks])})[KEY]
+        expected = stacked.request({KEY: array})[KEY]
+        assert serialization.serialise(fed.request({KEY: rows})[KEY]) == serialization.serialise(expected)
+
+
+def test_a_request_sizes_only_the_rows_of_stack_rows_that_it_carries():
+    sized = []
+    resize = TransformImages(6, 4, mode=ResizeMode.BOUND)
+
+    def size(frames: list[np.ndarray]) -> list[np.ndarray]:
+        sized.append(len(frames))
+        return [resize.encode({KEY: frame})[KEY] for frame in frames]
+
+    with _fed_call_1(resize=resize.encode) as (streamer, entries):
+        rows = StackRows(KEY, [entries[12], entries[13], entries[15]]).sized_by(size, resize.transformed_shape)
+        value = streamer.request({KEY: rows})[KEY]
+        assert value[b'rows'] == [2, 1]
+        assert sized == [1]
+        assert rows.row_shape(0) == (4, 6, 3)
+
+
+def test_snap_refers_to_the_streamed_rows_of_stack_rows_by_shape():
+    with _fed_call_1(snap_sec=0.05) as (streamer, entries):
+        rows = StackRows(KEY, [entries[11], entries[13], entries[15]])  # tick 11 where the stream sent 12
+        assert streamer.request({KEY: rows})[KEY][b'rows'] == [2, 1]
+        assert streamer.counts['snapped'] == 1

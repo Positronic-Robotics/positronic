@@ -59,6 +59,7 @@ from positronic.policy import remote as remote_module
 from positronic.policy.base import Obs, Policy, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, EncodeImages, EndCommand, ResizeMode, TransformImages
 from positronic.policy.codecs.image import ResizeCache
+from positronic.policy.compatibility import WALL_TIME_NS
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
@@ -1344,13 +1345,16 @@ def _run_on_mock_session(
     replies: list | None = None,
     version: protocol.ProtocolVersion = protocol.ProtocolVersion.V1,
     extra: Mapping[int, dict] | None = None,
+    frame=_stream_frame,
+    **policy_kwargs,
 ) -> MagicMock:
     """Run a ``RemotePolicy`` on a mocked session, one tick every 0.1 s, and return the session.
 
     Each reply is a chunk or an exception; without ``replies`` every call answers a chunk of 5 rows. ``version``
-    is the session's protocol version, and ``extra`` adds fields to the observation of a tick index.
+    is the session's protocol version, ``extra`` adds fields to the observation of a tick index, and ``frame``
+    gives the image of each tick index.
     """
-    policy, session = _mock_remote_policy(meta, frame_stream=frame_stream)
+    policy, session = _mock_remote_policy(meta, frame_stream=frame_stream, **policy_kwargs)
     session.protocol_version = version
     pending = list(replies or [])
     tick_ended = threading.Event()
@@ -1371,7 +1375,7 @@ def _run_on_mock_session(
         for index in range(ticks):
             now[0] = index * 100_000_000
             tick_ended.clear()
-            run.send({'image': _stream_frame(index), **(extra or {}).get(index, {})})
+            run.send({'image': frame(index), **(extra or {}).get(index, {})})
             tick_ended.set()
             runtime.wait(timeout_sec=5)
     finally:
@@ -1850,6 +1854,93 @@ def test_a_served_rtc_frame_stream_gives_the_model_the_observations_of_full_requ
     assert [context for _, context in full[1:]] == [([{'value': i} for i in range(4, 8)], 0.4, 0.0, 0.1, 0.1)] * 4
     # Calls 1, 3 and 4 refer to both rows; call 2 misses them and goes again in full.
     assert resolved == [[], [2], [2], [], [2], [2]]
+
+
+def _noise_frame(index: int) -> np.ndarray:
+    """A 16 x 24 frame of noise that changes every other tick, as a camera slower than the control loop gives."""
+    return np.random.default_rng(index // 2).integers(0, 256, (16, 24, 3), dtype=np.uint8)
+
+
+def _wire_bytes(session: MagicMock) -> tuple[list[bytes], list[bytes]]:
+    """The serialised requests and rows that ``session`` got, each without its wall-clock time."""
+    requests = [
+        serialization.serialise({k: v for k, v in call.args[0].items() if k != WALL_TIME_NS})
+        for call in session.infer.call_args_list
+    ]
+    rows = [
+        serialization.serialise({k: v for k, v in call.args[0][ROW].items() if k != 't_ns'})
+        for call in session.send_message.call_args_list
+    ]
+    return requests, rows
+
+
+_RESIZE = {'name': 'restrict_image_size', 'args': {'width': 12, 'height': 8}}
+
+
+@pytest.mark.parametrize('frame_stream', ['jpeg', 'h264'])
+def test_a_chunked_stream_fed_by_its_temporal_stack_sends_the_bytes_of_the_stream_that_compares_pixels(
+    monkeypatch, frame_stream
+):
+    chunk = [{'value': i} for i in range(5)]
+    replies = [chunk, chunk, FrameMiss([['image', 2]]), chunk, chunk]
+    fed = _run_on_mock_session(
+        _stream_meta(_RESIZE), 26, frame_stream=frame_stream, replies=replies, frame=_noise_frame
+    )
+    monkeypatch.setattr(remote_module, '_ROWS_PASS_THROUGH', frozenset())  # the stream before the feed
+    compared = _run_on_mock_session(
+        _stream_meta(_RESIZE), 26, frame_stream=frame_stream, replies=replies, frame=_noise_frame
+    )
+
+    assert _wire_bytes(fed) == _wire_bytes(compared)
+    requests = [call.args[0]['image'] for call in fed.infer.call_args_list]
+    assert sum(isinstance(r, dict) and REF in r and len(r[b'rows']) == 2 for r in requests) >= 2
+
+
+@pytest.mark.parametrize('snap', [0.0, 0.05])
+def test_an_rtc_stream_fed_by_its_temporal_stack_sends_the_bytes_of_the_stream_that_compares_pixels(monkeypatch, snap):
+    meta = _rtc_stream_meta(TransformImages(12, 8, mode=ResizeMode.BOUND).to_spec())
+    fed = _run_v2_rtc(meta, 15, frame=_noise_frame, frame_stream_snap_sec=snap)
+    monkeypatch.setattr(remote_module, '_ROWS_PASS_THROUGH', frozenset())
+    compared = _run_v2_rtc(meta, 15, frame=_noise_frame, frame_stream_snap_sec=snap)
+
+    assert _wire_bytes(fed) == _wire_bytes(compared)
+    requests = [call.args[0]['image'] for call in fed.infer.call_args_list]
+    assert sum(isinstance(r, dict) and REF in r and len(r[b'rows']) > 0 for r in requests) >= 2
+
+
+def test_a_fed_stream_transforms_on_the_call_only_the_frames_that_the_request_carries(monkeypatch):
+    on_call = []
+    transform = TransformImages._transform_frame
+
+    def counted(codec, frame):
+        if threading.current_thread().name.startswith('policy-fn'):
+            on_call.append(frame.shape)
+        return transform(codec, frame)
+
+    monkeypatch.setattr(TransformImages, '_transform_frame', counted)
+    session = _run_on_mock_session(_stream_meta(_RESIZE), 8, frame_stream='jpeg', frame=_noise_frame)
+
+    first, second = (call.args[0]['image'] for call in session.infer.call_args_list)
+    assert REF not in first and (second[b'rows'], len(second[b'tail'][b'frames'])) == ([2, 1], 1)
+    assert len(on_call) == 3 + 1  # the first request goes in full; the second carries its current frame
+
+
+@pytest.mark.parametrize(
+    'parts, fed',
+    [
+        pytest.param((_RESIZE,), True, id='known-components'),
+        pytest.param((_RESIZE, {'name': 'pack_observation_fields', 'args': {'layout': {}}}), False, id='another-codec'),
+    ],
+)
+def test_only_a_stack_of_known_components_feeds_the_streamer_its_entries(parts, fed):
+    policy, session = _mock_remote_policy(_stream_meta(*parts), frame_stream='jpeg')
+    session.protocol_version = protocol.ProtocolVersion.V1
+    *_, streamer, _, feeds = policy._stack_and_streamer(session, True, threading.Lock(), MagicMock())
+    try:
+        assert feeds is fed
+    finally:
+        assert streamer is not None
+        streamer.close()
 
 
 def test_an_answer_reports_its_result_once_at_its_first_read(runtime):
