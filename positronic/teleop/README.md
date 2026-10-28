@@ -14,6 +14,7 @@ The service prepares each session until the person presses Ready. Each session d
 client stack:
 - `end_on_field` ends the run when a reply carries the Complete or the Give up of the person;
 - `chunked_schedule` asks for one frame at a time, and plays each reply at once;
+- `change_ee_frame` states the grip point `gripper` as the frame of the pose and of the target;
 - `observation_codec` sends the task, the pose, the grip and the camera images of the robot;
 - `absolute_position_action` turns each reply into a command, and `end_command` gives the `end` of a reply to
   `end_on_field`.
@@ -60,8 +61,8 @@ confirms that the person holds the controller. The window on the laptop offers o
 | The trial runs | hold **Complete** for 1 s | hold B for 1 s | Complete: the episode ends |
 | The trial runs | hold **Hold: Give up** for 1 s | hold the stick for 1 s | Give up: the episode ends |
 
-When control comes on, the hand moves the robot from its current pose, so the robot does not jump. When the phone or
-the controller is not tracked for 0.5 s, control goes off.
+When control comes on, the hand moves the robot from its current pose, so the robot does not jump. A turn of the hand
+turns the gripper about its grip point. When the phone or the controller is not tracked for 0.5 s, control goes off.
 
 The phone page shows the phase above its buttons. It colours Control green while control is on and grey while it is
 off. The B button is labelled with what it does: Ready, or Complete while the trial runs. It pulses orange while the
