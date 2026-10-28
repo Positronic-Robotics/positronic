@@ -1,6 +1,7 @@
 """Scheduling, fault gating, temporal history, and deliverable stack specifications."""
 
 import json
+from collections.abc import Mapping
 from concurrent.futures import Future
 from datetime import date
 from sys import maxsize
@@ -1105,6 +1106,35 @@ def test_rtc_accepts_a_constant_duration(execution, monkeypatch):
                 model.answer('o')
             step(tick)
         assert model.calls == [(0, []), (8 * PERIOD_NS, ['o5', 'o6'])]
+    finally:
+        run.close()
+
+
+def test_rtc_submits_the_observation_without_reading_its_values(execution, monkeypatch):
+    values = {'image': 'stack', 'task': 't'}
+    reads = []
+
+    class Watched(Mapping[str, Any]):
+        def __getitem__(self, key):
+            reads.append(key)
+            return values[key]
+
+        def __iter__(self):
+            return iter(values)
+
+        def __len__(self):
+            return len(values)
+
+    runtime, _ = execution
+    submitted = []
+    monkeypatch.setattr(runtime, 'submit', lambda function, obs: submitted.append(obs) or Mock(done=lambda: False))
+    run = runtime.start(RTCSchedule(fps=10, call_after_sec=0.2, prefix_duration=DelayEstimate.mean()), Mock())
+    try:
+        run.send(Watched())
+        assert reads == []
+        [call] = submitted
+        assert len(call) == 3
+        assert dict(call) == {'image': 'stack', 'task': 't', policy_keys.ACTION_PREFIX: []}
     finally:
         run.close()
 

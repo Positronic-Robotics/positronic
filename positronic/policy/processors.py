@@ -526,6 +526,24 @@ class _TimedChunk:
         return self._due_ns(self._next_index) if self._next_index < len(self._actions) else None
 
 
+class _PrefixedObs(Mapping[str, Any]):
+    """``obs`` with ``prefix`` under ``ACTION_PREFIX``. It reads a key of ``obs`` only when that key is read here."""
+
+    def __init__(self, obs: Obs, prefix: Sequence[Commands]):
+        self._obs = obs
+        self._prefix = prefix
+
+    def __getitem__(self, key: str) -> Any:
+        return self._prefix if key == policy_keys.ACTION_PREFIX else self._obs[key]
+
+    def __iter__(self) -> Iterator[str]:
+        yield from (key for key in self._obs if key != policy_keys.ACTION_PREFIX)
+        yield policy_keys.ACTION_PREFIX
+
+    def __len__(self) -> int:
+        return len(self._obs) + (policy_keys.ACTION_PREFIX not in self._obs)
+
+
 class RTCSchedule(Policy):
     """Run action chunks from a model, and ask for the next chunk while the current one runs.
 
@@ -623,7 +641,9 @@ class RTCSchedule(Policy):
                     if chunk is not None:
                         prefix = chunk.prefix(now_ns, prefix_sec, self._prefix_sampling)
                     called_at_ns = now_ns
-                    answer = runtime.submit(infer, {**obs, policy_keys.ACTION_PREFIX: prefix})
+                    # A copy reads every value, so a `TemporalStack` around the schedule would build its stacks here,
+                    # on the control thread.
+                    answer = runtime.submit(infer, _PrefixedObs(obs, prefix))
 
                 commands = {} if chunk is None else chunk.take_due(now_ns)
                 next_due_ns = None if chunk is None else chunk.next_due_ns()
