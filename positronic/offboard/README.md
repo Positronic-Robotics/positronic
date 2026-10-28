@@ -201,8 +201,9 @@ The client preserves the behavior of the requested version, translating older co
 Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
-The client runs a protocol v1 server's stack on the current processors. `positronic.offboard.server`
-serves v2, including its optional server codec. `positronic_model_server.server` serves v3: the same
+The client runs a protocol v1 server's stack on the current processors, in its own `ChunkedSchedule`.
+So it refuses a v1 stack that declares `rtc_schedule`. `positronic.offboard.server` serves v2, including
+its optional server codec. `positronic_model_server.server` serves v3: the same
 session envelopes carry native model results without robot-command interpretation. Its full codec
 pipeline runs on the client, and image compression is explicitly selected by client components.
 See [the lightweight server contract](../../model_server/README.md) for readiness, parameters and cleanup.
