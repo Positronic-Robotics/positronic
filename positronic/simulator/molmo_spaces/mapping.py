@@ -97,6 +97,11 @@ SELECT_EPISODES = 'episodes'
 SELECT_HORIZON_SEC = 'horizon_sec'
 # In a selection and a reset token: whether the server adds the right shoulder camera.
 WITH_RIGHT_SHOULDER = 'with_right_shoulder'
+# In a reset token: whether the server keeps the object image points sensor of MolmoSpaces. The sensor renders a
+# segmentation mask for each camera at each step, and no positronic observation reads it. A token without the key
+# keeps it.
+WITH_OBJECT_IMAGE_POINTS = 'with_object_image_points'
+MOLMO_OBJECT_IMAGE_POINTS_SENSOR = 'object_image_points'
 TASK_NAME = 'name'
 TASK_HORIZON_SEC = 'task_horizon_sec'
 # The horizon override of a task in seconds, or None when the benchmark sets the horizon.

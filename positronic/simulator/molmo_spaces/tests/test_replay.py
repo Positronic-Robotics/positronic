@@ -46,14 +46,16 @@ def _skip_unless_present(bench: mapping.BenchmarkPath) -> None:
         pytest.skip(f'{benchmark_dir} is absent — this asset pack cannot replay the fixture')
 
 
+# The object image points sensor only observes, so a replay without it follows the same trajectory.
+@pytest.mark.parametrize('with_object_image_points', [True, False], ids=['image_points', 'no_image_points'])
 @pytest.mark.parametrize('fixture_path', FIXTURES, ids=lambda path: path.stem)
-def test_recorded_rollout_replays_the_pinned_trajectory(fixture_path: Path):
+def test_recorded_rollout_replays_the_pinned_trajectory(fixture_path: Path, with_object_image_points: bool):
     fixture = np.load(fixture_path, allow_pickle=False)
     commands, grips = fixture[fixture_fields.FIELD_COMMANDS], fixture[fixture_fields.FIELD_GRIPS]
     episode_index = int(fixture[fixture_fields.FIELD_EPISODE_INDEX])
     bench = mapping.BenchmarkPath.parse(str(fixture[fixture_fields.FIELD_BENCHMARK_PATH]))
     _skip_unless_present(bench)
-    states = replay_commands(bench, episode_index, commands, grips)
+    states = replay_commands(bench, episode_index, commands, grips, with_object_image_points)
 
     assert len(states) == len(commands), (
         f'replay of episode {episode_index} terminated after {len(states)} of {len(commands)} recorded steps '

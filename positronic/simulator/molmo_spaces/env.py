@@ -170,6 +170,7 @@ class MolmoSpacesEnv(EnvProtocol):
         seed: int | None,
         horizon_sec: float | None,
         with_right_shoulder: bool,
+        with_object_image_points: bool = True,
     ) -> None:
         if self._sampler is not None:
             self._sampler.close()
@@ -186,6 +187,9 @@ class MolmoSpacesEnv(EnvProtocol):
         self._sampler = _JointGraspSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
+        if not with_object_image_points:
+            # The sensor draws its points from the global NumPy generator, so a scored eval keeps it.
+            self._task.sensor_suite.sensors.pop(mapping.MOLMO_OBJECT_IMAGE_POINTS_SENSOR)
         self._robot_view = self._task.env.current_robot.robot_view
         self._assert_measures_at_grasp_site()
         self._control_dt = cfg.policy_dt_ms / 1000.0
@@ -232,6 +236,7 @@ class MolmoSpacesEnv(EnvProtocol):
             token.get(mapping.TOKEN_SEED),
             token.get(mapping.TOKEN_HORIZON_SEC),
             token[mapping.WITH_RIGHT_SHOULDER],
+            token.get(mapping.WITH_OBJECT_IMAGE_POINTS, True),
         )
         obs, _info = self._task.reset()  # One observation dict per environment.
         env_obs = obs[0]

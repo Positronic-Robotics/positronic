@@ -67,7 +67,11 @@ def sample_at(signal: Signal, timestamps: Sequence[int]) -> list:
 
 
 def replay_commands(
-    bench: mapping.BenchmarkPath, episode_index: int, commands: np.ndarray, grips: np.ndarray
+    bench: mapping.BenchmarkPath,
+    episode_index: int,
+    commands: np.ndarray,
+    grips: np.ndarray,
+    with_object_image_points: bool = True,
 ) -> list[np.ndarray]:
     """Simulation states after each command, stopping at termination or the end of the commands."""
     states: list[np.ndarray] = []
@@ -80,6 +84,7 @@ def replay_commands(
                 mapping.TOKEN_EPISODE_INDEX: episode_index,
                 mapping.TOKEN_SEED: None,
                 mapping.WITH_RIGHT_SHOULDER: True,
+                mapping.WITH_OBJECT_IMAGE_POINTS: with_object_image_points,
             })
             for command, grip in zip(commands, grips, strict=True):
                 action = protocol.single_arm_action(

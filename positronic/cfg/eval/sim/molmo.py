@@ -41,6 +41,7 @@ def _require_finite_positive(arg: str, value: float | None) -> None:
     seed=None,
     horizon_sec=None,
     with_right_shoulder=True,
+    object_image_points=True,
 )
 def benchmarks(
     suite: str | list[str] | None,
@@ -54,6 +55,7 @@ def benchmarks(
     seed: int | None,
     horizon_sec: float | None,
     with_right_shoulder: bool,
+    object_image_points: bool,
 ) -> Eval:
     """A DROID evaluation over selected MolmoSpaces benchmark episodes.
 
@@ -70,6 +72,10 @@ def benchmarks(
     in some episodes; an open selection leaves those out, and a pinned one is refused.
 
     ``with_right_shoulder=False`` serves the left shoulder camera alone, in ``image.exterior``, and runs every episode.
+
+    ``object_image_points=False`` drops the object image points sensor of MolmoSpaces, which renders a segmentation
+    mask for each camera at each step. No observation reads it, but it draws from the global NumPy generator, so a
+    scored eval keeps it.
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
@@ -86,7 +92,7 @@ def benchmarks(
             raise ValueError(f'--eval.episode_paths names its benchmarks, so --eval.{bound[0]} must be unset')
     exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if with_right_shoulder else [ShoulderSide.LEFT]
     cameras = camera_dict(exterior_sides)
-    adapter = MolmoAdapter(cameras)
+    adapter = MolmoAdapter(cameras, object_image_points=object_image_points)
     proxy = RemoteEnvControlSystem(adapter, serve_molmo_spaces())
     embodiment = remote_embodiment(
         proxy, cameras, descriptor='remote.molmo_spaces.droid', static_meta=adapter.robot_model
@@ -154,10 +160,11 @@ first_episode = pick_v1.override(episodes=0)
 
 # Demonstrations by a person on the pick mini benchmark: two minutes for each episode, not the benchmark horizon. It
 # runs the episodes that the eval selects with no `episodes`, so it leaves out each episode that hides the start
-# grasp site from the right shoulder camera.
+# grasp site from the right shoulder camera. It drops the object image points sensor, so each step runs faster.
 pick_mini_collect = bench_v2.override(
     scene_dataset='procthor-10k',
     task_config='FrankaPickDroidMiniBench',
     benchmark='FrankaPickDroidMiniBench_json_benchmark_20251231',
     horizon_sec=120.0,
+    object_image_points=False,
 )

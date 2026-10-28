@@ -254,7 +254,8 @@ class ChunkedSchedule(Policy):
     beyond the horizon.
 
     At most one call is pending. ``inference_lead`` estimates how many seconds before a chunk ends to
-    request the next one, bounded by the chunk's duration. The default is zero: request at the end.
+    request the next one, bounded by the chunk's duration. The default is zero: request at the end. A lead of the
+    whole chunk requests the next one in the round that reads the answer.
     The first request starts immediately. Later deadlines use the delays of completed calls in this
     episode. An early answer waits behind the remaining commands; the new chunk starts from its first
     action. The observation is read at the request, before commands emitted in that same round.
@@ -392,7 +393,8 @@ class ChunkedSchedule(Policy):
                     trajectory.clear()
                     end_ns = call_ns = now_ns
                     planned, recovering = 0, True
-                if answer is None and now_ns >= call_ns:
+                submitted = answer is None and now_ns >= call_ns
+                if submitted:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
                 if answer is not None and answer.done():
                     chunk, answer = answer.result(), None
@@ -403,6 +405,10 @@ class ChunkedSchedule(Policy):
                     # A regular early answer waits behind the commands that are still due.
                     trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
                     planned = len(waypoints)
+                    # A call due at the start of the new chunk goes out in this round, not one round later. A round
+                    # that has already called once sends no second call with the same observation.
+                    if not submitted and now_ns >= call_ns:
+                        answer, called_at_ns = runtime.submit(infer, obs), now_ns
 
                 commands: dict[str, Any] = {}
                 due_ns = None

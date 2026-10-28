@@ -209,6 +209,7 @@ def test_reset_token_carries_benchmark_episode_and_seed():
         mapping.TOKEN_EPISODE_INDEX: 3,
         mapping.TOKEN_SEED: 7,
         mapping.WITH_RIGHT_SHOULDER: True,
+        mapping.WITH_OBJECT_IMAGE_POINTS: True,
     }
     assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
     assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 2}) == {
@@ -216,6 +217,7 @@ def test_reset_token_carries_benchmark_episode_and_seed():
         mapping.TOKEN_EPISODE_INDEX: 2,
         mapping.TOKEN_SEED: None,
         mapping.WITH_RIGHT_SHOULDER: True,
+        mapping.WITH_OBJECT_IMAGE_POINTS: True,
     }
 
 
@@ -223,3 +225,9 @@ def test_reset_token_asks_for_the_right_shoulder_only_when_the_adapter_declares_
     params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
     assert _adapter([ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is False
     assert _adapter([ShoulderSide.RIGHT, ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is True
+
+
+def test_reset_token_drops_the_object_image_points_only_when_the_adapter_asks():
+    params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
+    dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), object_image_points=False)
+    assert dropped.reset_token(params)[mapping.WITH_OBJECT_IMAGE_POINTS] is False

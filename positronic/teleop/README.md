@@ -131,6 +131,8 @@ The run ends after its last trial. Press Ctrl-C in terminal 2 to end it earlier.
 
 `pick_mini_collect` runs the pick mini benchmark of the MolmoSpaces suite v2. It leaves out each episode that hides
 the start grasp site from the right shoulder camera. It gives each episode 120 s in place of the benchmark horizon.
+It drops the object image points sensor of MolmoSpaces (`--eval.object_image_points=False`), which renders a
+segmentation mask for each camera at each step and which no recording uses. So each step runs about 35 ms faster.
 Use it for demonstrations only, not for a scored eval.
 
 ```bash
