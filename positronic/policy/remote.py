@@ -299,7 +299,8 @@ class RemotePolicy(Policy):
         meta, version = session.metadata, session.protocol_version
         if self._frame_codec is None:
             return declared_stack(meta, version), None
-        if not (compress_images and version is ProtocolVersion.V1 and self._frame_codec in declared_codecs(meta)):
+        streams = version in (ProtocolVersion.V1, ProtocolVersion.V2)
+        if not (compress_images and streams and self._frame_codec in declared_codecs(meta)):
             logger.warning('The session offers no %s frame stream; requests go in full', self._frame_codec.value)
             return declared_stack(meta, version), None
         # The streamer mirrors the declared temporal stack, and transforms each row as the stack transforms its

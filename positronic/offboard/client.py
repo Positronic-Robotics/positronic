@@ -134,14 +134,15 @@ class InferenceSession:
         return self._metadata
 
     def send_message(self, message: dict[str, Any]) -> None:
-        """Send one message that the server does not answer, such as a frame stream row, on a protocol v1 session.
+        """Send one message that the server does not answer, such as a frame stream row, on a protocol v1 or v2
+        session. The message goes as it is, without the v2 session envelope.
 
         Do not call it while a round trip waits for its answer.
         """
         if self._closed:
             raise wire.PeerDisconnected('The inference session is closed')
-        if self._protocol is not protocol.ProtocolVersion.V1:
-            raise RuntimeError('A message without an answer needs a protocol v1 session')
+        if self._protocol not in (protocol.ProtocolVersion.V1, protocol.ProtocolVersion.V2):
+            raise RuntimeError('A message without an answer needs a protocol v1 or v2 session')
         self._conn.send(serialise(message))
 
     def infer(self, obs: dict[str, Any]) -> Any:

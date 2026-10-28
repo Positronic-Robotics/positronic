@@ -184,7 +184,8 @@ This metadata tells the client:
   sending. It is true unless the deployment sets it false.
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
   each run records it in the episode metadata.
-- `frame_stream` — optional, protocol v1 only: `{"version": 1, "codecs": ["jpeg", "h264"]}`.
+- `frame_stream` — optional, protocol v1 or v2 (rows go without the v2 envelope):
+  `{"version": 1, "codecs": ["jpeg", "h264"]}`.
   A client that asks for it with `RemotePolicy(frame_stream='jpeg')` (or `'h264'`) sends the history
   frames of the next request while the robot executes the current chunk. The request then refers to
   them, and the server can start its work before the request arrives. Without a request from the
