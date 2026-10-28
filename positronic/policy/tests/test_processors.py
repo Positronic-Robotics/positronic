@@ -108,20 +108,20 @@ def test_temporal_history_padding_sampling_and_fresh_runs(execution, pad_start):
     run = runtime.start(definition)
     frame = np.array([1])
     first = run.send({POSITION: frame})
-    np.testing.assert_array_equal(first.outputs[POSITION][:, 0], [1, 1, 1] if pad_start else [1])
+    np.testing.assert_array_equal(first.commands[POSITION][:, 0], [1, 1, 1] if pad_start else [1])
     frame[0] = 2
     clock.advance_to_ns(100_000_000)
     second = run.send({POSITION: frame})
-    np.testing.assert_array_equal(second.outputs[POSITION][:, 0], [1, 1, 2] if pad_start else [1, 2])
+    np.testing.assert_array_equal(second.commands[POSITION][:, 0], [1, 1, 2] if pad_start else [1, 2])
     frame[0] = 3
     clock.advance_to_ns(200_000_000)
     third = run.send({POSITION: frame})
-    np.testing.assert_array_equal(third.outputs[POSITION][:, 0], [1, 2, 3])
+    np.testing.assert_array_equal(third.commands[POSITION][:, 0], [1, 2, 3])
     run.close()
     fresh = runtime.start(definition)
     try:
         reset = fresh.send({POSITION: frame})
-        np.testing.assert_array_equal(reset.outputs[POSITION][:, 0], [3, 3, 3] if pad_start else [3])
+        np.testing.assert_array_equal(reset.commands[POSITION][:, 0], [3, 3, 3] if pad_start else [3])
     finally:
         fresh.close()
 
@@ -133,7 +133,7 @@ def test_temporal_history_carries_the_last_sample_before_each_offset(execution):
         for ns, value in [(0, 1), (150_000_000, 2), (300_000_000, 3)]:
             clock.advance_to_ns(ns)
             result = run.send({POSITION: np.array([value])})
-        np.testing.assert_array_equal(result.outputs[POSITION][:, 0], [1, 2, 3])
+        np.testing.assert_array_equal(result.commands[POSITION][:, 0], [1, 2, 3])
     finally:
         run.close()
 
@@ -240,7 +240,7 @@ def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(exec
     emitted = []
     for now in (0, 100_000_000, 350_000_000, 400_000_000):
         clock.advance_to_ns(now)
-        emitted.append(run.send({}).outputs[MOTOR])
+        emitted.append(run.send({}).commands[MOTOR])
     assert emitted == [0, 1, 3, 4]
     prefix = eval_keys.SCHEDULE
     assert runtime.metadata_snapshot() == {
@@ -271,7 +271,7 @@ def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
     emitted = []
     for now in (0, 600_000_000):
         clock.advance_to_ns(now)
-        emitted.append(run.send({}).outputs[MOTOR])
+        emitted.append(run.send({}).commands[MOTOR])
     run.close()
     assert emitted == [0, 0]
     prefix = eval_keys.SCHEDULE
@@ -287,7 +287,7 @@ def test_a_new_chunk_excludes_the_gap_from_the_previous_chunk(execution):
     try:
         for now in (0, 100_000_000, 300_000_000, 305_000_000):
             clock.advance_to_ns(now)
-            emitted.append(run.send({}).outputs.get(MOTOR))
+            emitted.append(run.send({}).commands.get(MOTOR))
     finally:
         run.close()
     assert emitted == [0, 1, 0, None]
@@ -382,8 +382,8 @@ class Rig:
     def tick(self, now_ns: int) -> Step:
         self._clock.advance_to_ns(now_ns)
         step = self.run.send({POSITION: self.position})
-        self.position = step.outputs.get(MOTOR, self.position)
-        self.executed.append(step.outputs.get(MOTOR, '--'))
+        self.position = step.commands.get(MOTOR, self.position)
+        self.executed.append(step.commands.get(MOTOR, '--'))
         return step
 
 
@@ -413,7 +413,7 @@ def test_errors_bring_inference_and_playback_forward_when_enabled(execution, sta
 
     run = runtime.start(ChunkedSchedule(fps=10, replan_on_error=replan_on_error), infer)
     try:
-        assert run.send({}).outputs == {MOTOR: (1, 0)}
+        assert run.send({}).commands == {MOTOR: (1, 0)}
         clock.advance_to_ns(PERIOD_NS)
         obs = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE.value, channel: status.value, POSITION: 42}
         step = run.send(obs)
@@ -437,12 +437,12 @@ def test_repeated_errors_keep_one_recovery_request_and_play_its_answer(execution
     try:
         run.send({POSITION: 0, keys.ROBOT_STATUS: initial_status})
         model.answer('a', length=5)
-        assert run.send({POSITION: 0, keys.ROBOT_STATUS: initial_status}).outputs == {MOTOR: 'a0'}
+        assert run.send({POSITION: 0, keys.ROBOT_STATUS: initial_status}).commands == {MOTOR: 'a0'}
         fault = {POSITION: 1, keys.ROBOT_STATUS: RobotStatus.ERROR}
         for now_ns in (PERIOD_NS, PERIOD_NS + 1, 2 * PERIOD_NS):
             clock.advance_to_ns(now_ns)
             step = run.send(fault)
-            assert step.outputs == {}
+            assert step.commands == {}
             assert len(model.calls) == 2
         assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 4
         assert model.seen == [0, 1]
@@ -475,16 +475,16 @@ def test_errors_keep_an_existing_request_and_execute_its_answer_immediately(exec
         fault = {POSITION: 25, keys.ROBOT_STATUS: RobotStatus.ERROR}
         step = run.send(fault)
         if not ready_at_error:
-            assert step.outputs == {}
+            assert step.commands == {}
             assert len(model.calls) == 2
             clock.advance_to_ns(3 * PERIOD_NS)
-            assert run.send(fault).outputs == {}
+            assert run.send(fault).commands == {}
             model.answer('b')
             step = run.send(fault)
-        assert step.outputs == {MOTOR: 'b0'}
+        assert step.commands == {MOTOR: 'b0'}
         assert model.seen == [0, 2]
         clock.advance_to_ns(4 * PERIOD_NS)
-        assert run.send(fault).outputs == {}
+        assert run.send(fault).commands == {}
         assert len(model.calls) == 3
     finally:
         run.close()
@@ -497,10 +497,10 @@ def test_errors_replace_a_prefetched_chunk_before_its_playback_starts(execution)
     try:
         run.send({})
         clock.advance_to_ns(2 * PERIOD_NS)
-        assert run.send({}).outputs == {MOTOR: 'a'}
+        assert run.send({}).commands == {MOTOR: 'a'}
         assert infer.call_count == 2
         clock.advance_to_ns(250_000_000)
-        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).outputs == {MOTOR: 'fresh'}
+        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: 'fresh'}
         assert infer.call_count == 3
     finally:
         run.close()
@@ -546,7 +546,7 @@ def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution):
     try:
         for tick in range(6):
             clock.advance_to_ns(tick * PERIOD_NS)
-            assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).outputs == {MOTOR: tick % 5}
+            assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: tick % 5}
         assert infer.call_count == 2
     finally:
         run.close()
@@ -637,9 +637,9 @@ def test_prefetched_chunk_resets_gap_when_execution_crosses_its_boundary(executi
     try:
         for index in range(5):
             clock.advance_to_ns(index * PERIOD_NS)
-            assert run.send({}).outputs == {MOTOR: (1, index)}
+            assert run.send({}).commands == {MOTOR: (1, index)}
         clock.advance_to_ns(first_new_ms * 1_000_000)
-        assert run.send({}).outputs == {MOTOR: (2, new_index)}
+        assert run.send({}).commands == {MOTOR: (2, new_index)}
     finally:
         run.close()
     assert calls == [0, 300_000_000]
@@ -659,16 +659,16 @@ def test_answer_between_emits_keeps_the_old_chunk_gap_history(execution, monkeyp
         run.send({})
         clock.advance_to_ns(100_000_000)
         model.answer('a', length=3)
-        assert run.send({}).outputs == {MOTOR: 'a0'}
+        assert run.send({}).commands == {MOTOR: 'a0'}
         clock.advance_to_ns(200_000_000)
-        assert run.send({}).outputs == {MOTOR: 'a1'}
+        assert run.send({}).commands == {MOTOR: 'a1'}
         clock.advance_to_ns(250_000_000)
-        assert run.send({}).outputs == {}
+        assert run.send({}).commands == {}
         clock.advance_to_ns(260_000_000)
         model.answer('b', length=3)
-        assert run.send({}).outputs == {}
+        assert run.send({}).commands == {}
         clock.advance_to_ns(350_000_000)
-        assert run.send({}).outputs == {MOTOR: 'a2'}
+        assert run.send({}).commands == {MOTOR: 'a2'}
     finally:
         run.close()
     assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.GAP_MAX_MS}'] == 150.0
@@ -719,7 +719,7 @@ def test_a_lead_cannot_queue_more_than_the_next_chunk(execution, lead_sec):
         assert calls == [0, 0]
         for index in range(1, 9):
             clock.advance_to_ns(index * PERIOD_NS)
-            assert run.send({}).outputs == {MOTOR: (index // 3 + 1, index % 3)}
+            assert run.send({}).commands == {MOTOR: (index // 3 + 1, index % 3)}
         assert calls == [0, 0, 3 * PERIOD_NS, 6 * PERIOD_NS]
     finally:
         run.close()
@@ -824,10 +824,10 @@ def test_an_early_empty_answer_retries_while_the_old_chunk_keeps_running(executi
         run.send({})
         clock.advance_to_ns(100_000_000)
         model.answer('a', length=5)
-        assert run.send({}).outputs == {MOTOR: 'a0'}
+        assert run.send({}).commands == {MOTOR: 'a0'}
         for tick in (2, 3):
             clock.advance_to_ns(tick * PERIOD_NS)
-            assert run.send({}).outputs == {MOTOR: f'a{tick - 1}'}
+            assert run.send({}).commands == {MOTOR: f'a{tick - 1}'}
         clock.advance_to_ns(350_000_000)
         run.send({})
         clock.advance_to_ns(360_000_000)
@@ -839,7 +839,7 @@ def test_an_early_empty_answer_retries_while_the_old_chunk_keeps_running(executi
         assert run.send({}) == Step({}, 400_000_000)
         for now, action in ((400, 'a3'), (500, 'a4'), (600, 'b0')):
             clock.advance_to_ns(now * 1_000_000)
-            assert run.send({}).outputs == {MOTOR: action}
+            assert run.send({}).commands == {MOTOR: action}
     finally:
         run.close()
     assert [time for time, _ in model.calls] == [0, 350_000_000, 360_000_000]
@@ -894,7 +894,7 @@ def test_rtc_follows_the_drawing(execution, monkeypatch):
             if index in answers:
                 model.answer(answers[index])
             result = step(index)
-            executed.append(result.outputs.get(MOTOR, '--'))
+            executed.append(result.commands.get(MOTOR, '--'))
             if index == 3:
                 assert result.resume_at_ns == 4 * PERIOD_NS
     finally:
@@ -911,7 +911,7 @@ def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execut
         for index in range(10):
             if index in answers:
                 model.answer(*answers[index])
-            executed.append(step(index).outputs.get(MOTOR, '--'))
+            executed.append(step(index).commands.get(MOTOR, '--'))
     finally:
         run.close()
     assert executed == ['--', 'o0', 'o1', 'o2', 'o3', '--', '--', '--', 'n5', 'n6']
@@ -934,7 +934,7 @@ def test_rtc_calls_at_once_after_a_late_answer(execution, monkeypatch, prefix_du
         for index in range(7):
             if index in answers:
                 model.answer(answers[index])
-            executed.append(step(index).outputs.get(MOTOR, '--'))
+            executed.append(step(index).commands.get(MOTOR, '--'))
     finally:
         run.close()
     assert executed == ['--', 'o0', 'o1', 'o2', 'o3', 'o4', 'n3']

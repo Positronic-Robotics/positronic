@@ -401,10 +401,10 @@ class ChunkedSchedule(Policy):
                     stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
                 resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
                 # Pending inference asks for the earliest allowed poll; action cadence is independent.
-                outputs = dict(commands)
+                outputs = {}
                 if self._timing_key is not None:
                     outputs[self._timing_key] = call_ns if answer is None else None
-                obs = yield Step(outputs, now_ns if answer is not None else resume_at_ns)
+                obs = yield Step(commands, now_ns if answer is not None else resume_at_ns, outputs=outputs)
         finally:
             if answer is not None:
                 answer.cancel()
@@ -894,7 +894,11 @@ class Prefetch(Policy):
             wake = step.resume_at_ns
             if deadline is not None and not self.handled and now_ns < deadline:
                 wake = min(wake, max(now_ns, deadline - round(policy._lead_sec * 1e9)))
-            return Step({key: value for key, value in step.outputs.items() if key != policy._timing_key}, wake)
+            return Step(
+                step.commands,
+                wake,
+                outputs={key: value for key, value in step.outputs.items() if key != policy._timing_key},
+            )
 
         def close(self) -> None:
             if self.pending is not None:

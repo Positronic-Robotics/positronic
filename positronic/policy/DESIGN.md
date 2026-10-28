@@ -180,9 +180,9 @@ The policy run is a reader of observations and a writer of commands.
 Everything around it is asynchronous, but each resumption is synchronous:
 the run processes an observation and returns control to the framework.
 
-- Each resumption receives observations. It yields named outputs, together with
-  the requested time of the next call, or it returns. Outputs can include robot
-  commands and values consumed by an enclosing processor.
+- Each resumption receives observations. It yields a `Step` containing robot commands,
+  the requested time of the next call, and auxiliary outputs consumed by enclosing
+  processors, or it returns. Commands and auxiliary outputs can each be empty.
 - The run ends the episode when it returns. It returns a `PolicyEnd`:
   `COMPLETE` when it thinks that it did the task, and `GIVE_UP` when it stops
   before that. This is a claim, not a verdict. A return after the time limit
@@ -192,8 +192,9 @@ the run processes an observation and returns control to the framework.
 - Observations contain the latest available sensor values, task, and rig descriptor.
   They form a read-only snapshot: later sensor updates must not change an earlier
   input. Current time comes from the runtime, separately from observations.
-- Outputs matching the embodiment's command ports are emitted towards the robot
-  driver immediately. Other outputs are not sent to hardware.
+- `Step.commands` are emitted towards the robot driver immediately. Each command must
+  name a configured embodiment port. `Step.outputs` are never sent to hardware, even
+  when an output has the same name as a command port.
 - Observations and commands are named channels. A channel value can be
   of any type, structured or unstructured (a robot command, an image).
 - The episode clock never goes backwards. A completion can cause another
@@ -351,6 +352,8 @@ The core interfaces below are abridged from [base.py](base.py),
 ### The policy step
 
 ```python
+from attr import dataclass, field
+
 # Observations and commands are named channels.
 Obs = Mapping[str, Any]
 Commands = Mapping[str, Any]
@@ -358,8 +361,9 @@ Commands = Mapping[str, Any]
 
 @dataclass
 class Step:
-    outputs: Mapping[str, Any]
+    commands: Commands
     resume_at_ns: int
+    outputs: Mapping[str, Any] = field(factory=dict)
 
 
 class PolicyEnd(StrEnum):
@@ -507,9 +511,9 @@ more than `max_lateness_sec` old (default 1 s). A missing server reference retri
 selected samples in full. Upload failures propagate. Closing a run cancels queued uploads.
 
 Put codecs outside `Prefetch` or on the server. A codec inside it would also receive cache calls
-and scheduler control fields. `Prefetch` consumes the child's deadline output before returning the
-remaining outputs to an outer codec. Codecs decode outputs as a whole; they do not implicitly
-preserve arbitrary fields.
+and scheduler control fields. `Prefetch` consumes the child's deadline output and passes through
+its commands and other outputs. Codecs decode only `Step.commands`, preserving `Step.outputs`
+and the requested wake-up time. A step with no commands needs no action decoding.
 
 The declaration contains constructor values and one nested child declaration. `to_spec()` produces
 JSON-compatible data; `from_spec()` reconstructs the child and wrapper, including `latest` versions.

@@ -99,7 +99,7 @@ def test_settled_prefix_and_fresh_tail_match_the_original_schedule(rig):
     assert steps[700].resume_at_ns == 750_000_000
     assert rig.requests[-1][VALUE][:, 0].tolist() == [800, 900, 1003]
     assert set(rig.requests[-1][REFERENCES]) == {VALUE}
-    assert [steps[t].outputs[MOTOR] for t in range(0, 1000, 100)] == list(range(10))
+    assert [steps[t].commands[MOTOR] for t in range(0, 1000, 100)] == list(range(10))
 
 
 def test_nested_definition_survives_json_and_has_no_shared_episode_state():
@@ -135,8 +135,8 @@ def test_slow_upload_keeps_sampling_and_playing_actions(rig, finished, frames):
     rig.upload = Future()
     steps = rig.drive(range(0, finished, 50))
     assert len(rig.calls) == 2
-    assert steps[800].outputs == {MOTOR: 8}
-    assert steps[900].outputs == {MOTOR: 9}
+    assert steps[800].commands == {MOTOR: 8}
+    assert steps[900].commands == {MOTOR: 9}
     rig.upload.set_result(rig.upload_result)
     rig.step(finished)
     assert rig.calls[-1] == (finished, False, frames)
@@ -144,7 +144,7 @@ def test_slow_upload_keeps_sampling_and_playing_actions(rig, finished, frames):
 
 def test_replanning_uses_fresh_history_even_after_a_successful_upload(rig):
     rig.drive([0, 400, 500, 600, 750])
-    assert rig.step(800, **{keys.ROBOT_STATUS: RobotStatus.ERROR}).outputs == {MOTOR: 0}
+    assert rig.step(800, **{keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: 0}
     assert rig.calls[-1] == (800, False, [400, 500, 600, 600, 800])
 
 
@@ -190,7 +190,7 @@ def test_outer_fault_guard_remains_effective_during_upload(rig):
     rig.step(750, **{keys.ROBOT_STATUS: RobotStatus.AVAILABLE})
     assert rig.step(800, **{keys.ROBOT_STATUS: RobotStatus.ERROR}) == Step({}, 801_000_000)
     rig.upload.set_result(rig.upload_result)
-    assert rig.step(1000, **{keys.ROBOT_STATUS: RobotStatus.AVAILABLE}).outputs == {MOTOR: 0}
+    assert rig.step(1000, **{keys.ROBOT_STATUS: RobotStatus.AVAILABLE}).commands == {MOTOR: 0}
 
 
 def test_unpadded_history_omits_samples_before_episode_start():
@@ -202,13 +202,15 @@ def test_unpadded_history_omits_samples_before_episode_start():
         rig.close()
 
 
-def test_wrapper_propagates_child_completion(rig):
+def test_wrapper_preserves_commands_other_outputs_and_child_completion(rig):
     class Done(Policy):
         def run(self, runtime, infer):
             yield
+            yield Step({MOTOR: 7}, 123, outputs={MOTOR: 99, policy_keys.NEXT_INFERENCE_NS: None})
             return PolicyEnd.COMPLETE
 
     run = rig.runtime.start(Prefetch(Done(), (VALUE,), (0.0,), 0.2), rig.infer)
+    assert run.send({VALUE: np.array([0])}) == Step({MOTOR: 7}, 123, outputs={MOTOR: 99})
     with pytest.raises(StopIteration) as end:
         run.send({VALUE: np.array([0])})
     assert end.value.value is PolicyEnd.COMPLETE
@@ -331,3 +333,12 @@ def test_all_offsets_can_be_cached_when_no_current_frame_is_requested():
         assert rig.requests[-1][VALUE].shape == (0, 1)
     finally:
         rig.close()
+
+
+def test_scheduler_publishes_deadline_separately_even_with_a_command_of_the_same_name(rig):
+    schedule = ChunkedSchedule(fps=10, timing_key=MOTOR)
+    run = rig.runtime.start(schedule, lambda obs: [{MOTOR: 7}])
+    try:
+        assert run.send({}) == Step({MOTOR: 7}, 100_000_000, outputs={MOTOR: 100_000_000})
+    finally:
+        run.close()

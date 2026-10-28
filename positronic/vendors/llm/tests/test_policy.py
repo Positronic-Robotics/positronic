@@ -300,17 +300,17 @@ def test_unavailable_arm_does_not_pause_inference_or_commands(model, status):
     replies.append(delayed)
     with execution(llm(model='test')) as (run, runtime, clock):
         obs = observation(x=0.02) | {keys.ROBOT_STATUS: status}
-        assert not run.send(obs).outputs
+        assert not run.send(obs).commands
         try:
             assert entered.wait(5)
-            assert not run.send(obs).outputs
+            assert not run.send(obs).commands
         finally:
             release.set()
         runtime.wait(5)
         first = run.send(obs)
         assert first == Step({}, 40_000_000)
         clock.advance_to_ns(first.resume_at_ns)
-        command = run.send(obs).outputs[keys.ROBOT_COMMAND]
+        command = run.send(obs).commands[keys.ROBOT_COMMAND]
         assert 0.02 < command.pose.translation[0] <= 0.04
         accepted = [e for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] if e['event'] == 'accepted']
         assert accepted[0]['target']['x'] == 0.04
@@ -347,7 +347,7 @@ def test_close_drains_request_without_processing_reply(model, late_response):
     replies.append(delayed)
     with execution(LLMPolicy(Endpoint('test'), Motion(), images=Images.ON_DEMAND)) as (run, runtime, clock):
         try:
-            assert not run.send(observation()).outputs
+            assert not run.send(observation()).commands
             assert entered.wait(5)
             snapshot = runtime.metadata_snapshot()
         finally:
@@ -389,7 +389,7 @@ def test_motion_uses_delivery_pose_and_waits_for_final_period_before_observing(
         end_ns = 5_000_000_000 + round(accepted['duration_s'] * 1e9)
         clock.advance_to_ns(end_ns - 40_000_000)
         final = run.send(observation(x=current_x))
-        assert final.outputs[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(expected_x)
+        assert final.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(expected_x)
         assert final.resume_at_ns == end_ns
         assert len(requests) == 1
         clock.advance_to_ns(end_ns - 1)
@@ -422,7 +422,7 @@ def test_late_resume_emits_final_command_before_requesting_next_decision(model):
         complete(run, runtime, clock, observation())
         clock.advance_to_ns(10_000_000_000)
         step = run.send(observation())
-        assert step.outputs[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.01)
+        assert step.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.01)
         assert len(requests) == 1
         assert complete(run, runtime, clock, observation(x=0.01)) is PolicyEnd.COMPLETE
         assert len(requests) == 2

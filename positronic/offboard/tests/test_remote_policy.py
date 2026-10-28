@@ -544,14 +544,14 @@ def test_prefetch_round_trip_rebuilds_images_before_server_codec(served, transpo
 
     try:
         tick(0)
-        assert finish(0).outputs == {'value': 0}
+        assert finish(0).commands == {'value': 0}
         for ms in [*range(50, 701, 50), 710, 750]:
             tick(ms)
         finish(750)
         assert len(model.observations) == 1  # Uploads never reach the model or its action codec.
         for ms in (800, 900, 1003):
             tick(ms)
-        assert finish(1003).outputs == {'value': 0}
+        assert finish(1003).commands == {'value': 0}
         observation = model.observations[-1]
         assert observation['state'] == 1003
         assert observation['selected'].shape == (5, 8, 8, 3)
@@ -621,10 +621,10 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
             step = run.send(obs)
             assert isinstance(step, Step)
-            assert [commands for commands in (first.outputs, step.outputs) if commands] == [{'value': 0}]
+            assert [commands for commands in (first.commands, step.commands) if commands] == [{'value': 0}]
             now[0] = 100_000_000
             step = run.send(obs)
-            assert isinstance(step, Step) and step.outputs == {'value': 1}
+            assert isinstance(step, Step) and step.commands == {'value': 1}
             assert len(model.observations) == 2 * episode + 1
             assert model.observations[-1]['image'].shape == (8, 8, 3)
             now[0] = round((0.2 - lead_sec) * 1e9)
@@ -634,13 +634,13 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
             step = run.send(obs)
             assert isinstance(step, Step)
             if lead_sec:
-                assert first.outputs == step.outputs == {}
+                assert first.commands == step.commands == {}
                 assert step.resume_at_ns == 200_000_000
                 now[0] = 200_000_000
                 step = run.send(obs)
-                assert isinstance(step, Step) and step.outputs == {'value': 0}
+                assert isinstance(step, Step) and step.commands == {'value': 0}
             else:
-                assert [commands for commands in (first.outputs, step.outputs) if commands] == [{'value': 0}]
+                assert [commands for commands in (first.commands, step.commands) if commands] == [{'value': 0}]
             assert len(model.observations) == 2 * episode + 2
         finally:
             runtime.close()
@@ -906,7 +906,7 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
             completed = run.send(obs)
             assert isinstance(completed, Step)
-            outputs.append(legacy_protocol.serialise(dict(first.outputs) | dict(completed.outputs)))
+            outputs.append(legacy_protocol.serialise(dict(first.commands) | dict(completed.commands)))
             inputs.append(legacy_protocol.serialise(model.observations[0]))
         finally:
             runtime.close()
@@ -1130,7 +1130,7 @@ def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_
             assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
             completed = run.send({})
             assert isinstance(first, Step) and isinstance(completed, Step)
-            commands = dict(first.outputs) | dict(completed.outputs)
+            commands = dict(first.commands) | dict(completed.commands)
             command = commands[keys.ROBOT_COMMAND]
             assert isinstance(command, CartesianPosition)
             np.testing.assert_allclose(command.pose.translation, [0.4, 0.0, 0.6])

@@ -377,20 +377,21 @@ def repair_harness():
         yield ports
 
 
-def test_only_outputs_connected_to_command_ports_are_emitted(episode_harness):
+@pytest.mark.parametrize('commands', [{}, {MOTOR: 7}])
+def test_auxiliary_outputs_are_never_emitted_to_command_ports(episode_harness, commands):
     h = episode_harness
 
     class Output(Policy):
         def run(self, runtime):
             yield
-            yield Step({MOTOR: 7, policy_keys.NEXT_INFERENCE_NS: 100_000_000}, 100_000_000)
+            yield Step(commands, 100_000_000, outputs={MOTOR: 99, policy_keys.NEXT_INFERENCE_NS: 100_000_000})
             return PolicyEnd.COMPLETE
 
     h.observation.emit(np.array([1]))
     call = h.caller(Rollout(Task('outputs', None), Output(), h.output_path))
     next(h.loop)
     assert not call.done()
-    assert h.commands.values == [(0, 7)]
+    assert h.commands.values == ([(0, 7)] if commands else [])
     assert set(h.harness.commands) == {MOTOR}
 
 

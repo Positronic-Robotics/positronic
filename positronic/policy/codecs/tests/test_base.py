@@ -216,6 +216,40 @@ def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned(
     assert end.value.value is PolicyEnd.GIVE_UP
 
 
+@pytest.mark.parametrize('commands', [{}, {'value': 1}])
+@pytest.mark.parametrize('as_run', [False, True])
+def test_codec_decodes_only_commands_and_preserves_auxiliary_outputs(commands, as_run):
+    outputs = {'value': object()}
+    step = Step(commands, 123, outputs=outputs)
+    decoded = []
+
+    class Decode(Codec):
+        def _decode_single(self, data):
+            decoded.append(data)
+            return {name: 2 * value for name, value in data.items()}
+
+    def run():
+        yield
+        yield step
+
+    if as_run:
+        inner = run()
+        next(inner)
+        wrapped = Decode().wrap(inner)
+        try:
+            result = wrapped.send({})
+        finally:
+            wrapped.close()
+            inner.close()
+    else:
+        result = Decode().wrap(lambda obs: step)({})
+    assert isinstance(result, Step)
+    assert result.commands == {name: 2 * value for name, value in commands.items()}
+    assert result.outputs is outputs
+    assert result.resume_at_ns == 123
+    assert decoded == ([commands] if commands else [])
+
+
 class TestCodecComposition:
     """Codec composition preserves metadata and frame declarations."""
 

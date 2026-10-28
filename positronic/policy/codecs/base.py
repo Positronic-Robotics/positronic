@@ -60,8 +60,8 @@ class Codec:
     ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
-        Steps retain their wake-up time; their outputs are decoded as a whole. The caller owns the wrapped
-        dependency, including closing it when it is a generator.
+        Steps retain their wake-up time and auxiliary outputs; only commands are decoded. The caller owns
+        the wrapped dependency, including closing it when it is a generator.
         """
         if isinstance(function, cabc.Generator):
             run = self._wrap_run(function)
@@ -77,7 +77,11 @@ class Codec:
             encoded = encode(dict(obs))
             result = function(encoded)
             if isinstance(result, Step):
-                return Step(self.decode(dict(result.outputs)), result.resume_at_ns) if result.outputs else result
+                return (
+                    Step(self.decode(dict(result.commands)), result.resume_at_ns, outputs=result.outputs)
+                    if result.commands
+                    else result
+                )
             return self.decode(result) if result is not None else None
 
         return call
