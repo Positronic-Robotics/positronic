@@ -44,7 +44,7 @@ from positronic.teleop import command, protocol
 from positronic.teleop import service as service_module
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import ButtonMap, Event, Phase, ReadyAnswer, TeleopModel, TeleopService
-from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
+from positronic.tests.testing_coutils import ManualCommandReceiver, MutableShouldStop, RecordingEmitter
 from positronic.utils import package_assets_path
 
 HAND = geom.Transform3D(np.array([0.1, 0.2, 1.0]), geom.Rotation.identity)
@@ -745,48 +745,97 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
     assert state == {'phase': Phase.IDLE, 'control': False}
 
 
-def test_each_trial_that_starts_to_wait_for_ready_shows_one_notice():
-    shown: list[str] = []
-    notice = command._ReadyNotice(shown.append, 'Press Ready')
+class _RecordingNotice:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def show(self, text: str) -> None:
+        self.calls.append(f'show {text}')
+
+    def hide(self) -> None:
+        self.calls.append('hide')
+
+
+def _drive_ready_notice(phases: list[Phase], stop_at_end: bool = False) -> list[str]:
+    notice = _RecordingNotice()
+    ready_notice = command._ReadyNotice(notice, 'Press Ready')
     states = ManualCommandReceiver[dict]()
-    notice.page_state._bind(states)
-    loop = notice.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), SystemClock())
-    phases = [Phase.IDLE, Phase.READY_WAIT, Phase.READY_WAIT, Phase.RUNNING, Phase.ENDED, Phase.IDLE, Phase.READY_WAIT]
+    ready_notice.page_state._bind(states)
+    stop = MutableShouldStop()
+    loop = ready_notice.run(cast(pimm.SignalReceiver, stop), SystemClock())
     for phase in phases:
         states.push(asdict(command.PageState(phase, control=False)))
         next(loop)
-    assert shown == ['Press Ready', 'Press Ready']
+    if stop_at_end:
+        stop.set(True)
+        next(loop, None)
+    return notice.calls
 
 
-MACOS_NOTICE = 'display notification "Press \\"Ready\\"" with title "positronic teleop" sound name "Glass"'
+def test_the_notice_shows_while_a_trial_waits_for_ready():
+    phases = [Phase.IDLE, Phase.READY_WAIT, Phase.READY_WAIT, Phase.RUNNING, Phase.ENDED, Phase.IDLE, Phase.READY_WAIT]
+    phases += [Phase.IDLE]
+    assert _drive_ready_notice(phases) == ['show Press Ready', 'hide', 'show Press Ready', 'hide']
+
+
+def test_a_service_that_stops_in_the_ready_wait_hides_the_notice():
+    assert _drive_ready_notice([Phase.READY_WAIT], stop_at_end=True) == ['show Press Ready', 'hide']
+
+
+MACOS_DIALOG = ['osascript', '-e', 'display alert "positronic teleop" message "Press \\"Ready\\""']
 LINUX_NOTICE = ['notify-send', '--urgency=critical', 'positronic teleop', 'Press "Ready"']
 LINUX_SOUND = ['paplay', '/usr/share/sounds/freedesktop/stereo/complete.oga']
 
 
+class _Process:
+    def __init__(self, command: list[str], started: list[list[str]]):
+        started.append(command)
+        self.command = command
+        self.terminated = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+
 @pytest.mark.parametrize(
     'platform, commands',
-    [('darwin', [['osascript', '-e', MACOS_NOTICE]]), ('linux', [LINUX_NOTICE, LINUX_SOUND])],
+    [('darwin', [['afplay', command.DesktopNotice.MACOS_SOUND], MACOS_DIALOG]), ('linux', [LINUX_NOTICE, LINUX_SOUND])],
     ids=['macos', 'linux'],
 )
 def test_the_desktop_notice_runs_the_notice_commands_of_the_platform(monkeypatch, platform, commands):
     started: list[list[str]] = []
     monkeypatch.setattr(command.sys, 'platform', platform)
-    monkeypatch.setattr(command.subprocess, 'Popen', started.append)
-    command.DesktopNotice()('Press "Ready"')
+    monkeypatch.setattr(command.subprocess, 'Popen', lambda argv: _Process(argv, started))
+    command.DesktopNotice().show('Press "Ready"')
     assert started == commands
+
+
+def test_hide_closes_the_macos_dialog(monkeypatch):
+    processes: list[_Process] = []
+
+    def start(argv: list[str]) -> _Process:
+        processes.append(_Process(argv, []))
+        return processes[-1]
+
+    monkeypatch.setattr(command.sys, 'platform', 'darwin')
+    monkeypatch.setattr(command.subprocess, 'Popen', start)
+    notice = command.DesktopNotice()
+    notice.show('Press Ready')
+    notice.hide()
+    assert [process.terminated for process in processes] == [False, True]
 
 
 def test_a_notice_program_that_is_missing_is_logged_and_the_next_one_runs(monkeypatch, caplog):
     started: list[list[str]] = []
 
-    def start(argv: list[str]) -> None:
+    def start(argv: list[str]) -> _Process:
         if argv[0] == 'notify-send':
             raise FileNotFoundError(argv[0])
-        started.append(argv)
+        return _Process(argv, started)
 
     monkeypatch.setattr(command.sys, 'platform', 'linux')
     monkeypatch.setattr(command.subprocess, 'Popen', start)
-    command.DesktopNotice()('Press Ready')
+    command.DesktopNotice().show('Press Ready')
     assert [argv[0] for argv in started] == ['paplay']
     assert 'Cannot show the notice with notify-send' in caplog.text
 

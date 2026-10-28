@@ -6,9 +6,10 @@ import os
 import subprocess
 import sys
 import webbrowser
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Protocol
 
 import configuronic as cfn
 from platform_client.policy_container import AUTH_TOKEN_ENV
@@ -61,52 +62,78 @@ class _Headset(pimm.ControlSystem):
             yield pimm.Sleep(self._view_period_sec)
 
 
-class _ReadyNotice(pimm.ControlSystem):
-    """Show ``text`` with ``notify`` each time a trial starts to wait for Ready."""
+class Notice(Protocol):
+    """A notice to the teleoperator on the computer of the service."""
 
-    def __init__(self, notify: Callable[[str], None], text: str):
-        self._notify = notify
+    def show(self, text: str) -> None: ...
+
+    def hide(self) -> None: ...
+
+
+class _ReadyNotice(pimm.ControlSystem):
+    """Show ``text`` with ``notice`` while a trial waits for Ready."""
+
+    def __init__(self, notice: Notice, text: str):
+        self._notice = notice
         self._text = text
         # The state of the trial, as a `PageState` mapping.
         self.page_state = pimm.ControlSystemReceiver(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        phase = Phase.IDLE
+        waiting = False
         while not should_stop.value:
             state = pimm.read_updated(self.page_state)
             if state is not None:
-                previous, phase = phase, PageState(**state.data).phase
-                if phase is Phase.READY_WAIT and previous is not Phase.READY_WAIT:
-                    self._notify(self._text)
+                was_waiting, waiting = waiting, PageState(**state.data).phase is Phase.READY_WAIT
+                if waiting and not was_waiting:
+                    self._notice.show(self._text)
+                elif was_waiting and not waiting:
+                    self._notice.hide()
             yield pimm.Sleep(0.1)
+        if waiting:
+            self._notice.hide()
 
 
 def _applescript_string(text: str) -> str:
     return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
+def _start(command: Sequence[str]) -> subprocess.Popen | None:
+    try:
+        return subprocess.Popen(command)
+    except OSError as error:
+        # The notice only helps the teleoperator, so the service goes on without it.
+        logger.error('Cannot show the notice with %s: %s', command[0], error)
+        return None
+
+
 class DesktopNotice:
-    """A notice with a sound on the desktop of this computer: ``osascript`` on macOS, else ``notify-send`` and
-    ``paplay`` with ``sound``."""
+    """A notice with a sound on the desktop of this computer. On macOS it is a dialog in the centre of the screen,
+    with ``afplay``. Elsewhere it is a notification of ``notify-send``, with ``sound`` played by ``paplay``."""
+
+    MACOS_SOUND = '/System/Library/Sounds/Glass.aiff'
 
     def __init__(
         self, title: str = 'positronic teleop', sound: str = '/usr/share/sounds/freedesktop/stereo/complete.oga'
     ):
         self._title = title
         self._sound = Path(sound)
+        self._dialog: subprocess.Popen | None = None
 
-    def __call__(self, text: str) -> None:
+    def show(self, text: str) -> None:
         if sys.platform == 'darwin':
-            script = f'display notification {_applescript_string(text)} with title {_applescript_string(self._title)}'
-            commands = [['osascript', '-e', f'{script} sound name "Glass"']]
+            _start(['afplay', self.MACOS_SOUND])
+            script = f'display alert {_applescript_string(self._title)} message {_applescript_string(text)}'
+            self._dialog = _start(['osascript', '-e', script])
         else:
-            commands = [['notify-send', '--urgency=critical', self._title, text], ['paplay', str(self._sound)]]
-        for command in commands:
-            try:
-                subprocess.Popen(command)
-            except OSError as error:
-                # The notice only helps the teleoperator, so the service goes on without it.
-                logger.error('Cannot show the notice with %s: %s', command[0], error)
+            _start(['notify-send', '--urgency=critical', self._title, text])
+            _start(['paplay', str(self._sound)])
+
+    def hide(self) -> None:
+        """Close the dialog. A notification of ``notify-send`` stays until the teleoperator closes it."""
+        if self._dialog is not None:
+            self._dialog.terminate()
+            self._dialog = None
 
 
 desktop_notice = cfn.Config(DesktopNotice)
@@ -122,14 +149,14 @@ network = cfn.Config(ServedHostPort, host='0.0.0.0', port=DEFAULT_PORT)
     served_address=socket_at.override(uds=str(default_socket_path())),
     ready_limit=120.0,
     window_port=5006,
-    notify=desktop_notice,
+    notice=desktop_notice,
 )
 def serve(
     webxr: WebXR,
     served_address: ServedAddress,
     ready_limit: float,
     window_port: int,
-    notify: Callable[[str], None] | None,
+    notice: Notice | None,
     silence_limit: float = 0.5,
     hold_sec: float = 1.0,
     press_threshold: float = 0.6,
@@ -141,7 +168,7 @@ def serve(
     ``served_address`` is the Unix socket of this user by default.
     ``--served_address=@positronic.teleop.command.network`` serves on a host and a port, and needs the bearer token in
     ``AUTH_TOKEN_ENV``. A run sets the parameters of its session (``SessionParams``) in the query of its address.
-    ``notify`` shows a notice on this computer when a trial starts to wait for Ready. ``--notify=None`` turns it off.
+    ``notice`` shows on this computer while a trial waits for Ready. ``--notice=None`` turns it off.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
@@ -152,15 +179,15 @@ def serve(
     )
     headset = _Headset(service, view_fps)
     text = f'A trial waits for Ready. Press Ready (B on a Quest) within {ready_limit:g} s.'
-    notice = None if notify is None else _ReadyNotice(notify, text)
+    ready_notice = None if notice is None else _ReadyNotice(notice, text)
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)
         world.connect(headset.view, webxr.frame)
         world.connect(headset.page_state, webxr.page_state)
-        if notice is not None:
-            world.connect(headset.page_state, notice.page_state)
+        if ready_notice is not None:
+            world.connect(headset.page_state, ready_notice.page_state)
         logger.info('The teleop service serves on %s. Its window is %s', service.served_address, window.url)
         if open_window:
             webbrowser.open(window.url)
-        world.run([headset, notice], [webxr])
+        world.run([headset, ready_notice], [webxr])
