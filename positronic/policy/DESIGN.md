@@ -321,6 +321,50 @@ any data conversion performed on the server. Loading and serving models belong
 to the server; the policy run sees an ordinary function call. See the
 [offboard interfaces](../offboard/spec.py) for the server configuration types.
 
+### Real-time chunking: who owns the plan
+
+Real-time chunking (RTC) generates a new action chunk while the robot continues
+executing its queued commands. The model needs enough context to continue that
+motion coherently. The design assigns decisions to the component that has the
+knowledge to make them.
+
+TODO: Align the RTC request fields and command encoding with the contract below.
+
+**The client supplies its plan; the server decides how to use it.** The request
+describes the observation moment, including the remaining planned actions and
+measured and expected call latency. The client knows its queue and call timings;
+the server knows how its model conditions predictions. Choosing frozen and
+blending regions therefore belongs to the server. The client supplies the
+remaining plan rather than trimming it to a particular model's conditioning window.
+
+**The prefix describes planned commands.** A model prediction can change during
+command preparation: a gripper value may be binarized, for example. Conditioning
+should reflect the commands the client plans to issue. The prefix is expressed
+in the model's action representation, but encoding it does not attempt to recover
+values discarded during command preparation. Planned commands are not a claim
+about the physical motion the robot will achieve.
+
+**Time is expressed in seconds.** Latency includes the submitted call's full
+duration, not just model computation. The prefix carries both its start time
+within the preceding prediction and its start time relative to the observation.
+The first locates source actions; the second says when they are due. With the
+prediction's fixed action spacing preserved, the server's known action rate
+determines the remaining times without synchronized machine clocks.
+
+**Conversion belongs in codecs.** Action codecs understand both robot commands
+and model action values. Their ordinary encoding operation converts commands at
+a configured input path; observation codecs prepare sensor inputs alongside
+them. Selection and packing explicitly carry the timing context. This keeps RTC
+handling out of the generic callable wrapper and avoids a separate command-encoding
+interface. A command path describes data to convert, not the algorithm using it.
+
+**A supplied prefix permits stateless inference without requiring it.** GR00T's
+tested DROID checkpoint also requires end-effector poses, which joint commands
+do not retain. Its session cache supplies those predicted poses while client
+values supply planned joints and grip. This avoids requiring pose reconstruction
+for every client. Cached poses remain model predictions and need not exactly
+match modified joint targets; that limitation belongs to the GR00T integration.
+
 ### Recording and logging
 
 A system split between a rig and a server is hard to debug. Data flows
