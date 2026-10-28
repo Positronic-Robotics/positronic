@@ -1414,6 +1414,24 @@ def test_a_protocol_v2_session_streams_the_rows_as_a_v1_session_does():
     assert (second[REF], second[b'call'], second[b'rows']) == (True, 1, [2, 1])
 
 
+def test_a_frame_stream_targets_the_request_that_the_inference_lead_brings_forward():
+    temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
+    meta = _stream_meta(ChunkedSchedule(fps=10.0, inference_lead=ConstantDuration(0.2)).to_spec())
+    meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
+    session = _run_v1(meta, 6, frame_stream='jpeg', version=protocol.ProtocolVersion.V2)
+
+    # Read at 0.1 s, 5 rows at 10 per second, a lead of 0.2 s: the next request goes at 0.4 s, its rows at 0.15 s
+    # and 0.25 s.
+    rows = [call.args[0][ROW] for call in session.send_message.call_args_list]
+    images = [serialization.deserialise(serialization.serialise(row['images']))['image'] for row in rows]
+    assert [(row['call'], row['back'], _frame_index(image)) for row, image in zip(rows, images, strict=True)] == [
+        (1, 2, 1),
+        (1, 1, 2),
+    ]
+    second = session.infer.call_args_list[1].args[0]['image']
+    assert (second[b'call'], second[b'rows']) == (1, [2, 1])
+
+
 def test_a_frame_miss_sends_the_request_again_in_full(caplog):
     chunk = [{'value': i} for i in range(5)]
     with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):

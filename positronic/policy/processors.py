@@ -353,6 +353,10 @@ class ChunkedSchedule(Policy):
         self._inference_lead = ConstantDuration() if inference_lead is None else inference_lead
         self._replan_on_error = replan_on_error
 
+    @property
+    def inference_lead(self) -> DurationEstimate:
+        return self._inference_lead
+
     @staticmethod
     def _next_call_ns(start_ns: int, end_ns: int, lead_sec: float) -> int:
         if not isfinite(lead_sec) or lead_sec < 0:
