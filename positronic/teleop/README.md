@@ -71,6 +71,13 @@ slider, so a closed gripper does not close again at the next Control.
 The Quest shows the phase, the task and the control state on its video. The window on the laptop shows the same state,
 and the control state.
 
+When a trial starts to wait for Ready, the service shows a notice with a sound on the desktop of its computer. The
+notice comes also when the window is not open. On macOS the service uses `osascript`. If no notice comes, allow the
+notifications of Script Editor in the system settings. On Linux the service uses `notify-send` and `paplay`.
+`--notify.sound=<file>` changes the sound on Linux, and `--notify=None` turns the notice off. A service that you start
+over ssh shows the notice only on the desktop of the same user, and only with
+`DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus` in its environment.
+
 ## Cameras
 
 A run records the union of two camera sets:

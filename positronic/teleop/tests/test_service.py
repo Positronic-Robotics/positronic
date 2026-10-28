@@ -6,6 +6,7 @@ import threading
 import time
 import types
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
@@ -742,6 +743,52 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
     next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     [(_, state)] = sent.emitted
     assert state == {'phase': Phase.IDLE, 'control': False}
+
+
+def test_each_trial_that_starts_to_wait_for_ready_shows_one_notice():
+    shown: list[str] = []
+    notice = command._ReadyNotice(shown.append, 'Press Ready')
+    states = ManualCommandReceiver[dict]()
+    notice.page_state._bind(states)
+    loop = notice.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), SystemClock())
+    phases = [Phase.IDLE, Phase.READY_WAIT, Phase.READY_WAIT, Phase.RUNNING, Phase.ENDED, Phase.IDLE, Phase.READY_WAIT]
+    for phase in phases:
+        states.push(asdict(command.PageState(phase, control=False)))
+        next(loop)
+    assert shown == ['Press Ready', 'Press Ready']
+
+
+MACOS_NOTICE = 'display notification "Press \\"Ready\\"" with title "positronic teleop" sound name "Glass"'
+LINUX_NOTICE = ['notify-send', '--urgency=critical', 'positronic teleop', 'Press "Ready"']
+LINUX_SOUND = ['paplay', '/usr/share/sounds/freedesktop/stereo/complete.oga']
+
+
+@pytest.mark.parametrize(
+    'platform, commands',
+    [('darwin', [['osascript', '-e', MACOS_NOTICE]]), ('linux', [LINUX_NOTICE, LINUX_SOUND])],
+    ids=['macos', 'linux'],
+)
+def test_the_desktop_notice_runs_the_notice_commands_of_the_platform(monkeypatch, platform, commands):
+    started: list[list[str]] = []
+    monkeypatch.setattr(command.sys, 'platform', platform)
+    monkeypatch.setattr(command.subprocess, 'Popen', started.append)
+    command.DesktopNotice()('Press "Ready"')
+    assert started == commands
+
+
+def test_a_notice_program_that_is_missing_is_logged_and_the_next_one_runs(monkeypatch, caplog):
+    started: list[list[str]] = []
+
+    def start(argv: list[str]) -> None:
+        if argv[0] == 'notify-send':
+            raise FileNotFoundError(argv[0])
+        started.append(argv)
+
+    monkeypatch.setattr(command.sys, 'platform', 'linux')
+    monkeypatch.setattr(command.subprocess, 'Popen', start)
+    command.DesktopNotice()('Press Ready')
+    assert [argv[0] for argv in started] == ['paplay']
+    assert 'Cannot show the notice with notify-send' in caplog.text
 
 
 @pytest.mark.parametrize('ending', ['give_up', 'time_limit'])
