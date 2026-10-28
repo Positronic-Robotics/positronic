@@ -92,22 +92,8 @@ class _ReadyNotice(pimm.ControlSystem):
                         self._notice.hide()
                 yield pimm.Sleep(0.1)
         finally:
-            # The world closes this loop, with no stop, when another control system fails.
             if waiting:
                 self._notice.hide()
-
-
-def _applescript_string(text: str) -> str:
-    return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
-
-
-def _start(command: Sequence[str]) -> subprocess.Popen | None:
-    try:
-        return subprocess.Popen(command)
-    except OSError as error:
-        # The notice only helps the teleoperator, so the service goes on without it.
-        logger.error('Cannot show the notice with %s: %s', command[0], error)
-        return None
 
 
 class DesktopNotice:
@@ -123,14 +109,27 @@ class DesktopNotice:
         self._sound = Path(sound)
         self._dialog: subprocess.Popen | None = None
 
+    @staticmethod
+    def _applescript_string(text: str) -> str:
+        return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+    @staticmethod
+    def _start(command: Sequence[str]) -> subprocess.Popen | None:
+        try:
+            return subprocess.Popen(command)
+        except OSError as error:
+            # The notice only helps the teleoperator, so the service goes on without it.
+            logger.error('Cannot show the notice with %s: %s', command[0], error)
+            return None
+
     def show(self, text: str) -> None:
         if sys.platform == 'darwin':
-            _start(['afplay', self.MACOS_SOUND])
-            script = f'display alert {_applescript_string(self._title)} message {_applescript_string(text)}'
-            self._dialog = _start(['osascript', '-e', script])
+            self._start(['afplay', self.MACOS_SOUND])
+            script = f'display alert {self._applescript_string(self._title)} message {self._applescript_string(text)}'
+            self._dialog = self._start(['osascript', '-e', script])
         else:
-            self._dialog = _start(['zenity', '--info', '--no-markup', f'--title={self._title}', f'--text={text}'])
-            _start(['paplay', str(self._sound)])
+            self._dialog = self._start(['zenity', '--info', '--no-markup', f'--title={self._title}', f'--text={text}'])
+            self._start(['paplay', str(self._sound)])
 
     def hide(self) -> None:
         if self._dialog is not None:
