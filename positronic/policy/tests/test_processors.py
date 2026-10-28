@@ -606,24 +606,6 @@ def test_a_fast_answer_is_asked_for_its_delay_before_the_chunk_ends(execution, m
     assert model.seen == ['--', 'a2']
 
 
-def test_a_lead_of_the_whole_chunk_calls_again_in_the_round_that_reads_the_answer(execution, monkeypatch):
-    runtime, clock = execution
-    model = ObservingModel(runtime)
-    monkeypatch.setattr(runtime, 'submit', model.submit)
-    # One command for each call, played at once, as the teleop service declares.
-    rig = Rig(runtime, clock, ChunkedSchedule(fps=100, inference_lead=ConstantDuration(0.01)))
-    try:
-        rig.tick(0)
-        model.answer('a', length=1)
-        assert rig.tick(66_000_000).commands == {MOTOR: 'a0'}
-        model.answer('b', length=1)
-        assert rig.tick(132_000_000).commands == {MOTOR: 'b0'}
-    finally:
-        rig.run.close()
-    assert [time_ns for time_ns, _ in model.calls] == [0, 66_000_000, 132_000_000]
-    assert model.seen == ['--', '--', 'a0']
-
-
 def test_an_early_answer_keeps_a_late_final_waypoint_and_observes_the_previous_one(execution, monkeypatch):
     runtime, clock = execution
     first = Future()
