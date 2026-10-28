@@ -42,7 +42,7 @@ from positronic.policy.compatibility import (
     restrict_image_size_v1,
     unpack_action_chunk_v1,
 )
-from positronic.policy.processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, RTCSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
@@ -56,6 +56,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         EncodeImages,
         EndCommand,
         EndOnField,
+        RTCSchedule,
         PauseOnUnavailable,
         TemporalStack,
         BinarizeGripTraining,

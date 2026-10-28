@@ -7,7 +7,8 @@ from positronic_model_server.spec import PAR, SEQ
 from positronic import telemetry, telemetry_keys
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.policy.base import Obs, ProcessorRun, Step
+from positronic.policy import keys as policy_keys
+from positronic.policy.base import Commands, Obs, ProcessorRun, Step
 from positronic.utils import merge_dicts
 
 
@@ -37,6 +38,10 @@ class Codec:
     def _decode_single(self, data: dict) -> dict:
         return {}
 
+    def encode_commands(self, commands: cabc.Sequence[Commands]) -> list[dict]:
+        """``commands`` in the format ``decode`` reads, for a codec that converts a command back."""
+        raise ValueError(f'{type(self).__name__} cannot convert a command back to the format it decodes')
+
     @property
     def training_encoder(self) -> EpisodeTransform:
         # TODO: Remove this interface and its composition after all model recipes build training independently.
@@ -58,8 +63,9 @@ class Codec:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
         Steps retain their wake-up time; only nonempty commands are decoded. A ``ValueError`` or ``KeyError``
-        from the decode becomes a ``PolicyCommandError``. The caller owns the wrapped dependency, including
-        closing it when it is a generator.
+        from the decode becomes a ``PolicyCommandError``. An ``ACTION_PREFIX`` in the observation goes to the
+        callable as ``encode_commands`` of it. The caller owns the wrapped dependency, including closing it when
+        it is a generator.
         """
         if isinstance(function, cabc.Generator):
             run = self._wrap_run(function)
@@ -72,7 +78,11 @@ class Codec:
 
         @telemetry.traced(telemetry.component_name(self))
         def call(obs: Obs) -> Any:
-            encoded = encode(dict(obs))
+            inputs = dict(obs)
+            prefix = inputs.pop(policy_keys.ACTION_PREFIX, None)
+            encoded = encode(inputs)
+            if prefix is not None:
+                encoded = {**encoded, policy_keys.ACTION_PREFIX: self.encode_commands(prefix)}
             result = function(encoded)
             if result is None or (isinstance(result, Step) and not result.commands):
                 return result
@@ -157,6 +167,9 @@ class _ComposedCodec(Codec):
     def decode(self, data):
         return self._left.decode(self._right.decode(data))
 
+    def encode_commands(self, commands):
+        return self._right.encode_commands(self._left.encode_commands(commands))
+
     @property
     def training_encoder(self):
         return self._left.training_encoder | self._right.training_encoder
@@ -193,6 +206,11 @@ class _ParallelCodec(Codec):
         if isinstance(data, list):
             return [{**lf, **rt} for lf, rt in zip(left_out, right_out, strict=True)]
         return {**left_out, **right_out}
+
+    def encode_commands(self, commands):
+        left_out = self._left.encode_commands(commands)
+        right_out = self._right.encode_commands(commands)
+        return [{**lf, **rt} for lf, rt in zip(left_out, right_out, strict=True)]
 
     @property
     def training_encoder(self):

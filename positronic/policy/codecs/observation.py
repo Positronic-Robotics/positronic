@@ -28,6 +28,9 @@ class SelectObservationFields(Codec):
     def encode(self, data: dict[str, Any]) -> dict[str, Any]:
         return {name: data[source] for name, source in self._mapping.items()}
 
+    def encode_commands(self, commands):
+        return [{} for _ in commands]
+
     def to_spec(self):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mapping': dict(self._mapping)}}
 
@@ -231,6 +234,9 @@ class StateObservationCodec(Codec):
         signals = [episode[k] for k in state_features]
         timeline = recording_timeline({name for signal in signals for name in signal.timelines})
         return transforms.concat(*signals, dtype=np.float32, timelines=(timeline,))
+
+    def encode_commands(self, commands):
+        return [{} for _ in commands]
 
     def encode(self, data: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}

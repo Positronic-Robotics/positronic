@@ -26,7 +26,7 @@ from positronic.policy.codecs import (
 )
 from positronic.policy.codecs.image import image_observation
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, RTCSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
 TIMESTAMP = 'timestamp'
@@ -131,6 +131,9 @@ class ObservationCodecV1(Codec):
         obs.update({name: state[name] for name in self._state_names})
         return obs
 
+    def encode_commands(self, commands):
+        return [{} for _ in commands]
+
     @property
     def training_encoder(self):
         # V1 training gives the task column precedence over images, and images over state.
@@ -233,6 +236,11 @@ def from_v1_spec(
     timing: dict[str, float] = {}
     parts: list[dict[str, Any]] = []
     for part in _unnest_seq(node):
+        if part.get(NAME) == RTCSchedule.WIRE_NAME:
+            raise ValueError(
+                f'A protocol v1 server declares {RTCSchedule.WIRE_NAME}, and the client runs a v1 stack in its own '
+                f'{ChunkedSchedule.WIRE_NAME}. Serve {RTCSchedule.WIRE_NAME} over protocol v2 or later.'
+            )
         if _is_v1(part, ACTION_TIMESTAMP):
             timing[ChunkedSchedule.FPS_ARG] = part[ARGS][V1_FPS_ARG]
         elif _is_v1(part, ACTION_HORIZON):

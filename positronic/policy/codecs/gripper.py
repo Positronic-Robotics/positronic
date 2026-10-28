@@ -32,6 +32,9 @@ class BinarizeGripTraining(Codec):
     def _decode_single(self, data: dict) -> dict:
         return data
 
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
+
     @property
     def training_encoder(self) -> EpisodeTransform:
         threshold = self._threshold
@@ -81,6 +84,9 @@ class BinarizeGripInference(Codec):
             data[self._key] = 1.0 if data[self._key] > self._threshold else 0.0
         return data
 
+    def encode_commands(self, commands):
+        return [dict(c) for c in commands]
+
     def to_spec(self):
         return {
             NAME: self.WIRE_NAME,
@@ -123,6 +129,9 @@ class FlipGrip(Codec):
             if key in data:
                 data[key] = 1.0 - data[key]
         return data
+
+    def encode_commands(self, commands):
+        return [self._decode_single(dict(c)) for c in commands]
 
     def to_spec(self):
         if self._arms is None:

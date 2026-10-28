@@ -144,6 +144,19 @@ def test_decode_maps_action_back_to_canonical():
     assert decoded[obs_keys.TARGET_GRIP] == 1.0
 
 
+def test_encode_commands_maps_a_command_to_the_policy_frame():
+    pose_c = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
+    commands = {obs_keys.ROBOT_COMMAND: cmd_module.CartesianPosition(pose=pose_c), 'target_grip': 1.0}
+
+    [encoded] = ChangeEEFrame(TO_ROBOLAB).encode_commands([commands])
+
+    np.testing.assert_allclose(
+        encoded[obs_keys.ROBOT_COMMAND].pose.as_vector(QUAT), (pose_c * TO_ROBOLAB).as_vector(QUAT), atol=1e-9
+    )
+    assert encoded['target_grip'] == 1.0
+    assert commands[obs_keys.ROBOT_COMMAND].pose is pose_c
+
+
 def test_decode_keeps_the_control_mode_a_command_pinned():
     """Re-expressing a pose does not change what law drives to it, nor the point its stiffness acts at."""
     stiffness_point = _pose([0.0, 0.0, 0.1], [0.0, 0.0, 0.3])

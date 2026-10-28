@@ -11,6 +11,7 @@ from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic.cfg.codecs import image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec, training
 from positronic.policy.codecs import LEROBOT_FEATURES, Codec, EncodeImages, Resample, ResizeMode, TransformImages
 
@@ -233,6 +234,20 @@ class TestTransformImages:
         actions = [{'target_grip': 0.5}, {'target_grip': 1.0}]
         assert TransformImages(64, 48, mode=ResizeMode.BOUND).decode(actions) == actions
 
+    def test_an_rtc_prefix_passes_through_while_the_images_shrink(self):
+        prefix = [{'target_grip': 0.5}, {'target_grip': 1.0}]
+        received = []
+
+        def model(obs):
+            received.append(obs)
+            return []
+
+        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
+        codec.wrap(model)({'cam': _image(480, 640), policy_keys.ACTION_PREFIX: prefix})
+
+        assert received[0][policy_keys.ACTION_PREFIX] == prefix
+        assert received[0]['cam'].shape == (48, 64, 3)
+
     def test_training_encoder_refuses(self):
         with pytest.raises(NotImplementedError, match='full-resolution'):
             _ = TransformImages(64, 48, mode=ResizeMode.BOUND).training_encoder
@@ -331,6 +346,18 @@ class TestTransformImages:
 
 
 class TestEncodeImages:
+    def test_an_rtc_prefix_passes_through_unchanged(self):
+        prefix = [{'action': np.array([0.1, 0.2], dtype=np.float32)}]
+        received = []
+
+        def model(obs):
+            received.append(obs[policy_keys.ACTION_PREFIX])
+            return []
+
+        EncodeImages().wrap(model)({policy_keys.ACTION_PREFIX: prefix})
+
+        np.testing.assert_array_equal(received[0][0]['action'], prefix[0]['action'])
+
     @pytest.mark.parametrize('shape', [(8, 12, 3), (2, 8, 12, 3), (2, 3, 8, 12, 3), (0, 8, 12, 3)])
     def test_automatic_encoding_reaches_nested_images_and_preserves_dimensions(self, shape):
         image = np.full(shape, 140, dtype=np.uint8)
