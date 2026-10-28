@@ -81,17 +81,20 @@ class _ReadyNotice(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         waiting = False
-        while not should_stop.value:
-            state = pimm.read_updated(self.page_state)
-            if state is not None:
-                was_waiting, waiting = waiting, PageState(**state.data).phase is Phase.READY_WAIT
-                if waiting and not was_waiting:
-                    self._notice.show(self._text)
-                elif was_waiting and not waiting:
-                    self._notice.hide()
-            yield pimm.Sleep(0.1)
-        if waiting:
-            self._notice.hide()
+        try:
+            while not should_stop.value:
+                state = pimm.read_updated(self.page_state)
+                if state is not None:
+                    was_waiting, waiting = waiting, PageState(**state.data).phase is Phase.READY_WAIT
+                    if waiting and not was_waiting:
+                        self._notice.show(self._text)
+                    elif was_waiting and not waiting:
+                        self._notice.hide()
+                yield pimm.Sleep(0.1)
+        finally:
+            # The world closes this loop, with no stop, when another control system fails.
+            if waiting:
+                self._notice.hide()
 
 
 def _applescript_string(text: str) -> str:

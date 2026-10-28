@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
@@ -756,30 +756,37 @@ class _RecordingNotice:
         self.calls.append('hide')
 
 
-def _drive_ready_notice(phases: list[Phase], stop_at_end: bool = False) -> list[str]:
+def _ready_notice_after(phases: list[Phase]) -> tuple[_RecordingNotice, MutableShouldStop, Generator]:
+    """A ready notice that has read ``phases``, its stop flag and its loop."""
     notice = _RecordingNotice()
     ready_notice = command._ReadyNotice(notice, 'Press Ready')
     states = ManualCommandReceiver[dict]()
     ready_notice.page_state._bind(states)
     stop = MutableShouldStop()
-    loop = ready_notice.run(cast(pimm.SignalReceiver, stop), SystemClock())
+    loop = cast(Generator, ready_notice.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     for phase in phases:
         states.push(asdict(command.PageState(phase, control=False)))
         next(loop)
-    if stop_at_end:
-        stop.set(True)
-        next(loop, None)
-    return notice.calls
+    return notice, stop, loop
 
 
 def test_the_notice_shows_while_a_trial_waits_for_ready():
     phases = [Phase.IDLE, Phase.READY_WAIT, Phase.READY_WAIT, Phase.RUNNING, Phase.ENDED, Phase.IDLE, Phase.READY_WAIT]
-    phases += [Phase.IDLE]
-    assert _drive_ready_notice(phases) == ['show Press Ready', 'hide', 'show Press Ready', 'hide']
+    notice, _, _ = _ready_notice_after([*phases, Phase.IDLE])
+    assert notice.calls == ['show Press Ready', 'hide', 'show Press Ready', 'hide']
 
 
 def test_a_service_that_stops_in_the_ready_wait_hides_the_notice():
-    assert _drive_ready_notice([Phase.READY_WAIT], stop_at_end=True) == ['show Press Ready', 'hide']
+    notice, stop, loop = _ready_notice_after([Phase.READY_WAIT])
+    stop.set(True)
+    next(loop, None)
+    assert notice.calls == ['show Press Ready', 'hide']
+
+
+def test_a_world_that_closes_the_loop_in_the_ready_wait_hides_the_notice():
+    notice, _, loop = _ready_notice_after([Phase.READY_WAIT])
+    loop.close()
+    assert notice.calls == ['show Press Ready', 'hide']
 
 
 MACOS_DIALOG = ['osascript', '-e', 'display alert "positronic teleop" message "Press \\"Ready\\""']
