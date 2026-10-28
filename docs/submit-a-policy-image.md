@@ -436,8 +436,7 @@ what its `reason` names. A `running` run reports its `stage`:
 
 Reaching `evaluating` proves the image works. A run can go back to `provisioning` from
 `evaluating`: a lost simulator VM is replaced, and `result.json` records which attempt scored.
-`episodes` and `runs` on a submission are fields of a plan the lab rig runs. An image run reports
-`0/0` and an empty list, while it runs and after it finishes.
+An image run reports `episodes` as `0/0` and `runs` as an empty list while it runs.
 
 A `finished` submission carries `scores.primary`, the value a leaderboard ranks on, and
 `artifacts` with signed links:
@@ -447,6 +446,11 @@ A `finished` submission carries `scores.primary`, the value a leaderboard ranks 
 | `result` | the run id, the attempt that scored, and `scores` with `primary`, `episodes` and `unscored` | on a finished run, and on an errored run that wrote its records |
 | `policy_log` | your container's stdout and stderr, from the attempt that decided the run | on the same runs as `result`, when the container printed anything |
 | `diagnostics` | why the run failed, and the state of the box | on an errored run whose record was written |
+
+An `errored` run of a private eval (`--org`) can publish the episodes that closed before it failed.
+It then also carries `scores` over those episodes, and `episodes` counts them: `done` closed of the
+`total` that the run asked for. `positronic eval status` prints both. A run that published no
+episode carries no `scores`, and a failed competition run carries none.
 
 The links expire after 15 minutes. Read `submissions.get` again for fresh ones. `submissions.get`
 returns these three files. The episodes are a separate call, below.

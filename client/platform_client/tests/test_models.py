@@ -291,6 +291,13 @@ MODELS: list[BaseModel] = [
         reason='policy ran out of memory',
         artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
     ),
+    ErroredSubmissionView(
+        id=SUB,
+        reason_code=ReasonCode.policy_inference_crash,
+        artifacts=ArtifactRefs(result=RESULT_URL),
+        scores=SCORES,
+        episodes=EpisodeCounts(total=12, done=6, outstanding=6),
+    ),
     FinishedSubmissionView(id=SUB, scores=SCORES, artifacts=ArtifactRefs(result='s3://b/result.json')),
     FinishedSubmissionView(
         id=SUB,
@@ -644,6 +651,27 @@ def test_a_failed_run_that_wrote_no_record_carries_no_link():
     view = ErroredSubmissionView(id=SUB, reason='the rig is not ready')
     assert view.artifacts is None
     assert 'artifacts' in view.model_dump(mode='json')
+
+
+def test_a_failed_run_carries_the_score_of_the_episodes_that_closed():
+    payload = {
+        'id': '1f',
+        'reason_code': 'policy_inference_crash',
+        'artifacts': {'result': RESULT_URL},
+        'scores': {'primary': 0.5},
+        'episodes': {'total': 12, 'done': 6, 'outstanding': 6},
+        'status': 'errored',
+    }
+    view = SUBMISSION_VIEWS.validate_python(payload)
+    assert isinstance(view, ErroredSubmissionView)
+    assert view.scores == Scores(primary=0.5)
+    assert view.episodes == EpisodeCounts(total=12, done=6, outstanding=6)
+
+
+def test_a_failed_run_that_published_no_episodes_carries_no_score():
+    view = SUBMISSION_VIEWS.validate_python({'id': '1f', 'reason_code': 'policy_oom', 'status': 'errored'})
+    assert isinstance(view, ErroredSubmissionView)
+    assert view.scores is None
 
 
 def test_a_failed_run_whose_diagnostics_were_not_written_still_links_its_result():

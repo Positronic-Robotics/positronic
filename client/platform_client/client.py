@@ -260,7 +260,8 @@ class PlatformClient:
         """One page of the objects a finished submission wrote, in key order.
 
         `prefix` keeps the page to one directory under the submission, and a page's `next` is the
-        `after` of the page behind it. A submission short of finished is refused `bad_request`.
+        `after` of the page behind it. A failed submission that carries `scores` lists too. Any other
+        submission short of finished is refused `bad_request`.
         """
         query = SubmissionArtifactsQuery(id=submission_id, prefix=prefix, after=after, limit=limit)
         return self._get(routes.SUBMISSIONS_ARTIFACTS, ArtifactListResponse, query=query)
