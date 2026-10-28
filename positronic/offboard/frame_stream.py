@@ -19,8 +19,8 @@ to answers ``frame_miss``, and the client sends that request again in full. The 
 camera are one stream for the whole session, in send order. Thus the server decodes each unit, also
 the tail of a request that it answers with ``frame_miss``.
 
-A server may implement its side without importing positronic, so this description is the protocol: a
-change to it changes every server.
+``PolicyServer`` serves its side with ``StreamedRows``. A server may implement its side without importing
+positronic, so this description is the protocol: a change to it changes every server.
 
 The streamer finds the rows of the next request before the request exists. ``TemporalStack`` samples,
 at the request time ``T``, the latest control tick at or before ``T + offset`` for each offset.
@@ -54,6 +54,9 @@ logger = logging.getLogger(__name__)
 ROW = '__stream_row__'
 REF = b'__stream_rows__'
 H264_FRAME = b'__h264_frame__'
+# The handshake key, and what a server that serves ``StreamedRows`` declares under it.
+FRAME_STREAM = 'frame_stream'
+DECLARATION = {'version': 1, 'codecs': ['jpeg', 'h264']}
 
 
 class FrameCodec(Enum):
@@ -65,7 +68,7 @@ class FrameCodec(Enum):
 
 def declared_codecs(meta: cabc.Mapping[str, Any]) -> frozenset[FrameCodec]:
     """The codecs of the version 1 frame stream that a handshake's ``meta`` declares. Empty when it declares none."""
-    declaration = meta.get('frame_stream')
+    declaration = meta.get(FRAME_STREAM)
     if not isinstance(declaration, cabc.Mapping) or declaration.get('version') != 1:
         return frozenset()
     return frozenset(codec for codec in FrameCodec if codec.value in declaration.get('codecs', ()))
@@ -101,6 +104,113 @@ class _VideoEncoder:
         if not data:
             raise RuntimeError('The H.264 encoder held a frame back')
         return {H264_FRAME: True, b'data': data, b'shape': [h, w, 3]}
+
+
+class _VideoDecoder:
+    """One camera's H.264 stream on the server: each access unit decodes to its frame, with no frame delay."""
+
+    def __init__(self) -> None:
+        self._ctx = av.CodecContext.create('h264', 'r')
+
+    def decode(self, unit: cabc.Mapping[bytes, Any]) -> np.ndarray:
+        h, w, *_ = (int(n) for n in unit[b'shape'])
+        if not (1 <= h <= StreamedRows.MAX_SIDE and 1 <= w <= StreamedRows.MAX_SIDE):
+            raise ValueError(f'An H.264 frame of {h} x {w} is outside {StreamedRows.MAX_SIDE} px')
+        frames = self._ctx.decode(av.Packet(bytes(unit[b'data'])))
+        if len(frames) != 1:
+            raise ValueError(f'An H.264 unit decoded to {len(frames)} frames, not one')
+        rgb = frames[0].to_ndarray(format='rgb24')
+        # The encoder pads an odd side by one pixel; a crop is a copy, so it does not keep the padded frame.
+        if rgb.shape[0] - h not in (0, 1) or rgb.shape[1] - w not in (0, 1):
+            raise ValueError(f'An H.264 unit decoded to {rgb.shape[:2]}, not the declared {(h, w)}')
+        return rgb if rgb.shape[:2] == (h, w) else rgb[:h, :w].copy()
+
+
+class RowsMissing(Exception):
+    """A request refers to streamed rows that the server does not have: ``[[key, back], ...]``."""
+
+    def __init__(self, missing: list[list[Any]]) -> None:
+        super().__init__(f'The server does not have the streamed rows {missing}')
+        self.missing = missing
+
+
+class StreamedRows:
+    """The server side of one session's frame stream: the rows that the client streamed, and the requests that
+    refer to them.
+
+    ``add`` takes one row message and ``resolve`` gives a request with each stack that refers to rows in full, as
+    the client would have sent it without a stream. Each H.264 unit decodes in arrival order, also the tail of a
+    request that refers to a row the server does not have. The client streams the rows of a call only after it read
+    the answer before, so a row of a newer call drops the rows of the older ones. Bounds on the rows, images and
+    frame sides refuse a malformed stream, and past ``MAX_HELD_BYTES`` a row is dropped: its request then misses
+    it and goes again in full.
+    """
+
+    MAX_BACK = 64
+    MAX_IMAGES = 16
+    MAX_SIDE = 4096
+    MAX_HELD_BYTES = 512 * 1024 * 1024
+
+    def __init__(self) -> None:
+        self._call = -1
+        self._rows: dict[int, dict[str, np.ndarray]] = {}
+        self._held = 0
+        self._video: dict[str, _VideoDecoder] = {}
+
+    def add(self, row: cabc.Mapping[str, Any]) -> None:
+        """Decode and keep one row (the value under ``ROW``)."""
+        call, back, images = int(row['call']), int(row['back']), row['images']
+        if not 1 <= back <= self.MAX_BACK:
+            raise ValueError(f'A streamed row goes {back} frames back, outside 1..{self.MAX_BACK}')
+        if len(images) > self.MAX_IMAGES:
+            raise ValueError(f'A streamed row of {len(images)} images, more than {self.MAX_IMAGES}')
+        decoded = {str(key): self._frame(str(key), value) for key, value in images.items()}
+        if call < self._call:
+            return  # a row of a call that the server answered
+        if call > self._call:
+            self._call, self._rows, self._held = call, {}, 0
+        held = self._held + sum(frame.nbytes for frame in decoded.values())
+        held -= sum(frame.nbytes for frame in self._rows.get(back, {}).values())
+        if held > self.MAX_HELD_BYTES:
+            self._rows.pop(back, None)
+            return
+        self._rows[back], self._held = decoded, held
+
+    def resolve(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
+        """``obs`` with each stack that refers to rows built in full. Raises ``RowsMissing`` for absent rows."""
+        out = dict(obs)
+        missing: list[list[Any]] = []
+        for key, value in obs.items():
+            if not (isinstance(value, cabc.Mapping) and value.get(REF)):
+                continue
+            backs = [int(back) for back in value[b'rows']]
+            if len(backs) > self.MAX_BACK or len(set(backs)) != len(backs):
+                raise ValueError(f'{key}: a stack refers to each of at most {self.MAX_BACK} rows once, not {backs}')
+            tail = self._tail(str(key), value[b'tail'])
+            rows = self._rows if int(value[b'call']) == self._call else {}
+            found = [rows.get(back, {}).get(str(key)) for back in backs]
+            frames = [frame for frame in found if frame is not None]
+            missing += [[key, back] for back, frame in zip(backs, found, strict=True) if frame is None]
+            if not missing:
+                out[key] = np.stack([*frames, *tail])
+        if missing:
+            raise RowsMissing(missing)
+        return out
+
+    def _frame(self, key: str, value: Any) -> np.ndarray:
+        if isinstance(value, cabc.Mapping) and value.get(H264_FRAME):
+            decoder = self._video.get(key)
+            if decoder is None:
+                decoder = self._video[key] = _VideoDecoder()
+            return decoder.decode(value)
+        if isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[-1] == 3:
+            return value  # a JPEG frame, decoded with the message
+        raise ValueError(f'{key}: a streamed frame must be a JPEG frame or an H.264 unit')
+
+    def _tail(self, key: str, tail: Any) -> list[np.ndarray]:
+        if isinstance(tail, np.ndarray) and tail.ndim == 4:
+            return list(tail)
+        return [self._frame(key, tail)]
 
 
 class FrameStreamer:

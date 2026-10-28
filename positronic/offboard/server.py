@@ -23,9 +23,13 @@ from positronic_wire import wire
 
 from positronic import telemetry
 from positronic.offboard import protocol as legacy_protocol
+from positronic.offboard.client import FRAME_MISS
+from positronic.offboard.frame_stream import DECLARATION, FRAME_STREAM, ROW, RowsMissing, StreamedRows
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
+from positronic.policy.compatibility import unnest_seq
+from positronic.policy.processors import TemporalStack
 
 from .protocol import deserialise, serialise
 
@@ -74,8 +78,18 @@ class _ServedTiming:
             return function(obs)
 
 
+def _takes_frame_stream(pipeline: PolicyDeployment) -> bool:
+    """Whether a session of ``pipeline`` takes a frame stream: its client compresses images, and its client stack
+    holds the one temporal stack that the stream's rows come from."""
+    parts = unnest_seq(pipeline.local.to_spec())
+    return pipeline.compress_images and sum(part.get(spec.NAME) == TemporalStack.WIRE_NAME for part in parts) == 1
+
+
 class PolicyServer:
     """Serve one model through a policy deployment: a declared client processor stack and a server codec.
+
+    A deployment whose client compresses images and stacks frames with a ``TemporalStack`` takes a frame stream
+    (``positronic.offboard.frame_stream``): its handshake declares one, and each session keeps its rows.
 
     ``build_model`` runs once, when ``serve`` starts, and its model serves every session. It returns the model
     warmed, with ``server_utils.warmup``: a client reads any keepalive answer as ready. A config-launched
@@ -158,20 +172,38 @@ class PolicyServer:
         return self._pipeline_cfg.override_data(**params).instantiate()
 
     async def _answer_observations(
-        self, conn: server_wire.ServerConnection, infer: Callable[[Obs], Any], session_id: str
+        self,
+        conn: server_wire.ServerConnection,
+        infer: Callable[[Obs], Any],
+        session_id: str,
+        rows: StreamedRows | None = None,
     ) -> None:
-        """Answer observations until the client ends this session or disconnects."""
+        """Answer observations until the client ends this session or disconnects.
+
+        With ``rows`` the session takes a frame stream: a row message has no answer, and a request that refers to
+        a row the server does not have gets a ``frame_miss`` answer.
+        """
         while True:
             message = await conn.receive()
             self._last_activity = time.monotonic()
             timing = _ServedTiming()
             with timing.phase(protocol.TIMING_DECODE):
                 request = deserialise(message)
+                if rows is not None and ROW in request:
+                    # Off the event loop, and in arrival order: each camera's H.264 units are one stream.
+                    await asyncio.to_thread(rows.add, request[ROW])
+                    continue
                 if request[protocol.SESSION_ID] != session_id:
                     raise ValueError('The session ID does not belong to this connection')
                 if request.get(protocol.END_SESSION) is True:
                     return
                 raw_obs = request[protocol.OBSERVATION]
+                if rows is not None:
+                    try:
+                        raw_obs = await asyncio.to_thread(rows.resolve, raw_obs)
+                    except RowsMissing as miss:
+                        await conn.send(serialise({FRAME_MISS: miss.missing}))
+                        continue
             try:
                 # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and would
                 # mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
@@ -214,10 +246,13 @@ class PolicyServer:
                 policy_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
+            if _takes_frame_stream(pipeline):
+                meta[FRAME_STREAM] = DECLARATION
             infer = partial(model, session_id=session_id)
             infer = telemetry.traced(protocol.MODEL_CALL)(infer)
             if pipeline.codec is not None:
                 infer = pipeline.codec.wrap(infer)
+            rows = StreamedRows() if FRAME_STREAM in meta else None
             try:
                 await conn.send(
                     serialise({
@@ -227,7 +262,7 @@ class PolicyServer:
                         protocol.SESSION_ID: session_id,
                     })
                 )
-                await self._answer_observations(conn, infer, session_id)
+                await self._answer_observations(conn, infer, session_id, rows)
             finally:
                 async with self._infer_lock:
                     await asyncio.to_thread(model.end_session, session_id)
