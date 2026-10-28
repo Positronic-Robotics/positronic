@@ -278,7 +278,12 @@ MODELS: list[BaseModel] = [
                 status=SubmissionStatus.running,
                 eval=EvalRef('fake.smoke'),
                 received_at=AT,
-            )
+                started_at=AT,
+                estimated_end_at=AT,
+            ),
+            SubmissionListRow(
+                id=SUB, user_id=USER, status=SubmissionStatus.finished, received_at=AT, started_at=AT, ended_at=AT
+            ),
         ]
     ),
     PendingSubmissionView(id=SUB, alias='demo', received_at=AT, queued_at=AT, queue_position=1),
@@ -474,6 +479,30 @@ def test_a_reason_code_is_refused_on_a_status_that_did_not_fail():
             'status': 'pending',
             'reason_code': 'image_unpullable',
         })
+
+
+def test_a_listed_row_reads_its_run_times_from_the_wire():
+    row = SubmissionListRow.model_validate({
+        'id': '1f',
+        'user_id': 'a0',
+        'status': 'running',
+        'received_at': '2026-08-13T10:00:00Z',
+        'started_at': '2026-08-13T10:01:00Z',
+        'estimated_end_at': '2026-08-13T11:50:00Z',
+    })
+    assert row.started_at == datetime(2026, 8, 13, 10, 1, tzinfo=UTC)
+    assert row.estimated_end_at == datetime(2026, 8, 13, 11, 50, tzinfo=UTC)
+    assert row.ended_at is None
+
+
+def test_a_listed_row_that_has_not_started_has_no_run_times():
+    row = SubmissionListRow.model_validate({
+        'id': '1f',
+        'user_id': 'a0',
+        'status': 'pending',
+        'received_at': '2026-08-13T10:00:00Z',
+    })
+    assert (row.started_at, row.ended_at, row.estimated_end_at) == (None, None, None)
 
 
 def test_a_listed_row_refuses_the_same_pairing():
