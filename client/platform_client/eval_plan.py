@@ -82,7 +82,7 @@ class Cascade(BaseModel):
     external_cameras: dict[str, Slugged[Placement]] = Field(default_factory=dict)
     clutter: Clutter | None = None
     # Later plans of the organization with this seed replay the sides recorded for a task, and the table recorded for
-    # a task and its `clutter` block; another block draws its own table (`README.md` §Eval plans).
+    # a task and the `clutter` block the plan states, or none; another block draws its own table (`README.md`).
     scene_seed: str | None = Field(default=None, min_length=1)
     start_pose: Slugged[StartPose] | None = None
 

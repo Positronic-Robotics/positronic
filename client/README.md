@@ -256,21 +256,22 @@ the plan lays out that scene and that table, and runs the episodes in that order
 names each task and what it lacks. Name a preset the rig carries: `production` serves each
 episode from one of the plan's endpoints.
 
-Each plan draws its scene again, so two plans of one task can lay out different scenes. A plan or a task
-that states `scene_seed` draws every random part of the task's scene from that seed alone. These parts are
-the table, the tote side and each camera side, where no level states the side or a level states `random`.
-The platform records each part the first time a plan of the organization draws it for that task under that
-seed. Every later plan of the organization with that seed and task lays out the recorded part, at any place in
-the task list and under any `transaction_key`. A change to the object kit or the task catalogue does not
-change a recorded part. A level that states a side lays out that side. The platform records one table for each
-`clutter` block that the task draws within: the nearest level's block, else the task's own. A later plan with
-the same seed and the same block lays out the recorded table. A plan with another block draws its own table
-and records it. `submissions.create` refuses a plan `bad_request` when the task no longer offers a recorded
-side or no longer defines a recorded camera mount, or when an object of the recorded table has left the kit
-or the task now names it. The refusal names the task and the side, the mount or the object. To file the plan,
-state the side, state another `clutter` block, or state another `scene_seed`. Another organization draws its own scene from the same seed.
-`submissions.resolve` shows the recorded scene, refuses the same plans, and records nothing. The episode
-order does not come from the seed: each plan draws its own.
+Each plan draws its scene again, so two plans of one task can lay out different scenes. A plan or a task that
+states `scene_seed` draws every random part of the task's scene from that seed alone. These parts are the
+table, the tote side and each camera side, where no level states the side or a level states `random`. The
+platform records each part the first time a plan of the organization draws it for that task under that seed.
+Every later plan of the organization with that seed and task lays out the recorded part, at any place in the
+task list and under any `transaction_key`. A change to the object kit or the task catalogue does not change a
+recorded part. A level that states a side lays out that side. The platform records one table for each
+`clutter` block that a plan states for the task, and one table for a plan that states none, drawn within the
+task's own block. A later plan with the same seed that states the same block, or states none, lays out the
+recorded table, whatever block the task catalogue gives the task now. A plan that states another block draws
+its own table and records it. `submissions.create` refuses a plan `bad_request` when the task no longer offers
+a recorded side or no longer defines a recorded camera mount, or when an object of the recorded table has left
+the kit or the task now names it. The refusal names the task and the side, the mount or the object. To file
+the plan, state the side, state another `clutter` block, or state another `scene_seed`. Another organization
+draws its own scene from the same seed. `submissions.resolve` shows the recorded scene, refuses the same
+plans, and records nothing. The episode order does not come from the seed: each plan draws its own.
 
 `submissions.resolve` takes the same plan and answers with `resolved` alone. For a pay_as_you_go
 organization, that `ResolvedPlan` carries a `credit_quote`. It files nothing, spends no quota and
