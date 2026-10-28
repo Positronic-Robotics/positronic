@@ -41,13 +41,46 @@ The [codec](codecs.py) handles all embodiment conversion:
 | Prompt | The task instruction → the prompt that the checkpoint trained under |
 | Action | 30 actions of 14 values → one `JointPosition` and one grip target per arm, with `1 - width` for the grip |
 
-The client plays the first 15 actions of each chunk at 30 Hz, and then asks for the next chunk. This is the
-synchronous mode of ABC's sim eval with no action prefix. ABC's own sim eval runs real-time chunking by default, which
-this adapter does not do, so its numbers can differ from ABC's published numbers.
+A session picks how the client plays the chunks with the `schedule` query parameter:
+
+| `schedule` | Client | Server |
+| --- | --- | --- |
+| `sync` (default) | Plays the first 15 actions of each chunk at 30 Hz, then asks for the next chunk | No action prefix, as in the synchronous mode of ABC's sim eval |
+| `rtc` | Plays 16 actions of each chunk, and asks for the next chunk when 7 are left | ABC's real-time chunking with a prefix of 4, as ABC's real-robot deploy runs it |
+
+In `rtc`, the server starts each new chunk with the last 4 actions it sent, which the client plays while the policy
+computes. The first chunk of a session starts from the state. The reply holds the 16 actions after the prefix, and
+the client plays them when the previous chunk ends. The session protocol carries no prefix, so the server keeps the
+actions of each session itself. A command error that makes the client drop its plan breaks this
+assumption for one chunk. The server warms the prefix length 4 at start, and refuses another one.
 
 ABC renders its sim training views at 224x168. A view of another aspect ratio is padded, not stretched, so the scene
 fills less of the image than in training. Render the cameras at 224x168, or at the same 4:3 aspect ratio, to match
-the training data.
+the training data, or crop each view with a `CropBox` in the codec's `crops`.
+
+ABC's cameras are RealSense D405s with a 58 degree vertical field of view, at 640x480. The `yambox` crop
+cuts the views of the yambox ZED cameras (960x600, focal length 367 px) to 4:3 before the resize:
+
+| View | Crop, in pixels of 960x600 | Why |
+| --- | --- | --- |
+| `image.exterior` | x 256-800, y 192-600 | 58 degrees vertical, the field of view of ABC's top view, over the arms and the table |
+| `image.wrist_left`, `image.wrist_right` | x 80-880, y 0-600 | the open fingertips lie as far apart, as a share of the width, as in ABC's wrist views |
+
+A crop has the client send each view at up to 448x336, so each crop still holds at least 224x168 pixels.
+
+A session picks the crop with the `crop` query parameter: `none` (the whole views), `yambox` (the table above), or
+`yambox_wide_top` (the whole exterior frame and the yambox wrist crops). In the whole exterior frame, the arm bases
+lie 0.48 of the width apart, as in ABC's top view (0.47); the `yambox` exterior crop puts them 0.84 apart. The
+16:10 frame pads to 4:3 with black rows. `sim_prefix=false` sends the prompts without the sim prefix. For example:
+
+    ws://<host>:<port>/api/v1/session?crop=yambox_wide_top&schedule=rtc
+
+The session metadata names the client schedule under `local_stack`, and the crop boxes, the prompt prefix and the
+action prefix length under `abc_dit.*`.
+
+ABC trained the five sim tasks under prompts that start with `sim `, within about 3553 hours of real teleoperation
+data and 98 hours of sim data. The codec's `prompt_prefix` sets that prefix, and `sim_prefix=false`
+sends the same prompts without it.
 
 ## Setup
 
