@@ -266,9 +266,9 @@ change a recorded part. A level that states a side lays out that side. The platf
 `clutter` block that the task draws within: the nearest level's block, else the task's own. A later plan with
 the same seed and the same block lays out the recorded table. A plan with another block draws its own table
 and records it. `submissions.create` refuses a plan `bad_request` when the task no longer offers a recorded
-side, or when an object of the recorded table has left the kit or the task now names it. The refusal names
-the task and the side or the object. To file the plan, state the side, state another `clutter` block, or
-state another `scene_seed`. Another organization draws its own scene from the same seed.
+side or no longer defines a recorded camera mount, or when an object of the recorded table has left the kit
+or the task now names it. The refusal names the task and the side, the mount or the object. To file the plan,
+state the side, state another `clutter` block, or state another `scene_seed`. Another organization draws its own scene from the same seed.
 `submissions.resolve` shows the recorded scene, refuses the same plans, and records nothing. The episode
 order does not come from the seed: each plan draws its own.
 
