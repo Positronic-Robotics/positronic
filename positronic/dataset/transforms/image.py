@@ -27,21 +27,33 @@ class ResizeMode(Enum):
     STRETCH = 'stretch'
 
 
+def _resized_size(w: int, h: int, width: int, height: int, mode: ResizeMode) -> tuple[int, int]:
+    """The ``(width, height)`` that a ``w`` x ``h`` frame resizes to before any padding."""
+    if mode is ResizeMode.PAD:
+        ratio = max(w / width, h / height)
+        return int(w / ratio), int(h / ratio)
+    if mode is ResizeMode.BOUND:
+        scale = min(1.0, width / w, height / h)
+        return int(w * scale), int(h * scale)
+    if mode is ResizeMode.STRETCH:
+        return width, height
+    raise ValueError(f'Unknown resize mode: {mode!r}')
+
+
+def transformed_shape(shape: tuple[int, ...], width: int, height: int, *, mode: ResizeMode) -> tuple[int, ...]:
+    """The shape of ``transform_frame``'s result for a frame of ``shape``, without transforming one."""
+    if mode is ResizeMode.PAD:
+        return (height, width, *shape[2:])
+    tw, th = _resized_size(shape[1], shape[0], width, height, mode)
+    return (th, tw, *shape[2:])
+
+
 def transform_frame(
     img: np.ndarray, width: int, height: int, *, mode: ResizeMode, resample: Resample = Resample.BILINEAR
 ) -> np.ndarray:
     """Bound without enlarging, fit and zero-pad, or stretch to the exact requested size."""
     h, w = img.shape[:2]
-    if mode is ResizeMode.PAD:
-        ratio = max(w / width, h / height)
-        tw, th = int(w / ratio), int(h / ratio)
-    elif mode is ResizeMode.BOUND:
-        scale = min(1.0, width / w, height / h)
-        tw, th = int(w * scale), int(h * scale)
-    elif mode is ResizeMode.STRETCH:
-        tw, th = width, height
-    else:
-        raise ValueError(f'Unknown resize mode: {mode!r}')
+    tw, th = _resized_size(w, h, width, height, mode)
     if (tw, th) == (w, h) and (mode is not ResizeMode.PAD or (w, h) == (width, height)):
         return img
     if resample is Resample.AREA:
