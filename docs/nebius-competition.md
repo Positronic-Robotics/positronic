@@ -404,8 +404,8 @@ bash positronic/docker/nebius_vm.sh delete
 These steps fine-tune the GR00T N1.7 DROID example on MolmoSpaces demonstrations, and put the checkpoint into
 a policy image. A person records the demonstrations with a phone or a Meta Quest.
 
-The 10 demonstrations of the example show the steps only. We did not train on them. A fine-tune on 30
-demonstrations of this type scored below the base model on `molmo.franka_pick_mini`.
+The 10 demonstrations are an example only. The set is very small, so it shows the steps and does not improve
+the policy.
 
 You need two machines, or one machine that does both:
 
