@@ -349,8 +349,7 @@ class SubmissionListRow(_ReasonBearing):
     """One row of `submissions.list`. `user_id` attributes it — an admin listing spans users.
 
     `eval` is the name the catalogue expanded, and is absent on a run that stated its own tasks.
-    `started_at` and `ended_at` are absent until the run starts and ends. `estimated_end_at` is the
-    platform's estimate of when a run that has not ended will end, and is absent without an estimate.
+    `estimated_end_at` is the platform's estimate of `ended_at`; each time is absent until it is known.
     """
 
     id: SubmissionId
