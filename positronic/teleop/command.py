@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 import webbrowser
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -100,8 +100,8 @@ _MACOS_SOUND, _LINUX_SOUND = '/System/Library/Sounds/Glass.aiff', '/usr/share/so
 
 
 class DesktopNotice:
-    """A dialog with ``sound`` in the centre of the screen of this computer: ``osascript`` and ``afplay`` on macOS,
-    else ``zenity`` on ``DISPLAY`` and ``paplay``."""
+    """A dialog with ``sound`` on the screen of this computer: ``osascript`` and ``afplay`` on macOS, else ``zenity`` on
+    ``DISPLAY`` and ``paplay``."""
 
     def __init__(
         self, title: str = 'positronic teleop', sound: str = _MACOS_SOUND if sys.platform == 'darwin' else _LINUX_SOUND
@@ -115,9 +115,9 @@ class DesktopNotice:
         return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
     @staticmethod
-    def _start(command: Sequence[str]) -> subprocess.Popen | None:
+    def _start(command: Sequence[str], env: Mapping[str, str] | None = None) -> subprocess.Popen | None:
         try:
-            return subprocess.Popen(command)
+            return subprocess.Popen(command, env=env)
         except OSError as error:
             # The notice only helps the teleoperator, so the service goes on without it.
             logger.error('Cannot show the notice with %s: %s', command[0], error)
@@ -129,7 +129,12 @@ class DesktopNotice:
             script = f'display alert {self._applescript_string(self._title)} message {self._applescript_string(text)}'
             self._dialog = self._start(['osascript', '-e', script])
         else:
-            self._dialog = self._start(['zenity', '--info', '--no-markup', f'--title={self._title}', f'--text={text}'])
+            dialog = ['zenity', '--info', '--no-markup', '--width=700', f'--title={self._title}', f'--text={text}']
+            # GTK waits some seconds for the session bus and the accessibility bus of the screen. A user other than the
+            # user at the screen cannot reach them, and the dialog needs neither.
+            self._dialog = self._start(
+                dialog, {**os.environ, 'DBUS_SESSION_BUS_ADDRESS': 'disabled:', 'NO_AT_BRIDGE': '1'}
+            )
             self._start(['paplay', str(self._sound)])
 
     def hide(self) -> None:

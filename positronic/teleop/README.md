@@ -71,9 +71,10 @@ slider, so a closed gripper does not close again at the next Control.
 The Quest shows the phase, the task and the control state on its video. The window on the laptop shows the same state,
 and the control state.
 
-While a trial waits for Ready, the service shows a dialog with a sound in the centre of the screen of its computer.
-The dialog comes also when the window is not open, and the service closes it when the wait ends. On macOS the service
-uses `osascript` and `afplay`. On Linux it uses `zenity` on `DISPLAY`, and plays the sound with `paplay`.
+While a trial waits for Ready, the service shows a dialog with a sound on the screen of its computer. The dialog
+comes also when the window is not open, and the service closes it when the wait ends. On macOS the service uses
+`osascript` and `afplay`, and the dialog is in the centre of the screen. On Linux it uses `zenity` on `DISPLAY`, and
+plays the sound with `paplay`. The window manager puts the dialog, for example in the top left corner.
 `--notice.sound=<file>` changes the sound, and `--notice=None` turns the notice off.
 
 A Linux service that runs as a user other than the user at the screen shows the dialog only with `DISPLAY=:0` and an X

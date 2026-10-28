@@ -790,7 +790,7 @@ def test_a_world_that_closes_the_loop_in_the_ready_wait_hides_the_notice():
 
 
 MACOS_DIALOG = ['osascript', '-e', 'display alert "positronic teleop" message "Press \\"Ready\\""']
-LINUX_DIALOG = ['zenity', '--info', '--no-markup', '--title=positronic teleop', '--text=Press "Ready"']
+LINUX_DIALOG = ['zenity', '--info', '--no-markup', '--width=700', '--title=positronic teleop', '--text=Press "Ready"']
 LINUX_SOUND = ['paplay', '/sounds/ready.wav']
 
 
@@ -812,7 +812,7 @@ class _Process:
 def test_the_desktop_notice_runs_the_notice_commands_of_the_platform(monkeypatch, platform, commands):
     started: list[list[str]] = []
     monkeypatch.setattr(command.sys, 'platform', platform)
-    monkeypatch.setattr(command.subprocess, 'Popen', lambda argv: _Process(argv, started))
+    monkeypatch.setattr(command.subprocess, 'Popen', lambda argv, env: _Process(argv, started))
     command.DesktopNotice(sound='/sounds/ready.wav').show('Press "Ready"')
     assert started == commands
 
@@ -821,7 +821,7 @@ def test_the_desktop_notice_runs_the_notice_commands_of_the_platform(monkeypatch
 def test_hide_closes_the_dialog(monkeypatch, platform, dialog):
     processes: list[_Process] = []
 
-    def start(argv: list[str]) -> _Process:
+    def start(argv: list[str], env: dict[str, str] | None) -> _Process:
         processes.append(_Process(argv, []))
         return processes[-1]
 
@@ -833,10 +833,26 @@ def test_hide_closes_the_dialog(monkeypatch, platform, dialog):
     assert [process.command[0] for process in processes if process.terminated] == [dialog]
 
 
+def test_the_linux_dialog_starts_with_no_session_bus_and_no_accessibility_bus(monkeypatch):
+    envs: dict[str, dict[str, str] | None] = {}
+
+    def start(argv: list[str], env: dict[str, str] | None) -> _Process:
+        envs[argv[0]] = env
+        return _Process(argv, [])
+
+    monkeypatch.setattr(command.sys, 'platform', 'linux')
+    monkeypatch.setattr(command.subprocess, 'Popen', start)
+    command.DesktopNotice().show('Press Ready')
+    zenity_env = envs['zenity']
+    assert zenity_env is not None
+    assert (zenity_env['DBUS_SESSION_BUS_ADDRESS'], zenity_env['NO_AT_BRIDGE']) == ('disabled:', '1')
+    assert envs['paplay'] is None
+
+
 def test_a_notice_program_that_is_missing_is_logged_and_the_next_one_runs(monkeypatch, caplog):
     started: list[list[str]] = []
 
-    def start(argv: list[str]) -> _Process:
+    def start(argv: list[str], env: dict[str, str] | None) -> _Process:
         if argv[0] == 'zenity':
             raise FileNotFoundError(argv[0])
         return _Process(argv, started)
