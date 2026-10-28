@@ -157,19 +157,15 @@ MULTITASK_200K_PROMPTS = {
     'hang mug on mug rack': 'hang the mug on the mug rack',
 }
 
-# The views of the yambox, cropped to 4:3 like ABC's D405 views. Its ZED cameras give 960x600 frames with a focal
-# length of 367 px. The top crop is 544x408 px: a 58 degree vertical field of view, as ABC's top view has, over the
-# arms and the table. Each wrist crop is the middle 800x600 px, where the open fingertips lie as far apart, as a
-# share of the width, as in ABC's wrist views.
+# The yambox ZED views (960x600, focal length 367 px) cut to 4:3 with the field of view of ABC's D405 views.
+# README.md gives the reason for each box.
 YAMBOX_CROPS = {
     keys.EXTERIOR_IMAGE: CropBox(4 / 15, 0.32, 5 / 6, 1.0),
     keys.WRIST_LEFT_IMAGE: CropBox(1 / 12, 0.0, 11 / 12, 1.0),
     keys.WRIST_RIGHT_IMAGE: CropBox(1 / 12, 0.0, 11 / 12, 1.0),
 }
 
-# The yambox views with the whole exterior frame. Its arm bases lie 0.48 of the width apart, as in ABC's top view
-# (0.47), and 0.92 of the height down. Padded to 4:3, that is 0.85 down, as in ABC's top view (0.83). The wrist views
-# keep the yambox crop.
+# The whole exterior frame, where the arm bases lie 0.48 of the width apart (ABC's top view: 0.47).
 YAMBOX_WIDE_TOP_CROPS = {**YAMBOX_CROPS, keys.EXTERIOR_IMAGE: FULL_FRAME}
 
 # The crop sets that a session can name.

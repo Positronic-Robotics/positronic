@@ -105,4 +105,7 @@ uv run --locked python -m positronic.vendors.abc_dit.server multitask_200k \
     --model.abc_python=<abc>/.venv/bin/python --model.checkpoint=<abc>/cache/abc_dit_xl_200k_model.pt
 ```
 
+`multitask_200k_yambox_crop` serves the same checkpoint with `crop=yambox` as the default, and
+`multitask_200k_yambox_crop_no_sim_prefix` adds `sim_prefix=false`.
+
 `--model.fast_inference=False` runs the DiT in float32 with no compilation. That mode also runs on a CPU, slowly.

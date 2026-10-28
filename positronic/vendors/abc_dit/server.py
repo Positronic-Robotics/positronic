@@ -1,11 +1,8 @@
 """Serve an ABC-DiT checkpoint over positronic's session protocol.
 
-The policy runs in ABC's own interpreter, as ABC's policy server started by `backend.py`, on this machine.
-`multitask_200k` serves `abc_dit_xl_200k_model.pt`, ABC's multi-task sim policy, with the prompts it trained under.
-`multitask_200k_yambox_crop` serves it with the yambox views cropped to the field of view of ABC's cameras, and
-`multitask_200k_yambox_crop_no_sim_prefix` does the same with the prompts of its sim tasks sent without the sim prefix.
-A session may change the crop, the schedule and the prompt prefix with the query of its URL, for example
-`?crop=yambox_wide_top&schedule=rtc&sim_prefix=false`. See `pipeline`.
+The policy runs in ABC's own interpreter, as ABC's policy server started by `backend.py`, on this machine. Each
+command serves `abc_dit_xl_200k_model.pt`, ABC's multi-task sim policy, and sets the defaults of `pipeline`. A session
+changes them in the query of its URL, for example `?crop=yambox_wide_top&schedule=rtc&sim_prefix=false`.
 
 Usage
   python -m positronic.vendors.abc_dit.server multitask_200k --model.abc_python=<ABC's python> \
