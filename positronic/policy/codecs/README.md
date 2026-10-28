@@ -190,7 +190,7 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
 
-- A policy that states no `ee_frames` gets each pose at the rig's legacy point, as [the frame contract](../../drivers/roboarm/README.md) says.
+- A policy that states no `ee_frames` speaks joints only: it observes no pose signal and must not send a pose command.
 - A policy that names a site the rig does not report that signal at is refused.
 
 A pose-reading checkpoint states its frame, also when the offset is the identity (`cfg.codecs.gripper_frame`).

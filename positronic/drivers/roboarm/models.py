@@ -17,7 +17,7 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 FLANGE_LINK = 'link8'
 ROBOLAB_EEF_LINK = 'robolab_eef'
 # The point a bundled model reported at before ``GRIPPER_SITE``, as a URDF link: the FR3's ``F_T_EE``, the old grasp
-# site of the sim panda, the YAM's i2rt grasp site. A policy that states no frame observes its poses there.
+# site of the sim panda, the YAM's i2rt grasp site.
 EE_LINK = 'end_effector'
 # The grip point every bundled model names, on the axes of the arm's last link: z is the approach axis. Every
 # embodiment reports its poses here, and every codec transform is measured from here.
