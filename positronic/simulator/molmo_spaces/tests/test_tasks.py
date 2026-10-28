@@ -123,7 +123,7 @@ def test_the_collection_config_asks_the_pick_mini_benchmark_for_a_two_minute_hor
             mapping.WITH_RIGHT_SHOULDER: True,
         }
     ]
-    assert molmo_cfg.pick_mini_collect.kwargs['object_image_points'] is False
+    assert molmo_cfg.pick_mini_collect.kwargs['with_object_image_points'] is False
 
 
 def _listing_of(selection: dict[str, Any]) -> list[dict[str, Any]]:
@@ -376,7 +376,7 @@ def test_an_eval_without_the_object_image_points_asks_each_reset_to_drop_them(mo
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
     with serve_env(env) as address, pos3.mirror():
         monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
-        ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, object_image_points=False).instantiate()
+        ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, with_object_image_points=False).instantiate()
         main(policy=policy, evals=[ev], output_dir=tmp_path)
 
     assert [token[mapping.WITH_OBJECT_IMAGE_POINTS] for token in env.tokens] == [False]

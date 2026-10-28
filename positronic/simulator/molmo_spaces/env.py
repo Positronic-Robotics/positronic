@@ -188,7 +188,7 @@ class MolmoSpacesEnv(EnvProtocol):
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         if not with_object_image_points:
-            # The sensor draws its points from the global NumPy generator, so a scored eval keeps it.
+            # The sensor draws its points from the global NumPy generator, so without it an episode draws other values.
             self._task.sensor_suite.sensors.pop(mapping.MOLMO_OBJECT_IMAGE_POINTS_SENSOR)
         self._robot_view = self._task.env.current_robot.robot_view
         self._assert_measures_at_grasp_site()

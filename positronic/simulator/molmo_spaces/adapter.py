@@ -41,13 +41,13 @@ def camera_dict(exterior_sides: Sequence[ShoulderSide]) -> dict[str, tuple[str, 
 class MolmoAdapter(WireCommandAdapter):
     _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
 
-    def __init__(self, cameras: Mapping[str, tuple[str, ...]], object_image_points: bool = True):
+    def __init__(self, cameras: Mapping[str, tuple[str, ...]], with_object_image_points: bool = True):
         # The env measures and drives at the 2F-85 grip point of this model, ``GRIPPER_SITE``, as the rig does.
         self.robot_model = bundled_franka_model()
         super().__init__()
         self._cameras = cameras
         self._with_right_shoulder = SHOULDER_CAMERAS[ShoulderSide.RIGHT] in cameras.values()
-        self._object_image_points = object_image_points
+        self._with_object_image_points = with_object_image_points
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
@@ -76,7 +76,7 @@ class MolmoAdapter(WireCommandAdapter):
                 else {}
             ),
             mapping.WITH_RIGHT_SHOULDER: self._with_right_shoulder,
-            mapping.WITH_OBJECT_IMAGE_POINTS: self._object_image_points,
+            mapping.WITH_OBJECT_IMAGE_POINTS: self._with_object_image_points,
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

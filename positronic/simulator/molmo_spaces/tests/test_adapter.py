@@ -229,5 +229,5 @@ def test_reset_token_asks_for_the_right_shoulder_only_when_the_adapter_declares_
 
 def test_reset_token_drops_the_object_image_points_only_when_the_adapter_asks():
     params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
-    dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), object_image_points=False)
+    dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), with_object_image_points=False)
     assert dropped.reset_token(params)[mapping.WITH_OBJECT_IMAGE_POINTS] is False
