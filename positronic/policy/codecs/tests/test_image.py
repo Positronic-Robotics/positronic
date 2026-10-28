@@ -234,6 +234,20 @@ class TestTransformImages:
         actions = [{'target_grip': 0.5}, {'target_grip': 1.0}]
         assert TransformImages(64, 48, mode=ResizeMode.BOUND).decode(actions) == actions
 
+    def test_an_rtc_prefix_passes_through_while_the_images_shrink(self):
+        prefix = [{'target_grip': 0.5}, {'target_grip': 1.0}]
+        received = []
+
+        def model(obs):
+            received.append(obs)
+            return []
+
+        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
+        codec.wrap(model)({'cam': _image(480, 640), policy_keys.ACTION_PREFIX: prefix})
+
+        assert received[0][policy_keys.ACTION_PREFIX] == prefix
+        assert received[0]['cam'].shape == (48, 64, 3)
+
     def test_training_encoder_refuses(self):
         with pytest.raises(NotImplementedError, match='full-resolution'):
             _ = TransformImages(64, 48, mode=ResizeMode.BOUND).training_encoder
