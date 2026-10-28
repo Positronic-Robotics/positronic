@@ -133,6 +133,11 @@ answer when it arrives. After the setup, the server only answers these
 calls. A stateless model answers from its arguments alone; a stateful model
 keeps its history in a server session tied to the policy run's lifetime.
 
+The local policy knows the planned commands and execution timing; the model
+knows how to use that context when predicting. A call supplies the context the
+model needs, while leaving its interpretation to the model. Each side makes
+the decisions for which it has the necessary knowledge.
+
 The framework records sensor and executed-command signals, along with timing
 logs. Recording inputs and outputs at every policy and inference boundary is
 part of the debugging goal. The episode ends when the framework closes the
@@ -141,25 +146,6 @@ run and its server session. The record remains.
 ![The life of an episode](docs/episode.svg)
 
 The sections below describe each piece.
-
-### Ownership of decisions
-
-Each component owns the decisions for which it has the necessary knowledge.
-The local policy knows the robot's planned commands and execution timing;
-the model implementation knows how to use that context when predicting.
-Inputs should carry enough context for their consumer to decide, without
-requiring the producer to implement the consumer's algorithm.
-
-Representation changes belong in codecs, scheduling belongs in policies,
-and model-specific interpretation belongs with the model. Compose these
-operations explicitly so the recipe shows which data reaches each component.
-A reusable operation should describe the data it transforms rather than
-require a separate interface for each algorithm that uses it.
-
-Shared interfaces permit implementation-specific needs without imposing them
-on every implementation. A model may retain session history without requiring
-all models to be stateful. State ownership and lifetime must be explicit;
-whether history is needed remains an implementation choice.
 
 ### Processors and runs
 
@@ -279,6 +265,10 @@ returned, blend a late plan into the motion underway. The API gives each
 kind its own shape. A codec transforms data and does not see time. A
 processor can keep state in its run and use the episode clock.
 
+Keeping these responsibilities separate lets a data transform serve different
+scheduling algorithms through the same interface. Their composition makes
+explicit which data reaches each component and which transformations it applies.
+
 ![Composed runs across time](docs/chain.svg)
 
 - Sequential composition nests components from outermost to innermost. It is
@@ -330,8 +320,9 @@ around an ordinary inference function. The session identifies that run's calls
 and owns any server-side episode state. It ends when the run closes or the
 connection is lost, after outstanding calls finish using its resources.
 
-A session does not require the model to be stateful. Stateless models can serve
-several sessions without keeping episode history. Stateful models must keep
+A session defines state ownership and lifetime; whether history is needed is
+the model implementation's choice. Stateless models can serve several sessions
+without keeping episode history. Stateful models must keep
 each session's history separate or reject overlapping sessions. Ending a session
 releases its episode state, not the shared loaded model.
 

@@ -335,8 +335,8 @@ checkpoints, start one server for each.
 ## Real-time chunking
 
 Real-time chunking (RTC) predicts a new action chunk while the client executes
-queued commands. Its responsibilities follow the policy API's
-[ownership principles](../policy/DESIGN.md#ownership-of-decisions).
+queued commands. It combines local scheduling and remote prediction through the
+policy API's [composition model](../policy/DESIGN.md#composability).
 
 TODO: Align RTC request fields and command encoding with the contract below.
 
