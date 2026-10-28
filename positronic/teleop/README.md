@@ -135,11 +135,14 @@ Use it for demonstrations only, not for a scored eval.
 
 ```bash
 uv run positronic eval run \
-  --eval=@positronic.cfg.eval.sim.molmo.pick_mini_collect --eval.episodes='[0,1,2,3,4]' \
+  --eval=@positronic.cfg.eval.sim.molmo.pick_mini_collect \
+  --eval.episodes='[367,468,472,486,508,521,650,663,703,787]' \
   --policy=@positronic.cfg.policy.teleop_molmo \
   --output_dir=~/datasets/molmo_pick_demos
 ```
 
+- No eval that the competition scores has the 10 episodes of the example, or their houses. Their physics runs
+  fast.
 - `--eval.horizon_sec` changes the horizon of each episode. Leave out `--eval.episodes` to run all the episodes that
   the config selects.
 - `teleop_molmo` shows `image.exterior`, `image.exterior_2` and `image.wrist`. The eval puts each shoulder camera in
