@@ -22,8 +22,8 @@ export class WebXRVideoPlayer {
         this.videoMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 map: { value: this.videoTexture },
-                blueBoost: { value: 1.5 },
-                contrast: { value: 2.0 }  // 1.0 is normal, >1.0 increases contrast
+                blueBoost: { value: 1.0 },
+                contrast: { value: 1.0 }  // 1.0 is normal, >1.0 increases contrast
             },
             vertexShader: `
                 varying vec2 vUv;
@@ -52,8 +52,8 @@ export class WebXRVideoPlayer {
             transparent: true,
         });
 
-        // Create plane for video (1 meter wide, 16:9 aspect ratio)
-        const width = 1.0;
+        // Create plane for video (1.5 meters wide, 16:9 aspect ratio)
+        const width = 1.5;
         const height = width * (9/16);
         this.videoPlane = new THREE.Mesh(
             new THREE.PlaneGeometry(width, height),

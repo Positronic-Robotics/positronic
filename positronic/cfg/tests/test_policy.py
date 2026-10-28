@@ -1,9 +1,15 @@
 import json
+from urllib.parse import parse_qsl
 
 import pytest
+from platform_client.policy_container import AUTH_TOKEN_ENV
+from positronic_model_server.spec import parse_params
 
+from positronic import keys
 from positronic.cfg import policy as policy_cfg
+from positronic.cfg.eval.sim.positronic import stack_cubes_collect
 from positronic.cfg.policy import file_headers
+from positronic.policy import RemotePolicy
 
 SECRET = 'ak-do-not-print-me'
 
@@ -57,3 +63,39 @@ def test_a_remote_policy_config_carries_an_address_its_network_flags_reach(name)
 
     address = overridden.kwargs['address'].instantiate()
     assert (address.host, address.port) == ('gpu-host', 443)
+
+
+def test_the_collection_eval_records_every_camera_that_the_teleop_collection_policy_shows():
+    recorded = stack_cubes_collect.kwargs['camera_dict']
+    assert set(policy_cfg.TELEOP_COLLECT_CAMERAS) <= set(recorded)
+    assert {keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE} <= set(recorded)
+
+
+@pytest.mark.parametrize(
+    ('config', 'cameras'),
+    [
+        pytest.param(policy_cfg.teleop_collect, policy_cfg.TELEOP_COLLECT_CAMERAS, id='teleop_collect'),
+        pytest.param(policy_cfg.teleop_molmo, policy_cfg.TELEOP_MOLMO_CAMERAS, id='teleop_molmo'),
+    ],
+)
+def test_a_teleop_collection_policy_asks_the_service_for_its_cameras_with_the_person_at_the_back(config, cameras):
+    query = config.instantiate()._client.session_url.split('?', 1)[1]
+    assert parse_params(parse_qsl(query)) == {'operator_position': 'BACK', 'cameras': list(cameras)}
+
+
+@pytest.mark.parametrize('name', ['teleop', 'teleop_network'])
+def test_a_run_sets_one_session_parameter_of_a_teleop_policy(monkeypatch, name):
+    monkeypatch.setenv(AUTH_TOKEN_ENV, 'token')
+    config = getattr(policy_cfg, name).override(**{'address.query.operator_position': 'BACK'})
+    query = config.instantiate()._client.session_url.split('?', 1)[1]
+    assert parse_params(parse_qsl(query)) == {'operator_position': 'BACK'}
+
+
+def test_the_teleop_policy_is_a_remote_policy_on_the_socket_of_the_service(tmp_path):
+    socket = tmp_path / 'teleop.sock'
+    teleop = policy_cfg.teleop.override(**{'address.uds': str(socket)}).instantiate()
+    plain = policy_cfg.remote.override(
+        wire='websocket_unix', address=policy_cfg.socket_address.override(uds=str(socket))
+    ).instantiate()
+    assert isinstance(teleop, RemotePolicy) and isinstance(plain, RemotePolicy)
+    assert teleop._client.session_url == plain._client.session_url == f'ws+unix://{socket}/api/v1/session'

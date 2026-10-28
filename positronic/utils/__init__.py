@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pos3
+import psutil
 import yaml
 
 from positronic import __file__ as pkg_init_file
@@ -53,6 +54,16 @@ def resolve_host_ip() -> str:
             return ip
 
     return candidates[0] if candidates else '127.0.0.1'
+
+
+def interface_ipv4_addresses() -> list[tuple[str, str]]:
+    """The name and the IPv4 address of each local interface that is not a loopback."""
+    return [
+        (name, addr.address)
+        for name, addrs in psutil.net_if_addrs().items()
+        for addr in addrs
+        if addr.family == socket.AF_INET and not addr.address.startswith('127.')
+    ]
 
 
 def merge_dicts(dst: dict, src: dict) -> dict:

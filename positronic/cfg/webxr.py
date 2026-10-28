@@ -1,17 +1,18 @@
 import configuronic as cfn
 
+from positronic.drivers.webxr import Frontend, WebXR
 
-@cfn.config(port=5005, use_https=True, sensitivity=1.0)
-def webxr(port: int, frontend: str, use_https: bool, sensitivity: float):
-    from positronic.drivers.webxr import WebXR
-
-    return WebXR(port=port, frontend=frontend, use_https=use_https, sensitivity=sensitivity)
+webxr = cfn.Config(WebXR, port=5005)
 
 
-oculus = webxr.override(frontend='oculus')
+oculus = webxr.override(frontend=Frontend.OCULUS)
 
 # iPhone controller: open http://<server-ip>:5005/ on the phone in XR Browser
-iphone = webxr.override(frontend='iphone', use_https=False, sensitivity=2.0)
+iphone = webxr.override(frontend=Frontend.IPHONE, use_https=False, sensitivity=2.0)
 
 # Android phones require https
-android = webxr.override(frontend='iphone', use_https=True, sensitivity=2.0)
+android = webxr.override(frontend=Frontend.IPHONE, use_https=True, sensitivity=2.0)
+
+# The phone pages for `positronic teleop`: the same page, with momentary buttons that carry the teleop labels
+iphone_teleop = iphone.override(frontend=Frontend.IPHONE_TELEOP)
+android_teleop = android.override(frontend=Frontend.IPHONE_TELEOP)
