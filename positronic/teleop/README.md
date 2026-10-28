@@ -74,7 +74,7 @@ and the control state.
 While a trial waits for Ready, the service shows a dialog with a sound in the centre of the screen of its computer.
 The dialog comes also when the window is not open, and the service closes it when the wait ends. On macOS the service
 uses `osascript` and `afplay`. On Linux it uses `zenity` on `DISPLAY`, and plays the sound with `paplay`.
-`--notice.sound=<file>` changes the sound on Linux, and `--notice=None` turns the notice off.
+`--notice.sound=<file>` changes the sound, and `--notice=None` turns the notice off.
 
 A Linux service that runs as a user other than the user at the screen shows the dialog only with `DISPLAY=:0` and an X
 grant from the session at the screen: `xhost +SI:localuser:<user>`. The sound of `paplay` then plays nowhere, because

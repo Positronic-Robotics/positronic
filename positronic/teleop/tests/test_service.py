@@ -791,7 +791,7 @@ def test_a_world_that_closes_the_loop_in_the_ready_wait_hides_the_notice():
 
 MACOS_DIALOG = ['osascript', '-e', 'display alert "positronic teleop" message "Press \\"Ready\\""']
 LINUX_DIALOG = ['zenity', '--info', '--no-markup', '--title=positronic teleop', '--text=Press "Ready"']
-LINUX_SOUND = ['paplay', '/usr/share/sounds/freedesktop/stereo/complete.oga']
+LINUX_SOUND = ['paplay', '/sounds/ready.wav']
 
 
 class _Process:
@@ -806,14 +806,14 @@ class _Process:
 
 @pytest.mark.parametrize(
     'platform, commands',
-    [('darwin', [['afplay', command.DesktopNotice.MACOS_SOUND], MACOS_DIALOG]), ('linux', [LINUX_DIALOG, LINUX_SOUND])],
+    [('darwin', [['afplay', '/sounds/ready.wav'], MACOS_DIALOG]), ('linux', [LINUX_DIALOG, LINUX_SOUND])],
     ids=['macos', 'linux'],
 )
 def test_the_desktop_notice_runs_the_notice_commands_of_the_platform(monkeypatch, platform, commands):
     started: list[list[str]] = []
     monkeypatch.setattr(command.sys, 'platform', platform)
     monkeypatch.setattr(command.subprocess, 'Popen', lambda argv: _Process(argv, started))
-    command.DesktopNotice().show('Press "Ready"')
+    command.DesktopNotice(sound='/sounds/ready.wav').show('Press "Ready"')
     assert started == commands
 
 

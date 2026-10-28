@@ -96,14 +96,15 @@ class _ReadyNotice(pimm.ControlSystem):
                 self._notice.hide()
 
 
-class DesktopNotice:
-    """A dialog with a sound in the centre of the screen of this computer: ``osascript`` and ``afplay`` on macOS,
-    else ``zenity`` on ``DISPLAY`` and ``sound`` played by ``paplay``."""
+_MACOS_SOUND, _LINUX_SOUND = '/System/Library/Sounds/Glass.aiff', '/usr/share/sounds/freedesktop/stereo/complete.oga'
 
-    MACOS_SOUND = '/System/Library/Sounds/Glass.aiff'
+
+class DesktopNotice:
+    """A dialog with ``sound`` in the centre of the screen of this computer: ``osascript`` and ``afplay`` on macOS,
+    else ``zenity`` on ``DISPLAY`` and ``paplay``."""
 
     def __init__(
-        self, title: str = 'positronic teleop', sound: str = '/usr/share/sounds/freedesktop/stereo/complete.oga'
+        self, title: str = 'positronic teleop', sound: str = _MACOS_SOUND if sys.platform == 'darwin' else _LINUX_SOUND
     ):
         self._title = title
         self._sound = Path(sound)
@@ -124,7 +125,7 @@ class DesktopNotice:
 
     def show(self, text: str) -> None:
         if sys.platform == 'darwin':
-            self._start(['afplay', self.MACOS_SOUND])
+            self._start(['afplay', str(self._sound)])
             script = f'display alert {self._applescript_string(self._title)} message {self._applescript_string(text)}'
             self._dialog = self._start(['osascript', '-e', script])
         else:
