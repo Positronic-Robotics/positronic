@@ -9,6 +9,7 @@ from eval_vocabulary.timeline import recording_timeline
 from positronic import geom, keys
 from positronic.dataset import transforms as tf
 from positronic.dataset.episode import Episode
+from positronic.dataset.time import Time
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity, map_signals
 from positronic.drivers.roboarm.models import parse_ee_frames
@@ -38,9 +39,12 @@ def _derive_grip(source: str, episode: Episode):
     return tf.Elementwise(episode[source], lambda values: np.asarray(values, dtype=np.float32).reshape(-1, 1))
 
 
-@cfn.config(settings=model_settings.droid())
-def droid(settings: dict) -> EpisodeTransform:
-    """Prepare recorded absolute trajectories and metadata for GR00T fine-tuning."""
+@cfn.config(settings=model_settings.droid(), action_lead_sec=0.0, binarize_grip=False)
+def droid(settings: dict, action_lead_sec: float, binarize_grip: bool) -> EpisodeTransform:
+    """Prepare recorded absolute trajectories and metadata for GR00T fine-tuning.
+
+    The lead and the grip threshold belong to the rig that recorded the data; a preset per rig sets them.
+    """
     image_mappings = settings[model_settings.IMAGE_MAPPINGS]
     conflicts = image_mappings.keys() & (gr00t.STATE_DIMS.keys() | {ACTION, keys.TASK})
     if conflicts:
@@ -80,9 +84,22 @@ def droid(settings: dict) -> EpisodeTransform:
     }
 
     def derive_action(episode):
-        signals = [derive(episode) for derive in state_encoders.values()]
-        timeline = recording_timeline({name for signal in signals for name in signal.timelines})
-        return tf.concat(*signals, timelines=(timeline,), dtype=np.float32)
+        signals = {name: derive(episode) for name, derive in state_encoders.items()}
+        timeline = recording_timeline({name for signal in signals.values() for name in signal.timelines})
+        grip = _derive_grip(keys.TARGET_GRIP, episode)
+        if binarize_grip:
+            grip = tf.Elementwise(grip, lambda values: (np.asarray(values) > 0.5).astype(np.float32))
+        signals[gr00t.GRIP] = grip
+        # The arm reaches a target about `action_lead_sec` after the command, so the arm action is the measured state
+        # that much later. The recorded command is not used: a rig commands poses or joints, not both. The measured
+        # grip stays low when the fingers stop on an object, so the gripper action is the command.
+        current = tf.concat(*signals.values(), timelines=(timeline,), dtype=np.float32)
+        ahead = tf.TimeOffsets(current, Time(**{timeline: round(action_lead_sec * 1e9)}))
+        parts = [
+            tf.view(current if name == gr00t.GRIP else ahead, slice(bounds[gr00t.START], bounds[gr00t.END]))
+            for name, bounds in action_meta.items()
+        ]
+        return tf.concat(*parts, timelines=(timeline,), dtype=np.float32)
 
     columns = Derive(
         meta=meta,
@@ -114,3 +131,7 @@ def droid(settings: dict) -> EpisodeTransform:
 
 
 droid_three_cameras = droid.override(settings=model_settings.droid_three_cameras())
+
+# The MolmoSpaces arm controller tracks a joint target best 2 steps (0.14 s) after the command.
+droid_molmo = droid.override(action_lead_sec=0.14, binarize_grip=True)
+droid_molmo_three_cameras = droid_molmo.override(settings=model_settings.droid_three_cameras())

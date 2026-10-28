@@ -69,7 +69,7 @@ See the [Codecs Guide](../positronic/policy/codecs/README.md) for detailed codec
 |-------|---------------|
 | **SmolVLA / LeRobot 0.4.x** | `ee`, `joints` (512x512 images) |
 | **LeRobot ACT (0.3.3)** | `ee`, `joints`, `ee_traj`, `joints_traj` |
-| **GR00T N1.7** | `droid`, `droid_three_cameras` |
+| **GR00T N1.7** | `droid`, `droid_three_cameras`, `droid_molmo`, `droid_molmo_three_cameras` |
 | **OpenPI** | `ee`, `ee_joints`, `droid` |
 
 ### S3 Support
