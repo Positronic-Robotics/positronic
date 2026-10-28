@@ -24,12 +24,15 @@ change to it changes every server.
 
 The streamer finds the rows of the next request before the request exists. ``TemporalStack`` samples,
 at the request time ``T``, the latest control tick at or before ``T + offset`` for each offset.
-``ChunkedSchedule`` sends the next request at the first tick at or after the end of the current chunk:
-the time that it read the answer, plus ``len(chunk) / fps``. The streamer predicts ``T`` from the
-answer and keeps its own copy of the ticks. A timer sends each row when its target time has passed, so
-the last row reaches the server before the request. The request compares each row of its stack with
-the streamed row, and it refers only to equal rows. A wrong prediction costs bytes, but it never
-changes an observation.
+``ChunkedSchedule`` starts a chunk when it reads the answer, or when the previous chunk ends if that is
+later, and sends the next request at the first tick at or after the chunk's end less its inference lead:
+the start plus ``len(chunk) / fps``, less the lead estimate, which follows the delays from each submit to
+the read of its answer. The streamer predicts ``T`` from the same times and keeps its own copy of the
+ticks. It plans the rows when the schedule reads the answer. A timer sends each row when its target time
+has passed, so the last row reaches the server before the request; a row whose target has passed at the
+plan goes at once. An answer whose next request is due at once, such as an empty chunk, plans no rows.
+The request compares each row of its stack with the streamed row, and it refers only to equal rows. A
+wrong prediction costs bytes, but it never changes an observation.
 """
 
 import collections.abc as cabc
@@ -104,7 +107,8 @@ class FrameStreamer:
     """Streams the history rows of each next request of one session.
 
     ``keys``, ``offsets_sec`` and ``pad_start`` are those of the declared ``TemporalStack``. ``resize``
-    sizes the frames as the declared stack does. ``fps`` and ``horizon_sec`` are those of the schedule.
+    sizes the frames as the declared stack does. ``fps`` and ``horizon_sec`` are those of the schedule, and
+    ``lead`` gives its inference lead from the delay of an answer (``DurationEstimateRun.update``; None: no lead).
     ``send`` puts one message on the session's connection, under the lock of the connection. ``clock`` is
     the episode clock in nanoseconds.
     """
@@ -120,6 +124,7 @@ class FrameStreamer:
         pad_start: bool,
         fps: float,
         horizon_sec: float | None = None,
+        lead: cabc.Callable[[float], float] | None = None,
         resize: cabc.Callable[[dict[str, np.ndarray]], dict[str, np.ndarray]] | None = None,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
         crf: int = 18,
@@ -134,6 +139,9 @@ class FrameStreamer:
         self._pad_start = pad_start
         self._fps = fps
         self._horizon_sec = horizon_sec
+        self._lead = lead
+        self._submitted_at: float | None = None
+        self._chunk_end = 0.0
         self._resize = resize
         self._quality = jpeg_quality
         self._crf = crf
@@ -168,19 +176,31 @@ class FrameStreamer:
                 self._ticks.popleft()
         self._dispatch_due(now)
 
+    def on_submit(self) -> None:
+        """Record the time the schedule submits a call."""
+        self._submitted_at = self._clock() / 1e9
+
     def on_answer(self, chunk: cabc.Sized) -> None:
         """Plan the rows of the next request when the schedule reads ``chunk``."""
         self.flush()
+        now = self._clock() / 1e9
+        delay = 0.0 if self._submitted_at is None else now - self._submitted_at
+        lead = 0.0 if self._lead is None else self._lead(delay)
         duration = len(chunk) / self._fps
         if self._horizon_sec is not None:
             duration = min(duration, self._horizon_sec)
-        t_next = self._clock() / 1e9 + duration
+        start = max(now, self._chunk_end)  # an early answer waits behind the commands still due
+        self._chunk_end = start + duration
+        t_next = self._chunk_end - min(lead, duration)
         n = len(self._offsets)
         with self._lock:
             self.call += 1
             self._streamed = {}
-            self._targets = [(n - 1 - i, t_next + offset) for i, offset in enumerate(self._offsets[:-1])]
+            planned = t_next > now
+            self._targets = [(n - 1 - i, t_next + o) for i, o in enumerate(self._offsets[:-1])] if planned else []
         self._wake.set()
+        if planned:
+            self._dispatch_due(now)  # rows whose target has passed go at once
 
     def request(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
         """The observation of a request, with each image stack referring to the streamed rows it holds."""

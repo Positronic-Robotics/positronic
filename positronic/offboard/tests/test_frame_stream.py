@@ -14,6 +14,7 @@ from positronic import keys
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.frame_stream import H264_FRAME, REF, ROW, FrameCodec, FrameStreamer, declared_codecs
 from positronic.policy.codecs import ResizeMode, TransformImages
+from positronic.policy.processors import ConstantDuration, DelayEstimate
 
 KEY = keys.WRIST_IMAGE
 # Targets fall between the 0.1 s ticks below, so each row has one frame that TemporalStack samples.
@@ -237,3 +238,46 @@ def test_h264_carries_the_whole_stack_as_jpeg_when_a_row_differs():
         value = streamer.request({KEY: stack})[KEY]
         assert value[b'rows'] == []
         np.testing.assert_allclose(_decoded(value[b'tail']), stack, atol=2)
+
+
+def test_the_inference_lead_brings_the_next_request_forward_and_a_passed_row_goes_at_once():
+    with _streamer(lead=ConstantDuration(0.3).run().update) as (streamer, clock, sent):
+        _tick(streamer, clock, *range(11))
+        streamer.on_answer([{}] * 5)  # read at 1.0 s: the chunk ends at 1.5 s, the next request goes at 1.2 s
+        streamer.flush()
+        assert _rows(sent) == [(1, 2, 9)]  # its target, 0.95 s, has passed
+        _tick(streamer, clock, 11)
+        streamer.flush()
+        assert _rows(sent) == [(1, 2, 9), (1, 1, 10)]
+
+
+def test_an_answer_read_before_the_chunk_ends_starts_its_chunk_at_that_end():
+    with _streamer(lead=ConstantDuration(0.3).run().update) as (streamer, clock, sent):
+        _tick(streamer, clock, *range(11))
+        streamer.on_answer([{}] * 5)  # read at 1.0 s: the chunk runs to 1.5 s
+        _tick(streamer, clock, 11, 12, 13)
+        streamer.on_answer([{}] * 5)  # read at 1.3 s: the chunk runs from 1.5 s to 2.0 s, the next request at 1.7 s
+        _tick(streamer, clock, *range(14, 18))
+        streamer.flush()
+        assert _rows(sent)[2:] == [(2, 2, 14), (2, 1, 15)]
+
+
+def test_the_lead_estimate_follows_the_delay_from_the_submit_to_the_read():
+    with _streamer(lead=DelayEstimate.max(last=5, max_sec=1.0).run().update) as (streamer, clock, sent):
+        _tick(streamer, clock, *range(8))
+        streamer.on_submit()  # at 0.7 s
+        _tick(streamer, clock, 8, 9, 10)
+        streamer.on_answer([{}] * 5)  # read at 1.0 s, 0.3 s after its submit: the next request goes at 1.2 s
+        _tick(streamer, clock, 11)
+        streamer.flush()
+        assert _rows(sent) == [(1, 2, 9), (1, 1, 10)]
+
+
+def test_an_answer_whose_next_request_is_due_at_once_plans_no_rows():
+    with _streamer() as (streamer, clock, sent):
+        _tick(streamer, clock, *range(11))
+        streamer.on_answer([])
+        _tick(streamer, clock, 11, 12)
+        streamer.flush()
+        assert sent == []
+        assert streamer.request({KEY: np.stack([_frame(9), _frame(10), _frame(12)])})[KEY][b'rows'] == []

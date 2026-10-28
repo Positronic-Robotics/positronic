@@ -647,6 +647,10 @@ class InferenceSchedule(Policy):
         self._latency_estimate = latency_estimate
         self._obs_time_key = obs_time_key
 
+    @property
+    def latency_estimate(self) -> DurationEstimate:
+        return self._latency_estimate
+
     def _call_obs(
         self, obs: Obs, trajectory: Trajectory | None, obs_time_ns: int, *, update: Trajectory | None, replan: bool
     ) -> Obs:

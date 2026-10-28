@@ -35,7 +35,7 @@ from .codecs.action import JointPositionAction
 from .codecs.image import ResizeCache
 from .compatibility import from_v1_spec
 from .executor import ExecutionRuntime
-from .processors import TemporalStack
+from .processors import InferenceSchedule, TemporalStack
 from .spec import ComponentFactory, from_spec
 
 P = ParamSpec('P')
@@ -170,11 +170,15 @@ class _ReportingAnswer(Answer[T]):
 
 
 class _ReportingRuntime(Runtime):
-    """``inner``, with each answer reporting its result to ``on_read`` at the first read."""
+    """``inner``, with each answer reporting its result to ``on_read`` at the first read, and each submit to
+    ``on_submit`` before the call starts."""
 
-    def __init__(self, inner: Runtime, on_read: cabc.Callable[[Any], None]) -> None:
+    def __init__(
+        self, inner: Runtime, on_read: cabc.Callable[[Any], None], on_submit: cabc.Callable[[], None] | None = None
+    ) -> None:
         self._inner = inner
         self._on_read = on_read
+        self._on_submit = on_submit
 
     def set_metadata(self, name: str, value: Any) -> None:
         self._inner.set_metadata(name, value)
@@ -188,6 +192,8 @@ class _ReportingRuntime(Runtime):
         return self._inner.tick
 
     def submit(self, function: cabc.Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+        if self._on_submit is not None:
+            self._on_submit()
         return _ReportingAnswer(self._inner.submit(function, *args, **kwargs), self._on_read)
 
     def _submit_on(
@@ -368,7 +374,9 @@ class RemotePolicy(Policy):
                 return answer
 
             infer = partial(self._infer, streamer, call, connection_lock)
-            policy_runtime = execution if streamer is None else _ReportingRuntime(execution, streamer.on_answer)
+            policy_runtime = (
+                execution if streamer is None else _ReportingRuntime(execution, streamer.on_answer, streamer.on_submit)
+            )
             run = policy_runtime.start(stack, infer)
             obs = yield
             while True:
@@ -418,9 +426,11 @@ class RemotePolicy(Policy):
         cache = ResizeCache()
         temporal: list[TemporalStack] = []
         transforms: list[TransformImages] = []
+        schedules: list[InferenceSchedule] = []
         overrides: dict[ComponentFactory, ComponentFactory] = {
             TemporalStack.from_spec_args: _recorded(TemporalStack.from_spec_args, temporal),
             TransformImages.from_spec_args: _recorded(partial(TransformImages.from_spec_args, cache=cache), transforms),
+            InferenceSchedule.from_spec_args: _recorded(InferenceSchedule.from_spec_args, schedules),
         }
         stack = declared_stack(meta, version, overrides)
         if len(temporal) != 1:
@@ -441,6 +451,8 @@ class RemotePolicy(Policy):
             pad_start=stacked.pad_start,
             fps=stack_meta[policy_keys.ACTION_FPS],
             horizon_sec=stack_meta.get(policy_keys.ACTION_HORIZON_SEC),
+            # The schedule's own estimate of its lead, fed the same delays: one estimate per session, as per episode.
+            lead=schedules[0].latency_estimate.run().update if len(schedules) == 1 else None,
             resize=partial(_transform_row, transforms) if transforms else None,
             jpeg_quality=self._jpeg_quality,
         )
