@@ -502,19 +502,22 @@ or the caller's, which charges it.
 
 `submissions.get` answers one model per status. A finished run reads its score off `scores` and its
 outputs off `artifacts`. A failed run reads `reason_code` and `reason`, and `artifacts` links the
-records the run wrote: `result` is its outcome, and `diagnostics` says why its policy failed.
-`policy_log` is the policy container's own output, and a finished or failed run carries it. Each
-link is a signed URL, because the submitter holds no credential for the bucket. `artifacts` is
-absent on a run that wrote nothing, `diagnostics` on a run whose record was not written, and
-`policy_log` on a run whose container printed nothing.
+records the run wrote: `result` is its outcome, and `diagnostics` says why its policy failed. A
+failed run that published episodes before it failed also carries `scores` over those episodes, and
+`episodes` counts them against the episodes that the run asked for. `policy_log` is the policy
+container's own output, and a finished or failed run carries it. Each link is a signed URL, because
+the submitter holds no credential for the bucket. `artifacts` is absent on a run that wrote nothing,
+`diagnostics` on a run whose record was not written, and `policy_log` on a run whose container
+printed nothing.
 
-`submissions.artifacts` lists what a finished run wrote, one page at a time. Each entry names its
-`key` under the submission's own prefix, its `size`, and a signed `url` that expires. Pass `prefix`
-to keep the page to one part of the tree, so one attempt's episodes are `attempts/<n>/episodes/`
-and `result.json`'s `attempt_location` names the attempt that scored. Pass `after` with the `next`
-of the page before it to read the rest. The route answers a finished run alone: a run still going
-has a part-written prefix, and a run that failed reads its records off `submissions.get`. It refuses
-a rig plan, whose episodes are in the org's own bucket (§Eval plans).
+`submissions.artifacts` lists what a finished run wrote, one page at a time. It also lists a failed
+run that carries `scores`. Each entry names its `key` under the submission's own prefix, its `size`,
+and a signed `url` that expires. Pass `prefix` to keep the page to one part of the tree, so one
+attempt's episodes are `attempts/<n>/episodes/` and `result.json`'s `attempt_location` names the
+attempt that scored. Pass `after` with the `next` of the page before it to read the rest. The route
+refuses every other run: a run still going has a part-written prefix, and a run that failed with no
+`scores` reads its records off `submissions.get`. It refuses a rig plan, whose episodes are in the
+org's own bucket (§Eval plans).
 
 `users.me` reports the plan's rules as a list of `QuotaLimit`, each with its own key, window and
 subject; `MeResponse.quota_for(QUOTA_SUBMISSIONS_DAY)` reads one by key, from the keys the package
