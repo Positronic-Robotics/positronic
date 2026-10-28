@@ -404,16 +404,12 @@ bash positronic/docker/nebius_vm.sh delete
 These steps fine-tune the GR00T N1.7 DROID example on MolmoSpaces demonstrations, and put the checkpoint into
 a policy image. A person records the demonstrations with a phone or a Meta Quest.
 
-The 10 demonstrations are an example only. The set is very small, so it shows the steps and does not improve
-the policy.
-
 You need two machines, or one machine that does both:
 
 - Any machine with uv and the positronic source converts the demonstrations.
-- A machine with a GPU trains the model. At the default batch of 64, training used 50 GB of GPU memory, so an
-  H100 with 80 GB has enough. An L40S with 48 GB does not have enough. We did not try a smaller batch. We used a
-  disk of 400 GB. On Nebius, make the VM of
-  [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) with an H100:
+- A machine with a GPU trains the model. At the default batch of 64, training needs about 50 GB of GPU
+  memory, so an H100 with 80 GB has enough. An L40S with 48 GB does not have enough. On Nebius, make the VM of
+  [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) with an H100 and a disk of 400 GB:
 
   ```bash
   NEBIUS_PLATFORM=gpu-h100-sxm NEBIUS_PRESET=1gpu-16vcpu-200gb NEBIUS_DISK_GIB=400 \
@@ -422,13 +418,13 @@ You need two machines, or one machine that does both:
 
 ### 1. Get the demonstrations
 
-Use our 10 demonstrations, `@positronic.cfg.ds.sim.molmo_pick_demos`. They are public, and the convert step
-downloads them.
+Use the 10 example demonstrations, `@positronic.cfg.ds.sim.molmo_pick_demos`. They are public, and the convert
+step downloads them. They are an example of the steps only: do not expect a dataset of this size to improve the
+policy.
 
 Or record your own. The
 [teleoperation guide](https://github.com/Positronic-Robotics/positronic/blob/main/positronic/teleop/README.md#collect-demonstrations-in-molmospaces)
-gives the commands. Do not record on the episodes of `molmo.franka_pick_mini`, because then that eval scores
-your policy on scenes that it learned.
+gives the commands.
 
 ### 2. Convert the demonstrations
 
@@ -469,9 +465,8 @@ docker compose run --rm -v "$HOME/groot-data:/data" \
   --learning_rate=2e-5 --num_train_steps=2000 --save_steps=1000
 ```
 
-- One step took 1 to 1.5 s on an H100 at the batch of 64. Before the first step, training loads the dataset
-  and computes its statistics.
-- The step count and the learning rate are an example. We did not tune them for 10 demonstrations.
+- Before the first step, training loads the dataset and computes its statistics.
+- The step count and the learning rate are example values.
 - Training keeps the normalization statistics of the base checkpoint. The log shows `new stats DISCARDED`.
 - Each checkpoint is about 24 GB, and it goes to `$HOME/groot-data/checkpoints/molmo_pick_demos/checkpoint-<step>`.
 
