@@ -45,12 +45,13 @@ class Serializers:
         return x.as_vector(geom.Rotation.Representation.QUAT)
 
     @staticmethod
-    def robot_state(state: State) -> dict[str, np.ndarray | RobotStatus]:
+    def robot_state(state: State) -> dict[str, np.ndarray | RobotStatus | None]:
         return {
             keys.STATUS_SUFFIX: state.status,
             keys.JOINTS_SUFFIX: state.q,
             keys.JOINT_VEL_SUFFIX: state.dq,
             keys.EE_POSE_SUFFIX: Serializers.transform_3d(state.ee_pose),
+            keys.EE_WRENCH_SUFFIX: state.ee_wrench,
         }
 
     @staticmethod

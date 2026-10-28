@@ -13,6 +13,7 @@ from eval_vocabulary.episode import TASK as TASK
 JOINTS_SUFFIX = '.q'
 JOINT_VEL_SUFFIX = '.dq'
 EE_POSE_SUFFIX = '.ee_pose'
+EE_WRENCH_SUFFIX = '.ee_wrench'
 POSE_SUFFIX = '.pose'
 STATUS_SUFFIX = '.status'
 
@@ -69,6 +70,7 @@ ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}{JOINTS_SUFFIX}'
 JOINT_VEL = f'{ROBOT_STATE}{JOINT_VEL_SUFFIX}'
 EE_POSE = f'{ROBOT_STATE}{EE_POSE_SUFFIX}'
+EE_WRENCH = f'{ROBOT_STATE}{EE_WRENCH_SUFFIX}'
 ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'
 # The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.
