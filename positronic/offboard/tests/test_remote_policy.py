@@ -14,7 +14,7 @@ import mujoco as mj
 import numpy as np
 import pytest
 from positronic_model_server import keys as offboard_keys
-from positronic_model_server import protocol, spec
+from positronic_model_server import protocol, spec, websocket_wire
 from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
@@ -678,7 +678,9 @@ def test_a_declared_prompt_is_in_episode_meta_and_the_task_reaches_the_model_unc
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 @pytest.mark.parametrize('payload', [{protocol.OBSERVATION: {}}, {protocol.END_SESSION: True}], ids=['infer', 'end'])
-def test_wrong_session_id_closes_only_the_requesting_session(served, transport, payload):
+def test_wrong_session_id_closes_only_the_requesting_session(served, transport, payload, monkeypatch):
+    # The websocket server ends a refused session when its client does not close it within the close timeout.
+    monkeypatch.setattr(websocket_wire.WebsocketWire, 'CLOSE_TIMEOUT_SEC', 0.5)
     address, model, _ = served(transport=transport)
     client = InferenceClient(registry.client_wire(transport), address)
     first, second = client.new_session(), client.new_session()
