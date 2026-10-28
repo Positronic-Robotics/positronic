@@ -123,6 +123,7 @@ def test_the_collection_config_asks_the_pick_mini_benchmark_for_a_two_minute_hor
             mapping.WITH_RIGHT_SHOULDER: True,
         }
     ]
+    assert molmo_cfg.pick_mini_collect.kwargs['with_object_image_points'] is False
 
 
 def _listing_of(selection: dict[str, Any]) -> list[dict[str, Any]]:
@@ -336,6 +337,7 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
             mapping.TOKEN_EPISODE_INDEX: 3,
             mapping.TOKEN_SEED: seed,
             mapping.WITH_RIGHT_SHOULDER: True,
+            mapping.WITH_OBJECT_IMAGE_POINTS: True,
         }
     ]
     assert policy.observations
@@ -366,3 +368,15 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
         assert eval_keys.SUCCESS not in episode.static
     recorded = {keys.JOINTS, keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2, mapping.OBS_SIM_STATE}
     assert recorded <= episode.signals.keys()
+
+
+@pytest.mark.timeout(60.0)
+def test_an_eval_without_the_object_image_points_asks_each_reset_to_drop_them(monkeypatch, tmp_path):
+    env = _MolmoObservationEnv(done_after=2)
+    policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
+    with serve_env(env) as address, pos3.mirror():
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
+        ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, with_object_image_points=False).instantiate()
+        main(policy=policy, evals=[ev], output_dir=tmp_path)
+
+    assert [token[mapping.WITH_OBJECT_IMAGE_POINTS] for token in env.tokens] == [False]
