@@ -261,16 +261,16 @@ that states `scene_seed` draws every random part of the task's scene from that s
 the table, the tote side and each camera side, where no level states the side or a level states `random`.
 The platform records each part the first time a plan of the organization draws it for that task under that
 seed. Every later plan of the organization with that seed and task lays out the recorded part, at any place in
-the task list and under any `transaction_key`. The recorded scene holds when the object kit or the task
-catalogue changes. A level that states a side lays out that side. When the task no longer offers a recorded
-side, `submissions.create` refuses the plan `bad_request` and names the task and the side. To file the plan,
-state the side or state another `scene_seed`. The platform records one table for each `clutter` block that
-the task draws within: the nearest level's block, else the task's own. A later plan with the same seed and the
-same block lays out the recorded table. A plan with another block draws its own table and records it. When an
-object of a recorded table has left the kit, or the task now names it, the table takes the next object in the
-seed's own order that fits the size caps. `clutter_replaced` names each object that the table replaced.
-Another organization draws its own scene from the same seed. `submissions.resolve` shows the recorded scene,
-refuses the same plans, and records nothing. The episode order does not come from the seed: each plan draws its own.
+the task list and under any `transaction_key`. A change to the object kit or the task catalogue does not
+change a recorded part. A level that states a side lays out that side. The platform records one table for each
+`clutter` block that the task draws within: the nearest level's block, else the task's own. A later plan with
+the same seed and the same block lays out the recorded table. A plan with another block draws its own table
+and records it. `submissions.create` refuses a plan `bad_request` when the task no longer offers a recorded
+side, or when an object of the recorded table has left the kit or the task now names it. The refusal names
+the task and the side or the object. To file the plan, state the side, state another `clutter` block, or
+state another `scene_seed`. Another organization draws its own scene from the same seed.
+`submissions.resolve` shows the recorded scene, refuses the same plans, and records nothing. The episode
+order does not come from the seed: each plan draws its own.
 
 `submissions.resolve` takes the same plan and answers with `resolved` alone. For a pay_as_you_go
 organization, that `ResolvedPlan` carries a `credit_quote`. It files nothing, spends no quota and

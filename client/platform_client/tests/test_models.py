@@ -225,7 +225,6 @@ RESOLVED_TASK = ResolvedTask(
     external_cameras={'side': Placement.right},
     clutter=Clutter(count_min=2, count_max=6),
     clutter_objects=['cup', 'sponge'],
-    clutter_replaced={'bowl': 'sponge', 'box': None},
     episode_order=['pi05', 'baseline', 'baseline'],
 )
 RESOLVED = ResolvedPlan(rig_shape=RigShape.franka, episodes_total=3, tasks=[RESOLVED_TASK])
