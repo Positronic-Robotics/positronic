@@ -1,9 +1,9 @@
 """Frame stream: send the frames of the next request while the robot executes the current chunk.
 
-A protocol v1 server that declares ``frame_stream`` in its handshake takes the history rows of the
-next request as separate messages on the session's connection. It decodes each row when the row
-arrives, and it can start its model work on the row while the robot moves. The request then refers
-to the streamed rows and carries the other frames. The messages::
+A protocol v1 or v2 server that declares ``frame_stream`` in its handshake takes the history rows of the
+next request as separate messages on the session's connection (on v2 without the session envelope). It
+decodes each row when the row arrives, and it can start its model work on the row while the robot moves.
+The request then refers to the streamed rows and carries the other frames. The messages::
 
     handshake meta:  "frame_stream": {"version": 1, "codecs": ["jpeg", "h264"], ...}
     row:             {"__stream_row__": {"call": c, "back": b, "t_ns": int, "images": {key: <image>}}}

@@ -538,9 +538,23 @@ def test_a_message_without_an_answer_goes_out_alone_and_reads_nothing():
     assert conn.recv.call_count == 1  # the handshake
 
 
-def test_a_message_without_an_answer_needs_a_protocol_v1_session():
+def test_a_message_without_an_answer_goes_out_without_the_v2_envelope():
     conn = _connection(_ready('s'))
-    with pytest.raises(RuntimeError, match='protocol v1'):
+    InferenceSession(conn).send_message({'row': 1})
+    assert [legacy_protocol.deserialise(call.args[0]) for call in conn.send.call_args_list] == [{'row': 1}]
+
+
+def test_a_frame_miss_answer_raises_frame_miss_on_a_v2_session():
+    missing = [['image', 3]]
+    conn = _connection(_ready('s'), legacy_protocol.serialise({FRAME_MISS: missing}))
+    with pytest.raises(FrameMiss) as raised:
+        InferenceSession(conn).infer({'image': 'test'})
+    assert raised.value.missing == missing
+
+
+def test_a_message_without_an_answer_needs_a_protocol_v1_or_v2_session():
+    conn = _connection(_ready('s', version=protocol.ProtocolVersion.V3))
+    with pytest.raises(RuntimeError, match='protocol v1 or v2'):
         InferenceSession(conn).send_message({'row': 1})
     conn.send.assert_not_called()
 
@@ -1308,13 +1322,21 @@ def _frame_index(image: np.ndarray) -> int:
     return round(float(image.mean()) / 10)
 
 
-def _run_v1(meta: dict, ticks: int, *, frame_stream: str | None, replies: list | None = None) -> MagicMock:
+def _run_v1(
+    meta: dict,
+    ticks: int,
+    *,
+    frame_stream: str | None,
+    replies: list | None = None,
+    version: protocol.ProtocolVersion = protocol.ProtocolVersion.V1,
+) -> MagicMock:
     """Run a ``RemotePolicy`` on a mocked protocol v1 session, one tick every 0.1 s, and return the session.
 
-    Each reply is a chunk or an exception; without ``replies`` every call answers a chunk of 5 rows.
+    Each reply is a chunk or an exception; without ``replies`` every call answers a chunk of 5 rows. ``version``
+    is the session's protocol version.
     """
     policy, session = _mock_remote_policy(meta, frame_stream=frame_stream)
-    session.protocol_version = protocol.ProtocolVersion.V1
+    session.protocol_version = version
     pending = list(replies or [])
     tick_ended = threading.Event()
 
@@ -1373,6 +1395,25 @@ def test_a_frame_stream_sends_the_rows_of_the_next_request_and_the_request_refer
     assert (second[REF], second[b'call'], second[b'rows']) == (True, 1, [2, 1])
     (tail,) = serialization.deserialise(serialization.serialise(second[b'tail']))
     assert _frame_index(tail) == stacked[-1]
+
+
+def test_a_protocol_v2_session_streams_the_rows_as_a_v1_session_does():
+    v1 = _run_v1(_stream_meta(), 8, frame_stream='jpeg')
+    temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
+    # A protocol v2 stack names its versions and declares its schedule.
+    meta = _stream_meta(ChunkedSchedule(fps=10.0).to_spec())
+    meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
+    v2 = _run_v1(meta, 8, frame_stream='jpeg', version=protocol.ProtocolVersion.V2)
+
+    def rows(session: MagicMock) -> list[dict]:
+        return [
+            {k: v for k, v in call.args[0][ROW].items() if k != 't_ns'} for call in session.send_message.call_args_list
+        ]
+
+    assert [(row['call'], row['back']) for row in rows(v2)] == [(1, 2), (1, 1)]
+    assert rows(v2) == rows(v1)
+    second = v2.infer.call_args_list[1].args[0]['image']
+    assert (second[REF], second[b'call'], second[b'rows']) == (True, 1, [2, 1])
 
 
 def test_a_frame_miss_sends_the_request_again_in_full(caplog):
