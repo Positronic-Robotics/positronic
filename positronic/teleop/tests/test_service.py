@@ -5,7 +5,8 @@ import socket
 import threading
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
@@ -43,7 +44,7 @@ from positronic.teleop import command, protocol
 from positronic.teleop import service as service_module
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import ButtonMap, Event, Phase, ReadyAnswer, TeleopModel, TeleopService
-from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
+from positronic.tests.testing_coutils import ManualCommandReceiver, MutableShouldStop, RecordingEmitter
 from positronic.utils import package_assets_path
 
 HAND = geom.Transform3D(np.array([0.1, 0.2, 1.0]), geom.Rotation.identity)
@@ -742,6 +743,125 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
     next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     [(_, state)] = sent.emitted
     assert state == {'phase': Phase.IDLE, 'control': False}
+
+
+class _RecordingNotice:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def show(self, text: str) -> None:
+        self.calls.append(f'show {text}')
+
+    def hide(self) -> None:
+        self.calls.append('hide')
+
+
+def _ready_notice_after(phases: list[Phase]) -> tuple[_RecordingNotice, MutableShouldStop, Generator]:
+    """A ready notice that has read ``phases``, its stop flag and its loop."""
+    notice = _RecordingNotice()
+    ready_notice = command._ReadyNotice(notice, 'Press Ready')
+    states = ManualCommandReceiver[dict]()
+    ready_notice.page_state._bind(states)
+    stop = MutableShouldStop()
+    loop = cast(Generator, ready_notice.run(cast(pimm.SignalReceiver, stop), SystemClock()))
+    for phase in phases:
+        states.push(asdict(command.PageState(phase, control=False)))
+        next(loop)
+    return notice, stop, loop
+
+
+def test_the_notice_shows_while_a_trial_waits_for_ready():
+    phases = [Phase.IDLE, Phase.READY_WAIT, Phase.READY_WAIT, Phase.RUNNING, Phase.ENDED, Phase.IDLE, Phase.READY_WAIT]
+    notice, _, _ = _ready_notice_after([*phases, Phase.IDLE])
+    assert notice.calls == ['show Press Ready', 'hide', 'show Press Ready', 'hide']
+
+
+def test_a_service_that_stops_in_the_ready_wait_hides_the_notice():
+    notice, stop, loop = _ready_notice_after([Phase.READY_WAIT])
+    stop.set(True)
+    next(loop, None)
+    assert notice.calls == ['show Press Ready', 'hide']
+
+
+def test_a_world_that_closes_the_loop_in_the_ready_wait_hides_the_notice():
+    notice, _, loop = _ready_notice_after([Phase.READY_WAIT])
+    loop.close()
+    assert notice.calls == ['show Press Ready', 'hide']
+
+
+MACOS_DIALOG = ['osascript', '-e', 'display alert "Teleoperation trial" message "Press \\"Ready\\""']
+LINUX_DIALOG = ['zenity', '--info', '--no-markup', '--width=700', '--title=Teleoperation trial', '--text=Press "Ready"']
+LINUX_SOUND = ['paplay', '/sounds/ready.wav']
+
+
+class _Process:
+    def __init__(self, command: list[str], started: list[list[str]]):
+        started.append(command)
+        self.command = command
+        self.terminated = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+
+@pytest.mark.parametrize(
+    'platform, commands',
+    [('darwin', [['afplay', '/sounds/ready.wav'], MACOS_DIALOG]), ('linux', [LINUX_DIALOG, LINUX_SOUND])],
+    ids=['macos', 'linux'],
+)
+def test_the_desktop_notice_runs_the_notice_commands_of_the_platform(monkeypatch, platform, commands):
+    started: list[list[str]] = []
+    monkeypatch.setattr(command.sys, 'platform', platform)
+    monkeypatch.setattr(command.subprocess, 'Popen', lambda argv, env: _Process(argv, started))
+    command.DesktopNotice(sound='/sounds/ready.wav').show('Press "Ready"')
+    assert started == commands
+
+
+@pytest.mark.parametrize('platform, dialog', [('darwin', 'osascript'), ('linux', 'zenity')], ids=['macos', 'linux'])
+def test_hide_closes_the_dialog(monkeypatch, platform, dialog):
+    processes: list[_Process] = []
+
+    def start(argv: list[str], env: dict[str, str] | None) -> _Process:
+        processes.append(_Process(argv, []))
+        return processes[-1]
+
+    monkeypatch.setattr(command.sys, 'platform', platform)
+    monkeypatch.setattr(command.subprocess, 'Popen', start)
+    notice = command.DesktopNotice()
+    notice.show('Press Ready')
+    notice.hide()
+    assert [process.command[0] for process in processes if process.terminated] == [dialog]
+
+
+def test_the_linux_dialog_starts_with_no_session_bus_and_no_accessibility_bus(monkeypatch):
+    envs: dict[str, dict[str, str] | None] = {}
+
+    def start(argv: list[str], env: dict[str, str] | None) -> _Process:
+        envs[argv[0]] = env
+        return _Process(argv, [])
+
+    monkeypatch.setattr(command.sys, 'platform', 'linux')
+    monkeypatch.setattr(command.subprocess, 'Popen', start)
+    command.DesktopNotice().show('Press Ready')
+    zenity_env = envs['zenity']
+    assert zenity_env is not None
+    assert (zenity_env['DBUS_SESSION_BUS_ADDRESS'], zenity_env['NO_AT_BRIDGE']) == ('disabled:', '1')
+    assert envs['paplay'] is None
+
+
+def test_a_notice_program_that_is_missing_is_logged_and_the_next_one_runs(monkeypatch, caplog):
+    started: list[list[str]] = []
+
+    def start(argv: list[str], env: dict[str, str] | None) -> _Process:
+        if argv[0] == 'zenity':
+            raise FileNotFoundError(argv[0])
+        return _Process(argv, started)
+
+    monkeypatch.setattr(command.sys, 'platform', 'linux')
+    monkeypatch.setattr(command.subprocess, 'Popen', start)
+    command.DesktopNotice().show('Press Ready')
+    assert [argv[0] for argv in started] == ['paplay']
+    assert 'Cannot show the notice with zenity' in caplog.text
 
 
 @pytest.mark.parametrize('ending', ['give_up', 'time_limit'])
