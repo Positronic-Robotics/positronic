@@ -83,9 +83,35 @@ history. If inference reports a missing reference, it retries once with the same
 in full. Other failures propagate. These keys are reserved request/result fields for deployments
 using this contract; they are not model inputs.
 
-Configure the client with [`Prefetch`](../policy/DESIGN.md#prefetching-selected-history) around a
-`ChunkedSchedule` that publishes its deadline. The stock lightweight `ModelServer` does not implement
-this cache contract; a backend using it must supply its own handler.
+The stock lightweight `ModelServer` does not implement this cache contract; a backend using it must
+supply its own handler.
+
+#### Prefetching selected history
+
+`Prefetch` wraps `ChunkedSchedule` and uploads selected historical samples before its next inference.
+Configure it in the deployment's client stack:
+
+```python
+from positronic.policy.keys import NEXT_INFERENCE_NS
+from positronic.policy.processors import ChunkedSchedule, Prefetch
+
+local = Prefetch(
+    ChunkedSchedule(fps=10, timing_key=NEXT_INFERENCE_NS),
+    fields=('camera',),
+    offsets_sec=(-0.4, -0.3, -0.2, -0.1, 0.0),
+    lead_sec=0.25,
+)
+```
+
+For inference planned at 1.0 s, this uploads samples for 0.6 and 0.7 s at 0.75 s. Inference sends
+the returned IDs plus the remaining frames, sampled relative to its actual start time. Each target
+selects the latest available frame at or before it. Only configured samples are uploaded.
+The first inference sends its history directly.
+
+The scheduler publishes its deadline in `Step.outputs`. Pending uploads defer inference while action
+playback and history collection continue. A changed deadline or an anchor more than `max_lateness_sec`
+old (default 1 s) uses fresh history. Put codecs outside `Prefetch` or on the server so cache calls
+reach the handler unchanged. Closing the run cancels queued uploads.
 
 ### Authentication
 
