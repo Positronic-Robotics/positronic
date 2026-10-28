@@ -190,8 +190,9 @@ This metadata tells the client:
   frames of the next request while the robot executes the current chunk. The request then refers to
   them, and the server can start its work before the request arrives. Without a request from the
   client and a declaration from the server, requests go in full. `positronic/offboard/frame_stream.py`
-  describes the messages. A server may implement its side without positronic, so that description is
-  the protocol.
+  describes the messages. `PolicyServer` declares the stream for a deployment whose client compresses
+  images and stacks frames with a `TemporalStack`, and resolves each request's rows (`StreamedRows`).
+  A server may implement its side without positronic, so that description is the protocol.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### Compatibility and deprecation

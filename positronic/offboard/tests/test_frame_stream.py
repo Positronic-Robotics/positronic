@@ -9,10 +9,21 @@ import av
 import numpy as np
 import pytest
 from positronic_model_server import serialization
+from positronic_model_server.serialization import encode_jpeg
 
 from positronic import keys
 from positronic.offboard import protocol as legacy_protocol
-from positronic.offboard.frame_stream import H264_FRAME, REF, ROW, FrameCodec, FrameStreamer, declared_codecs
+from positronic.offboard.frame_stream import (
+    H264_FRAME,
+    REF,
+    ROW,
+    FrameCodec,
+    FrameStreamer,
+    RowsMissing,
+    StreamedRows,
+    _VideoEncoder,
+    declared_codecs,
+)
 from positronic.policy.codecs import ResizeMode, TransformImages
 from positronic.policy.processors import ConstantDuration, DelayEstimate
 
@@ -281,3 +292,106 @@ def test_an_answer_whose_next_request_is_due_at_once_plans_no_rows():
         streamer.flush()
         assert sent == []
         assert streamer.request({KEY: np.stack([_frame(9), _frame(10), _frame(12)])})[KEY][b'rows'] == []
+
+
+def _wire(message: Any) -> Any:
+    """``message`` as the server reads it: serialised, then deserialised with its JPEG frames decoded."""
+    return legacy_protocol.deserialise(legacy_protocol.serialise(message))
+
+
+def _row(call: int, back: int, image: Any) -> dict[str, Any]:
+    return _wire({ROW: {'call': call, 'back': back, 't_ns': 0, 'images': {KEY: image}}})[ROW]
+
+
+def _gradient(index: int) -> np.ndarray:
+    """A smooth 16 x 24 frame that H.264 keeps close."""
+    ramp = np.add.outer(np.arange(16), np.arange(24)).astype(np.uint8) * 4
+    return np.repeat(ramp[..., None], 3, axis=2) + np.uint8(10 * index)
+
+
+def test_a_server_builds_a_stack_from_the_streamed_rows_and_the_tail():
+    rows = StreamedRows()
+    frames = [_gradient(i) for i in range(3)]
+    for back, frame in ((2, frames[0]), (1, frames[1])):
+        rows.add(_row(1, back, encode_jpeg(frame)))
+    request = _wire({KEY: {REF: True, b'call': 1, b'rows': [2, 1], b'tail': encode_jpeg(frames[2][None])}, 'task': 'x'})
+    resolved = rows.resolve(request)
+    full = _wire({KEY: encode_jpeg(np.stack(frames)), 'task': 'x'})
+    assert resolved.keys() == full.keys() and resolved['task'] == 'x'
+    np.testing.assert_array_equal(resolved[KEY], full[KEY])
+
+
+def test_a_server_answers_the_rows_it_does_not_have():
+    rows = StreamedRows()
+    rows.add(_row(1, 2, encode_jpeg(_gradient(0))))
+    request = _wire({KEY: {REF: True, b'call': 1, b'rows': [2, 1], b'tail': encode_jpeg(_gradient(2)[None])}})
+    with pytest.raises(RowsMissing) as raised:
+        rows.resolve(request)
+    assert raised.value.missing == [[KEY, 1]]
+
+
+def test_a_row_of_a_newer_call_drops_the_rows_of_the_older_ones():
+    rows = StreamedRows()
+    rows.add(_row(1, 2, encode_jpeg(_gradient(0))))
+    rows.add(_row(2, 1, encode_jpeg(_gradient(1))))
+    rows.add(_row(1, 1, encode_jpeg(_gradient(1))))  # a row of an answered call
+    tail = encode_jpeg(_gradient(2)[None])
+    with pytest.raises(RowsMissing) as raised:
+        rows.resolve(_wire({KEY: {REF: True, b'call': 1, b'rows': [2], b'tail': tail}}))
+    assert raised.value.missing == [[KEY, 2]]
+    assert rows.resolve(_wire({KEY: {REF: True, b'call': 2, b'rows': [1], b'tail': tail}}))[KEY].shape == (2, 16, 24, 3)
+
+
+def test_a_server_decodes_each_h264_unit_in_order_also_the_tail_of_a_request_it_misses():
+    encoder = _VideoEncoder(24, 16, crf=18, fps=10.0)
+    frames = [_gradient(i) for i in range(6)]
+    rows = StreamedRows()
+    rows.add(_row(1, 2, encoder.encode(frames[0])))
+    rows.add(_row(1, 1, encoder.encode(frames[1])))
+    missed = _wire({KEY: {REF: True, b'call': 1, b'rows': [2, 1, 3], b'tail': encoder.encode(frames[2])}})
+    with pytest.raises(RowsMissing):
+        rows.resolve(missed)
+    rows.add(_row(2, 2, encoder.encode(frames[3])))
+    rows.add(_row(2, 1, encoder.encode(frames[4])))
+    request = _wire({KEY: {REF: True, b'call': 2, b'rows': [2, 1], b'tail': encoder.encode(frames[5])}})
+    np.testing.assert_allclose(rows.resolve(request)[KEY], np.stack(frames[3:]), atol=6)
+
+
+def test_a_server_decodes_an_h264_frame_of_odd_sides_to_its_declared_shape():
+    encoder = _VideoEncoder(23, 15, crf=18, fps=10.0)
+    rows = StreamedRows()
+    rows.add(_row(1, 1, encoder.encode(_gradient(0)[:15, :23])))
+    request = _wire({KEY: {REF: True, b'call': 1, b'rows': [1], b'tail': encoder.encode(_gradient(1)[:15, :23])}})
+    assert rows.resolve(request)[KEY].shape == (2, 15, 23, 3)
+
+
+@pytest.mark.parametrize(
+    'row, match',
+    [
+        ({'call': 1, 'back': 0, 'images': {}}, 'frames back'),
+        ({'call': 1, 'back': StreamedRows.MAX_BACK + 1, 'images': {}}, 'frames back'),
+        ({'call': 1, 'back': 1, 'images': {str(i): None for i in range(StreamedRows.MAX_IMAGES + 1)}}, 'images'),
+        ({'call': 1, 'back': 1, 'images': {KEY: 'pixels'}}, 'JPEG frame or an H.264 unit'),
+        ({'call': 1, 'back': 1, 'images': {KEY: {H264_FRAME: True, b'data': b'', b'shape': [0, 4, 3]}}}, 'outside'),
+    ],
+)
+def test_a_server_refuses_a_malformed_row(row, match):
+    with pytest.raises(ValueError, match=match):
+        StreamedRows().add(row)
+
+
+def test_a_stack_that_refers_to_a_row_twice_is_refused():
+    rows = StreamedRows()
+    rows.add(_row(1, 1, encode_jpeg(_gradient(0))))
+    with pytest.raises(ValueError, match='once'):
+        rows.resolve(_wire({KEY: {REF: True, b'call': 1, b'rows': [1, 1], b'tail': encode_jpeg(_gradient(1)[None])}}))
+
+
+def test_a_row_past_the_held_bytes_is_dropped_and_its_request_misses_it(monkeypatch):
+    monkeypatch.setattr(StreamedRows, 'MAX_HELD_BYTES', _gradient(0).nbytes)
+    rows = StreamedRows()
+    rows.add(_row(1, 2, encode_jpeg(_gradient(0))))
+    rows.add(_row(1, 1, encode_jpeg(_gradient(1))))
+    with pytest.raises(RowsMissing) as raised:
+        rows.resolve(_wire({KEY: {REF: True, b'call': 1, b'rows': [2, 1], b'tail': encode_jpeg(_gradient(2)[None])}}))
+    assert raised.value.missing == [[KEY, 1]]

@@ -49,10 +49,10 @@ from positronic.offboard.client import (
     InferenceClient,
     InferenceSession,
 )
-from positronic.offboard.frame_stream import REF, ROW
+from positronic.offboard.frame_stream import FRAME_STREAM, REF, ROW, StreamedRows
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Obs, PolicyEnd, Step
+from positronic.policy.base import Obs, Policy, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, ResizeMode, TransformImages
 from positronic.policy.codecs.image import ResizeCache
 from positronic.policy.executor import Executor, WaitStatus
@@ -1507,6 +1507,90 @@ def test_a_frame_stream_needs_a_declared_temporal_stack(runtime):
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()
+
+
+def _streamed_stack(*parts: Policy | Codec) -> Sequential:
+    """A client stack that stacks ``image`` at 0.1 s ticks for a frame stream."""
+    return Sequential(TemporalStack(('image',), (-0.25, -0.15, 0.0)), *parts)
+
+
+@pytest.mark.parametrize(
+    'local, compress_images, declared',
+    [
+        pytest.param(_streamed_stack(ChunkedSchedule(fps=10)), True, True, id='a-temporal-stack'),
+        pytest.param(_streamed_stack(ChunkedSchedule(fps=10)), False, False, id='raw-images'),
+        pytest.param(ChunkedSchedule(fps=10), True, False, id='no-temporal-stack'),
+    ],
+)
+def test_a_server_declares_a_frame_stream_for_a_client_that_stacks_compressed_frames(
+    start_server, local, compress_images, declared
+):
+    server = start_server(FixedModel(), PolicyDeployment(local, compress_images=compress_images))
+    session = InferenceClient(*server.ws()).new_session()
+    try:
+        assert (FRAME_STREAM in session.metadata) is declared
+        if declared:
+            assert session.metadata[FRAME_STREAM] == {'version': 1, 'codecs': ['jpeg', 'h264']}
+    finally:
+        session.close()
+
+
+def _gradient_frame(index: int) -> np.ndarray:
+    """A smooth 32 x 48 frame that changes every tick, which JPEG and H.264 both keep close."""
+    ramp = np.add.outer(np.arange(32), np.arange(48)).astype(np.uint8) * 2
+    return np.repeat(ramp[..., None], 3, axis=2) + np.uint8(5 * index)
+
+
+def _served_run(address: wire.HostPortAddress, frame_stream: str | None, ticks: int) -> None:
+    """Run a ``RemotePolicy`` on a served session, one tick every 0.1 s; each answer lands before the next tick."""
+    policy = RemotePolicy('websocket', address, frame_stream=frame_stream)
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    run = runtime.start(policy)
+    try:
+        for index in range(ticks):
+            now[0] = index * 100_000_000
+            run.send({'image': _gradient_frame(index)})
+            runtime.wait(timeout_sec=5)
+    finally:
+        runtime.close()
+        run.close()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize('frame_stream, atol', [('jpeg', 0), ('h264', 12)])
+def test_a_served_frame_stream_gives_the_model_the_observations_of_full_requests(
+    served, monkeypatch, frame_stream, atol
+):
+    resolved: list[list[int]] = []
+    resolve, add = StreamedRows.resolve, StreamedRows.add
+
+    def recording_resolve(rows, obs):
+        resolved.append([len(value[b'rows']) for value in obs.values() if isinstance(value, Mapping) and REF in value])
+        return resolve(rows, obs)
+
+    def dropping_add(rows, row):
+        add(rows, row)
+        if row['call'] == 2:
+            rows._rows.pop(row['back'], None)  # the server lost the rows of call 2: that request misses them
+
+    monkeypatch.setattr(StreamedRows, 'resolve', recording_resolve)
+    monkeypatch.setattr(StreamedRows, 'add', dropping_add)
+    local = _streamed_stack(ChunkedSchedule(fps=10), TransformImages(24, 16, mode=ResizeMode.BOUND))
+    observed = {}
+    for stream in (None, frame_stream):
+        resolved.clear()
+        address, model, _ = served(local=local)
+        _served_run(address, stream, 22)
+        observed[stream] = [obs['image'] for obs in model.observations]
+
+    full, streamed = observed[None], observed[frame_stream]
+    assert len(full) == len(streamed) == 5
+    for expected, got in zip(full, streamed, strict=True):
+        assert got.shape == expected.shape == (3, 16, 24, 3)
+        np.testing.assert_allclose(got, expected, atol=atol)
+    # Calls 1, 3 and 4 refer to both rows; call 2 misses them and goes again in full.
+    assert resolved == [[], [2], [2], [], [2], [2]]
 
 
 def test_an_answer_reports_its_result_once_at_its_first_read(runtime):
