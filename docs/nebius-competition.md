@@ -16,7 +16,8 @@ Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
   gives values for each example image. Some images also need a GPU.
   - No such machine? [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) creates one with one
     command. Sign up for Nebius Builder with the email address of the account that you register with.
-    Nebius also has the GPUs to train your policy.
+    Nebius also has the GPUs to train your policy:
+    [Fine-tune GR00T on demonstrations](#fine-tune-gr00t-on-demonstrations) shows how.
   - A Mac with Apple silicon, or another ARM machine, can build and submit the image: the build command
     names `--platform linux/amd64`. Docker emulates amd64 there, so the build is slower. The local test
     does not run there, because the model does not load in the time limit, and the test script stops at
@@ -397,6 +398,115 @@ bash positronic/docker/nebius_vm.sh delete
 - `nebius compute platform list` shows the VM types and presets in your region.
 - If Nebius refuses the VM because of a [quota](https://docs.nebius.com/overview/quotas), ask Nebius
   for a larger quota.
+
+## Fine-tune GR00T on demonstrations
+
+These steps fine-tune the GR00T N1.7 DROID example on MolmoSpaces demonstrations, and put the checkpoint into
+a policy image. A person records the demonstrations with a phone or a Meta Quest.
+
+You need two machines, or one machine that does both:
+
+- Any machine with uv and the positronic source converts the demonstrations.
+- A machine with a GPU trains the model. At the default batch of 64, training needs about 50 GB of GPU
+  memory, so an H100 with 80 GB has enough. An L40S with 48 GB does not have enough. On Nebius, make the VM of
+  [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) with an H100 and a disk of 400 GB:
+
+  ```bash
+  NEBIUS_PLATFORM=gpu-h100-sxm NEBIUS_PRESET=1gpu-16vcpu-200gb NEBIUS_DISK_GIB=400 \
+    bash positronic/docker/nebius_vm.sh create
+  ```
+
+### 1. Get the demonstrations
+
+Use the 10 example demonstrations, `@positronic.cfg.ds.sim.molmo_pick_demos`. They are public, and the convert
+step downloads them. They are an example of the steps only: do not expect a dataset of this size to improve the
+policy.
+
+Or record your own. The
+[teleoperation guide](https://github.com/Positronic-Robotics/positronic/blob/main/positronic/teleop/README.md#collect-demonstrations-in-molmospaces)
+gives the commands.
+
+If you have ideas about how to get demonstrations for a fine-tune, please share them on the
+[Positronic Discord](https://discord.gg/PXvBy4NBgv). We are grateful for each one.
+
+### 2. Convert the demonstrations
+
+In the positronic source, convert the demonstrations into the training format of GR00T:
+
+```bash
+uv run --extra lerobot_0_3_3 python -m positronic.vendors.lerobot_0_3_3.to_lerobot convert \
+  --dataset=@positronic.cfg.ds.transform \
+  --dataset.base=@positronic.cfg.ds.sim.molmo_pick_demos \
+  '--dataset.transforms=["@positronic.vendors.gr00t.recipes.droid_molmo"]' \
+  --output_dir=$HOME/groot-data/datasets/molmo_pick_demos
+```
+
+- `droid_molmo` trains on the wrist camera and one shoulder camera, as the example image serves.
+- For your own recordings, set `--dataset.base=@positronic.cfg.ds.local_all` and
+  `--dataset.base.path=<the directory of your recordings>`. It reads every recording under that directory.
+- The convert step takes every episode. Delete the episodes that failed first, or the model learns them too.
+- Copy `$HOME/groot-data` to the GPU machine if the convert step ran on another machine.
+
+### 3. Train
+
+On the GPU machine, copy the weights of GR00T N1.7 DROID and of its gated backbone out of the example image,
+into the cache that training reads. Then training needs no Hugging Face token:
+
+```bash
+mkdir -p ~/.cache/huggingface
+cid=$(docker create positro/gr00t-n17-droid:latest)
+docker cp "$cid":/opt/hf/. ~/.cache/huggingface/
+docker rm "$cid"
+```
+
+In the `docker` directory of the positronic source, train:
+
+```bash
+docker compose run --rm -v "$HOME/groot-data:/data" \
+  -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e GROOT_PATCH_MISTRAL=1 -e WANDB_MODE=offline groot-train \
+  --input_path=/data/datasets/molmo_pick_demos --output_path=/data/checkpoints --exp_name=molmo_pick_demos \
+  --learning_rate=2e-5 --num_train_steps=2000 --save_steps=1000
+```
+
+- Before the first step, training loads the dataset and computes its statistics.
+- The step count and the learning rate are example values.
+- Training keeps the normalization statistics of the base checkpoint. The log shows `new stats DISCARDED`.
+- Each checkpoint is about 24 GB, and it goes to `$HOME/groot-data/checkpoints/molmo_pick_demos/checkpoint-<step>`.
+
+### 4. Build the image
+
+Delete the optimizer state from the checkpoint, because the server does not read it. It is about 12 GB. Then
+build the image from the example image:
+
+```bash
+cd $HOME/groot-data/checkpoints/molmo_pick_demos
+rm checkpoint-2000/optimizer.pt checkpoint-2000/scheduler.pt checkpoint-2000/rng_state.pth
+cat > Dockerfile <<'DOCKERFILE'
+FROM positro/gr00t-n17-droid:latest
+COPY checkpoint-2000 /opt/checkpoint
+ENV GROOT_MODEL_SOURCE=/opt/checkpoint
+DOCKERFILE
+docker login
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+  -t docker.io/<you>/<image>:v1 --push .
+```
+
+The example image serves the cameras of `droid_molmo`, so the image needs no other command.
+
+### 5. Test, score and submit
+
+- Go back to the positronic source, and test the image with the GPU, as [Test the image](#test-the-image)
+  says:
+
+  ```bash
+  cd <the positronic source>
+  bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
+  ```
+
+- Score it on your machine before you submit, as
+  [Score a policy on MolmoSpaces on your machine](https://github.com/Positronic-Robotics/positronic/blob/main/docs/local-molmospaces-eval.md)
+  says. Compare the score with the score of `positro/gr00t-n17-droid`.
+- Then [submit](#submit) the image.
 
 ## Submissions per day
 
