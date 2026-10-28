@@ -497,8 +497,14 @@ The example image serves the cameras of `droid_molmo`, so the image needs no oth
 
 ### 5. Test, score and submit
 
-- Test the image with the GPU, as [Test the image](#test-the-image) says:
-  `bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1`.
+- Go back to the positronic source, and test the image with the GPU, as [Test the image](#test-the-image)
+  says:
+
+  ```bash
+  cd <the positronic source>
+  bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
+  ```
+
 - Score it on your machine before you submit, as
   [Score a policy on MolmoSpaces on your machine](https://github.com/Positronic-Robotics/positronic/blob/main/docs/local-molmospaces-eval.md)
   says. Compare the score with the score of `positro/gr00t-n17-droid`.
