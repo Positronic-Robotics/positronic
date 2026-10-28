@@ -467,6 +467,40 @@ def test_robot_state_serializer_records_a_busy_arm_beside_its_pose(world):
         np.testing.assert_allclose(by_name[name][0], value)
 
 
+def _record_robot_states(world, *states: FakeRobotState) -> dict[str, list[Any]]:
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({keys.ROBOT_STATE: Serializers.robot_state}, ds, world)
+    script = [
+        (lambda: cmd_em.emit(DsWriterCommand.START(OUTPUT_PATH)), 0.001),
+        *((partial(emitters[keys.ROBOT_STATE].emit, state), 0.001) for state in states),
+        (lambda: cmd_em.emit(DsWriterCommand.STOP()), 0.001),
+    ]
+    run_scripted_agent(agent, script, world=world)
+    by_name: dict[str, list[Any]] = {}
+    for name, val, _ in ds.created[-1].appends:
+        by_name.setdefault(name, []).append(val)
+    return by_name
+
+
+def test_robot_state_serializer_records_the_wrench_of_an_arm_that_measures_it(world):
+    wrench = np.array([1.0, -2.0, 3.0, 0.1, -0.2, 0.3], dtype=np.float32)
+    pose = geom.Transform3D(translation=np.zeros(3), rotation=geom.Rotation.identity)
+    state = FakeRobotState(np.zeros(7), np.zeros(7), pose, RobotStatus.AVAILABLE, ee_wrench=wrench)
+
+    by_name = _record_robot_states(world, state)
+
+    assert len(by_name[keys.EE_WRENCH]) == 1
+    np.testing.assert_allclose(by_name[keys.EE_WRENCH][0], wrench)
+
+
+def test_robot_state_serializer_records_no_wrench_for_an_arm_that_measures_none(world):
+    pose = geom.Transform3D(translation=np.zeros(3), rotation=geom.Rotation.identity)
+
+    by_name = _record_robot_states(world, FakeRobotState(np.zeros(7), np.zeros(7), pose, RobotStatus.AVAILABLE))
+
+    assert set(by_name) == {keys.ROBOT_STATUS, keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE}
+
+
 def test_robot_command_serializer_variants(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'cmd': Serializers.robot_command}, ds, world)

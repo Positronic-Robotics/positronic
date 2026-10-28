@@ -1860,8 +1860,13 @@ def test_cartesian_delta_applies_in_world_frame():
 def test_robot_state_serializer_emits_the_status_beside_the_pose(status):
     state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=status)
     serialized = Serializers.robot_state(state)
-    assert set(serialized) == {'.status', '.q', '.dq', '.ee_pose'}
-    assert serialized['.status'] is status
+    assert {suffix for suffix, value in serialized.items() if value is not None} == {
+        keys.STATUS_SUFFIX,
+        keys.JOINTS_SUFFIX,
+        keys.JOINT_VEL_SUFFIX,
+        keys.EE_POSE_SUFFIX,
+    }
+    assert serialized[keys.STATUS_SUFFIX] is status
 
 
 def run_robot_rollout(policy, static_meta=None, robot_meta=None, *, ticks=1, commands=None, sensors=None, state=None):
