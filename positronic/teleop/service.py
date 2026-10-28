@@ -29,10 +29,17 @@ from positronic_model_server.server_wire import ServedAddress
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
 
 from positronic import geom, keys
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.offboard.client import DEFAULT_RECONNECT_DEADLINE
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
-from positronic.policy.codecs import AbsolutePositionAction, EncodeImages, EndCommand, StateObservationCodec
+from positronic.policy.codecs import (
+    AbsolutePositionAction,
+    ChangeEEFrame,
+    EncodeImages,
+    EndCommand,
+    StateObservationCodec,
+)
 from positronic.policy.codecs.image import image_observation
 from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.keys import END
@@ -548,8 +555,8 @@ class TeleopModel(Model):
 
     @classmethod
     def client_stack(cls, settings: SessionParams) -> dict[str, Any]:
-        """The client stack of a session: one frame for each call, the state and the images of the robot, the target as
-        a command, and the end of the trial."""
+        """The client stack of a session: one frame for each call, the state and the images of the robot at
+        ``GRIPPER_SITE``, the target as a command, and the end of the trial."""
         # TODO: A sim run that does not charge inference time holds its clock during each call, so a person cannot
         #  control it. Refuse such a run.
         schedule = ChunkedSchedule(
@@ -559,7 +566,9 @@ class TeleopModel(Model):
             image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
         )
         action = AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP)
-        codec = (observation & action & EndCommand()) | EncodeImages(quality=settings.jpeg_quality)
+        # A client stack that states no frame gets no pose.
+        frame = ChangeEEFrame(EEFrame(site=GRIPPER_SITE))
+        codec = frame | (observation & action & EndCommand()) | EncodeImages(quality=settings.jpeg_quality)
         return spec.sequence(EndOnField().to_spec(), schedule.to_spec(), codec.to_spec())
 
     def prepare_session(self, params: dict[str, Any]) -> TeleopSession:
