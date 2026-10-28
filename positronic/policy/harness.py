@@ -201,44 +201,6 @@ class Harness(pimm.ControlSystem):
     def _statics(self) -> dict[str, Any]:
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
 
-    @staticmethod
-    def _policy_frames(policy: Policy, runtime: Executor) -> dict[str, EEFrame]:
-        """The frames that ``policy`` states. Call it after ``runtime.start(policy)``, before the first observation.
-
-        The policy states its frames as ``EE_FRAMES`` in ``meta()``, or its run writes them to ``runtime`` as it
-        starts, as a remote run does once its session opens. Raise when both state the frame of one pose signal.
-        """
-        stated, recorded = ee_frames(policy.meta()), ee_frames(runtime.metadata_snapshot())
-        if both := stated.keys() & recorded.keys():
-            raise ValueError(f'Only one component of the policy may state the {EE_FRAMES} of {sorted(both)}')
-        return stated | recorded
-
-    def _withheld_poses(self, declared: dict[str, EEFrame]) -> frozenset[str]:
-        """The rig's pose signals that a policy that states ``declared`` does not observe.
-
-        A policy observes only the poses it states. Raise when the policy states another site than the rig, or states
-        frames on a rig that states none, such as an arm with no model.
-        """
-        rig = ee_frames(self._statics())
-        if declared and not rig:
-            raise ValueError(
-                f'The rig states no {EE_FRAMES}, so it runs only a policy that speaks joints, and the policy states '
-                f'frames for {sorted(declared)}'
-            )
-        mismatched = {
-            name: (frame.site, rig[name].site)
-            for name, frame in declared.items()
-            if name in rig and frame.site != rig[name].site
-        }
-        if mismatched:
-            raise ValueError(
-                'The policy declares poses at a site the rig does not report them at, as {signal: (declared, rig)}: '
-                f'{mismatched}'
-            )
-        # The embodiment lists every pose its serializers write; an arm with no model states none of them.
-        poses = set(self._embodiment.static_meta.get(eval_keys.POSE_SIGNALS, ())) | rig.keys()
-        return frozenset(poses - (declared.keys() & rig.keys()))
-
     def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:
         task = rollout.task
         meta = self._statics()
@@ -526,6 +488,44 @@ class Harness(pimm.ControlSystem):
         if self._writer is not None:
             self._sample()
         return payload
+
+    @staticmethod
+    def _policy_frames(policy: Policy, runtime: Executor) -> dict[str, EEFrame]:
+        """The frames that ``policy`` states. Call it after ``runtime.start(policy)``, before the first observation.
+
+        The policy states its frames as ``EE_FRAMES`` in ``meta()``, or its run writes them to ``runtime`` as it
+        starts, as a remote run does once its session opens. Raise when both state the frame of one pose signal.
+        """
+        stated, recorded = ee_frames(policy.meta()), ee_frames(runtime.metadata_snapshot())
+        if both := stated.keys() & recorded.keys():
+            raise ValueError(f'Only one component of the policy may state the {EE_FRAMES} of {sorted(both)}')
+        return stated | recorded
+
+    def _withheld_poses(self, declared: dict[str, EEFrame]) -> frozenset[str]:
+        """The rig's pose signals that a policy that states ``declared`` does not observe.
+
+        A policy observes only the poses it states. Raise when the policy states another site than the rig, or states
+        frames on a rig that states none, such as an arm with no model.
+        """
+        rig = ee_frames(self._statics())
+        if declared and not rig:
+            raise ValueError(
+                f'The rig states no {EE_FRAMES}, so it runs only a policy that speaks joints, and the policy states '
+                f'frames for {sorted(declared)}'
+            )
+        mismatched = {
+            name: (frame.site, rig[name].site)
+            for name, frame in declared.items()
+            if name in rig and frame.site != rig[name].site
+        }
+        if mismatched:
+            raise ValueError(
+                'The policy declares poses at a site the rig does not report them at, as {signal: (declared, rig)}: '
+                f'{mismatched}'
+            )
+        # The embodiment lists every pose its serializers write; an arm with no model states none of them.
+        poses = set(self._embodiment.static_meta.get(eval_keys.POSE_SIGNALS, ())) | rig.keys()
+        return frozenset(poses - (declared.keys() & rig.keys()))
 
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
