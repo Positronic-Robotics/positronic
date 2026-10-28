@@ -1386,6 +1386,11 @@ def test_an_unknown_frame_stream_codec_is_refused():
         RemotePolicy('websocket', _address('localhost', 0), frame_stream='vp9')
 
 
+def test_a_negative_frame_stream_snap_is_refused():
+    with pytest.raises(ValueError, match='frame_stream_snap_sec'):
+        RemotePolicy('websocket', _address('localhost', 0), frame_stream='jpeg', frame_stream_snap_sec=-0.01)
+
+
 @pytest.mark.parametrize(
     'parts, ticks, streamed, stacked',
     [

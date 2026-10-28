@@ -189,9 +189,11 @@ This metadata tells the client:
   A client that asks for it with `RemotePolicy(frame_stream='jpeg')` (or `'h264'`) sends the history
   frames of the next request while the robot executes the current chunk (a `chunked_schedule`: at its
   end, less its inference lead; an `rtc_schedule`: `call_after_sec` after the current call). A declared
-  `encode_images` sets the JPEG quality of the rows and the requests. The request then refers to
-  them, and the server can start its work before the request arrives. Without a request from the
-  client and a declaration from the server, requests go in full. `positronic/offboard/frame_stream.py`
+  `encode_images` sets the JPEG quality of the rows and the requests. `frame_stream_snap_sec` lets a
+  request close to its predicted time refer to every streamed row (its history then lags the stack's
+  sampling by at most that time). The request then refers to them, and the server can start its work
+  before the request arrives. Without a request from the client and a declaration from the server,
+  requests go in full. `positronic/offboard/frame_stream.py`
   describes the messages. `PolicyServer` declares the stream for a deployment whose client compresses
   images and stacks frames with one `TemporalStack` that ends at the current frame, and resolves each
   request's rows (`StreamedRows`). A client goes in full for a declared stack whose rows the stream does

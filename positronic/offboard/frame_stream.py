@@ -40,6 +40,14 @@ wrong prediction costs bytes, but it never changes an observation.
 the first answer: its read time plus ``call_after_sec``, as the schedule counts the first chunk from its answer).
 It plans the rows when the schedule first reads the answer, since the server takes a call's rows only after it
 sent the answer before. An answer read after the predicted time plans no rows: the next call goes at once, in full.
+
+While a call is pending the harness polls every few milliseconds, so the ticks around a row's target are a few
+milliseconds apart and a little tick lateness moves the stack's pick to another camera frame than the streamer's.
+One such row makes the server's precompute miss. ``snap_sec`` trades that exactness for latency: a request whose call
+was submitted within ``snap_sec`` after the predicted time (the schedule's codecs may run before the request is built)
+refers to every streamed row of its call (a run from the stack's oldest history row, by shape, not by pixels). Its
+history rows are then the streamed frames: each row may be sampled up to ``snap_sec`` earlier than the stack would
+sample it. The default 0 keeps every observation exact.
 """
 
 import collections.abc as cabc
@@ -63,6 +71,9 @@ REF = b'__stream_rows__'
 H264_FRAME = b'__h264_frame__'
 # The handshake key.
 FRAME_STREAM = 'frame_stream'
+# A call this much before the predicted time still snaps: the streamer reads the clock a little after the
+# schedule's own read of it.
+SNAP_EARLY_SEC = 0.005
 
 
 class FrameCodec(Enum):
@@ -249,7 +260,8 @@ class FrameStreamer:
     sizes the frames as the declared stack does. ``fps`` and ``horizon_sec`` are those of the schedule, and
     ``lead`` gives its inference lead from the delay of an answer (``DurationEstimateRun.update``; None: no lead),
     and ``on_replan`` takes its replans.
-    ``call_after_sec`` is that of an ``RTCSchedule`` (None: a ``ChunkedSchedule``).
+    ``call_after_sec`` is that of an ``RTCSchedule`` (None: a ``ChunkedSchedule``). ``snap_sec`` (see the module
+    docstring) lets a request close to the predicted time refer to every streamed row.
     ``send`` puts one message on the session's connection, under the lock of the connection. ``clock`` is
     the episode clock in nanoseconds.
     """
@@ -270,6 +282,7 @@ class FrameStreamer:
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
         crf: int = 18,
         call_after_sec: float | None = None,
+        snap_sec: float = 0.0,
     ) -> None:
         if not offsets_sec or offsets_sec[-1] != 0.0:
             raise ValueError('A frame stream needs the current frame as the last stack offset')
@@ -288,6 +301,8 @@ class FrameStreamer:
         self._quality = jpeg_quality
         self._crf = crf
         self._call_after_sec = call_after_sec
+        self._snap_sec = snap_sec
+        self._t_pred: float | None = None
         self._ticks: deque[tuple[float, dict[str, np.ndarray]]] = deque()
         self._image_keys: tuple[str, ...] | None = None
         self.call = 0
@@ -300,7 +315,7 @@ class FrameStreamer:
         self._wake = threading.Event()
         self._closed = False
         self._rows_sent = self._rows_referred = self._frames_inline = 0
-        self._unplanned = self.frame_misses = 0
+        self._snapped = self._unplanned = self.frame_misses = 0
         threading.Thread(target=self._send_rows, name='FrameStreamer', daemon=True).start()
         threading.Thread(target=self._time_rows, name='FrameStreamerTimer', daemon=True).start()
 
@@ -341,6 +356,7 @@ class FrameStreamer:
             self.call += 1
             self._streamed = {}
             planned = t_next is not None and t_next > now
+            self._t_pred = t_next if planned else None
             if planned and t_next is not None:
                 self._targets = [(n - 1 - i, t_next + offset) for i, offset in enumerate(self._offsets[:-1])]
             else:
@@ -369,15 +385,25 @@ class FrameStreamer:
 
     def request(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
         """The observation of a request, with each image stack referring to the streamed rows it holds."""
-        self._dispatch_due(self._clock() / 1e9)
+        now = self._clock() / 1e9
+        self._dispatch_due(now)
+        # The stack sampled its frames at the submit; codecs on the worker may run before this request is built.
+        called = now if self._submitted_at is None else self._submitted_at
         with self._lock:
             self._targets = []  # a row that is not due yet is not in this request's stack
+            snap = (
+                self._snap_sec > 0
+                and self._t_pred is not None
+                and self._t_pred - SNAP_EARLY_SEC <= called <= self._t_pred + self._snap_sec
+            )
         self.flush()
         out = dict(obs)
         for key in self._image_keys or ():
             stack = obs.get(key)
             if isinstance(stack, np.ndarray) and stack.ndim == 4:
-                out[key] = self._refer(key, stack)
+                out[key] = self._refer(key, stack, snap)
+        if snap:
+            self._snapped += 1
         return out
 
     def flush(self) -> None:
@@ -392,11 +418,12 @@ class FrameStreamer:
         self._wake.set()
         self._queue.put(None)
         logger.info(
-            'Frame stream closed: %d rows sent, %d rows referred to, %d frames inline, '
+            'Frame stream closed: %d rows sent, %d rows referred to, %d frames inline, %d snapped requests, '
             '%d answers whose next request went in full at once, %d frame_miss answers',
             self._rows_sent,
             self._rows_referred,
             self._frames_inline,
+            self._snapped,
             self._unplanned,
             self.frame_misses,
         )
@@ -408,6 +435,7 @@ class FrameStreamer:
             'rows_sent': self._rows_sent,
             'rows_referred': self._rows_referred,
             'frames_inline': self._frames_inline,
+            'snapped': self._snapped,
             'unplanned': self._unplanned,
             'frame_misses': self.frame_misses,
         }
@@ -440,14 +468,17 @@ class FrameStreamer:
                 continue
             self._dispatch_due(self._clock() / 1e9)
 
-    def _refer(self, key: str, stack: np.ndarray) -> dict[bytes, Any]:
-        """The request value of one stack: its oldest rows that equal the streamed rows, then the other frames."""
+    def _refer(self, key: str, stack: np.ndarray, snap: bool = False) -> dict[bytes, Any]:
+        """The request value of one stack: its oldest rows that equal the streamed rows, then the other frames.
+
+        With ``snap`` a streamed row stands for the stack's row by shape alone (the module docstring).
+        """
         n = len(stack)
         rows: list[int] = []
         for j in range(n - 1):
             back = n - 1 - j
             row = self._streamed.get(back, {}).get(key)
-            if row is None or row.shape != stack[j].shape or not np.array_equal(row, stack[j]):
+            if row is None or row.shape != stack[j].shape or not (snap or np.array_equal(row, stack[j])):
                 break
             rows.append(back)
         if self._codec is FrameCodec.H264 and len(rows) == n - 1:

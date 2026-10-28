@@ -143,6 +143,8 @@ class RemotePolicy(Policy):
     quality of images sent to a server that asks for compressed images. ``frame_stream`` names the codec
     (``jpeg`` or ``h264``) of a frame stream (``positronic.offboard.frame_stream``), for a server that declares one
     for a temporal stack that the stream carries; otherwise requests go in full.
+    ``frame_stream_snap_sec`` lets a streamed request that comes within that many seconds after its predicted time
+    refer to every streamed row (``FrameStreamer``'s ``snap_sec``); 0 keeps every observation exact.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -160,11 +162,15 @@ class RemotePolicy(Policy):
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
         frame_stream: str | None = None,
+        frame_stream_snap_sec: float = 0.0,
     ):
         self._client = InferenceClient(
             registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout
         )
         self._frame_codec = None if frame_stream is None else FrameCodec(frame_stream)
+        if not frame_stream_snap_sec >= 0:
+            raise ValueError('frame_stream_snap_sec must not be negative')
+        self._frame_stream_snap_sec = frame_stream_snap_sec
         self._jpeg_quality = jpeg_quality
 
     def meta(self) -> dict[str, Any]:
@@ -387,6 +393,7 @@ class RemotePolicy(Policy):
             resize=partial(self._transform_row, transforms) if transforms else None,
             jpeg_quality=quality,
             call_after_sec=rtc[0].call_after_sec if len(rtc) == 1 else None,
+            snap_sec=self._frame_stream_snap_sec,
         )
         hooks.streamer = streamer
         return stack, streamer, quality
