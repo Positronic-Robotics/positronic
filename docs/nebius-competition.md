@@ -426,6 +426,9 @@ Or record your own. The
 [teleoperation guide](https://github.com/Positronic-Robotics/positronic/blob/main/positronic/teleop/README.md#collect-demonstrations-in-molmospaces)
 gives the commands.
 
+If you have ideas about how to get demonstrations for a fine-tune, please share them on the
+[Positronic Discord](https://discord.gg/PXvBy4NBgv). We are grateful for each one.
+
 ### 2. Convert the demonstrations
 
 In the positronic source, convert the demonstrations into the training format of GR00T:
