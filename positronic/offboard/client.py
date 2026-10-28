@@ -161,12 +161,13 @@ class InferenceSession:
         return self._max_in_flight
 
     def send_message(self, message: dict[str, Any]) -> None:
-        """Send one message that the server does not answer, such as a frame stream row, on a protocol v1 session.
+        """Send one message that the server does not answer, such as a frame stream row, on a protocol v1 or v2
+        session. The message goes as it is, without the v2 session envelope.
 
         The message goes between the sends of the session's calls, never inside one.
         """
-        if self._protocol is not protocol.ProtocolVersion.V1:
-            raise RuntimeError('A message without an answer needs a protocol v1 session')
+        if self._protocol not in (protocol.ProtocolVersion.V1, protocol.ProtocolVersion.V2):
+            raise RuntimeError('A message without an answer needs a protocol v1 or v2 session')
         serialised = serialise(message)
         with self._send_lock:
             if self._closed:
