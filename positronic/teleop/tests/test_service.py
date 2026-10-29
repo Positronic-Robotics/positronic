@@ -317,11 +317,12 @@ def test_with_no_operator_position_the_hand_pose_is_the_robot_pose_and_control_i
 
 
 def test_the_service_shows_the_camera_image_of_the_run(service, socket_path, runtime):
+    width, height = VIEW_SIZE
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
-        _drive(run, 0.2)
+        # The view is black until the first frame request brings the image.
+        _drive_until(run, lambda _: service.view()[height // 2, width // 2].any())
         view = service.view()
-        width, height = VIEW_SIZE
         assert view.shape == (height, width, 3)
         assert abs(int(view[height // 2, width // 2, 0]) - 128) < 10
         run.close()
