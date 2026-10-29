@@ -15,7 +15,6 @@ import positronic.cfg.embodiment as embodiment_cfg
 import positronic.cfg.hardware.roboarm as roboarm_cfg
 from pimm.tests.testing import MockClock, wire_call
 from positronic import geom, keys
-from positronic.cfg import video_encoder
 from positronic.cfg.eval.real import yam as yam_eval
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import RobotStatus, command
@@ -1738,9 +1737,7 @@ def _a_trial_after_a_closed_trial(rig: Embodiment, prepare_args: dict, sides: li
 
 
 def test_a_bimanual_trial_starts_with_both_grippers_open_after_a_trial_that_closed_them(chains):
-    rig = yam_eval.bimanual.override(
-        embodiment=embodiment_cfg.yam_bimanual.override(cameras={}, video_encoder=video_encoder.libx264_veryfast)
-    ).instantiate()
+    rig = yam_eval.bimanual.override(embodiment=embodiment_cfg.yam_bimanual.override(cameras={})).instantiate()
     (trial,) = rig.tasks()
 
     grips = _a_trial_after_a_closed_trial(rig.embodiment, trial.prepare_args, [f'.{s}' for s in keys.BIMANUAL_ARMS])
@@ -1752,7 +1749,7 @@ def test_a_bimanual_trial_starts_with_both_grippers_open_after_a_trial_that_clos
 
 
 def test_a_single_arm_trial_starts_with_the_gripper_open_after_a_trial_that_closed_it(chains):
-    rig = embodiment_cfg.yam.override(video_encoder=video_encoder.libx264_veryfast).instantiate()
+    rig = embodiment_cfg.yam.instantiate()
     start = {eval_keys.ARM: command.JointPosition(np.asarray(roboarm_cfg.YAM_NOMINAL_JOINTS)), eval_keys.GRIPPER: OPEN}
 
     (grip,) = _a_trial_after_a_closed_trial(rig, start, [''])
@@ -1800,9 +1797,7 @@ def _gravity_by_channel(monkeypatch, rig) -> dict:
 
     monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
     with pimm.World() as world:
-        loop = world.start(
-            list(rig.override(cameras={}, video_encoder=video_encoder.libx264_veryfast).instantiate().control_systems)
-        )
+        loop = world.start(list(rig.override(cameras={}).instantiate().control_systems))
         _run_until(loop, lambda: len(factors) == 2)
     return factors
 

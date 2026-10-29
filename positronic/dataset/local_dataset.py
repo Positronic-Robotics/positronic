@@ -466,6 +466,7 @@ class LocalDatasetWriter(DatasetWriter):
     """
 
     def __init__(self, root: Path, *, video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER) -> None:
+        video_encoder.ensure_available()
         self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
         self._next_episode_id = self._compute_next_episode_id()

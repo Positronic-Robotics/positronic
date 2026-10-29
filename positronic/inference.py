@@ -18,7 +18,8 @@ from pimm.logging import init_logging
 from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run, run_world, scoped_env_var
-from positronic.dataset.local_dataset import load_all_datasets
+from positronic.dataset.dataset import DatasetFactory
+from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
@@ -70,7 +71,13 @@ class KeyboardOperator(KeyboardControl):
                 self.done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR})
 
 
-def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir=None):
+def real(
+    policy,
+    embodiment: Embodiment,
+    next_task: Callable[[], Task],
+    output_dir=None,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
+):
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
 
@@ -84,7 +91,9 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
         output_path = prepare_output_dir(output_dir)
         operator = KeyboardOperator(next_task, policy, output_path)
         logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
-        run_world(embodiment, operator, record=output_path is not None, done=operator.done)
+        run_world(
+            embodiment, operator, record=output_path is not None, done=operator.done, dataset_factory=dataset_factory
+        )
 
 
 real_cfg = cfn.Config(
@@ -103,6 +112,7 @@ def web(
     output_dir=None,
     host: str = '127.0.0.1',
     port: int = 8080,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
 ):
     """Run one hardware embodiment attended from a browser, at ``http://{host}:{port}/``.
 
@@ -115,9 +125,7 @@ def web(
 
     output_path = prepare_output_dir(output_dir)
     console = StationConsole(next_task, policy, output_path, host=host, port=port)
-    if output_path is not None:
-        embodiment.video_encoder.ensure_available()
-    harness = Harness(embodiment)
+    harness = Harness(embodiment, dataset_factory=dataset_factory)
     with pimm.World() as world:
         wire.wire_embodiment(world, harness, embodiment, done=console.done)
         world.connect(console.perform_task, harness.perform_task)

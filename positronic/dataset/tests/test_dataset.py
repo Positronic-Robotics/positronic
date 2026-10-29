@@ -1,12 +1,29 @@
+import pickle
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+from positronic.cfg import dataset_writer, video_encoder
 from positronic.dataset import Time
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
 from positronic.dataset.edits import EditedDataset
+from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
+from positronic.dataset.gst_video import GstH264Encoder
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder
+
+
+def test_writer_rejects_an_unavailable_encoder_before_creating_the_dataset(tmp_path):
+    class AbsentEncoder(LibavEncoder):
+        def ensure_available(self) -> None:
+            raise RuntimeError('no such encoder here')
+
+    root = tmp_path / 'recording'
+    with pytest.raises(RuntimeError, match='no such encoder here'):
+        LocalDatasetWriter(root, video_encoder=AbsentEncoder())
+    assert not root.exists()
 
 
 def episode_ids(episodes):
@@ -100,3 +117,19 @@ def test_filter_dataset_lazy(tmp_path):
 
     _ = len(filtered)
     assert call_count == 3
+
+
+@pytest.mark.parametrize(
+    ('config', 'encoder'),
+    [(dataset_writer.local, DEFAULT_VIDEO_ENCODER), (dataset_writer.jetson, video_encoder.jetson_h264.instantiate())],
+)
+def test_writer_presets_survive_process_transfer_and_reach_the_episode(tmp_path, monkeypatch, config, encoder):
+    checked = []
+    monkeypatch.setattr(GstH264Encoder, 'ensure_available', lambda self: checked.append(self))
+    factory = pickle.loads(pickle.dumps(config.instantiate()))
+    with factory(tmp_path) as dataset, dataset.new_episode() as episode:
+        episode.append('value', 1, Time(tick=0))
+    recorded = LocalDataset(tmp_path)[0]
+    assert recorded.meta['writer'][META_WRITER_VIDEO_ENCODER] == repr(encoder)
+    if isinstance(encoder, GstH264Encoder):
+        assert checked == [encoder]

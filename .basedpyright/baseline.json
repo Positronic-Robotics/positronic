@@ -898,22 +898,6 @@
                     "endColumn": 71,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportAssignmentType",
-                "range": {
-                    "startColumn": 14,
-                    "endColumn": 83,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 70,
-                    "endColumn": 77,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/dataset/episode.py": [

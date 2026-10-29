@@ -19,12 +19,10 @@ from pimm.tests.testing import Passive, wire_call
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from pimm.world import VirtualClock
 from positronic import keys, telemetry, telemetry_keys, wire
-from positronic.cli.eval.run import run_world
 from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import Episode, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.video import LibavEncoder
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
@@ -1504,26 +1502,6 @@ def test_wiring_rejects_privileged_names_shared_with_policy_signals(episode_harn
     privileged = {name: h.embodiment.observations[POSITION].source}
     with pytest.raises(ValueError, match='signal names must be distinct'):
         wire.wire_embodiment(h.world, h.harness, h.embodiment, privileged=privileged)
-
-
-def test_recorder_refuses_an_encoder_this_host_cannot_run():
-    class AbsentEncoder(LibavEncoder):
-        def ensure_available(self) -> None:
-            raise RuntimeError('no such encoder here')
-
-    motion = Motion()
-    embodiment = Embodiment(
-        descriptor='recording-test',
-        observations={POSITION: Observation(motion.position, None)},
-        commands={MOTOR: Command(motion.command, None)},
-        prepare_handlers={},
-        static_meta={},
-        meta_source=None,
-        simulated=True,
-        video_encoder=AbsentEncoder(),
-    )
-    with pytest.raises(RuntimeError, match='no such encoder here'):
-        run_world(embodiment, Passive())
 
 
 def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):

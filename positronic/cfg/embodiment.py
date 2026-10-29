@@ -5,7 +5,6 @@ import configuronic as cfn
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
-import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
@@ -59,10 +58,8 @@ droid_fake = droid.override(
 droid_3cam_fake = droid_fake.override(cameras=positronic.cfg.hardware.camera.droid_3cam_fake)
 
 
-@cfn.config(
-    robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={}, video_encoder=positronic.cfg.video_encoder.jetson_h264
-)
-def yam(robot_arm, cameras, video_encoder):
+@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={})
+def yam(robot_arm, cameras):
     """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
     observations = {
         keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
@@ -83,7 +80,6 @@ def yam(robot_arm, cameras, video_encoder):
         ready_handlers={eval_keys.ARM: robot_arm.ready, **{name: cam.ready for name, cam in cameras.items()}},
         control_systems=(*cameras.values(), robot_arm),
         simulated=False,
-        video_encoder=video_encoder,
     )
 
 
@@ -108,7 +104,6 @@ def yam(robot_arm, cameras, video_encoder):
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
         keys.WRIST_RIGHT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
-    video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
 def yam_bimanual(
     left_channel: str,
@@ -116,7 +111,6 @@ def yam_bimanual(
     mounts: dict[str, list[float]],
     gravity_comp_factor: dict[str, list[float]] | None,
     cameras,
-    video_encoder,
     park_after_idle_s: float | None,
     park_tuning: dict[str, 'SettleTuning'],
     move_tuning: dict[str, 'SettleTuning'],
@@ -180,7 +174,6 @@ def yam_bimanual(
         },
         control_systems=(*cameras.values(), *arms.values()),
         simulated=False,
-        video_encoder=video_encoder,
     )
 
 

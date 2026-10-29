@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from functools import partial, reduce
+from functools import reduce
 from operator import or_
 from pathlib import Path
 from typing import Any
@@ -130,7 +130,7 @@ class Harness(pimm.ControlSystem):
         embodiment: Embodiment,
         *,
         static_meta: dict[str, Any] | None = None,
-        dataset_factory: DatasetFactory | None = None,
+        dataset_factory: DatasetFactory = LocalDatasetWriter,
         recording_hz: float = 1000,
         record: bool = True,
     ):
@@ -141,9 +141,7 @@ class Harness(pimm.ControlSystem):
         names = [*embodiment.observations, *embodiment.commands]
         if len(names) != len(set(names)):
             raise ValueError('Observation and command signal names must be distinct')
-        self._dataset_factory = (
-            (dataset_factory or partial(LocalDatasetWriter, video_encoder=embodiment.video_encoder)) if record else None
-        )
+        self._dataset_factory = dataset_factory if record else None
         self._recording_period_ns = round(1e9 / recording_hz)
         self._writer: EpisodeWriter | None = None
         self._recorded_signals: set[str] = set()

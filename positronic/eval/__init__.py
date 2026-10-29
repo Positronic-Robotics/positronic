@@ -4,7 +4,6 @@ from typing import Any
 
 import pimm
 from positronic.dataset.serializers import Serializer
-from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers.roboarm.keys import EE_FRAMES
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.eval import keys as eval_keys
@@ -88,8 +87,6 @@ class Embodiment:
     ready_handlers: dict[str, pimm.calls.ControlSystemHandler[None, None]] = field(default_factory=dict)
     control_systems: tuple[pimm.ControlSystem, ...] = ()
     simulated: bool = False
-    # How the recorder encodes the camera signals
-    video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER
 
 
 @dataclass
