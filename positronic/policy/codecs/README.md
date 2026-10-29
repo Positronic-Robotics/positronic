@@ -188,10 +188,7 @@ each chunk executes. `training_fps` supplies training cadence metadata, independ
 
 `ChangeEEFrame(EEFrame(site=site, offset=T))` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
 
-The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
-
-- A policy that states no `ee_frames` speaks joints only: it observes no pose signal, and the harness fails the episode at its first pose command.
-- A policy that names a site the rig does not report that signal at is refused.
+The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states, as [the frame contract](../../drivers/roboarm/README.md) says. A policy that states no `ee_frames` gets no pose.
 
 A pose-reading checkpoint states its frame, also when the offset is the identity (`cfg.codecs.gripper_frame`).
 
