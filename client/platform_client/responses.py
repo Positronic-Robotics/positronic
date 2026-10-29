@@ -140,6 +140,7 @@ class ReplayLink(BaseModel):
     expires_at: AwareDatetime | None = None
 
 
+# rules-allow: earn-its-place — the type names what the link opens: a report, which is not a replay
 class ReportLink(BaseModel):
     """A page that shows the results of a run's episodes. `expires_at` is unset on a link that does not expire."""
 
