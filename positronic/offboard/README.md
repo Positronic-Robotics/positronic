@@ -199,7 +199,8 @@ The client preserves the behavior of the requested version, translating older co
 Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
-The client runs a protocol v1 server's stack on the current processors. `positronic.offboard.server`
+The client runs a protocol v1 server's stack on the current processors with its own chunked schedule.
+It rejects a v1 stack declaring `rtc_schedule`; RTC requires protocol v2 or later. `positronic.offboard.server`
 serves v2, including its optional server codec. `positronic_model_server.server` serves v3: the same
 session envelopes carry native model results without robot-command interpretation. Its full codec
 pipeline runs on the client, and image compression is explicitly selected by client components.
@@ -338,10 +339,9 @@ Real-time chunking (RTC) predicts a new action chunk while the client executes
 queued commands. It combines local scheduling and remote prediction through the
 policy API's [composition model](../policy/DESIGN.md#composability).
 
-TODO: Align RTC request fields and command encoding with the contract below.
-
 The client supplies the remaining planned actions at the observation moment,
-alongside measured and expected end-to-end call latency. The server decides how
+alongside measured and expected end-to-end call latency. The measured value is
+`None` before the first completed call. The server decides how
 to use that context, including which actions to freeze or blend. Supplying the
 whole remaining plan lets models choose their own conditioning window.
 
@@ -357,8 +357,9 @@ synchronized client and server clocks.
 
 Action codecs encode commands at a configured input path through ordinary
 `encode()` calls. Observation codecs, field selection and packing compose with
-them to prepare the request explicitly. Neither a separate command-encoding
-interface nor RTC-specific handling in `Codec.wrap` is needed.
+them to prepare the request explicitly. The scheduler owns the local context;
+the model's recipe maps it to the adapter's input format, just like state and
+camera observations. The transport wrapper does not interpret RTC fields.
 
 A complete prefix can support stateless inference, but models may retain session
 history. [GR00T](../vendors/gr00t/README.md#real-time-chunking) uses cached pose

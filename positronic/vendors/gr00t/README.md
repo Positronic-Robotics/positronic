@@ -190,12 +190,10 @@ Use `droid_rtc` to predict the next chunk while the client executes the current 
 docker compose run --rm --service-ports groot-server droid_rtc
 ```
 
-The client sends its estimated inference latency and the actions due during that delay.
-GR00T uses the estimate to select frozen steps, then blends a later overlap from its cached prediction.
-Each session keeps its own prediction history.
-The DROID checkpoint requires joint, grip and end-effector pose actions. The client supplies planned
-joints and grip; cached predictions supply poses that joint commands do not retain. This avoids
-requiring client-side pose reconstruction, but cached poses need not exactly match modified joint targets.
+The client sends its remaining planned joints and grip, time offsets and inference latency.
+GR00T uses the latency estimate to select frozen steps and its session settings to choose the blend overlap.
+The DROID checkpoint also requires end-effector poses. Each session caches those predictions,
+avoiding client-side pose reconstruction. Cached poses need not exactly match modified joint targets.
 See the [RTC design rationale](../../offboard/README.md#real-time-chunking) for the division of responsibilities.
 Native checkpoint transforms prepare the overlap for inference. Both inference paths are warm before the server accepts sessions.
 

@@ -11,7 +11,6 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 import pos3
-from positronic_model_server.rtc import ACTION_PREFIX, ESTIMATED_LATENCY_SEC, ActionPrefix, estimated_latency
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.server_wire import ServedHostPort
@@ -102,73 +101,78 @@ def resolve_checkpoint(
     }
 
 
+def _is_finite_number(value: Any) -> bool:
+    return type(value) in (int, float) and math.isfinite(value)
+
+
 class Gr00tSession(Session):
     def __init__(self, policy: Any, client_stack: dict[str, Any], rtc: dict[str, float] | None = None, *, fps: float):
         super().__init__(client_stack)
         self._policy = policy
         self._rtc = rtc
         self._fps = fps
-        self._sequence = 0
-        self._previous: dict[str, np.ndarray] = {}
+        self._previous_poses: np.ndarray | None = None
 
-    def _rtc_options(self, prefix: ActionPrefix, latency_sec: float) -> dict[str, Any] | None:
-        if prefix.sequence != self._sequence:
-            raise ValueError(f'RTC sequence {prefix.sequence} does not match session sequence {self._sequence}')
-        if not prefix.positions:
+    def _rtc_options(self, context: dict[str, Any]) -> dict[str, Any] | None:
+        for name in (keys.CHUNK_OFFSET_SEC, keys.OBSERVATION_OFFSET_SEC, keys.ESTIMATED_LATENCY_SEC):
+            value = context[name]
+            if not _is_finite_number(value) or (name != keys.OBSERVATION_OFFSET_SEC and value < 0):
+                raise ValueError(f'{name} must be finite seconds, non-negative except for the observation offset')
+        targets = context[ACTION]
+        if not isinstance(targets, list) or any(not isinstance(target, dict) for target in targets):
+            raise ValueError('GR00T RTC actions must be a list of dictionaries')
+        if not targets:
             return None
-        horizon = len(self._policy.get_modality_config()[ACTION].delta_indices)
-        if len(prefix.positions) > horizon or any(
-            not float(position).is_integer() or position >= horizon for position in prefix.positions
-        ):
-            raise ValueError('GR00T RTC requires integer positions within the preceding action horizon')
-        if not self._previous:
+        if self._previous_poses is None:
             raise ValueError('RTC overlap requires a preceding prediction in this session')
-        indices = np.asarray(prefix.positions, dtype=int)
-        if np.any(np.diff(indices) != 1):
-            raise ValueError('GR00T RTC requires consecutive source positions')
+        horizon = len(self._policy.get_modality_config()[ACTION].delta_indices)
+        source_position = context[keys.CHUNK_OFFSET_SEC] * self._fps
+        start = round(source_position)
+        if not math.isclose(source_position, start, abs_tol=1e-6) or start + len(targets) > horizon:
+            raise ValueError('GR00T prefix must align with the preceding prediction and fit its horizon')
+        if context[keys.OBSERVATION_OFFSET_SEC] > 0:
+            raise ValueError('GR00T prefix must cover the observation moment')
+        skipped = math.floor(round(-context[keys.OBSERVATION_OFFSET_SEC] * 1e9) * self._fps / 1e9)
+        available = len(targets) - skipped
+        if available <= 0:
+            return None
         assert self._rtc is not None
-        frozen = min(len(indices), math.ceil(round(latency_sec * 1e9) * self._fps / 1e9))
-        blend_steps = math.ceil(self._rtc[keys.BLEND_SEC] * self._fps)
-        following = int(indices[-1]) + 1
-        indices = np.concatenate((indices, np.arange(following, min(horizon, following + blend_steps))))
-        actions = {name: values[0, indices].copy() for name, values in self._previous.items()}
-        for index, targets in enumerate(prefix.actions):
-            if set(targets) != {JOINT_POSITION, GRIP}:
-                raise ValueError('GR00T RTC targets must contain joint_position and gripper_position')
-            for name, value in targets.items():
-                target = np.asarray(value, dtype=np.float32)
-                if target.shape != (STATE_DIMS[name],) or not np.isfinite(target).all():
-                    raise ValueError(f'Invalid RTC target for {name}')
-                actions[name][index] = target
+        frozen = min(available, math.ceil(round(context[keys.ESTIMATED_LATENCY_SEC] * 1e9) * self._fps / 1e9))
+        overlap = min(available, frozen + math.ceil(self._rtc[keys.BLEND_SEC] * self._fps))
+        actions = {EE_POSE: self._previous_poses[start + skipped : start + skipped + overlap].copy()}
+        targets = targets[skipped : skipped + overlap]
+        if any(set(target) != {JOINT_POSITION, GRIP} for target in targets):
+            raise ValueError('GR00T RTC targets must contain joint_position and gripper_position')
+        for name in (JOINT_POSITION, GRIP):
+            values = np.asarray([target[name] for target in targets], dtype=np.float32)
+            if values.shape != (overlap, STATE_DIMS[name]) or not np.isfinite(values).all():
+                raise ValueError(f'Invalid RTC target for {name}')
+            actions[name] = values
         # Checkpoint normalization statistics have a full time axis, before processor padding.
         actions = {
             name: np.pad(values, ((0, horizon - len(values)), (0, 0)), mode='edge') for name, values in actions.items()
         }
         return {
             ACTION: actions,
-            keys.ACTION_HORIZON: len(indices),
-            keys.RTC_OVERLAP_STEPS: len(indices),
+            keys.ACTION_HORIZON: overlap,
+            keys.RTC_OVERLAP_STEPS: overlap,
             keys.RTC_FROZEN_STEPS: frozen,
             keys.RTC_RAMP_RATE: self._rtc[keys.RAMP_RATE],
         }
 
     def infer(self, observation: Any) -> Any:
         if self._rtc is None:
-            if ACTION_PREFIX in observation:
+            if keys.RTC in observation:
                 raise ValueError('This session does not enable RTC')
             return self._policy.get_action(observation)
-        prefix = ActionPrefix.from_observation(observation)
-        options = self._rtc_options(prefix, estimated_latency(observation))
-        inputs = {
-            name: value for name, value in observation.items() if name not in (ACTION_PREFIX, ESTIMATED_LATENCY_SEC)
-        }
+        options = self._rtc_options(observation[keys.RTC])
+        inputs = {name: value for name, value in observation.items() if name != keys.RTC}
         result = self._policy.get_action(inputs, options=options)
-        self._previous = {name: value.copy() for name, value in result[0].items()}
-        self._sequence += 1
+        self._previous_poses = result[0][EE_POSE][0].copy()
         return result
 
     def close(self) -> None:
-        self._previous.clear()
+        self._previous_poses = None
 
 
 class Gr00tModel(Model):
@@ -220,13 +224,26 @@ class Gr00tModel(Model):
                 raise ValueError(f'Checkpoint action {name} has shape {actions[name].shape}, expected {expected}')
         if rtc is not None:
             warm = Gr00tSession(policy, {}, rtc, fps=self.parameters[keys.FPS])
-            warm.infer({**observation, **ActionPrefix(0, [], []).to_observation(), ESTIMATED_LATENCY_SEC: 0.0})
-            positions = list(range(min(2, action_horizon)))
-            targets = [{name: actions[name][0, index] for name in (JOINT_POSITION, GRIP)} for index in positions]
             warm.infer({
                 **observation,
-                **ActionPrefix(1, positions, targets).to_observation(),
-                ESTIMATED_LATENCY_SEC: 1 / self.parameters[keys.FPS],
+                keys.RTC: {
+                    ACTION: [],
+                    keys.CHUNK_OFFSET_SEC: 0.0,
+                    keys.OBSERVATION_OFFSET_SEC: 0.0,
+                    keys.ESTIMATED_LATENCY_SEC: 0.0,
+                },
+            })
+            targets = [
+                {name: actions[name][0, index] for name in (JOINT_POSITION, GRIP)} for index in range(action_horizon)
+            ]
+            warm.infer({
+                **observation,
+                keys.RTC: {
+                    ACTION: targets,
+                    keys.CHUNK_OFFSET_SEC: 0.0,
+                    keys.OBSERVATION_OFFSET_SEC: 0.0,
+                    keys.ESTIMATED_LATENCY_SEC: 1 / self.parameters[keys.FPS],
+                },
             })
             warm.close()
         policy.reset()
@@ -260,7 +277,7 @@ class Gr00tModel(Model):
             if not isinstance(rtc, dict) or set(rtc) != expected:
                 raise ValueError(f'rtc must be None or contain {sorted(expected)}')
             for name, value in rtc.items():
-                if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < math.inf:
+                if not _is_finite_number(value) or value <= 0:
                     raise ValueError(f'rtc.{name} must be positive and finite')
         fps, horizon = params[keys.FPS], params[keys.HORIZON_SEC]
         if rtc is not None and horizon is not None:
@@ -268,7 +285,7 @@ class Gr00tModel(Model):
         for name, value in ((keys.FPS, fps), (keys.HORIZON_SEC, horizon)):
             if name == keys.HORIZON_SEC and value is None:
                 continue
-            if isinstance(value, bool) or not isinstance(value, int | float) or not 0 < value < math.inf:
+            if not _is_finite_number(value) or value <= 0:
                 raise ValueError(f'{name} must be positive and finite')
         cameras = params[model_settings.IMAGE_MAPPINGS]
         if not isinstance(cameras, dict) or cameras.keys() != self._settings[model_settings.IMAGE_MAPPINGS].keys():

@@ -26,12 +26,10 @@ from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
-from positronic_model_server.rtc import ESTIMATED_LATENCY_SEC, ActionPrefix
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import interpolate_commands
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
@@ -454,25 +452,6 @@ class ChunkedSchedule(Policy):
         return cls(**args)
 
 
-class PrefixSampling(Enum):
-    """How `RTCSchedule` reads an old action for a time of the new chunk.
-
-    The new chunk is timed from its call, so its times can fall between two old due times.
-    At 0.52 s, with old actions o5 due at 0.5 s and o6 due at 0.6 s:
-
-    * `PREVIOUS` gives o5, the action that the robot executes at that time.
-    * `NEAREST` gives o5, the action with the closest due time. At 0.57 s it gives o6.
-      A tie, at 0.55 s, gives the earlier one.
-    * `NEXT` gives o6, the first action due at or after that time.
-    * `INTERPOLATE` gives the point 20% of the way from o5 to o6: see `interpolate_commands`.
-    """
-
-    PREVIOUS = 'previous'
-    NEAREST = 'nearest'
-    NEXT = 'next'
-    INTERPOLATE = 'interpolate'
-
-
 class _TimedChunk:
     """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
 
@@ -489,39 +468,13 @@ class _TimedChunk:
         """The index of the action that runs at ``time_ns``, or ``len(actions)`` after the chunk ends."""
         return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
 
-    def prefix(self, now_ns: int, duration_sec: float, sampling: PrefixSampling) -> tuple[list[float], list[Commands]]:
-        """Sample source positions and targets on a new chunk's time grid."""
-        end_ns = now_ns + round(duration_sec * 1e9)
-        positions: list[float] = []
-        actions: list[Commands] = []
-        while (slot_ns := now_ns + round(len(positions) * 1e9 / self._fps)) < end_ns:
-            position = self._position(slot_ns, sampling)
-            if position is None:
-                return positions, actions
-            positions.append(position)
-            low = int(position)
-            fraction = position - low
-            actions.append(
-                interpolate_commands(self._actions[low], self._actions[low + 1], fraction)
-                if fraction
-                else self._actions[low]
-            )
-        return positions, actions
-
-    def _position(self, time_ns: int, sampling: PrefixSampling) -> float | None:
-        running = self._running_index(time_ns)
-        last = len(self._actions) - 1
-        if running > last:
-            return None
-        if sampling is PrefixSampling.PREVIOUS or (running == last and sampling is not PrefixSampling.NEXT):
-            return float(running)
-        if sampling is PrefixSampling.NEXT:
-            following = running if self._due_ns(running) == time_ns else running + 1
-            return float(following) if following <= last else None
-        since_ns, until_ns = time_ns - self._due_ns(running), self._due_ns(running + 1) - time_ns
-        if sampling is PrefixSampling.NEAREST:
-            return float(running + 1 if until_ns < since_ns else running)
-        return running + since_ns / (since_ns + until_ns)
+    def prefix(self, now_ns: int) -> dict[str, Any]:
+        running = self._running_index(now_ns)
+        return {
+            policy_keys.PREFIX_ACTIONS: [dict(action) for action in self._actions[running:]],
+            policy_keys.CHUNK_OFFSET_SEC: running / self._fps,
+            policy_keys.OBSERVATION_OFFSET_SEC: (self._due_ns(running) - now_ns) / 1e9,
+        }
 
     def take_due(self, now_ns: int) -> dict[str, Any]:
         """The merged commands of every action due by ``now_ns`` and not taken yet."""
@@ -537,7 +490,9 @@ class _TimedChunk:
 
 
 class RTCSchedule(Policy):
-    """Run action chunks from a model, and ask for the next chunk while the current one runs.
+    """Execute planned commands while requesting the next chunk in the background.
+
+    One handover at 10 fps, with ``call_after_sec=0.5`` and inference taking 0.3 seconds::
 
         step              0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
         observation T0    ^
@@ -546,80 +501,68 @@ class RTCSchedule(Policy):
         old chunk                  o0 o1 o2 o3 o4 o5 o6 o7 o8 o9
         call_after_sec             |--------------|
         observation T1                            ^
-        prefix                                    o5 o6 o7
+        prefix                                    o5 o6 o7 o8 o9
         inference                                 |--------|
         answer                                             ^
         new chunk                                 n0 n1 n2 n3 n4 n5 n6 n7 n8 n9
         robot executes    -- -- -- o0 o1 o2 o3 o4 o5 o6 o7 n3 n4 n5 n6 n7 n8 n9
 
-    A chunk holds one action per 1 / `fps` seconds. Its action i is due at the time of
-    its observation + i / `fps`. The policy executes each action when its due time comes.
+    A chunk holds one action per ``1 / fps`` seconds. The first chunk starts when its answer
+    arrives: there is no preceding plan to execute while waiting. Later chunks start at their
+    observation time, so action i is due at ``observation_time + i / fps``.
 
-    `call_after_sec` after T0, the policy takes the observation T1 and calls `infer`.
-    The call also gets a prefix: the old chunk read at the new chunk's due times T1,
-    T1 + 1 / `fps`, ..., for the duration estimated by `prefix_duration`, and not past
-    the end of the old chunk. The prefix tells the model what the robot does while the model
-    computes. The request also carries this duration as ``estimated_latency_sec``.
-    The server decides how to use the prefix and latency estimate.
+    ``call_after_sec`` after the chunk starts, the policy takes observation T1 and requests
+    another prediction. The request includes the entire remaining plan, including the action
+    currently running: o5 through o9 in the drawing. These are planned commands, with their
+    original values and spacing. The server chooses which of them to use for conditioning.
 
-    When T1 falls between two old due times, each new due time falls between two old
-    actions. `prefix_sampling` decides which value the prefix holds there; see
-    `PrefixSampling`. On the grid, as in the drawing, every choice gives the same prefix.
+    Two offsets locate the prefix. ``chunk_offset_sec`` is the first action's time within the
+    preceding prediction: 0.5 seconds for o5. ``observation_offset_sec`` is that action's due
+    time minus T1: zero in the drawing. If T1 falls 0.02 seconds after o5 became due, the prefix
+    still starts with o5 and this offset is -0.02. The scheduler does not resample the plan.
 
-    Until the answer arrives, the policy executes the old chunk. When the answer arrives,
-    the policy executes the new chunk, from the action that is due now. If the old chunk
-    ends before the answer arrives, the policy executes no action until the answer arrives.
+    Measured latency is the duration of the preceding completed call; estimated latency comes
+    from ``latency_estimate``. Both travel separately from the prefix, in seconds. Before the
+    first answer, measured latency is None and the estimate is zero; the prefix is empty.
 
-    Only one call runs at a time. If an answer arrives more than `call_after_sec` after
-    its observation, the next call starts at once.
+    Until the answer arrives, the policy executes the old chunk. On arrival, it switches to the
+    new chunk at the action due now: n0 through n2 have elapsed, so it starts with n3. If the old
+    chunk ends before the answer arrives, the policy emits no commands while waiting.
 
-    The first call has no old chunk, so its prefix is empty, and the robot executes no
-    action until its answer arrives (-- in the drawing).
-
-    ``infer`` receives the observation with an ``action_prefix`` description. It includes source
-    positions in the preceding answer and scheduled targets. Codecs convert targets to model units.
-    Call sequences start at zero for each run. The server must validate them against its session's prediction history.
-
-    Prefix targets use absolute commands. A model with relative actions must convert these targets
-    against the current observation before inference.
+    Only one call runs at a time. If an answer arrives after the next request is already due,
+    that request starts immediately. Composed codecs prepare the observation and planned commands
+    for the model and decode its reply into the command sequence this scheduler executes.
     """
 
     WIRE_NAME = 'rtc_schedule'
     WIRE_VERSION = 1
     CALL_AFTER_ARG = 'call_after_sec'
-    PREFIX_DURATION_ARG = 'prefix_duration'
-    PREFIX_SAMPLING_ARG = 'prefix_sampling'
+    LATENCY_ESTIMATE_ARG = 'latency_estimate'
 
-    def __init__(
-        self,
-        fps: float,
-        call_after_sec: float,
-        prefix_duration: DurationEstimate,
-        prefix_sampling: PrefixSampling = PrefixSampling.PREVIOUS,
-    ) -> None:
+    def __init__(self, fps: float, call_after_sec: float, latency_estimate: DurationEstimate) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
         if not isfinite(call_after_sec) or call_after_sec < 0:
             raise ValueError('call_after_sec must be finite and not negative')
         self._fps = fps
         self._call_after_ns = round(call_after_sec * 1e9)
-        self._prefix_duration = prefix_duration
-        self._prefix_sampling = prefix_sampling
+        self._latency_estimate = latency_estimate
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
-        duration = self._prefix_duration.run()
-        prefix_sec = 0.0
+        duration = self._latency_estimate.run()
+        expected_sec = 0.0
+        measured_sec: float | None = None
         answer: Answer[Sequence[Commands]] | None = None
         called_at_ns = 0
         chunk: _TimedChunk | None = None
         next_call_ns = 0
-        sequence = 0
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 if answer is not None and answer.done():
-                    prefix_sec = duration.update((now_ns - called_at_ns) / 1e9)
+                    measured_sec = (now_ns - called_at_ns) / 1e9
+                    expected_sec = duration.update(measured_sec)
                     # The first chunk counts from its answer: the robot did not move while it waited.
                     start_ns = now_ns if chunk is None else called_at_ns
                     chunk = _TimedChunk(answer.result(), start_ns, self._fps, now_ns)
@@ -627,14 +570,22 @@ class RTCSchedule(Policy):
                     next_call_ns = start_ns + self._call_after_ns
 
                 if answer is None and now_ns >= next_call_ns:
-                    positions, actions = (
-                        ([], []) if chunk is None else chunk.prefix(now_ns, prefix_sec, self._prefix_sampling)
+                    prefix = (
+                        {
+                            policy_keys.PREFIX_ACTIONS: [],
+                            policy_keys.CHUNK_OFFSET_SEC: 0.0,
+                            policy_keys.OBSERVATION_OFFSET_SEC: 0.0,
+                        }
+                        if chunk is None
+                        else chunk.prefix(now_ns)
                     )
-                    prefix = ActionPrefix(sequence, positions, [dict(action) for action in actions])
                     called_at_ns = now_ns
-                    context = {**prefix.to_observation(), ESTIMATED_LATENCY_SEC: prefix_sec}
+                    context = {
+                        policy_keys.ACTION_PREFIX: prefix,
+                        policy_keys.ESTIMATED_LATENCY_SEC: expected_sec,
+                        policy_keys.MEASURED_LATENCY_SEC: measured_sec,
+                    }
                     answer = runtime.submit(infer, ChainMap(context, obs))
-                    sequence += 1
 
                 commands = {} if chunk is None else chunk.take_due(now_ns)
                 next_due_ns = None if chunk is None else chunk.next_due_ns()
@@ -657,15 +608,13 @@ class RTCSchedule(Policy):
         args = {
             ChunkedSchedule.FPS_ARG: self._fps,
             self.CALL_AFTER_ARG: self._call_after_ns / 1e9,
-            self.PREFIX_DURATION_ARG: self._prefix_duration.to_spec(),
-            self.PREFIX_SAMPLING_ARG: self._prefix_sampling.value,
+            self.LATENCY_ESTIMATE_ARG: self._latency_estimate.to_spec(),
         }
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
     @classmethod
     def from_spec_args(cls, **args: Any) -> Self:
-        args[cls.PREFIX_DURATION_ARG] = DurationEstimate.from_spec(args[cls.PREFIX_DURATION_ARG])
-        args[cls.PREFIX_SAMPLING_ARG] = PrefixSampling(args.get(cls.PREFIX_SAMPLING_ARG, PrefixSampling.PREVIOUS.value))
+        args[cls.LATENCY_ESTIMATE_ARG] = DurationEstimate.from_spec(args[cls.LATENCY_ESTIMATE_ARG])
         return cls(**args)
 
 

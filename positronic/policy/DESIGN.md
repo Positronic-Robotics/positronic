@@ -216,12 +216,6 @@ For example, a scheduling processor can play an action chunk before requesting
 another, a fault guard can withhold commands, and a history processor can collect
 sensor samples while inference is pending. These are composable policy choices.
 
-`ChunkedSchedule(replan_on_error=True)` clears queued commands when it observes
-an arm's `ERROR` and makes inference due immediately. It retains an already
-pending call and uses its answer. An outer `PauseOnUnavailable` withholds child
-calls during an error, so the scheduler cannot react to a status it never sees.
-Recovery therefore depends on which component receives the robot's status.
-
 ### Submitted work
 
 The policy defines its heavy work, such as model inference, as ordinary

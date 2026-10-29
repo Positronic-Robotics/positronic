@@ -23,7 +23,6 @@ from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
     CartesianDeltaAction,
-    EncodeActionPrefix,
     JointDeltaAction,
     JointPositionAction,
     SetControlMode,
@@ -83,17 +82,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
 }
 
 
-def _encode_action_prefix(**args: Any) -> EncodeActionPrefix:
-    for name in (EncodeActionPrefix.CODEC_ARG, EncodeActionPrefix.ACTION_ARG):
-        codec = from_spec(args[name])
-        if not isinstance(codec, Codec):
-            raise ValueError(f'{name} must describe a codec')
-        args[name] = codec
-    return EncodeActionPrefix(**args)
-
-
 COMPONENTS.update({
-    EncodeActionPrefix.WIRE_NAME: {EncodeActionPrefix.WIRE_VERSION: Version(_encode_action_prefix)},
     'pack_observation_fields': {1: Version(pack_observation_fields_v1)},
     'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
     'restrict_image_size': {1: Version(restrict_image_size_v1)},

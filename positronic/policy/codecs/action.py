@@ -1,10 +1,10 @@
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
 from eval_vocabulary.timeline import recording_timeline
-from positronic_model_server.rtc import ACTION_PREFIX, ESTIMATED_LATENCY_SEC, ActionPrefix, estimated_latency
+from positronic_model_server import tree
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom, keys
@@ -19,39 +19,6 @@ from .base import Codec
 from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action
 
 RotRep = geom.Rotation.Representation
-
-
-class EncodeActionPrefix(Codec):
-    """A codec with scheduled-command encoding for RTC requests."""
-
-    WIRE_NAME = 'encode_action_prefix'
-    CODEC_ARG = 'codec'
-    ACTION_ARG = 'action'
-
-    def __init__(self, codec: Codec, action: Codec):
-        self._codec = codec
-        self._action = action
-
-    def encode(self, data: dict) -> dict:
-        prefix = ActionPrefix.from_observation(data)
-        latency = estimated_latency(data)
-        inputs = {name: value for name, value in data.items() if name not in (ACTION_PREFIX, ESTIMATED_LATENCY_SEC)}
-        prefix = replace(prefix, actions=self._action.encode_commands(prefix.actions))
-        return {**self._codec.encode(inputs), **prefix.to_observation(), ESTIMATED_LATENCY_SEC: latency}
-
-    def decode(self, data: Any) -> Any:
-        return self._codec.decode(data)
-
-    @property
-    def meta(self):
-        return self._codec.meta
-
-    def to_spec(self):
-        return {
-            NAME: self.WIRE_NAME,
-            VERSION: self.WIRE_VERSION,
-            ARGS: {self.CODEC_ARG: self._codec.to_spec(), self.ACTION_ARG: self._action.to_spec()},
-        }
 
 
 class SplitActionChunk(Codec):
@@ -87,14 +54,35 @@ class SplitActionChunk(Codec):
 
 
 class JointPositionAction(Codec):
-    """Decode named joint and grip predictions into an absolute robot command."""
+    """Convert named joint and grip predictions to and from absolute robot commands.
+
+    ``commands_path`` selects a command sequence to encode. Encoding contributes only its top-level
+    field, preserving sibling values inside that field. With no path or an absent top-level field,
+    encoding contributes nothing. Missing nested fields raise. Decoding always produces commands.
+    """
 
     WIRE_NAME = 'joint_position_action'
 
-    def __init__(self, joints_key: str, grip_key: str, num_joints: int = 7):
+    def __init__(
+        self, joints_key: str, grip_key: str, num_joints: int = 7, *, commands_path: tuple[str | int, ...] | None = None
+    ):
+        if commands_path is not None and (
+            not isinstance(commands_path, tuple)
+            or not commands_path
+            or not isinstance(commands_path[0], str)
+            or any(type(part) not in (str, int) for part in commands_path)
+        ):
+            raise ValueError('commands_path must be a non-empty tuple of keys and indices starting with a field name')
         self._joints_key = joints_key
         self._grip_key = grip_key
         self._num_joints = num_joints
+        self._commands_path = commands_path
+
+    def encode(self, data: dict) -> dict:
+        if self._commands_path is None or self._commands_path[0] not in data:
+            return {}
+        name = self._commands_path[0]
+        return {name: tree.update_at(data[name], self._commands_path[1:], self._encode_commands)}
 
     def _decode_single(self, data: dict) -> dict:
         return {
@@ -104,7 +92,7 @@ class JointPositionAction(Codec):
             keys.TARGET_GRIP: np.asarray(data[self._grip_key]).item(),
         }
 
-    def encode_commands(self, commands):
+    def _encode_commands(self, commands):
         result = []
         for values in commands:
             target = values[keys.ROBOT_COMMAND]
@@ -117,11 +105,20 @@ class JointPositionAction(Codec):
         return result
 
     def to_spec(self):
-        return {
-            NAME: self.WIRE_NAME,
-            VERSION: self.WIRE_VERSION,
-            ARGS: {'joints_key': self._joints_key, 'grip_key': self._grip_key, 'num_joints': self._num_joints},
+        args: dict[str, Any] = {
+            'joints_key': self._joints_key,
+            'grip_key': self._grip_key,
+            'num_joints': self._num_joints,
         }
+        if self._commands_path is not None:
+            args['commands_path'] = list(self._commands_path)
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+
+    @classmethod
+    def from_spec_args(cls, **args: Any) -> Self:
+        if isinstance(args.get('commands_path'), list):
+            args['commands_path'] = tuple(args['commands_path'])
+        return cls(**args)
 
 
 class CartesianDeltaAction(Codec):

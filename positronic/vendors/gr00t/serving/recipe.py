@@ -6,23 +6,47 @@ from typing import Any
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
 from positronic_model_server.spec import component, parallel, sequence
 
-from . import EE_POSE, GRIP, JOINT_POSITION, LANGUAGE, STATE, STATE_DIMS, TASK, VIDEO
+from . import ACTION, EE_POSE, GRIP, JOINT_POSITION, LANGUAGE, STATE, STATE_DIMS, TASK, VIDEO
 from . import keys as obs_keys
 from . import settings as model_settings
 
 
-def _joint_action() -> dict[str, Any]:
-    return component(
-        'joint_position_action', joints_key=JOINT_POSITION, grip_key=GRIP, num_joints=STATE_DIMS[JOINT_POSITION]
-    )
-
-
-def inference(settings: dict[str, Any]) -> dict[str, Any]:
+def inference(settings: dict[str, Any], *, rtc: bool = False) -> dict[str, Any]:
     """Describe the client codec using the checkpoint's image and pose conventions."""
     image_mappings = settings[model_settings.IMAGE_MAPPINGS]
     observation_keys = settings[model_settings.OBSERVATION_KEYS]
     ee_frame = settings[model_settings.EE_FRAMES][observation_keys[EE_POSE]]
     state = {observation_keys[name]: {observation_keys[name]: size} for name, size in STATE_DIMS.items()}
+    action_args = {'commands_path': [obs_keys.ACTION_PREFIX, obs_keys.PREFIX_ACTIONS]} if rtc else {}
+    timing = (
+        [
+            component(
+                'select_observation_fields',
+                mapping={name: name for name in (obs_keys.ESTIMATED_LATENCY_SEC, obs_keys.MEASURED_LATENCY_SEC)},
+            )
+        ]
+        if rtc
+        else []
+    )
+    context = (
+        [
+            component(
+                'pack_fields',
+                encode_layout={
+                    obs_keys.RTC: {
+                        ACTION: [obs_keys.ACTION_PREFIX, obs_keys.PREFIX_ACTIONS],
+                        obs_keys.CHUNK_OFFSET_SEC: [obs_keys.ACTION_PREFIX, obs_keys.CHUNK_OFFSET_SEC],
+                        obs_keys.OBSERVATION_OFFSET_SEC: [obs_keys.ACTION_PREFIX, obs_keys.OBSERVATION_OFFSET_SEC],
+                        obs_keys.ESTIMATED_LATENCY_SEC: [obs_keys.ESTIMATED_LATENCY_SEC],
+                        obs_keys.MEASURED_LATENCY_SEC: [obs_keys.MEASURED_LATENCY_SEC],
+                    }
+                },
+                decode_layout={},
+            )
+        ]
+        if rtc
+        else []
+    )
     return sequence(
         component(
             'metadata',
@@ -63,19 +87,32 @@ def inference(settings: dict[str, Any]) -> dict[str, Any]:
                     ),
                 ),
             ),
-            sequence(component('set_control_mode', mode=settings[model_settings.CONTROL_MODE]), _joint_action()),
+            sequence(
+                component('set_control_mode', mode=settings[model_settings.CONTROL_MODE]),
+                component(
+                    'joint_position_action',
+                    joints_key=JOINT_POSITION,
+                    grip_key=GRIP,
+                    num_joints=STATE_DIMS[JOINT_POSITION],
+                    **action_args,
+                ),
+            ),
+            *timing,
         ),
         component('split_action_chunk'),
-        component(
-            'pack_fields',
-            encode_layout={
-                VIDEO: {name: [source] for name, source in image_mappings.items()},
-                STATE: {name: [observation_keys[name]] for name in STATE_DIMS},
-                LANGUAGE: {TASK: [observation_keys[TASK]]},
-            },
-            decode_layout={name: [0, name] for name in (JOINT_POSITION, GRIP)},
-            unsqueeze_dims=2,
-            squeeze_dims=1,
+        parallel(
+            component(
+                'pack_fields',
+                encode_layout={
+                    VIDEO: {name: [source] for name, source in image_mappings.items()},
+                    STATE: {name: [observation_keys[name]] for name in STATE_DIMS},
+                    LANGUAGE: {TASK: [observation_keys[TASK]]},
+                },
+                decode_layout={name: [0, name] for name in (JOINT_POSITION, GRIP)},
+                unsqueeze_dims=2,
+                squeeze_dims=1,
+            ),
+            *context,
         ),
     )
 
@@ -94,15 +131,14 @@ def client_stack(
     settings = deepcopy(settings)
     settings[model_settings.IMAGE_MAPPINGS] = image_mappings
     schedule = component('chunked_schedule', fps=fps, horizon_sec=horizon_sec)
-    codec = inference(settings)
+    codec = inference(settings, rtc=rtc is not None)
     if rtc is not None:
         schedule = component(
             'rtc_schedule',
             fps=fps,
             call_after_sec=rtc[obs_keys.CALL_AFTER_SEC],
-            prefix_duration={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.MAX_DELAY_SEC]},
+            latency_estimate={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.MAX_DELAY_SEC]},
         )
-        codec = component('encode_action_prefix', codec=codec, action=_joint_action())
     parts = [schedule, codec, component('metadata', values={model_settings.ACTION_FPS: fps})]
     if compress_images:
         parts.append(component('encode_images', quality=jpeg_quality))

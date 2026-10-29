@@ -37,10 +37,6 @@ class Codec:
     def _decode_single(self, data: dict) -> dict:
         return {}
 
-    def encode_commands(self, commands: cabc.Sequence[cabc.Mapping[str, Any]]) -> list[dict[str, Any]]:
-        """Express scheduled commands in model units for an RTC request."""
-        raise ValueError(f'{type(self).__name__} cannot encode scheduled commands')
-
     @property
     def training_encoder(self) -> EpisodeTransform:
         # TODO: Remove this interface and its composition after all model recipes build training independently.
