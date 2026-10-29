@@ -90,6 +90,17 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --output_dir=~/datasets/inference_logs/exp_v1
 ```
 
+**A Modal Server with sticky sessions takes `.modal_remote`.** Its URL ends in `.modal.direct`. `.modal_remote` is `.file_authed_remote` on `websocket_tls`, port 443. Each session first starts a Modal session with the header file. The start waits until a container takes it, so one session starts one container. The client then dials with the session token, and a reconnect uses the same token, so it reaches the same container. A dial on a session that ended (404) starts a new one. The client ends the Modal session when it closes. The URL names the region that routes requests, for example `<app>-server.eu-west.modal.direct`.
+
+```bash
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+  --policy=.modal_remote --policy.address.host=<app>-server.us-east.modal.direct \
+  --policy.headers.path=~/.config/modal/headers.json \
+  --output_dir=~/datasets/inference_logs/exp_v1
+```
+
+A Modal web endpoint without sessions takes `.modal_remote_legacy`: one dial with an `open_timeout` as long as the connect deadline (900 s), as above.
+
 **Session parameters** are `--policy.address.query`, a query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 
 Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`, `--model.checkpoint`, device...) is fixed at server launch, and a key that names it is an unknown key. A server serves one checkpoint; to serve another, start another server. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).

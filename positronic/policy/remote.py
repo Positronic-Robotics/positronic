@@ -130,8 +130,8 @@ class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
     ``wire`` names the transport and ``address`` is the address it dials. ``open_timeout`` and ``connect_deadline``
-    bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality of images sent to a server
-    that asks for compressed images.
+    bound the connect, and ``modal_sessions`` starts a Modal sticky session for each run, as in ``InferenceClient``.
+    ``jpeg_quality`` sets the JPEG quality of images sent to a server that asks for compressed images.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -150,6 +150,7 @@ class RemotePolicy(Policy):
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+        modal_sessions: bool = False,
     ):
         self._client = InferenceClient(
             registry.client_wire(wire),
@@ -158,6 +159,7 @@ class RemotePolicy(Policy):
             open_timeout=open_timeout,
             connect_deadline=connect_deadline,
             infer_timeout=infer_timeout,
+            modal_sessions=modal_sessions,
         )
         self._jpeg_quality = jpeg_quality
 

@@ -462,6 +462,15 @@ raises no exception of the WebSocket or gRPC library.
 `wait_for_server()` returns once a server answers a probe, and opens no session. It retries as `new_session`
 does.
 
+`InferenceClient(..., modal_sessions=True)` serves a Modal Server with sticky sessions (`ModalSessions`): each
+session starts a Modal session first and dials with its token, a reconnect dials the same session, a dial on a
+session that ended (404) starts a new one, and close ends it (`positronic.cfg.policy.modal_remote`;
+`modal_remote_legacy` is the long dial for a Modal web endpoint without sessions). The start is one blocking
+request, never abandoned: a start the edge answers with a 5xx after its own limit continues under the same
+idempotency key, so it places one session. The start and the dial fit in one `connect_deadline`. The session
+calls go to the endpoint alone: the client follows no redirect, since the calls carry the endpoint's
+credentials.
+
 A session recovers a connection that drops before the server's first answer. A later drop raises
 `wire.PeerDisconnected`.
 

@@ -1,11 +1,18 @@
+import json
 import logging
 import math
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from enum import Enum
+from functools import partial
+from http.client import HTTPMessage
 from types import MappingProxyType
-from typing import Any, TypeVar
+from typing import IO, Any, TypeVar
 
 from positronic_model_server import protocol, serialization
 from positronic_wire import wire
@@ -37,6 +44,114 @@ SEND_MS = 'send_ms'
 RECV_MS = 'recv_ms'
 
 
+# A Modal sticky session ends this long after its last in-flight request, an open websocket included. Short, so a
+# session whose dial never came frees its container soon.
+MODAL_SESSION_IDLE_TIMEOUT = 120
+MODAL_SESSION_START_PATH = '/_modal/sessions/start'
+MODAL_SESSION_TERMINATE_PATH = '/_modal/sessions/terminate'
+MODAL_SESSION_HEADER = 'Modal-Authorization'
+# A session's idle timeout, on its start. A keepalive carries it too: the edge forwards the session id to the
+# container and not the timeout, and the server reports the session's idle timeout when it knows it.
+MODAL_SESSION_IDLE_TIMEOUT_HEADER = 'x-modal-server-session-idle-timeout'
+# Modal's edge answers a session start that waited this long with a 5xx; the start then continues under its key.
+_MODAL_START_REQUEST_TIMEOUT = 330.0
+# The most of an answer to a session call that the client reads: a token in a JSON object fits in it many times.
+_MAX_MODAL_ANSWER_BYTES = 16 * 1024
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Answers a redirect as an ``HTTPError``. A session call carries the endpoint's credentials, so it goes to the
+    endpoint alone. ``urllib`` makes a redirected ``POST`` a ``GET`` without its body, which no session call is."""
+
+    def redirect_request(
+        self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
+    ) -> None:
+        return None
+
+
+_SESSION_CALLS = urllib.request.build_opener(_RefuseRedirects)
+
+
+def _session_token(answer: bytes) -> str:
+    """The token in the answer to a session start.
+
+    Raises ``wire.ConnectRefused`` with ``FINAL`` where the answer carries none. The token goes into a header, so it
+    is one run of visible ASCII characters.
+    """
+    try:
+        token = json.loads(answer)['token']
+    except (ValueError, LookupError, TypeError, RecursionError) as e:
+        raise wire.ConnectRefused(wire.Refusal.FINAL, 'Modal answered a session start without a token') from e
+    if not isinstance(token, str) or not token or not all('!' <= c <= '~' for c in token):
+        raise wire.ConnectRefused(wire.Refusal.FINAL, 'Modal answered a session start with a token no header holds')
+    return token
+
+
+class ModalSessions:
+    """Sticky sessions on a Modal Server (`@app.server` with `@modal.sessioned`).
+
+    `start` places one session on one container: on a free container, on a container that Modal starts for it,
+    or on the next container that frees. The token it returns routes every request of the session to that
+    container. The edge answers a start that waits past its own limit with a 5xx; the next attempt carries the
+    same idempotency key, so the start continues and places one session. A start under a new key places another
+    session, which holds a container until its idle timeout.
+
+    The session calls go to ``base_url`` alone: the client follows no redirect.
+    """
+
+    def __init__(self, base_url: str, idle_timeout: int = MODAL_SESSION_IDLE_TIMEOUT):
+        self._base_url = base_url.rstrip('/')
+        self.idle_timeout = idle_timeout
+
+    def _post(self, path: str, headers: Mapping[str, str], timeout: float) -> bytes:
+        """The answer to a ``POST`` on ``path`` at the endpoint. A refusal and a redirect raise
+        ``urllib.error.HTTPError``."""
+        request = urllib.request.Request(self._base_url + path, data=b'', method='POST', headers=dict(headers))
+        with _SESSION_CALLS.open(request, timeout=timeout) as answer:
+            return answer.read(_MAX_MODAL_ANSWER_BYTES)
+
+    def start(self, headers: Mapping[str, str] | None, deadline: float) -> str:
+        """The token of a new session. Raises `wire.ConnectRefused` when the edge refuses the start, and
+        `TimeoutError` when no container takes it before the `time.monotonic()` instant `deadline`."""
+        key, stamp = str(uuid.uuid4()), str(time.time())
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError(f'No Modal session started by the deadline ({self._base_url})')
+            start_headers = {
+                **(headers or {}),
+                MODAL_SESSION_IDLE_TIMEOUT_HEADER: str(self.idle_timeout),
+                'x-idempotency-key': key,
+                'x-modal-timestamp': stamp,
+            }
+            try:
+                return _session_token(
+                    self._post(MODAL_SESSION_START_PATH, start_headers, min(left, _MODAL_START_REQUEST_TIMEOUT))
+                )
+            except urllib.error.HTTPError as refused:
+                if refused.code < 500:
+                    raise wire.ConnectRefused(
+                        wire.Refusal.FORBIDDEN if refused.code in (401, 403) else wire.Refusal.FINAL,
+                        f'Modal refused a session start with {refused.code}',
+                    ) from None
+            except (TimeoutError, urllib.error.URLError) as lost:
+                logger.info('Modal session start got no answer (%s); asking again under the same key', lost)
+            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+
+    def terminate(self, headers: Mapping[str, str] | None, token: str) -> None:
+        """End the session, so its container takes the next one. A session that already ended answers 404.
+
+        A session that this call does not end ends at its idle timeout, so a failure is logged and not raised.
+        """
+        try:
+            self._post(MODAL_SESSION_TERMINATE_PATH, {**(headers or {}), 'x-modal-server-session-token': token}, 60)
+        except urllib.error.HTTPError as answer:
+            if answer.code != 404:
+                logger.error('Modal session terminate answered %s; the session ends at its idle timeout', answer.code)
+        except (TimeoutError, urllib.error.URLError) as lost:
+            logger.error('Modal session terminate got no answer (%s); the session ends at its idle timeout', lost)
+
+
 class InferenceSession:
     """One connection using the protocol declared by its server. Finish inference before closing it.
 
@@ -59,8 +174,10 @@ class InferenceSession:
         *,
         ready_by: float = math.inf,
         reopen: Callable[[], 'InferenceSession'] | None = None,
+        on_close: Callable[[], None] | None = None,
     ):
         self._conn = conn
+        self._on_close = on_close
         self._infer_timeout = infer_timeout
         self._reopen = reopen
         ready = self._handshake(ready_by)
@@ -165,6 +282,9 @@ class InferenceSession:
             reopened.close()
             raise wire.PeerDisconnected('The server this session reconnected to declares other metadata')
         self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
+        # A reconnect can hold a new Modal session; its close ends that one. A reconnect that could not continue the
+        # old Modal session already ended it (the failed attempt's ``on_close``).
+        self._on_close, reopened._on_close = reopened._on_close, None
 
     def _round_trip(self, obs: dict[str, Any]) -> Any:
         self.served_timing = self.wire_timing = {}
@@ -226,10 +346,22 @@ class InferenceSession:
         return result if self._protocol is protocol.ProtocolVersion.V3 else typed_commands(result)
 
     def close(self) -> None:
-        """End the server session and wait for its cleanup before closing the connection."""
-        if self._closed:
-            return
-        self._closed = True
+        """End the server session and wait for its cleanup before closing the connection.
+
+        ``on_close`` runs once, also for a session whose connection a timeout, a drop or a server error already
+        closed: on a Modal Server it terminates the Modal session, which otherwise holds its container until the
+        session's idle timeout, and lets the client forget that session's token.
+        """
+        on_close, self._on_close = self._on_close, None
+        try:
+            if not self._closed:
+                self._closed = True
+                self._end_server_session()
+        finally:
+            if on_close is not None:
+                on_close()
+
+    def _end_server_session(self) -> None:
         if self._protocol is protocol.ProtocolVersion.V1:
             logger.info('InferenceSession.close: %s', self._conn.close())
             return
@@ -294,6 +426,11 @@ class InferenceClient:
     An edge that holds a dial while it starts a backend wants an ``open_timeout`` as long as the cold start:
     one dial then waits through it. A shorter one makes the client re-dial, and such an edge can start a
     backend for each dial the client gave up on.
+
+    ``modal_sessions`` is for a Modal Server with sticky sessions (``ModalSessions``): each session starts a Modal
+    session before it dials, and dials with its token. The start waits for the container, so one session starts
+    one container. ``.modal_remote`` in ``positronic.cfg.policy`` sets it, and ``.modal_remote_legacy`` the long
+    dial for a Modal web endpoint without sessions.
     """
 
     def __init__(
@@ -306,6 +443,7 @@ class InferenceClient:
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         reconnect_deadline: float = DEFAULT_RECONNECT_DEADLINE,
+        modal_sessions: bool = False,
     ):
         if not isinstance(address, client_wire.ADDRESS):
             raise ValueError(
@@ -320,22 +458,55 @@ class InferenceClient:
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
         self.reconnect_deadline = reconnect_deadline
+        self._modal_sessions = ModalSessions(_https_root(self.session_url)) if modal_sessions else None
 
     def _open_session(
-        self, ready_by: float, reopen: Callable[[], InferenceSession] | None, open_timeout: float
+        self,
+        ready_by: float,
+        reopen: Callable[[str | None], InferenceSession] | None,
+        open_timeout: float,
+        modal_token: str | None = None,
     ) -> InferenceSession:
         """One attempt at a session, whose dial waits ``open_timeout`` at most and whose handshake waits for no
         status update past the ``time.monotonic()`` instant ``ready_by``. The connection closes when the handshake
         does not finish.
 
+        On a Modal Server with sticky sessions, the attempt starts a Modal session first, or dials the one that
+        ``modal_token`` names: a reconnect reaches the container of the session it continues. A failed attempt ends
+        its Modal session.
+
         A refusal sent as a protocol frame (a rejected session param) raises past every
         transport handler, and a connection may hold a reader thread until it is closed.
         """
-        conn = self._wire.dial(self._address, self.headers, open_timeout)
+        headers, token = self.headers, modal_token
+        on_close: Callable[[], None] | None = None
+        if (sessions := self._modal_sessions) is not None:
+            if token is None:
+                # The session waits for its container here, so the dial below opens at once. The start and the dial
+                # fit in one connect deadline.
+                token = sessions.start(self.headers, ready_by)
+                open_timeout = max(0.0, min(open_timeout, ready_by - time.monotonic()))
+            headers = {MODAL_SESSION_HEADER: f'Bearer {token}'}
+            on_close = partial(sessions.terminate, self.headers, token)
+
         try:
-            return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen)
+            conn = self._wire.dial(self._address, headers, open_timeout)
+        except BaseException:
+            if on_close is not None:
+                on_close()
+            raise
+        try:
+            return InferenceSession(
+                conn,
+                infer_timeout=self.infer_timeout,
+                ready_by=ready_by,
+                reopen=(lambda: reopen(token)) if reopen is not None else None,
+                on_close=on_close,
+            )
         except BaseException:
             conn.close()
+            if on_close is not None:
+                on_close()
             raise
 
     def new_session(self) -> InferenceSession:
@@ -343,7 +514,10 @@ class InferenceClient:
 
         Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
         """
-        return self._connect(self.connect_deadline, reopen=lambda: self._connect(self.reconnect_deadline, reopen=None))
+        return self._connect(
+            self.connect_deadline,
+            reopen=lambda token: self._connect(self.reconnect_deadline, reopen=None, modal_token=token),
+        )
 
     def wait_for_server(self) -> None:
         """Return once a server answers on the address, without opening a session.
@@ -358,10 +532,35 @@ class InferenceClient:
 
         self._retry(time.monotonic() + self.connect_deadline, probe)
 
-    def _connect(self, deadline_sec: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
-        """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock."""
+    def _connect(
+        self,
+        deadline_sec: float,
+        reopen: Callable[[str | None], InferenceSession] | None,
+        modal_token: str | None = None,
+    ) -> InferenceSession:
+        """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock.
+
+        A reconnect dials the Modal session that ``modal_token`` names. Only the first attempt dials that token: a
+        failed attempt ends its Modal session, and the next one starts a new one. The edge answers a dial on a session
+        that ended (its idle timeout passed, or it was ended) with 404, which reads as a permanent refusal: that one
+        starts a new session at once and spends no retry.
+        """
         deadline = time.monotonic() + deadline_sec
-        return self._retry(deadline, lambda open_timeout: self._open_session(deadline, reopen, open_timeout))
+        held = iter([modal_token] if modal_token is not None else [])
+
+        def attempt(open_timeout: float) -> InferenceSession:
+            token = next(held, None)
+            if token is None:
+                return self._open_session(deadline, reopen, open_timeout)
+            try:
+                return self._open_session(deadline, reopen, open_timeout, token)
+            except wire.ConnectRefused as refused:
+                if refused.refusal is not wire.Refusal.FINAL:
+                    raise
+                logger.info('The Modal session this dial named has ended (%s); starting a new one', refused)
+            return self._open_session(deadline, reopen, open_timeout)
+
+        return self._retry(deadline, attempt)
 
     def _retry(self, deadline: float, attempt: Callable[[float], T]) -> T:
         """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``.
@@ -397,3 +596,11 @@ class InferenceClient:
         Raises ``wire.KeepaliveUnsupported`` where the server serves sessions but not the call.
         """
         return self._wire.keepalive(self._address, self.headers, self.open_timeout)
+
+
+def _https_root(session_url: str) -> str:
+    """The `https://host[:port]` of a `wss://` or `https://` session URL: where the Modal session calls go."""
+    parts = urllib.parse.urlsplit(session_url)
+    if parts.scheme not in ('wss', 'https') or not parts.hostname or '@' in parts.netloc:
+        raise ValueError(f'Modal sessions need a TLS endpoint, and this session URL is {session_url}')
+    return f'https://{parts.netloc}'

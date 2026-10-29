@@ -9,6 +9,7 @@ from positronic import keys
 from positronic.cfg import policy as policy_cfg
 from positronic.cfg.eval.sim.positronic import stack_cubes_collect
 from positronic.cfg.policy import file_headers
+from positronic.offboard.client import DEFAULT_CONNECT_DEADLINE
 from positronic.policy import RemotePolicy
 
 SECRET = 'ak-do-not-print-me'
@@ -56,13 +57,43 @@ def test_file_headers_refuses_what_is_not_a_header_set_without_quoting_it(tmp_pa
     assert excinfo.value.__suppress_context__
 
 
-@pytest.mark.parametrize('name', ['remote', 'authed_remote', 'nebius_remote', 'file_authed_remote'])
+@pytest.mark.parametrize(
+    'name', ['remote', 'authed_remote', 'nebius_remote', 'file_authed_remote', 'modal_remote', 'modal_remote_legacy']
+)
 def test_a_remote_policy_config_carries_an_address_its_network_flags_reach(name):
     """`--policy.address.host` overrides a nested config, so every policy config holds one to override."""
     overridden = getattr(policy_cfg, name).override(**{'address.host': 'gpu-host', 'address.port': 443})
 
     address = overridden.kwargs['address'].instantiate()
     assert (address.host, address.port) == ('gpu-host', 443)
+
+
+def test_modal_remote_starts_a_modal_session_before_its_dial(tmp_path):
+    """A Modal Server with sticky sessions, on its TLS edge, with the header file for the session start."""
+    path = tmp_path / 'headers.json'
+    path.write_text(json.dumps({'Modal-Key': SECRET, 'Modal-Secret': 'as-also-secret'}))
+
+    policy = policy_cfg.modal_remote.override(**{
+        'address.host': 'app-server.us-east.modal.direct',
+        'headers.path': str(path),
+    }).instantiate()
+
+    client = policy._client
+    assert client.session_url == 'wss://app-server.us-east.modal.direct/api/v1/session'
+    assert client.open_timeout == client.connect_deadline == DEFAULT_CONNECT_DEADLINE
+    assert client.headers == {'Modal-Key': SECRET, 'Modal-Secret': 'as-also-secret'}
+    assert client._modal_sessions is not None
+
+
+def test_modal_remote_legacy_dials_once_through_a_cold_start_without_a_modal_session(tmp_path):
+    """A web endpoint holds the dial while it starts a container: one dial as long as the connect deadline."""
+    path = tmp_path / 'headers.json'
+    path.write_text(json.dumps({'Modal-Key': SECRET}))
+
+    policy = policy_cfg.modal_remote_legacy.override(**{'address.host': 'app.example.com', 'headers.path': str(path)})
+    client = policy.instantiate()._client
+    assert client.open_timeout == client.connect_deadline == DEFAULT_CONNECT_DEADLINE
+    assert client._modal_sessions is None
 
 
 def test_the_collection_eval_records_every_camera_that_the_teleop_collection_policy_shows():
