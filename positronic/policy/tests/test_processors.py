@@ -15,10 +15,9 @@ import pimm
 from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, JointPosition, PositionControl
+from positronic.drivers.roboarm.command import JointPosition, PositionControl
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
-from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.base import Answer, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
@@ -53,7 +52,7 @@ from positronic.policy.codecs.observation import (
 )
 from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.keys import END
+from positronic.policy.keys import END, RTC
 from positronic.policy.processors import (
     ChunkedSchedule,
     ConstantDuration,
@@ -62,7 +61,6 @@ from positronic.policy.processors import (
     DurationEstimateRun,
     EndOnField,
     PauseOnUnavailable,
-    PrefixSampling,
     RTCSchedule,
     TemporalStack,
 )
@@ -362,9 +360,12 @@ class SlowModel:
         self._runtime = runtime
         self.calls: list[tuple[int, list]] = []
         self.prefixes: list[list] = []
+        self.requests: list[dict] = []
         self._pending: Future | None = None
 
-    def submit(self, function, obs, prefix=()):
+    def submit(self, function, obs):
+        self.requests.append(dict(obs))
+        prefix = obs[RTC.ACTION_PREFIX][RTC.PREFIX_ACTIONS] if RTC.ACTION_PREFIX in obs else []
         self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
         self.prefixes.append(list(prefix))
         self._pending = Future()
@@ -406,9 +407,9 @@ class ObservingModel(SlowModel):
         super().__init__(runtime)
         self.seen: list = []
 
-    def submit(self, function, obs, prefix=()):
+    def submit(self, function, obs):
         self.seen.append(obs[POSITION])
-        return super().submit(function, obs, prefix)
+        return super().submit(function, obs)
 
 
 @pytest.mark.parametrize('status', list(RobotStatus))
@@ -806,7 +807,7 @@ def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, esti
     estimate = estimate_factory()
     estimate.run().update(0.4)
     schedule = (
-        RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=estimate)
+        RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=estimate)
         if rtc
         else ChunkedSchedule(fps=10, inference_lead=estimate)
     )
@@ -824,7 +825,8 @@ def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, esti
                 run.send({})
             assert model.calls[-1][0] == call_ns
             if rtc:
-                assert len(model.calls[-1][1]) == delay_ns // PERIOD_NS
+                assert model.requests[-1][RTC.ESTIMATED_LATENCY_SEC] == pytest.approx(delay_ns / 1e9)
+                assert len(model.calls[-1][1]) == 5
         finally:
             run.close()
 
@@ -899,13 +901,11 @@ def test_lead_and_handoff_use_the_horizon_truncated_end(execution):
         run.close()
 
 
-def _rtc(execution, monkeypatch, call_after_sec, prefix_duration, prefix_sampling=PrefixSampling.PREVIOUS):
+def _rtc(execution, monkeypatch, call_after_sec, latency_estimate):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    schedule = RTCSchedule(
-        fps=10, call_after_sec=call_after_sec, prefix_duration=prefix_duration, prefix_sampling=prefix_sampling
-    )
+    schedule = RTCSchedule(fps=10, call_after_sec=call_after_sec, latency_estimate=latency_estimate)
     run = runtime.start(schedule, Mock())
 
     def step(index):
@@ -915,7 +915,7 @@ def _rtc(execution, monkeypatch, call_after_sec, prefix_duration, prefix_samplin
     return model, run, step
 
 
-def test_rtc_follows_the_drawing(execution, monkeypatch):
+def test_rtc_executes_old_plan_until_the_answer_then_skips_elapsed_new_actions(execution, monkeypatch):
     model, run, step = _rtc(execution, monkeypatch, 0.5, DelayEstimate.mean())
     answers = {3: 'o', 11: 'n'}
     executed = []
@@ -930,7 +930,11 @@ def test_rtc_follows_the_drawing(execution, monkeypatch):
     finally:
         run.close()
     assert executed == ['--'] * 3 + [f'o{i}' for i in range(8)] + [f'n{i}' for i in range(3, 10)]
-    assert model.calls == [(0, []), (8 * PERIOD_NS, ['o5', 'o6', 'o7']), (13 * PERIOD_NS, ['n5', 'n6', 'n7'])]
+    assert model.calls == [
+        (0, []),
+        (8 * PERIOD_NS, [f'o{i}' for i in range(5, 10)]),
+        (13 * PERIOD_NS, [f'n{i}' for i in range(5, 10)]),
+    ]
 
 
 def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execution, monkeypatch):
@@ -945,19 +949,12 @@ def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execut
     finally:
         run.close()
     assert executed == ['--', 'o0', 'o1', 'o2', 'o3', '--', '--', '--', 'n5', 'n6']
-    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2']), (8 * PERIOD_NS, ['n5', 'n6', 'n7'])]
+    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2', 'o3']), (8 * PERIOD_NS, [f'n{i}' for i in range(5, 10)])]
 
 
-@pytest.mark.parametrize(
-    ('prefix_duration', 'prefix'),
-    [
-        (DelayEstimate.mean(), ['n3', 'n4']),
-        (DelayEstimate.max(), ['n3', 'n4', 'n5']),
-        (DelayEstimate.max(max_sec=0.1), ['n3']),
-    ],
-)
-def test_rtc_calls_at_once_after_a_late_answer(execution, monkeypatch, prefix_duration, prefix):
-    model, run, step = _rtc(execution, monkeypatch, 0.2, prefix_duration)
+@pytest.mark.parametrize('estimate', [DelayEstimate.mean(), DelayEstimate.max(), ConstantDuration(0.1)])
+def test_rtc_sends_the_remaining_plan_independently_of_its_latency_estimate(execution, monkeypatch, estimate):
+    model, run, step = _rtc(execution, monkeypatch, 0.2, estimate)
     answers = {1: 'o', 6: 'n'}
     executed = []
     try:
@@ -968,108 +965,35 @@ def test_rtc_calls_at_once_after_a_late_answer(execution, monkeypatch, prefix_du
     finally:
         run.close()
     assert executed == ['--', 'o0', 'o1', 'o2', 'o3', 'o4', 'n3']
-    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2']), (6 * PERIOD_NS, prefix)]
+    assert model.calls == [
+        (0, []),
+        (3 * PERIOD_NS, [f'o{i}' for i in range(2, 10)]),
+        (6 * PERIOD_NS, [f'n{i}' for i in range(3, 10)]),
+    ]
 
 
-@pytest.mark.parametrize(
-    ('call_after_sec', 'sampling', 'prefix'),
-    [
-        (0.4, PrefixSampling.PREVIOUS, ['o4', 'o5']),
-        (0.4, PrefixSampling.NEXT, ['o4', 'o5']),
-        (0.52, PrefixSampling.PREVIOUS, ['o5']),
-        (0.52, PrefixSampling.NEAREST, ['o5']),
-        (0.52, PrefixSampling.NEXT, []),
-    ],
-)
-def test_rtc_prefix_stops_at_the_end_of_the_old_chunk(execution, monkeypatch, call_after_sec, sampling, prefix):
-    model, run, step = _rtc(execution, monkeypatch, call_after_sec, ConstantDuration(0.5), sampling)
+@pytest.mark.parametrize('call_after_sec', [0.4, 0.42, 0.47, 0.52, 0.6, 0.7])
+def test_rtc_keeps_original_actions_and_reports_their_time_offsets(execution, monkeypatch, call_after_sec):
+    model, run, step = _rtc(execution, monkeypatch, call_after_sec, ConstantDuration(0.1))
     _, clock = execution
+    actions = [{MOTOR: float(i), 'joints': JointPosition(np.array([i, 2 * i]))} for i in range(6)]
     call_ns = round((0.1 + call_after_sec) * 1e9)
     try:
-        for index in range(6):
-            if index == 1:
-                model.answer('o', 6)
-            step(index)
+        step(0)
+        model.answer_with(actions)
+        step(1)
         clock.advance_to_ns(call_ns)
         run.send({})
+        prefix = model.requests[-1][RTC.ACTION_PREFIX]
+        first = min(int(round(call_after_sec * 1e9) // PERIOD_NS), len(actions))
+        assert [action[MOTOR] for action in prefix[RTC.PREFIX_ACTIONS]] == list(range(first, len(actions)))
+        if prefix[RTC.PREFIX_ACTIONS]:
+            assert prefix[RTC.CHUNK_OFFSET_SEC] == pytest.approx(first / 10)
+            assert prefix[RTC.OBSERVATION_OFFSET_SEC] == pytest.approx(first / 10 - call_after_sec)
+            for expected, actual in zip(actions[first:], prefix[RTC.PREFIX_ACTIONS], strict=True):
+                assert actual['joints'] is expected['joints']
     finally:
         run.close()
-    assert model.calls == [(0, []), (call_ns, prefix)]
-
-
-@pytest.mark.parametrize(
-    ('call_after_sec', 'sampling', 'prefix'),
-    [
-        (0.42, PrefixSampling.PREVIOUS, ['o4', 'o5', 'o6']),
-        (0.42, PrefixSampling.NEAREST, ['o4', 'o5', 'o6']),
-        (0.42, PrefixSampling.NEXT, ['o5', 'o6', 'o7']),
-        (0.45, PrefixSampling.NEAREST, ['o4', 'o5', 'o6']),
-        (0.47, PrefixSampling.PREVIOUS, ['o4', 'o5', 'o6']),
-        (0.47, PrefixSampling.NEAREST, ['o5', 'o6', 'o7']),
-        (0.47, PrefixSampling.NEXT, ['o5', 'o6', 'o7']),
-    ],
-)
-def test_rtc_prefix_reads_the_old_chunk_at_the_new_due_times(execution, monkeypatch, call_after_sec, sampling, prefix):
-    model, run, step = _rtc(execution, monkeypatch, call_after_sec, ConstantDuration(0.3), sampling)
-    _, clock = execution
-    call_ns = round((0.1 + call_after_sec) * 1e9)
-    try:
-        for index in range(6):
-            if index == 1:
-                model.answer('o')
-            step(index)
-        clock.advance_to_ns(call_ns)
-        run.send({})
-    finally:
-        run.close()
-    assert model.calls == [(0, []), (call_ns, prefix)]
-
-
-def _interpolation_action(i):
-    return {
-        MOTOR: 10.0 * i,
-        'joints': JointPosition(positions=np.array([i, 2.0 * i])),
-        'pose': CartesianPosition(
-            pose=Transform3D(np.array([i, 0.0, 0.0]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.1 * i])))
-        ),
-        'label': f'x{i}',
-    }
-
-
-def test_rtc_interpolates_each_command_type(execution, monkeypatch):
-    model, run, step = _rtc(execution, monkeypatch, 0.42, ConstantDuration(0.1), PrefixSampling.INTERPOLATE)
-    _, clock = execution
-    try:
-        for index in range(6):
-            if index == 1:
-                model.answer_with([_interpolation_action(i) for i in range(10)])
-            step(index)
-        clock.advance_to_ns(520_000_000)
-        run.send({})
-    finally:
-        run.close()
-    [action] = model.prefixes[1]
-    assert action[MOTOR] == pytest.approx(42.0)
-    np.testing.assert_allclose(action['joints'].positions, [4.2, 8.4])
-    np.testing.assert_allclose(action['pose'].pose.translation, [4.2, 0.0, 0.0])
-    np.testing.assert_allclose(action['pose'].pose.rotation.as_rotvec, [0.0, 0.0, 0.42])
-    assert action['label'] == 'x4'
-
-
-def test_rtc_interpolation_holds_the_last_old_action_after_its_due_time(execution, monkeypatch):
-    model, run, step = _rtc(execution, monkeypatch, 0.52, ConstantDuration(0.1), PrefixSampling.INTERPOLATE)
-    _, clock = execution
-    try:
-        for index in range(6):
-            if index == 1:
-                model.answer_with([_interpolation_action(i) for i in range(6)])
-            step(index)
-        clock.advance_to_ns(620_000_000)
-        run.send({})
-    finally:
-        run.close()
-    [action] = model.prefixes[1]
-    assert action[MOTOR] == 50.0
 
 
 @pytest.mark.parametrize('duration', [DelayEstimate.mean, DelayEstimate.max])
@@ -1079,7 +1003,7 @@ def test_delay_estimates_refuse_a_negative_cap(duration):
 
 
 @pytest.mark.parametrize(
-    ('prefix_duration', 'expected'),
+    ('latency_estimate', 'expected'),
     [
         (DelayEstimate.mean(last=2), 0.2),
         (DelayEstimate.max(last=2), 0.3),
@@ -1087,8 +1011,8 @@ def test_delay_estimates_refuse_a_negative_cap(duration):
         (DelayEstimate.max(max_sec=0.4), 0.4),
     ],
 )
-def test_delay_estimates_read_the_last_delays_and_cap_them(prefix_duration, expected):
-    estimate = prefix_duration.run()
+def test_delay_estimates_read_the_last_delays_and_cap_them(latency_estimate, expected):
+    estimate = latency_estimate.run()
     estimate.update(0.9)
     estimate.update(0.1)
     assert estimate.update(0.3) == pytest.approx(expected)
@@ -1121,7 +1045,7 @@ def test_rtc_accepts_a_constant_duration(execution, monkeypatch):
             if tick == 3:
                 model.answer('o')
             step(tick)
-        assert model.calls == [(0, []), (8 * PERIOD_NS, ['o5', 'o6'])]
+        assert model.calls == [(0, []), (8 * PERIOD_NS, [f'o{i}' for i in range(5, 10)])]
     finally:
         run.close()
 
@@ -1266,6 +1190,7 @@ def test_wire_names_match_the_registered_components():
         'observation_codec': ObservationCodecV1(state={}, images={}),
         'pack_fields': PackFields(encode_layout={'state': ['input']}),
         'split_action_chunk': SplitActionChunk(),
+        'rtc_schedule': RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=DelayEstimate.max()),
         'state_observation': StateObservationCodec(state={}),
         'select_observation_fields': SelectObservationFields(mapping={}),
         'rename_observation_fields': RenameObservationFields({'state': 'input'}),
@@ -1396,7 +1321,8 @@ class _EndingModel:
         self.calls: list[int] = []
         self.prefixes: list[list] = []
 
-    def __call__(self, obs, prefix=()):
+    def __call__(self, obs):
+        prefix = obs[RTC.ACTION_PREFIX][RTC.PREFIX_ACTIONS] if RTC.ACTION_PREFIX in obs else []
         call = len(self.calls)
         self.calls.append(self._runtime.time_ns)
         self.prefixes.append(list(prefix))
@@ -1534,7 +1460,7 @@ def test_a_late_round_ends_the_run_on_the_next_end_that_plays(execution, monkeyp
     ('schedule', 'calls'),
     [
         (lambda: ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.1), record_stats=False), [0, PERIOD_NS]),
-        (lambda: RTCSchedule(fps=10, call_after_sec=0.1, prefix_duration=ConstantDuration()), [0, 2 * PERIOD_NS]),
+        (lambda: RTCSchedule(fps=10, call_after_sec=0.1, latency_estimate=ConstantDuration()), [0, 2 * PERIOD_NS]),
     ],
     ids=['chunked', 'rtc'],
 )
@@ -1567,7 +1493,7 @@ def test_rtc_plays_an_end_only_from_an_element_that_it_does_not_skip(execution, 
     runtime, _ = execution
     model = _EndingModel(runtime, [_ending(i) if i == 6 else {MOTOR: i} for i in range(10)], on=on)
     _answer_after(runtime, monkeypatch, 5 * PERIOD_NS // 2)
-    schedule = RTCSchedule(fps=10, call_after_sec=0.1, prefix_duration=ConstantDuration(0.25))
+    schedule = RTCSchedule(fps=10, call_after_sec=0.1, latency_estimate=ConstantDuration(0.25))
     sent, ended = _play(execution, schedule, model, [i * PERIOD_NS // 2 for i in range(60)])
     assert ended is end
     assert 6 not in sent
@@ -1576,7 +1502,7 @@ def test_rtc_plays_an_end_only_from_an_element_that_it_does_not_skip(execution, 
 def test_the_rtc_prefix_carries_end_like_any_other_command(execution):
     runtime, clock = execution
     model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2), {MOTOR: 3}])
-    run = runtime.start(RTCSchedule(fps=10, call_after_sec=0, prefix_duration=ConstantDuration(0.3)), model)
+    run = runtime.start(RTCSchedule(fps=10, call_after_sec=0, latency_estimate=ConstantDuration(0.3)), model)
     try:
         run.send({})
         clock.advance_to_ns(PERIOD_NS // 2)
@@ -1584,3 +1510,82 @@ def test_the_rtc_prefix_carries_end_like_any_other_command(execution):
     finally:
         run.close()
     assert model.prefixes == [[], [{MOTOR: 1}, _ending(2), {MOTOR: 3}]]
+
+
+def test_rtc_sends_measured_and_expected_latency_with_the_remaining_plan(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    schedule = RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration(0.2))
+    run = runtime.start(schedule, Mock())
+    try:
+        run.send({})
+        model.answer('old')
+        clock.advance_to_ns(100_000_000)
+        run.send({})
+        clock.advance_to_ns(600_000_000)
+        run.send({})
+        first = model.requests[0][RTC.ACTION_PREFIX]
+        second = model.requests[1][RTC.ACTION_PREFIX]
+        assert first[RTC.PREFIX_ACTIONS] == []
+        assert second[RTC.CHUNK_OFFSET_SEC] == 0.5
+        assert second[RTC.OBSERVATION_OFFSET_SEC] == 0.0
+        assert model.requests[0][RTC.MEASURED_LATENCY_SEC] is None
+        assert model.requests[1][RTC.MEASURED_LATENCY_SEC] == 0.1
+        assert model.requests[0][RTC.ESTIMATED_LATENCY_SEC] == 0.0
+        assert model.requests[1][RTC.ESTIMATED_LATENCY_SEC] == 0.2
+        assert [action[MOTOR] for action in second[RTC.PREFIX_ACTIONS]] == [f'old{i}' for i in range(5, 10)]
+    finally:
+        run.close()
+
+
+def test_rtc_description_preserves_commands_without_a_model_codec(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    description = RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration(0.2)).to_spec()
+    restored = spec.from_spec(description)
+    assert restored.to_spec() == description
+    run = runtime.start(restored, Mock())
+    try:
+        run.send({})
+        model.answer_with([
+            {keys.ROBOT_COMMAND: JointPosition(np.array([i, i + 1])), keys.TARGET_GRIP: float(i % 2)} for i in range(10)
+        ])
+        clock.advance_to_ns(100_000_000)
+        run.send({})
+        clock.advance_to_ns(600_000_000)
+        run.send({})
+        prefix = model.requests[-1][RTC.ACTION_PREFIX]
+        np.testing.assert_array_equal(
+            [action[keys.ROBOT_COMMAND].positions for action in prefix[RTC.PREFIX_ACTIONS]],
+            [[i, i + 1] for i in range(5, 10)],
+        )
+        assert [action[keys.TARGET_GRIP] for action in prefix[RTC.PREFIX_ACTIONS]] == [1.0, 0.0, 1.0, 0.0, 1.0]
+    finally:
+        run.close()
+
+
+def test_rtc_keeps_camera_history_lazy_until_inference(execution, monkeypatch):
+    runtime, _ = execution
+    submitted = []
+
+    def submit(function, observation):
+        submitted.append(observation)
+        return _UnchargedAnswer(Future())
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+    stack = Mock(wraps=np.stack)
+    monkeypatch.setattr(np, 'stack', stack)
+    schedule = Sequential(
+        TemporalStack(('camera',), (-0.1, 0.0)),
+        RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration()),
+    )
+    run = runtime.start(schedule, Mock())
+    try:
+        run.send({'camera': np.zeros((2, 3, 3), dtype=np.uint8)})
+        stack.assert_not_called()
+        assert submitted[0]['camera'].shape == (2, 2, 3, 3)
+        stack.assert_called_once()
+    finally:
+        run.close()

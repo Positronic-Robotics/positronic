@@ -29,3 +29,14 @@ POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'
 
 OBS_TIME_NS = 'obs_time_ns'
+
+
+class RTC:
+    """Observation fields describing the scheduler's remaining plan and timing."""
+
+    ACTION_PREFIX = 'action_prefix'
+    PREFIX_ACTIONS = 'actions'
+    CHUNK_OFFSET_SEC = 'chunk_offset_sec'
+    OBSERVATION_OFFSET_SEC = 'observation_offset_sec'
+    ESTIMATED_LATENCY_SEC = 'estimated_latency_sec'
+    MEASURED_LATENCY_SEC = 'measured_latency_sec'

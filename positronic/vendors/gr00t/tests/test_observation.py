@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from positronic_model_server import serialization
+from positronic_model_server.spec import SEQ
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
@@ -17,8 +18,10 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
+from positronic.drivers.roboarm.command import JointPosition
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec
+from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec, EncodeImages
 from positronic.policy.codecs.metadata import MODEL_SETTINGS
 from positronic.policy.keys import ACTION_FPS
 from positronic.vendors.gr00t import recipes
@@ -220,3 +223,45 @@ def test_droid_frame_and_pixels_match_upstream_robot_client(observation):
     for name, source in {gr00t.EXTERIOR_IMAGE: keys.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE: keys.WRIST_IMAGE}.items():
         expected = loaded['image'].resize_with_pad(observation[source], 180, 320)
         np.testing.assert_array_equal(encoded[gr00t.VIDEO][name][0, 0], expected)
+
+
+def test_rtc_targets_survive_observation_packing_and_image_compression(observation):
+    settings = model_settings.droid()
+    stack = recipe.client_stack(
+        settings,
+        fps=15,
+        horizon_sec=None,
+        image_mappings=settings[model_settings.IMAGE_MAPPINGS],
+        compress_images=True,
+        rtc={serving_keys.RTC.CALL_AFTER_SEC: 0.5, serving_keys.RTC.MAX_DELAY_SEC: 1.0},
+    )
+    definition = spec.from_spec(stack[SEQ][1])
+    assert isinstance(definition, Codec)
+    codec = definition | EncodeImages()
+    targets = [{keys.ROBOT_COMMAND: JointPosition(np.ones(7)), keys.TARGET_GRIP: 1.0}]
+    prefix = {
+        policy_keys.RTC.PREFIX_ACTIONS: targets,
+        policy_keys.RTC.CHUNK_OFFSET_SEC: 0.2,
+        policy_keys.RTC.OBSERVATION_OFFSET_SEC: -0.01,
+    }
+    received = []
+
+    def infer(encoded):
+        received.append(serialization.deserialise(serialization.serialise(encoded)))
+        return ({gr00t.JOINT_POSITION: np.zeros((1, 40, 7)), gr00t.GRIP: np.zeros((1, 40, 1))}, {})
+
+    result = codec.wrap(infer)({
+        **observation,
+        policy_keys.RTC.ACTION_PREFIX: prefix,
+        policy_keys.RTC.ESTIMATED_LATENCY_SEC: 0.2,
+        policy_keys.RTC.MEASURED_LATENCY_SEC: 0.15,
+    })
+    assert len(result) == 40
+    restored = received[0][serving_keys.RTC.FIELD]
+    assert restored[serving_keys.RTC.CHUNK_OFFSET_SEC] == 0.2
+    assert restored[serving_keys.RTC.OBSERVATION_OFFSET_SEC] == -0.01
+    np.testing.assert_array_equal(restored[gr00t.ACTION][0][gr00t.JOINT_POSITION], np.ones(7, dtype=np.float32))
+    np.testing.assert_array_equal(restored[gr00t.ACTION][0][gr00t.GRIP], [1.0])
+    assert restored[serving_keys.RTC.ESTIMATED_LATENCY_SEC] == 0.2
+    assert restored[serving_keys.RTC.MEASURED_LATENCY_SEC] == 0.15
+    assert set(received[0]) == {gr00t.VIDEO, gr00t.STATE, gr00t.LANGUAGE, serving_keys.RTC.FIELD}

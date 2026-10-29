@@ -22,12 +22,66 @@ from positronic.policy.codecs import (
     Codec,
     JointPositionAction,
     PackFields,
+    SelectObservationFields,
     SetControlMode,
     SplitActionChunk,
     StateObservationCodec,
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
 from positronic.policy.spec import from_spec
+
+
+def test_joint_commands_encode_through_composition_without_changing_the_plan():
+    codec = SelectObservationFields({'state': 'q'}) & JointPositionAction(
+        'joints', 'grip', num_joints=2, commands_path=('plan', 'commands')
+    )
+    codec = from_spec(json.loads(json.dumps(codec.to_spec())))
+    assert isinstance(codec, Codec)
+    commands = [{obs_keys.ROBOT_COMMAND: cmd_module.JointPosition(np.array([0.1, 0.2])), obs_keys.TARGET_GRIP: 1.0}]
+    plan = {'commands': commands, 'offset_sec': -0.02}
+    encoded = codec.encode({'q': [0.3, 0.4], 'plan': plan, 'unselected': 'omit'})
+    encoded = serialization.deserialise(serialization.serialise(encoded))
+    assert set(encoded) == {'state', 'plan'}
+    assert encoded['state'] == [0.3, 0.4]
+    assert encoded['plan']['offset_sec'] == -0.02
+    np.testing.assert_allclose(encoded['plan']['commands'][0]['joints'], [0.1, 0.2])
+    np.testing.assert_array_equal(encoded['plan']['commands'][0]['grip'], [1.0])
+    assert isinstance(commands[0][obs_keys.ROBOT_COMMAND], cmd_module.JointPosition)
+    decoded = codec.decode(encoded['plan']['commands'])
+    np.testing.assert_allclose(decoded[0][obs_keys.ROBOT_COMMAND].positions, [0.1, 0.2])
+    assert decoded[0][obs_keys.TARGET_GRIP] == 1.0
+
+
+def test_joint_command_path_can_select_inside_a_list_and_preserve_siblings():
+    codec = JointPositionAction('joints', 'grip', num_joints=2, commands_path=('plans', 1, 'commands'))
+    commands = [{obs_keys.ROBOT_COMMAND: cmd_module.JointPosition(np.array([1, 2])), obs_keys.TARGET_GRIP: 0.4}]
+    plans = [{'untouched': True}, {'commands': commands}]
+    encoded = codec.encode({'plans': plans})
+    assert encoded['plans'][0] is plans[0]
+    np.testing.assert_array_equal(encoded['plans'][1]['commands'][0]['joints'], [1, 2])
+    assert plans[1]['commands'] is commands
+
+
+def test_joint_command_encoding_distinguishes_empty_absent_and_malformed_input():
+    codec = JointPositionAction('joints', 'grip', commands_path=('plan', 'commands'))
+    assert codec.encode({}) == {}
+    assert codec.encode({'plan': {'commands': []}}) == {'plan': {'commands': []}}
+    with pytest.raises(KeyError):
+        codec.encode({'plan': {}})
+    with pytest.raises(ValueError, match='absolute joint targets'):
+        codec.encode({'plan': {'commands': [{obs_keys.ROBOT_COMMAND: JointDelta(np.zeros(7))}]}})
+    assert JointPositionAction('joints', 'grip').encode({'plan': {'commands': []}}) == {}
+
+
+@pytest.mark.parametrize('path', [[], (), ('plan', False), (0,), 'plan'])
+def test_joint_command_encoding_requires_a_named_tuple_path(path):
+    with pytest.raises(ValueError, match='commands_path'):
+        JointPositionAction('joints', 'grip', commands_path=path)
+
+
+def test_joint_command_wire_path_rejects_a_string():
+    with pytest.raises(ValueError, match='commands_path'):
+        from_spec(component('joint_position_action', joints_key='joints', grip_key='grip', commands_path='plan'))
 
 
 @pytest.mark.parametrize('positions', [False, True])

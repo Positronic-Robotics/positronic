@@ -25,7 +25,7 @@ from positronic.policy.codecs import Codec, ResizeMode, TransformImages
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration, RTCSchedule
 from positronic.policy.remote import RemotePolicy
 from positronic.utils import flatten_dict
 from positronic.utils.versions import Deprecation, Version
@@ -132,6 +132,12 @@ def test_v1_server_without_action_fps_runs_at_the_default_rate_and_warns(caplog)
         stack = from_v1_spec({'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}, {}, spec.from_spec)
     assert flatten_dict(stack.meta())[ACTION_FPS] == V1_SERVER_DEFAULT_ACTION_FPS
     assert 'Rebuild the server on current positronic' in caplog.text
+
+
+def test_v1_stack_rejects_an_rtc_schedule():
+    rtc = RTCSchedule(fps=15, call_after_sec=0.8, latency_estimate=ConstantDuration()).to_spec()
+    with pytest.raises(ValueError, match='over protocol v2'):
+        from_v1_spec({'seq': [{'name': 'stop_on_fault'}, rtc]}, {ACTION_FPS: 15.0}, spec.from_spec)
 
 
 def test_v1_fault_pauses_and_keeps_the_pending_answer_and_history(controlled_runtime):

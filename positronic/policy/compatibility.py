@@ -26,7 +26,7 @@ from positronic.policy.codecs import (
 )
 from positronic.policy.codecs.image import image_observation
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, RTCSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 
 TIMESTAMP = 'timestamp'
@@ -233,6 +233,8 @@ def from_v1_spec(
     timing: dict[str, float] = {}
     parts: list[dict[str, Any]] = []
     for part in _unnest_seq(node):
+        if part.get(NAME) == RTCSchedule.WIRE_NAME:
+            raise ValueError('Protocol v1 adds its own chunked schedule; serve rtc_schedule over protocol v2 or later')
         if _is_v1(part, ACTION_TIMESTAMP):
             timing[ChunkedSchedule.FPS_ARG] = part[ARGS][V1_FPS_ARG]
         elif _is_v1(part, ACTION_HORIZON):
