@@ -15,10 +15,9 @@ import pimm
 from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, JointPosition, PositionControl
+from positronic.drivers.roboarm.command import JointPosition, PositionControl
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
-from positronic.geom import Transform3D
 from positronic.policy import spec
 from positronic.policy.base import Answer, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
