@@ -24,6 +24,7 @@ from positronic.dataset.episode import META_CREATED_TS_NS, META_UID
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.signal import SupportsEncodedRepresentation
+from positronic.dataset.vector import parquet_write_options
 from positronic.dataset.video import VIDEO_ENCODING_V1, VIDEO_ENCODING_V2
 
 
@@ -104,7 +105,9 @@ def _write_video(chunks: Iterator[bytes], episode_path: Path, signal_name: str) 
     # Read Arrow IPC, write as parquet
     arrow_size = struct.unpack('<Q', read_bytes(8))[0]
     frames_table = pa.ipc.open_stream(read_bytes(arrow_size)).read_all()
-    pq.write_table(frames_table, episode_path / f'{signal_name}.frames.parquet')
+    pq.write_table(
+        frames_table, episode_path / f'{signal_name}.frames.parquet', **parquet_write_options(frames_table.schema)
+    )
 
 
 if __name__ == '__main__':

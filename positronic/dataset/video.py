@@ -17,7 +17,7 @@ from av.video.stream import VideoStream
 
 from .signal import IndicesLike, Kind, Signal, SignalMeta, SignalWriter
 from .time import Time, TimeBounds
-from .vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY, ParquetTimeIndex, timestamp_table
+from .vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY, ParquetTimeIndex, parquet_write_options, timestamp_table
 
 
 class VideoEncoderSession(Protocol):
@@ -238,7 +238,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                 self._session.abort()
                 raise RuntimeError('Video encoding failed') from e
 
-        pq.write_table(timestamp_table(self._frame_timestamps), self.frames_index_path)
+        frames = timestamp_table(self._frame_timestamps)
+        pq.write_table(frames, self.frames_index_path, **parquet_write_options(frames.schema))
 
     def abort(self) -> None:
         """Abort writing and remove any partial outputs."""

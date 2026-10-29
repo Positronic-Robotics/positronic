@@ -592,6 +592,34 @@ def test_named_columns_and_empty_signal(tmp_path, count):
         assert signal.time[Time(world=115)] == (1, Time(world=110, wall=1010))
 
 
+def _column_codings(path) -> dict[str, tuple[str, tuple[str, ...]]]:
+    row_group = pq.ParquetFile(path).metadata.row_group(0)
+    columns = (row_group.column(i) for i in range(row_group.num_columns))
+    return {c.path_in_schema: (c.compression, tuple(e for e in c.encodings if e != 'RLE')) for c in columns}
+
+
+def test_a_signal_file_is_zstd_with_delta_times_and_split_float_values(tmp_path):
+    path = tmp_path / 'vector.parquet'
+    with SimpleSignalWriter(path) as writer:
+        for i in range(5):
+            writer.append(np.array([0.5 * i, -1.0 * i]), Time(world=100 + i, wall=1000 + i))
+    assert _column_codings(path) == {
+        'ts.world': ('ZSTD', ('DELTA_BINARY_PACKED',)),
+        'ts.wall': ('ZSTD', ('DELTA_BINARY_PACKED',)),
+        f'{VALUE_COLUMN}.list.element': ('ZSTD', ('BYTE_STREAM_SPLIT',)),
+    }
+    np.testing.assert_array_equal(SimpleSignal(path)[4][0], [2.0, -4.0])
+
+
+def test_a_text_signal_keeps_plain_values_under_zstd(tmp_path):
+    path = tmp_path / 'text.parquet'
+    with SimpleSignalWriter(path) as writer:
+        for i, word in enumerate(['pick', 'place', 'pick']):
+            writer.append(word, Time(world=100 + i))
+    assert _column_codings(path)[VALUE_COLUMN] == ('ZSTD', ('PLAIN',))
+    assert [value for value, _ in SimpleSignal(path)] == ['pick', 'place', 'pick']
+
+
 def test_unnamed_legacy_file_queries(tmp_path):
     path = tmp_path / 'legacy.parquet'
     pq.write_table(pa.table({LEGACY_TIME_COLUMN: [100, 200], VALUE_COLUMN: [1, 2]}), path)
