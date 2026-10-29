@@ -5,6 +5,7 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
 (no sockets), and checks:
 
 - the wire observation contract: keys, shapes, dtypes, quat normalization, grip range;
+- ``gt_state``: a pose and a contact flag for every object, bool progress, and no progress on a reset frame;
 - grip: the binary gripper term reaches both closure extremes;
 - ``joint_pos`` pass-through: the applied action is bit-identical to the commanded joints (the leaderboard
   equivalence claim) and the arm converges onto the target;
@@ -17,9 +18,9 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
   reported but not fatal;
 - ``cartesian_delta``: solves to the same joint targets as the equivalent absolute command, and the composed
   target tracks end-to-end;
-- with ``--num-envs`` above one, the batch: every clone answers its own frame and takes its own command, a
-  clone with no command holds, a clone still makes subtask progress after another clone ends its episode, and a
-  one-scene recorded state restores into every clone.
+- with ``--num-envs`` above one, the batch: every clone answers its own frame and ``gt_state`` and takes its own
+  command, a clone with no command holds, a clone still makes subtask progress after another clone ends its
+  episode, and a one-scene recorded state restores into every clone.
 
 The transform checks all drive a single clone, whatever ``--num-envs`` asks for; the batch check builds its
 own env, because a clone count is fixed at ``create_env``.
@@ -140,6 +141,33 @@ def _check_obs_contract(env: RobolabEnv) -> None:
         quat = obs[protocol.OBS_EEF_QUAT]
         assert abs(float(np.linalg.norm(quat)) - 1.0) < 1e-3, f'eef_quat norm {quat}'
     print('  obs contract: OK (keys, camera set, shapes, dtypes, quat norm, grip range)')
+
+
+def _check_gt_state(env: RobolabEnv, obs: dict, *, reset: bool) -> None:
+    """The ``gt_state`` of one frame: every object's pose and contact flag, and bool progress."""
+    state = dict(obs[keys.GT_STATE])
+    objects = f'.{keys.GT_STATE_OBJECTS}.'
+    progress = f'.{keys.GT_STATE_PROGRESS}.'
+    for name in env._objects:
+        pose = state.pop(f'{objects}{name}.{keys.GT_STATE_POSE}')
+        assert isinstance(pose, np.ndarray) and pose.shape == (7,) and pose.dtype == np.float32, f'{name} pose {pose!r}'
+        assert abs(float(np.linalg.norm(pose[3:])) - 1.0) < 1e-3, f'{name} quat norm {pose[3:]}'
+        contact = state.pop(f'{objects}{name}.{keys.GT_STATE_GRIPPER_CONTACT}')
+        assert isinstance(contact, bool), f'{name} contact {contact!r}'
+    assert state, 'gt_state has no progress, but the task has a subtask'
+    for key, done in state.items():
+        assert key.startswith(progress), f'gt_state holds {key}, which is no object and no progress'
+        assert isinstance(done, bool), f'{key}: {done!r}'
+        assert not (reset and done), f'{key} is done on a reset frame, so it holds the prior trial'
+
+
+def _check_gt_state_contract(env: RobolabEnv) -> None:
+    out = _reset(env, _TOKEN)
+    _check_gt_state(env, out[protocol.FRAME_OBS], reset=True)
+    for _ in range(_SETTLE_STEPS):
+        out = _step(env, _HOLD)
+    _check_gt_state(env, out[protocol.FRAME_OBS], reset=False)
+    print(f'  gt_state: OK ({len(env._objects)} objects with pose and contact; bool progress, none at reset)')
 
 
 def _check_grip(env: RobolabEnv) -> None:
@@ -386,6 +414,7 @@ def _check_batch(num_envs: int) -> None:
         observed = frame[protocol.FRAME_OBS][protocol.OBS_JOINT_POS]
         nearest = int(np.argmin(np.abs(measured - observed).max(axis=1)))
         assert nearest == slot, f'slot {slot} answered the joints of clone {nearest}'
+        _check_gt_state(env, frame[protocol.FRAME_OBS], reset=False)
     print(f'  batch: OK ({num_envs} clones answer their own frames, take their own commands, and hold without one)')
     _check_a_clone_that_ends_first(env)
     _check_a_recorded_state_reaches_every_clone(env)
@@ -395,6 +424,7 @@ def _check_batch(num_envs: int) -> None:
 def main() -> None:
     env = RobolabEnv()
     _check_obs_contract(env)
+    _check_gt_state_contract(env)
     _check_grip(env)
     _check_joint_pos_passthrough(env)
     _check_joint_vel_anchoring(env)

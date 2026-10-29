@@ -60,7 +60,7 @@ class RobolabAdapter(WireCommandAdapter):
         return obs
 
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        return {robolab_keys.SUBTASK: raw_obs[robolab_keys.SUBTASK]}
+        return {name: raw_obs[name] for name in (robolab_keys.SUBTASK, robolab_keys.GT_STATE)}
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` covers termination and truncation, so the trial ends either way; ``success`` is True only

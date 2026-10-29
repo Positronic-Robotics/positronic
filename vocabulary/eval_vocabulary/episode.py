@@ -46,6 +46,13 @@ SUBTASK_SIGNAL = 'subtask'
 SUBTASK_COMPLETED_INDEX = 1
 SUBTASK_TOTAL_INDEX = 2
 SUBTASK_SCORE_INDEX = 3
+# RoboLab's scene state at each step, as one signal per value:
+# `<GT_STATE_SIGNAL>.objects.<object>.pose`, the [x, y, z, qw, qx, qy, qz] of the object, with the position in
+# the frame of the scene clone and the rotation in the world frame;
+# `<GT_STATE_SIGNAL>.objects.<object>.gripper_contact`, True when the gripper touches the object;
+# `<GT_STATE_SIGNAL>.progress.<group>.<index>.<condition>`, True when RoboLab counts the condition at that index of
+# the group's chain in the current subtask as done.
+GT_STATE_SIGNAL = 'gt_state'
 
 # ABC's task evaluator records each of its metrics as the signal `<ABC_TASK_EVAL_SIGNAL>.<metric>`, under ABC's name.
 ABC_TASK_EVAL_SIGNAL = 'task_eval'
