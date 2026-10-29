@@ -1,0 +1,28 @@
+This adapter serves checkpoints of the ABC project (https://github.com/amazon-far/abc). This repository holds no ABC
+weights.
+
+The ABC code and the released DiT checkpoints, abc_dit_xl_200k_model.pt included, are under the Apache License 2.0.
+The LICENSE file of the ABC repository is a copy of that licence.
+
+The DiT checkpoints embed a vision backbone that is derived from DINOv3, from Meta Platforms. The DINOv3 License
+governs that backbone, in the weights and in the code that loads them. LICENSE-DINOv3.md in this directory is a copy
+of that licence, from
+https://github.com/facebookresearch/dinov3/blob/ffb4bb89c6558ca3244655c25a3955d01788b732/LICENSE.md.
+
+Meta also publishes the DINOv3 License at https://ai.meta.com/resources/models-and-libraries/dinov3-license/. That
+text adds a second duty to section 1.b.i, so this NOTICE follows it.
+
+The DINOv3 License sets these duties:
+- A distribution of the weights to a third party, for example in a container image, carries a copy of the DINOv3
+  License (section 1.b.i).
+- A party that makes the weights available to a third party, for example as a served policy, prominently displays
+  "Built with DINOv3" on a related website, user interface, about page or product documentation (section 1.b.i, in
+  the text on Meta's page).
+- A publication of results from the model acknowledges the use of DINOv3 (section 1.b.ii).
+- The use complies with trade controls, and it is not for an end use that section 1.b.v prohibits.
+
+ABC's policy server downloads the CLIP ViT-B/32 text encoder of OpenAI at run time. The ABC repository holds its MIT
+licence at assets/third_party/clip/LICENSE.
+
+Positronic packaged the checkpoints with a serving entry point of its own, server.py. Positronic did not change the
+model weights. This adapter is not an official product of the ABC project or of Meta Platforms.

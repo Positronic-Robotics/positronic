@@ -3,6 +3,7 @@
 from .action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
+    BimanualJointsAction,
     CartesianDeltaAction,
     IKJointsAction,
     JointDeltaAction,
@@ -25,4 +26,11 @@ from .metadata import (
     lerobot_image,
     lerobot_vector,
 )
-from .observation import TASK_FIELD, PackFields, RenameObservationFields, SelectObservationFields, StateObservationCodec
+from .observation import (
+    TASK_FIELD,
+    PackFields,
+    RenameObservationFields,
+    SelectObservationFields,
+    StateObservationCodec,
+    bimanual_joints_state,
+)

@@ -12,8 +12,13 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
-from positronic.policy.codecs import LEROBOT_FEATURES
-from positronic.policy.codecs.observation import PackFields, RenameObservationFields, StateObservationCodec
+from positronic.policy.codecs import ACTION, LEROBOT_FEATURES, BimanualJointsAction
+from positronic.policy.codecs.observation import (
+    PackFields,
+    RenameObservationFields,
+    StateObservationCodec,
+    bimanual_joints_state,
+)
 from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.spec import from_spec
 
@@ -414,3 +419,25 @@ def test_observation_encode_task():
 
     obs_no_task = enc.encode({'a': 1.0})
     assert obs_keys.TASK not in obs_no_task
+
+
+def test_bimanual_joints_state_packs_the_left_arm_first_with_grips():
+    state = bimanual_joints_state({
+        obs_keys.arm_channel(obs_keys.ROBOT_STATE, obs_keys.LEFT_ARM) + obs_keys.JOINTS_SUFFIX: np.arange(
+            6, dtype=np.float64
+        ),
+        obs_keys.arm_channel(obs_keys.ROBOT_STATE, obs_keys.RIGHT_ARM) + obs_keys.JOINTS_SUFFIX: np.arange(
+            6, 12, dtype=np.float64
+        ),
+        obs_keys.arm_channel(obs_keys.GRIP, obs_keys.LEFT_ARM): 0.0,
+        obs_keys.arm_channel(obs_keys.GRIP, obs_keys.RIGHT_ARM): 0.75,
+    })
+
+    assert state.dtype == np.float32
+    np.testing.assert_array_equal(state, np.concatenate([np.arange(6), [0.0], np.arange(6, 12), [0.75]]))
+    # The action codec reads the same layout, so a state fed back as an action commands the observed pose.
+    decoded = BimanualJointsAction().decode({ACTION: state})
+    np.testing.assert_array_equal(
+        decoded[obs_keys.arm_channel(obs_keys.ROBOT_COMMAND, obs_keys.RIGHT_ARM)].positions, np.arange(6, 12)
+    )
+    assert decoded[obs_keys.arm_channel(obs_keys.TARGET_GRIP, obs_keys.RIGHT_ARM)] == pytest.approx(0.75)
