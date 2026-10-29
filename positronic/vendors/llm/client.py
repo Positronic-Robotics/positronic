@@ -17,6 +17,10 @@ from pydantic_ai.tools import ToolDefinition
 from positronic import telemetry, telemetry_keys
 
 
+class CallTimeout(TimeoutError):
+    """A model call ran past ``Endpoint.timeout``, its retries included."""
+
+
 class Endpoint:
     """Model configuration and recorded generation settings."""
 
@@ -58,15 +62,20 @@ class Endpoint:
                 runner.run(model.__aexit__(None, None, None))
 
     async def _request(self, model: Model, messages: list[ModelMessage], tools: list[ToolDefinition]) -> ModelResponse:
-        return await asyncio.wait_for(
-            model_request(
-                model,
-                messages,
-                model_settings={**self.settings, 'timeout': self.timeout},
-                model_request_parameters=ModelRequestParameters(function_tools=tools, allow_text_output=False),
-            ),
-            timeout=self.timeout,
-        )
+        deadline = asyncio.timeout(self.timeout)
+        try:
+            async with deadline:
+                return await model_request(
+                    model,
+                    messages,
+                    model_settings={**self.settings, 'timeout': self.timeout},
+                    model_request_parameters=ModelRequestParameters(function_tools=tools, allow_text_output=False),
+                )
+        except Exception as error:
+            # After the deadline, any error comes from its cancel, whatever type the provider turns it into.
+            if deadline.expired():
+                raise CallTimeout(f'ran past {self.timeout} s') from error
+            raise
 
     @telemetry.traced(telemetry_keys.SPAN_POLICY_INFER)
     def request(

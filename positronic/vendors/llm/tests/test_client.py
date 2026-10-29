@@ -15,8 +15,9 @@ from pydantic_ai.usage import RequestUsage
 from positronic import keys
 from positronic.policy import PolicyEnd
 from positronic.policy import keys as policy_keys
-from positronic.vendors.llm.client import Endpoint
-from positronic.vendors.llm.policy import llm
+from positronic.vendors.llm.client import CallTimeout, Endpoint
+from positronic.vendors.llm.motion import Motion
+from positronic.vendors.llm.policy import LLMPolicy, llm
 from positronic.vendors.llm.tests.test_policy import complete, execution, finish, observation
 
 
@@ -175,9 +176,46 @@ def test_endpoint_deadline_cancels_the_model_request():
         raise AssertionError('The timeout should cancel this request')
 
     endpoint = Endpoint(FunctionModel(delayed), timeout=1.0)
-    with endpoint.open() as request, pytest.raises(TimeoutError):
+    with endpoint.open() as request, pytest.raises(CallTimeout):
         request([ModelRequest.user_text_prompt('stop')], [])
     assert cancelled
+
+
+def test_an_error_that_a_provider_raises_for_the_deadline_cancel_is_the_call_deadline():
+    async def converts(messages, info):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError('Request cancelled') from None
+        raise AssertionError('The timeout should cancel this request')
+
+    endpoint = Endpoint(FunctionModel(converts), timeout=0.1)
+    with endpoint.open() as request, pytest.raises(CallTimeout):
+        request([ModelRequest.user_text_prompt('stop')], [])
+
+
+def test_a_timeout_inside_the_model_is_not_the_call_deadline():
+    async def fail(messages, info):
+        raise TimeoutError('socket timed out')
+
+    endpoint = Endpoint(FunctionModel(fail), timeout=60.0)
+    with endpoint.open() as request, pytest.raises(TimeoutError, match='socket timed out') as raised:
+        request([ModelRequest.user_text_prompt('stop')], [])
+    assert not isinstance(raised.value, CallTimeout)
+
+
+def test_a_call_past_the_deadline_ends_the_episode_with_the_stop_reason_timeout():
+    async def delayed(messages, info):
+        await asyncio.Event().wait()
+        raise AssertionError('The timeout should cancel this request')
+
+    with execution(LLMPolicy(Endpoint(FunctionModel(delayed), timeout=0.1), Motion())) as (run, runtime, clock):
+        assert complete(run, runtime, clock, observation()) is PolicyEnd.GIVE_UP
+        meta = runtime.metadata_snapshot()
+    assert meta[policy_keys.STOP_REASON] == 'timeout'
+    events = meta[policy_keys.TRANSCRIPT][-2:]
+    assert [event['event'] for event in events] == ['timed_out', 'accepted']
+    assert events[1][policy_keys.STOP_REASON] == 'timeout'
 
 
 def test_endpoint_propagates_model_errors():

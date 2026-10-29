@@ -18,7 +18,7 @@ from positronic.policy import PolicyEnd
 from positronic.policy import keys as policy_keys
 from positronic.policy.processors import PauseOnUnavailable
 from positronic.policy.sequential import Sequential
-from positronic.vendors.llm.client import Endpoint
+from positronic.vendors.llm.client import CallTimeout, Endpoint
 from positronic.vendors.llm.motion import Motion
 from positronic.vendors.llm.policy import LLMPolicy
 
@@ -54,6 +54,27 @@ class Camera(pimm.ControlSystem):
         while not should_stop.value:
             self.frames.emit(frame)
             yield pimm.Sleep(0.05)
+
+
+def arm_embodiment() -> Embodiment:
+    robot, camera = Arm(), Camera()
+    return Embodiment(
+        descriptor='test arm',
+        observations={
+            keys.ROBOT_STATE: Observation(robot.state, Serializers.robot_state),
+            keys.GRIP: Observation(robot.grip, None),
+            keys.WRIST_IMAGE: Observation(camera.frames, Serializers.camera_images),
+        },
+        commands={
+            keys.ROBOT_COMMAND: Command(robot.commands, Serializers.robot_command),
+            keys.TARGET_GRIP: Command(robot.target_grip, None),
+        },
+        prepare_handlers={},
+        static_meta=dict(ROBOT_STATIC_META),
+        meta_source=None,
+        control_systems=(robot, camera),
+        simulated=True,
+    )
 
 
 @pytest.mark.timeout(30)
@@ -99,27 +120,9 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
         ])
 
     monkeypatch.setattr(Endpoint, 'request', request)
-    robot, camera = Arm(), Camera()
-    embodiment = Embodiment(
-        descriptor='test arm',
-        observations={
-            keys.ROBOT_STATE: Observation(robot.state, Serializers.robot_state),
-            keys.GRIP: Observation(robot.grip, None),
-            keys.WRIST_IMAGE: Observation(camera.frames, Serializers.camera_images),
-        },
-        commands={
-            keys.ROBOT_COMMAND: Command(robot.commands, Serializers.robot_command),
-            keys.TARGET_GRIP: Command(robot.target_grip, None),
-        },
-        prepare_handlers={},
-        static_meta=dict(ROBOT_STATIC_META),
-        meta_source=None,
-        control_systems=(robot, camera),
-        simulated=True,
-    )
     policy = Sequential(PauseOnUnavailable(), LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,)))
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
-    run_world(embodiment, TaskDriver(lambda: [task, task], policy, LocalDatasetWriter(tmp_path)))
+    run_world(arm_embodiment(), TaskDriver(lambda: [task, task], policy, LocalDatasetWriter(tmp_path)))
     dataset = LocalDataset(tmp_path)
     assert len(dataset) == 2
     assert len(states) == 4
@@ -161,3 +164,28 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
         final_pose = list(episode[keys.EE_POSE].values())[-1]
         assert final_pose[0] == pytest.approx(target_x)
         assert len(episode[keys.EE_POSE]) > 1
+
+
+@pytest.mark.timeout(30)
+def test_a_timed_out_call_ends_its_episode_and_the_next_episode_runs(monkeypatch, tmp_path):
+    calls = []
+
+    def request(endpoint, runner, model, messages, tools):
+        calls.append(messages)
+        if len(calls) == 1:
+            raise CallTimeout('ran past 120.0 s')
+        return ModelResponse([
+            ToolCallPart('done', {'reason': 'Finish smoke test.', 'hindsight': 'Nothing moved.'}, tool_call_id='done')
+        ])
+
+    monkeypatch.setattr(Endpoint, 'request', request)
+    policy = LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,))
+    task = Task(instruction_source='Smoke test.', timeout_sec=10)
+    run_world(arm_embodiment(), TaskDriver(lambda: [task, task], policy, LocalDatasetWriter(tmp_path)))
+    timed_out, completed = LocalDataset(tmp_path)
+    assert timed_out[eval_keys.TERMINATED] is True
+    assert timed_out[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+    assert timed_out[eval_keys.POLICY_END] == PolicyEnd.GIVE_UP
+    assert timed_out[f'{policy_keys.POLICY_META}.{policy_keys.STOP_REASON}'] == 'timeout'
+    assert completed[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
+    assert len(calls) == 2

@@ -26,7 +26,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.vendors.llm.client import Endpoint
+from positronic.vendors.llm.client import CallTimeout, Endpoint
 from positronic.vendors.llm.motion import Motion
 from positronic.vendors.llm.policy import Images, LLMPolicy, Tool, llm
 
@@ -262,15 +262,21 @@ def test_invalid_reply_gets_correction_and_has_finite_retry_budget(model, bad):
 
 
 @pytest.mark.parametrize(
-    'ending,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP), ('call_budget', PolicyEnd.GIVE_UP)]
+    'ending,end,reply',
+    [
+        ('done', PolicyEnd.COMPLETE, finish('done')),
+        ('give_up', PolicyEnd.GIVE_UP, finish('give_up')),
+        (
+            'call_budget',
+            PolicyEnd.GIVE_UP,
+            ModelResponse([ToolCallPart(Tool.REVEAL_FRAMES.value, {'cameras': [], 'note': 'Look.'})]),
+        ),
+        ('timeout', PolicyEnd.GIVE_UP, Mock(side_effect=CallTimeout('ran past 120.0 s'))),
+    ],
 )
-def test_a_finished_run_returns_its_end_and_a_new_run_starts_fresh(model, ending, end):
+def test_a_finished_run_returns_its_end_and_a_new_run_starts_fresh(model, ending, end, reply):
     requests, replies = model
-    replies.append(
-        ModelResponse([ToolCallPart(Tool.REVEAL_FRAMES.value, {'cameras': [], 'note': 'Look.'})])
-        if ending == 'call_budget'
-        else finish(ending)
-    )
+    replies.append(reply)
     policy = llm(model='test', images='on_demand', max_calls=1)
     with execution(policy) as (run, runtime, clock):
         assert complete(run, runtime, clock, observation()) is end
@@ -317,8 +323,8 @@ def test_unavailable_arm_does_not_pause_inference_or_commands(model, status):
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize('error', [TimeoutError('API timed out'), RuntimeError('API unavailable')])
-def test_active_request_failure_propagates(model, error):
+@pytest.mark.parametrize('error', [TimeoutError('socket timed out'), RuntimeError('API unavailable')])
+def test_active_request_failure_other_than_the_call_deadline_propagates(model, error):
     requests, replies = model
     replies.append(Mock(side_effect=error))
     with execution(LLMPolicy(Endpoint('test'), Motion())) as (run, runtime, clock):

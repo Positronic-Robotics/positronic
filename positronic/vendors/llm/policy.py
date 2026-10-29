@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
@@ -32,7 +33,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.utils import flatten_dict
 
-from .client import Endpoint
+from .client import CallTimeout, Endpoint
 from .motion import Motion, MoveTo
 
 
@@ -306,12 +307,6 @@ class LLMPolicy(Policy):
                         ToolReturnPart(call.tool_name, 'No further actions.', tool_call_id=call.tool_call_id)
                     ])
                 )
-                self._record({
-                    'event': 'accepted',
-                    'call': self._calls,
-                    'time_ns': time_ns,
-                    policy_keys.STOP_REASON: call.tool_name,
-                })
                 return []
             start = _Observation.measured_pose(obs)
             self._target, trajectory = self._policy.motion.trajectory(start, data)
@@ -326,6 +321,17 @@ class LLMPolicy(Policy):
             )
             self._record({'event': 'accepted', 'call': self._calls, 'time_ns': time_ns, **result})
             return trajectory
+
+        def _stop(self, reason: str, end: PolicyEnd) -> PolicyEnd:
+            """The one exit of an episode."""
+            self._runtime.set_metadata(policy_keys.STOP_REASON, reason)
+            self._record({
+                'event': 'accepted',
+                'call': self._calls,
+                'time_ns': self._runtime.time_ns,
+                policy_keys.STOP_REASON: reason,
+            })
+            return end
 
     def __init__(
         self,
@@ -377,15 +383,8 @@ class LLMPolicy(Policy):
             obs = yield
             while True:
                 if conversation._calls >= self.max_calls:
-                    runtime.set_metadata(policy_keys.STOP_REASON, 'call_budget')
                     conversation._record({'event': 'budget_exhausted', 'calls': conversation._calls})
-                    conversation._record({
-                        'event': 'accepted',
-                        'call': conversation._calls,
-                        'time_ns': runtime.time_ns,
-                        policy_keys.STOP_REASON: 'call_budget',
-                    })
-                    return PolicyEnd.GIVE_UP
+                    return conversation._stop('call_budget', PolicyEnd.GIVE_UP)
                 if conversation._obs is None:
                     conversation._observe(obs, runtime.time_ns)
                 messages = conversation._request_messages()
@@ -393,15 +392,22 @@ class LLMPolicy(Policy):
                 obs = yield Step({}, runtime.time_ns)
                 while not answer.done():
                     obs = yield Step({}, runtime.time_ns)
-                decision = conversation._respond(answer.result())
+                try:
+                    response = answer.result()
+                except CallTimeout as error:
+                    # A call deadline is an outcome of this episode, not a defect of the policy.
+                    logging.error(f'Model call {conversation._calls}: {error}')
+                    conversation._record({'event': 'timed_out', 'call': conversation._calls})
+                    return conversation._stop('timeout', PolicyEnd.GIVE_UP)
+                decision = conversation._respond(response)
                 if decision is None:
                     continue
                 call, data = decision
                 chunk = conversation._accept(call, data, obs, runtime.time_ns)
                 if isinstance(data, Finish):
-                    runtime.set_metadata(policy_keys.STOP_REASON, call.tool_name)
                     runtime.set_metadata(policy_keys.HINDSIGHT, data.hindsight)
-                    return PolicyEnd.COMPLETE if call.tool_name == Tool.DONE else PolicyEnd.GIVE_UP
+                    end = PolicyEnd.COMPLETE if call.tool_name == Tool.DONE else PolicyEnd.GIVE_UP
+                    return conversation._stop(call.tool_name, end)
                 started_ns, index = runtime.time_ns, 0
                 end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)
                 while index < len(chunk) or runtime.time_ns < end_ns:
