@@ -106,7 +106,7 @@ def test_each_yambox_view_is_cropped_to_its_box_and_fills_abcs_view(size):
 
 def test_the_wide_top_crop_sends_the_whole_exterior_frame_and_crops_the_wrist_views():
     frames = {key: _framed_view(box) for key, box in codecs.YAMBOX_CROPS.items()}
-    codec = codecs.AbcObservationCodec({TASK: 'p'}, crops=codecs.CROPS['yambox_wide_top'])
+    codec = codecs.AbcObservationCodec({TASK: 'p'}, crops=codecs.CROPS[codecs.Crop.YAMBOX_WIDE_TOP])
 
     images = codec.encode(_obs(**frames))[abc_dit.IMAGES]
 

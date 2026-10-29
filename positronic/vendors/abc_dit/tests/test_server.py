@@ -119,7 +119,7 @@ def test_a_session_reaches_abcs_server_in_its_fields_and_gets_the_whole_chunk(tm
     # One warm-up request comes before the session's own.
     started, _, request = _log(tmp_path)
     fields = request['request']
-    images = fields.pop('images')
+    images = fields.pop(abc_dit.IMAGES)
     # The session's request carries the first noise draw of ABC's sim-eval seed.
     first_draw = np.random.default_rng(0).standard_normal((30, 14), dtype=np.float32)
     assert fields['noise'].pop('sum') == pytest.approx(float(first_draw.sum()), rel=1e-5)
@@ -245,8 +245,8 @@ def test_the_yambox_crop_pipeline_sends_each_cropped_view_to_abc_without_pad(tmp
     _infer_in_a_session(PolicyServer(model, server.yambox_crop_pipeline, auth_token=TOKEN), obs)
 
     request = _log(tmp_path)[-1]['request']
-    assert request['prompt'] == 'sim turn mug right side up'
-    for view in request['images'].values():
+    assert request[abc_dit.PROMPT] == 'sim turn mug right side up'
+    for view in request[abc_dit.IMAGES].values():
         assert view['shape'] == [3, 168, 224]
         assert view['mean'] > 250
 
@@ -294,7 +294,7 @@ def test_a_session_query_sets_the_crop_the_schedule_and_the_prompt_prefix_and_th
             reply[0][keys.arm_channel(keys.ROBOT_COMMAND, keys.LEFT_ARM)].positions, abc_stand_in.CHUNK[4, :6]
         )
     first, second = (entry['request'] for entry in _log(tmp_path)[-2:])
-    assert first['prompt'] == 'load plates into tabletop dish rack'
+    assert first[abc_dit.PROMPT] == 'load plates into tabletop dish rack'
     assert abc_dit.EXECUTED_ACTIONS not in first
     # The first prefix is the state, four times; the second is the last four actions the client played.
     state = [*range(6), 1.0, *range(6, 12), 0.0]
@@ -314,7 +314,7 @@ def test_a_session_with_no_query_gets_the_launch_pipeline(tmp_path):
     assert meta['local_stack']['seq'][0]['args'] == {'fps': 30.0, 'horizon_sec': 0.5}
     assert len(reply) == len(abc_stand_in.CHUNK)
     request = _log(tmp_path)[-1]['request']
-    assert request['prompt'] == 'sim load plates into tabletop dish rack'
+    assert request[abc_dit.PROMPT] == 'sim load plates into tabletop dish rack'
     assert abc_dit.PREFIX_LENGTH not in request and abc_dit.ACTION_PREFIX not in request
 
 

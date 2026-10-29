@@ -2,6 +2,7 @@
 decode its 14-D actions as one joint command and one grip target per arm."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import configuronic as cfn
@@ -70,15 +71,6 @@ class ActionPrefix:
             raise ValueError(f'The prefix and the played actions must fit in one chunk of {CHUNK_LENGTH}, got {self}')
 
 
-def _channels_first_view(frame: Any, key: str, box: CropBox) -> np.ndarray:
-    frame = np.asarray(frame)
-    if frame.ndim != 3 or frame.shape[2] != 3:
-        raise ValueError(f"Image '{key}' must be HWC with 3 channels, got {frame.shape}")
-    width, height = VIEW_SIZE
-    frame = image.transform_frame(box.crop(frame), width, height, mode=image.ResizeMode.PAD)
-    return np.ascontiguousarray(frame.transpose(2, 0, 1))
-
-
 # The session metadata fields that name what the codec does: the crop box of each view, in fractions of the frame,
 # the prompt prefix, and the length of the action prefix (0 for none).
 CROPS_META = 'abc_dit.crops'
@@ -119,6 +111,15 @@ class AbcObservationCodec(Codec):
         if unknown := set(self._crops) - set(self._cameras.values()):
             raise ValueError(f'Crop boxes name no camera of this codec: {sorted(unknown)}')
 
+    @staticmethod
+    def _channels_first_view(frame: Any, key: str, box: CropBox) -> np.ndarray:
+        frame = np.asarray(frame)
+        if frame.ndim != 3 or frame.shape[2] != 3:
+            raise ValueError(f"Image '{key}' must be HWC with 3 channels, got {frame.shape}")
+        width, height = VIEW_SIZE
+        frame = image.transform_frame(box.crop(frame), width, height, mode=image.ResizeMode.PAD)
+        return np.ascontiguousarray(frame.transpose(2, 0, 1))
+
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         task = inputs.get(keys.TASK, '')
         if task not in self._prompts:
@@ -126,7 +127,7 @@ class AbcObservationCodec(Codec):
         request = {
             abc_dit.STATE: bimanual_joints_state(inputs),
             abc_dit.IMAGES: {
-                name: _channels_first_view(inputs[key], key, self._crops.get(key, FULL_FRAME))
+                name: self._channels_first_view(inputs[key], key, self._crops.get(key, FULL_FRAME))
                 for name, key in self._cameras.items()
             },
             abc_dit.PROMPT: self._prompts[task],
@@ -168,8 +169,16 @@ YAMBOX_CROPS = {
 # The whole exterior frame, where the arm bases lie 0.48 of the width apart (ABC's top view: 0.47).
 YAMBOX_WIDE_TOP_CROPS = {**YAMBOX_CROPS, keys.EXTERIOR_IMAGE: FULL_FRAME}
 
-# The crop sets that a session can name.
-CROPS = {'none': {}, 'yambox': YAMBOX_CROPS, 'yambox_wide_top': YAMBOX_WIDE_TOP_CROPS}
+
+class Crop(StrEnum):
+    """The crop sets that a session can name."""
+
+    NONE = 'none'
+    YAMBOX = 'yambox'
+    YAMBOX_WIDE_TOP = 'yambox_wide_top'
+
+
+CROPS = {Crop.NONE: {}, Crop.YAMBOX: YAMBOX_CROPS, Crop.YAMBOX_WIDE_TOP: YAMBOX_WIDE_TOP_CROPS}
 
 
 @cfn.config(training_fps=FPS, prompt_prefix=SIM_PROMPT_PREFIX, crops=None, action_prefix=None)

@@ -12,6 +12,7 @@ Usage
 import socket
 import subprocess
 from dataclasses import dataclass
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -97,11 +98,6 @@ class AbcDitModel(Model):
             self._backend.wait()
 
 
-def _exit_status(process: subprocess.Popen) -> tuple[bool, int | None]:
-    code = process.poll()
-    return code is not None, code
-
-
 def _warm_observation() -> dict[str, Any]:
     """Black views and a zero state, in the fields of ABC's policy server."""
     width, height = codecs.VIEW_SIZE
@@ -112,6 +108,11 @@ def _warm_observation() -> dict[str, Any]:
         abc_dit.IMAGES: dict.fromkeys(cameras, view),
         abc_dit.PROMPT: '',
     }
+
+
+def _exit_status(process: subprocess.Popen) -> tuple[bool, int | None]:
+    code = process.poll()
+    return code is not None, code
 
 
 @cfn.config(fast_inference=True, noise_seed=0, backend_port=9000, prefix_length=None)
@@ -190,41 +191,55 @@ class Schedule:
         return codecs.ActionPrefix(self.prefix, self.executed) if self.prefix else None
 
 
-# The schedules that a session can name. `sync` is ABC's synchronous sim eval: 15 actions, then a new observation.
-# `rtc` takes the flags of ABC's real-robot deploy, `--rtc-prefix-length=4 --rtc-inference-lead-steps=7
-# --execute-chunk-dim=16`: the client asks 7 actions before the chunk ends, which covers the round trip.
-SCHEDULES = {'sync': Schedule(executed=15), 'rtc': Schedule(executed=16, lead=7, prefix=4)}
+class ScheduleName(StrEnum):
+    """The schedules that a session can name."""
+
+    SYNC = 'sync'
+    RTC = 'rtc'
+
+
+# `sync` is ABC's synchronous sim eval: 15 actions, then a new observation. `rtc` takes the flags of ABC's real-robot
+# deploy, `--rtc-prefix-length=4 --rtc-inference-lead-steps=7 --execute-chunk-dim=16`: the client asks 7 actions
+# before the chunk ends, which covers the round trip.
+SCHEDULES = {ScheduleName.SYNC: Schedule(executed=15), ScheduleName.RTC: Schedule(executed=16, lead=7, prefix=4)}
 # The one prefix length of the schedules, which the backend warms.
-PREFIX_LENGTH = SCHEDULES['rtc'].prefix
+PREFIX_LENGTH = SCHEDULES[ScheduleName.RTC].prefix
 
 # A crop box down to half of a frame's width and height still holds ABC's view size when the client sends this bound.
 CROPPED_UPLOAD_SIZE = (2 * codecs.VIEW_SIZE[0], 2 * codecs.VIEW_SIZE[1])
 
 
-@cfn.config(crop='none', schedule='sync', sim_prefix=True)
+@cfn.config(crop=codecs.Crop.NONE.value, schedule=ScheduleName.SYNC.value, sim_prefix=True)
 def pipeline(crop: str, schedule: str, sim_prefix: bool) -> PolicyDeployment:
     """The views cropped by the set `crop` of `codecs.CROPS`, played by the client as `schedule` of `SCHEDULES`, with
     the sim prompt prefix when `sim_prefix`. A session sets each one in its URL query. The client shrinks each view
     to fit ABC's view size, or twice that size for a cropped view, and the codec runs on this server."""
-    if crop not in codecs.CROPS:
-        raise ValueError(f'Unknown crop {crop!r}; the crops are {sorted(codecs.CROPS)}')
-    if schedule not in SCHEDULES:
-        raise ValueError(f'Unknown schedule {schedule!r}; the schedules are {sorted(SCHEDULES)}')
+    # The session query gives strings; each becomes its enum here.
+    try:
+        crop_set = codecs.Crop(crop)
+    except ValueError:
+        raise ValueError(f'Unknown crop {crop!r}; the crops are {sorted(crop.value for crop in codecs.Crop)}') from None
+    try:
+        schedule_name = ScheduleName(schedule)
+    except ValueError:
+        raise ValueError(
+            f'Unknown schedule {schedule!r}; the schedules are {sorted(name.value for name in ScheduleName)}'
+        ) from None
     if not isinstance(sim_prefix, bool):
         raise ValueError(f'sim_prefix must be true or false, got {sim_prefix!r}')
-    plan = SCHEDULES[schedule]
+    plan = SCHEDULES[schedule_name]
     codec = codecs.multitask_200k.override(
-        crops=codecs.CROPS[crop],
+        crops=codecs.CROPS[crop_set],
         prompt_prefix=codecs.SIM_PROMPT_PREFIX if sim_prefix else '',
         action_prefix=plan.action_prefix(),
     ).instantiate()
-    upload_size = CROPPED_UPLOAD_SIZE if codecs.CROPS[crop] else codecs.VIEW_SIZE
+    upload_size = CROPPED_UPLOAD_SIZE if codecs.CROPS[crop_set] else codecs.VIEW_SIZE
     return PolicyDeployment(
         Sequential(plan.client_schedule(), TransformImages(*upload_size, mode=ResizeMode.BOUND)), codec
     )
 
 
-yambox_crop_pipeline = pipeline.override(crop='yambox')
+yambox_crop_pipeline = pipeline.override(crop=codecs.Crop.YAMBOX.value)
 model_with_prefix = abc_dit_model.override(prefix_length=PREFIX_LENGTH)
 
 COMMANDS = {
