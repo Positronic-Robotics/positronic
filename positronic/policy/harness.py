@@ -8,7 +8,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import reduce
 from operator import or_
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -17,9 +16,8 @@ from opentelemetry.trace import Span
 import pimm
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, emission_time
 from positronic import geom, keys, telemetry, telemetry_keys
-from positronic.dataset.dataset import DatasetFactory
+from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import EpisodeWriter
-from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.ik import ee_frames, frame_transform
@@ -41,16 +39,16 @@ MAX_POLL_PERIOD_SEC = 1.0
 
 @dataclass
 class Rollout:
-    """One trial, its complete policy definition, and the path it records into.
+    """One trial, its policy definition, and its unopened recording writer.
 
     The harness creates and owns the runtime and the generator returned by
     ``runtime.start(policy)``. The policy supplies its own dependencies.
-    An ``output_path`` of ``None`` records nothing.
+    A ``writer`` of ``None`` records nothing.
     """
 
     task: Task
     policy: Policy
-    output_path: Path | None
+    writer: DatasetWriter | None
 
 
 class _EpisodeTelemetry:
@@ -113,7 +111,7 @@ class Harness(pimm.ControlSystem):
 
     Recording samples observations and privileged inputs before policy calls and at ``recording_hz`` between
     them. Each pass resets the sampling deadline. Harness appends commands after emission and waits for writer
-    finalization before answering the rollout. A rollout without an output path, or ``record=False``, writes nothing.
+    finalization before answering the rollout. A rollout without a writer records nothing.
 
     Each ``perform_task`` call runs one ``Rollout`` until its deadline, a truthy ``done`` signal, or the return of
     the policy run. A ``done`` or a return after the deadline counts as a timeout. When a ``done`` and a return come
@@ -126,13 +124,7 @@ class Harness(pimm.ControlSystem):
     """
 
     def __init__(
-        self,
-        embodiment: Embodiment,
-        *,
-        static_meta: dict[str, Any] | None = None,
-        dataset_factory: DatasetFactory = LocalDatasetWriter,
-        recording_hz: float = 1000,
-        record: bool = True,
+        self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None, recording_hz: float = 1000
     ):
         if not math.isfinite(recording_hz) or not 0 < recording_hz <= 1e9:
             raise ValueError('recording_hz must be positive and at most 1 GHz')
@@ -141,7 +133,6 @@ class Harness(pimm.ControlSystem):
         names = [*embodiment.observations, *embodiment.commands]
         if len(names) != len(set(names)):
             raise ValueError('Observation and command signal names must be distinct')
-        self._dataset_factory = dataset_factory if record else None
         self._recording_period_ns = round(1e9 / recording_hz)
         self._writer: EpisodeWriter | None = None
         self._recorded_signals: set[str] = set()
@@ -477,12 +468,12 @@ class Harness(pimm.ControlSystem):
         return runtime.take_completed()
 
     @contextmanager
-    def _recording(self, path: Path | None) -> Iterator[None]:
+    def _recording(self, dataset_writer: DatasetWriter | None) -> Iterator[None]:
         try:
             with ExitStack() as stack:
-                if path is not None and self._dataset_factory is not None:
+                if dataset_writer is not None:
                     with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
-                        dataset = stack.enter_context(self._dataset_factory(path))
+                        dataset = stack.enter_context(dataset_writer)
                         writer = dataset.new_episode()
                         self._writer = writer.__enter__()
                         stack.push(telemetry.traced(telemetry_keys.SPAN_RECORD_IO)(writer.__exit__))
@@ -567,7 +558,7 @@ class Harness(pimm.ControlSystem):
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
             try:
-                with self._recording(rollout.output_path):
+                with self._recording(rollout.writer):
                     payload = yield from self._rollout(
                         should_stop, task, withheld_poses, runtime, stepped_run, deadline_ns
                     )

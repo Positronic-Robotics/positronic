@@ -25,6 +25,7 @@ from starlette.requests import HTTPConnection
 
 import pimm
 from positronic import keys
+from positronic.dataset.dataset import DatasetWriter
 from positronic.eval import Task
 from positronic.gui.station import Outcome, Refused, RunView, Station, Verdict, outcome_of
 from positronic.gui.video_stream import VideoStream, codec_string
@@ -111,11 +112,11 @@ class StationConsole(pimm.ControlSystem):
     """
 
     def __init__(
-        self, next_task: Callable[[], Task], policy: Policy, output_path: Path | None, *, host: str, port: int
+        self, next_task: Callable[[], Task], policy: Policy, writer: DatasetWriter | None, *, host: str, port: int
     ):
         self._next_task = next_task
         self._policy = policy
-        self._output_path = output_path
+        self._writer = writer
         logger.info('Reading the policy metadata')
         self._policy_label = policy.meta().get(policy_keys.TYPE, type(policy).__name__)
         self._host = host
@@ -181,7 +182,7 @@ class StationConsole(pimm.ControlSystem):
                 task = tasks.get_nowait()
             except queue.Empty:
                 break
-            self._episode = self.perform_task(Rollout(task, self._policy, self._output_path))
+            self._episode = self.perform_task(Rollout(task, self._policy, self._writer))
         if self._episode is None or not self._episode.done():
             return
         episode, self._episode = self._episode, None

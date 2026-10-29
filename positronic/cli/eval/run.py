@@ -23,7 +23,7 @@ from positronic.cfg.eval import unset
 from positronic.cli.account.gateway import CommandFailed, Fault, refusing_bad_input
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
-from positronic.dataset.dataset import DatasetFactory
+from positronic.dataset.dataset import DatasetFactory, DatasetWriter
 from positronic.dataset.episode import META_PATH
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Task
@@ -90,19 +90,19 @@ class TaskDriver(pimm.ControlSystem):
     stopping the world — once the last has ended.
 
     It makes the plan on its first turn and submits one task at a time. The harness owns each episode's
-    policy run and cleanup; every episode records into ``output_path``. Each task runs once, and a failed episode
+    policy run and cleanup; every episode records through ``writer``. Each task runs once, and a failed episode
     ends the run.
     """
 
-    def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, output_path: Path | None):
+    def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, writer: DatasetWriter | None):
         self._tasks = tasks
         self._policy = policy
-        self._output_path = output_path
+        self._writer = writer
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
-            answer = self.perform_task(Rollout(task, self._policy, self._output_path))
+            answer = self.perform_task(Rollout(task, self._policy, self._writer))
             while not answer.done():
                 if should_stop.value:
                     return
@@ -114,8 +114,6 @@ def run_world(
     embodiment: Embodiment,
     driver,
     *,
-    record: bool = True,
-    dataset_factory: DatasetFactory = LocalDatasetWriter,
     privileged: dict[str, pimm.ControlSystemEmitter] | None = None,
     done: pimm.ControlSystemEmitter | None = None,
 ) -> None:
@@ -123,12 +121,11 @@ def run_world(
 
     An attended run and an unattended one differ only by their driver: any control system with a ``perform_task``
     caller — a plan walked to its end, a person at a keyboard, a console of somebody's own. The driver reads what it
-    decides from itself, so the runner wires nothing of it but that call. ``record`` off disables recording and
-    leaves privileged sources disconnected. Each rollout names its output path, or ``None`` to write nothing.
+    decides from itself, so the runner wires nothing of it but that call. Each rollout supplies its writer,
+    or ``None`` to write nothing.
     ``done`` ends an episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
     """
-    privileged = (privileged or {}) if record else {}
-    harness = Harness(embodiment, record=record, dataset_factory=dataset_factory)
+    harness = Harness(embodiment)
     with pimm.World(virtual_time=embodiment.simulated) as world:
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged, done=done)
         world.connect(driver.perform_task, harness.perform_task)
@@ -240,14 +237,9 @@ def main(
         earlier = set() if output_path is None else _episode_paths(output_path)
         with timed_pass(output_path, timing, policy):
             for ev in evals:
-                driver = TaskDriver(ev.tasks, policy, output_path)
+                driver = TaskDriver(ev.tasks, policy, dataset_factory(output_path) if output_path is not None else None)
                 run_world(
-                    ev.embodiment,
-                    driver,
-                    record=output_path is not None,
-                    privileged=ev.privileged,
-                    done=ev.done,
-                    dataset_factory=dataset_factory,
+                    ev.embodiment, driver, privileged=ev.privileged if output_path is not None else None, done=ev.done
                 )
     if output_path is None:
         return []

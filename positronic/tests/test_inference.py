@@ -24,7 +24,7 @@ import pimm
 from pimm.shared_memory import NumpySMAdapter
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys, wire
-from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.video import VideoSignal
 from positronic.drivers import keyboard
@@ -221,6 +221,25 @@ class _MarkingPolicy(Policy):
                 (self._marks / f'episode-{number}').touch()
 
 
+class _ProcessCheckedWriter(LocalDatasetWriter):
+    def __init__(self, root: Path, *, owner_pid: int, events: Path):
+        super().__init__(root)
+        self.owner_pid = owner_pid
+        self.events = events
+
+    def __enter__(self):
+        assert os.getpid() == self.owner_pid
+        super().__enter__()
+        with self.events.open('a') as stream:
+            stream.write('open\n')
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        super().__exit__(exc_type, exc, tb)
+        with self.events.open('a') as stream:
+            stream.write('close\n')
+
+
 def _serve_station(port: int, output_dir: Path, marks: Path) -> None:
     camera, devices = _Camera(), ReadyDevices(parked=marks / 'parked')
     embodiment = Embodiment(
@@ -239,6 +258,7 @@ def _serve_station(port: int, output_dir: Path, marks: Path) -> None:
             make_trial('pick up the cube'),
             output_dir=str(output_dir),
             port=port,
+            dataset_factory=partial(_ProcessCheckedWriter, owner_pid=os.getpid(), events=marks / 'writer-events'),
         )
 
 
@@ -277,6 +297,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     try:
         status = _wait_for(lambda: (s := read_status(base)) and s.cameras[0].live and s, 'the camera to be live')
         assert status.run.configured == 'pick up the cube'
+        assert not (marks / 'writer-events').exists()
         with connect(f'ws://127.0.0.1:{port}/video/{keys.WRIST_IMAGE}', open_timeout=10) as tile:
             codec, _init, fragment = (tile.recv(timeout=10) for _ in range(3))
             assert isinstance(codec, str) and codec.startswith('avc1.')
@@ -324,6 +345,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
             run.kill()
 
     first, second = (episode.static for episode in LocalDataset(output_dir))
+    assert (marks / 'writer-events').read_text().splitlines() == ['open', 'close', 'open', 'close']
     assert first[keys.TASK] == 'pick up the red cube'
     assert first[eval_keys.INSTRUCTION_OVERRIDDEN] is True
     assert first[eval_keys.TRIAL_INDEX] == 0

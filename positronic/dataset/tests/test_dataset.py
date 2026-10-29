@@ -22,7 +22,8 @@ def test_writer_rejects_an_unavailable_encoder_before_creating_the_dataset(tmp_p
 
     root = tmp_path / 'recording'
     with pytest.raises(RuntimeError, match='no such encoder here'):
-        LocalDatasetWriter(root, video_encoder=AbsentEncoder())
+        with LocalDatasetWriter(root, video_encoder=AbsentEncoder()):
+            pass
     assert not root.exists()
 
 
