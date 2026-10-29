@@ -1,4 +1,4 @@
-"""Which tasks a RoboLab eval runs: the adapter maps the env's records, the config sweeps them.
+"""Which tasks a RoboLab eval runs and what it records: the adapter maps the env's records, the config sweeps them.
 
 ``RemoteEnvControlSystem.tasks`` is stubbed, since a real task list needs RoboLab's Isaac Lab interpreter;
 ``e2e.py`` runs the same command against the real benchmark.
@@ -6,10 +6,13 @@
 
 from typing import Any
 
+import numpy as np
 import pytest
+from eval_vocabulary.episode import GT_STATE_SIGNAL, SUBTASK_SIGNAL
 
 from positronic import keys
 from positronic.cfg.eval.sim import robolab as robolab_cfg
+from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.robolab import keys as robolab_keys
@@ -86,3 +89,27 @@ def test_the_spec_reaches_the_env_unmapped(asked):
     list(robolab_cfg.rubiks_cube_and_banana.instantiate().tasks())
 
     assert asked == [{'task': 'procedural'}, {'task': 'RubiksCubeAndBananaTask'}]
+
+
+_GT_STATE = {
+    f'.{robolab_keys.GT_STATE_OBJECTS}.banana.{robolab_keys.GT_STATE_POSE}': np.zeros(7, dtype=np.float32),
+    f'.{robolab_keys.GT_STATE_OBJECTS}.banana.{robolab_keys.GT_STATE_GRIPPER_CONTACT}': True,
+    f'.{robolab_keys.GT_STATE_PROGRESS}.banana.0.object_grabbed': True,
+}
+
+
+def test_the_privileged_channel_carries_the_subtask_progress_and_the_scene_state():
+    subtask = np.array([0, 0, 1, 0.0], dtype=np.float32)
+    raw = {robolab_keys.SUBTASK: subtask, robolab_keys.GT_STATE: _GT_STATE, 'wrist_cam': np.zeros((2, 2, 3))}
+
+    privileged = RobolabAdapter({}).privileged(raw)
+
+    assert privileged == {robolab_keys.SUBTASK: subtask, robolab_keys.GT_STATE: _GT_STATE}
+
+
+def test_the_eval_records_each_scene_state_value_as_a_signal_of_its_own():
+    ev = robolab_cfg.banana_in_bowl.instantiate()
+
+    assert set(ev.privileged) == {SUBTASK_SIGNAL, GT_STATE_SIGNAL}
+    recorded = dict(expand_suffixed(GT_STATE_SIGNAL, _GT_STATE))
+    assert recorded == {f'{GT_STATE_SIGNAL}{suffix}': value for suffix, value in _GT_STATE.items()}
