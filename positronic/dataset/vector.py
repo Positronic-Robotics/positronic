@@ -32,13 +32,14 @@ def parquet_write_options(schema: pa.Schema) -> dict[str, Any]:
     """
     encodings = {}
     for field in schema:
-        if pa.types.is_integer(field.type):
-            encodings[field.name] = 'DELTA_BINARY_PACKED'
-        elif pa.types.is_floating(field.type):
-            encodings[field.name] = 'BYTE_STREAM_SPLIT'
-        elif pa.types.is_list(field.type) and pa.types.is_floating(field.type.value_type):
-            # pyarrow applies an encoding to the leaf column only, and ignores it on the list.
-            encodings[f'{field.name}.list.element'] = 'BYTE_STREAM_SPLIT'
+        # pyarrow applies an encoding to the leaf column only, and ignores it on a list.
+        column, leaf = field.name, field.type
+        while pa.types.is_list(leaf):
+            column, leaf = f'{column}.list.element', leaf.value_type
+        if pa.types.is_integer(leaf):
+            encodings[column] = 'DELTA_BINARY_PACKED'
+        elif pa.types.is_floating(leaf):
+            encodings[column] = 'BYTE_STREAM_SPLIT'
     return {'compression': 'zstd', 'compression_level': 3, 'use_dictionary': False, 'column_encoding': encodings}
 
 

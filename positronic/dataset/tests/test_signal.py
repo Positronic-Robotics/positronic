@@ -611,6 +611,17 @@ def test_a_signal_file_is_zstd_with_delta_times_and_split_float_values(tmp_path)
     np.testing.assert_array_equal(SimpleSignal(path)[4][0], [2.0, -4.0])
 
 
+@pytest.mark.parametrize(
+    ('vector', 'encoding'), [([1, 2], 'DELTA_BINARY_PACKED'), ([True, False], 'PLAIN')], ids=['int', 'bool']
+)
+def test_a_vector_signal_encodes_its_leaf_by_the_leaf_type(tmp_path, vector, encoding):
+    path = tmp_path / 'vector.parquet'
+    with SimpleSignalWriter(path) as writer:
+        writer.append(np.array(vector), Time(world=100))
+    assert _column_codings(path)[f'{VALUE_COLUMN}.list.element'] == ('ZSTD', (encoding,))
+    np.testing.assert_array_equal(SimpleSignal(path)[0][0], vector)
+
+
 def test_a_text_signal_keeps_plain_values_under_zstd(tmp_path):
     path = tmp_path / 'text.parquet'
     with SimpleSignalWriter(path) as writer:
