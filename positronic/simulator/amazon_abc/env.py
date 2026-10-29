@@ -27,18 +27,27 @@ _BUILD_ATTEMPTS = 3
 _IK_POSITION_TOLERANCE = 1e-3  # m
 _IK_ROTATION_TOLERANCE = 1e-2  # rad
 
-# Experiment only: the view and start pose of AI2's MolmoSpaces bimanual YAM, not ABC's benchmark.
-# MolmoSpaces' BimanualYamCameraSystem exo camera: 0.86 m above the midpoint of the two arm mounts,
-# with this wxyz rotation in the mount frame (MuJoCo camera axes: it looks along -z, up is +y).
+# Experiment only: a top view fitted to the real top camera of allenai/MolmoAct2-BimanualYAM-Dataset,
+# not ABC's benchmark view. The pose is relative to the midpoint of the two arm mounts, in the mount
+# frame (x forward along the arms, z up). The camera looks forward along x, pitched down. The values
+# maximise the mean overlap of the arm silhouettes at the start pose with seven real first frames.
 _TOP_CAMERA = 'top'
-_TOP_CAMERA_ABOVE_MOUNTS = 0.86  # m
-_TOP_CAMERA_QUAT = (0.6870, 0.1675, -0.1675, -0.6870)
-_TOP_CAMERA_FOVY = 58.0  # deg
+_TOP_CAMERA_OFFSET = (-0.1125, 0.0647, 0.7313)  # m: forward, left, up
+_TOP_CAMERA_PITCH = 50.5  # deg below the horizontal
+_TOP_CAMERA_FOVY = 66.5  # deg
 # The median first state of 220 episodes of allenai/MolmoAct2-BimanualYAM-Dataset, ``[joints(6), aperture]``.
 START_Q = {
     'left': (-0.002, 0.013, 0.014, -0.064, 0.028, -0.055, 0.992),
     'right': (0.039, 0.013, 0.008, -0.070, -0.057, 0.018, 0.993),
 }
+
+
+def _top_camera_axes(pitch_deg: float) -> np.ndarray:
+    """The MuJoCo camera axes (columns x right, y up, z back) of a camera that looks along +x, pitched down."""
+    pitch = np.radians(pitch_deg)
+    back = -np.array([np.cos(pitch), 0.0, -np.sin(pitch)])
+    right = np.array([0.0, -1.0, 0.0])
+    return np.stack([right, np.cross(back, right), back], axis=1)
 
 
 def _joint_delta_width(command: dict[str, Any]) -> int | None:
@@ -206,16 +215,14 @@ class AbcEnv(EnvProtocol):
         return mounts
 
     def _place_top_camera(self) -> None:
-        """Move the top camera to the MolmoSpaces exo pose, relative to the arm mounts of this scene."""
+        """Move the top camera to the fitted pose, relative to the arm mounts of this scene."""
         model, data = self._env.model, self._env.data
         mujoco.mj_kinematics(model, data)
         camera = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, _TOP_CAMERA)
         mount_rot = data.xmat[self._arms[0].base_body_id].reshape(3, 3)
         mounts = np.mean([data.xpos[arm.base_body_id] for arm in self._arms], axis=0)
-        position = mounts + mount_rot @ np.array([0.0, 0.0, _TOP_CAMERA_ABOVE_MOUNTS])
-        local_rot = np.empty(9)
-        mujoco.mju_quat2Mat(local_rot, np.asarray(_TOP_CAMERA_QUAT, dtype=np.float64))
-        rotation = mount_rot @ local_rot.reshape(3, 3)
+        position = mounts + mount_rot @ np.asarray(_TOP_CAMERA_OFFSET)
+        rotation = mount_rot @ _top_camera_axes(_TOP_CAMERA_PITCH)
         body = model.cam_bodyid[camera]
         body_pos, body_rot = data.xpos[body], data.xmat[body].reshape(3, 3)
         model.cam_pos[camera] = body_rot.T @ (position - body_pos)

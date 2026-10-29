@@ -157,16 +157,17 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
     assert frame[protocol.FRAME_CONTROL_DT] == pytest.approx(_TIMESTEP * _DECIMATION)
 
 
-def test_a_reset_places_the_top_camera_at_the_molmospaces_pose_above_the_arm_mounts(env, scene):
+def test_a_reset_places_the_top_camera_at_the_fitted_pose_behind_and_above_the_arm_mounts(env, scene):
     env.reset(_TOKEN)
 
     camera = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_CAMERA, 'top')
-    np.testing.assert_allclose(scene.data.cam_xpos[camera], [0.0, 0.0, 0.86], atol=1e-9)
+    np.testing.assert_allclose(scene.data.cam_xpos[camera], [-0.1125, 0.0647, 0.7313], atol=1e-9)
     rotation = scene.data.cam_xmat[camera].reshape(3, 3)
-    # The camera looks along its -z: forward along the arms' +x and down, with the image's top away from the arms.
-    np.testing.assert_allclose(-rotation[:, 2], [0.4603, 0.0, -0.8878], atol=1e-3)
-    np.testing.assert_allclose(rotation[:, 1], [0.8878, 0.0, 0.4603], atol=1e-3)
-    assert scene.model.cam_fovy[camera] == 58.0
+    # It looks along its -z: forward along the arms' +x and 50.5 deg down; the image's top is away from the arms.
+    np.testing.assert_allclose(-rotation[:, 2], [0.6361, 0.0, -0.7716], atol=1e-3)
+    np.testing.assert_allclose(rotation[:, 1], [0.7716, 0.0, 0.6361], atol=1e-3)
+    np.testing.assert_allclose(rotation[:, 0], [0.0, -1.0, 0.0], atol=1e-9)
+    assert scene.model.cam_fovy[camera] == 66.5
 
 
 def test_the_arms_start_from_the_median_first_state_of_the_molmoact2_yam_dataset(env, scene):
