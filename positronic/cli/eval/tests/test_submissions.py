@@ -15,11 +15,15 @@ from platform_client.enums import ErrorCode, ReasonCode, RigShape, SubmissionSta
 from platform_client.ids import SubmissionId
 from platform_client.requests import CancelRequest
 from platform_client.responses import (
+    ArtifactRefs,
     BlockedSubmissionView,
     CancelResponse,
     EpisodeCounts,
     ErroredSubmissionView,
+    FinishedSubmissionView,
     PendingSubmissionView,
+    ReplayLink,
+    ReportLink,
     Scores,
     SubmissionListResponse,
     SubmissionListRow,
@@ -32,7 +36,7 @@ from pydantic import TypeAdapter
 from positronic.cli import _internal_main
 from positronic.cli.account import gateway as gateway_module
 from positronic.cli.account.gateway import CommandFailed, Fault
-from positronic.cli.conftest import BASE, ID, SUBMISSION, USER, WHEN, refusal
+from positronic.cli.conftest import AT, BASE, ID, SUBMISSION, USER, WHEN, refusal
 from positronic.cli.eval.submissions import CatalogView, cancel, catalog, list_submissions, status
 
 PENDING = PendingSubmissionView(id=SUBMISSION, received_at=WHEN, queued_at=WHEN, queue_position=3)
@@ -105,6 +109,24 @@ def test_status_prints_what_a_blocked_run_waits_on(platform, run_command, capsys
     out = capsys.readouterr().out.splitlines()
     assert out[0] == f'submission {ID} blocked'
     assert '  reason: the rig is not ready' in out
+
+
+def test_status_prints_the_replay_and_the_report_of_a_finished_run(platform, run_command, capsys):
+    replay, report = 'https://replays.example/r/token/', 'https://reports.example/r/token/report.html'
+    platform.answer(
+        FinishedSubmissionView(
+            id=SUBMISSION,
+            artifacts=ArtifactRefs(result='s3://b/episodes/'),
+            replay=ReplayLink(url=replay, expires_at=WHEN),
+            report=ReportLink(url=report, expires_at=WHEN),
+        )
+    )
+
+    run_command(status, id=ID)
+
+    out = capsys.readouterr().out.splitlines()
+    assert f"  replay: {{'url': '{replay}', 'expires_at': '{AT}'}}" in out
+    assert f"  report: {{'url': '{report}', 'expires_at': '{AT}'}}" in out
 
 
 def test_list_prints_one_labelled_line_per_run(platform, run_command, capsys):

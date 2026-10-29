@@ -140,6 +140,14 @@ class ReplayLink(BaseModel):
     expires_at: AwareDatetime | None = None
 
 
+# rules-allow: earn-its-place — the type names what the link opens: a report, which is not a replay
+class ReportLink(BaseModel):
+    """A page that shows the results of a run's episodes. `expires_at` is unset on a link that does not expire."""
+
+    url: str
+    expires_at: AwareDatetime | None = None
+
+
 class EndpointOutcome(BaseModel):
     """One endpoint's recorded episodes.
 
@@ -441,12 +449,16 @@ class ErroredSubmissionView(_TaggedView):
 
 
 class FinishedSubmissionView(_TaggedView):
-    """Terminal success. `replay` plays the recorded episodes back, and `outcome` counts them per endpoint."""
+    """Terminal success.
+
+    `replay` plays the recorded episodes back, `report` shows their results, and `outcome` counts them per endpoint.
+    """
 
     id: SubmissionId
     scores: Scores = Field(default_factory=Scores)
     artifacts: ArtifactRefs
     replay: ReplayLink | None = None
+    report: ReportLink | None = None
     outcome: PlanOutcome | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.finished
 
