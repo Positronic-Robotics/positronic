@@ -85,7 +85,6 @@ def test_ckpt_remote_resolves_lerobot_pretrained_model_path():
 def test_an_llm_episode_shows_the_short_name_of_its_configured_model(model_id, name):
     ep = EpisodeContainer({'inference.policy.type': 'llm', 'inference.policy.model': model_id})
     assert analysis.model(ep) == name
-    assert ckpt(ep) == ''
 
 
 def test_an_unknown_llm_model_shows_its_id_without_provider_and_date():

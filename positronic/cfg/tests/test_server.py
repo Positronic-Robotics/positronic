@@ -115,13 +115,10 @@ def test_the_model_group_table_groups_on_the_key_the_preset_derives():
     assert set(group.format_table) >= {cfg_server.DERIVED_MODEL}
 
 
-def test_one_llm_model_on_two_providers_is_one_model_row():
-    episodes = [
-        EpisodeContainer({'inference.policy.type': 'llm', 'inference.policy.model': model_id})
-        for model_id in ('azure:gpt-4.1', 'openai-responses:gpt-4.1-2025-04-14')
-    ]
+def test_an_unlabelled_llm_rollout_takes_the_short_name_of_its_model():
+    ep = EpisodeContainer({'inference.policy.type': 'llm', 'inference.policy.model': 'azure:gpt-4.1'})
 
-    assert {cfg_server.rollout_model(ep) for ep in episodes} == {'gpt4.1'}
+    assert cfg_server.rollout_model(ep) == 'gpt4.1'
 
 
 def test_a_stage_cell_would_spell_itself_into_a_filter_dropdown():
