@@ -6,14 +6,15 @@ from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
 
 from pimm.logging import init_logging
-from positronic import geom, keys
+from positronic import keys
 from positronic.cfg import codecs
+from positronic.drivers.roboarm.models import EEFrame
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
@@ -47,8 +48,8 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
     return model
 
 
-# No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
-# so none has a transform to declare.
+# ``ee_frame`` has no default. A wrong frame raises no error and sends the arm to a different place, so each
+# deployment states the frame of its checkpoint. ``ee_frame=None`` serves a checkpoint that speaks joints only.
 @cfn.config(**{
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
@@ -60,14 +61,16 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
 def pipeline(
     obs: Codec,
     action: Codec,
+    ee_frame: EEFrame | None,
     fps: float = 15.0,
     horizon_sec: float | None = 1.0,
     binarize_grip: tuple[str, ...] | None = None,
     flip_grip: bool = False,
-    ee_frame: geom.Transform3D | None = None,
 ) -> PolicyDeployment:
     return PolicyDeployment(
-        local=Sequential(ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), RestrictImageSize(224, 224)),
+        local=Sequential(
+            ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), TransformImages(224, 224, mode=ResizeMode.BOUND)
+        ),
         codec=codecs.compose_data(
             obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame
         ),
@@ -75,6 +78,7 @@ def pipeline(
 
 
 ee = pipeline
+# Joint observations, absolute EE actions: a pose pipeline.
 joints = pipeline.override(**{'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1}})
 ee_traj = pipeline.override(**{
     'action.tgt_ee_pose_key': keys.EE_POSE,
@@ -83,6 +87,7 @@ ee_traj = pipeline.override(**{
 })
 joints_traj = pipeline.override(**{
     'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1},
+    'ee_frame': None,
     'action': codecs.absolute_joints_action,
     'action.tgt_joints_key': keys.JOINTS,
     'action.tgt_grip_key': keys.GRIP,
@@ -90,11 +95,13 @@ joints_traj = pipeline.override(**{
 })
 joints_ik = pipeline.override(**{
     'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1},
+    'ee_frame': None,
     'action': codecs.ik_joints_action,
     'action.solver': 'dls_limits',
 })
 joints_ik_sim = pipeline.override(**{
     'obs.state_features': {keys.JOINTS: 7, keys.GRIP: 1},
+    'ee_frame': None,
     'action': codecs.ik_joints_action,
     'action.solver': 'lm',
 })
@@ -102,7 +109,12 @@ joints_ik_sim = pipeline.override(**{
 ee_flip = pipeline.override(flip_grip=True)
 
 
-phail = pipeline.override(**{'action': codecs.phail_v1_execution, 'action.action': codecs.absolute_pos_action})
+# The phail checkpoints speak the real Franka's ``F_T_EE``, the sim_stack and demo ones the sim panda's ``EE_LINK``.
+phail = pipeline.override(**{
+    'action': codecs.phail_v1_execution,
+    'action.action': codecs.absolute_pos_action,
+    'ee_frame': codecs.franka_hand_frame,
+})
 demo = pipeline.override(**{
     'obs': codecs.general_obs,
     'obs.state_name': 'observation.state',
@@ -113,6 +125,7 @@ demo = pipeline.override(**{
     'flip_grip': True,
     'fps': 15.0,
     'horizon_sec': 1.0,
+    'ee_frame': codecs.panda_hand_frame,
 })
 
 
@@ -131,7 +144,8 @@ COMMANDS = {
         model=act_model.override(checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/'), pipeline=phail
     ),
     'sim_stack': serve.override(
-        model=act_model.override(checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/'), pipeline=ee_flip
+        model=act_model.override(checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/'),
+        pipeline=ee_flip.override(ee_frame=codecs.panda_hand_frame),
     ),
     'demo': serve.override(
         model=act_model.override(checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'),

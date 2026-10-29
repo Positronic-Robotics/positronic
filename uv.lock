@@ -5531,7 +5531,7 @@ dependencies = [
 
 [[package]]
 name = "positronic"
-version = "0.3.1"
+version = "0.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "av", version = "15.1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
@@ -5566,7 +5566,6 @@ dependencies = [
     { name = "pyturbojpeg" },
     { name = "pyyaml" },
     { name = "rerun-sdk" },
-    { name = "robosuite" },
     { name = "ruckig" },
     { name = "scipy" },
     { name = "starlette" },
@@ -5644,6 +5643,9 @@ molmoact2 = [
 openpi = [
     { name = "openpi-client" },
 ]
+scenes = [
+    { name = "robosuite" },
+]
 telemetry = [
     { name = "nvidia-ml-py" },
     { name = "opentelemetry-exporter-otlp-json-file" },
@@ -5661,7 +5663,7 @@ dev = [
     { name = "ipython" },
     { name = "jupyter" },
     { name = "opencv-python" },
-    { name = "positronic", extra = ["telemetry"] },
+    { name = "positronic", extra = ["scenes", "telemetry"] },
     { name = "pybind11-stubgen" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -5712,7 +5714,7 @@ requires-dist = [
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
     { name = "positronic-eval-vocabulary", editable = "vocabulary" },
     { name = "positronic-evals", editable = "evals" },
-    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'franka'", specifier = ">=0.9.0" },
+    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'franka'", specifier = ">=0.12.0" },
     { name = "positronic-model-server", extras = ["websocket", "grpc"], editable = "model_server" },
     { name = "positronic-platform-client", editable = "client" },
     { name = "positronic-wire", extras = ["websocket", "grpc"], editable = "wire" },
@@ -5738,7 +5740,7 @@ requires-dist = [
     { name = "pyzed", marker = "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'hardware'", url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl" },
     { name = "requests", marker = "extra == 'molmoact2'" },
     { name = "rerun-sdk", specifier = "==0.30.0" },
-    { name = "robosuite" },
+    { name = "robosuite", marker = "extra == 'scenes'" },
     { name = "ruckig" },
     { name = "scipy" },
     { name = "sentencepiece", marker = "extra == 'molmoact2'" },
@@ -5757,7 +5759,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
-provides-extras = ["openpi", "hardware", "franka", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "llm", "llm-openai", "llm-anthropic", "llm-google"]
+provides-extras = ["openpi", "hardware", "franka", "scenes", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "llm", "llm-openai", "llm-anthropic", "llm-google"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5767,6 +5769,7 @@ dev = [
     { name = "ipython" },
     { name = "jupyter" },
     { name = "opencv-python" },
+    { name = "positronic", extras = ["scenes"] },
     { name = "positronic", extras = ["telemetry"] },
     { name = "pybind11-stubgen" },
     { name = "pytest" },
@@ -5780,12 +5783,12 @@ dev = [
 
 [[package]]
 name = "positronic-eval-vocabulary"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "vocabulary" }
 
 [[package]]
 name = "positronic-evals"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "evals" }
 dependencies = [
     { name = "positronic-eval-vocabulary" },
@@ -5802,18 +5805,18 @@ requires-dist = [
 
 [[package]]
 name = "positronic-franka"
-version = "0.9.0"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam')" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'linux' and extra == 'extra-10-positronic-molmoact2') or (sys_platform == 'linux' and extra != 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
     { name = "requests", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1a/35/2fdfb01be020f43742ad0d64e5093c042d60fa1d3fe12cae5368f5a40342/positronic_franka-0.9.0.tar.gz", hash = "sha256:f42ab8a09fb99e8b5220804fbe68dc69811be089626aba3be2e6ea59f2613b5b", size = 1826803, upload-time = "2026-10-20T11:57:44.866Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/75/88/1eaf3f824fcb1e64581a14ad87e8e110aa9311c21950c83ba0baa027764f/positronic_franka-0.12.0.tar.gz", hash = "sha256:a51c0638b29004723b4f802af50243f3d39f1702981e5247a21c93f7cc2e3c0f", size = 1837092, upload-time = "2026-10-24T13:35:33.163Z" }
 
 [[package]]
 name = "positronic-model-server"
-version = "0.2.3"
+version = "0.3.2"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },
@@ -5846,10 +5849,12 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.39.1"
+version = "0.46.0"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
+    { name = "packaging", version = "26.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra == 'extra-10-positronic-yam' or extra != 'extra-10-positronic-lerobot'" },
     { name = "positronic-evals" },
     { name = "pydantic" },
     { name = "typing-extensions" },
@@ -5858,6 +5863,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "packaging", specifier = ">=24" },
     { name = "positronic-evals", editable = "evals" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "typing-extensions", specifier = ">=4.12.2" },

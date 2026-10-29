@@ -125,12 +125,11 @@ class PlatformError(Exception):
         try:
             envelope = ErrorEnvelope.model_validate(payload)
         except ValidationError:
-            envelope = ErrorEnvelope(
-                error=ApiErrorBody(
-                    code=ErrorCode.internal_error,
-                    message=f'unparseable error response (HTTP {http_status})',
-                    details={'body': payload},
-                )
-            )
-            return cls(envelope, http_status=http_status, synthesized_envelope=True)
+            return cls.synthesized(http_status, f'unparseable error response (HTTP {http_status})', body=payload)
         return cls(envelope, http_status=http_status)
+
+    @classmethod
+    def synthesized(cls, http_status: int, message: str, **details: object) -> PlatformError:
+        """A failure the client names itself, around a response that carries no envelope of the platform's."""
+        envelope = ErrorEnvelope(error=ApiErrorBody(code=ErrorCode.internal_error, message=message, details=details))
+        return cls(envelope, http_status=http_status, synthesized_envelope=True)

@@ -3,17 +3,11 @@
 import hashlib
 import json
 import os
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
 from scipy.spatial.transform import Rotation
-
-if __package__:
-    from positronic.simulator.env_server import protocol
-else:
-    import protocol
 
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'
@@ -95,23 +89,29 @@ def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[
 
 TOKEN_EPISODE_INDEX = 'episode_index'
 TOKEN_SEED = 'seed'
+# The horizon in seconds that replaces the horizon of the benchmark, or None.
+TOKEN_HORIZON_SEC = 'horizon_sec'
 
 SELECT_EPISODES = 'episodes'
+# The horizon in seconds that replaces the horizon of each selected benchmark.
+SELECT_HORIZON_SEC = 'horizon_sec'
 # In a selection and a reset token: whether the server adds the right shoulder camera.
 WITH_RIGHT_SHOULDER = 'with_right_shoulder'
+# In a reset token: whether the server keeps the object image points sensor of MolmoSpaces. The sensor renders a
+# segmentation mask for each camera at each step, and no positronic observation reads it. A token without the key
+# keeps it.
+WITH_OBJECT_IMAGE_POINTS = 'with_object_image_points'
+MOLMO_OBJECT_IMAGE_POINTS_SENSOR = 'object_image_points'
 TASK_NAME = 'name'
 TASK_HORIZON_SEC = 'task_horizon_sec'
+# The horizon override of a task in seconds, or None when the benchmark sets the horizon.
+TASK_HORIZON_OVERRIDE_SEC = 'task_horizon_override_sec'
 
 META_TASK = 'task'
 META_HOUSE_INDEX = 'house_index'
 
 MOLMO_OBS_QPOS = 'qpos'  # MolmoSpaces joint positions, grouped by robot move group.
 
-OBS_JOINT_POS = 'joint_pos'
-OBS_JOINT_VEL = 'joint_vel'
-OBS_EEF_POS = 'eef_pos'  # Position in the arm base frame, metres.
-OBS_EEF_QUAT = 'eef_quat'  # Orientation in the arm base frame, wxyz.
-OBS_GRIP = 'grip'  # Closure in [0, 1].
 OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
 
 # The left shoulder camera under its benchmark names, in Pi-policy preference order.
@@ -141,64 +141,23 @@ def grip_command_to_actuator(grip: float) -> float:
     return float(np.clip(grip, 0.0, 1.0)) * ROBOTIQ_CLOSED
 
 
-def unpack_wire_pose(vector: Any) -> tuple[np.ndarray, np.ndarray]:
-    """Translation and rotation matrix from a wire pose ``[t(3), R(9) row-major]``."""
-    vec = np.asarray(vector, dtype=np.float64).reshape(-1)
-    if vec.shape[0] != 12:
-        raise ValueError(f'wire pose must be [t(3), R(9)], got {vec.shape[0]} values')
-    return vec[:3].copy(), vec[3:].reshape(3, 3).copy()
-
-
-def compose_reference_delta(
-    cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any
-) -> tuple[np.ndarray, np.ndarray]:
-    """Apply a reference-frame translation and rotation delta to a measured pose."""
-    return (
-        np.asarray(cur_pos, dtype=np.float64).reshape(3) + np.asarray(delta_pos, dtype=np.float64).reshape(3),
-        np.asarray(delta_rot, dtype=np.float64).reshape(3, 3) @ np.asarray(cur_rot, dtype=np.float64).reshape(3, 3),
-    )
-
-
-def wire_command_to_arm_action(
-    command: dict[str, Any],
-    current_q: Any,
-    *,
-    ik: Callable[[np.ndarray, np.ndarray], Any],
-    current_eef: tuple[Any, Any],
-) -> np.ndarray | None:
-    """Absolute arm joint targets, or None where ``ik`` finds no solution.
-
-    ``ik`` and ``current_eef`` use arm-base grasp-site poses.
-    """
-    current = np.asarray(current_q, dtype=np.float32).reshape(-1)
-    match command[protocol.COMMAND_TYPE]:
-        case protocol.JOINT_POS:
-            target = command[protocol.COMMAND_JOINT_POS]
-        case protocol.JOINT_DELTA:
-            dq = np.asarray(command[protocol.COMMAND_JOINT_DELTA], dtype=np.float32).reshape(-1)
-            if dq.shape[0] != current.shape[0]:
-                raise ValueError(f'joint delta {dq.shape[0]} vs measured joints {current.shape[0]}')
-            target = current + dq
-        case protocol.HOLD:
-            target = current
-        case protocol.CARTESIAN:
-            target = ik(*unpack_wire_pose(command[protocol.COMMAND_POSE]))
-        case protocol.CARTESIAN_DELTA:
-            delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            target = ik(*compose_reference_delta(*current_eef, delta_pos, delta_rot))
-        case other:
-            raise ValueError(
-                f'{other!r} is not a canonical command type; the contract is {list(protocol.CANONICAL_COMMAND_TYPES)}'
-            )
-    return None if target is None else np.asarray(target, dtype=np.float32).reshape(-1)
-
-
 def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | None = None) -> int:
     """The episode seed, following MolmoSpaces' ``JsonEvalRunner.get_episode_seed`` convention."""
     if override_seed is not None:
         return int(override_seed)
     spec_seed = getattr(episode, 'seed', None)
     return int(spec_seed) if spec_seed is not None else int(episode_index)
+
+
+def horizon_steps(horizon_sec: float | None, policy_dt_ms: float) -> int | None:
+    """``horizon_sec`` in policy steps, as MolmoSpaces converts its own ``--task_horizon_sec``, or None. Raise for a
+    horizon shorter than one step."""
+    if horizon_sec is None:
+        return None
+    steps = round(horizon_sec * 1000.0 / policy_dt_ms)
+    if steps < 1:
+        raise ValueError(f'horizon_sec {horizon_sec} is shorter than one policy step of {policy_dt_ms} ms')
+    return steps
 
 
 # A reflection across the robot base's XZ plane, and a flip of the camera's own x axis. A camera looks along -Z with +Y

@@ -27,6 +27,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
 from positronic import geom, keys
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.utils import flatten_dict
@@ -354,7 +355,9 @@ class LLMPolicy(Policy):
         ]
 
     def meta(self) -> dict[str, Any]:
-        return flatten_dict({
+        # The model reads the measured pose and moves the hand in the frame the rig reports it in.
+        frames = ee_frames_entry(dict.fromkeys((keys.EE_POSE, keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE)))
+        return frames | flatten_dict({
             policy_keys.TYPE: 'llm',
             'model': self.endpoint.model_id,
             'settings': dict(self.endpoint.settings),

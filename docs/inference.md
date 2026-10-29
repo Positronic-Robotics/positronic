@@ -13,23 +13,26 @@ deployment configs as server subcommands, such as `groot-server droid`.
 
 **Start inference server:**
 ```bash
-# The subcommand pairs a model with a pipeline; --model.* names the checkpoint
+# The subcommand pairs a model with a pipeline; --model.* names the checkpoint.
+# A pose pipeline also takes --pipeline.ee_frame: the EE frame the checkpoint speaks.
 # LeRobot (SmolVLA — 0.4.x)
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 # LeRobot (ACT — 0.3.3)
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
-  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
+  --model.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 # GR00T
 cd docker && docker compose run --rm --service-ports -v "$PWD/groot-data:/data" groot-server droid \
   --model.model_source=/data/checkpoints/experiment_v1/
 
-# OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`)
+# OpenPI
 cd docker && docker compose run --rm --service-ports openpi-server ee \
   --model.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
-  --pipeline.ee_frame=None
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 ```
 
 Check server: `curl -X POST http://localhost:8000/api/v1/keepalive` answers once the model has loaded and warmed.
@@ -81,12 +84,12 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`, `--model.checkpoint`, device...) is fixed at server launch, and a key that names it is an unknown key. A server serves one checkpoint; to serve another, start another server. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
 **The server declares data preparation.** Its client stack can contain
-`RestrictImageSize` to bound uploaded frames and `ChangeEEFrame` to convert poses.
+`TransformImages` to bound uploaded frames and `ChangeEEFrame` to convert poses.
 The client JPEG-encodes each frame unless the deployment sets `compress_images=False`. The
 websocket wire adds no other compression: neither end accepts permessage-deflate. The model returns
 full chunks; client scheduling emits commands immediately when they become due.
 
-**The handshake is recorded as the server sent it.** Every episode stores the server's handshake metadata under `inference.policy.server.*`. The client reads the declared stack and `compress_images` from it and records the rest without a check. A `prompt` field there is the server's own field, and positronic gives it no meaning. The instruction an episode sent is `task`.
+**The handshake is recorded as the server sent it.** Every episode stores the server's handshake metadata under `inference.policy.server.*`. The client reads the declared stack and `compress_images` from it and records the rest without a check. A `prompt` field there is the server's own field, and positronic gives it no meaning. The instruction an episode sent is `task`. The signal `eval.instruction` records each instruction that the policy got. It has a sample at the first observation and one at each change. `task` holds the instruction at the end of the episode.
 
 ## Running on the same machine
 
@@ -113,13 +116,19 @@ Something has to say when an episode starts and when it finishes.
 
 Browser mode requires a serializable policy. `RemotePolicy` is supported.
 
-Anything richer — a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and the output path: each ask carries the policy definition the episode runs and names where it records. The answer carries the episode's terminal payload or the error that failed it, and the driver decides whether that error ends the run. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
+A person can also be the policy: [Teleoperation](../positronic/teleop/README.md) runs a human trial in VR through the same eval.
 
-**A device that gives no data fails only its episode.** A device driver emits a `pimm.SignalError` on its observation signal while the device gives no data, for example after a camera drops off the USB bus. The harness reads that value before the policy does. It discards the episode, records nothing, and answers the ask with that `SignalError`. The harness does not run the task again. The driver decides what follows, as it does for any failed episode: `positronic eval run` ends the run. The device driver keeps the error until the harness asks the device to be ready. A device driver that stops emitting without a `SignalError` leaves the policy on the last value it sent. While its emergency stop is pressed, the Franka arm emits `Release the emergency stop button`.
+Anything richer — a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller, and it brings the policy and an unopened dataset writer. Each ask carries both; Harness opens the writer for that episode. The answer carries the episode's terminal payload or the error that failed it, and the driver decides whether that error ends the run. `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. `KeyboardOperator` in [`positronic/inference.py`](../positronic/inference.py) is the worked example, in about thirty lines.
+
+**A device in error fails only its episode.** A device driver emits a `pimm.SignalError` on its observation signal while the device gives no data or takes no commands, for example after a camera drops off the USB bus or an arm loses its controller. The harness reads that value before the policy does. It discards the episode, records nothing, and answers the ask with that `SignalError`. The harness does not run the task again. The driver decides what follows, as it does for any failed episode: `positronic eval run` ends the run. The device driver keeps the error as the newest value on the signal until a ready call or a recover call repairs the device. A repair that needs a step a ready call must not take, such as one that needs a person at the rig, waits for a recover call, and the ready call answers with the error. A device driver that stops emitting without a `SignalError` leaves the policy on the last value it sent. Each driver documents its own faults and repairs in its code.
+
+**A device error names its kind.** A device driver emits a `positronic.drivers.faults.DeviceFault`, a subclass of `pimm.SignalError`. Its `kind` field is a `FaultKind`: `E_STOP` for a pressed emergency stop, `CAMERA` for a camera, `ARM` for an arm, and `GRIPPER` for a gripper. The kind names the device that failed, so an arm that also drives its gripper puts its `ARM` fault on the grip too when the arm fails. A consumer reads `kind` to tell the faults apart. A device failure that the driver knows, such as a lost bus or a lost controller, never leaves the driver as a raised exception. The device's signal carries it, and a call to the driver, such as a move or a ready call, answers with the same `DeviceFault`, with the raw error as its `__cause__`. A command streamed with no answer reports its failure only on the signal. A malformed command answers with its own error. The error keeps its kind and its cause when it crosses a process boundary.
+
+**A command a codec cannot decode is a `PolicyCommandError`.** `Codec.wrap` decodes each command that the policy returns. When a codec raises a `ValueError` or a `KeyError` on that command, the wrap raises `positronic.policy.PolicyCommandError`, a subclass of `ValueError`, with the codec's error as its cause. An error that the policy itself raises reaches the caller unchanged.
 
 **Every device is ready before an episode starts.** Before each episode, the harness calls each handler in `Embodiment.ready_handlers` with no argument, then the prepare handlers that the task names. A healthy device answers at once. A device that holds an error repairs first and answers when it gives data again. A device that cannot repair answers with its error. That error fails the ask, and the harness keeps serving asks. The next ask calls the handler again.
 
-**A device in error is repaired between episodes.** A ready handler and the observation of its device share one name in `Embodiment`. Between episodes, the harness reads each such observation. When it carries a `pimm.SignalError`, the harness calls that handler at once, with no ask. It makes one call at a time, and calls again while the error stays. A ready handler with no observation of its name, such as the Franka arm's, is called only before an episode. An observation in error with no ready handler of its name gets no call.
+**A device in error is repaired between episodes.** A ready handler and the observation of its device share one name in `Embodiment`. Between episodes, the harness reads each such observation. When it carries a `pimm.SignalError`, the harness calls that handler at once, with no ask. It makes one call at a time, and calls again while the error stays. A ready handler with no observation of its name is called only before an episode. The arm and gripper drivers name their handlers this way, because a repair moves them. An observation in error with no ready handler of its name gets no call.
 
 ## Recording and Replay
 

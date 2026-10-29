@@ -21,7 +21,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.vendors.galaxea import codecs, protocol
 
@@ -147,9 +147,9 @@ class GalaxeaModel(Model):
 
 
 def _warm_observation() -> dict[str, Any]:
-    """A request as ``codecs.DroidCodec`` encodes one: black views, the arm at zero, the gripper open."""
+    """A request as ``codecs.droid`` encodes one: black views, the arm at zero, the gripper open."""
     view = np.zeros((224, 224, 3), dtype=np.uint8)
-    return codecs.DroidCodec().encode({
+    return codecs.droid().encode({
         keys.EXTERIOR_IMAGE: view,
         keys.WRIST_IMAGE: view,
         keys.JOINTS: np.zeros(protocol.RIGHT_ARM_WIDTH),
@@ -192,8 +192,10 @@ def galaxea_model(
 @cfn.config(codec=cfn.Config(codecs.DroidCodec))
 def pipeline(codec: codecs.DroidCodec, execution_steps: int = 16):
     return PolicyDeployment(
-        Sequential(ChunkedSchedule(codec.fps, execution_steps / codec.fps), RestrictImageSize()),
-        codecs.droid(action=codec),
+        Sequential(
+            ChunkedSchedule(codec.fps, execution_steps / codec.fps), TransformImages(640, 640, mode=ResizeMode.BOUND)
+        ),
+        codecs.droid(codec=codec),
     )
 
 

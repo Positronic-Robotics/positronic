@@ -22,10 +22,11 @@ from positronic.cfg.eval import unset
 from positronic.cli.account.gateway import CommandFailed, Fault, refusing_bad_input
 from positronic.cli.eval.plan import file_plan, given, plan_source, read_plan
 from positronic.cli.eval.submit import submit
+from positronic.dataset.dataset import DatasetFactory, DatasetWriter
 from positronic.dataset.episode import META_PATH
-from positronic.dataset.local_dataset import LocalDataset, sync_recording_dir
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter, sync_recording_dir
 from positronic.eval import Embodiment, Eval, Task
-from positronic.policy import Policy
+from positronic.policy import Policy, RemotePolicy
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.utils.git import get_package_git_state
@@ -88,19 +89,19 @@ class TaskDriver(pimm.ControlSystem):
     stopping the world — once the last has ended.
 
     It makes the plan on its first turn and submits one task at a time. The harness owns each episode's
-    policy run and cleanup; every episode records into ``output_path``. Each task runs once, and a failed episode
+    policy run and cleanup; every episode records through ``writer``. Each task runs once, and a failed episode
     ends the run.
     """
 
-    def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, output_path: Path | None):
+    def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, writer: DatasetWriter | None):
         self._tasks = tasks
         self._policy = policy
-        self._output_path = output_path
+        self._writer = writer
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
-            answer = self.perform_task(Rollout(task, self._policy, self._output_path))
+            answer = self.perform_task(Rollout(task, self._policy, self._writer))
             while not answer.done():
                 if should_stop.value:
                     return
@@ -112,7 +113,6 @@ def run_world(
     embodiment: Embodiment,
     driver,
     *,
-    record: bool = True,
     privileged: dict[str, pimm.ControlSystemEmitter] | None = None,
     done: pimm.ControlSystemEmitter | None = None,
 ) -> None:
@@ -120,14 +120,11 @@ def run_world(
 
     An attended run and an unattended one differ only by their driver: any control system with a ``perform_task``
     caller — a plan walked to its end, a person at a keyboard, a console of somebody's own. The driver reads what it
-    decides from itself, so the runner wires nothing of it but that call. ``record`` off disables recording and
-    leaves privileged sources disconnected. Each rollout names its output path, or ``None`` to write nothing.
+    decides from itself, so the runner wires nothing of it but that call. Each rollout supplies its writer,
+    or ``None`` to write nothing.
     ``done`` ends an episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
     """
-    privileged = (privileged or {}) if record else {}
-    if record:
-        embodiment.video_encoder.ensure_available()
-    harness = Harness(embodiment, record=record)
+    harness = Harness(embodiment)
     with pimm.World(virtual_time=embodiment.simulated) as world:
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged, done=done)
         world.connect(driver.perform_task, harness.perform_task)
@@ -207,7 +204,14 @@ def _episode_paths(dataset_dir: Path) -> set[Path]:
     return {Path(episode.meta[META_PATH]) for episode in LocalDataset(dataset_dir)}
 
 
-def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, timing: bool = False) -> list[Path]:
+def main(
+    policy,
+    *,
+    evals: list[Eval],
+    output_dir: str | Path | None = None,
+    timing: bool = False,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
+) -> list[Path]:
     """Run an unattended sweep: a driver walks each eval's tasks, rebuilding the World per eval.
 
     A sweep reuses the policy definition; each harness owns its episode's runtime and generator. Returns the
@@ -221,16 +225,21 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     if timing:
         _validate_timing([ev.embodiment for ev in evals], output_dir)
 
-    logger.info('Warming up policy endpoints')
-    # Reading remote metadata waits for model loading and warmup, keeping startup outside the timed sweep.
-    policy.meta()
+    if isinstance(policy, RemotePolicy):
+        logger.info('Waiting for the policy server')
+        # The server loads and warms its model before it answers, which keeps the load outside the timed sweep.
+        # TODO: The preparation of each session falls inside the `eval.pass` span, and a one-time warm-up in the
+        # first one depresses the real-time factor. Time the session preparation as its own span, outside the factor.
+        policy.wait_for_server()
     with scoped_env_var(ENV_TELEMETRY_DIR):
         output_path = prepare_output_dir(output_dir)
         earlier = set() if output_path is None else _episode_paths(output_path)
         with timed_pass(output_path, timing, policy):
             for ev in evals:
-                driver = TaskDriver(ev.tasks, policy, output_path)
-                run_world(ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done)
+                driver = TaskDriver(ev.tasks, policy, dataset_factory(output_path) if output_path is not None else None)
+                run_world(
+                    ev.embodiment, driver, privileged=ev.privileged if output_path is not None else None, done=ev.done
+                )
     if output_path is None:
         return []
     return sorted(_episode_paths(output_path) - earlier)
@@ -331,6 +340,7 @@ def run(
     output_dir=None,
     charge_inference_time: bool = True,
     timing=False,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
     policy_image: str | None = None,
     alias: str | None = None,
     from_file: str | None = None,
@@ -351,7 +361,8 @@ def run(
     With ``--output_dir`` it then prints the score that the platform gives the episodes it recorded.
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
     eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
-    since the platform owns the evals it offers. ``--from-file`` files an eval plan for the lab rig,
+    since the platform owns the evals it offers. With no ``--eval``, it runs the eval that the
+    platform's boards rank. ``--from-file`` files an eval plan for the lab rig,
     as a YAML or JSON file. Two or more endpoints in it make one blind sample. ``--org`` names the
     organisation a private run is for: beside ``--from-file`` it states the plan's request type, and
     with ``--policy-image`` it makes a private run instead of a `nebius_competition` one. A filed run —
@@ -377,6 +388,7 @@ def run(
         '--output-dir': output_dir,
         '--charge-inference-time': None if charge_inference_time else False,
         '--timing': timing or None,
+        '--dataset-factory': None if dataset_factory is LocalDatasetWriter else dataset_factory,
     }
     platform_only = {
         '--registry-username': registry_username,
@@ -412,7 +424,9 @@ def run(
                 f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval', Fault.USAGE
             )
         chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge_inference_time))
-        recorded = main(policy=policy, evals=[chosen], output_dir=output_dir, timing=timing)
+        recorded = main(
+            policy=policy, evals=[chosen], output_dir=output_dir, timing=timing, dataset_factory=dataset_factory
+        )
         if definition is not None:
             if output_dir is None:
                 logger.warning('The run has no score: pass --output_dir to record the episodes that a score reads.')
@@ -423,7 +437,9 @@ def run(
     if policy_image is not None:
         # The platform owns its own trial sweep, its own output and its own telemetry.
         _refuse({**local_only, '--from-file': from_file}, 'platform')
-        if not isinstance(eval, str):
+        if eval is None and org is not None:
+            raise CommandFailed('a private run names its eval: pass --eval=<name>', Fault.USAGE)
+        if eval is not None and not isinstance(eval, str):
             raise CommandFailed(
                 'the platform names its own evals: pass --eval=<name>; a refused run lists the ones on offer',
                 Fault.USAGE,

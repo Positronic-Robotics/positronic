@@ -9,6 +9,9 @@ These datasets remain on the private s3://raw/ bucket and include:
 - Full combined datasets for multi-task training
 """
 
+import xml.etree.ElementTree as ET
+from collections.abc import Sequence
+from functools import partial
 from typing import Any
 
 import configuronic as cfn
@@ -24,8 +27,25 @@ from positronic.dataset.transforms import Elementwise, TransformedDataset, agg_f
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.roboarm.models import bundled_franka_model, bundled_panda_model
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.ik import MoveToSite
+from positronic.drivers.roboarm.models import (
+    EE_LINK,
+    FLANGE_LINK,
+    GRIPPER_2F85_XYZ,
+    GRIPPER_SITE,
+    GRIPPER_YAM_XYZ,
+    YAM_WRIST_LINK,
+    EEFrame,
+    attach_frame,
+    bundled_franka_model,
+    bundled_panda_model,
+    bundled_yam_model,
+    ee_frames_entry,
+    parse_ee_frames,
+)
 from positronic.eval import keys as eval_keys
+from positronic.geom import Transform3D
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
 
@@ -39,16 +59,78 @@ _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 # Signal-name pointers the 3D viewer reads. They must name the signals as they exist after the
 # transform, so the transform always supplies them — overriding any stale value a recording baked
 # into static (pre-rename recordings carry `robot_commands.pose` in their `pose_signals`).
+_POSE_SIGNALS = [keys.EE_POSE, keys.TARGET_EE_POSE]
 _POINTER_VALUES: dict[str, Any] = {
     eval_keys.JOINT_SIGNALS: FromValue([keys.JOINTS]),
-    eval_keys.POSE_SIGNALS: FromValue([keys.EE_POSE, keys.TARGET_EE_POSE]),
+    eval_keys.POSE_SIGNALS: FromValue(_POSE_SIGNALS),
 }
 ROBOT_SIGNAL_POINTERS = Derive(**_POINTER_VALUES)
 
-# The bundled model (URDF + collision meshes + joint names + control frame + gripper) for the real
-# arm and the MuJoCo sim.
-_REAL_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_franka_model().items()})
-_SIM_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_panda_model().items()})
+# The bundled model (URDF + collision meshes + joint names + gripper) for the real arm, the MuJoCo sim and the YAM.
+_REAL_MODEL = Derive(meta=None, **{key: FromValue(value) for key, value in bundled_franka_model().items()})
+_SIM_MODEL = Derive(meta=None, **{key: FromValue(value) for key, value in bundled_panda_model().items()})
+_YAM_MODEL = Derive(meta=None, **{key: FromValue(value) for key, value in bundled_yam_model().items()})
+
+# The keys of the site and the codec offset of an older recording, the site that a recording with no site states,
+# and the YAM MJCF site that the first YAM recordings name.
+_LEGACY_CONTROL_FRAME = 'control_frame'
+_LEGACY_EE_FRAME = 'ee_frame'
+_LEGACY_DEFAULT_SITE = 'default'
+_LEGACY_YAM_GRASP_SITE = 'grasp_site'
+
+
+def _legacy_ee_frames(episode, site: str, pose_signals: Sequence[str] = _POSE_SIGNALS) -> dict[str, Any]:
+    offset = episode[_LEGACY_EE_FRAME] if _LEGACY_EE_FRAME in episode else Transform3D.identity
+    frame = EEFrame(site=site, offset=offset)
+    return ee_frames_entry(dict.fromkeys(pose_signals, frame))[roboarm_keys.EE_FRAMES]
+
+
+def _recorded_site(episode) -> str:
+    return episode[_LEGACY_CONTROL_FRAME] if _LEGACY_CONTROL_FRAME in episode else _LEGACY_DEFAULT_SITE
+
+
+def _real_legacy_ee_frames(episode) -> dict[str, Any]:
+    return _legacy_ee_frames(episode, _recorded_site(episode))
+
+
+def _yam_legacy_ee_frames(episode) -> dict[str, Any]:
+    return _legacy_ee_frames(episode, _recorded_site(episode), episode[eval_keys.POSE_SIGNALS])
+
+
+# Each relabels only a recording that states no ``ee_frames`` of its own: the Identity before it wins the key.
+# The sim's comes from its bundled model, which always replaces the recorded one, so its site is that model's.
+# A YAM recording keeps its own ``pose_signals``: a bimanual one names a pose signal per arm.
+_REAL_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: _real_legacy_ee_frames})
+_SIM_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: partial(_legacy_ee_frames, site=_LEGACY_DEFAULT_SITE)})
+_YAM_EE_FRAMES = Derive(meta=None, **{roboarm_keys.EE_FRAMES: _yam_legacy_ee_frames})
+_LEGACY_FRAME_KEYS = [_LEGACY_CONTROL_FRAME, _LEGACY_EE_FRAME]
+
+# The sites a recording older than ``GRIPPER_SITE`` names: ``default``, and ``grasp_site`` of the first YAM
+# recordings. Every model put them at the point it names ``EE_LINK`` now.
+_LEGACY_SITES = frozenset({_LEGACY_DEFAULT_SITE, _LEGACY_YAM_GRASP_SITE})
+
+
+def _with_legacy_sites(episode, gripper_parent: str, gripper_xyz: str) -> str:
+    """The episode's URDF with the sites an older model lacks: ``GRIPPER_SITE`` at ``gripper_xyz`` in
+    ``gripper_parent``, and each legacy site a frame names at ``EE_LINK``."""
+    root = ET.fromstring(episode[roboarm_keys.URDF])
+    links = {link.get('name') for link in root.findall('link')}
+    sites = {frame.site for frame in parse_ee_frames(episode[roboarm_keys.EE_FRAMES]).values()}
+    if GRIPPER_SITE not in links:
+        attach_frame(root, GRIPPER_SITE, gripper_parent, gripper_xyz)
+    for site in sorted((sites & _LEGACY_SITES) - links):
+        attach_frame(root, site, EE_LINK)
+    return ET.tostring(root, encoding='unicode')
+
+
+def _at_the_gripper(gripper_parent: str, gripper_xyz: str):
+    """Re-express every pose at ``GRIPPER_SITE`` of the model a recording carries, with the sites it lacks."""
+    urdf = partial(_with_legacy_sites, gripper_parent=gripper_parent, gripper_xyz=gripper_xyz)
+    return Group(Derive(meta=None, **{roboarm_keys.URDF: urdf}), Identity()) | MoveToSite(GRIPPER_SITE)
+
+
+_AT_THE_FRANKA_GRIPPER = _at_the_gripper(FLANGE_LINK, GRIPPER_2F85_XYZ)
+
 
 # Backfill the canonical `robot_command.pose` from the plural name older recordings stored on
 # disk. Recordings already using the canonical name pass through the Identity, which wins on the
@@ -59,10 +141,31 @@ _RENAME_ROBOT_COMMAND = Derive(**{keys.TARGET_EE_POSE: Get('robot_commands.pose'
 # carry the arm's own driver-emitted model, so the bundled one only backfills it (Identity before
 # `_REAL_MODEL`). The sim's model always comes from the transform — older sim recordings store raw
 # MuJoCo XML under `urdf` — so the bundled panda overwrites (`_SIM_MODEL` before Identity).
-REAL_ROBOT_TRANSFORM = Group(
-    ROBOT_SIGNAL_POINTERS, Identity(remove=_REMOVE_SIGNALS), _REAL_MODEL, _RENAME_ROBOT_COMMAND
+REAL_ROBOT_TRANSFORM = (
+    Group(
+        ROBOT_SIGNAL_POINTERS,
+        Identity(remove=_REMOVE_SIGNALS + _LEGACY_FRAME_KEYS),
+        _REAL_MODEL,
+        _RENAME_ROBOT_COMMAND,
+        _REAL_EE_FRAMES,
+    )
+    | _AT_THE_FRANKA_GRIPPER
 )
-SIM_ROBOT_TRANSFORM = Group(ROBOT_SIGNAL_POINTERS, _SIM_MODEL, Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
+SIM_ROBOT_TRANSFORM = (
+    Group(
+        ROBOT_SIGNAL_POINTERS,
+        _SIM_MODEL,
+        Identity(remove=_REMOVE_SIGNALS + _LEGACY_FRAME_KEYS),
+        _RENAME_ROBOT_COMMAND,
+        _SIM_EE_FRAMES,
+    )
+    | _AT_THE_FRANKA_GRIPPER
+)
+
+# A YAM recording carries the model its driver emitted; the bundled YAM model backfills one that carries none.
+YAM_ROBOT_TRANSFORM = Group(Identity(remove=_LEGACY_FRAME_KEYS), _YAM_MODEL, _YAM_EE_FRAMES) | _at_the_gripper(
+    YAM_WRIST_LINK, GRIPPER_YAM_XYZ
+)
 
 RECOVERY_TASK = 'Recovery cases.'
 

@@ -28,6 +28,9 @@ def warm_observation(state_dim: int = DROID_STATE_DIM) -> dict[str, Any]:
 
 class MolmoAct2Model(Model):
     def __init__(self, model_id: str, *, device_map: str = 'auto', norm_tag: str = 'franka_droid', num_steps: int = 10):
+        # `auto` places the whole model on the CPU when CUDA is missing, and the policy then serves too slowly to act.
+        if device_map != 'cpu' and not torch.cuda.is_available():
+            raise RuntimeError('MolmoAct2 found no CUDA GPU. Pass --model.device_map=cpu to run it on the CPU.')
         self._processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
         self._model = AutoModelForImageTextToText.from_pretrained(
             model_id, trust_remote_code=True, dtype=torch.bfloat16, device_map=device_map

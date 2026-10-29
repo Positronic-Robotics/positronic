@@ -15,8 +15,8 @@
 Positronic is the open stack behind **[PhAIL](https://phail.ai)** — independent evaluation of VLA models on real robots and in simulation, through one API. It's the full engine underneath: bring robots online, capture and curate data, run inference across model vendors, and **evaluate policies** in sim and on real hardware.
 
 **→ Evaluating a model? Start here: [docs/evaluation.md](docs/evaluation.md).** Submitting one to
-the platform? [docs/submit-a-policy-image.md](docs/submit-a-policy-image.md). Entering the Physical AI
-Competition? [docs/nebius-competition.md](docs/nebius-competition.md).
+the platform? [docs/submit-a-policy-image.md](docs/submit-a-policy-image.md) lists five example images
+to start from. Entering the Physical AI Competition? [docs/nebius-competition.md](docs/nebius-competition.md).
 
 ## The Problem
 
@@ -270,7 +270,8 @@ Run a model server on the same machine or a GPU host, then connect it to the
 ```bash
 # On inference server (the subcommand selects the codec pipeline; must match training):
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-    --model.checkpoints_dir=~/checkpoints/lerobot/<run_id>
+    --model.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
+    --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 # On the simulator machine:
 uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
@@ -296,7 +297,7 @@ Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs
 **Guides:**
 - [Architecture](ARCHITECTURE.md) — the goals and principles behind the design, who owns the control loop, and how foreign components plug in
 - [Model Selection](docs/model-selection.md) | [Codecs](positronic/policy/codecs/README.md) | [Training](docs/training-workflow.md)
-- [Data Collection](docs/data-collection.md) | [Inference](docs/inference.md)
+- [Data Collection](docs/data-collection.md) | [Inference](docs/inference.md) | [Teleoperation](positronic/teleop/README.md)
 
 **Hardware:**
 - [Drivers](positronic/drivers/) — Robot arms, cameras, grippers

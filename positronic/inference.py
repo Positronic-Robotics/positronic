@@ -4,7 +4,6 @@ the ``sim`` and ``stats`` aliases over ``cli.eval.run``."""
 import logging
 from collections import Counter
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -18,7 +17,8 @@ from pimm.logging import init_logging
 from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run, run_world, scoped_env_var
-from positronic.dataset.local_dataset import load_all_datasets
+from positronic.dataset.dataset import DatasetFactory, DatasetWriter
+from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
@@ -37,14 +37,14 @@ class KeyboardOperator(KeyboardControl):
     One episode is in flight at a time: a press while one runs is declined here, with a warning. It holds
     the pending answer because that is where the episode's terminal, its error or a refused ask arrives, and
     it logs that as it lands. ``next_task`` makes the trial and the policy opens its session, once per accepted
-    press. Every episode records into ``output_path``, and none records when that is ``None``.
+    press. Every episode records through ``writer``, and none records when that is ``None``.
     """
 
-    def __init__(self, next_task: Callable[[], Task], policy: Policy, output_path: Path | None):
+    def __init__(self, next_task: Callable[[], Task], policy: Policy, writer: DatasetWriter | None):
         super().__init__(quit_key='q')
         self._next_task = next_task
         self._policy = policy
-        self._output_path = output_path
+        self._writer = writer
         self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
@@ -62,7 +62,7 @@ class KeyboardOperator(KeyboardControl):
                 logger.warning('An episode is already running: press [p] to stop it')
             case 's':
                 try:
-                    rollout = Rollout(self._next_task(), self._policy, self._output_path)
+                    rollout = Rollout(self._next_task(), self._policy, self._writer)
                     self._pending = self.perform_task(rollout)
                 except Exception as e:  # rules-allow: swallowed-error — the operator is who this failure is for
                     logger.error(f'Episode failed to open: {e}')
@@ -70,7 +70,13 @@ class KeyboardOperator(KeyboardControl):
                 self.done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR})
 
 
-def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir=None):
+def real(
+    policy,
+    embodiment: Embodiment,
+    next_task: Callable[[], Task],
+    output_dir=None,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
+):
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
 
@@ -82,9 +88,11 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
 
     with scoped_env_var(ENV_TELEMETRY_DIR):
         output_path = prepare_output_dir(output_dir)
-        operator = KeyboardOperator(next_task, policy, output_path)
+        operator = KeyboardOperator(
+            next_task, policy, dataset_factory(output_path) if output_path is not None else None
+        )
         logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
-        run_world(embodiment, operator, record=output_path is not None, done=operator.done)
+        run_world(embodiment, operator, done=operator.done)
 
 
 real_cfg = cfn.Config(
@@ -103,6 +111,7 @@ def web(
     output_dir=None,
     host: str = '127.0.0.1',
     port: int = 8080,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
 ):
     """Run one hardware embodiment attended from a browser, at ``http://{host}:{port}/``.
 
@@ -114,9 +123,8 @@ def web(
         raise ValueError('the web console drives hardware in real time; run a simulated embodiment as `sim`')
 
     output_path = prepare_output_dir(output_dir)
-    console = StationConsole(next_task, policy, output_path, host=host, port=port)
-    if output_path is not None:
-        embodiment.video_encoder.ensure_available()
+    writer = dataset_factory(output_path) if output_path is not None else None
+    console = StationConsole(next_task, policy, writer, host=host, port=port)
     harness = Harness(embodiment)
     with pimm.World() as world:
         wire.wire_embodiment(world, harness, embodiment, done=console.done)

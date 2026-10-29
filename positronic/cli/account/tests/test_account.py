@@ -271,6 +271,7 @@ def test_a_registration_whose_answer_is_lost_names_rotate_as_the_recovery(platfo
     """The gateway may have minted the key before the answer was lost, so a plain retry finds no key."""
     monkeypatch.setattr(PlatformClient, 'register_timeout', lambda _self: GITHUB_REGISTER_TIMEOUT)
     platform.no_answer = httpx.ReadTimeout('no answer', request=httpx.Request('POST', f'{BASE}{routes.USERS_REGISTER}'))
+    platform.no_answer_on = routes.USERS_REGISTER
 
     with pytest.raises(CommandFailed) as raised:
         run_command(register)

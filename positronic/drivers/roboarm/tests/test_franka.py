@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import time
 from collections.abc import Callable, Iterator
@@ -12,8 +13,10 @@ import pytest
 import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic import geom
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import RobotStatus, command, franka
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.models import DROID_EE_FRAME
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned, RecoveryOutcome, RecoveryStep
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
@@ -31,6 +34,8 @@ def _park_with_j4(j4: float) -> np.ndarray:
 
 PAST_J4 = _park_with_j4(-0.05)
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+QUAT = geom.Rotation.Representation.QUAT
+TURN = geom.Rotation.from_euler([0.1, -0.2, 0.3])
 # The emergency stop (x31), released and pressed.
 CLEAR = 'Active'
 STOPPED = 'Inactive'
@@ -97,7 +102,7 @@ ARRIVED = _Goal(franka.pf.GoalStatus.REACHED, None)
 class _ArmState:
     q: np.ndarray
     dq: np.ndarray
-    end_effector_pose: np.ndarray
+    flange_pose: np.ndarray
     ee_wrench: np.ndarray
     error: int
     error_message: str
@@ -107,9 +112,10 @@ class FakeArm:
     """In-memory ``pf.Robot``: a commanded joint target is reached after ``polls_to_reach`` reads of ``goal``.
 
     ``goal_status`` pins the reported status, so a move that never lands can be scripted; ``raises``, once
-    set, is what every call but ``stop`` raises, ``ik_raises`` what only the solver raises, and
-    ``recover_raises`` what only ``recover_from_errors`` raises; ``error`` is the vendor fault flag every
-    state carries beside ``error_message``, and ``recover_clears`` whether a recovery puts it back to 0.
+    set, is what every call but ``stop`` raises, ``ik_raises`` what only the solver raises,
+    ``recover_raises`` what only ``recover_from_errors`` raises, and ``stop_raises`` what only ``stop``
+    raises; ``error`` is the vendor fault flag every state carries beside ``error_message``, and
+    ``recover_clears`` whether a recovery puts it back to 0.
     """
 
     def __init__(self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None):
@@ -123,10 +129,14 @@ class FakeArm:
         self.raises_once: Exception | None = None
         self.ik_raises: Exception | None = None
         self.recover_raises: Exception | None = None
+        self.stop_raises: Exception | None = None
         self.recover_clears = False
         self.polls_to_reach = polls_to_reach
         self._polls = 0
         self.goal_status = goal_status
+        # The flange pose every state reports, and the flange pose each IK call was asked for.
+        self.flange_pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        self.ik_targets: list[np.ndarray] = []
 
     def _record(self, call: Call) -> None:
         self.calls.append(call)
@@ -138,8 +148,9 @@ class FakeArm:
 
     def state(self) -> _ArmState:
         self._record(Call.STATE)
-        pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-        return _ArmState(self.q.copy(), np.zeros(7), pose, np.zeros(6), self.error, self.error_message)
+        return _ArmState(
+            self.q.copy(), np.zeros(7), self.flange_pose.copy(), np.zeros(6), self.error, self.error_message
+        )
 
     def goal(self) -> _Goal:
         self._record(Call.GOAL)
@@ -166,6 +177,8 @@ class FakeArm:
 
     def stop(self) -> None:
         self.calls.append(Call.STOP)
+        if self.stop_raises is not None:
+            raise self.stop_raises
 
     def get_robot_model(self) -> str:
         return (Path(franka.__file__).parent / 'fr3.urdf').read_text()
@@ -175,6 +188,7 @@ class FakeArm:
 
     def inverse_kinematics_with_limits(self, pose) -> np.ndarray:
         self._record(Call.INVERSE_KINEMATICS)
+        self.ik_targets.append(np.asarray(pose, dtype=np.float64))
         if self.ik_raises is not None:
             raise self.ik_raises
         return self.q.copy()
@@ -195,8 +209,9 @@ class FakeDesk:
     """In-memory ``Desk``: records every prepare, brake, FCI and reboot operation the driver asked for, records that
     the session released control, and reports whatever ``safe_inputs`` holds.
 
-    An operation named in ``raises`` raises the exception it maps to. ``safety_error``, ``fsoe_error`` and ``holder``
-    script the control box states that only a reboot clears, where ``reboot_clears`` is set. A reboot ends the
+    An operation named in ``raises`` raises the exception it maps to. ``safety_error``, ``fsoe_error``,
+    ``programming_mode`` and ``holder`` script the control box states that only a reboot clears, where
+    ``reboot_clears`` is set. A reboot ends the
     session: a later call on it raises until a new ``with Desk(...)`` enters it again.
     """
 
@@ -211,6 +226,7 @@ class FakeDesk:
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
         self.safety_error = False
         self.fsoe_error = False
+        self.programming_mode = False
         # The Desk login that holds robot control, where a session of the driver does not.
         self.holder: str | None = None
         self.reboot_clears = True
@@ -242,7 +258,7 @@ class FakeDesk:
         self.calls.append(Call.REBOOT)
         self.on_reboot()
         if self.reboot_clears:
-            self.safety_error = self.fsoe_error = False
+            self.safety_error = self.fsoe_error = self.programming_mode = False
             self.holder = None
         self.brakes = [franka._BrakeState.LOCKED] * 7
         self._ended = True
@@ -264,6 +280,8 @@ class FakeDesk:
             raise franka.SafetyControllerError(['scripted'])
         if self.fsoe_error:
             raise RuntimeError('424 Client Error: Failed Dependency for url: /desk/api/joints/unlock')
+        if self.programming_mode:
+            raise franka.ProgrammingModeError()
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
 
     def ensure_control(self) -> None:
@@ -602,8 +620,10 @@ def test_a_control_fault_stops_the_arm_without_parking_it(desk):
     arm.q = JOGGED
     arm.raises_once = RuntimeError('libfranka: connection lost')  # the fault, not a dead arm — a park could move it
     mark = len(arm.calls)
-    with pytest.raises(RuntimeError):
-        _drive(loop, clock)
+    for _ in range(3):
+        next(loop)
+    stop.stopped = True
+    _drive(loop, clock)
 
     assert Call.SET_TARGET_JOINTS not in arm.calls[mark:]  # a fault is not answered with autonomous motion
     assert arm.calls[-1] == Call.STOP
@@ -843,7 +863,27 @@ def test_a_sync_move_the_arm_cannot_make_fails_the_asker(world):
             break
         next(loop)
 
-    with pytest.raises(RuntimeError, match='stopped short'):
+    with pytest.raises(DeviceFault, match='stopped short') as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
+
+
+def test_a_sync_move_with_a_malformed_command_answers_its_own_error_and_not_a_device_fault(world):
+    """A command the driver cannot turn into a target is the asker's error, and the arm never sees it."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, manage_desk=False)
+    loop = driver.run(StopFlag(), MockClock())
+
+    for _ in range(2):
+        next(loop)
+    answer = _mover(world, driver)(command.JointPosition(np.full(7, np.nan)))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    with pytest.raises(ValueError, match='does not name a joint target'):
         answer.result()
 
 
@@ -1021,8 +1061,10 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
         clock.advance(1.0)
         next(loop)
 
-    with pytest.raises(TimeoutError, match='stopped short'):
+    with pytest.raises(DeviceFault, match='stopped short') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, TimeoutError)
     np.testing.assert_allclose(arm.targets[-1], PARK)
     np.testing.assert_allclose(arm.targets[-2], JOGGED)
     # Published before the asker heard: a caller that starts recovering must not read the arm as available
@@ -1331,8 +1373,10 @@ def test_a_refused_sync_move_logs_the_refusal_itself(desk, world, caplog):
 
     _drive(driving.sync_move(asked), clock)
 
-    with pytest.raises(RuntimeError, match='stopped short'):
+    with pytest.raises(DeviceFault, match='stopped short') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     assert _refusals(caplog) == ["The arm refused a move: scripted; safe inputs ['x4'] are triggered"]
 
 
@@ -1352,8 +1396,9 @@ def test_a_sync_move_answers_the_release_instruction_while_the_emergency_stop_is
 
     _drive(driving.sync_move(asked), clock)
 
-    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+    with pytest.raises(DeviceFault, match=franka.EMERGENCY_STOP_PRESSED) as raised:
         answer.result()
+    assert raised.value.kind is FaultKind.E_STOP
     assert not arm.targets
 
 
@@ -1445,8 +1490,10 @@ def test_a_run_whose_move_the_arm_refuses_fails_the_asker_and_logs_the_refusal(d
     answer = move(command.JointPosition(JOGGED))
     next(loop)  # into the move, which the arm refuses
 
-    with pytest.raises(RuntimeError, match='stopped short'):
+    with pytest.raises(DeviceFault, match='stopped short') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     assert _refusals(caplog) == ['The arm refused a move: scripted']
 
     next(loop)  # and the loop carries on rather than raising
@@ -1475,6 +1522,117 @@ def test_a_commands_mode_reaches_the_arm_with_the_gains_it_named(desk):
     applied = [m for m in arm.modes if isinstance(m, franka.pf.SoftwareImpedance)]
     assert applied, 'the command named a mode the arm was never put under'
     assert applied[-1].kq == list(IMPEDANCE.kq), 'the gains the command named did not reach the arm'
+
+
+# The grip point of the 2F-85, 155 mm along the flange approach axis.
+FLANGE_TO_GRIPPER = geom.Transform3D(np.array([0.0, 0.0, 0.155]))
+TURNED_IMPEDANCE = command.Impedance(
+    kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(400.0,) * 6, kxd=(37.0,) * 6, frame=geom.Transform3D(rotation=TURN)
+)
+
+
+def _streamed_mode(mode: command.Impedance) -> Any:
+    """The pf mode the arm runs once a streamed joint command under ``mode`` lands."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    loop = driver.run(StopFlag(), MockClock())
+    for _ in range(3):
+        next(loop)
+    feed.push(command.JointPosition(positions=JOGGED, mode=mode))
+    for _ in range(2):
+        next(loop)
+    return arm.modes[-1]
+
+
+@pytest.mark.parametrize(
+    'frame, point',
+    [
+        (geom.Transform3D.identity, [0.0, 0.0, 0.155]),
+        (DROID_EE_FRAME, [0.0, 0.0, 0.0]),
+        (geom.Transform3D(np.array([0.01, 0.0, -0.1])), [0.01, 0.0, 0.055]),
+    ],
+    ids=['gripper', 'flange', 'offset'],
+)
+def test_an_impedance_frame_reaches_the_arm_as_its_stiffness_point_on_the_flange(desk, frame, point):
+    """``Impedance.frame`` is measured from ``gripper``, and the arm takes the point in flange axes."""
+    mode = _streamed_mode(dataclasses.replace(IMPEDANCE, frame=frame))
+    np.testing.assert_allclose(mode.stiffness_point, point, atol=1e-12)
+
+
+def test_a_streamed_impedance_at_a_turned_frame_leaves_the_arm_alone(desk):
+    """The arm takes a stiffness point and no orientation, so a mode naming a turned frame is refused."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):
+        next(loop)
+    mark, targets = len(arm.modes), len(arm.targets)
+    feed.push(command.JointPosition(positions=JOGGED, mode=TURNED_IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+
+    assert arm.modes[mark:] == [], 'the arm changed law for a mode it cannot run'
+    assert len(arm.targets) == targets, 'the arm got a target under a mode it cannot run'
+
+
+def test_a_sync_move_under_an_impedance_at_a_turned_frame_answers_a_refusal(world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm, manage_desk=False)
+    loop = driver.run(StopFlag(), MockClock())
+
+    for _ in range(2):
+        next(loop)
+    answer = _mover(world, driver)(command.JointPosition(JOGGED, mode=TURNED_IMPEDANCE))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    with pytest.raises(ValueError, match='turned stiffness frame'):
+        answer.result()
+
+
+def test_the_arm_state_carries_the_pose_of_the_gripper_site():
+    """The arm reports its flange, and the driver publishes the grip point of the 2F-85 on it."""
+    arm = FakeArm(PARK)
+    flange = geom.Transform3D(np.array([0.4, -0.1, 0.3]), TURN)
+    arm.flange_pose = flange.as_vector(QUAT)
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    driver.state._bind(states, clock=MockClock())
+    loop = driver.run(StopFlag(), MockClock())
+
+    for _ in range(2):
+        next(loop)
+
+    np.testing.assert_allclose(
+        states.emitted[-1][1].ee_pose.as_matrix, (flange * FLANGE_TO_GRIPPER).as_matrix, atol=1e-6
+    )
+
+
+def test_a_cartesian_command_is_solved_for_the_flange_under_the_gripper_site(desk):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    loop = driver.run(StopFlag(), MockClock())
+    target = geom.Transform3D(np.array([0.5, 0.1, 0.2]), TURN)
+
+    for _ in range(3):
+        next(loop)
+    feed.push(command.CartesianPosition(pose=target))
+    for _ in range(2):
+        next(loop)
+
+    solved = geom.Transform3D.from_vector(arm.ik_targets[-1], QUAT)
+    np.testing.assert_allclose(solved.as_matrix, (target * FLANGE_TO_GRIPPER.inv).as_matrix, atol=1e-12)
 
 
 def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):
@@ -1555,11 +1713,14 @@ def test_a_ready_call_answers_the_fault_that_stays_and_the_run_serves_the_next_o
         arm.goal_status = franka.pf.GoalStatus.ABORTED
         next(loop)
 
+    expected = 'recovery did not clear' if fault == 'error' else 'safe input'
     for _ in range(2):
         answer = ready(None)
         next(loop)
-        with pytest.raises(RuntimeError, match='recovery did not clear' if fault == 'error' else 'safe input'):
+        with pytest.raises(DeviceFault, match=expected) as answered:
             answer.result()
+        assert answered.value.kind is FaultKind.ARM
+        assert isinstance(answered.value.__cause__, RuntimeError)
     assert desk.calls == [Call.PREPARE], 'a ready call prepared the arm through Desk again'
 
 
@@ -1579,8 +1740,9 @@ def test_a_ready_call_answers_the_release_instruction_while_the_emergency_stop_i
     answer = ready(None)
     next(loop)
 
-    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+    with pytest.raises(DeviceFault, match=franka.EMERGENCY_STOP_PRESSED) as raised:
         answer.result()
+    assert raised.value.kind is FaultKind.E_STOP
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before
 
 
@@ -1609,8 +1771,9 @@ def test_a_ready_call_runs_no_recovery_on_an_error_while_the_emergency_stop_is_p
     answer = ready(None)
     next(loop)
 
-    with pytest.raises(pimm.SignalError, match=franka.EMERGENCY_STOP_PRESSED):
+    with pytest.raises(DeviceFault, match=franka.EMERGENCY_STOP_PRESSED) as raised:
         answer.result()
+    assert raised.value.kind is FaultKind.E_STOP
     # The tick's own recovery of the error, which nobody asked for.
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1, 'the ready call ran a recovery'
 
@@ -1632,7 +1795,8 @@ def test_the_arm_state_carries_the_release_instruction_once_while_the_emergency_
     """A reader keeps the last value, and the link queues each error, so one per press is enough."""
     [error] = _shipped(desk, STOPPED)
 
-    assert isinstance(error, pimm.SignalError) and str(error) == franka.EMERGENCY_STOP_PRESSED
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.E_STOP
+    assert str(error) == franka.EMERGENCY_STOP_PRESSED
 
 
 @pytest.mark.parametrize('stop', ['AcknowledgeRequired', 'Invalid'])
@@ -1656,8 +1820,8 @@ def test_the_arm_state_comes_back_once_the_emergency_stop_is_released(desk):
     arm.safe_inputs.sample()
     arm.publish(arm.robot.state())
 
-    kinds = [type(data) for _, data in states.emitted]
-    assert kinds == [pimm.SignalError, franka.FrankaState, pimm.SignalError]
+    kinds = [data.kind if isinstance(data, DeviceFault) else type(data) for _, data in states.emitted]
+    assert kinds == [FaultKind.E_STOP, franka.FrankaState, FaultKind.E_STOP]
 
 
 def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):
@@ -1769,8 +1933,10 @@ def test_a_desk_step_refused_while_another_login_holds_control_touches_nothing(d
     refused = recover(None)
     next(loop)
 
-    with pytest.raises(RuntimeError, match="Desk login 'safe'"):
+    with pytest.raises(DeviceFault, match="Desk login 'safe'") as answered:
         refused.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     assert [c for c in arm.calls[mark:] if c not in (Call.STATE, Call.GOAL)] == [
         Call.RECOVER_FROM_ERRORS,
         Call.ENSURE_CONTROL,
@@ -1861,8 +2027,10 @@ def test_a_failed_desk_prepare_answers_the_console_and_the_run_goes_on_with_no_c
     answer = recover(None)
     next(loop)
 
-    with pytest.raises(RuntimeError, match='OneClientError'):
+    with pytest.raises(DeviceFault, match='OneClientError') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     arm.raises = ConnectionError('libfranka: TCP send bytes: Connection reset by peer')  # the connection FCI off ended
     mark = len(arm.calls)
     for _ in range(3):
@@ -1967,8 +2135,10 @@ def test_a_move_with_no_connection_is_refused_and_reaches_no_arm(desk, world, mo
     feed.push(command.JointPosition(positions=JOGGED))
     next(loop)
 
-    with pytest.raises(RuntimeError, match='no connection to the arm: 500 Server Error: OneClientError'):
+    with pytest.raises(DeviceFault, match='no connection to the arm: 500 Server Error: OneClientError') as answered:
         move.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     assert arm.calls[mark:] == []
 
 
@@ -1983,8 +2153,10 @@ def test_a_ready_call_with_no_connection_answers_the_error_and_runs_no_desk_step
     answer = ready(None)
     next(loop)
 
-    with pytest.raises(RuntimeError, match='no connection to the arm: 500 Server Error: OneClientError'):
+    with pytest.raises(DeviceFault, match='no connection to the arm: 500 Server Error: OneClientError') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     assert desk.calls[mark:] == []
 
 
@@ -2019,14 +2191,52 @@ def test_a_new_connection_that_fails_its_configuration_never_drives_the_arm(desk
     answer = recover(None)
     next(loop)
 
-    with pytest.raises(RuntimeError, match='set_collision_behavior rejected'):
+    with pytest.raises(DeviceFault, match='set_collision_behavior rejected') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     arm.raises = ConnectionError('FCI is off')  # the connection FCI off ended
     mark = len(arm.calls)
     for _ in range(3):
         next(loop)
     assert arm.calls[mark:] == []
     assert reconnected.calls == [Call.SET_COLLISION_BEHAVIOR, Call.STOP], 'the failed handle drives the arm'
+
+
+def test_a_failed_reconnection_holds_its_own_error_and_stops_no_handle_that_fci_off_ended(desk, world, monkeypatch):
+    """The old handle stopped before FCI went off. A second stop on it can raise, and must not hide the failure."""
+    arm = FakeArm(PARK)
+    arm.error = 1
+    reconnected = FakeArm(PARK)
+    reconnected.raises_once = RuntimeError('libfranka: set_collision_behavior rejected')
+    _reconnect_to(monkeypatch, reconnected)
+    fci_off = desk.deactivate_fci
+    after_fci_off: list[int] = []
+
+    def deactivate_fci() -> None:
+        fci_off()
+        after_fci_off.append(len(arm.calls))
+        arm.stop_raises = RuntimeError('libfranka: TCP connection got interrupted')
+
+    monkeypatch.setattr(desk, 'deactivate_fci', deactivate_fci)
+    driver = _driver(arm)
+    clock = MockClock()
+    states = RecordingEmitter()
+    driver.state._bind(states, clock=clock)
+    recover = _recoverer(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    answer = recover(None)
+    next(loop)
+
+    with pytest.raises(DeviceFault, match='set_collision_behavior rejected'):
+        answer.result()
+    held = states.emitted[-1][1]
+    assert isinstance(held, DeviceFault) and held.kind is FaultKind.ARM
+    assert str(held.__cause__) == 'libfranka: set_collision_behavior rejected'
+    assert Call.STOP not in arm.calls[after_fci_off[0] :], 'the driver stopped the handle FCI off ended'
 
 
 def test_the_next_command_opens_the_brakes_the_driver_locked_when_fci_stays_on(desk, world):
@@ -2045,8 +2255,10 @@ def test_the_next_command_opens_the_brakes_the_driver_locked_when_fci_stays_on(d
         next(loop)
     answer = _recoverer(world, driver)(None)
     next(loop)
-    with pytest.raises(RuntimeError, match='FCI did not go down'):
+    with pytest.raises(DeviceFault, match='FCI did not go down') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     arm.error = 0
     feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
     for _ in range(2):
@@ -2107,8 +2319,10 @@ def test_a_ready_call_on_an_error_the_recovery_leaves_answers_it_and_takes_no_de
     for _ in range(3):
         answer = ready(None)
         next(loop)
-        with pytest.raises(RuntimeError, match='recovery did not clear: a fault the recovery leaves'):
+        with pytest.raises(DeviceFault, match='recovery did not clear: a fault the recovery leaves') as answered:
             answer.result()
+        assert answered.value.kind is FaultKind.ARM
+        assert isinstance(answered.value.__cause__, RuntimeError)
 
     assert desk.calls[mark:] == []
 
@@ -2139,8 +2353,10 @@ def test_a_ready_call_on_a_driver_with_no_desk_session_answers_the_error_without
         answer = ready(None)
         next(loop)
 
-    with pytest.raises(RuntimeError, match='recovery did not clear'):
+    with pytest.raises(DeviceFault, match='recovery did not clear') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     named_desk = [r for r in caplog.records if r.levelno >= logging.WARNING and 'Desk' in r.getMessage()]
     assert not named_desk, 'a driver with no Desk session warned about Desk'
 
@@ -2165,8 +2381,10 @@ def test_a_recovery_the_vendor_fails_answers_the_console_rather_than_ending_the_
 
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == before + 1, 'the tick ran the recovery twice'
     assert answer.done()
-    with pytest.raises(RuntimeError, match='control command rejected'):
+    with pytest.raises(DeviceFault, match='control command rejected') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
 
     arm.recover_raises, arm.error = None, 0
     answer = recover(None)
@@ -2216,13 +2434,17 @@ def test_an_arm_in_error_recovers_with_no_console_asking(desk, world):
     assert desk.calls == [Call.PREPARE], 'a recovery no console asked for prepared the arm through Desk again'
 
 
-def test_a_recovery_no_console_asked_for_lets_the_vendor_throw_end_the_run(desk, world):
-    """A throw from the recovery the driver runs for itself has no caller to hand it to, so it ends the
-    run rather than going unreported."""
+def _errors(states: RecordingEmitter) -> list[pimm.SignalError]:
+    return [data for _, data in states.emitted if isinstance(data, pimm.SignalError)]
+
+
+def test_a_recovery_no_console_asked_for_puts_the_vendor_throw_on_the_state(desk, world):
+    """A throw from the recovery the driver runs for itself has no caller to hand it to, so the state carries it."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     clock = MockClock()
-    driver.state._bind(RecordingEmitter(), clock=clock)
+    states = RecordingEmitter()
+    driver.state._bind(states, clock=clock)
     _recoverer(world, driver)
     loop = driver.run(StopFlag(), clock)
 
@@ -2230,9 +2452,12 @@ def test_a_recovery_no_console_asked_for_lets_the_vendor_throw_end_the_run(desk,
         next(loop)
     arm.error = 1
     arm.recover_raises = RuntimeError('libfranka: control command rejected')
-
-    with pytest.raises(RuntimeError, match='control command rejected'):
+    for _ in range(3):
         next(loop)
+
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    assert 'control command rejected' in str(error)
 
 
 def test_an_arm_with_no_fault_nobody_called_runs_no_recovery(desk, world):
@@ -2275,10 +2500,13 @@ def test_a_move_waiting_on_an_erroring_arm_is_refused_after_the_grace(desk, worl
     clock.advance(franka._Arm._RECOVERY_GRACE_S)
     next(loop)
 
-    with pytest.raises(franka.MoveRefused) as refused:
+    with pytest.raises(DeviceFault) as answered:
         answer.result()
-    assert refused.value.error_message == '[cartesian_reflex]'
-    assert refused.value.moved_rad == 0.0  # nothing commanded the arm, so it did not move
+    assert answered.value.kind is FaultKind.ARM
+    refused = answered.value.__cause__
+    assert isinstance(refused, franka.MoveRefused)
+    assert refused.error_message == '[cartesian_reflex]'
+    assert refused.moved_rad == 0.0  # nothing commanded the arm, so it did not move
 
 
 def test_a_refused_move_reports_the_largest_joint_motion_during_recovery(desk, world):
@@ -2300,9 +2528,11 @@ def test_a_refused_move_reports_the_largest_joint_motion_during_recovery(desk, w
     clock.advance(franka._Arm._RECOVERY_GRACE_S)
     next(loop)
 
-    with pytest.raises(franka.MoveRefused) as refused:
+    with pytest.raises(DeviceFault) as answered:
         answer.result()
-    assert refused.value.moved_rad == pytest.approx(0.1)
+    refused = answered.value.__cause__
+    assert isinstance(refused, franka.MoveRefused)
+    assert refused.moved_rad == pytest.approx(0.1)
 
 
 def test_a_move_waiting_on_an_erroring_arm_is_served_once_recovery_clears(desk, world):
@@ -2381,8 +2611,8 @@ def test_a_move_held_on_an_erroring_arm_is_answered_when_the_world_stops(desk, w
         answer.result()
 
 
-def test_a_move_held_on_an_erroring_arm_is_answered_when_a_throw_ends_the_run(desk, world):
-    """A recovery that throws ends the run with a move held, and the move's caller still gets an answer."""
+def test_a_move_held_on_an_erroring_arm_is_answered_when_the_driver_loses_control(desk, world):
+    """A recovery that throws ends the driver's control with a move held, and the move's caller gets an answer."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     clock = MockClock()
@@ -2396,11 +2626,13 @@ def test_a_move_held_on_an_erroring_arm_is_answered_when_a_throw_ends_the_run(de
     answer = move(command.JointPosition(JOGGED))
     next(loop)  # the call is held
     arm.recover_raises = RuntimeError('libfranka: control command rejected')
-
-    with pytest.raises(RuntimeError, match='control command rejected'):
+    for _ in range(2):
         next(loop)
-    with pytest.raises(MoveAbandoned):
+
+    with pytest.raises(DeviceFault, match='no connection to the arm: libfranka: control command rejected') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
 
 
 @dataclass
@@ -2451,6 +2683,7 @@ class StartFailure(StrEnum):
     BRAKES = 'brakes'
     FCI = 'fci'
     FSOE = 'fsoe'
+    PROGRAMMING_MODE = 'programming mode'
     CONNECT = 'connect'
     CONFIGURATION = 'configuration'
 
@@ -2471,6 +2704,8 @@ class StartFailure(StrEnum):
                 desk.raises[Call.PREPARE] = RuntimeError(self.reason)
             case StartFailure.FSOE:
                 desk.fsoe_error = True
+            case StartFailure.PROGRAMMING_MODE:
+                desk.programming_mode = True
             case StartFailure.CONNECT:
                 del driver._robot
 
@@ -2490,6 +2725,7 @@ _START_FAILURE_REASONS = {
     StartFailure.BRAKES: "Brakes did not reach 'Unlocked' within 20.0s",
     StartFailure.FCI: 'FCI did not activate within 15.0s',
     StartFailure.FSOE: 'Failed Dependency',
+    StartFailure.PROGRAMMING_MODE: 'Programming mode',
     StartFailure.CONNECT: 'libfranka: Connection timeout',
     StartFailure.CONFIGURATION: 'libfranka: set_collision_behavior rejected',
 }
@@ -2553,14 +2789,19 @@ def test_ready_calls_on_an_arm_with_no_connection_answer_the_error_and_run_no_de
     for _ in range(3):
         answer = run.ready(None)
         run.tick()
-        with pytest.raises(RuntimeError, match=franka.NO_CONNECTION):
+        with pytest.raises(DeviceFault, match=franka.NO_CONNECTION) as answered:
             answer.result()
+        assert answered.value.kind is FaultKind.ARM
+        assert isinstance(answered.value.__cause__, RuntimeError)
 
     assert desk.calls[mark:] == []
     assert run.step_names == [RecoveryStep.IDLE]
 
 
-@pytest.mark.parametrize('failure', [StartFailure.SAFETY_ERROR, StartFailure.STRANDED_TOKEN, StartFailure.FSOE])
+@pytest.mark.parametrize(
+    'failure',
+    [StartFailure.SAFETY_ERROR, StartFailure.STRANDED_TOKEN, StartFailure.FSOE, StartFailure.PROGRAMMING_MODE],
+)
 def test_a_recover_call_on_a_box_only_a_reboot_clears_reboots_it_once_and_connects(desk, world, monkeypatch, failure):
     arm = FakeArm(PARK)
     driver = _driver(arm)
@@ -2599,8 +2840,10 @@ def test_a_reboot_that_does_not_clear_the_box_answers_the_error_and_each_press_r
     for presses in (1, 2):
         answer = run.recover(None)
         run.tick()
-        with pytest.raises(franka.SafetyControllerError):
+        with pytest.raises(DeviceFault) as answered:
             answer.result()
+        assert answered.value.kind is FaultKind.ARM
+        assert isinstance(answered.value.__cause__, franka.SafetyControllerError)
         assert desk.calls.count(Call.REBOOT) == presses
     assert isinstance(run.streamed[-1], pimm.SignalError)
 
@@ -2785,8 +3028,10 @@ def test_a_recover_call_whose_connection_fails_after_desk_prepare_locks_the_brak
     answer = run.recover(None)
     run.tick()
 
-    with pytest.raises(RuntimeError, match='Connection timeout'):
+    with pytest.raises(DeviceFault, match='Connection timeout') as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
     assert desk.calls[-2:] == [Call.PREPARE, Call.CLOSE_BRAKES]
 
 
@@ -2887,8 +3132,10 @@ def test_a_recover_call_that_fails_logs_one_line_with_its_type_and_reason_and_no
         answer = run.recover(None)
         run.tick()
 
-    with pytest.raises(franka.SafetyControllerError):
+    with pytest.raises(DeviceFault) as answered:
         answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, franka.SafetyControllerError)
     line = _one_error_line(caplog, 'The recovery a console asked for failed')
     assert 'SafetyControllerError' in line.getMessage() and 'scripted' in line.getMessage()
 
@@ -2901,3 +3148,289 @@ def test_a_park_that_fails_at_start_logs_one_line_with_its_type_and_reason_and_n
 
     line = _one_error_line(caplog, 'did not reach the park pose')
     assert 'RuntimeError' in line.getMessage() and 'stopped short' in line.getMessage()
+
+
+def _running(
+    desk: FakeDesk, world: pimm.World, driver: franka.Robot
+) -> tuple[Iterator[pimm.Command], RecordingEmitter]:
+    """Run ``driver`` through init and the opening move. Returns the run and what its state emits."""
+    clock = MockClock()
+    states = RecordingEmitter()
+    driver.state._bind(states, clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    return loop, states
+
+
+@pytest.mark.parametrize('call', [Call.STATE, Call.GOAL])
+def test_a_libfranka_failure_puts_an_error_on_the_state_and_the_run_goes_on(desk, world, monkeypatch, call):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+    calls = len(arm.calls)
+
+    def fail(*_args):
+        raise RuntimeError('libfranka: UDP receive: Timeout')
+
+    monkeypatch.setattr(arm, call.value, fail)
+    for _ in range(5):
+        next(loop)
+
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    assert str(error) == 'The driver has no connection to the arm: libfranka: UDP receive: Timeout'
+    assert arm.calls[calls:].count(Call.STOP) == 1
+    assert Call.SET_TARGET_JOINTS not in arm.calls[calls:]
+
+
+def test_a_libfranka_failure_whose_stop_also_fails_still_holds_the_fault(desk, world, monkeypatch):
+    """A dead connection can refuse the stop too, and the driver still drives the arm no more."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+    arm.raises = RuntimeError('libfranka: UDP receive: Timeout')
+    arm.stop_raises = RuntimeError('libfranka: TCP connection got interrupted')
+    for _ in range(3):
+        next(loop)
+
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    assert str(error.__cause__) == 'libfranka: UDP receive: Timeout'
+
+
+def test_a_move_on_an_arm_the_driver_lost_is_refused(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, _states = _running(desk, world, driver)
+    arm.raises = RuntimeError('libfranka: UDP receive: Timeout')
+    next(loop)
+
+    move = _mover(world, driver)(command.JointPosition(JOGGED))
+    next(loop)
+
+    with pytest.raises(DeviceFault, match='no connection to the arm: libfranka: UDP receive: Timeout') as answered:
+        move.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
+
+
+def test_an_arm_that_fails_during_a_move_answers_the_move_and_the_run_goes_on(desk, world):
+    arm = FakeArm(PARK, polls_to_reach=10**9)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+
+    move = _mover(world, driver)(command.JointPosition(JOGGED))
+    next(loop)  # the move goes out and polls once
+    arm.raises = RuntimeError('libfranka: TCP receive: Connection reset by peer')
+    next(loop)
+
+    with pytest.raises(DeviceFault, match='Connection reset by peer') as answered:
+        move.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    assert 'Connection reset by peer' in str(error)
+
+
+def test_a_libfranka_failure_in_a_move_that_the_next_read_does_not_repeat_still_loses_the_arm(desk, world, monkeypatch):
+    arm = FakeArm(PARK, polls_to_reach=10**9)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+    poll = arm.goal
+    failures = [RuntimeError('libfranka: UDP receive: Timeout')]
+
+    def goal_once_failing():
+        if failures:
+            raise failures.pop()
+        return poll()
+
+    mover = _mover(world, driver)
+    move = mover(command.JointPosition(JOGGED))
+    next(loop)  # the move goes out and polls once
+    monkeypatch.setattr(arm, 'goal', goal_once_failing)
+    next(loop)
+
+    with pytest.raises(DeviceFault, match='UDP receive: Timeout') as answered:
+        move.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    refused = mover(command.JointPosition(PARK))
+    next(loop)
+    with pytest.raises(DeviceFault, match='no connection to the arm') as answered:
+        refused.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
+
+
+@pytest.mark.parametrize('send', ['set_control_mode', 'set_target_joints'])
+def test_a_libfranka_failure_sending_a_move_loses_the_arm(desk, world, monkeypatch, send):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+    sent = getattr(arm, send)
+    failures = [RuntimeError('libfranka: TCP send: Broken pipe')]
+
+    def send_once_failing(*args):
+        if failures:
+            raise failures.pop()
+        return sent(*args)
+
+    monkeypatch.setattr(arm, send, send_once_failing)
+    mover = _mover(world, driver)
+    move = mover(command.JointPosition(JOGGED))
+    next(loop)
+
+    with pytest.raises(DeviceFault, match='Broken pipe') as answered:
+        move.result()
+    assert isinstance(answered.value.__cause__, RuntimeError)
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    refused = mover(command.JointPosition(PARK))
+    next(loop)
+    with pytest.raises(DeviceFault, match='no connection to the arm'):
+        refused.result()
+
+
+def test_a_libfranka_failure_sending_a_streamed_target_loses_the_arm(desk, world, monkeypatch):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    loop, states = _running(desk, world, driver)
+    sent = arm.set_target_joints
+    failures = [RuntimeError('libfranka: TCP send: Broken pipe')]
+
+    def send_once_failing(*args):
+        if failures:
+            raise failures.pop()
+        return sent(*args)
+
+    monkeypatch.setattr(arm, 'set_target_joints', send_once_failing)
+    feed.push(command.JointPosition(JOGGED))
+    next(loop)
+
+    [error] = _errors(states)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+    assert isinstance(error.__cause__, RuntimeError)
+
+
+def test_a_move_the_arm_refuses_puts_no_error_on_the_state(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+    arm.goal_status = franka.pf.GoalStatus.ABORTED
+
+    move = _mover(world, driver)(command.JointPosition(JOGGED))
+    for _ in range(5):
+        next(loop)
+
+    with pytest.raises(DeviceFault, match='stopped short') as answered:
+        move.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
+    assert _errors(states) == []
+
+
+def test_a_recover_call_after_a_libfranka_failure_turns_fci_off_prepares_and_connects_again(desk, world, monkeypatch):
+    """A libfranka failure leaves FCI on, so the Desk step turns it off before it prepares the arm."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    recover = _recoverer(world, driver)
+    loop, states = _running(desk, world, driver)
+    arm.raises = RuntimeError('libfranka: UDP receive: Timeout')
+    next(loop)
+    reconnected = FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED)
+    _reconnect_to(monkeypatch, reconnected)
+    mark = len(desk.calls)
+
+    answer = recover(None)
+    next(loop)
+    next(loop)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert Call.DEACTIVATE_FCI in desk.calls[mark:]
+    assert desk.calls[mark:].index(Call.DEACTIVATE_FCI) < desk.calls[mark:].index(Call.PREPARE)
+    assert Call.STATE in reconnected.calls
+    assert isinstance(states.emitted[-1][1], franka.FrankaState), 'the state did not come back'
+
+
+def test_a_recover_call_whose_desk_step_fails_answers_its_error_and_the_next_one_skips_the_second_fci_off(
+    desk, world, monkeypatch
+):
+    """The step that failed turned FCI off, so the next step sends no second FCI off."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    recover = _recoverer(world, driver)
+    loop, states = _running(desk, world, driver)
+    arm.raises = RuntimeError('libfranka: UDP receive: Timeout')
+    next(loop)
+    desk.raises[Call.PREPARE] = RuntimeError('TD2 self-test did not complete')
+    mark = len(desk.calls)
+
+    first = recover(None)
+    next(loop)
+    with pytest.raises(DeviceFault, match='TD2 self-test') as answered:
+        first.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
+    assert isinstance(states.emitted[-1][1], DeviceFault)
+
+    del desk.raises[Call.PREPARE]
+    _reconnect_to(monkeypatch, FakeArm(PARK, goal_status=franka.pf.GoalStatus.REACHED))
+    second = recover(None)
+    next(loop)
+
+    assert second.result() is RecoveryOutcome.CLEARED
+    assert desk.calls[mark:].count(Call.DEACTIVATE_FCI) == 1
+
+
+def test_a_driver_with_no_desk_session_holds_a_libfranka_failure(world):
+    """With no Desk session, a ready call answers the missing connection, and nothing connects again."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, manage_desk=False)
+    ready = _readier(world, driver)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    loop = driver.run(StopFlag(), clock)
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.raises = RuntimeError('libfranka: UDP receive: Timeout')
+    next(loop)
+
+    answer = ready(None)
+    next(loop)
+
+    with pytest.raises(DeviceFault, match='no connection to the arm: libfranka: UDP receive: Timeout') as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, RuntimeError)
+
+
+def test_an_arm_error_the_recovery_clears_puts_no_error_on_the_state(desk, world):
+    """The driver recovers an error that the arm reports over a connection that answers."""
+    arm = FakeArm(PARK)
+    arm.recover_clears = True
+    driver = _driver(arm)
+    loop, states = _running(desk, world, driver)
+
+    arm.error, arm.error_message = 1, '[cartesian_reflex]'
+    for _ in range(5):
+        next(loop)
+
+    assert _errors(states) == []
+    assert arm.error == 0
+
+
+def test_a_failure_that_is_not_libfranka_ends_the_run(desk, world):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    loop, _states = _running(desk, world, driver)
+
+    arm.raises = ValueError('a bug in the driver')
+
+    with pytest.raises(ValueError, match='a bug in the driver'):
+        next(loop)

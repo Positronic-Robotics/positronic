@@ -13,6 +13,7 @@ from eval_vocabulary.episode import TASK as TASK
 JOINTS_SUFFIX = '.q'
 JOINT_VEL_SUFFIX = '.dq'
 EE_POSE_SUFFIX = '.ee_pose'
+EE_WRENCH_SUFFIX = '.ee_wrench'
 POSE_SUFFIX = '.pose'
 STATUS_SUFFIX = '.status'
 
@@ -26,6 +27,8 @@ POSE_DELTA_SUFFIX = '.pose_delta'
 POSE_DELTA_FRAME_SUFFIX = '.pose_delta_frame'
 # A command's control mode unfolds into signals under this suffix, for example ``robot_command.mode.impedance.kq``.
 CONTROL_MODE_SUFFIX = '.mode'
+# The point an impedance mode's Cartesian stiffness acts at, as a pose vector.
+IMPEDANCE_FRAME_SUFFIX = f'{CONTROL_MODE_SUFFIX}.impedance.frame'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}{POSE_SUFFIX}'
 TARGET_JOINTS = f'{ROBOT_COMMAND}{JOINT_TARGETS_SUFFIX}'
 TARGET_JOINT_DELTAS = f'{ROBOT_COMMAND}{JOINT_DELTAS_SUFFIX}'
@@ -67,6 +70,7 @@ ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}{JOINTS_SUFFIX}'
 JOINT_VEL = f'{ROBOT_STATE}{JOINT_VEL_SUFFIX}'
 EE_POSE = f'{ROBOT_STATE}{EE_POSE_SUFFIX}'
+EE_WRENCH = f'{ROBOT_STATE}{EE_WRENCH_SUFFIX}'
 ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'
 # The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.
@@ -79,3 +83,6 @@ WRIST_LEFT_IMAGE = f'{IMAGE_PREFIX}wrist_left'
 WRIST_RIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_right'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
+# An upright view from the wrist, and a view from the right side of the hand.
+WRIST_UPRIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_upright'
+HANDCAM_RIGHT_IMAGE = f'{IMAGE_PREFIX}handcam_right'

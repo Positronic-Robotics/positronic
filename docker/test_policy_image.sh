@@ -2,8 +2,11 @@
 # Start a policy image the way the platform does, and wait until its server answers.
 #
 # Usage
-#   bash docker/test_policy_image.sh <image>          # with no GPU, for up to 900 s
-#   bash docker/test_policy_image.sh --gpu <image>    # with GPU 0, for up to 600 s
+#   bash docker/test_policy_image.sh <image> [arg...]          # with no GPU, for up to 900 s
+#   bash docker/test_policy_image.sh --gpu <image> [arg...]    # with GPU 0, for up to 600 s
+#   bash docker/test_policy_image.sh <molmoact2 image> --model.device_map=cpu
+#
+# Each arg after the image goes to the image's start command.
 #
 # The container gets the token `test` in AUTH_TOKEN, no capabilities, and a Docker network with no egress.
 # Every 5 s, the script sends POST /api/v1/keepalive to port 8000 from outside the container, as the
@@ -20,7 +23,8 @@ if [ "${1:-}" = --gpu ]; then
   limit=600
   shift
 fi
-image="${1:?usage: $0 [--gpu] <image>}"
+image="${1:?usage: $0 [--gpu] <image> [arg...]}"
+shift
 # The policy contract, as positronic names it: `policy_container.POLICY_PORT` and `AUTH_TOKEN_ENV`,
 # `positronic_model_server.protocol.AUTH_HEADER` and `bearer`, `positronic_wire.wire.KEEPALIVE_PATH` and
 # `ALIVE_SECONDS`, and `positronic_wire.websocket` `_MAX_KEEPALIVE_BODY_BYTES`.
@@ -63,7 +67,7 @@ cleanup() {
 docker network create --internal "$network" >/dev/null
 trap 'cleanup "$body" "$curl_errors" "$network" "$cid"' EXIT
 cid=$(docker run -d --pull=always --network "$network" --cap-drop ALL --security-opt no-new-privileges \
-  "${gpu_flags[@]}" -e "$token_env=$token" "$image")
+  "${gpu_flags[@]}" -e "$token_env=$token" "$image" "$@")
 ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$cid")
 
 # A socket that listens on port $2 of 127.0.0.1 or ::1, in /proc/net/tcp of the container $1. The platform cannot

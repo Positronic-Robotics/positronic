@@ -4,12 +4,34 @@ from typing import Any
 
 import pimm
 from positronic.dataset.serializers import Serializer
-from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
+from positronic.drivers.roboarm.keys import EE_FRAMES
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.eval import keys as eval_keys
 from positronic.keys import EE_POSE, JOINTS, TARGET_EE_POSE
 
-# Embodiment-level static meta: how recorded signals map to the canonical robot fields.
-ROBOT_STATIC_META = {eval_keys.JOINT_SIGNALS: [JOINTS], eval_keys.POSE_SIGNALS: [EE_POSE, TARGET_EE_POSE]}
+# Embodiment-level static meta of one arm: how recorded signals map to the canonical robot fields, and the site
+# each pose signal is reported at.
+ROBOT_STATIC_META = {
+    eval_keys.JOINT_SIGNALS: [JOINTS],
+    eval_keys.POSE_SIGNALS: [EE_POSE, TARGET_EE_POSE],
+    **ee_frames_entry({signal: EEFrame(site=GRIPPER_SITE) for signal in (EE_POSE, TARGET_EE_POSE)}),
+}
+
+
+# The meta of an arm that publishes no model: no pose signal has a frame, so its rig runs joint-only policies only.
+NO_MODEL_ROBOT_META = {eval_keys.POSE_SIGNALS: [], EE_FRAMES: {}}
+
+
+def only_keep_written_signals(static: dict[str, Any], written: set[str]) -> dict[str, Any]:
+    """Filter ``joint_signals`` and ``pose_signals`` to names the episode actually recorded."""
+    return {
+        **static,
+        **{
+            key: [name for name in static[key] if name in written]
+            for key in (eval_keys.JOINT_SIGNALS, eval_keys.POSE_SIGNALS)
+            if key in static
+        },
+    }
 
 
 @dataclass
@@ -65,8 +87,6 @@ class Embodiment:
     ready_handlers: dict[str, pimm.calls.ControlSystemHandler[None, None]] = field(default_factory=dict)
     control_systems: tuple[pimm.ControlSystem, ...] = ()
     simulated: bool = False
-    # How the recorder encodes the camera signals
-    video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER
 
 
 @dataclass

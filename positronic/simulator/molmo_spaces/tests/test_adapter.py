@@ -37,8 +37,8 @@ def test_observations_assemble_robot_state():
     payload = _payload()
     obs = _adapter().observations(payload)
     state = obs[keys.ROBOT_STATE]
-    assert np.allclose(state.q, payload[mapping.OBS_JOINT_POS])
-    assert np.allclose(state.dq, payload[mapping.OBS_JOINT_VEL])
+    assert np.allclose(state.q, payload[protocol.OBS_JOINT_POS])
+    assert np.allclose(state.dq, payload[protocol.OBS_JOINT_VEL])
     assert obs[keys.GRIP] == 0.5
 
 
@@ -47,26 +47,23 @@ _ROTMAT = geom.Rotation.Representation.ROTATION_MATRIX
 
 
 def _with_grasp_pose(payload: dict, pose: geom.Transform3D) -> dict:
-    return {**payload, mapping.OBS_EEF_POS: pose.translation, mapping.OBS_EEF_QUAT: pose.rotation.as_quat}
+    return {**payload, protocol.OBS_EEF_POS: pose.translation, protocol.OBS_EEF_QUAT: pose.rotation.as_quat}
 
 
-def test_the_hand_pose_is_reported_at_the_franka_tool_point_not_the_grasp_site():
-    # The FR3 tool point is 103.4 mm and -45 deg about the approach axis from the flange; the grasp site is 155 mm.
+def test_the_hand_pose_is_reported_at_the_grasp_site():
+    """The env measures at the 2F-85 grip point, which is ``GRIPPER_SITE`` of the FR3 model the embodiment ships."""
     reported = _adapter().observations(_with_grasp_pose(_payload(), _GRASP_POSE))[keys.ROBOT_STATE].ee_pose
-    to_tool_point = geom.Transform3D(np.array([0.0, 0.0, -0.0516]), geom.Rotation.from_euler([0.0, 0.0, -np.pi / 4]))
-    np.testing.assert_allclose(reported.as_vector(_ROTMAT), (_GRASP_POSE * to_tool_point).as_vector(_ROTMAT), atol=1e-6)
+    np.testing.assert_allclose(reported.as_vector(_ROTMAT), _GRASP_POSE.as_vector(_ROTMAT), atol=1e-9)
 
 
-def test_a_delta_moves_the_hand_point_as_the_real_franka_driver_moves_it():
+def test_a_delta_reaches_the_env_as_a_delta_at_its_grasp_site():
     adapter = _adapter()
-    reported = adapter.observations(_with_grasp_pose(_payload(), _GRASP_POSE))[keys.ROBOT_STATE].ee_pose
+    adapter.observations(_with_grasp_pose(_payload(), _GRASP_POSE))
     delta = roboarm_command.CartesianDelta(
         geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
     )
     wire = adapter.action({keys.ROBOT_COMMAND: pimm.Message(delta)})[keys.ROBOT_COMMAND]
-    assert wire[protocol.COMMAND_TYPE] == protocol.CARTESIAN
-    expected = delta.apply(reported) * adapter.env_control_frame
-    np.testing.assert_allclose(wire[protocol.COMMAND_POSE], expected.as_vector(_ROTMAT), atol=1e-9)
+    assert wire[protocol.COMMAND_TYPE] == protocol.CARTESIAN_DELTA
 
 
 def test_a_reported_hand_pose_commanded_back_reaches_the_env_at_its_grasp_site():
@@ -177,6 +174,34 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
     assert adapter.reset_token(adapter.task_params([record])[0])[mapping.TOKEN_EPISODE_INDEX] == 3
 
 
+def test_a_horizon_override_rides_from_the_record_to_the_reset_token():
+    adapter = _adapter()
+    record = {
+        **_BENCH._asdict(),
+        mapping.TASK_NAME: 'put the banana in the bowl',
+        mapping.TOKEN_EPISODE_INDEX: 3,
+        mapping.TASK_HORIZON_SEC: 120.0,
+        mapping.TASK_HORIZON_OVERRIDE_SEC: 120.0,
+    }
+    [params] = adapter.task_params([record])
+    assert params[molmo_keys.TASK_HORIZON] == params[molmo_keys.TASK_HORIZON_OVERRIDE] == 120.0
+    assert adapter.reset_token(params)[mapping.TOKEN_HORIZON_SEC] == 120.0
+
+
+def test_no_horizon_override_keeps_the_record_and_the_token_free_of_one():
+    adapter = _adapter()
+    record = {
+        **_BENCH._asdict(),
+        mapping.TASK_NAME: 'put the banana in the bowl',
+        mapping.TOKEN_EPISODE_INDEX: 3,
+        mapping.TASK_HORIZON_SEC: 30.0,
+        mapping.TASK_HORIZON_OVERRIDE_SEC: None,
+    }
+    [params] = adapter.task_params([record])
+    assert molmo_keys.TASK_HORIZON_OVERRIDE not in params
+    assert mapping.TOKEN_HORIZON_SEC not in adapter.reset_token(params)
+
+
 def test_reset_token_carries_benchmark_episode_and_seed():
     adapter = _adapter()
     expected = {
@@ -184,6 +209,7 @@ def test_reset_token_carries_benchmark_episode_and_seed():
         mapping.TOKEN_EPISODE_INDEX: 3,
         mapping.TOKEN_SEED: 7,
         mapping.WITH_RIGHT_SHOULDER: True,
+        mapping.WITH_OBJECT_IMAGE_POINTS: True,
     }
     assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
     assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 2}) == {
@@ -191,6 +217,7 @@ def test_reset_token_carries_benchmark_episode_and_seed():
         mapping.TOKEN_EPISODE_INDEX: 2,
         mapping.TOKEN_SEED: None,
         mapping.WITH_RIGHT_SHOULDER: True,
+        mapping.WITH_OBJECT_IMAGE_POINTS: True,
     }
 
 
@@ -198,3 +225,9 @@ def test_reset_token_asks_for_the_right_shoulder_only_when_the_adapter_declares_
     params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
     assert _adapter([ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is False
     assert _adapter([ShoulderSide.RIGHT, ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is True
+
+
+def test_reset_token_drops_the_object_image_points_only_when_the_adapter_asks():
+    params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
+    dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), with_object_image_points=False)
+    assert dropped.reset_token(params)[mapping.WITH_OBJECT_IMAGE_POINTS] is False

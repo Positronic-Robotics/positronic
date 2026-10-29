@@ -9,7 +9,7 @@ import ipaddress
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Annotated, Generic, Literal, Self
+from typing import Annotated, ClassVar, Generic, Literal, Self
 
 from platform_client.enums import CameraVantage, EndpointKind, Placement, RequestType, RigShape, StartPose, Wire
 from platform_client.ids import OrgSlug, TransactionKey
@@ -68,6 +68,10 @@ class Cascade(BaseModel):
 
     model_config = INPUT_MODEL_CONFIG
 
+    # A dump leaves out each of these while it holds None, so a plan that states none of them reads the same to a
+    # platform that does not declare them.
+    _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = ('scene_seed',)
+
     # Episodes each endpoint of each task under this level takes.
     episodes_per_endpoint: int | None = Field(default=None, ge=1)
     cap_per_episode_sec: int | None = Field(default=None, ge=1)
@@ -77,7 +81,18 @@ class Cascade(BaseModel):
     # Per external camera the task defines, keyed by the mount name the task gives it.
     external_cameras: dict[str, Slugged[Placement]] = Field(default_factory=dict)
     clutter: Clutter | None = None
+    # Later plans of the organization with this seed replay the sides recorded for a task, and the table recorded for
+    # a task and the `clutter` block the plan states, or none; another block draws its own table (`README.md`).
+    scene_seed: str | None = Field(default=None, min_length=1)
     start_pose: Slugged[StartPose] | None = None
+
+    @model_serializer(mode='wrap')
+    def _without_unstated_optional_fields(self, handler: SerializerFunctionWrapHandler):
+        serialized: dict[str, object] = handler(self)
+        for name in self._OMITTED_WHEN_NONE:
+            if serialized.get(name) is None:
+                serialized.pop(name, None)
+        return serialized
 
 
 # Each address field holds what the table in the client README states, and no other value.
@@ -284,6 +299,12 @@ class Endpoint(Cascade, Generic[Credential]):
     Every kind that names a locator names its wire.
     """
 
+    _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (
+        *Cascade._OMITTED_WHEN_NONE,
+        'max_concurrent_sessions',
+        'min_vram_gb',
+    )
+
     name: str = Field(min_length=1)
     kind: Slugged[EndpointKind] = EndpointKind.remote
     wire: Slugged[Wire] | None = None
@@ -296,13 +317,9 @@ class Endpoint(Cascade, Generic[Credential]):
     image_credential: Credential | None = None
     # The most sessions the platform holds open to a remote policy at once. None leaves the count to the platform.
     max_concurrent_sessions: int | None = Field(default=None, ge=1)
-
-    @model_serializer(mode='wrap')
-    def _without_an_unstated_session_limit(self, handler: SerializerFunctionWrapHandler):
-        serialized: dict[str, object] = handler(self)
-        if self.max_concurrent_sessions is None:
-            serialized.pop('max_concurrent_sessions', None)
-        return serialized
+    # The least GPU memory an image needs, in GB of 10**9 bytes. The platform gives the run a GPU slice that
+    # holds it. None takes the published slice.
+    min_vram_gb: int | None = Field(default=None, ge=1)
 
     @model_validator(mode='before')
     @classmethod
@@ -381,6 +398,22 @@ class Endpoint(Cascade, Generic[Credential]):
             raise ValueError(
                 f'endpoint {self.name!r} states max_concurrent_sessions and names no address: state it on the plan '
                 'endpoint this label names'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _a_memory_need_sizes_an_image(self) -> Self:
+        if self.min_vram_gb is None:
+            return self
+        if not self.names_a_locator:
+            raise ValueError(
+                f'endpoint {self.name!r} states min_vram_gb and names no image: state it on the plan endpoint '
+                'this label names'
+            )
+        if self.kind is not EndpointKind.image:
+            raise ValueError(
+                f'{slug_of(self.kind)} endpoint {self.name!r} states min_vram_gb, which only an image endpoint '
+                'carries: the platform sizes the GPU of the image it runs'
             )
         return self
 
@@ -491,6 +524,8 @@ class EvalPlan(Cascade, Generic[Credential]):
     client from the key's grant.
     """
 
+    _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (*Cascade._OMITTED_WHEN_NONE, 'sample')
+
     # The rules, the approvals and the board this plan runs under.
     request_type: PlanRequestType
     # The rig shape a plan that states its tasks runs on.
@@ -510,13 +545,6 @@ class EvalPlan(Cascade, Generic[Credential]):
     transaction_key: TransactionKey | None = Field(default=None, min_length=1)
     # The trials of the named eval this run takes. None runs every trial.
     sample: Sample | None = None
-
-    @model_serializer(mode='wrap')
-    def _without_an_unused_sample(self, handler: SerializerFunctionWrapHandler):
-        serialized: dict[str, object] = handler(self)
-        if self.sample is None:
-            serialized.pop('sample', None)
-        return serialized
 
     @property
     def names_an_eval(self) -> bool:

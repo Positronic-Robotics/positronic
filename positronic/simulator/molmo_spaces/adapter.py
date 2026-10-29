@@ -7,9 +7,7 @@ from typing import Any
 import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.ik import frame_transform
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, GRASP_SITE_LINK, bundled_franka_model
+from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -43,12 +41,13 @@ def camera_dict(exterior_sides: Sequence[ShoulderSide]) -> dict[str, tuple[str, 
 class MolmoAdapter(WireCommandAdapter):
     _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
 
-    def __init__(self, cameras: Mapping[str, tuple[str, ...]]):
-        # The env measures and drives at the 2F-85 grasp site of this model, which the embodiment declares.
+    def __init__(self, cameras: Mapping[str, tuple[str, ...]], with_object_image_points: bool = True):
+        # The env measures and drives at the 2F-85 grip point of this model, ``GRIPPER_SITE``, as the rig does.
         self.robot_model = bundled_franka_model()
-        super().__init__(frame_transform(self.robot_model[roboarm_keys.URDF], DEFAULT_FRAME, GRASP_SITE_LINK))
+        super().__init__()
         self._cameras = cameras
         self._with_right_shoulder = SHOULDER_CAMERAS[ShoulderSide.RIGHT] in cameras.values()
+        self._with_object_image_points = with_object_image_points
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
@@ -57,6 +56,11 @@ class MolmoAdapter(WireCommandAdapter):
                 eval_keys.TASK: record[mapping.TASK_NAME],
                 molmo_keys.EPISODE_INDEX: record[mapping.TOKEN_EPISODE_INDEX],
                 molmo_keys.TASK_HORIZON: record[mapping.TASK_HORIZON_SEC],
+                **(
+                    {molmo_keys.TASK_HORIZON_OVERRIDE: record[mapping.TASK_HORIZON_OVERRIDE_SEC]}
+                    if record.get(mapping.TASK_HORIZON_OVERRIDE_SEC) is not None
+                    else {}
+                ),
             }
             for record in records
         ]
@@ -66,19 +70,25 @@ class MolmoAdapter(WireCommandAdapter):
             **{dimension: params[key] for dimension, key in self._DIMENSION_KEYS.items()},
             mapping.TOKEN_EPISODE_INDEX: params[molmo_keys.EPISODE_INDEX],
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
+            **(
+                {mapping.TOKEN_HORIZON_SEC: params[molmo_keys.TASK_HORIZON_OVERRIDE]}
+                if molmo_keys.TASK_HORIZON_OVERRIDE in params
+                else {}
+            ),
             mapping.WITH_RIGHT_SHOULDER: self._with_right_shoulder,
+            mapping.WITH_OBJECT_IMAGE_POINTS: self._with_object_image_points,
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         grasp_pose = geom.Transform3D(
-            raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT])
+            raw_obs[protocol.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[protocol.OBS_EEF_QUAT])
         )
         ee_pose = self._measure(grasp_pose)
         state = MujocoFrankaState()
-        state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
+        state.encode(raw_obs[protocol.OBS_JOINT_POS], raw_obs[protocol.OBS_JOINT_VEL], ee_pose)
         if raw_obs[protocol.OBS_ARM_ERROR]:
             state.set_status(RobotStatus.ERROR)
-        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[mapping.OBS_GRIP])}
+        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[protocol.OBS_GRIP])}
         for logical, candidates in self._cameras.items():
             key = next((c for c in candidates if c in raw_obs), candidates[-1])
             obs[logical] = pimm.shared_memory.NumpySMAdapter.lazy_init(raw_obs[key], None)

@@ -1,4 +1,4 @@
-.PHONY: all build tag push clean prune help build-training tag-training push-training build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
+.PHONY: all build tag push clean prune help build-molmospaces tag-molmospaces push-molmospaces build-training tag-training push-training build-openpi-base push-openpi-base build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
 
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
@@ -7,6 +7,8 @@ IMAGE_NAME_DREAMZERO := positro/dreamzero
 IMAGE_NAME_DREAMZERO_BASE := positro/dreamzero-base
 IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 IMAGE_NAME_ROBOLAB := positro/robolab
+# The public MolmoSpaces eval image. Not in `build` or `push`: CI publishes it from a job of its own.
+IMAGE_NAME_MOLMOSPACES := positro/molmospaces
 # One serving image per checkpoint, the weights inside, starting with no network: positro/<name>, from
 # Dockerfile.serve-<name>. Not in `build` or `push`.
 SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid flux3-action cosmos3-nano
@@ -36,8 +38,11 @@ LOCAL_TAG_TRAINING := $(IMAGE_NAME_TRAINING):local
 # Base image tags (not parameterized — these are heavy foundational images)
 TAG_DREAMZERO_BASE_LATEST := $(IMAGE_NAME_DREAMZERO_BASE):latest
 
-# OpenPI base image (pulled from registry)
-TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):latest
+# The commit of the openpi fork that positro/openpi-base carries. positro/openpi and positro/pi05-droid build on
+# that base. CI builds the base from this commit when Docker Hub has no image of it.
+OPENPI_REPO := https://github.com/Positronic-Robotics/openpi.git
+OPENPI_REF := 00f1f4e6f26ce041972864b505e5dd2dafc19246
+TAG_OPENPI_BASE := $(IMAGE_NAME_OPENPI_BASE):$(shell printf %.7s $(OPENPI_REF))
 
 help:
 	@echo "Positronic Docker Build System - Makefile"
@@ -52,6 +57,8 @@ help:
 	@echo "  make build-training  Build the training image"
 	@echo "  make build-serve-<name>  Build a serving image: $(SERVE_IMAGES)"
 	@echo "  make build-serve-galaxea  Build the private Galaxea serving image (needs HF_TOKEN)"
+	@echo "  make build-openpi-base  Build positro/openpi-base from the openpi fork at OPENPI_REF"
+	@echo "  make build-molmospaces  Build the public MolmoSpaces eval image"
 	@echo "  make build           Build training, openpi and groot images"
 	@echo ""
 	@echo "  make tag-training    Tag the training image (depends on build-training)"
@@ -75,9 +82,27 @@ build-training:
 	fi
 	docker build --platform linux/amd64 -f Dockerfile.training.cloud -t $(LOCAL_TAG_TRAINING) ..
 
-build-openpi:
+# The base builds from the fork's own recipe. A published tag is never built again, so a moved OPENPI_REF is the only
+# change that rebuilds it. Under CI, `push-openpi-base` also points `latest` at the published tag.
+OPENPI_BASE_PUBLISHED = docker manifest inspect $(TAG_OPENPI_BASE) > /dev/null 2>&1
+OPENPI_BASE_BUILD = src="$$(mktemp -d)" && trap 'rm -rf "$$src"' EXIT && \
+	git -C "$$src" init -q && git -C "$$src" fetch -q --depth 1 $(OPENPI_REPO) $(OPENPI_REF) && \
+	git -C "$$src" checkout -q FETCH_HEAD && \
+	docker buildx build --platform linux/amd64 --provenance=false --sbom=false -t $(TAG_OPENPI_BASE) $(1) \
+		-f "$$src/docker/Dockerfile.training.cloud" "$$src"
+
+build-openpi-base:
+	$(OPENPI_BASE_PUBLISHED) || { $(call OPENPI_BASE_BUILD,--load); }
+
+push-openpi-base:
+	$(OPENPI_BASE_PUBLISHED) || { $(call OPENPI_BASE_BUILD,--push); }
+ifdef CI
+	docker buildx imagetools create --tag $(IMAGE_NAME_OPENPI_BASE):latest $(TAG_OPENPI_BASE)
+endif
+
+build-openpi: build-openpi-base
 	@echo "Building $(IMAGE_NAME_OPENPI) using base $(TAG_OPENPI_BASE)..."
-	docker build --pull --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_OPENPI_BASE) -f Dockerfile.openpi -t $(IMAGE_NAME_OPENPI):local ..
+	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_OPENPI_BASE) -f Dockerfile.openpi -t $(IMAGE_NAME_OPENPI):local ..
 
 build-groot: build-training
 	@echo "Building $(IMAGE_NAME_GROOT)..."
@@ -99,11 +124,15 @@ build-robolab:
 	@echo "Building $(IMAGE_NAME_ROBOLAB)..."
 	docker build --platform linux/amd64 -f Dockerfile.robolab -t $(IMAGE_NAME_ROBOLAB):local ..
 
+build-molmospaces:
+	docker build --platform linux/amd64 -f Dockerfile.molmospaces -t $(IMAGE_NAME_MOLMOSPACES):local ..
+
 # The GR00T backbone and the FLUX 3 Action weights are gated on the Hub. BuildKit reads the token from HF_TOKEN,
 # and it enters no layer. Every image's Dockerfile mounts the secret by this id.
 HF_TOKEN_BUILD_FLAGS := --secret id=hf_token,env=HF_TOKEN
 SERVE_BUILD_FLAGS_gr00t-n17-droid := $(HF_TOKEN_BUILD_FLAGS)
 SERVE_BUILD_FLAGS_flux3-action := $(HF_TOKEN_BUILD_FLAGS)
+SERVE_BUILD_FLAGS_pi05-droid := --build-arg BASE_IMAGE=$(TAG_OPENPI_BASE)
 
 # `push-serve-<name>` builds and pushes in one BuildKit run, which needs a docker-container builder
 # (`docker buildx create --use`). The second argument of SERVE_IMAGE is the repository. The cache at
@@ -127,6 +156,10 @@ push-serve-$(1):
 endef
 
 $(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name),positro/$(name))))
+
+# A docker-container builder reads a base from the registry only, so the push needs the base published.
+build-serve-pi05-droid: build-openpi-base
+push-serve-pi05-droid: push-openpi-base
 
 # Galaxea's weights are gated and its licence allows internal evaluation only, so its image goes to a private
 # registry, built and pushed by hand. It is not in SERVE_IMAGES, which CI publishes to Docker Hub.
@@ -197,6 +230,16 @@ ifdef PUBLISH_RELEASE
 endif
 	@echo "Tagged: $(IMAGE_TAG), $(GIT_SHA)"
 
+tag-molmospaces: build-molmospaces
+	docker tag $(IMAGE_NAME_MOLMOSPACES):local $(IMAGE_NAME_MOLMOSPACES):$(IMAGE_TAG)
+	docker tag $(IMAGE_NAME_MOLMOSPACES):local $(IMAGE_NAME_MOLMOSPACES):$(GIT_SHA)
+ifdef CI
+	docker tag $(IMAGE_NAME_MOLMOSPACES):local $(IMAGE_NAME_MOLMOSPACES):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker tag $(IMAGE_NAME_MOLMOSPACES):local $(IMAGE_NAME_MOLMOSPACES):v$(VERSION)
+endif
+
 tag: tag-training tag-openpi tag-groot tag-dreamzero tag-robolab
 
 push-training: tag-training
@@ -261,6 +304,16 @@ ifdef PUBLISH_RELEASE
 endif
 	@echo "IMAGE_TAG=$(IMAGE_TAG)" > .env
 
+push-molmospaces: tag-molmospaces
+	docker push $(IMAGE_NAME_MOLMOSPACES):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME_MOLMOSPACES):$(GIT_SHA)
+ifdef CI
+	docker push $(IMAGE_NAME_MOLMOSPACES):latest
+endif
+ifdef PUBLISH_RELEASE
+	docker push $(IMAGE_NAME_MOLMOSPACES):v$(VERSION)
+endif
+
 push: push-training push-openpi push-groot push-dreamzero push-robolab
 
 # Log docker/podman in to the Nebius registry using the nebius CLI credential
@@ -307,6 +360,9 @@ clean:
 	-docker rmi $(IMAGE_NAME_ROBOLAB):local
 	-docker rmi $(IMAGE_NAME_ROBOLAB):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_ROBOLAB):$(GIT_SHA)
+	-docker rmi $(IMAGE_NAME_MOLMOSPACES):local
+	-docker rmi $(IMAGE_NAME_MOLMOSPACES):$(IMAGE_TAG)
+	-docker rmi $(IMAGE_NAME_MOLMOSPACES):$(GIT_SHA)
 	-docker rmi $(GALAXEA_REPO):local
 	-for name in $(SERVE_IMAGES); do docker rmi positro/$$name:local; done
 	@echo "Image cleanup attempts complete. Check the output for removal errors."

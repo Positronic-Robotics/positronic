@@ -1,6 +1,9 @@
 import io
+import threading
+import time
 import typing
 import xml.etree.ElementTree as ET
+from collections.abc import Generator, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -13,8 +16,10 @@ import pyarrow.parquet as pq
 import pytest
 import rerun.blueprint as rrb
 import rerun.recording as rr_recording
+import rerun_bindings
 from eval_vocabulary.episode import LEGACY_TIME_COLUMN
 from eval_vocabulary.progress import STATE_SIGNAL
+from rerun.urdf import UrdfTree
 
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys
@@ -113,6 +118,44 @@ def test_urdf_link_and_joint_names_carry_the_namespace(tmp_path):
     assert [el.get('link') for el in root.iter('child')] == ['robot_state.left.q.arm']
 
 
+_TWO_VISUAL_URDF = """<robot name="toy">
+  <link name="painted">
+    <visual>
+      <geometry><box size="1 1 1"/></geometry>
+      <material name="red"><color rgba="1 0 0 1"/></material>
+    </visual>
+  </link>
+  <link name="bare">
+    <visual>
+      <geometry><box size="1 1 1"/></geometry>
+    </visual>
+  </link>
+  <joint name="fixed" type="fixed">
+    <parent link="painted"/>
+    <child link="bare"/>
+  </joint>
+</robot>"""
+
+
+def _visual_materials(urdf_path: Path, link: str) -> list[tuple[str | None, list[str | None]]]:
+    """Each material of the link's visual, as its name and the rgba of its colors."""
+    materials = ET.fromstring(urdf_path.read_text()).iterfind(f"link[@name='{link}']/visual/material")
+    return [(material.get('name'), [color.get('rgba') for color in material.iter('color')]) for material in materials]
+
+
+def test_urdf_visual_with_its_own_material_keeps_only_the_tint(tmp_path):
+    urdf_path = _write_urdf_to_dir(_TWO_VISUAL_URDF, {}, tmp_path, 'robot.')
+
+    assert _visual_materials(urdf_path, 'robot.painted') == [('viewer_translucent', ['1 1 1 0.5'])]
+    UrdfTree.from_file_path(str(urdf_path), entity_path_prefix='/robot')
+
+
+def test_urdf_visual_without_a_material_gets_the_tint(tmp_path):
+    urdf_path = _write_urdf_to_dir(_TWO_VISUAL_URDF, {}, tmp_path, 'robot.')
+
+    assert _visual_materials(urdf_path, 'robot.bare') == [('viewer_translucent', ['1 1 1 0.5'])]
+
+
 def test_notice_names_every_unplotted_signal_and_its_width():
     notice = _unplotted_notice({'wide_signal': '866 values', 'wider_signal': '120 values'})
 
@@ -199,14 +242,121 @@ def test_an_ended_stream_releases_its_recording_threads(tmp_path, read_all):
     assert process.num_threads() < threads + streams
 
 
+def test_threads_never_start_a_recording_while_another_sweeps_orphans(tmp_path, monkeypatch):
+    # In rerun, a creation waits for the list with the GIL held, and a sweep flushes with the list held.
+    # Two such calls at the same time in two threads can deadlock the process.
+    ds = _numeric_dataset(tmp_path / 'ds')
+    active: list[str] = []
+    overlaps: list[tuple[str, ...]] = []
+    state = threading.Lock()
+    # The real calls run one at a time, so a deadlock shows as an overlap and not as a hung test.
+    one_real_call = threading.Lock()
+
+    def spy(name: str, call: Any) -> Any:
+        def spied(*args: Any, **kwargs: Any) -> Any:
+            with state:
+                if active:
+                    overlaps.append((*active, name))
+                active.append(name)
+            try:
+                with one_real_call:
+                    time.sleep(0.002)  # Keep the call open long enough for another thread to enter.
+                    return call(*args, **kwargs)
+            finally:
+                with state:
+                    active.remove(name)
+
+        return spied
+
+    # The rerun calls that take rerun's global recording list: two creations and two orphan sweeps.
+    for name in (
+        'new_recording',
+        'new_blueprint',
+        'flush_and_cleanup_orphaned_recordings',
+        'disconnect_orphaned_recordings',
+    ):
+        monkeypatch.setattr(rerun_bindings, name, spy(name, getattr(rerun_bindings, name)))
+    start = threading.Barrier(8)
+
+    def stream_episodes() -> None:
+        start.wait()
+        for _ in range(3):
+            b''.join(stream_episode_rrd(ds, 0))
+
+    workers = [threading.Thread(target=stream_episodes) for _ in range(8)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+
+    assert overlaps == []
+
+
+def _spy_on_sweeps_outside_the_lock(monkeypatch) -> list[str]:
+    """The names of the orphan sweeps that run while the recording list lock is free, as they run."""
+    outside: list[str] = []
+
+    def spy(name: str, call: Any) -> Any:
+        def spied(*args: Any, **kwargs: Any) -> Any:
+            if not dataset_utils._RERUN_RECORDING_LIST_LOCK.locked():
+                outside.append(name)
+            return call(*args, **kwargs)
+
+        return spied
+
+    for name in ('flush_and_cleanup_orphaned_recordings', 'disconnect_orphaned_recordings'):
+        monkeypatch.setattr(rerun_bindings, name, spy(name, getattr(rerun_bindings, name)))
+    return outside
+
+
+def _read_to_the_end(stream: Iterator[bytes]) -> None:
+    b''.join(stream)
+
+
+def _close_after_one_chunk(stream: Generator[bytes, None, None]) -> None:
+    next(stream)
+    stream.close()
+
+
+@pytest.mark.parametrize('consume', [_read_to_the_end, _close_after_one_chunk])
+def test_every_orphan_sweep_of_a_stream_runs_under_the_recording_list_lock(tmp_path, monkeypatch, consume):
+    # A sweep outside the lock can run while another thread creates a recording.
+    ds = _numeric_dataset(tmp_path / 'ds')
+    outside = _spy_on_sweeps_outside_the_lock(monkeypatch)
+
+    consume(stream_episode_rrd(ds, 0))
+
+    assert outside == []
+
+
+def test_a_stream_that_raises_sweeps_its_recording_under_the_lock(tmp_path, monkeypatch):
+    ds = _numeric_dataset(tmp_path / 'ds')
+    outside = _spy_on_sweeps_outside_the_lock(monkeypatch)
+
+    def failing_text(*args: Any, **kwargs: Any) -> Iterator[bytes]:
+        yield b''
+        raise RuntimeError('a text signal failed')
+
+    monkeypatch.setattr(dataset_utils, '_log_text_signals', failing_text)
+    with pytest.raises(RuntimeError, match='a text signal failed'):
+        b''.join(stream_episode_rrd(ds, 0))
+
+    assert outside == []
+
+
 def test_a_streamed_recording_carries_its_blueprint(tmp_path):
     rrd = b''.join(stream_episode_rrd(_numeric_dataset(tmp_path / 'ds'), 0))
 
     assert rrb.archetypes.ContainerBlueprint.archetype().encode() in rrd
 
 
-def _null_drainer() -> dataset_utils._BinaryStreamDrainer:
-    return dataset_utils._BinaryStreamDrainer(dataset_utils.rr.RecordingStream('test').binary_stream(), min_bytes=1)
+@pytest.fixture
+def rec() -> dataset_utils.rr.RecordingStream:
+    return dataset_utils.rr.RecordingStream('test')
+
+
+def _null_drainer(rec: dataset_utils.rr.RecordingStream) -> dataset_utils._BinaryStreamDrainer:
+    return dataset_utils._BinaryStreamDrainer(rec.binary_stream(), min_bytes=1)
 
 
 @pytest.mark.parametrize('selected', [None, 'tick'])
@@ -214,9 +364,9 @@ def test_numeric_and_pose_samples_keep_their_coordinates_after_thinning(tmp_path
     sent = {}
     send = dataset_utils.rr.send_columns
 
-    def send_columns(path, indexes, columns):
+    def send_columns(path, indexes, columns, recording=None):
         sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
-        send(path, indexes=indexes, columns=columns)
+        send(path, indexes=indexes, columns=columns, recording=recording)
 
     monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
     root = tmp_path / 'ds'
@@ -279,19 +429,19 @@ def test_initial_timeline_prefers_harness_then_receipt_then_legacy_world_time(tm
     assert blueprint.time_panel.timeline == expected
 
 
-def test_a_text_signal_is_logged_where_its_value_changes(tmp_path, monkeypatch):
+def test_a_text_signal_is_logged_where_its_value_changes(rec, tmp_path, monkeypatch):
     sent: dict[str, tuple[list[int], list[Any]]] = {}
     styles: dict[str, Any] = {}
 
-    def send_columns(path, indexes, columns):
+    def send_columns(path, indexes, columns, recording=None):
         times = indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()
         sent[path] = (times, [value for column in columns for value in column.as_arrow_array().to_pylist()])
 
     monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
-    monkeypatch.setattr(dataset_utils.rr, 'log', lambda path, value, static=False: styles.__setitem__(path, value))
+    monkeypatch.setattr(dataset_utils.rr, 'log', lambda path, value, **kwargs: styles.__setitem__(path, value))
     ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
 
-    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer(), None))
+    list(dataset_utils._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
 
     second = 1_000_000_000
     changes = [second, 3 * second, 4 * second, 5 * second, 7 * second]
@@ -302,10 +452,10 @@ def test_a_text_signal_is_logged_where_its_value_changes(tmp_path, monkeypatch):
     assert names == ['0 floating, 1 reaching, 2 contact, 3 at-target']
 
 
-def test_a_text_log_entry_keeps_all_its_coordinates(tmp_path, monkeypatch):
+def test_a_text_log_entry_keeps_all_its_coordinates(rec, tmp_path, monkeypatch):
     sent: dict[str, dict[str, list[int]]] = {}
 
-    def send_columns(path, indexes, columns):
+    def send_columns(path, indexes, columns, recording=None):
         sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
 
     monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
@@ -321,7 +471,7 @@ def test_a_text_log_entry_keeps_all_its_coordinates(tmp_path, monkeypatch):
         )
     ep = DiskEpisode(tmp_path / 'ep')
 
-    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer(), None))
+    list(dataset_utils._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
 
     assert sent['/text/progress.state'] == {
         RECEIVED_WALL: [machine_clock, machine_clock + 1000],
@@ -330,10 +480,10 @@ def test_a_text_log_entry_keeps_all_its_coordinates(tmp_path, monkeypatch):
     }
 
 
-def test_disjoint_text_timelines_are_exported(tmp_path, monkeypatch):
+def test_disjoint_text_timelines_are_exported(rec, tmp_path, monkeypatch):
     sent: dict[str, dict[str, list[int]]] = {}
 
-    def send_columns(path, indexes, columns):
+    def send_columns(path, indexes, columns, recording=None):
         sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
 
     monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
@@ -343,7 +493,7 @@ def test_disjoint_text_timelines_are_exported(tmp_path, monkeypatch):
         writer.append('device.state', 'ready', Time(device=7))
     ep = DiskEpisode(tmp_path / 'ep')
 
-    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer(), None))
+    list(dataset_utils._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
 
     assert sent['/text/progress.state'] == {RECORDED_TIME: [4_000_000_000]}
     assert sent['/text/device.state'] == {'device': [7]}
@@ -353,9 +503,9 @@ def _capture_indexes(monkeypatch) -> dict[str, dict[str, list[int]]]:
     sent: dict[str, dict[str, list[int]]] = {}
     send = dataset_utils.rr.send_columns
 
-    def send_columns(path, indexes, columns):
+    def send_columns(path, indexes, columns, recording=None):
         sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
-        send(path, indexes=indexes, columns=columns)
+        send(path, indexes=indexes, columns=columns, recording=recording)
 
     monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
     return sent
@@ -758,17 +908,19 @@ def test_a_chart_that_names_a_control_mode_plots_it(tmp_path):
     assert chart.contents == [f'/signals/{kq}/**']
 
 
-def test_a_text_signal_holds_its_last_value_to_the_last_sample(tmp_path, monkeypatch):
+def test_a_text_signal_holds_its_last_value_to_the_last_sample(rec, tmp_path, monkeypatch):
     sent: dict[str, list[int]] = {}
     monkeypatch.setattr(
         dataset_utils.rr,
         'send_columns',
-        lambda path, indexes, columns: sent.__setitem__(path, indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()),
+        lambda path, indexes, columns, **kwargs: sent.__setitem__(
+            path, indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()
+        ),
     )
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
     ep = _text_episode(tmp_path / 'ep', {'progress.state': ['floating', 'reaching', 'reaching']})
 
-    list(dataset_utils._log_text_signals(ep, _collect_signal_groups(ep), _null_drainer(), None))
+    list(dataset_utils._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
 
     assert sent['/text/progress.state'] == [1_000_000_000, 2_000_000_000]
     assert sent['/signals/progress.state'] == [1_000_000_000, 2_000_000_000, 3_000_000_000]
@@ -827,37 +979,39 @@ def test_a_signal_below_the_cap_keeps_every_sample():
     assert len(_decimation_indices(np.array([], dtype='datetime64[ns]'), max_hz=30)) == 0
 
 
-def test_every_encoded_frame_keeps_its_own_episode_time(monkeypatch):
+def test_every_encoded_frame_keeps_its_own_episode_time(rec, monkeypatch):
     times = [i * 33_000_000 for i in range(12)]
     frames = [np.full((64, 64, 3), i * 20 % 256, dtype=np.uint8) for i in range(12)]
     logged = []
 
-    def send_columns(path, indexes, columns):
+    def send_columns(path, indexes, columns, recording=None):
         logged.append({index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes})
 
     monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
     signal = DummySignal(list(zip(times, range(12), strict=True)), frames, timelines=(RECORDED_TIME, 'tick'))
-    dataset_utils._encode_frames_as_video('/video', signal, _timestamp_columns(signal, None), 640, max_hz=0)
+    dataset_utils._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, None), 640, max_hz=0)
     other = DummySignal([7], frames[:1], timelines=('device',))
-    dataset_utils._encode_frames_as_video('/other', other, _timestamp_columns(other, None), 640, max_hz=0)
+    dataset_utils._encode_frames_as_video(rec, '/other', other, _timestamp_columns(other, None), 640, max_hz=0)
 
     assert logged == [{RECORDED_TIME: [ts], 'tick': [i]} for i, ts in enumerate(times)] + [{'device': [7]}]
 
 
-def test_frames_past_the_rate_cap_are_left_out_of_the_encoding(monkeypatch):
+def test_frames_past_the_rate_cap_are_left_out_of_the_encoding(rec, monkeypatch):
     times = [i * 10_000_000 for i in range(12)]
     frames = [np.full((64, 64, 3), i * 20 % 256, dtype=np.uint8) for i in range(12)]
     logged: list[int] = []
     monkeypatch.setattr(
         dataset_utils.rr,
         'send_columns',
-        lambda path, indexes, columns: logged.extend(indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()),
+        lambda path, indexes, columns, **kwargs: logged.extend(
+            indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()
+        ),
     )
     monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
 
     signal = DummySignal(times, frames)
-    dataset_utils._encode_frames_as_video('/video', signal, _timestamp_columns(signal, None), 640, max_hz=30)
+    dataset_utils._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, None), 640, max_hz=30)
 
     kept = _decimation_indices(np.asarray(times, dtype='datetime64[ns]'), max_hz=30)
     assert 1 < len(kept) < len(times)
@@ -937,7 +1091,7 @@ def _jittery_episode(root: Path) -> DiskEpisode:
     return typing.cast(DiskEpisode, LocalDataset(root)[0])
 
 
-def _logged_video(monkeypatch, ep: DiskEpisode) -> tuple[bytes, list[int]]:
+def _logged_video(rec: dataset_utils.rr.RecordingStream, monkeypatch, ep: DiskEpisode) -> tuple[bytes, list[int]]:
     """The camera's embedded mp4, and the times its frame references are sent at."""
     embedded: list[bytes] = []
     asset_video = dataset_utils.rr.AssetVideo
@@ -949,32 +1103,32 @@ def _logged_video(monkeypatch, ep: DiskEpisode) -> tuple[bytes, list[int]]:
     monkeypatch.setattr(dataset_utils.rr, 'AssetVideo', keep_contents)
     sent = _capture_indexes(monkeypatch)
     signals = _collect_signal_groups(ep)
-    list(dataset_utils._log_video_signals(ep, signals, _null_drainer(), 640, 30, None))
+    list(dataset_utils._log_video_signals(rec, ep, signals, _null_drainer(rec), 640, 30, None))
     return embedded[0], sent['camera'][RECEIVED_WORLD]
 
 
-def test_a_stored_video_on_a_jittery_timeline_keeps_every_frame(tmp_path, monkeypatch):
+def test_a_stored_video_on_a_jittery_timeline_keeps_every_frame(rec, tmp_path, monkeypatch):
     ep = _jittery_episode(tmp_path / 'ds')
 
-    mp4, times = _logged_video(monkeypatch, ep)
+    mp4, times = _logged_video(rec, monkeypatch, ep)
 
     assert times == _JITTERY_30HZ_NS.tolist()
     assert len(_frame_times(mp4)) == len(_JITTERY_30HZ_NS)
 
 
-def test_a_stored_video_that_fits_the_cap_is_embedded_byte_for_byte(tmp_path, monkeypatch):
+def test_a_stored_video_that_fits_the_cap_is_embedded_byte_for_byte(rec, tmp_path, monkeypatch):
     ep = _jittery_episode(tmp_path / 'ds')
 
-    mp4, _ = _logged_video(monkeypatch, ep)
+    mp4, _ = _logged_video(rec, monkeypatch, ep)
 
     assert mp4 == typing.cast(VideoSignal, ep.signals['camera']).video_path.read_bytes()
 
 
-def test_a_numeric_signal_on_the_same_jittery_timeline_is_still_thinned(tmp_path, monkeypatch):
+def test_a_numeric_signal_on_the_same_jittery_timeline_is_still_thinned(rec, tmp_path, monkeypatch):
     ep = _jittery_episode(tmp_path / 'ds')
     sent = _capture_indexes(monkeypatch)
 
-    list(dataset_utils._log_numeric_signals(ep, _collect_signal_groups(ep), _null_drainer(), 30, None))
+    list(dataset_utils._log_numeric_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), 30, None))
 
     kept = _decimation_indices(_JITTERY_30HZ_NS.astype('datetime64[ns]'), max_hz=30)
     assert 1 < len(kept) < len(_JITTERY_30HZ_NS)

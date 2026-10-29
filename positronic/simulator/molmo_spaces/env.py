@@ -36,8 +36,10 @@ _install_cgl_noop_stub()
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
+import arm_action  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
+import mujoco_state  # noqa: E402 -- positronic-free, on PYTHONPATH
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
 from server import EnvProtocol, EnvServer  # noqa: E402
@@ -162,7 +164,13 @@ class MolmoSpacesEnv(EnvProtocol):
         return with_right
 
     def _build(
-        self, bench: mapping.BenchmarkPath, episode_index: int, seed: int | None, with_right_shoulder: bool
+        self,
+        bench: mapping.BenchmarkPath,
+        episode_index: int,
+        seed: int | None,
+        horizon_sec: float | None,
+        with_right_shoulder: bool,
+        with_object_image_points: bool = True,
     ) -> None:
         if self._sampler is not None:
             self._sampler.close()
@@ -172,11 +180,16 @@ class MolmoSpacesEnv(EnvProtocol):
             episode = self._with_right_shoulder_camera(episode, mapping.episode_rng(bench, episode_index))
         cfg = _DroidEvalConfig()
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
-        # MolmoSpaces resolves one horizon from the full benchmark.
-        cfg.task_horizon = determine_task_horizon(episodes, None, cfg.policy_dt_ms)
+        # MolmoSpaces resolves one horizon from the full benchmark, unless an override in steps replaces it.
+        cfg.task_horizon = determine_task_horizon(
+            episodes, mapping.horizon_steps(horizon_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
+        )
         self._sampler = _JointGraspSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
+        if not with_object_image_points:
+            # The sensor draws its points from the global NumPy generator, so without it an episode draws other values.
+            self._task.sensor_suite.sensors.pop(mapping.MOLMO_OBJECT_IMAGE_POINTS_SENSOR)
         self._robot_view = self._task.env.current_robot.robot_view
         self._assert_measures_at_grasp_site()
         self._control_dt = cfg.policy_dt_ms / 1000.0
@@ -190,6 +203,7 @@ class MolmoSpacesEnv(EnvProtocol):
         """Selected episode records, with names, reset parameters and horizons in seconds."""
         cfg = _DroidEvalConfig()
         selection = spec.get(mapping.SELECT_EPISODES)
+        override_sec = spec.get(mapping.SELECT_HORIZON_SEC)
         pinned = None if selection is None else [selection] if isinstance(selection, int) else list(selection)
         records = []
         for bench in mapping.select_benchmarks(self._found, spec):
@@ -198,13 +212,17 @@ class MolmoSpacesEnv(EnvProtocol):
                 self._right_view_blocked.get(bench, frozenset()) if spec[mapping.WITH_RIGHT_SHOULDER] else frozenset()
             )
             indices = mapping.select_episodes(bench, len(episodes), pinned, blocked)
-            horizon_sec = determine_task_horizon(episodes, None, cfg.policy_dt_ms) * cfg.policy_dt_ms / 1000.0
+            horizon_steps = determine_task_horizon(
+                episodes, mapping.horizon_steps(override_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
+            )
+            horizon_sec = horizon_steps * cfg.policy_dt_ms / 1000.0
             records += [
                 {
                     **bench._asdict(),
                     mapping.TOKEN_EPISODE_INDEX: i,
                     mapping.TASK_NAME: episodes[i].language.task_description,
                     mapping.TASK_HORIZON_SEC: horizon_sec,
+                    mapping.TASK_HORIZON_OVERRIDE_SEC: override_sec,
                 }
                 for i in indices
             ]
@@ -213,7 +231,12 @@ class MolmoSpacesEnv(EnvProtocol):
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         bench = mapping.BenchmarkPath(**{d: token[d] for d in mapping.BenchmarkPath._fields})
         self._build(
-            bench, token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED), token[mapping.WITH_RIGHT_SHOULDER]
+            bench,
+            token[mapping.TOKEN_EPISODE_INDEX],
+            token.get(mapping.TOKEN_SEED),
+            token.get(mapping.TOKEN_HORIZON_SEC),
+            token[mapping.WITH_RIGHT_SHOULDER],
+            token.get(mapping.WITH_OBJECT_IMAGE_POINTS, True),
         )
         obs, _info = self._task.reset()  # One observation dict per environment.
         env_obs = obs[0]
@@ -229,7 +252,7 @@ class MolmoSpacesEnv(EnvProtocol):
         (action,) = actions.values()  # MolmoSpaces runs one scene per server, so this server serves one slot
         wire = protocol.single_arm(action)
         measured = self._measured_arm_q()
-        arm = mapping.wire_command_to_arm_action(
+        arm = arm_action.wire_command_to_arm_action(
             wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, current_eef=self._measured_eef_pose()
         )
         gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)
@@ -277,32 +300,24 @@ class MolmoSpacesEnv(EnvProtocol):
     def _observe(self, env_obs: dict[str, Any], *, arm_error: bool) -> dict[str, Any]:
         """Raw observations, including the grasp-site pose in the arm base frame."""
         arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
+        scene = self._robot_view.mj_data
         eef_pos, eef_rot = self._measured_eef_pose()
         eef_quat = np.zeros(4)
         mujoco.mju_mat2Quat(eef_quat, np.ascontiguousarray(eef_rot.reshape(9)))
         payload = {
-            mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
-            mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
-            mapping.OBS_EEF_POS: eef_pos.astype(np.float32),
-            mapping.OBS_EEF_QUAT: eef_quat.astype(np.float32),
-            mapping.OBS_GRIP: np.float32(
+            protocol.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
+            protocol.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
+            protocol.OBS_EEF_POS: eef_pos.astype(np.float32),
+            protocol.OBS_EEF_QUAT: eef_quat.astype(np.float32),
+            protocol.OBS_GRIP: np.float32(
                 mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
             ),
-            mapping.OBS_SIM_STATE: self._full_physics_state(),
+            mapping.OBS_SIM_STATE: mujoco_state.integration_state(scene.model, scene),
             protocol.OBS_ARM_ERROR: arm_error,
         }
         for name in self._camera_names:
             payload[name] = np.ascontiguousarray(env_obs[name])
         return payload
-
-    def _full_physics_state(self) -> np.ndarray:
-        """MuJoCo's ``mjSTATE_INTEGRATION`` vector for this scene."""
-        data = self._robot_view.mj_data
-        model = data.model
-        spec = mujoco.mjtState.mjSTATE_INTEGRATION
-        state = np.empty(mujoco.mj_stateSize(model, spec), dtype=np.float64)
-        mujoco.mj_getState(model, data, state, spec)
-        return state
 
     def close(self) -> None:
         if self._sampler is not None:

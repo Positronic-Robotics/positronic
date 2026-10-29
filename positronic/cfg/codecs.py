@@ -5,18 +5,42 @@ import configuronic as cfn
 from positronic import geom, keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.models import (
+    DROID_EE_FRAME,
+    FRANKA_HAND_FRAME,
+    GRIPPER_SITE,
+    PANDA_HAND_FRAME,
+    YAM_GRASP_SITE_FRAME,
+    EEFrame,
+)
+from positronic.policy import training
 from positronic.policy.codecs import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
     FlipGrip,
     Metadata,
+    Resample,
     SetControlMode,
 )
-from positronic.policy.codecs.observation import ObservationCodec
+from positronic.policy.codecs.image import image_observation as image_inference
+from positronic.policy.codecs.observation import TASK_FIELD, StateObservationCodec
+from positronic.policy.compatibility import WithTraining
 from positronic.policy.keys import ACTION_FPS
 
 RotRep = geom.Rotation.Representation
+
+
+@cfn.config(resample=Resample.BILINEAR)
+def image_observation(images: dict[str, tuple[str, tuple[int, int]]], resample: Resample):
+    """Connect image inference and training recipes for codec-based exporters."""
+    return WithTraining(image_inference(images, resample), training.image_observation(images, resample))
+
+
+@cfn.config(task_field=TASK_FIELD)
+def observation(state: dict[str, dict[str, int]], images: dict[str, tuple[str, tuple[int, int]]], task_field: str):
+    """Prepare state, prompt and images independently from the same observation."""
+    return StateObservationCodec(state, task_field) & image_observation(images=images)
 
 
 @cfn.config()
@@ -26,7 +50,7 @@ def general_obs(
     """General observation encoder for non-GR00T policies (OpenPI, ACT, etc.)."""
     state_dict = {state_name: state_features}
     images = {k: (v, image_size) for k, v in image_mappings.items()}
-    return ObservationCodec(state=state_dict, images=images)
+    return observation(state=state_dict, images=images)
 
 
 eepose_grip_obs = general_obs.override(
@@ -54,17 +78,25 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
+# The grip point, where every rig reports its poses.
+gripper_frame = cfn.Config(EEFrame, site=GRIPPER_SITE)
+# The FR3's Franka Hand point, where the real FR3 and the FR3 sims reported before ``GRIPPER_SITE``.
+franka_hand_frame = gripper_frame.override(offset=FRANKA_HAND_FRAME)
+# The hand point of the MuJoCo panda, where the MuJoCo sim reported before ``GRIPPER_SITE``.
+panda_hand_frame = gripper_frame.override(offset=PANDA_HAND_FRAME)
+# The YAM's i2rt grasp site, where the YAM reported before ``GRIPPER_SITE``.
+yam_grasp_site_frame = gripper_frame.override(offset=YAM_GRASP_SITE_FRAME)
+# The FR3 flange, where DROID records its poses.
+droid_frame = gripper_frame.override(offset=DROID_EE_FRAME)
+
+
 @cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)
-def compose_data(
-    obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: geom.Transform3D | None
-):
+def compose_data(obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: EEFrame | None):
     """Compose observation and action conversions, with optional grip and frame conversions.
 
-    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
-    places the end-effector frame the checkpoint speaks relative to ``DEFAULT_FRAME`` (``models.DROID_EE_FRAME``)
-    and re-expresses a dataset in it for training (see ``ChangeEEFrame``); serving declares the conversion in
-    the pipeline instead, so leave it unset there.
-
+    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame`` is the
+    frame the checkpoint speaks its poses in: a ``ChangeEEFrame`` declares it and re-expresses a dataset in it for
+    training. A codec that reads or writes poses states one; ``None`` speaks joints only.
     """
     result = obs & action
     if ee_frame is not None:
@@ -78,12 +110,7 @@ def compose_data(
 
 @cfn.config(training_fps=15.0, binarize_grip=None, flip_grip=False, ee_frame=None)
 def compose(
-    obs,
-    action,
-    training_fps: float,
-    binarize_grip: tuple[str, ...] | None,
-    flip_grip: bool,
-    ee_frame: geom.Transform3D | None,
+    obs, action, training_fps: float, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: EEFrame | None
 ):
     """Data conversions with the sampling cadence recorded in training metadata."""
     result = compose_data(obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame)

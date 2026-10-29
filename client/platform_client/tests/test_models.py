@@ -239,7 +239,10 @@ MODELS: list[BaseModel] = [
     ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL, policy_log=POLICY_LOG_URL),
     RegisterRequest(credential='token', alias='demo', rotate=True),
     TaskSummary(
-        id=TaskRef('stack-the-cubes'), embodiment='franka', task='Stack the cubes', start_pose=StartPose.droid_reset
+        id=TaskRef('stack-the-cubes'),
+        embodiments=[RigShape.franka, RigShape.yam],
+        task='Stack the cubes',
+        start_pose=StartPose.droid_reset,
     ),
     PLAN_OF_AN_IMAGE,
     CancelRequest(id=SUB),
@@ -275,7 +278,12 @@ MODELS: list[BaseModel] = [
                 status=SubmissionStatus.running,
                 eval=EvalRef('fake.smoke'),
                 received_at=AT,
-            )
+                started_at=AT,
+                estimated_end_at=AT,
+            ),
+            SubmissionListRow(
+                id=SUB, user_id=USER, status=SubmissionStatus.finished, received_at=AT, started_at=AT, ended_at=AT
+            ),
         ]
     ),
     PendingSubmissionView(id=SUB, alias='demo', received_at=AT, queued_at=AT, queue_position=1),
@@ -287,6 +295,13 @@ MODELS: list[BaseModel] = [
         reason_code=ReasonCode.policy_oom,
         reason='policy ran out of memory',
         artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
+    ),
+    ErroredSubmissionView(
+        id=SUB,
+        reason_code=ReasonCode.policy_inference_crash,
+        artifacts=ArtifactRefs(result=RESULT_URL),
+        scores=SCORES,
+        episodes=EpisodeCounts(total=12, done=6, outstanding=6),
     ),
     FinishedSubmissionView(id=SUB, scores=SCORES, artifacts=ArtifactRefs(result='s3://b/result.json')),
     FinishedSubmissionView(
@@ -378,9 +393,21 @@ def test_the_published_scores_are_a_subset_of_the_record():
     assert published == {name: record[name] for name in Scores.model_fields}
 
 
+# One `catalog.tasks` entry as the wire carries it, with no optional field stated.
+TASK_SUMMARY_WIRE = {'id': 'fold-the-towel', 'embodiments': ['yam'], 'task': 'Fold the towel'}
+
+
 def test_a_task_summary_that_states_no_start_pose_reads_the_nominal():
-    summary = TaskSummary.model_validate({'id': 'stack-the-cubes', 'embodiment': 'franka', 'task': 'Stack the cubes'})
-    assert summary.start_pose is StartPose.nominal
+    assert TaskSummary.model_validate(TASK_SUMMARY_WIRE).start_pose is StartPose.nominal
+
+
+def test_a_task_summary_reads_the_embodiments_the_task_runs_on():
+    assert TaskSummary.model_validate(TASK_SUMMARY_WIRE).embodiments == [RigShape.yam]
+
+
+def test_a_task_summary_that_names_one_embodiment_and_no_list_is_refused():
+    with pytest.raises(ValidationError, match='embodiments'):
+        TaskSummary.model_validate({'id': 'fold-the-towel', 'embodiment': 'yam', 'task': 'Fold the towel'})
 
 
 def test_ids_and_statuses_leave_as_wire_values():
@@ -452,6 +479,30 @@ def test_a_reason_code_is_refused_on_a_status_that_did_not_fail():
             'status': 'pending',
             'reason_code': 'image_unpullable',
         })
+
+
+def test_a_listed_row_reads_its_run_times_from_the_wire():
+    row = SubmissionListRow.model_validate({
+        'id': '1f',
+        'user_id': 'a0',
+        'status': 'running',
+        'received_at': '2026-08-13T10:00:00Z',
+        'started_at': '2026-08-13T10:01:00Z',
+        'estimated_end_at': '2026-08-13T11:50:00Z',
+    })
+    assert row.started_at == datetime(2026, 8, 13, 10, 1, tzinfo=UTC)
+    assert row.estimated_end_at == datetime(2026, 8, 13, 11, 50, tzinfo=UTC)
+    assert row.ended_at is None
+
+
+def test_a_listed_row_that_has_not_started_has_no_run_times():
+    row = SubmissionListRow.model_validate({
+        'id': '1f',
+        'user_id': 'a0',
+        'status': 'pending',
+        'received_at': '2026-08-13T10:00:00Z',
+    })
+    assert (row.started_at, row.ended_at, row.estimated_end_at) == (None, None, None)
 
 
 def test_a_listed_row_refuses_the_same_pairing():
@@ -629,6 +680,27 @@ def test_a_failed_run_that_wrote_no_record_carries_no_link():
     view = ErroredSubmissionView(id=SUB, reason='the rig is not ready')
     assert view.artifacts is None
     assert 'artifacts' in view.model_dump(mode='json')
+
+
+def test_a_failed_run_carries_the_score_of_the_episodes_that_closed():
+    payload = {
+        'id': '1f',
+        'reason_code': 'policy_inference_crash',
+        'artifacts': {'result': RESULT_URL},
+        'scores': {'primary': 0.5},
+        'episodes': {'total': 12, 'done': 6, 'outstanding': 6},
+        'status': 'errored',
+    }
+    view = SUBMISSION_VIEWS.validate_python(payload)
+    assert isinstance(view, ErroredSubmissionView)
+    assert view.scores == Scores(primary=0.5)
+    assert view.episodes == EpisodeCounts(total=12, done=6, outstanding=6)
+
+
+def test_a_failed_run_that_published_no_episodes_carries_no_score():
+    view = SUBMISSION_VIEWS.validate_python({'id': '1f', 'reason_code': 'policy_oom', 'status': 'errored'})
+    assert isinstance(view, ErroredSubmissionView)
+    assert view.scores is None
 
 
 def test_a_failed_run_whose_diagnostics_were_not_written_still_links_its_result():

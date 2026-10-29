@@ -21,14 +21,25 @@ from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Step
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import Codec, ResizeMode, TransformImages
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration, RTCSchedule
 from positronic.policy.remote import RemotePolicy
 from positronic.utils import flatten_dict
 from positronic.utils.versions import Deprecation, Version
+
+
+@pytest.mark.parametrize('sizes', [[224, 224], {'camera': [320, 180]}])
+def test_image_sizes_from_old_server_stacks_remain_descriptive_metadata(sizes):
+    values = {'image_sizes': sizes}
+    codec = spec.from_spec(component('metadata', version=1, values=values))
+    assert isinstance(codec, Codec)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    observation = {'camera': frame}
+    assert codec.meta == values
+    assert codec.encode(observation) is observation
 
 
 @pytest.fixture
@@ -123,6 +134,12 @@ def test_v1_server_without_action_fps_runs_at_the_default_rate_and_warns(caplog)
     assert 'Rebuild the server on current positronic' in caplog.text
 
 
+def test_v1_stack_rejects_an_rtc_schedule():
+    rtc = RTCSchedule(fps=15, call_after_sec=0.8, latency_estimate=ConstantDuration()).to_spec()
+    with pytest.raises(ValueError, match='over protocol v2'):
+        from_v1_spec({'seq': [{'name': 'stop_on_fault'}, rtc]}, {ACTION_FPS: 15.0}, spec.from_spec)
+
+
 def test_v1_fault_pauses_and_keeps_the_pending_answer_and_history(controlled_runtime):
     runtime, now, calls = controlled_runtime
     stack = from_v1_spec(
@@ -158,7 +175,7 @@ def test_v1_fault_pauses_and_keeps_the_pending_answer_and_history(controlled_run
 def test_v1_ticks_that_send_nothing_encode_no_image(controlled_runtime, monkeypatch):
     runtime, now, calls = controlled_runtime
     encoded = []
-    monkeypatch.setattr(RestrictImageSize, 'encode', lambda self, data: encoded.append(data) or data)
+    monkeypatch.setattr(TransformImages, 'encode', lambda self, data: encoded.append(data) or data)
     stack = from_v1_spec(
         {
             'seq': [
@@ -186,7 +203,7 @@ def test_v1_ticks_that_send_nothing_encode_no_image(controlled_runtime, monkeypa
 def test_v1_codec_above_a_layer_still_encodes_on_every_tick(controlled_runtime, monkeypatch):
     runtime, now, calls = controlled_runtime
     encoded = []
-    monkeypatch.setattr(RestrictImageSize, 'encode', lambda self, data: encoded.append(data) or data)
+    monkeypatch.setattr(TransformImages, 'encode', lambda self, data: encoded.append(data) or data)
     stack = from_v1_spec(
         {
             'seq': [
@@ -321,7 +338,10 @@ def test_component_versions_are_independent_and_exact():
             {'name': 'restrict_image_size', 'version': 1, 'args': {'width': 32, 'height': 32}},
         ]
     })
-    assert [part['version'] for part in stack.to_spec()['seq']] == [2, 1]
+    assert stack.to_spec() == sequence(
+        ChunkedSchedule(fps=10, replan_on_error=False).to_spec(),
+        TransformImages(32, 32, mode=ResizeMode.BOUND).to_spec(),
+    )
     for version in (1, 99):
         with pytest.raises(ValueError, match=f'Unsupported.*version {version}'):
             spec.from_spec({'name': 'chunked_schedule', 'version': version, 'args': {'fps': 10}})

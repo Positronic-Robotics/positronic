@@ -402,7 +402,9 @@ def register_with_device_flow(
     flow = sign_in.flow
     authorization = flow.start_device_authorization()
     # To stderr: it is a prompt for the person at the terminal, and stdout carries the command's answer.
-    print(authorization.sign_in_prompt(), file=sys.stderr, flush=True)
+    line = authorization.sign_in_prompt()
+    hint = flow.provider.code_mail_hint
+    print(line if hint is None else f'{line}. {hint}', file=sys.stderr, flush=True)
     token = flow.poll_for_token(authorization)
     request = RegisterRequest(credential=token, alias=alias, rotate=rotate)
     return platform.register(request, timeout=sign_in.register_timeout)
@@ -525,7 +527,10 @@ def main() -> None:
     print(f'user {response.user_id} ({response.key_status.name})')
     print(f'artifacts at {response.artifact_location}')
     if response.api_key is None:
-        print('no key issued: one is minted on a first registration, or by --rotate')
+        print(
+            f'You already have an API key. Set {API_KEY_ENV} to it. '
+            'Lost it? Run platform-register --rotate. This stops the old key.'
+        )
     else:
         # The key is opaque, so it may hold whitespace or shell metacharacters; an unquoted export
         # line would either mangle it or run the rest of it.

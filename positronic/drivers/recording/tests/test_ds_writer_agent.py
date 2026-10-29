@@ -467,6 +467,40 @@ def test_robot_state_serializer_records_a_busy_arm_beside_its_pose(world):
         np.testing.assert_allclose(by_name[name][0], value)
 
 
+def _record_robot_states(world, *states: FakeRobotState) -> dict[str, list[Any]]:
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({keys.ROBOT_STATE: Serializers.robot_state}, ds, world)
+    script = [
+        (lambda: cmd_em.emit(DsWriterCommand.START(OUTPUT_PATH)), 0.001),
+        *((partial(emitters[keys.ROBOT_STATE].emit, state), 0.001) for state in states),
+        (lambda: cmd_em.emit(DsWriterCommand.STOP()), 0.001),
+    ]
+    run_scripted_agent(agent, script, world=world)
+    by_name: dict[str, list[Any]] = {}
+    for name, val, _ in ds.created[-1].appends:
+        by_name.setdefault(name, []).append(val)
+    return by_name
+
+
+def test_robot_state_serializer_records_the_wrench_of_an_arm_that_measures_it(world):
+    wrench = np.array([1.0, -2.0, 3.0, 0.1, -0.2, 0.3], dtype=np.float32)
+    pose = geom.Transform3D(translation=np.zeros(3), rotation=geom.Rotation.identity)
+    state = FakeRobotState(np.zeros(7), np.zeros(7), pose, RobotStatus.AVAILABLE, ee_wrench=wrench)
+
+    by_name = _record_robot_states(world, state)
+
+    assert len(by_name[keys.EE_WRENCH]) == 1
+    np.testing.assert_allclose(by_name[keys.EE_WRENCH][0], wrench)
+
+
+def test_robot_state_serializer_records_no_wrench_for_an_arm_that_measures_none(world):
+    pose = geom.Transform3D(translation=np.zeros(3), rotation=geom.Rotation.identity)
+
+    by_name = _record_robot_states(world, FakeRobotState(np.zeros(7), np.zeros(7), pose, RobotStatus.AVAILABLE))
+
+    assert set(by_name) == {keys.ROBOT_STATUS, keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE}
+
+
 def test_robot_command_serializer_variants(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'cmd': Serializers.robot_command}, ds, world)
@@ -475,7 +509,8 @@ def test_robot_command_serializer_variants(world):
     delta = geom.Transform3D(translation=np.array([0.01, -0.02, 0.03]), rotation=geom.Rotation.identity)
     delta_frame = geom.Transform3D(translation=np.array([0.0, 0.0, 0.05]), rotation=geom.Rotation.identity)
     joints = np.arange(7, dtype=np.float32) * 0.1
-    impedance = rcmd.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+    stiffness_point = geom.Transform3D(translation=np.array([0.0, 0.0, 0.1]), rotation=geom.Rotation.identity)
+    impedance = rcmd.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6, frame=stiffness_point)
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand.START(OUTPUT_PATH)), 0.001),
@@ -499,12 +534,13 @@ def test_robot_command_serializer_variants(world):
     )
     np.testing.assert_allclose(items['cmd.joints'], joints)
     np.testing.assert_allclose(items['cmd.mode.impedance.kq'], impedance.kq)
+    np.testing.assert_allclose(items[f'cmd{keys.IMPEDANCE_FRAME_SUFFIX}'], Serializers.transform_3d(stiffness_point))
     # A pin naming no stiffness is a marker: a vector would fix the signal's shape, and what a mode does not
     # name has no shape to fix it at.
     assert items['cmd.mode.position_control'] == 1
     np.testing.assert_allclose(items['cmd.mode.position_control.stiffness'], [100.0] * 7)
     mode_appends = [name for (name, _, _) in w.appends if '.mode' in name]
-    assert len(mode_appends) == 6, 'a command pinning nothing records no mode'
+    assert len(mode_appends) == 7, 'a command pinning nothing records no mode'
 
 
 def test_recording_rejects_decreasing_producer_timestamps(tmp_path, world):

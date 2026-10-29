@@ -7,6 +7,7 @@ Three solvers for reconstructing joint-space targets from recorded EE targets:
 """
 
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from functools import lru_cache, partial
 from typing import Any
 
@@ -16,11 +17,14 @@ from eval_vocabulary.timeline import recording_timeline
 from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation as ScipyRotation
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.dataset import transforms
+from positronic.dataset.episode import Episode
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.models import EEFrame, ee_frames_entry, parse_ee_frames
+from positronic.eval import keys as eval_keys
 
 _QUAT = geom.Rotation.Representation.QUAT
 
@@ -121,44 +125,62 @@ def change_frame(value: Any, transform: geom.Transform3D) -> Any:
             )
 
 
-def assert_default_frame(statics) -> None:
-    """Raise unless a rig or recording states that its poses are anchored at ``DEFAULT_FRAME``.
+def ee_frames(statics) -> dict[str, EEFrame]:
+    """Where each pose signal of a rig, a recording or a policy sits, from its ``EE_FRAMES`` entry.
 
-    ``CONTROL_FRAME`` is that statement, and a model — when one is carried — has to declare the frame it names.
-    Saying nothing is not a false claim and passes; a caller that needs the model fails on its own terms.
-
-    TODO(#550): delete this. ``CONTROL_FRAME`` goes with that issue, leaving nothing to check: poses are at
-    ``DEFAULT_FRAME`` by contract and ``EE_FRAME`` states any offset from it.
+    Raise when a ``POSE_SIGNALS`` entry has no frame, or when the carried model has no site that a frame names.
     """
-    if roboarm_keys.CONTROL_FRAME not in statics:
-        return
-    frame = statics[roboarm_keys.CONTROL_FRAME]
-    if frame != DEFAULT_FRAME:
-        raise ValueError(
-            f'Poses are reported in {frame!r}, but every frame transform is measured from {DEFAULT_FRAME!r} '
-            '— see positronic/drivers/roboarm/README.md'
-        )
+    frames = parse_ee_frames(statics[roboarm_keys.EE_FRAMES]) if roboarm_keys.EE_FRAMES in statics else {}
+    pose_signals = statics[eval_keys.POSE_SIGNALS] if eval_keys.POSE_SIGNALS in statics else []
+    unstated = [name for name in pose_signals if name not in frames]
+    if unstated:
+        raise ValueError(f'Pose signals {unstated} state no {roboarm_keys.EE_FRAMES} entry')
     if roboarm_keys.URDF in statics:
-        frame_transform(statics[roboarm_keys.URDF], frame, frame)
+        for frame in frames.values():
+            frame_transform(statics[roboarm_keys.URDF], frame.site, frame.site)
+    return frames
 
 
-def ee_frame(episode) -> geom.Transform3D:
-    """Where an episode's poses sit relative to ``DEFAULT_FRAME`` — identity unless a codec moved them."""
-    if roboarm_keys.EE_FRAME not in episode:
-        return geom.Transform3D.identity
-    return geom.Transform3D.from_vector(np.asarray(episode[roboarm_keys.EE_FRAME], dtype=np.float64), _QUAT)
+def _moved_signal(episode: Episode, key: str, move: Callable[[Any], Any]) -> Any:
+    return transforms.Elementwise(episode[key], transforms.lazy_sequence(move))
 
 
-def pose_anchor(episode) -> tuple[str, geom.Transform3D]:
-    """The model frame an episode's poses are anchored in, and where they sit relative to it.
+def _move_delta_frame(vector, site_to_frame: geom.Transform3D) -> np.ndarray:
+    """A ``CartesianDelta`` frame vector, restated from the site that the targets move to."""
+    return (site_to_frame * geom.Transform3D.from_vector(np.asarray(vector, dtype=np.float64), _QUAT)).as_vector(_QUAT)
 
-    TODO(#550): a recording predating ``EE_FRAME`` states the anchor as a frame name and nothing else. Solving at
-    that name is exact — ``DEFAULT_FRAME`` was added alongside those frames, not in place of them — so the branch
-    lives until those datasets are re-expressed, not longer.
+
+class MoveToSite(EpisodeTransform):
+    """Re-express every pose signal of an episode at ``site`` of the model it carries, and state them there.
+
+    Each signal that ``EE_FRAMES`` names moves by the transform from ``site`` to its frame. A recorded
+    ``CartesianDelta`` frame moves with the targets. An episode with every signal at ``site`` stays as it is.
     """
-    if roboarm_keys.EE_FRAME in episode:
-        return DEFAULT_FRAME, ee_frame(episode)
-    return episode[roboarm_keys.CONTROL_FRAME], geom.Transform3D.identity
+
+    def __init__(self, site: str):
+        self._site = site
+
+    def __call__(self, episode: Episode) -> Episode:
+        frames = ee_frames(episode)
+        if all(frame.site == self._site and frame.offset == geom.Transform3D.identity for frame in frames.values()):
+            return episode
+        urdf = episode[roboarm_keys.URDF]
+        site_to_frame = {
+            name: frame_transform(urdf, self._site, frame.site) * frame.offset for name, frame in frames.items()
+        }
+        moved = {
+            name: partial(_moved_signal, key=name, move=partial(change_frame, transform=transform.inv))
+            for name, transform in site_to_frame.items()
+            if name in episode
+        }
+        if keys.TARGET_EE_POSE_DELTA_FRAME in episode and keys.TARGET_EE_POSE in site_to_frame:
+            move = partial(_move_delta_frame, site_to_frame=site_to_frame[keys.TARGET_EE_POSE])
+            moved[keys.TARGET_EE_POSE_DELTA_FRAME] = partial(
+                _moved_signal, key=keys.TARGET_EE_POSE_DELTA_FRAME, move=move
+            )
+        stated = ee_frames_entry(dict.fromkeys(frames, EEFrame(site=self._site)))
+        statics = {name: FromValue(value) for name, value in stated.items()}
+        return Group(Derive(meta=None, **statics, **moved), Identity())(episode)
 
 
 def _parse_target(target_ee_pose_vec):
@@ -258,24 +280,24 @@ class _SolverBase:
     """Base for MuJoCo-based IK solvers. Handles model loading, FK, and Jacobian.
 
     MuJoCo objects are built lazily on first use so that the solver stays
-    naturally picklable (only urdf_xml, joint_names, control_frame, and
+    naturally picklable (only urdf_xml, joint_names, site, and
     solver params are stored as instance state).
     """
 
-    def __init__(self, urdf_xml, joint_names, control_frame):
+    def __init__(self, urdf_xml, joint_names, site):
         self.urdf_xml = urdf_xml
         self.joint_names = tuple(joint_names)
-        self.control_frame = control_frame
+        self.site = site
         self._mj = None  # backing for _model property
 
     @property
     def _model(self):
         if self._mj is not None:
             return self._mj
-        spec = _prepare_spec(self.urdf_xml, self.control_frame)
+        spec = _prepare_spec(self.urdf_xml, self.site)
         self._mj = spec.compile()
         self._data = mj.MjData(self._mj)
-        self._site_id = mj.mj_name2id(self._mj, mj.mjtObj.mjOBJ_SITE, self.control_frame)
+        self._site_id = mj.mj_name2id(self._mj, mj.mjtObj.mjOBJ_SITE, self.site)
         self._jqpos = np.array([self._mj.joint(n).qposadr.item() for n in self.joint_names])
         self._joint_dof_ids = np.array([self._mj.joint(n).dofadr.item() for n in self.joint_names])
         jnt_ids = [mj.mj_name2id(self._mj, mj.mjtObj.mjOBJ_JOINT, n) for n in self.joint_names]
@@ -356,7 +378,7 @@ class DLSIKSolver(_SolverBase):
         self,
         urdf_xml,
         joint_names,
-        control_frame,
+        site,
         *,
         tol=1e-4,
         max_iters=150,
@@ -367,7 +389,7 @@ class DLSIKSolver(_SolverBase):
         line_search_beta=0.5,
         line_search_max_steps=20,
     ):
-        super().__init__(urdf_xml, joint_names, control_frame)
+        super().__init__(urdf_xml, joint_names, site)
         self.tol = tol
         self.max_iters = max_iters
         self.min_step = min_step
@@ -431,8 +453,8 @@ class DLSIKSolverWithLimits(_SolverBase):
     _STEP_TOLERANCE = 1e-9
     _LEVENBERG = 1e-4
 
-    def __init__(self, urdf_xml, joint_names, control_frame, *, max_step=IK_MAX_JOINT_STEP):
-        super().__init__(urdf_xml, joint_names, control_frame)
+    def __init__(self, urdf_xml, joint_names, site, *, max_step=IK_MAX_JOINT_STEP):
+        super().__init__(urdf_xml, joint_names, site)
         self.max_step = max_step
 
     def solve(self, current_q, target_ee_pose_vec):
@@ -468,12 +490,15 @@ class DLSIKSolverWithLimits(_SolverBase):
 def ik_joints_from_episode(episode, solver_cls, tgt_ee_pose_key, current_q_key):
     """Episode -> Signal. Computes target joints from EE targets via IK.
 
-    Reads the robot model from episode statics and solves at the frame the poses are anchored in, so targets a
-    codec has moved elsewhere come back to that frame first.
+    Reads the robot model from episode statics and solves at the site the targets' ``EE_FRAMES`` entry names, so
+    targets a codec has moved off that site come back to it first.
     """
-    frame, offset = pose_anchor(episode)
-    solver = solver_cls(episode[roboarm_keys.URDF], episode[roboarm_keys.JOINT_NAMES], frame)
-    move = partial(change_frame, transform=offset.inv)
+    frames = ee_frames(episode)
+    if tgt_ee_pose_key not in frames:
+        raise ValueError(f'{tgt_ee_pose_key!r} states no {roboarm_keys.EE_FRAMES} entry, so no site to solve at')
+    frame = frames[tgt_ee_pose_key]
+    solver = solver_cls(episode[roboarm_keys.URDF], episode[roboarm_keys.JOINT_NAMES], frame.site)
+    move = partial(change_frame, transform=frame.offset.inv)
     targets = transforms.Elementwise(episode[tgt_ee_pose_key], transforms.lazy_sequence(move))
     current_q = episode[current_q_key]
     timeline = recording_timeline(current_q.timelines + targets.timelines)

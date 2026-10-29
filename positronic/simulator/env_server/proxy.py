@@ -16,6 +16,7 @@ from typing import Any
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.eval import Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
@@ -49,13 +50,13 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._active = False
         # The latest env frame (``obs`` + ``control_dt``), refreshed by ``reset`` and each ``step``.
         self._frame: dict[str, Any] | None = None
-        # The scene meta the env reports at ``reset`` (the task/prompt, scene ids) — constant for the trial; read
-        # by the client's ``Task`` for its live instruction. ``step`` omits it.
+        # The scene meta (the task/prompt, scene ids) from ``reset``, or from the latest ``step`` that carries
+        # one; read by the client's ``Task`` for its live instruction.
         self._meta: dict[str, Any] | None = None
 
     @property
     def meta(self) -> dict[str, Any]:
-        """The env's scene meta from the latest ``reset`` (suite, task, …); a client reads its task from here."""
+        """The env's latest scene meta (suite, task, …); a client reads its task from here."""
         assert self._meta is not None, 'meta read before the first reset'
         return self._meta
 
@@ -130,6 +131,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         assert self._conn is not None, 'stepped before the first reset connected'
         commands = {name: receiver.read() for name, receiver in self.commands.items()}
         result = self._conn.step(self._adapter.action(commands))
+        if protocol.FRAME_META in result:
+            self._meta = result[protocol.FRAME_META]
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)
@@ -163,10 +166,13 @@ def remote_embodiment(
         **{name: Command(proxy.commands[name], Serializers.robot_command) for name in commanded},
         **{name: Command(proxy.commands[name], None) for name in target_grips},
     }
+    pose_signals = [f'{name}{keys.EE_POSE_SUFFIX}' for name in states] + [
+        f'{name}{keys.POSE_SUFFIX}' for name in commanded
+    ]
     signal_meta = {
         eval_keys.JOINT_SIGNALS: [f'{name}{keys.JOINTS_SUFFIX}' for name in states],
-        eval_keys.POSE_SIGNALS: [f'{name}{keys.EE_POSE_SUFFIX}' for name in states]
-        + [f'{name}{keys.POSE_SUFFIX}' for name in commanded],
+        eval_keys.POSE_SIGNALS: pose_signals,
+        **ee_frames_entry({name: EEFrame(site=GRIPPER_SITE) for name in pose_signals}),
     }
     return Embodiment(
         descriptor=descriptor,

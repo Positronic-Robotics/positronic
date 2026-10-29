@@ -5,13 +5,21 @@ project, its ``PYTHONPATH`` entries) and its pinned source checkout — and comp
 """
 
 import fcntl
+import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
+
+# What ``server`` and ``protocol`` import beyond the benchmark's own dependencies.
+SERVER_DEPS = ('websockets>=15.0.1', 'msgpack')
+
+PYTHONPATH_ENV = 'PYTHONPATH'
+GL_BACKEND_ENV = 'MUJOCO_GL'
 
 
 def free_port() -> int:
@@ -48,6 +56,43 @@ def ensure_pinned_checkout(repo_url: str, commit: str, dest: Path, *, lfs: bool 
         if lfs:
             subprocess.run(['git', '-C', str(dest), 'lfs', 'pull'], check=True)
     return dest
+
+
+@contextmanager
+def setup_lock(cache: Path) -> Iterator[None]:
+    """Serialize a benchmark's setup (checkout, install, assets) across the processes that share ``cache``.
+
+    A fan-out of eval jobs mounts one cache, so two setups at once would install into a half-written tree.
+    """
+    cache.mkdir(parents=True, exist_ok=True)
+    with open(cache / 'setup.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def ensure_venv(venv: Path, python: str) -> Path:
+    """The interpreter of ``venv``; uv makes the venv on Python ``python`` when it is absent."""
+    if not venv.exists():
+        subprocess.run(['uv', 'venv', '--python', python, str(venv)], check=True)
+    return venv / 'bin' / 'python'
+
+
+def uv_pip_install(venv: Path, args: Sequence[str], cwd: Path | None = None) -> None:
+    subprocess.run(
+        ['uv', 'pip', 'install', *args],
+        cwd=None if cwd is None else str(cwd),
+        env={**os.environ, 'VIRTUAL_ENV': str(venv)},
+        check=True,
+    )
+
+
+def mujoco_server_env(pythonpath: Sequence[Path]) -> dict[str, str]:
+    """This process's environment with ``pythonpath``, and a MuJoCo GL backend where the operator set none."""
+    return {
+        **os.environ,
+        PYTHONPATH_ENV: os.pathsep.join(str(path) for path in pythonpath),
+        GL_BACKEND_ENV: os.environ.get(GL_BACKEND_ENV, 'cgl' if sys.platform == 'darwin' else 'egl'),
+    }
 
 
 def terminate(proc: subprocess.Popen) -> None:

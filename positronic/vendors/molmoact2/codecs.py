@@ -8,7 +8,7 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm import command
-from positronic.policy.codecs import ACTION, Codec
+from positronic.policy.codecs import ACTION, Codec, FlipGrip
 from positronic.vendors import molmoact2
 
 
@@ -70,16 +70,11 @@ droid_3cam = droid.override(**{'obs.exterior_camera_2': keys.EXTERIOR_IMAGE_2})
 YAM_JOINTS = 6
 
 
-def _invert_grip(grip: np.ndarray) -> np.ndarray:
-    """Swap Positronic grip (0 open, 1 closed) and the i2rt gripper width (1 open, 0 closed). It is its own inverse."""
-    return 1.0 - grip
-
-
 class MolmoAct2BimanualObservationCodec(Codec):
     """Encodes a bimanual YAM observation into MolmoAct2 ``predict_action`` inputs.
 
-    Cameras go in the order ``[top, left, right]``. The state is 14-D: per arm, 6 joints then the gripper
-    width, left arm first.
+    Cameras go in the order ``[top, left, right]``. The state is 14-D: per arm, 6 joints then the grip, left arm
+    first. ``FlipGrip`` turns the grip into the gripper width the checkpoint reads.
     """
 
     def __init__(
@@ -95,7 +90,7 @@ class MolmoAct2BimanualObservationCodec(Codec):
         for arm in keys.BIMANUAL_ARMS:
             joints = np.asarray(inputs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'])
             grip = np.asarray(inputs[keys.arm_channel(keys.GRIP, arm)], dtype=np.float32).reshape(-1)
-            state.extend([joints.reshape(-1), _invert_grip(grip)])
+            state.extend([joints.reshape(-1), grip])
         return {
             molmoact2.IMAGES: [_image(k, inputs) for k in self._cameras],
             molmoact2.STATE: np.concatenate(state).astype(np.float32),
@@ -104,7 +99,10 @@ class MolmoAct2BimanualObservationCodec(Codec):
 
 
 class BimanualJointsAction(Codec):
-    """Decodes the 14-D bimanual action into one ``JointPosition`` and one grip target per arm."""
+    """Decodes the 14-D bimanual action into one ``JointPosition`` and one grip target per arm.
+
+    The grip target is the gripper width the checkpoint predicts. ``FlipGrip`` turns it into positronic's grip.
+    """
 
     def _decode_single(self, data: dict) -> dict:
         vector = np.asarray(data[ACTION], dtype=np.float64)
@@ -115,11 +113,15 @@ class BimanualJointsAction(Codec):
         for i, arm in enumerate(keys.BIMANUAL_ARMS):
             arm_vector = vector[i * width : (i + 1) * width]
             out[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.JointPosition(positions=arm_vector[:YAM_JOINTS])
-            out[keys.arm_channel(keys.TARGET_GRIP, arm)] = float(_invert_grip(arm_vector[YAM_JOINTS]))
+            out[keys.arm_channel(keys.TARGET_GRIP, arm)] = float(arm_vector[YAM_JOINTS])
         return out
 
 
 # The upstream YAM example records and runs at 30 Hz.
-yam_bimanual = codecs.compose.override(
-    obs=cfn.Config(MolmoAct2BimanualObservationCodec), action=cfn.Config(BimanualJointsAction), training_fps=30.0
-)
+@cfn.config(training_fps=30.0)
+def yam_bimanual(training_fps: float):
+    """The bimanual YAM codec, with each arm's grip in the i2rt gripper width (1 = open) the checkpoint speaks."""
+    pair = codecs.compose(
+        obs=MolmoAct2BimanualObservationCodec(), action=BimanualJointsAction(), training_fps=training_fps
+    )
+    return FlipGrip(arms=keys.BIMANUAL_ARMS) | pair

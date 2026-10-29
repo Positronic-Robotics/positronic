@@ -9,13 +9,24 @@ from functools import partial
 from itertools import islice
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import Mock
 
 import numpy as np
 import pos3
 import pytest
-from eval_vocabulary.episode import SUBTASK_SIGNAL
+from eval_vocabulary.episode import ABC_REWARD_SIGNAL, SUBTASK_SIGNAL
 from positronic_evals.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
-from positronic_evals.labels import MOLMO_LABELER, ROBOLAB_LABELER, Fail, Label, SubtaskAchieved, Success, label
+from positronic_evals.labels import (
+    ABC_LABELER,
+    MOLMO_LABELER,
+    ROBOLAB_LABELER,
+    Fail,
+    Label,
+    SubtaskAchieved,
+    Success,
+    abc_max_progress,
+    label,
+)
 from positronic_evals.scoring import Scores, score
 
 import pimm
@@ -23,16 +34,19 @@ from pimm.time import EMITTED_WALL, EMITTED_WORLD, Time
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.cfg.eval.real import droid as real_droid
+from positronic.cfg.video_encoder import jetson_h264
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
-from positronic.dataset.episode import META_UID
-from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.dataset.episode import META_UID, META_WRITER_VIDEO_ENCODER
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.dataset.video import LibavEncoder
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyRun, Runtime, Step
 from positronic.policy.harness import Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 from positronic.simulator.molmo_spaces import keys as molmo_keys
+from positronic.tests.testing_inference import make_embodiment
 
 
 def _eval(simulated: bool) -> Eval:
@@ -69,6 +83,27 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
         simulated=True,
     )
     main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, ()))])
+
+
+@pytest.mark.parametrize('record', [False, True])
+def test_eval_uses_the_supplied_writer_only_when_recording(tmp_path, record):
+    embodiment = make_embodiment(simulated=True)
+    tasks = partial(iter, [Task('wait', timeout_sec=0.05)])
+    encoder = LibavEncoder(options=(('preset', 'ultrafast'),))
+    factory = Mock(wraps=partial(LocalDatasetWriter, video_encoder=encoder))
+    output = tmp_path / 'recording'
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
+        main(
+            _IdlePolicy(),
+            evals=[Eval(embodiment=embodiment, tasks=tasks)],
+            output_dir=output if record else None,
+            dataset_factory=factory,
+        )
+    if record:
+        factory.assert_called_once_with(output)
+        assert LocalDataset(output)[0].meta['writer'][META_WRITER_VIDEO_ENCODER] == repr(encoder)
+    else:
+        factory.assert_not_called()
 
 
 def _record(output_dir, successes: list[bool]) -> list:
@@ -223,7 +258,7 @@ def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, s
     made = [Task(instruction_source='t', timeout_sec=1.0) for _ in range(2)]
     seen: list[Task] = []
 
-    def capture(policy, evals, output_dir, timing):
+    def capture(policy, evals, output_dir, timing, dataset_factory):
         seen.extend(evals[0].tasks())
 
     monkeypatch.setattr(run_module, 'main', capture)
@@ -237,9 +272,20 @@ def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, s
 SMOKE = 'molmo.franka_pick_mini_smoke'
 
 
+def test_local_eval_accepts_a_writer_preset_from_the_cli(run_command, monkeypatch):
+    launch = Mock()
+    monkeypatch.setattr(run_module, 'main', launch)
+    run_command(run_module.run, eval=SMOKE, policy='a policy', dataset_factory='@positronic.cfg.dataset_writer.jetson')
+    factory = launch.call_args.kwargs['dataset_factory']
+    assert factory.func is LocalDatasetWriter
+    assert factory.keywords == {'video_encoder': jetson_h264.instantiate()}
+
+
 def test_a_local_run_of_a_public_eval_runs_the_config_its_definition_names(run_command, monkeypatch):
     seen: list[Eval] = []
-    monkeypatch.setattr(run_module, 'main', lambda policy, evals, output_dir, timing: seen.extend(evals))
+    monkeypatch.setattr(
+        run_module, 'main', lambda policy, evals, output_dir, timing, dataset_factory: seen.extend(evals)
+    )
 
     run_command(run_module.run, eval=SMOKE, policy='a policy')
 
@@ -251,7 +297,9 @@ def test_a_local_run_of_a_public_eval_prints_the_score_of_the_episodes_it_record
 ):
     _record(tmp_path, [False, False])  # an earlier run's episodes, which the sweep does not return
     monkeypatch.setattr(
-        run_module, 'main', lambda policy, evals, output_dir, timing: _record(output_dir, [True, False, True, True])
+        run_module,
+        'main',
+        lambda policy, evals, output_dir, timing, dataset_factory: _record(output_dir, [True, False, True, True]),
     )
 
     run_command(run_module.run, eval=SMOKE, policy='a policy', output_dir=tmp_path)
@@ -261,7 +309,7 @@ def test_a_local_run_of_a_public_eval_prints_the_score_of_the_episodes_it_record
 
 
 def test_a_local_run_of_a_public_eval_without_an_output_dir_prints_no_score(run_command, monkeypatch, capsys, caplog):
-    monkeypatch.setattr(run_module, 'main', lambda policy, evals, output_dir, timing: [])
+    monkeypatch.setattr(run_module, 'main', lambda policy, evals, output_dir, timing, dataset_factory: [])
 
     with caplog.at_level(logging.WARNING, logger=run_module.logger.name):
         run_command(run_module.run, eval=SMOKE, policy='a policy')
@@ -331,6 +379,21 @@ def test_the_robolab_labeler_reads_the_progress_that_positronic_records(tmp_path
             events=(SubtaskAchieved(seconds=1.0, achieved=1, score=0.5), Fail(seconds=2.0)),
         ),
     )
+
+
+def test_the_abc_labeler_reads_the_outcome_and_the_progress_that_positronic_records(tmp_path):
+    with LocalDatasetWriter(tmp_path) as writer, writer.new_episode() as episode:
+        episode.set_static(keys.TASK, 'put the plastic bottles in the bin')
+        episode.set_static(eval_keys.TASK, 'put_plastic_bottles_in_bin')
+        episode.set_static(eval_keys.TERMINATED, False)
+        for world_ns, reward in ((0, 0.0), (1_000_000_000, 0.5), (2_000_000_000, 0.25)):
+            episode.append(ABC_REWARD_SIGNAL, reward, Time(**{EMITTED_WORLD: world_ns, EMITTED_WALL: 10 * world_ns}))
+
+    assert label(episode.path, (ABC_LABELER,)) == (
+        ABC_LABELER,
+        Label(uid=episode.meta[META_UID], task='put_plastic_bottles_in_bin', annotator=ABC_LABELER, seconds_to_end=2.0),
+    )
+    assert abc_max_progress(episode.path) == 0.5
 
 
 @pytest.mark.parametrize('name', ['molmo.held_out', ''])

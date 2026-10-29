@@ -150,7 +150,6 @@ Upon connection, the server sends a ready packet with metadata:
     "port": 8000,
     "checkpoint_path": "~/checkpoints/lerobot/experiment_v1",
     "checkpoint_id": "10000",
-    "image_sizes": [224, 224],
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
@@ -171,7 +170,7 @@ owns the session and includes its ID in each inference request.
 This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
-- Codec geometry (`image_sizes`) and scheduler cadence (`action_fps`, `action_horizon_sec`).
+- Scheduler cadence (`action_fps`, `action_horizon_sec`).
 - `local_stack` — processors and codecs composed by `"seq"`, with the first outermost.
   `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
   `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits
@@ -184,7 +183,7 @@ This metadata tells the client:
 - `compress_images` — whether the client JPEG-encodes frames before
   sending. It is true unless the deployment sets it false.
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
-  records it in the policy metadata.
+  each run records it in the episode metadata.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### Compatibility and deprecation
@@ -196,11 +195,12 @@ uses the session-ID envelope and explicit end-session acknowledgement described 
 `/api/v1` prefix identifies the route; it does not select the inference-message protocol.
 
 Each component leaf declares its own `version`. `seq` and `par` belong to the protocol grammar.
-The client selects the exact registered implementation; it never substitutes a newer version or
-guesses from constructor arguments. Unsupported versions fail with supported-version information.
+The client preserves the behavior of the requested version, translating older configurations when needed.
+Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
-The client runs a protocol v1 server's stack on the current processors. `positronic.offboard.server`
+The client runs a protocol v1 server's stack on the current processors with its own chunked schedule.
+It rejects a v1 stack declaring `rtc_schedule`; RTC requires protocol v2 or later. `positronic.offboard.server`
 serves v2, including its optional server codec. `positronic_model_server.server` serves v3: the same
 session envelopes carry native model results without robot-command interpretation. Its full codec
 pipeline runs on the client, and image compression is explicitly selected by client components.
@@ -282,7 +282,7 @@ scheduler supplies timing; commands carry no timestamps or end-of-chunk sentinel
 
 A command's `type` selects the fields beside it: `cartesian_pos` (`pose`), `joint_pos` (`positions`), `joint_delta` (`velocities`), and `cartesian_delta` (`delta`, `frame`). A pose is translation followed by a row-major 3x3 rotation.
 
-Every command may carry a `mode`, itself a tagged mapping naming the control law to execute under: `{"type": "position_control", "stiffness": [...]}` or `{"type": "impedance", "kq": [...], "kqd": [...], "kx": [...], "kxd": [...]}`. Omit `stiffness` to take the arm's own gains — an empty list is refused. Omit `mode` entirely and the arm runs its native law. `positronic.offboard.protocol` reads that mapping into the typed command the drivers dispatch on, so a server written against another stack sends it as plain data; one built on positronic may instead put a `positronic.drivers.roboarm.command` instance here and let `serialise` encode it.
+Every command may carry a `mode`, itself a tagged mapping naming the control law to execute under: `{"type": "position_control", "stiffness": [...]}` or `{"type": "impedance", "kq": [...], "kqd": [...], "kx": [...], "kxd": [...], "frame": [...]}`. Omit `stiffness` to take the arm's own gains — an empty list is refused. An impedance `frame` is a pose in the same form, measured from the rig's control frame: the point where the Cartesian stiffness acts. Omit it and the stiffness acts at the control frame. The Franka arm refuses a `frame` with a rotation. Omit `mode` entirely and the arm runs its native law. `positronic.offboard.protocol` reads that mapping into the typed command the drivers dispatch on, so a server written against another stack sends it as plain data; one built on positronic may instead put a `positronic.drivers.roboarm.command` instance here and let `serialise` encode it.
 
 **Server → Client (Error):**
 ```json
@@ -315,7 +315,8 @@ any running inference finishes. Reconnecting creates a new session ID.
 ```bash
 # LeRobot server (SmolVLA — 0.4.x); the subcommand names the codec pipeline
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
-  --model.checkpoints_dir=~/checkpoints/lerobot/exp_v1
+  --model.checkpoints_dir=~/checkpoints/lerobot/exp_v1 \
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 # GR00T server (swap hardware code stays the same)
 cd docker && docker compose run --rm --service-ports groot-server droid \
@@ -332,6 +333,38 @@ checkpoints, start one server for each.
 
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
+## Real-time chunking
+
+Real-time chunking (RTC) predicts a new action chunk while the client executes
+queued commands. It combines local scheduling and remote prediction through the
+policy API's [composition model](../policy/DESIGN.md#composability).
+
+The client supplies the remaining planned actions at the observation moment,
+alongside measured and expected end-to-end call latency. The measured value is
+`None` before the first completed call. The server decides how
+to use that context, including which actions to freeze or blend. Supplying the
+whole remaining plan lets models choose their own conditioning window.
+
+The prefix represents planned commands in model action units. If command
+preparation changes a grip prediction from `0.7` to `1.0`, the prefix reflects
+`1.0`. It describes intended commands, not measured physical motion.
+
+Latency and offsets are in seconds. The prefix's start within the preceding
+prediction identifies its source actions; its start relative to the observation
+says when they are due. With the original action spacing preserved, the server
+knows the remaining times from its action rate. Relative offsets avoid requiring
+synchronized client and server clocks.
+
+Action codecs encode commands at a configured input path through ordinary
+`encode()` calls. Observation codecs, field selection and packing compose with
+them to prepare the request explicitly. The scheduler owns the local context;
+the model's recipe maps it to the adapter's input format, just like state and
+camera observations. The transport wrapper does not interpret RTC fields.
+
+A complete prefix can support stateless inference, but models may retain session
+history. [GR00T](../vendors/gr00t/README.md#real-time-chunking) uses cached pose
+predictions alongside client-supplied joint and grip targets.
+
 ## Classes
 
 ### `server.PolicyServer`
@@ -346,12 +379,12 @@ from positronic.offboard.server import PolicyServer
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import ResizeMode, TransformImages
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy.processors import ChunkedSchedule
 
 pipeline = PolicyDeployment(
-    local=Sequential(ChunkedSchedule(fps=15, horizon_sec=1.0), RestrictImageSize(224, 224)),
+    local=Sequential(ChunkedSchedule(fps=15, horizon_sec=1.0), TransformImages(224, 224, mode=ResizeMode.BOUND)),
     codec=my_model_codec,
 )
 server = PolicyServer(build_my_model, pipeline)
@@ -422,6 +455,9 @@ action = session.infer(observation)
 cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
 answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
 exception of the WebSocket or gRPC library.
+
+`wait_for_server()` returns once a server answers a probe, and opens no session. It retries as `new_session`
+does.
 
 A session recovers a connection that drops before the server's first answer. A later drop raises
 `wire.PeerDisconnected`.

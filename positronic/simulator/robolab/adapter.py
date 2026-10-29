@@ -12,7 +12,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.roboarm.models import DROID_EE_FRAME
+from positronic.drivers.roboarm.models import ROBOLAB_EE_FRAME
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
@@ -23,7 +23,7 @@ from positronic.simulator.robolab import keys as robolab_keys
 class RobolabAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
         # Converting here is what lets one checkpoint run on RoboLab and on the rig it stands in for unchanged.
-        super().__init__(DROID_EE_FRAME)
+        super().__init__(ROBOLAB_EE_FRAME)
         self._camera_dict = camera_dict  # logical observation name -> the RoboLab obs image key
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -40,12 +40,12 @@ class RobolabAdapter(WireCommandAdapter):
         # The env reports the eef pose in the control frame IK drives; ``eef_quat`` is scalar-first (wxyz),
         # so ``from_quat`` is the matching decode.
         eef_pose = geom.Transform3D(
-            raw_obs[robolab_keys.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[robolab_keys.OBS_EEF_QUAT])
+            raw_obs[protocol.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[protocol.OBS_EEF_QUAT])
         )
         ee_pose = self._measure(eef_pose)
         state = MujocoFrankaState()
-        state.encode(raw_obs[robolab_keys.OBS_JOINT_POS], raw_obs[robolab_keys.OBS_JOINT_VEL], ee_pose)
-        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[robolab_keys.OBS_GRIP])}
+        state.encode(raw_obs[protocol.OBS_JOINT_POS], raw_obs[protocol.OBS_JOINT_VEL], ee_pose)
+        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[protocol.OBS_GRIP])}
         for logical, env_key in self._camera_dict.items():
             if env_key not in raw_obs:
                 rendered = sorted(k for k, v in raw_obs.items() if isinstance(v, np.ndarray) and v.ndim == 3)

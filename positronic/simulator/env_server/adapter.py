@@ -64,7 +64,7 @@ class EnvAdapter(ABC):
 
 
 def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D, measured: geom.Transform3D | None) -> Any:
-    """A command against the embodiment's ``default``, re-expressed in the frame the env measures and drives.
+    """A command against the embodiment's ``GRIPPER_SITE``, re-expressed in the frame the env measures and drives.
 
     ``measured`` is the env's last measured pose in that frame, or None before the first observation.
     """
@@ -126,14 +126,18 @@ class WireCommandAdapter(EnvAdapter):
 
     def __init__(self, env_control_frame: geom.Transform3D | None = None):
         """``env_control_frame`` places the frame the env measures and drives relative to the embodiment's
-        ``default``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
+        ``GRIPPER_SITE``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
         self.env_control_frame = env_control_frame if env_control_frame is not None else geom.Transform3D.identity
-        self._measured: geom.Transform3D | None = None
+        self._measured: dict[str, geom.Transform3D] = {}  # the last pose the env measured, per command channel
         self._reset_command_state()
 
-    def _measure(self, env_pose: geom.Transform3D) -> geom.Transform3D:
-        """The pose the env measures, at ``default``. It also anchors the next Cartesian delta."""
-        self._measured = env_pose
+    def _measure(self, env_pose: geom.Transform3D, arm: str | None = None) -> geom.Transform3D:
+        """The pose the env measures for ``arm``, at ``GRIPPER_SITE``. It also anchors that arm's next Cartesian
+        delta.
+
+        ``arm`` is None on a one-arm robot, whose command channel has the bare name.
+        """
+        self._measured[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = env_pose
         return env_pose * self.env_control_frame.inv
 
     def _reset_command_state(self) -> None:
@@ -156,7 +160,7 @@ class WireCommandAdapter(EnvAdapter):
 
     def _channel_payload(self, name: str) -> Any:
         if not keys.is_robot_command(name):
-            return float(self._held.get(name, 0.0))
+            return self._held.get(name, 0.0)
         # The server maps the held command into its controller's action. A delta — Cartesian or joint — is a
         # one-shot relative motion, forwarded once then dropped: re-sending a stale delta would re-compose it
         # against the moving arm every tick (the eef drifts, or the joints walk toward their limits), so after
@@ -164,4 +168,4 @@ class WireCommandAdapter(EnvAdapter):
         cmd = self._held.get(name)
         if isinstance(cmd, roboarm_command.CartesianDelta | roboarm_command.JointDelta):
             self._held.pop(name)
-        return _wire_command(_in_env_control_frame(cmd, self.env_control_frame, self._measured))
+        return _wire_command(_in_env_control_frame(cmd, self.env_control_frame, self._measured.get(name)))

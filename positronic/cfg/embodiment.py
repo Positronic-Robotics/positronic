@@ -5,9 +5,9 @@ import configuronic as cfn
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
-import positronic.cfg.video_encoder
 from positronic import keys
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 
@@ -38,7 +38,11 @@ def droid(robot_arm, gripper, cameras):
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: gripper.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
-        ready_handlers={eval_keys.ARM: robot_arm.ready, **{name: cam.ready for name, cam in cameras.items()}},
+        ready_handlers={
+            eval_keys.ARM: robot_arm.ready,
+            eval_keys.GRIPPER: gripper.ready,
+            **{name: cam.ready for name, cam in cameras.items()},
+        },
         control_systems=(*cameras.values(), robot_arm, gripper),
         simulated=False,
     )
@@ -54,10 +58,8 @@ droid_fake = droid.override(
 droid_3cam_fake = droid_fake.override(cameras=positronic.cfg.hardware.camera.droid_3cam_fake)
 
 
-@cfn.config(
-    robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={}, video_encoder=positronic.cfg.video_encoder.jetson_h264
-)
-def yam(robot_arm, cameras, video_encoder):
+@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={})
+def yam(robot_arm, cameras):
     """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
     observations = {
         keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
@@ -75,10 +77,9 @@ def yam(robot_arm, cameras, video_encoder):
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: robot_arm.sync_grip},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
-        ready_handlers={name: cam.ready for name, cam in cameras.items()},
+        ready_handlers={eval_keys.ARM: robot_arm.ready, **{name: cam.ready for name, cam in cameras.items()}},
         control_systems=(*cameras.values(), robot_arm),
         simulated=False,
-        video_encoder=video_encoder,
     )
 
 
@@ -103,7 +104,6 @@ def yam(robot_arm, cameras, video_encoder):
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
         keys.WRIST_RIGHT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
-    video_encoder=positronic.cfg.video_encoder.jetson_h264,
 )
 def yam_bimanual(
     left_channel: str,
@@ -111,7 +111,6 @@ def yam_bimanual(
     mounts: dict[str, list[float]],
     gravity_comp_factor: dict[str, list[float]] | None,
     cameras,
-    video_encoder,
     park_after_idle_s: float | None,
     park_tuning: dict[str, 'SettleTuning'],
     move_tuning: dict[str, 'SettleTuning'],
@@ -149,11 +148,14 @@ def yam_bimanual(
         **{f'{keys.TARGET_GRIP}.{s}': Command(arm.target_grip, None) for s, arm in arms.items()},
     }
     joint_signals = {side: f'{keys.ROBOT_STATE}.{side}.q' for side in arms}
+    pose_signals = [f'{keys.ROBOT_STATE}.{s}{keys.EE_POSE_SUFFIX}' for s in arms] + [
+        f'{keys.ROBOT_COMMAND}.{s}{keys.POSE_SUFFIX}' for s in arms
+    ]
     static_meta = {
         eval_keys.JOINT_SIGNALS: list(joint_signals.values()),
-        eval_keys.POSE_SIGNALS: [f'{keys.ROBOT_STATE}.{s}.ee_pose' for s in arms]
-        + [f'{keys.ROBOT_COMMAND}.{s}.pose' for s in arms],
+        eval_keys.POSE_SIGNALS: pose_signals,
         eval_keys.MOUNTS: {sig: mounts[side] for side, sig in joint_signals.items()},
+        **ee_frames_entry({sig: EEFrame(site=GRIPPER_SITE) for sig in pose_signals}),
     }
     return Embodiment(
         descriptor='yam_bimanual',
@@ -166,10 +168,12 @@ def yam_bimanual(
         static_meta=static_meta,
         # Both drivers emit the identical per-arm meta; record one copy.
         meta_source=arms[keys.LEFT_ARM].robot_meta,
-        ready_handlers={name: cam.ready for name, cam in cameras.items()},
+        ready_handlers={
+            **{f'{eval_keys.ARM}.{s}': arm.ready for s, arm in arms.items()},
+            **{name: cam.ready for name, cam in cameras.items()},
+        },
         control_systems=(*cameras.values(), *arms.values()),
         simulated=False,
-        video_encoder=video_encoder,
     )
 
 

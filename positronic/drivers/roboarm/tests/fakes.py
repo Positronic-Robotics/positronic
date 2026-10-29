@@ -18,14 +18,22 @@ class StopFlag(pimm.SignalReceiver[bool]):
 
 
 class FakeRobotState(State):
-    """A ``State`` over the four values it is given, copied on read so a caller cannot reach the arrays
+    """A ``State`` over the values it is given, copied on read so a caller cannot reach the arrays
     a producer keeps emitting from."""
 
-    def __init__(self, q: np.ndarray, dq: np.ndarray, ee_pose: geom.Transform3D, status: RobotStatus) -> None:
+    def __init__(
+        self,
+        q: np.ndarray,
+        dq: np.ndarray,
+        ee_pose: geom.Transform3D,
+        status: RobotStatus,
+        ee_wrench: np.ndarray | None = None,
+    ) -> None:
         self._q = q
         self._dq = dq
         self._ee_pose = ee_pose
         self._status = status
+        self._ee_wrench = ee_wrench
 
     @property
     def q(self) -> np.ndarray:
@@ -42,6 +50,10 @@ class FakeRobotState(State):
     @property
     def status(self) -> RobotStatus:
         return self._status
+
+    @property
+    def ee_wrench(self) -> np.ndarray | None:
+        return None if self._ee_wrench is None else self._ee_wrench.copy()
 
 
 def make_robot_state(translation, joints, status: RobotStatus = RobotStatus.AVAILABLE) -> FakeRobotState:

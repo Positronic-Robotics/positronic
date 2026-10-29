@@ -14,6 +14,7 @@ import mapping
 import mujoco
 import numpy as np
 import parity_record
+import protocol
 
 # MolmoSpaces is installed only in the server's isolated environment.
 from molmo_spaces.evaluation.benchmark_schema import (  # pyright: ignore[reportMissingImports]
@@ -39,11 +40,11 @@ def _observe(robot_view, env_obs: dict, camera_names: list[str]) -> dict:
     qpos = env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP]
     grip = np.clip(qpos[0] / _GRIPPER_QPOS_CLOSED, 0.0, 1.0)
     return {
-        mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
-        mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
-        mapping.OBS_EEF_POS: eef[:3, 3].astype(np.float32),
-        mapping.OBS_EEF_QUAT: quat.astype(np.float32),
-        mapping.OBS_GRIP: np.float32(grip),
+        protocol.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
+        protocol.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
+        protocol.OBS_EEF_POS: eef[:3, 3].astype(np.float32),
+        protocol.OBS_EEF_QUAT: quat.astype(np.float32),
+        protocol.OBS_GRIP: np.float32(grip),
         **{name: np.ascontiguousarray(env_obs[name]) for name in camera_names},
     }
 
@@ -64,11 +65,11 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
     fields: dict[str, list] = {
         k: []
         for k in (
-            mapping.OBS_JOINT_POS,
-            mapping.OBS_JOINT_VEL,
-            mapping.OBS_EEF_POS,
-            mapping.OBS_EEF_QUAT,
-            mapping.OBS_GRIP,
+            protocol.OBS_JOINT_POS,
+            protocol.OBS_JOINT_VEL,
+            protocol.OBS_EEF_POS,
+            protocol.OBS_EEF_QUAT,
+            protocol.OBS_GRIP,
         )
     }
     cam_hashes: dict[str, list[str]] = {name: [] for name in camera_names}

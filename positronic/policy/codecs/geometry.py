@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
 from positronic_model_server.spec import ARGS, NAME, VERSION
@@ -7,8 +7,8 @@ from positronic_model_server.spec import ARGS, NAME, VERSION
 from positronic import geom
 from positronic import keys as obs_keys
 from positronic.dataset.transforms.episode import EpisodeTransform, map_signals
-from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import change_frame
+from positronic.drivers.roboarm.models import EEFrame, ee_frames_entry
 from positronic.policy import training
 
 from .base import Codec
@@ -17,54 +17,63 @@ _QUAT = geom.Rotation.Representation.QUAT
 
 
 class ChangeEEFrame(Codec):
-    """Convert poses between the embodiment's ``default`` frame and the frame the policy speaks.
+    """Convert poses between a site of the embodiment's model and the frame the policy speaks.
 
-    ``transform`` expresses the policy's frame relative to ``default`` — the frame every embodiment declares in
-    its model and reports poses in, so one policy-side constant serves every rig that honours the contract.
-    Keys in ``keys`` go ``pose * transform`` on encode and ``pose * transform⁻¹`` on decode; absent keys and
-    joint-space commands are left alone. A ``CartesianDelta`` has no anchor pose to convert against, so it
-    travels with the frame it is expressed in and the driver applies it there.
+    The policy speaks ``frame``, and states it as the ``EE_FRAMES`` entry of each key in ``keys``. The rig reports
+    its poses at a site with no offset and refuses a policy that names another site. Keys in ``keys`` go
+    ``pose * frame.offset`` on encode and ``pose * frame.offset⁻¹`` on decode; absent keys and joint-space
+    commands are left alone. A ``CartesianDelta`` has no anchor pose to convert against, so it travels with the
+    frame it is expressed in and the driver applies it there.
 
     Which side of the ``remote`` marker it sits on decides who converts, the rig or the server. Compose it left
     of the observation/action codecs.
     """
 
     WIRE_NAME = 'change_ee_frame'
+    WIRE_VERSION = 2
 
     def __init__(
         self,
-        transform: geom.Transform3D | Sequence[float],
+        frame: EEFrame,
         keys: tuple[str, ...] = (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE, obs_keys.ROBOT_COMMAND),
     ):
-        if not isinstance(transform, geom.Transform3D):  # the ``[tx,ty,tz,qw,qx,qy,qz]`` vector a wire spec carries
-            transform = geom.Transform3D.from_vector(np.asarray(transform, dtype=np.float64), _QUAT)
-        self._transform = transform
+        self._frame = frame
         self._keys = tuple(keys)
+
+    @classmethod
+    def from_spec_args(cls, **args: Any) -> Self:
+        # A wire spec carries the frame as ``site`` and a ``[tx,ty,tz,qw,qx,qy,qz]`` ``transform`` vector.
+        offset = geom.Transform3D.from_vector(np.asarray(args.pop('transform'), dtype=np.float64), _QUAT)
+        return cls(EEFrame(site=args.pop('site'), offset=offset), **args)
 
     def _apply(self, data: dict, transform: geom.Transform3D) -> dict:
         moved = {key: change_frame(data[key], transform) for key in self._keys if key in data}
         return {**data, **moved} if moved else data
 
     def encode(self, data):
-        return self._apply(data, self._transform)
+        return self._apply(data, self._frame.offset)
 
     def _decode_single(self, data: dict) -> dict:
-        return self._apply(data, self._transform.inv)
+        return self._apply(data, self._frame.offset.inv)
 
     @property
     def training_encoder(self) -> EpisodeTransform:
-        return training.ChangeEEFrame(self._transform, self._keys)
+        return training.ChangeEEFrame(self._frame, self._keys)
 
     @property
     def meta(self):
-        return {roboarm_keys.EE_FRAME: self._transform.as_vector(_QUAT).tolist()}
+        return ee_frames_entry(dict.fromkeys(self._keys, self._frame))
 
     def to_spec(self):
         # Lists, not tuples, so the spec is identical before and after a wire round-trip.
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'transform': self._transform.as_vector(_QUAT).tolist(), 'keys': list(self._keys)},
+            ARGS: {
+                'site': self._frame.site,
+                'transform': self._frame.offset.as_vector(_QUAT).tolist(),
+                'keys': list(self._keys),
+            },
         }
 
 

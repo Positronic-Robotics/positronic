@@ -50,8 +50,8 @@ def _compose_pose(obs: dict, delta: np.ndarray) -> np.ndarray:
     Mirrors robosuite ``set_goal``: world-frame translation ``ee_pos + Δpos`` and orientation ``R(Δrot) @ ee_ori``
     (left-multiply), but reads ``ee_pos``/``ee_ori`` from the wire observation rather than the controller."""
     delta_pos, delta_rot = _physical_delta(delta)
-    cur_rot = np.asarray(geom.Rotation.from_quat_xyzw(obs['eef_quat']).to(_ROTMAT)).reshape(3, 3)
-    return np.concatenate([np.asarray(obs['eef_pos']) + delta_pos, (delta_rot @ cur_rot).reshape(9)])
+    cur_rot = np.asarray(geom.Rotation.from_quat_xyzw(obs[protocol.OBS_EEF_QUAT]).to(_ROTMAT)).reshape(3, 3)
+    return np.concatenate([np.asarray(obs[protocol.OBS_EEF_POS]) + delta_pos, (delta_rot @ cur_rot).reshape(9)])
 
 
 def _step_command(obs: dict, delta: np.ndarray, command_mode: str) -> dict:

@@ -23,7 +23,7 @@ from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import _prepare_spec
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
@@ -46,14 +46,16 @@ def _skip_unless_present(bench: mapping.BenchmarkPath) -> None:
         pytest.skip(f'{benchmark_dir} is absent — this asset pack cannot replay the fixture')
 
 
+# The object image points sensor only observes, so a replay without it follows the same trajectory.
+@pytest.mark.parametrize('with_object_image_points', [True, False], ids=['image_points', 'no_image_points'])
 @pytest.mark.parametrize('fixture_path', FIXTURES, ids=lambda path: path.stem)
-def test_recorded_rollout_replays_the_pinned_trajectory(fixture_path: Path):
+def test_recorded_rollout_replays_the_pinned_trajectory(fixture_path: Path, with_object_image_points: bool):
     fixture = np.load(fixture_path, allow_pickle=False)
     commands, grips = fixture[fixture_fields.FIELD_COMMANDS], fixture[fixture_fields.FIELD_GRIPS]
     episode_index = int(fixture[fixture_fields.FIELD_EPISODE_INDEX])
     bench = mapping.BenchmarkPath.parse(str(fixture[fixture_fields.FIELD_BENCHMARK_PATH]))
     _skip_unless_present(bench)
-    states = replay_commands(bench, episode_index, commands, grips)
+    states = replay_commands(bench, episode_index, commands, grips, with_object_image_points)
 
     assert len(states) == len(commands), (
         f'replay of episode {episode_index} terminated after {len(states)} of {len(commands)} recorded steps '
@@ -151,12 +153,12 @@ _REACH_STEPS = 30
 
 
 def _recorded_model_fk(q: np.ndarray) -> geom.Transform3D:
-    """The pose of ``DEFAULT_FRAME`` at joints ``q`` on the recorded model, in the model's root frame."""
-    model = _prepare_spec(_RECORDED_MODEL[roboarm_keys.URDF], DEFAULT_FRAME).compile()
+    """The pose of ``GRIPPER_SITE`` at joints ``q`` on the recorded model, in the model's root frame."""
+    model = _prepare_spec(_RECORDED_MODEL[roboarm_keys.URDF], GRIPPER_SITE).compile()
     data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
     data.qpos[[model.joint(n).qposadr.item() for n in _RECORDED_MODEL[roboarm_keys.JOINT_NAMES]]] = q
     mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
-    site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, DEFAULT_FRAME)  # pyright: ignore[reportAttributeAccessIssue]
+    site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, GRIPPER_SITE)  # pyright: ignore[reportAttributeAccessIssue]
     return geom.Transform3D(
         data.site_xpos[site].copy(), geom.Rotation.from_rotation_matrix(data.site_xmat[site].reshape(3, 3))
     )
@@ -190,14 +192,14 @@ def test_the_reported_ee_pose_is_forward_kinematics_of_the_joints_on_the_recorde
         conn = EnvConnection(host, port)
         try:
             observations = [conn.reset(_episode_token(_OPEN_BENCHMARK))[protocol.FRAME_OBS]]
-            start = np.asarray(observations[0][mapping.OBS_JOINT_POS], dtype=np.float64)
+            start = np.asarray(observations[0][protocol.OBS_JOINT_POS], dtype=np.float64)
             for sign in (1.0, -1.0):
                 observations.append(conn.step(_joint_pos_action(start + sign * _JOINT_STEP))[protocol.FRAME_OBS])
         finally:
             conn.close()
     for obs in observations:
         reported = _reported_ee_pose(obs)
-        expected = _recorded_model_fk(np.asarray(obs[mapping.OBS_JOINT_POS], dtype=np.float64))
+        expected = _recorded_model_fk(np.asarray(obs[protocol.OBS_JOINT_POS], dtype=np.float64))
         np.testing.assert_allclose(reported.translation, expected.translation, atol=_FK_POS_ATOL)
         assert (reported.rotation * expected.rotation.inv).angle < _FK_ROT_ATOL
 
@@ -207,7 +209,7 @@ def test_a_cartesian_target_on_the_recorded_model_drives_the_joints_to_it():
     with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
-            start = conn.reset(_episode_token(_OPEN_BENCHMARK))[protocol.FRAME_OBS][mapping.OBS_JOINT_POS]
+            start = conn.reset(_episode_token(_OPEN_BENCHMARK))[protocol.FRAME_OBS][protocol.OBS_JOINT_POS]
             target = _recorded_model_fk(np.asarray(start, dtype=np.float64) + _JOINT_STEP)
             steps = [conn.step(_cartesian_action(target))[protocol.FRAME_OBS] for _ in range(_REACH_STEPS)]
         finally:
@@ -215,5 +217,5 @@ def test_a_cartesian_target_on_the_recorded_model_drives_the_joints_to_it():
     assert not any(obs[protocol.OBS_ARM_ERROR] for obs in steps), (
         'the server found no IK solution for a reachable target'
     )
-    reached = _recorded_model_fk(np.asarray(steps[-1][mapping.OBS_JOINT_POS], dtype=np.float64))
+    reached = _recorded_model_fk(np.asarray(steps[-1][protocol.OBS_JOINT_POS], dtype=np.float64))
     np.testing.assert_allclose(reached.translation, target.translation, atol=_REACH_POS_ATOL)

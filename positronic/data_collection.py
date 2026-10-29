@@ -1,8 +1,6 @@
 import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
-from enum import Enum
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -11,31 +9,34 @@ import numpy as np
 import pos3
 
 import pimm
+import positronic.cfg.dataset_writer
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
-import positronic.cfg.video_encoder
 import positronic.cfg.webxr
 from pimm.logging import init_logging
 from positronic import geom, keys, utils, wire
+from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.local_dataset import LocalDatasetWriter, sync_recording_dir
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers import roboarm
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import State as RoboarmState
-from positronic.drivers.webxr import WebXR
+from positronic.drivers.webxr import LEFT, RIGHT, WebXR
 from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+
+# TODO: Replace this module with a run of `cfg.policy.teleop`, and keep the clutch only in `positronic.teleop`.
+from positronic.teleop.clutch import OperatorPosition, Tracker
 from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
 
 
 def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
-    for side in ['left', 'right']:
+    for side in [LEFT, RIGHT]:
         if buttons[side] is None:
             continue
 
@@ -51,54 +52,6 @@ def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
 
 def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
-
-
-class _Tracker:
-    on = False
-    _offset = geom.Transform3D()
-    _teleop_t = geom.Transform3D()
-
-    def __init__(self, operator_position: geom.Transform3D | None):
-        self._operator_position = operator_position
-        self.on = self.umi_mode
-
-    @property
-    def umi_mode(self):
-        return self._operator_position is None
-
-    def turn_on(self, robot_pos: geom.Transform3D):
-        if self.umi_mode:
-            logging.info('Ignoring tracking on/off in UMI mode')
-            return
-
-        self.on = True
-        logging.info('Starting tracking')
-        self._offset = geom.Transform3D(
-            -self._teleop_t.translation + robot_pos.translation, self._teleop_t.rotation.inv * robot_pos.rotation
-        )
-
-    def turn_off(self):
-        if self.umi_mode:
-            logging.info('Ignoring tracking on/off in UMI mode')
-            return
-        self.on = False
-        logging.info('Stopped tracking')
-
-    def update(self, tracker_pos: geom.Transform3D):
-        if self.umi_mode:
-            return tracker_pos
-
-        self._teleop_t = self._operator_position * tracker_pos * self._operator_position.inv
-        return geom.Transform3D(
-            self._teleop_t.translation + self._offset.translation, self._teleop_t.rotation * self._offset.rotation
-        )
-
-
-class OperatorPosition(Enum):
-    # map xyz -> zxy
-    FRONT = geom.Transform3D(rotation=geom.Rotation.from_quat([0.5, 0.5, 0.5, 0.5]))
-    # map xyz -> zxy + flip x and y
-    BACK = geom.Transform3D(rotation=geom.Rotation.from_quat([-0.5, -0.5, 0.5, 0.5]))
 
 
 class DataCollectionController(pimm.ControlSystem):
@@ -162,6 +115,17 @@ class DataCollectionController(pimm.ControlSystem):
             logging.error(f'The arm gives no state: {error}')
             self.sound.emit(error_wav_path)
 
+    def _toggle_control(self, tracker: Tracker) -> None:
+        if tracker.on:
+            tracker.turn_off()
+            return
+        robot_pos = self.robot_state.value.ee_pose
+        hand_pos = self.controller_positions.value.get(RIGHT)
+        if hand_pos is None:
+            logging.warning('Control needs a pose of the right controller')
+            return
+        tracker.turn_on(robot_pos, hand_pos)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         sounds = Path(package_assets_path('assets/sounds'))
         start_wav_path = sounds / 'recording-has-started.wav'
@@ -169,7 +133,7 @@ class DataCollectionController(pimm.ControlSystem):
         abort_wav_path = sounds / 'recording-has-been-aborted.wav'
         error_wav_path = sounds / 'error-occurred.wav'
 
-        tracker = _Tracker(self.operator_position)
+        tracker = Tracker(self.operator_position)
         button_handler = ButtonHandler()
 
         recording = False
@@ -190,11 +154,8 @@ class DataCollectionController(pimm.ControlSystem):
                         self.sound.emit(end_wav_path)
                     recording = not recording
                 elif button_handler.just_pressed('right_A'):
-                    if tracker.on:
-                        tracker.turn_off()
-                    else:
-                        tracker.turn_on(self.robot_state.value.ee_pose)
-                elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
+                    self._toggle_control(tracker)
+                elif button_handler.just_pressed('right_stick') and not tracker.is_umi_mode:
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
                         self.sound.emit(abort_wav_path)
@@ -209,8 +170,6 @@ class DataCollectionController(pimm.ControlSystem):
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
-                if cp_msg.updated:
-                    target_robot_pos = tracker.update(cp_msg.data['right'])
 
                 if tracker.on:
                     in_error, entered_error = _check_error(
@@ -219,7 +178,7 @@ class DataCollectionController(pimm.ControlSystem):
                     if entered_error:
                         self.sound.emit(error_wav_path)
                     if not in_error and cp_msg.updated:
-                        cmd = roboarm.command.CartesianPosition(target_robot_pos)
+                        cmd = roboarm.command.CartesianPosition(tracker.update(cp_msg.data[RIGHT]))
                         self.robot_commands.emit(cmd)
 
                 yield pimm.Sleep(0.001)
@@ -290,7 +249,7 @@ def main(
     stream_video_to_webxr: str | None = None,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
-    video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
 ):
     """Runs data collection in real hardware."""
     if (robot_arm is not None) != (len(nominal_joints) > 0):
@@ -317,16 +276,22 @@ def main(
         static_meta.update(wire.ROBOT_STATIC_META)
     output_path = None
     if output_dir is not None:
-        video_encoder.ensure_available()
         output_path = sync_recording_dir(output_dir)
         utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
         operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
     )
 
-    dataset_factory = partial(LocalDatasetWriter, video_encoder=video_encoder) if output_path is not None else None
     with pimm.World() as world:
-        ds_agent = wire.wire(world, data_collection, dataset_factory, camera_emitters, robot_arm, gripper, None)
+        ds_agent = wire.wire(
+            world,
+            data_collection,
+            dataset_factory if output_path is not None else None,
+            camera_emitters,
+            robot_arm,
+            gripper,
+            None,
+        )
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
         # SO-101 fills both the arm and gripper slots with one object; a control system runs in exactly one process.
@@ -349,7 +314,7 @@ def main(
     cameras={
         keys.WRIST_IMAGE: 'handcam_left_ph',
         keys.EXTERIOR_IMAGE: 'back_view_ph',
-        'image.handcam_right': 'handcam_right_ph',
+        keys.HANDCAM_RIGHT_IMAGE: 'handcam_right_ph',
         'image.wrist_2': 'wrist_cam_ph',
     },
     sound=positronic.cfg.sound.sound,
@@ -366,11 +331,12 @@ def main_sim(
     fps: int = 30,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
 ):
     """Runs data collection in simulator."""
 
     sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
-    cameras = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
+    camera_emitters = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
     gui = dpg_ui()
 
     static_meta: dict[str, Any] = dict(wire.ROBOT_STATIC_META)
@@ -389,10 +355,11 @@ def main_sim(
         metadata_getter=lambda: {k: v.tolist() for k, v in sim.save_state().items()},
     )
 
-    dataset_factory = LocalDatasetWriter if output_path is not None else None
     with pimm.World(virtual_time=True) as world:
         # The sim carries both the arm and the gripper ports, so it fills both slots.
-        ds_agent = wire.wire(world, data_collection, dataset_factory, cameras, sim, sim, gui)
+        ds_agent = wire.wire(
+            world, data_collection, dataset_factory if output_path is not None else None, camera_emitters, sim, sim, gui
+        )
         _wire(world, ds_agent, data_collection, webxr, sim, sound)
         world.connect(data_collection.redraw_scene, sim.env_reset)
 
@@ -447,7 +414,7 @@ yamcfg = arm_as_gripper.override(
     robot_arm=positronic.cfg.hardware.roboarm.yam,
     cameras={},
     nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
-    video_encoder=positronic.cfg.video_encoder.jetson_h264,
+    dataset_factory=positronic.cfg.dataset_writer.jetson,
 )
 
 

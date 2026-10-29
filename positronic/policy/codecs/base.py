@@ -11,21 +11,18 @@ from positronic.policy.base import Obs, ProcessorRun, Step
 from positronic.utils import merge_dicts
 
 
+class PolicyCommandError(ValueError):
+    """A codec cannot decode the command that a policy returned. The codec's own error is the cause."""
+
+
 class Codec:
     """Base class for observation/action codecs.
 
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
     (action decoding). The ``training_encoder`` property
     returns an ``EpisodeTransform`` used by the training pipeline to derive dataset columns.
-
-    Reserved ``meta`` key:
-
-    ``image_sizes``
-        The image dimensions this codec encodes to. Either a ``(width, height)`` tuple (same
-        size for all images) or a dict mapping raw input keys to ``(width, height)`` tuples.
     """
 
-    IMAGE_SIZES = 'image_sizes'
     WIRE_NAME: ClassVar[str]
     WIRE_VERSION: ClassVar[int] = 1
 
@@ -60,8 +57,9 @@ class Codec:
     ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
-        Steps retain their wake-up time; only nonempty commands are decoded. The caller owns the
-        wrapped dependency, including closing it when it is a generator.
+        Steps retain their wake-up time; only nonempty commands are decoded. A ``ValueError`` or ``KeyError``
+        from the decode becomes a ``PolicyCommandError``. The caller owns the wrapped dependency, including
+        closing it when it is a generator.
         """
         if isinstance(function, cabc.Generator):
             run = self._wrap_run(function)
@@ -76,9 +74,14 @@ class Codec:
         def call(obs: Obs) -> Any:
             encoded = encode(dict(obs))
             result = function(encoded)
-            if isinstance(result, Step):
-                return Step(self.decode(dict(result.commands)), result.resume_at_ns) if result.commands else result
-            return self.decode(result) if result is not None else None
+            if result is None or (isinstance(result, Step) and not result.commands):
+                return result
+            try:
+                if isinstance(result, Step):
+                    return Step(self.decode(dict(result.commands)), result.resume_at_ns)
+                return self.decode(result)
+            except (ValueError, KeyError) as e:
+                raise PolicyCommandError(f'{type(self).__name__} cannot decode the policy command: {e!r}') from e
 
         return call
 
@@ -162,10 +165,11 @@ class _ComposedCodec(Codec):
     def meta(self):
         left, right = self._left.meta, self._right.meta
         # Sequential frame transforms compose, so either transform's frame metadata alone is incorrect.
-        if roboarm_keys.EE_FRAME in left and roboarm_keys.EE_FRAME in right:
+        both = left.get(roboarm_keys.EE_FRAMES, {}).keys() & right.get(roboarm_keys.EE_FRAMES, {}).keys()
+        if both:
             raise ValueError(
-                f'sequential codecs both declare {roboarm_keys.EE_FRAME}: poses come out at the product of both '
-                f'moves, which neither {left[roboarm_keys.EE_FRAME]} nor {right[roboarm_keys.EE_FRAME]} names'
+                f'sequential codecs both declare {roboarm_keys.EE_FRAMES} for {sorted(both)}: those poses come out '
+                'at the product of both moves, which neither declaration names'
             )
         return _merged_meta(left, right)
 
@@ -186,9 +190,11 @@ class _ParallelCodec(Codec):
     def decode(self, data):
         left_out = self._left.decode(data)
         right_out = self._right.decode(data)
-        if isinstance(data, list):
+        if isinstance(left_out, list) and isinstance(right_out, list):
             return [{**lf, **rt} for lf, rt in zip(left_out, right_out, strict=True)]
-        return {**left_out, **right_out}
+        if isinstance(left_out, cabc.Mapping) and isinstance(right_out, cabc.Mapping):
+            return {**left_out, **right_out}
+        raise ValueError('Parallel codec outputs must be both mappings or both lists')
 
     @property
     def training_encoder(self):

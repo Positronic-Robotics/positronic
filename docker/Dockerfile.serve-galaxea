@@ -53,6 +53,15 @@ ARG GALAXEA_SHA=89f2322b4ad016e192437adc1a2c253b05bab246
 RUN git clone https://github.com/OpenGalaxea/GalaxeaVLA.git /galaxea \
     && git -C /galaxea checkout ${GALAXEA_SHA}
 
+# FlashAttention 4 fails every call on sm_120 (RTX PRO 6000) with `Operation creation failed`. The vision tower
+# takes it on compute capability 9 and 10 only, and its own SDPA path elsewhere. A moved vendor line fails the build.
+ARG VISION=/galaxea/src/g05/models/g05/qwen35/vision.py
+ARG FA_LINE='        if _flash_attn_varlen is not None:'
+ARG FA4_ON_SM90_SM100='        if _flash_attn_varlen is not None and (_flash_attn_backend != "fa4" or torch.cuda.get_device_capability(query_states.device)[0] in (9, 10)):'
+RUN test "$(grep -cxF "$FA_LINE" "$VISION")" = 1 \
+    && sed -i "s/^${FA_LINE}\$/${FA4_ON_SM90_SM100}/" "$VISION" \
+    && test "$(grep -cxF "$FA4_ON_SM90_SM100" "$VISION")" = 1
+
 WORKDIR /galaxea
 COPY positronic/vendors/galaxea/requirements-inference.txt /galaxea/requirements-inference.txt
 # Export versions without installing Galaxea's training and simulation dependencies.

@@ -2,13 +2,15 @@
 
 Walkthroughs for the competition's sim qualifier, on top of the same client every other caller uses.
 
-- `enter.py` — the `competition-enter` command: show what becomes public about your team, with `--yes` enter
-  your team, and with `--accept-terms=<version>` also accept that version of the terms, which the first
-  submission needs.
-  It holds its own copy of the models of the competition's two routes, `competition.enter` and
-  `competition.accept_terms`, because the client package carries no engagement words. A test pins their field
-  names.
+- `enter.py` — the `competition-enter` command: show what becomes public about your team and the current
+  version of the terms, with `--yes` enter your team, and with `--accept-terms=<version>` also accept that
+  version of the terms, which the first submission needs.
+  It holds its own copy of the models of the competition's three routes, `competition.terms`,
+  `competition.enter` and `competition.accept_terms`, because the client package carries no engagement words.
+  A test pins their field names.
 - `standings.py` — print the public leaderboards, or every row of one of them. No key is needed.
+- `serverless_eval.py` — score a policy image on a public MolmoSpaces eval on Nebius Serverless, with no GPU of
+  your own, and delete what it made. `docs/local-molmospaces-eval.md` tells how.
 - `submit_sample.py` — submit a policy image to one eval, wait for it to finish, and report what it
   scored. `--eval` names the eval; `standings.py` prints the evals the leaderboards rank.
 

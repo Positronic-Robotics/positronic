@@ -15,6 +15,7 @@
 | `positro/openpi` | OpenPI training and inference |
 | `positro/dreamzero` | DreamZero inference (1+ GPU, H100 80GB recommended) |
 | `positro/robolab` | RoboLab (Isaac Lab) eval — runs `positronic eval run`, which spawns the Isaac sim subprocess in-container; needs an RTX-class GPU |
+| `positro/molmospaces` | The public MolmoSpaces eval: runs `positronic eval run` against a served policy, and downloads the assets at start; `docker/run_molmospaces_eval.sh` is its entrypoint |
 | `galaxea` | G0.5-DROID inference with its gated weights, internal non-commercial evaluation only; isolated Galaxea and Positronic Python environments |
 
 `Dockerfile.serve-<name>` builds `positro/<name>`, a policy image the platform runs: one
@@ -23,6 +24,9 @@ build on `positro/openpi-base` and `positro/gr00t-base`, `molmoact2-droid` on a 
 image with uv, and `flux3-action` and `cosmos3-nano` build the vendor stack themselves. CI
 publishes each one; `make build-serve-<name>` builds it. See
 [Submit a policy image](../docs/submit-a-policy-image.md).
+
+`positro/openpi-base` is the openpi fork at the commit `OPENPI_REF` in the Makefile names. CI builds it
+when Docker Hub has no image of that commit (`docker-openpi-base.yaml`).
 
 Build and push all: `make push`
 

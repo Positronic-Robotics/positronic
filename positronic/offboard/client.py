@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from enum import Enum
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeVar
 
 from positronic_model_server import protocol, serialization
 from positronic_wire import wire
@@ -277,6 +277,9 @@ class ConnectRetries:
         return ConnectOutcome.RETRY if again else ConnectOutcome.SURFACE
 
 
+T = TypeVar('T')
+
+
 class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
@@ -333,14 +336,31 @@ class InferenceClient:
         """
         return self._connect(self.connect_deadline, reopen=lambda: self._connect(self.reconnect_deadline, reopen=None))
 
+    def wait_for_server(self) -> None:
+        """Return once a server answers on the address, without opening a session.
+
+        Retries a cold server as ``new_session`` does, until the connect deadline. Raises ``wire.ConnectRefused``
+        when the wire refuses the server and no retry clears it.
+        """
+
+        def probe() -> None:
+            if (refusal := self._wire.probe(self._address, self.headers, self.open_timeout)) is not None:
+                raise wire.ConnectRefused(refusal, f'{self.session_url} refused the probe: {refusal.value}')
+
+        self._retry(time.monotonic() + self.connect_deadline, probe)
+
     def _connect(self, deadline_sec: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
         """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock."""
         deadline = time.monotonic() + deadline_sec
+        return self._retry(deadline, lambda: self._open_session(deadline, reopen))
+
+    def _retry(self, deadline: float, attempt: Callable[[], T]) -> T:
+        """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``."""
         backoff = 1.0
         retries = ConnectRetries()
         while True:
             try:
-                return self._open_session(deadline, reopen)
+                return attempt()
             except wire.ConnectRefused as e:
                 refusal, not_ready = e.refusal, e
             # A status handshake the server did not finish: a backend that is not ready.

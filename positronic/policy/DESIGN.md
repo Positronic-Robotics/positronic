@@ -133,6 +133,11 @@ answer when it arrives. After the setup, the server only answers these
 calls. A stateless model answers from its arguments alone; a stateful model
 keeps its history in a server session tied to the policy run's lifetime.
 
+The local policy knows the planned commands and execution timing; the model
+knows how to use that context when predicting. A call supplies the context the
+model needs, while leaving its interpretation to the model. Each side makes
+the decisions for which it has the necessary knowledge.
+
 The framework records sensor and executed-command signals, along with timing
 logs. Recording inputs and outputs at every policy and inference boundary is
 part of the debugging goal. The episode ends when the framework closes the
@@ -254,6 +259,10 @@ returned, blend a late plan into the motion underway. The API gives each
 kind its own shape. A codec transforms data and does not see time. A
 processor can keep state in its run and use the episode clock.
 
+Keeping these responsibilities separate lets a data transform serve different
+scheduling algorithms through the same interface. Their composition makes
+explicit which data reaches each component and which transformations it applies.
+
 ![Composed runs across time](docs/chain.svg)
 
 - Sequential composition nests components from outermost to innermost. It is
@@ -305,10 +314,17 @@ around an ordinary inference function. The session identifies that run's calls
 and owns any server-side episode state. It ends when the run closes or the
 connection is lost, after outstanding calls finish using its resources.
 
-A session does not require the model to be stateful. Stateless models can serve
-several sessions without keeping episode history. Stateful models must keep
+A session defines state ownership and lifetime; whether history is needed is
+the model implementation's choice. Stateless models can serve several sessions
+without keeping episode history. Stateful models must keep
 each session's history separate or reject overlapping sessions. Ending a session
 releases its episode state, not the shared loaded model.
+
+A remote model ends the run through the reserved field `end` of a result element. One declared component,
+`EndOnField`, sits outermost in the client stack and turns a step's `end` into the run's `PolicyEnd`. The
+codec `EndCommand`, composed in parallel with the action codec, decodes the model's decision into `end`. The
+schedules carry `end` as an opaque command.
+`docs/connect-your-model.md` states what a model that ends sends.
 
 A server deployment brings together the model to load, the client stack, and
 any data conversion performed on the server. Loading and serving models belong
@@ -328,9 +344,9 @@ It records new inputs before each policy call and commands after emission. Betwe
 samples every millisecond; each sampling pass resets that deadline. Reused inputs keep their
 original timestamps and are not written twice. Privileged inputs stay outside policy observations.
 Inputs include receipt timestamps; commands use the emission timestamps returned by `emit()`.
-Harness adds `harness.world` and `harness.wall` to every record: first receipt for inputs,
-emission for commands. These coordinates align training, replay, and viewing without changing
-the original message timestamps. Producer timelines cannot use these two names.
+Harness adds `harness.world` and `harness.wall` to every record, marking when it reads an input
+or emits a command. These coordinates align training, replay, and viewing while preserving
+the original message timestamps. These two names are reserved for the harness.
 Writing is synchronous and may slow execution. An episode's answer waits for recording to close.
 The harness stores episode metadata with the policy definition metadata before policy cleanup.
 TODO: Add per-call records for the policy stack, remote inference payloads, and custom values.
@@ -472,7 +488,9 @@ their caller. `Codec.wrap` does not take ownership of the child it wraps.
 
 ## Deferred, not to decide now
 
-- Plan invalidation and recovery after robot unavailability; [#789](https://github.com/Positronic-Robotics/positronic/issues/789).
+- Coordinating recovery across guards and schedulers, including pending inference
+  and whether temporal history or server session state needs resetting;
+  [#789](https://github.com/Positronic-Robotics/positronic/issues/789).
 - TODO: Let a policy select which answers may wake it early with `wake_on`.
 - The shape of the robot description, and a server's ability to refuse one.
 - Inference input/output recording and custom signal recording.

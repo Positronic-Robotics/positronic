@@ -15,6 +15,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
+from positronic.drivers.faults import DeviceFault, FaultKind, device_fault, raise_as_device_fault
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import (
     DriverRun,
@@ -27,7 +28,8 @@ from positronic.drivers.utils import (
 )
 
 from . import RobotStatus, State, command
-from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
+from .ik import frame_transform
+from .models import FLANGE_LINK, GRIPPER_SITE, attach_robotiq_2f85, bundled_franka_model
 
 with vendor_import(
     'positronic_franka',
@@ -36,9 +38,17 @@ with vendor_import(
     platforms=('linux',),
 ):
     import positronic_franka._franka as pf
-    from positronic_franka.desk import ControlHeldElsewhere, Desk, SafetyControllerError
+    from positronic_franka.desk import ControlHeldElsewhere, Desk, ProgrammingModeError, SafetyControllerError
 
 logger = logging.getLogger(__name__)
+
+_QUAT = geom.Rotation.Representation.QUAT
+
+
+@functools.cache
+def _flange_to_gripper() -> geom.Transform3D:
+    """``GRIPPER_SITE`` measured from the flange, on the FR3 model with the 2F-85 that the driver publishes."""
+    return frame_transform(bundled_franka_model()[roboarm_keys.URDF], FLANGE_LINK, GRIPPER_SITE)
 
 
 def _check_error(is_error, was_error):
@@ -103,7 +113,8 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def encode(self, state: pf.State, status: RobotStatus):
         self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7] = state.q
         self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7] = state.dq
-        self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = state.end_effector_pose
+        gripper = geom.Transform3D.from_vector(np.asarray(state.flange_pose), _QUAT) * _flange_to_gripper()
+        self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = gripper.as_vector(_QUAT)
         self.array[FrankaState.EE_WRENCH_OFFSET : FrankaState.EE_WRENCH_OFFSET + 6] = state.ee_wrench
         self.array[FrankaState.STATUS_OFFSET] = status.value
 
@@ -318,6 +329,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._robot: pf.Robot | None = None
         # Why the driver has no connection to the arm; None while ``robot`` drives the arm.
         self.disconnect_cause: Exception | None = RuntimeError('the driver has not connected yet')
+        # Whether FCI is on. A libfranka failure leaves it on, and a Desk step that fails after FCI off leaves it off.
+        self.fci_active = False
         self.out = out
         self.state = FrankaState()
         self._dynamics_factor = dynamics_factor
@@ -410,8 +423,19 @@ class _Arm(DriverRun[command.CommandType]):
             self.out.emit(self.state)
         elif error != self._emitted_error:
             # The Message types do not name the SignalError that any message can carry.
-            self.out.emit(cast(FrankaState, pimm.SignalError(error)))
+            self.out.emit(cast(FrankaState, self._fault(error)))
             self._emitted_error = error
+
+    def _fault(self, error: str) -> DeviceFault:
+        """The typed fault for ``error``, the text ``emit_state`` puts in place of the state."""
+        if error == EMERGENCY_STOP_PRESSED:
+            return DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP)
+        return self.no_connection_fault()
+
+    def no_connection_fault(self) -> DeviceFault:
+        """The ARM fault that says the driver has no connection to the arm, with the reason as its cause."""
+        cause = self.disconnect_cause or RuntimeError('the driver has no connection')
+        return device_fault(cause, FaultKind.ARM, self.no_connection)
 
     def hold_through_error(self, st: pf.State, entered: bool, outcome: 'RecoveryOutcome') -> None:
         """Take one tick of an arm error for the sync move that waits on it.
@@ -434,7 +458,7 @@ class _Arm(DriverRun[command.CommandType]):
                 f'The arm error persists after {self._RECOVERY_GRACE_S}s; refusing the waiting move: '
                 f'{st.error_message}, moved {self._moved_in_error:.3f} rad'
             )
-            self._held.set_exception(MoveRefused(st.error_message, self._moved_in_error))
+            self._held.set_exception(device_fault(MoveRefused(st.error_message, self._moved_in_error), FaultKind.ARM))
             self._held = None
 
     def next_request(self) -> pimm.calls.Call[command.CommandType, None] | command.CommandType | None:
@@ -444,10 +468,34 @@ class _Arm(DriverRun[command.CommandType]):
             return held
         return self.moves.next_request()
 
+    def lose_control(self, cause: Exception) -> None:
+        """Stop the control loop, and drive the arm no more, for ``cause``, until a recover call connects again."""
+        logger.error(f'The driver lost control of the arm: {cause}')
+        try:
+            self.halt()
+        # rules-allow: swallowed-error — the connection is lost already, and the state holds that fault
+        except RuntimeError as stop_failed:
+            logger.error(f'Cannot stop the control loop of the lost connection: {stop_failed}')
+        self.disconnect(cause)
+
+    @contextlib.contextmanager
+    def lose_control_on_failure(self) -> Iterator[None]:
+        """End the driver's control of the arm when a libfranka read or send in the block fails, and raise the
+        failure again.
+
+        Not once the world stops: the teardown stops the arm itself.
+        """
+        try:
+            yield
+        except RuntimeError as exc:  # pybind11 raises every libfranka failure as a RuntimeError
+            if self.connected and not self.should_stop.value:
+                self.lose_control(exc)
+            raise
+
     def refuse_moves(self) -> None:
         """Answer every waiting sync move with the failure that ended the connection, and drop a streamed one."""
         while isinstance(asked := self.next_request(), pimm.calls.Call):
-            asked.set_exception(RuntimeError(self.no_connection))
+            asked.set_exception(self.no_connection_fault())
 
     @staticmethod
     def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
@@ -457,13 +505,19 @@ class _Arm(DriverRun[command.CommandType]):
                 return pf.InternalImpedance()
             case command.PositionControl(stiffness=stiffness):
                 return pf.InternalImpedance() if stiffness is None else pf.InternalImpedance(k_theta=list(stiffness))
-            case command.Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd):
-                return pf.SoftwareImpedance(kq=list(kq), kqd=list(kqd), kx=list(kx), kxd=list(kxd))
+            case command.Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd, frame=frame):
+                if frame.rotation != geom.Rotation.identity:
+                    raise ValueError(f'this arm takes a stiffness point, not a turned stiffness frame: {frame}')
+                point = (_flange_to_gripper() * frame).translation
+                return pf.SoftwareImpedance(
+                    kq=list(kq), kqd=list(kqd), kx=list(kx), kxd=list(kxd), stiffness_point=point.tolist()
+                )
 
     def command_target(self, target: np.ndarray, mode: command.ControlModeType | None) -> None:
         """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between."""
-        self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
-        self.robot.set_target_joints(target)
+        with self.lose_control_on_failure():
+            self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
+            self.robot.set_target_joints(target)
         self._refused = False  # the goal just dispatched is not the one the last reading found refused
 
     def await_goal(
@@ -474,7 +528,8 @@ class _Arm(DriverRun[command.CommandType]):
         ``pace`` is what to wait between polls, and so how often the goal is asked about.
         """
         while not should_stop():
-            goal = self.robot.goal()
+            with self.lose_control_on_failure():
+                goal = self.robot.goal()
             if goal.status == pf.GoalStatus.REACHED:
                 return MoveStatus.ARRIVED
             if goal.status != pf.GoalStatus.IN_FLIGHT:
@@ -546,7 +601,9 @@ class _Arm(DriverRun[command.CommandType]):
         heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
         """
         # The first emit must not ship an unfilled state.
-        self.state.encode(self.robot.state(), RobotStatus.BUSY)
+        with self.lose_control_on_failure():
+            first = self.robot.state()
+        self.state.encode(first, RobotStatus.BUSY)
         self.emit_state()
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
@@ -564,18 +621,16 @@ class _Arm(DriverRun[command.CommandType]):
             self.clear_held_fault()
             self.command_target(target, mode)
             for wait in self.await_goal(should_stop, self.limiter.wait):
-                st = self.robot.state()
+                with self.lose_control_on_failure():
+                    st = self.robot.state()
                 self.state.encode(st, RobotStatus.BUSY)
                 self.emit_state()
                 if st.error != 0 and not at_teardown:
                     self.robot.recover_from_errors()
                 yield wait
             # The loop exits before it polls again, so a goal that landed as the deadline passed is unseen.
-            if expired() and (missed := self.robot.goal()).status != pf.GoalStatus.REACHED:
-                self.note_refusals(missed)  # the hold target below replaces it, and any refusal it carries
-                # The robot still tracks the goal it missed, and would resume the move once the arm comes free.
-                self.robot.set_target_joints(self.robot.state().q)
-                raise TimeoutError(f'the arm stopped short of {target}')
+            if expired():
+                self._hold_a_missed_goal(target)
         except Exception:
             self.moves.errored = True
             raise
@@ -584,8 +639,23 @@ class _Arm(DriverRun[command.CommandType]):
             return MoveStatus.GAVE_UP
         self.moves.errored = False
         # The poll that reports arrival ends the loop, so the sample before it was taken mid-travel
-        self.publish(self.robot.state())
+        with self.lose_control_on_failure():
+            arrived = self.robot.state()
+        self.publish(arrived)
         return MoveStatus.ARRIVED
+
+    def _hold_a_missed_goal(self, target: np.ndarray) -> None:
+        """Hold the arm where it stands, and raise ``TimeoutError``, when the goal ``target`` is not reached."""
+        with self.lose_control_on_failure():
+            missed = self.robot.goal()
+        if missed.status == pf.GoalStatus.REACHED:
+            return
+        self.note_refusals(missed)  # the hold target below replaces it, and any refusal it carries
+        # The robot still tracks the goal it missed, and would resume the move once the arm comes free.
+        with self.lose_control_on_failure():
+            q = self.robot.state().q
+            self.robot.set_target_joints(q)
+        raise TimeoutError(f'the arm stopped short of {target}')
 
     def _clamp(self, target: np.ndarray) -> np.ndarray:
         """``target`` a margin inside the soft limits; logs the first of a run of clamped commands, and its length."""
@@ -606,8 +676,9 @@ class _Arm(DriverRun[command.CommandType]):
         return clamped
 
     def _ik(self, pose: geom.Transform3D) -> np.ndarray:
-        """The joints that put the end effector at ``pose``, within the arm's limits."""
-        return self.robot.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
+        """The joints that put ``GRIPPER_SITE`` at ``pose``, within the arm's limits."""
+        flange = pose * _flange_to_gripper().inv
+        return self.robot.inverse_kinematics_with_limits(flange.as_vector(_QUAT))
 
     def to_joints(self, cmd: command.CommandType) -> np.ndarray:
         """The joints ``cmd`` asks for, a margin inside the soft limits, not applied yet.
@@ -615,6 +686,7 @@ class _Arm(DriverRun[command.CommandType]):
         Solved here so that a malformed command raises before anything changes; ``command_target``
         applies the result.
         """
+        self._to_pf_mode(cmd.mode)  # refuses a mode the arm cannot run
         match cmd:
             case command.CartesianPosition(pose):
                 target = self._ik(pose)
@@ -634,22 +706,31 @@ class _Arm(DriverRun[command.CommandType]):
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once the state saying so is out.
 
-        Answer with the release instruction, and send no target, while the emergency stop is pressed.
+        Answer with the release instruction, and send no target, while the emergency stop is pressed. Answer a move
+        that fails with an ARM ``DeviceFault``, and a malformed command with its own error.
         """
         if self.stop_pressed:
-            call.set_exception(pimm.SignalError(EMERGENCY_STOP_PRESSED))
+            call.set_exception(DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP))
             return
         cmd = call.request
         try:
-            if (yield from self.move_to(self.to_joints(cmd), cmd.mode)) is MoveStatus.ARRIVED:
+            target = self.to_joints(cmd)
+        except Exception as exc:  # a malformed command, which the arm never sees
+            call.set_exception(exc)
+            return
+        try:
+            if (yield from self.move_to(target, cmd.mode)) is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
                 call.set_exception(MoveAbandoned())
         except Exception as exc:
             try:
-                self.publish(self.robot.state())
-            finally:
-                call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
+                if self.connected:
+                    self.publish(self.robot.state())
+            except RuntimeError as lost:  # pybind11 raises every libfranka failure as a RuntimeError
+                self.lose_control(lost)
+            finally:  # an arm the driver cannot read still leaves nobody waiting
+                call.set_exception(device_fault(exc, FaultKind.ARM))
 
     def park(self, *, at_teardown: bool = False) -> Iterator[pimm.Command]:
         """Move the arm to ``_PARK_JOINTS``, logging a failure rather than raising it."""
@@ -827,6 +908,8 @@ class Robot(pimm.ControlSystem):
         self._relative_dynamics_factor = relative_dynamics_factor
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        # Answers once the arm takes moves. A failed libfranka call holds an ARM fault on ``state``; a ready call
+        # answers with it, and only a recover call reconnects, through Desk.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
@@ -866,12 +949,10 @@ class Robot(pimm.ControlSystem):
         # TODO: The arm driver should not own the gripper. Move the 2F-85 model to the gripper driver
         # (drivers/gripper) and compose the arm and gripper together at the embodiment level.
         gripper = attach_robotiq_2f85(root, meshes)
-        add_default_frame(root, EE_LINK)
         return {
             roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
             roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
-            'meshes': meshes,
-            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
+            roboarm_keys.MESHES: meshes,
             roboarm_keys.GRIPPER: gripper,
         }
 
@@ -944,6 +1025,7 @@ class Robot(pimm.ControlSystem):
             return
         try:
             session.take_control().prepare()
+            arm.fci_active = True
             brakes.record_opened()
             self._connect(arm)
         # rules-allow: swallowed-error — the arm streams the failure, and a recover call connects again
@@ -979,12 +1061,14 @@ class Robot(pimm.ControlSystem):
         # A self-test that Desk.prepare() runs needs locked brakes. A safety stop can lock them before the driver does.
         if _BrakeState.UNLOCKED in desk.safety_status()[BRAKE_STATE]:
             brakes.close()
-        # With no connection FCI is off, and a box in Recovery refuses requests until prepare() acknowledges the error.
-        if arm.connected:
+        # A box in Recovery refuses requests until prepare() acknowledges the error, so FCI goes off once.
+        if arm.fci_active:
             desk.deactivate_fci()
+            arm.fci_active = False
             self._forget_connection()  # FCI off ended the connection this handle holds
         try:
             desk.prepare()
+            arm.fci_active = True
             brakes.record_opened()
             self._connect(arm)
         except Exception as exc:
@@ -1018,6 +1102,8 @@ class Robot(pimm.ControlSystem):
         """
         if isinstance(exc, SafetyControllerError):
             return 'the safety controller is in SafetyError'
+        if isinstance(exc, ProgrammingModeError):
+            return 'Desk is in Programming mode'
         if isinstance(exc, ControlHeldElsewhere):
             # The checker runs without the Franka package, so it cannot narrow `exc` to its error.
             holder = exc.holder  # pyright: ignore[reportAttributeAccessIssue]
@@ -1058,6 +1144,7 @@ class Robot(pimm.ControlSystem):
         arm.disconnect(refused)
         self._forget_connection()  # the reboot ends every connection
         session.reboot()
+        arm.fci_active = False
         arm.safe_inputs.renew()
         if not self._safe_to_prepare(arm):
             return self._held_by_the_safe_inputs(arm)
@@ -1071,7 +1158,7 @@ class Robot(pimm.ControlSystem):
         what it did.
 
         When a caller asked and the recovery leaves the fault, ``_clear_with_desk_prepare`` runs. A throw reaches
-        the callers that asked and counts as NOT_CLEARED; one nobody asked for reaches no caller, so it ends the run.
+        the callers that asked and counts as NOT_CLEARED. One nobody asked for ends the driver's control of the arm.
         """
         try:
             outcome = arm.recover()
@@ -1081,13 +1168,14 @@ class Robot(pimm.ControlSystem):
                 outcome = self._clear_with_desk_prepare(session, arm, brakes)
             if asked and outcome is RecoveryOutcome.CLEARED:
                 arm.forget_missed_target()
-        # rules-allow: swallowed-error — the throw is handed to every caller that asked
+        # rules-allow: swallowed-error — the throw is handed to every caller that asked, or held on the state
         except Exception as exc:
             if not asked:
-                raise
+                arm.lose_control(exc)
+                return RecoveryOutcome.NOT_CLEARED
             logger.error(f'The recovery a console asked for failed ({type(exc).__name__}: {exc})')
             for call in asked:
-                call.set_exception(exc)
+                call.set_exception(device_fault(exc, FaultKind.ARM))
             return RecoveryOutcome.NOT_CLEARED
         else:
             for call in asked:
@@ -1105,13 +1193,16 @@ class Robot(pimm.ControlSystem):
         pressed emergency stop gets the release instruction, and no recovery. A ready call takes no Desk control and
         opens no brakes: the harness asks again and again between episodes, with nobody at the rig.
         """
-        with pimm.calls.raise_to(call):
+        with pimm.calls.raise_to(call), raise_as_device_fault(FaultKind.ARM):
             if arm.stop_pressed:
-                raise pimm.SignalError(EMERGENCY_STOP_PRESSED)
+                raise DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP)
             if not arm.connected:
-                raise RuntimeError(arm.no_connection)
-            if arm.robot.state().error != 0 and arm.recover() is RecoveryOutcome.NOT_CLEARED:
-                remaining = arm.robot.state().error_message
+                raise arm.no_connection_fault()
+            with arm.lose_control_on_failure():
+                faulted = arm.robot.state().error != 0
+            if faulted and arm.recover() is RecoveryOutcome.NOT_CLEARED:
+                with arm.lose_control_on_failure():
+                    remaining = arm.robot.state().error_message
                 raise RuntimeError(f'the arm holds an error that the recovery did not clear: {remaining}')
             arm.clear_held_fault()
             if arm.rejects_moves and not arm.safe_inputs.confirmed_clear:
@@ -1142,9 +1233,12 @@ class Robot(pimm.ControlSystem):
                         self._recover(session, arm, brakes, asked_to_recover)
                     yield arm.limiter.wait()
                     continue
-                st = arm.robot.state()
+                try:
+                    st, goal = arm.robot.state(), arm.robot.goal()
+                except RuntimeError as exc:  # pybind11 raises every libfranka failure as a RuntimeError
+                    arm.lose_control(exc)
+                    continue
                 arm.publish(st)
-                goal = arm.robot.goal()
                 arm.note_refusals(goal)
 
                 in_error, entered_error = _check_error(st.error != 0, in_error)

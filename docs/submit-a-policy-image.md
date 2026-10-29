@@ -50,7 +50,12 @@ NVIDIA Cosmos. The image carries the agreement and its notice in `/opt/gr00t`, a
 requires of each copy of the models.
 
 The MolmoAct2 recipe downloads `allenai/MolmoAct2-DROID` (21.8 GB in float32). The build needs no
-token: the repository is not gated. The image is 24.4 GB compressed.
+token: the repository is not gated. The image is 24.4 GB compressed. The image serves the
+`droid_3cam` command. It sends the policy `image.exterior`, `image.exterior_2` and the wrist view,
+the three views the checkpoint was fine-tuned on. On an eval or a rig with one exterior view, the
+server answers each observation with an error that names `image.exterior_2`. To run there, build with
+`--build-arg PIPELINE=droid`, or start the image with `-e MOLMOACT2_PIPELINE=droid`: `droid` sends
+`image.exterior` in both exterior slots.
 
 Other models:
 
@@ -64,7 +69,9 @@ Other models:
 ### What the example images use
 
 Approximate values, from one run of each image in October 2026. A later build of an image can use
-different values. The platform gives each image 24 GB of GPU memory, so the last two images do not fit.
+different values. The platform gives an image 24 GB of GPU memory unless its endpoint states a larger
+need ([GPU memory](#gpu-memory)). The last two images need more, so a competition run of them does
+not fit.
 
 | Image | Disk, pulled image | Memory, test without a GPU | GPU memory |
 |---|---|---|---|
@@ -207,28 +214,47 @@ What the platform does with the credential:
    exits, and the run fails with `policy_setup_crash`.
 4. It denies all network egress from the container for the whole run. Only the simulator can
    reach your container, on port 8000. A download at start hangs or fails.
-5. It waits for `POST /api/v1/keepalive` to answer on port 8000. VM boot, the image pull and your
-   server's start share one provisioning deadline of 1800 s. A 25 GB image takes about 10 minutes
-   to pull.
+5. It waits for `POST /api/v1/keepalive` to answer on port 8000. VM boot and the image pull have a
+   deadline of 1800 s from the start of the VM. A miss there is the platform's fault. Your
+   server's start has its own deadline of 1800 s, from the end of the pull to the first
+   answer. A 25 GB image takes about 10 minutes to pull.
 6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token.
 7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
    servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
 8. The GPU is one `1g.24gb` slice of an RTX PRO 6000: 24192 MiB of VRAM and a quarter of the card's
-   compute. The container runs under the
-   limits in [The container](#the-container).
+   compute, unless the endpoint states a larger need ([GPU memory](#gpu-memory)). The container runs
+   under the limits in [The container](#the-container).
+
+The RTX PRO 6000 is a Blackwell card with compute capability 12.0 (`sm_120`). Each framework in the
+image needs kernels for `sm_120`. Without them, the first inference fails with
+`CUDA error: no kernel image is available for execution on the device`. The PyPI build of torch 2.7.1
+is a CUDA 12.6 build, and its kernels stop at `sm_90`. Install a PyTorch build for CUDA 12.8 or newer,
+for example from the `https://download.pytorch.org/whl/cu128` index, as the MolmoAct2 recipe does. A
+CUDA 12.8 build needs NVIDIA driver 570 or newer. `docker/test_policy_image.sh` runs no inference, so
+check the kernels on a machine with a GPU:
+
+```bash
+docker run --rm --gpus device=0 --entrypoint python docker.io/<you>/<image>:v1 \
+  -c "import torch; print(torch.cuda.get_arch_list())"
+```
+
+The list must contain `sm_120`. If `python` in your image is not the interpreter your server uses,
+give the full path to that interpreter.
 
 ## The container
 
 [`client/platform_client/policy_container.py`](../client/platform_client/policy_container.py)
-holds each value below. The platform runs every image under them.
+holds each value below. The platform runs every image under them. An endpoint that states
+`min_vram_gb` gets a larger GPU slice ([GPU memory](#gpu-memory)).
 
 | Limit | Value | Constant |
 |---|---|---|
 | The port the server listens on | 8000 | `POLICY_PORT` |
 | The one variable the platform sets | `AUTH_TOKEN` | `AUTH_TOKEN_ENV` |
-| The deadline for VM boot, the pull and the server's start | 1800 s | `PROVISIONING_DEADLINE_S` |
-| The GPU slice | `1g.24gb` | `MIG_PROFILE` |
-| VRAM | 24192 MiB | `VRAM_MIB` |
+| The deadline for VM boot and the pull | 1800 s | `IMAGE_FETCH_DEADLINE_S` |
+| The deadline for the server's start, from the end of the pull | 1800 s | `WARMUP_DEADLINE_S` |
+| The GPU slice, with no `min_vram_gb` | `1g.24gb` | `MIG_PROFILE` |
+| VRAM, with no `min_vram_gb` | 24192 MiB | `VRAM_MIB` |
 | The compressed image | 50 GB | `COMPRESSED_IMAGE_BYTES` |
 | The unpacked image | 55 GB | `UNPACKED_IMAGE_BYTES` |
 | The files in the image | 3,300,000 | `IMAGE_FILES` |
@@ -282,8 +308,15 @@ the request prints `the server answered HTTP <code>`, and a `401` means that it 
 in `AUTH_TOKEN`. A server that listens only on `127.0.0.1` cannot answer the platform, and the script says
 so. The log follows each of them.
 
-In a correct image, the server pins its checkpoint and starts the model process. The openpi and
-MolmoAct2 recipes then load the model on the CPU and serve. The GR00T recipe stops on the missing GPU
+In a correct image, the server pins its checkpoint and starts the model process. The openpi recipe
+then loads the model on the CPU and serves. The MolmoAct2 server stops without a GPU with `MolmoAct2
+found no CUDA GPU`, so that it cannot serve from the CPU on the platform. Add `--model.device_map=cpu`
+after the image name, and it loads the model on the CPU and serves:
+
+```bash
+bash docker/test_policy_image.sh docker.io/<you>/molmoact2-droid:v1 --model.device_map=cpu
+```
+ The GR00T recipe stops on the missing GPU
 with `Flash Attention 2 is not available on CPU`. For the FLUX 3 Action recipe, BFL's server exits on
 the missing GPU, and the server reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano
 recipe, NVIDIA's server exits the same way, and the server reports `Cosmos3 backend exited with code 1`.
@@ -300,12 +333,38 @@ bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
 The script then waits up to 600 s: FLUX 3 Action binds port 8000 after about 140 s, and GR00T loads in
-about 151 s. `no answer in 600 s` means a hung server, or one too slow for the provisioning deadline,
-which it shares with VM boot and the pull.
+about 151 s. `no answer in 600 s` means a hung server, or a slow one. The platform gives the server's start
+1800 s from the end of the pull.
 
-The platform gives the image one GPU with 24 GB of memory. On a larger GPU, use `nvidia-smi` to make
-sure that your model uses less. A memory setting that is a fraction of the GPU, such as
-`XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB.
+The platform gives the image one GPU with 24 GB of memory, or the slice that holds the need its
+endpoint states ([GPU memory](#gpu-memory)). On a larger GPU, use `nvidia-smi` to make sure that your
+model uses less. A memory setting that is a fraction of the GPU, such as
+`XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the slice.
+
+### GPU memory
+
+An `image` endpoint may state `min_vram_gb`: the least GPU memory the image needs, in GB of 10^9
+bytes. The platform then gives the run the smallest slice that holds it:
+
+| Slice | VRAM | Holds `min_vram_gb` up to |
+|---|---|---|
+| `1g.24gb` (the published slice) | 24192 MiB | 25 |
+| `2g.48gb` | 48512 MiB | 50 |
+| `4g.96gb` | 97280 MiB | 102 |
+
+`nvidia-smi` reports MiB. Convert a peak you measured with MiB × 2^20 / 10^9, round up, and add
+headroom. The largest slice depends on the GPU the run is placed on. A need that no slice of that GPU
+holds is refused when you submit. A competition run keeps the published slice: a competition plan
+whose `min_vram_gb` is more than 25 is refused.
+
+```yaml
+endpoints:
+  - name: policy
+    kind: image
+    wire: websocket
+    image: docker.io/<you>/<image>@sha256:<digest>
+    min_vram_gb: 40
+```
 
 After the push of a public image, read the digest and the compressed size the way the platform
 does, anonymously:
@@ -377,8 +436,7 @@ what its `reason` names. A `running` run reports its `stage`:
 
 Reaching `evaluating` proves the image works. A run can go back to `provisioning` from
 `evaluating`: a lost simulator VM is replaced, and `result.json` records which attempt scored.
-`episodes` and `runs` on a submission are fields of a plan the lab rig runs. An image run reports
-`0/0` and an empty list, while it runs and after it finishes.
+An image run reports `episodes` as `0/0` and `runs` as an empty list while it runs.
 
 A `finished` submission carries `scores.primary`, the value a leaderboard ranks on, and
 `artifacts` with signed links:
@@ -388,6 +446,11 @@ A `finished` submission carries `scores.primary`, the value a leaderboard ranks 
 | `result` | the run id, the attempt that scored, and `scores` with `primary`, `episodes` and `unscored` | on a finished run, and on an errored run that wrote its records |
 | `policy_log` | your container's stdout and stderr, from the attempt that decided the run | on the same runs as `result`, when the container printed anything |
 | `diagnostics` | why the run failed, and the state of the box | on an errored run whose record was written |
+
+An `errored` run of a private eval (`--org`) can publish the episodes that closed before it failed.
+It then also carries `scores` over those episodes, and `episodes` counts them: `done` closed of the
+`total` that the run asked for. `positronic eval status` prints both. A run that published no
+episode carries no `scores`, and a failed competition run carries none.
 
 The links expire after 15 minutes. Read `submissions.get` again for fresh ones. `submissions.get`
 returns these three files. The episodes are a separate call, below.
@@ -447,7 +510,7 @@ fault is not.
 | `image_too_large` | caller | the compressed size, against 50 GB |
 | `policy_setup_crash` | caller | `policy_log`: the server did not come up, or refused the run's own token |
 | `policy_inference_crash` | caller | `policy_log`: the server died after it served |
-| `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against the 24192 MiB slice |
+| `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against its slice (`vram_capacity_mib`) |
 | `latency_budget_exceeded` | caller | inference time per step |
 | `wall_clock_exceeded` | caller | the run passed its ceiling |
 | `invalid_flags` | caller | the plan the platform recorded |

@@ -32,8 +32,8 @@ against robosuite's *own* control path:
   ``_arm_action``, and assert the recovered action equals the original. This proves ``_arm_action`` is the exact
   inverse of robosuite's ``scale_action`` + ``set_goal`` — byte-identical to what a LIBERO policy drives.
 - forward kinematics: ``_fk`` of the live joints reproduces the controller's eef-site read to the bit.
-- the eef site against the panda model's ``DEFAULT_FRAME``: LIBERO's own scene puts the site where
-  ``LiberoAdapter``, passing no ``env_control_frame``, claims it is.
+- the eef site against the panda model's ``EE_LINK``: LIBERO's own scene puts the site where
+  ``LiberoAdapter``, passing ``PANDA_HAND_FRAME`` as its ``env_control_frame``, claims it is.
 - inverse kinematics: ``_fk(_ik(pose))`` recovers the target pose (round-trip; LIBERO has no IK to match).
 
 Run on a LIBERO-capable box with the positronic-free ``server`` module and a LIBERO source checkout on the
@@ -63,9 +63,9 @@ _OSC_ATOL = 1e-5  # robosuite mat2quat casts to float32, so the OSC orientation 
 _FK_ATOL = 2e-4  # a fresh FK recompute vs the live stepped eef site agree only to float precision near the
 # settled, near-singular tool-down pose — far tighter than a real FK bug (O(1e-2)+), still not float64-exact
 
-# ``bundled_panda_model``'s ``DEFAULT_FRAME`` restated against link7, because this script runs in LIBERO's venv
-# and cannot import positronic: the same transform as ``frame_transform(panda_urdf, 'link7', DEFAULT_FRAME)``.
-# ``LiberoAdapter`` passes no ``env_control_frame``, which claims LIBERO's eef site is exactly this pose.
+# ``bundled_panda_model``'s ``EE_LINK`` restated against link7, because this script runs in LIBERO's venv
+# and cannot import positronic: the same transform as ``frame_transform(panda_urdf, 'link7', EE_LINK)``.
+# ``LiberoAdapter`` passes ``PANDA_HAND_FRAME``, which claims LIBERO's eef site is exactly this pose.
 # rules-allow: hardcoded-keys — this script runs in LIBERO's 3.10 venv, where positronic is not importable, so
 # there is no shared constant to reach for; naming the body is the point of the check
 _LINK7_BODY = 'robot0_link7'
@@ -111,7 +111,14 @@ def _check_serve(env: LiberoEnv, token: dict) -> None:
     out = _reset(env, token)
     for _ in range(5):
         out = _step(env, protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
-    expected = {'agentview_image', 'joint_pos', 'eef_pos', 'eef_quat', 'grip', keys.SIM_STATE}
+    expected = {
+        'agentview_image',
+        protocol.OBS_JOINT_POS,
+        protocol.OBS_EEF_POS,
+        protocol.OBS_EEF_QUAT,
+        protocol.OBS_GRIP,
+        keys.SIM_STATE,
+    }
     assert expected <= out[protocol.FRAME_OBS].keys()
     print('  serve smoke: OK (5 hold steps, obs keys present)')
 
@@ -122,11 +129,11 @@ def _check_grip(env: LiberoEnv, token: dict) -> None:
     out = _reset(env, token)
     for _ in range(40):
         out = _step(env, protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
-    opened = out[protocol.FRAME_OBS]['grip']
+    opened = out[protocol.FRAME_OBS][protocol.OBS_GRIP]
     assert opened < 0.05, f'open grip {opened}'
     for _ in range(40):
         out = _step(env, protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))
-    closed = out[protocol.FRAME_OBS]['grip']
+    closed = out[protocol.FRAME_OBS][protocol.OBS_GRIP]
     assert closed > 0.95, f'closed grip {closed}'
     print('  grip normalization: OK (open < 0.05, closed > 0.95)')
 
@@ -183,7 +190,7 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
         )[protocol.FRAME_OBS]
 
     # Orientation: a fixed grip-site -> hand-body rotation. Measure on the first sample (xyzw, w>=0 from mat2quat).
-    r_off = quat2mat(samples[0][0]['eef_quat']).T @ quat2mat(samples[0][1]['robot0_eef_quat'])
+    r_off = quat2mat(samples[0][0][protocol.OBS_EEF_QUAT]).T @ quat2mat(samples[0][1]['robot0_eef_quat'])
     q = mat2quat(r_off)
 
     # Gripper: drive to both stops to read the finger qpos endpoints, then the codec's linear reconstruction
@@ -203,7 +210,7 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
             hold = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, float(g))
             wire = _step(env, hold)[protocol.FRAME_OBS]
         true_qpos = np.asarray(_robosuite_obs(env)['robot0_gripper_qpos'])
-        recon = q_closed + (1.0 - wire['grip']) * (q_open - q_closed)
+        recon = q_closed + (1.0 - wire[protocol.OBS_GRIP]) * (q_open - q_closed)
         recon_err = max(recon_err, float(np.max(np.abs(recon - true_qpos))))
 
     # Print the bake values first so they surface even if a check below fails.
@@ -215,10 +222,10 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
 
     # Position matches robosuite's grip-site pos directly; the grip->hand offset is a fixed rotation.
     for w, robo in samples:
-        assert np.allclose(w['eef_pos'], robo['robot0_eef_pos'], atol=_OSC_ATOL), 'eef_pos != robot0_eef_pos'
-        assert np.allclose(quat2mat(w['eef_quat']) @ r_off, quat2mat(robo['robot0_eef_quat']), atol=_OSC_ATOL), (
-            'grip->hand offset varies across poses'
-        )
+        assert np.allclose(w[protocol.OBS_EEF_POS], robo['robot0_eef_pos'], atol=_OSC_ATOL), 'eef_pos != robot0_eef_pos'
+        assert np.allclose(
+            quat2mat(w[protocol.OBS_EEF_QUAT]) @ r_off, quat2mat(robo['robot0_eef_quat']), atol=_OSC_ATOL
+        ), 'grip->hand offset varies across poses'
 
     # The policy consumes the axis-angle 3-vector the codec emits, so verify it encodes robosuite's orientation.
     # The tool-down home pose sits at angle ~pi, where the axis-angle map is singular (w ~ 0, so a tiny quat
@@ -226,7 +233,9 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
     # and compare to robosuite's, double-cover and all. A genuine branch/sign bug away from pi yields a different
     # rotation and still fails, so this stays a real check.
     for w, robo in samples:
-        aa_codec = quat2axisangle(-mat2quat(quat2mat(w['eef_quat']) @ r_off))  # negate w>=0 form to the codec's w<=0
+        aa_codec = quat2axisangle(
+            -mat2quat(quat2mat(w[protocol.OBS_EEF_QUAT]) @ r_off)
+        )  # negate w>=0 form to the codec's w<=0
         q_codec, q_ref = axisangle2quat(aa_codec), robo['robot0_eef_quat']
         assert np.allclose(q_codec, q_ref, atol=_OSC_ATOL) or np.allclose(q_codec, -q_ref, atol=_OSC_ATOL), (
             f'axis-angle encodes the wrong rotation: {aa_codec} -> {q_codec} vs {q_ref}'

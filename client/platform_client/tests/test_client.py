@@ -15,7 +15,11 @@ from platform_client.client import (
     API_KEY_ENV,
     API_URL_ENV,
     AUTH_HEADER,
+    CLIENT_VERSION,
+    CLIENT_VERSION_HEADER,
     DEFAULT_PLATFORM_URL,
+    MIN_PLATFORM_VERSION,
+    PLATFORM_VERSION_HEADER,
     PlatformClient,
     resolve_api_key,
     resolve_base_url,
@@ -68,23 +72,43 @@ BASE = 'http://gateway.test'
 KEY = ApiKey('pk_live_secret')
 AT = '2026-03-04T05:06:07Z'
 EPISODE_KEY = 'episodes/0000/meta.json'
+# What a platform built against this client names in every answer.
+SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
+
+
+GITHUB_ONLY_AUTH_CONFIG = {'github_registration': True, 'workos': None}
 
 
 class Gateway:
-    """Records the request it was handed and answers a canned payload."""
+    """Records the requests it was handed and answers a canned payload.
 
-    def __init__(self, status: int, payload: object) -> None:
+    `auth.config`, which the client reads before its first write, answers `auth_config`; None answers it the
+    canned payload too, for a test of that route.
+    """
+
+    def __init__(
+        self,
+        status: int,
+        payload: object,
+        *,
+        headers: dict[str, str] = SERVES_THIS_CLIENT,
+        auth_config: object | None = GITHUB_ONLY_AUTH_CONFIG,
+    ) -> None:
         self.status = status
         self.payload = payload
-        self.seen: httpx.Request | None = None
+        self.headers = headers
+        self.auth_config = auth_config
+        self.requests: list[httpx.Request] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.seen = request
-        return httpx.Response(self.status, json=self.payload)
+        self.requests.append(request)
+        if request.url.path == routes.AUTH_CONFIG and self.auth_config is not None:
+            return httpx.Response(200, json=self.auth_config, headers=self.headers)
+        return httpx.Response(self.status, json=self.payload, headers=self.headers)
 
     def request(self) -> httpx.Request:
-        assert self.seen is not None, 'no request reached the gateway'
-        return self.seen
+        assert self.requests, 'no request reached the gateway'
+        return self.requests[-1]
 
     def body(self) -> dict:
         return json.loads(self.request().content)
@@ -205,7 +229,7 @@ def test_register_without_a_timeout_sends_one_request_that_outwaits_the_clients_
 
 def test_a_platform_without_auth_config_is_refused():
     with pytest.raises(PlatformError):
-        make_client(Gateway(404, {'detail': 'Not Found'})).auth_config()
+        make_client(Gateway(404, {'detail': 'Not Found'}, auth_config=None)).auth_config()
 
 
 @pytest.mark.parametrize('deadline', [0, -1, float('inf'), float('nan'), 10**9])
@@ -260,18 +284,18 @@ def test_register_waits_the_timeout_it_is_given():
 )
 def test_the_register_timeout_covers_the_longest_check_the_platform_names(status, config, expected):
     """The gateway owns its WorkOS deadline and states it in `auth.config`; GitHub keeps its own figure."""
-    assert make_client(Gateway(status, config)).register_timeout() == expected
+    assert make_client(Gateway(status, config, auth_config=None)).register_timeout() == expected
 
 
 def test_a_failing_auth_config_is_no_reason_to_guess_a_register_timeout():
     with pytest.raises(PlatformError):
-        make_client(Gateway(500, {'detail': 'boom'})).register_timeout()
+        make_client(Gateway(500, {'detail': 'boom'}, auth_config=None)).register_timeout()
 
 
 def test_auth_config_reads_the_sign_ins_without_a_key():
     workos = {'client_id': 'client_01', 'authkit_domain': 'a.authkit.app', 'register_deadline_s': 75.0}
     config = {'github_registration': False, 'workos': workos}
-    gateway = Gateway(200, config)
+    gateway = Gateway(200, config, auth_config=None)
 
     answer = make_client(gateway).auth_config()
 
@@ -579,6 +603,67 @@ def test_a_redirect_is_a_failure_rather_than_a_body_to_parse():
     assert raised.value.http_status == 302
 
 
+def test_every_call_names_the_client_version_whatever_key_its_route_takes():
+    # One route of each `Auth` kind: a key required, a key sent when set, and no key at all.
+    calls = [
+        (Gateway(200, {'tasks': []}), lambda client: client.catalog_tasks()),
+        (Gateway(200, {'boards': []}), lambda client: client.list_boards()),
+        (Gateway(200, {'github_registration': True, 'workos': None}), lambda client: client.auth_config()),
+    ]
+    for gateway, call in calls:
+        call(make_client(gateway))
+        assert gateway.request().headers[CLIENT_VERSION_HEADER] == str(CLIENT_VERSION)
+
+
+@pytest.mark.parametrize('served', [{}, {PLATFORM_VERSION_HEADER: '0.39.1'}, {PLATFORM_VERSION_HEADER: 'latest'}])
+def test_an_answer_from_a_platform_older_than_the_client_reads_is_refused(served: dict[str, str]):
+    gateway = Gateway(200, {'boards': []}, headers=served)
+    with pytest.raises(PlatformError, match=f'needs {MIN_PLATFORM_VERSION} or later') as raised:
+        make_client(gateway).list_boards()
+    assert raised.value.synthesized_envelope
+
+
+def test_a_write_to_a_platform_older_than_the_client_reads_is_refused_before_it_is_sent():
+    gateway = Gateway(200, {'submission_id': 'a0', 'status': 'pending'}, headers={})
+    with pytest.raises(PlatformError, match='too old to name its version'):
+        make_client(gateway).create_submission(plan_of_image(PolicyImage('org/policy:v1'), EvalRef('fake.smoke')))
+    assert [request.url.path for request in gateway.requests] == [routes.AUTH_CONFIG]
+
+
+def test_the_platform_version_is_read_once_before_the_first_write():
+    gateway = Gateway(200, {'status': 'cancelled', 'refunded': True})
+    client = make_client(gateway)
+    client.cancel_submission(CancelRequest(id=SubmissionId(0x1F)))
+    client.cancel_submission(CancelRequest(id=SubmissionId(0x1F)))
+    paths = [request.url.path for request in gateway.requests]
+    assert paths == [routes.AUTH_CONFIG, routes.SUBMISSIONS_CANCEL, routes.SUBMISSIONS_CANCEL]
+
+
+@pytest.mark.parametrize(
+    ('served', 'named'),
+    [({}, 'too old to name its version'), ({PLATFORM_VERSION_HEADER: 'latest'}, "'latest', which is not a version")],
+)
+def test_the_refusal_tells_a_platform_that_names_no_version_from_one_that_names_a_bad_one(
+    served: dict[str, str], named: str
+):
+    with pytest.raises(PlatformError, match=named):
+        make_client(Gateway(200, {'boards': []}, headers=served)).list_boards()
+
+
+def test_an_answer_from_a_platform_at_the_oldest_contract_the_client_reads_is_taken():
+    gateway = Gateway(200, {'boards': []}, headers={PLATFORM_VERSION_HEADER: str(MIN_PLATFORM_VERSION)})
+    assert make_client(gateway).list_boards().boards == []
+
+
+def test_a_refusal_that_names_no_platform_version_raises_its_own_envelope():
+    # A proxy's error page names no version either; calling it an old platform would hide the fault.
+    gateway = Gateway(403, {'error': {'code': 'forbidden', 'message': 'no grant'}}, headers={})
+    with pytest.raises(PlatformError) as raised:
+        make_client(gateway).catalog_tasks()
+    assert raised.value.code is ErrorCode.forbidden
+    assert not raised.value.synthesized_envelope
+
+
 def test_a_numeric_id_is_refused_at_the_boundary():
     # The wire contract is hex text. Decoding the body first would have taken the number.
     gateway = Gateway(200, {'submission_id': 31, 'status': 'pending'})
@@ -681,7 +766,7 @@ def test_an_authenticated_call_without_a_key_fails_before_the_request():
     gateway = Gateway(200, {})
     with pytest.raises(ValueError, match='API key'):
         make_client(gateway, api_key=None).me()
-    assert gateway.seen is None
+    assert not gateway.requests
 
 
 def test_a_client_given_nothing_reaches_the_default_platform(monkeypatch):
@@ -930,6 +1015,31 @@ def test_create_submission_sends_the_session_limit_a_remote_endpoint_states():
     make_client(gateway).create_submission(plan)
 
     assert gateway.body()['endpoints'][0]['max_concurrent_sessions'] == 1
+
+
+def test_create_submission_sends_the_scene_seed_a_plan_states():
+    gateway = Gateway(200, {'submission_id': '2c', 'status': 'pending'})
+    plan = EvalPlan.model_validate({**PLAN.model_dump(), 'scene_seed': 'scene-a'})
+    make_client(gateway).create_submission(plan)
+
+    assert gateway.body()['scene_seed'] == 'scene-a'
+
+
+def test_create_submission_sends_no_scene_seed_for_a_plan_that_states_none():
+    gateway = Gateway(200, {'submission_id': '2d', 'status': 'pending'})
+    make_client(gateway).create_submission(PLAN)
+
+    body = gateway.body()
+    assert 'scene_seed' not in body and 'scene_seed' not in body['tasks'][0]
+
+
+def test_create_submission_sends_the_memory_need_an_image_endpoint_states():
+    gateway = Gateway(200, {'submission_id': '2b', 'status': 'pending'})
+    image = {'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket', 'min_vram_gb': 40}
+    plan = EvalPlan.model_validate({**PLAN.model_dump(), 'endpoints': [image]})
+    make_client(gateway).create_submission(plan)
+
+    assert gateway.body()['endpoints'][0]['min_vram_gb'] == 40
 
 
 def test_a_run_carries_its_episode_counts_into_the_view():
