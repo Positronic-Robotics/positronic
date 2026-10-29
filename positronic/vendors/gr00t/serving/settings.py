@@ -13,7 +13,13 @@ MODEL_SETTINGS_PATH = Path('meta/positronic_model_settings.json')
 ACTION_FPS = 'action_fps'
 IMAGE_SIZE = 'image_size'
 IMAGE_MAPPINGS = 'image_mappings'
-EE_FRAME = 'ee_frame'
+# Where each pose signal the checkpoint reads sits: ``{signal: {SITE: <site of the rig's model>, OFFSET: <vector>}}``,
+# the dumped form of ``positronic.drivers.roboarm.models.EEFrame`` keyed by signal.
+EE_FRAMES = 'ee_frames'
+SITE = 'site'
+OFFSET = 'offset'
+# ``positronic.drivers.roboarm.models.GRIPPER_SITE``, the site every Franka rig reports its poses at.
+GRIPPER_SITE = 'gripper'
 ROTATION_OFFSET = 'rotation_offset'
 OBSERVATION_KEYS = 'observation_keys'
 CONTROL_MODE = 'control_mode'
@@ -30,9 +36,8 @@ def validate(settings: dict[str, Any], checkpoint: Path) -> None:
     recorded_path = checkpoint / MODEL_SETTINGS_PATH
     if recorded_path.exists():
         recorded = json.loads(recorded_path.read_text())
-        conflicts = [
-            name for name in (IMAGE_SIZE, EE_FRAME, ROTATION_OFFSET, ACTION_FPS) if recorded.get(name) != settings[name]
-        ]
+        compared = (IMAGE_SIZE, EE_FRAMES, ROTATION_OFFSET, ACTION_FPS)
+        conflicts = [name for name in compared if recorded.get(name) != settings[name]]
         if set(recorded[IMAGE_MAPPINGS]) != set(settings[IMAGE_MAPPINGS]):
             conflicts.append(IMAGE_MAPPINGS)
         if conflicts:
@@ -49,14 +54,17 @@ def droid() -> dict[str, Any]:
         },
         IMAGE_SIZE: [320, 180],
         IMAGE_MAPPINGS: {EXTERIOR_IMAGE: obs_keys.EXTERIOR_IMAGE, WRIST_IMAGE: obs_keys.WRIST_IMAGE},
-        EE_FRAME: [0.0, 0.0, -0.085225977, 0.38268343245394154, 0.0, 0.0, 0.9238795324744832],
+        EE_FRAMES: {obs_keys.EE_POSE: {SITE: GRIPPER_SITE, OFFSET: [0.0, 0.0, -0.155, 1.0, 0.0, 0.0, 0.0]}},
         ROTATION_OFFSET: [0.5, 0.5, -0.5, -0.5],
+        # rules-allow: hardcoded-keys — the wire form of `DROID_IMPEDANCE`; this image cannot import positronic, and
+        # test_droid_control_mode_is_the_droid_impedance_on_the_wire pins it to `command.to_wire`.
         CONTROL_MODE: {
             'type': 'impedance',
             'kq': [40.0, 30.0, 50.0, 25.0, 35.0, 25.0, 10.0],
             'kqd': [4.0, 6.0, 5.0, 5.0, 3.0, 2.0, 1.0],
-            'kx': [750.0, 750.0, 750.0, 15.0, 15.0, 15.0],
+            'kx': [400.0, 400.0, 400.0, 15.0, 15.0, 15.0],
             'kxd': [37.0, 37.0, 37.0, 2.0, 2.0, 2.0],
+            'frame': [0.0, 0.0, -0.155, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
         },
         ACTION_FPS: 15.0,
     }

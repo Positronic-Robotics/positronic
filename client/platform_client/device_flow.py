@@ -1,9 +1,9 @@
 """The device flow of RFC 8628, and the `platform-register` command that runs it.
 
 The platform's `auth.config` names the identity provider: WorkOS or GitHub. The flow asks that provider for a
-device code, shows the user the short code, polls until the provider answers, and hands the access token to
-`users.register` as its `credential`. It keeps no other token: WorkOS also sends a refresh token, and the flow
-drops it.
+device code, shows the user the sign-in link and the short code, polls until the provider answers, and hands the
+access token to `users.register` as its `credential`. It keeps no other token: WorkOS also sends a refresh token,
+and the flow drops it.
 
 Usage
   platform-register --alias='<display name>'
@@ -59,7 +59,6 @@ _ERROR_FIELD = 'error'
 _INTERVAL_FIELD = 'interval'
 
 DEFAULT_POLL_INTERVAL_S = 5.0
-DEFAULT_EXPIRES_IN_S = 900.0
 
 
 class DeviceFlowError(Exception):
@@ -86,13 +85,36 @@ class NoSignIn(DeviceFlowError):
 
 @dataclass(frozen=True)
 class DeviceAuthorization:
-    """What step one returns: the code the user types, and the code this flow polls with."""
+    """What step one returns: the code the user types, and the code this flow polls with.
+
+    `verification_uri_complete` is the sign-in link with the user code in it, when the provider sends one.
+    """
 
     device_code: str
     user_code: str
     verification_uri: str
+    verification_uri_complete: str | None
     interval: float
     expires_in: float
+
+    def sign_in_prompt(self) -> str:
+        """The line that tells the user where to sign in, and how long the code stays valid."""
+        lifetime = _lifetime_text(self.expires_in)
+        if self.verification_uri_complete is not None:
+            return (
+                f'open {self.verification_uri_complete} and check that the page shows {self.user_code}; '
+                f'the link expires in {lifetime}'
+            )
+        return f'open {self.verification_uri} and enter {self.user_code}; the code expires in {lifetime}'
+
+
+def _lifetime_text(seconds: float) -> str:
+    """Whole minutes, or whole seconds below a minute, rounded down so the user is never told too much time."""
+    if seconds < 60:
+        count, unit = math.floor(seconds), 'second'
+    else:
+        count, unit = math.floor(seconds / 60), 'minute'
+    return f'{count} {unit}' if count == 1 else f'{count} {unit}s'
 
 
 class PollOutcome(Enum):
@@ -130,14 +152,23 @@ class DeviceFlow:
             raise ProviderFailed(f'{self.provider.name} answered without {field}')
         return value
 
-    def _optional_duration_s(self, payload: Mapping[str, object], field: str, default: float) -> float:
-        """Seconds the provider may omit. Absent takes the default; present must be above zero and sleepable.
+    def _optional_str(self, payload: Mapping[str, object], field: str) -> str | None:
+        """A text field the provider may omit. Absent is None; present must be text that is not empty."""
+        if field not in payload:
+            return None
+        return self._require_str(payload, field)
+
+    def _duration_s(self, payload: Mapping[str, object], field: str, default: float | None) -> float:
+        """Seconds the provider sends. Absent takes the default, or with no default is a bad answer; present must
+        be above zero and sleepable.
 
         A negative or NaN value raises inside `time.sleep`, a zero one polls until the code expires, and a
         value past a day overflows `time.sleep` or `float` itself.
         """
         longest_s = 24 * 60 * 60  # a device code lives minutes (RFC 8628 gives 15 min as the example)
         if field not in payload:
+            if default is None:
+                raise ProviderFailed(f'{self.provider.name} answered without {field}')
             return default
         value = payload[field]
         # `bool` is an `int`, so `True` would pass as an interval of one second.
@@ -164,8 +195,9 @@ class DeviceFlow:
             device_code=self._require_str(payload, _DEVICE_CODE_FIELD),
             user_code=self._require_str(payload, 'user_code'),
             verification_uri=self._require_str(payload, 'verification_uri'),
-            interval=self._optional_duration_s(payload, _INTERVAL_FIELD, DEFAULT_POLL_INTERVAL_S),
-            expires_in=self._optional_duration_s(payload, 'expires_in', DEFAULT_EXPIRES_IN_S),
+            verification_uri_complete=self._optional_str(payload, 'verification_uri_complete'),
+            interval=self._duration_s(payload, _INTERVAL_FIELD, DEFAULT_POLL_INTERVAL_S),
+            expires_in=self._duration_s(payload, 'expires_in', None),
         )
 
     @staticmethod
@@ -253,9 +285,7 @@ class DeviceFlow:
             if outcome is PollOutcome.SLOW_DOWN:
                 # GitHub repeats the original interval in this answer, so the step raises the rate;
                 # taking the value alone would poll on at the rate the provider just refused.
-                interval = max(
-                    interval + slow_down_step_s, self._optional_duration_s(payload, _INTERVAL_FIELD, interval)
-                )
+                interval = max(interval + slow_down_step_s, self._duration_s(payload, _INTERVAL_FIELD, interval))
             elif outcome is not PollOutcome.PENDING:
                 raise self._terminal_failure(outcome, error, spent_by)
             spent_by = None
@@ -372,7 +402,9 @@ def register_with_device_flow(
     flow = sign_in.flow
     authorization = flow.start_device_authorization()
     # To stderr: it is a prompt for the person at the terminal, and stdout carries the command's answer.
-    print(f'open {authorization.verification_uri} and enter {authorization.user_code}', file=sys.stderr, flush=True)
+    line = authorization.sign_in_prompt()
+    hint = flow.provider.code_mail_hint
+    print(line if hint is None else f'{line}. {hint}', file=sys.stderr, flush=True)
     token = flow.poll_for_token(authorization)
     request = RegisterRequest(credential=token, alias=alias, rotate=rotate)
     return platform.register(request, timeout=sign_in.register_timeout)
@@ -495,7 +527,10 @@ def main() -> None:
     print(f'user {response.user_id} ({response.key_status.name})')
     print(f'artifacts at {response.artifact_location}')
     if response.api_key is None:
-        print('no key issued: one is minted on a first registration, or by --rotate')
+        print(
+            f'You already have an API key. Set {API_KEY_ENV} to it. '
+            'Lost it? Run platform-register --rotate. This stops the old key.'
+        )
     else:
         # The key is opaque, so it may hold whitespace or shell metacharacters; an unquoted export
         # line would either mangle it or run the rest of it.

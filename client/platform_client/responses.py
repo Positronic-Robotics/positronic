@@ -35,7 +35,7 @@ from pydantic import AwareDatetime, BaseModel, Discriminator, Field, Tag, model_
 
 
 class Scores(BaseModel):
-    """A finished run's published score. `primary` is its value under the eval's primary metric."""
+    """A run's published score. `primary` is its value under the eval's primary metric."""
 
     primary: float | None = None
 
@@ -349,6 +349,7 @@ class SubmissionListRow(_ReasonBearing):
     """One row of `submissions.list`. `user_id` attributes it — an admin listing spans users.
 
     `eval` is the name the catalogue expanded, and is absent on a run that stated its own tasks.
+    `estimated_end_at` is the platform's estimate of `ended_at`; each time is absent until it is known.
     """
 
     id: SubmissionId
@@ -357,6 +358,9 @@ class SubmissionListRow(_ReasonBearing):
     eval: EvalRef | None = None
     episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
     received_at: AwareDatetime
+    started_at: AwareDatetime | None = None
+    ended_at: AwareDatetime | None = None
+    estimated_end_at: AwareDatetime | None = None
 
 
 class SubmissionListResponse(BaseModel):
@@ -423,13 +427,16 @@ class RunningSubmissionView(_TaggedView):
 class ErroredSubmissionView(_TaggedView):
     """Terminal failure. `reason_code` is the machine-readable taxonomy; `reason` is for humans.
 
-    `artifacts` reads the run's own records. It is absent where the run wrote none.
+    `artifacts` reads the run's own records. It is absent where the run wrote none. `scores` covers the
+    episodes that closed before the run failed, and is absent where the run published no episode.
+    `episodes` then counts the closed episodes against the episodes that the run asked for.
     """
 
     id: SubmissionId
     reason_code: Slugged[ReasonCode] | None = None
     reason: str | None = None
     artifacts: ArtifactRefs | None = None
+    scores: Scores | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.errored
 
 

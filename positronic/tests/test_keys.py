@@ -39,6 +39,7 @@ _GUARDED = {
     *molmo_keys.BENCHMARK_DIMENSIONS,
     molmo_keys.EPISODE_INDEX,
     molmo_keys.TASK_HORIZON,
+    molmo_keys.TASK_HORIZON_OVERRIDE,
     molmo_keys.EXTERIOR_SIDES,
 }
 # keys.GRIP and keys.TASK are deliberately not guarded: their values are bare tokens the wire reuses
@@ -102,3 +103,14 @@ def test_keys_modules_import_only_from_the_vocabulary():
 def test_an_import_from_outside_the_vocabulary_is_found():
     source = 'from eval_vocabulary.episode import TASK\nimport os\nfrom eval_vocabulary_x import a\nfrom . import b\n'
     assert _lines_importing_outside_the_vocabulary(source) == [2, 3, 4]
+
+
+def test_a_control_mode_follows_the_command_channel_or_its_arm():
+    mode = keys.CONTROL_MODE_SUFFIX
+    command_of_left_arm = keys.arm_channel(keys.ROBOT_COMMAND, keys.LEFT_ARM)
+
+    assert keys.is_control_mode(f'{keys.ROBOT_COMMAND}{mode}.impedance.kq')
+    assert keys.is_control_mode(f'{command_of_left_arm}{mode}.position_control')
+    assert not keys.is_control_mode(keys.TARGET_JOINTS)
+    assert not keys.is_control_mode(f'{keys.ROBOT_STATE}{mode}.impedance.kq')
+    assert not keys.is_control_mode(f'{command_of_left_arm}.joints{mode}')

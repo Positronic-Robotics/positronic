@@ -45,27 +45,29 @@ class Serializers:
         return x.as_vector(geom.Rotation.Representation.QUAT)
 
     @staticmethod
-    def robot_state(state: State) -> dict[str, np.ndarray | RobotStatus]:
+    def robot_state(state: State) -> dict[str, np.ndarray | RobotStatus | None]:
         return {
             keys.STATUS_SUFFIX: state.status,
             keys.JOINTS_SUFFIX: state.q,
             keys.JOINT_VEL_SUFFIX: state.dq,
             keys.EE_POSE_SUFFIX: Serializers.transform_3d(state.ee_pose),
+            keys.EE_WRENCH_SUFFIX: state.ee_wrench,
         }
 
     @staticmethod
     def _mode_entries(mode: ControlModeType) -> dict[str, np.ndarray | int]:
         match mode:
             case PositionControl(stiffness=None):
-                return {'.mode.position_control': 1}
+                return {f'{keys.CONTROL_MODE_SUFFIX}.position_control': 1}
             case PositionControl(stiffness=stiffness):
-                return {'.mode.position_control.stiffness': np.asarray(stiffness)}
-            case Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd):
+                return {f'{keys.CONTROL_MODE_SUFFIX}.position_control.stiffness': np.asarray(stiffness)}
+            case Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd, frame=frame):
                 return {
-                    '.mode.impedance.kq': np.asarray(kq),
-                    '.mode.impedance.kqd': np.asarray(kqd),
-                    '.mode.impedance.kx': np.asarray(kx),
-                    '.mode.impedance.kxd': np.asarray(kxd),
+                    f'{keys.CONTROL_MODE_SUFFIX}.impedance.kq': np.asarray(kq),
+                    f'{keys.CONTROL_MODE_SUFFIX}.impedance.kqd': np.asarray(kqd),
+                    f'{keys.CONTROL_MODE_SUFFIX}.impedance.kx': np.asarray(kx),
+                    f'{keys.CONTROL_MODE_SUFFIX}.impedance.kxd': np.asarray(kxd),
+                    keys.IMPEDANCE_FRAME_SUFFIX: Serializers.transform_3d(frame),
                 }
 
     # TODO: a command writes only the entries its own form has, so a signal here is sparse — `.mode.*` has

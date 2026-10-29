@@ -598,6 +598,8 @@ def test_bind_from_env_without_the_telemetry_extra_runs_on(tmp_path, monkeypatch
                 pass
 
     assert 'telemetry extra' in caplog.text
+    assert '--timing' not in caplog.text, 'the run did not ask for timing'
+    assert 'Traceback' not in caplog.text
     assert _env_sidecars(tmp_path) == []
 
 

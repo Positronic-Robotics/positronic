@@ -96,6 +96,111 @@ def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked)
     ]
 
 
+def test_a_horizon_override_rides_the_spec_and_no_override_sends_none(asked):
+    benchmarks.override(horizon_sec=120.0).instantiate().tasks()
+    benchmarks.instantiate().tasks()
+    assert asked == [
+        {mapping.SELECT_HORIZON_SEC: 120.0, mapping.WITH_RIGHT_SHOULDER: True},
+        {mapping.WITH_RIGHT_SHOULDER: True},
+    ]
+
+
+@pytest.mark.parametrize('horizon_sec', [0.0, -1.0, float('nan'), float('inf')])
+def test_an_invalid_horizon_override_is_refused(horizon_sec):
+    with pytest.raises(ValueError, match='horizon_sec must be finite and positive'):
+        benchmarks.override(horizon_sec=horizon_sec).instantiate()
+
+
+def test_the_collection_config_asks_the_pick_mini_benchmark_for_a_two_minute_horizon(asked):
+    molmo_cfg.pick_mini_collect.instantiate().tasks()
+    assert asked == [
+        {
+            'suite': 'molmospaces-bench-v2',
+            'scene_dataset': 'procthor-10k',
+            'task_config': 'FrankaPickDroidMiniBench',
+            'benchmark': 'FrankaPickDroidMiniBench_json_benchmark_20251231',
+            mapping.SELECT_HORIZON_SEC: 120.0,
+            mapping.WITH_RIGHT_SHOULDER: True,
+        }
+    ]
+    assert molmo_cfg.pick_mini_collect.kwargs['with_object_image_points'] is False
+
+
+def _listing_of(selection: dict[str, Any]) -> list[dict[str, Any]]:
+    """What the env lists for a selection of one benchmark and pinned episodes."""
+    bench = {
+        key: selection[dimension]
+        for dimension, key in zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True)
+    }
+    return [
+        {**bench, eval_keys.TASK: 'pick it', molmo_keys.EPISODE_INDEX: i, molmo_keys.TASK_HORIZON: _PICK_HORIZON_SEC}
+        for i in selection[mapping.SELECT_EPISODES]
+    ]
+
+
+def test_episode_paths_list_each_benchmark_once_and_run_the_pins_in_their_order(monkeypatch):
+    specs: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        RemoteEnvControlSystem, 'tasks', lambda self, selection: specs.append(selection) or _listing_of(selection)
+    )
+    pick = 'molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/pick_20251231'
+    hard = 'molmospaces-bench-v1/holodeck-objaverse/FrankaPickHardBench/hard_20260206'
+    paths = [f'{pick}/11', f'{hard}/0', f'{pick}/49', f'{hard}/295']
+
+    trials = benchmarks.override(episode_paths=paths, trial_count=2).instantiate().tasks()
+
+    assert [s[mapping.SELECT_EPISODES] for s in specs] == [[11, 49], [0, 295]]
+    assert [mapping.BenchmarkPath(*(s[f] for f in mapping.BenchmarkPath._fields)).scene_dataset for s in specs] == [
+        'procthor-10k',
+        'holodeck-objaverse',
+    ]
+    scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
+    assert [(scene[_SCENE_DATASET], scene[molmo_keys.EPISODE_INDEX]) for scene in scenes] == [
+        ('procthor-10k', 11),
+        ('procthor-10k', 11),
+        ('holodeck-objaverse', 0),
+        ('holodeck-objaverse', 0),
+        ('procthor-10k', 49),
+        ('procthor-10k', 49),
+        ('holodeck-objaverse', 295),
+        ('holodeck-objaverse', 295),
+    ]
+
+
+def test_episode_paths_carry_the_horizon_override(monkeypatch):
+    specs: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        RemoteEnvControlSystem, 'tasks', lambda self, selection: specs.append(selection) or _listing_of(selection)
+    )
+    path = 'molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/pick_20251231/11'
+
+    benchmarks.override(episode_paths=[path], horizon_sec=120.0).instantiate().tasks()
+    benchmarks.override(episode_paths=[path]).instantiate().tasks()
+
+    assert [s.get(mapping.SELECT_HORIZON_SEC) for s in specs] == [120.0, None]
+
+
+@pytest.mark.parametrize('bound', [{'suite': 'molmospaces-bench-v1'}, {'episodes': [0]}, {'task_config': 'A'}])
+def test_episode_paths_refuse_a_benchmark_dimension_or_episodes_beside_them(asked, bound):
+    path = 'molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/pick_20251231/11'
+    with pytest.raises(ValueError, match=f'--eval.{next(iter(bound))} must be unset'):
+        benchmarks.override(episode_paths=[path], **bound).instantiate()
+    assert asked == []
+
+
+@pytest.mark.parametrize('path', ['procthor-10k/FrankaPickDroidMiniBench/pick_20251231/11', 'a/b/c/d/x', 'a/b/c/d'])
+def test_a_malformed_episode_path_is_refused(asked, path):
+    with pytest.raises(ValueError):
+        benchmarks.override(episode_paths=[path]).instantiate()
+    assert asked == []
+
+
+def test_an_empty_episode_path_list_is_refused(asked):
+    with pytest.raises(ValueError, match='--eval.episode_paths must name at least one episode'):
+        benchmarks.override(episode_paths=[]).instantiate()
+    assert asked == []
+
+
 def test_an_explicit_seed_sweeps_each_episode(asked):
     ev = benchmarks.override(seed=5, trial_count=2).instantiate()
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in ev.tasks()]
@@ -216,7 +321,7 @@ class _MolmoObservationEnv(EnvProtocol):
 @pytest.mark.parametrize(('done_after', 'timeout', 'seed'), [(5, None, 7), (None, 0.3, None)])
 def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch, tmp_path, done_after, timeout, seed):
     env = _MolmoObservationEnv(done_after)
-    joints = env.observation[mapping.OBS_JOINT_POS]
+    joints = env.observation[protocol.OBS_JOINT_POS]
     policy = StubPolicy(command=JointPosition(joints), target_grip=0.0)
     with serve_env(env) as address, pos3.mirror():
         monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
@@ -232,13 +337,14 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
             mapping.TOKEN_EPISODE_INDEX: 3,
             mapping.TOKEN_SEED: seed,
             mapping.WITH_RIGHT_SHOULDER: True,
+            mapping.WITH_OBJECT_IMAGE_POINTS: True,
         }
     ]
     assert policy.observations
     last_obs = policy.observations[-1]
     assert last_obs[keys.TASK] == env.INSTRUCTION
     np.testing.assert_array_equal(last_obs[keys.JOINTS], joints)
-    assert last_obs[keys.GRIP] == env.observation[mapping.OBS_GRIP]
+    assert last_obs[keys.GRIP] == env.observation[protocol.OBS_GRIP]
     dataset = LocalDataset(tmp_path)
     assert len(dataset) == 1
     episode = dataset[0]
@@ -262,3 +368,15 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
         assert eval_keys.SUCCESS not in episode.static
     recorded = {keys.JOINTS, keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2, mapping.OBS_SIM_STATE}
     assert recorded <= episode.signals.keys()
+
+
+@pytest.mark.timeout(60.0)
+def test_an_eval_without_the_object_image_points_asks_each_reset_to_drop_them(monkeypatch, tmp_path):
+    env = _MolmoObservationEnv(done_after=2)
+    policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
+    with serve_env(env) as address, pos3.mirror():
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
+        ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, with_object_image_points=False).instantiate()
+        main(policy=policy, evals=[ev], output_dir=tmp_path)
+
+    assert [token[mapping.WITH_OBJECT_IMAGE_POINTS] for token in env.tokens] == [False]

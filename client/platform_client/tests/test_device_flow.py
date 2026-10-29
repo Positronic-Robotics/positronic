@@ -9,14 +9,14 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 from platform_client import device_flow, routes
-from platform_client.client import PlatformClient
+from platform_client.client import CLIENT_VERSION, PLATFORM_VERSION_HEADER, PlatformClient
 from platform_client.device_flow import (
     DEFAULT_GITHUB_CLIENT_ID,
     DEVICE_GRANT_TYPE,
@@ -32,6 +32,7 @@ from platform_client.device_flow import (
     register_with_device_flow,
     sign_in_flow,
 )
+from platform_client.enums import KeyStatus
 from platform_client.errors import PlatformError
 from platform_client.identity_providers import (
     CONNECT_TIMEOUT_S,
@@ -46,6 +47,7 @@ from platform_client.identity_providers import (
     IdentityProvider,
     max_stall_s,
 )
+from platform_client.ids import UserId
 from platform_client.responses import RegisterResponse
 
 CLIENT_ID = 'Iv1.testclientid'
@@ -63,6 +65,7 @@ GRANTED = {'access_token': TOKEN, 'token_type': 'bearer', 'scope': IDENTITY_SCOP
 # rules-allow: hardcoded-keys — `positronic/cli/conftest.py` holds the same value, and this package
 # may not import from `positronic`: the dependency runs the other way, and the client installs alone.
 MINTED_KEY = 'pk_live_secret'
+COMPLETE_URI = 'https://a.authkit.app/device?user_code=WDJB-MJHT'
 
 
 @dataclass
@@ -133,6 +136,7 @@ def _authorization(*, interval: float = 5.0, expires_in: float = 900.0) -> Devic
         device_code=DEVICE_CODE,
         user_code=str(DEVICE_ANSWER['user_code']),
         verification_uri=str(DEVICE_ANSWER['verification_uri']),
+        verification_uri_complete=None,
         interval=interval,
         expires_in=expires_in,
     )
@@ -151,16 +155,65 @@ def test_the_device_code_request_asks_for_identity_scope_only():
     assert authorization.device_code == DEVICE_CODE
     assert authorization.user_code == DEVICE_ANSWER['user_code']
     assert authorization.verification_uri == DEVICE_ANSWER['verification_uri']
+    assert authorization.verification_uri_complete is None
     assert authorization.interval == 5.0 and authorization.expires_in == 900.0
 
 
 def test_a_device_code_answer_without_an_interval_polls_at_the_default_rate():
-    github = ScriptedProvider(device={k: v for k, v in DEVICE_ANSWER.items() if k not in ('interval', 'expires_in')})
+    github = ScriptedProvider(device={k: v for k, v in DEVICE_ANSWER.items() if k != 'interval'})
     flow, _ = _flow(github)
 
     authorization = flow.start_device_authorization()
 
     assert authorization.interval == 5.0 and authorization.expires_in == 900.0
+
+
+def test_a_device_code_answer_without_expires_in_is_a_bad_answer():
+    """RFC 8628 §3.2 requires the field, and the prompt tells the user the time that the provider gave."""
+    flow, _ = _flow(ScriptedProvider(device={k: v for k, v in DEVICE_ANSWER.items() if k != 'expires_in'}))
+
+    with pytest.raises(ProviderFailed, match='without expires_in'):
+        flow.start_device_authorization()
+
+
+def test_the_device_code_answer_keeps_the_link_that_carries_the_user_code():
+    flow, _ = _flow(_workos(device=dict(DEVICE_ANSWER) | {'verification_uri_complete': COMPLETE_URI}))
+
+    authorization = flow.start_device_authorization()
+
+    assert authorization.verification_uri_complete == COMPLETE_URI
+
+
+@pytest.mark.parametrize('value', ['', 7, None])
+def test_an_unreadable_link_with_the_user_code_is_a_bad_answer(value: object):
+    flow, _ = _flow(_workos(device=dict(DEVICE_ANSWER) | {'verification_uri_complete': value}))
+
+    with pytest.raises(ProviderFailed, match='without verification_uri_complete'):
+        flow.start_device_authorization()
+
+
+def test_the_prompt_gives_the_link_with_the_user_code_and_its_lifetime():
+    authorization = replace(_authorization(expires_in=300.0), verification_uri_complete=COMPLETE_URI)
+
+    assert authorization.sign_in_prompt() == (
+        f'open {COMPLETE_URI} and check that the page shows {DEVICE_ANSWER["user_code"]}; the link expires in 5 minutes'
+    )
+
+
+def test_the_prompt_without_a_complete_link_gives_the_link_the_code_and_its_lifetime():
+    assert _authorization(expires_in=900.0).sign_in_prompt() == (
+        f'open {DEVICE_ANSWER["verification_uri"]} and enter {DEVICE_ANSWER["user_code"]}; '
+        'the code expires in 15 minutes'
+    )
+
+
+@pytest.mark.parametrize(
+    ('expires_in', 'lifetime'),
+    [(300.0, '5 minutes'), (299.0, '4 minutes'), (60.0, '1 minute'), (59.5, '59 seconds'), (1.0, '1 second')],
+)
+def test_the_prompt_rounds_the_lifetime_down(expires_in: float, lifetime: str):
+    """A user told too much time comes back to a code that has expired."""
+    assert _authorization(expires_in=expires_in).sign_in_prompt().endswith(f'expires in {lifetime}')
 
 
 def test_an_unreadable_interval_is_a_bad_answer_rather_than_the_default():
@@ -624,6 +677,10 @@ def test_the_refresh_token_leaves_the_flow_nowhere(capsys):
 # --- step three: the registration --------------------------------------------
 
 
+# What a platform built against this client names in every answer.
+SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
+
+
 @dataclass
 class ScriptedGateway:
     """`auth.config` and `users.register`, answering scripted bodies and recording what reached them."""
@@ -649,8 +706,10 @@ class ScriptedGateway:
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.url.path == routes.AUTH_CONFIG:
-            return self.config if isinstance(self.config, httpx.Response) else httpx.Response(200, json=self.config)
-        return httpx.Response(200, json=self.body)
+            if isinstance(self.config, httpx.Response):
+                return self.config
+            return httpx.Response(200, json=self.config, headers=SERVES_THIS_CLIENT)
+        return httpx.Response(200, json=self.body, headers=SERVES_THIS_CLIENT)
 
 
 WORKOS_SETTINGS = {
@@ -668,7 +727,7 @@ def test_the_registration_carries_the_access_token_as_the_credential():
     with PlatformClient(client=gateway.client()) as platform:
         response = register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT), alias='team-rocket')
 
-    sent = gateway.requests[0]
+    sent = gateway.requests[-1]
     assert str(sent.url) == f'https://gateway.example{routes.USERS_REGISTER}'
     assert json.loads(sent.content) == {'credential': TOKEN, 'alias': 'team-rocket', 'rotate': False}
     assert response.api_key == MINTED_KEY
@@ -683,7 +742,7 @@ def test_the_registration_asks_the_gateway_to_rotate_when_told_to():
     with PlatformClient(client=gateway.client()) as platform:
         register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT), rotate=True)
 
-    assert json.loads(gateway.requests[0].content)['rotate'] is True
+    assert json.loads(gateway.requests[-1].content)['rotate'] is True
 
 
 # --- the pick: which provider `auth.config` names ------------------------------
@@ -937,22 +996,43 @@ def test_the_flag_admits_a_platform_the_command_would_otherwise_refuse():
     assert len(picked.rotations) == 1
 
 
+def _answer_the_command_as(patch: pytest.MonkeyPatch, gateway: ScriptedGateway, flow: DeviceFlow | None) -> None:
+    """Make every client the command opens answer as `gateway`, and sign in through `flow` when one is given."""
+    real_client = httpx.Client
+    if flow is not None:
+        patch.setattr(device_flow, 'sign_in_flow', lambda *_args, **_kwargs: SignIn(flow, GITHUB_REGISTER_TIMEOUT))
+    patch.setattr(
+        httpx, 'Client', lambda **kwargs: real_client(**{**kwargs, 'transport': httpx.MockTransport(gateway.handle)})
+    )
+    patch.setattr(sys, 'argv', ['platform-register', '--client-id=x', '--platform-url=https://gateway.example'])
+
+
 def _main_against(gateway: ScriptedGateway, flow: DeviceFlow | None = None) -> SystemExit:
     """Run the command with every client it opens answering as `gateway`, and return how it exited."""
-    real_client = httpx.Client
     with pytest.MonkeyPatch.context() as patch:
-        if flow is not None:
-            patch.setattr(device_flow, 'sign_in_flow', lambda *_args, **_kwargs: SignIn(flow, GITHUB_REGISTER_TIMEOUT))
-        patch.setattr(
-            httpx,
-            'Client',
-            lambda **kwargs: real_client(**{**kwargs, 'transport': httpx.MockTransport(gateway.handle)}),
-        )
-        patch.setattr(sys, 'argv', ['platform-register', '--client-id=x', '--platform-url=https://gateway.example'])
+        _answer_the_command_as(patch, gateway, flow)
 
         with pytest.raises(SystemExit) as raised:
             device_flow.main()
     return raised.value
+
+
+def test_the_command_tells_an_existing_account_to_set_its_key_and_that_rotate_stops_it(capsys):
+    flow, _ = _flow(ScriptedProvider(polls=[dict(GRANTED)]))  # built before the patch, so GitHub keeps its transport
+    existing = RegisterResponse(
+        user_id=UserId(0xA1), artifact_location='s3://artifacts/a1', key_status=KeyStatus.existing
+    )
+    gateway = ScriptedGateway(body=existing.model_dump(mode='json'))
+
+    with pytest.MonkeyPatch.context() as patch:
+        _answer_the_command_as(patch, gateway, flow)
+        device_flow.main()
+
+    # rules-allow: hardcoded-keys — the test pins the exact text that a person reads.
+    assert capsys.readouterr().out.endswith(
+        'You already have an API key. Set POSITRONIC_PLATFORM_API_KEY to it. '
+        'Lost it? Run platform-register --rotate. This stops the old key.\n'
+    )
 
 
 def test_a_success_that_is_no_registration_exits_with_one_line():
@@ -1005,7 +1085,36 @@ def test_the_user_is_shown_the_code_on_stderr_before_the_poll_starts(capsys):
 
     captured = capsys.readouterr()
     assert str(DEVICE_ANSWER['user_code']) in captured.err and str(DEVICE_ANSWER['verification_uri']) in captured.err
+    assert 'spam folder' not in captured.err
     assert captured.out == ''
+
+
+def test_the_user_is_shown_the_link_that_carries_the_code_when_the_provider_sends_one(capsys):
+    """The user opens one link and types nothing, and the line says how long the link stays valid."""
+    device = dict(DEVICE_ANSWER) | {'verification_uri_complete': COMPLETE_URI, 'expires_in': 300}
+    flow, _ = _flow(_workos(device=device, polls=[dict(WORKOS_GRANTED)]))
+
+    with PlatformClient(client=ScriptedGateway().client()) as platform:
+        register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT))
+
+    err = capsys.readouterr().err
+    assert COMPLETE_URI in err and 'expires in 5 minutes' in err
+
+
+def test_a_workos_sign_in_line_sends_the_user_to_the_spam_folder_for_the_code_mail(capsys):
+    """The WorkOS sign-in line says where to look when a mail provider files the code mail as spam."""
+    device = dict(DEVICE_ANSWER) | {'verification_uri_complete': COMPLETE_URI, 'expires_in': 300}
+    flow, _ = _flow(_workos(device=device, polls=[dict(WORKOS_GRANTED)]))
+
+    with PlatformClient(client=ScriptedGateway().client()) as platform:
+        register_with_device_flow(platform, SignIn(flow, GITHUB_REGISTER_TIMEOUT))
+
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1
+    assert lines[0].endswith(
+        'expires in 5 minutes. If the sign-in page sends you a code by email and it is not in your inbox, '
+        'look in your spam folder.'
+    )
 
 
 def test_the_registration_keeps_the_key_the_gateway_minted():
@@ -1027,7 +1136,7 @@ def test_a_github_registration_waits_out_the_gateways_two_github_reads():
     with PlatformClient(client=gateway.client()) as platform:
         register_with_device_flow(platform, SignIn(flow, sign_in.register_timeout))
 
-    assert gateway.requests[0].extensions['timeout'] == {
+    assert gateway.requests[-1].extensions['timeout'] == {
         'connect': CONNECT_TIMEOUT_S,
         'read': 3 * MAX_REQUEST_STALL_S,
         'write': WRITE_TIMEOUT_S,
@@ -1045,7 +1154,7 @@ def test_a_workos_registration_waits_out_the_deadline_the_gateway_names():
     with PlatformClient(client=gateway.client()) as platform:
         register_with_device_flow(platform, SignIn(flow, sign_in.register_timeout))
 
-    assert gateway.requests[0].extensions['timeout'] == {
+    assert gateway.requests[-1].extensions['timeout'] == {
         'connect': CONNECT_TIMEOUT_S,
         'read': 120.0 + MAX_REQUEST_STALL_S,
         'write': WRITE_TIMEOUT_S,

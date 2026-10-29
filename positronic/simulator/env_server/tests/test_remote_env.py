@@ -26,12 +26,14 @@ from positronic.cli.eval.run import main
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.roboarm.ik import ee_frames
+from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
 from positronic.policy.processors import ChunkedSchedule
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server import launcher, protocol
 from positronic.simulator.env_server.adapter import EnvAdapter, WireCommandAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import _CLOSE_ACK_TIMEOUT, EnvConnection
 from positronic.simulator.env_server.launcher import free_port, serve_subprocess
@@ -97,18 +99,76 @@ def test_serve_subprocess_reports_a_server_that_dies_before_binding():
         pass
 
 
+# Binds its port once it reads a line on stdin, then listens until it is terminated.
+_LISTEN_SCRIPT = (
+    'import socket,sys,time\nsys.stdin.readline()\ns=socket.socket()\ns.bind(("localhost",int(sys.argv[1])))\n'
+    's.listen()\ntime.sleep(30)'
+)
+
+
+def _spawn_unbound(host, port):
+    return subprocess.Popen([sys.executable, '-c', _LISTEN_SCRIPT, str(port)], stdin=subprocess.PIPE, text=True)
+
+
+def _let_bind(proc: subprocess.Popen) -> None:
+    assert proc.stdin is not None
+    proc.stdin.write('\n')
+    proc.stdin.flush()
+
+
+def _listening_spawn(host, port):
+    proc = _spawn_unbound(host, port)
+    _let_bind(proc)
+    return proc
+
+
 @pytest.mark.timeout(30.0)
 def test_serve_subprocess_yields_once_the_port_accepts():
-    script = (
-        'import socket,sys,time\ns=socket.socket()\ns.bind(("localhost",int(sys.argv[1])))\ns.listen()\ntime.sleep(30)'
-    )
-
-    def spawn(host, port):
-        return subprocess.Popen([sys.executable, '-c', script, str(port)])
-
-    with serve_subprocess(spawn, 'localhost') as (host, port):
+    with serve_subprocess(_listening_spawn, 'localhost') as (host, port):
         with socket.create_connection((host, port), timeout=1.0):
             pass
+
+
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_never_gives_the_port_of_a_server_that_has_not_bound_yet(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, '_PORT_LOCKS', tmp_path)
+    starting: list[tuple[int, subprocess.Popen]] = []
+    spawned, finished = threading.Event(), threading.Event()
+
+    def spawn_unbound(host, port):
+        proc = _spawn_unbound(host, port)
+        starting.append((port, proc))
+        spawned.set()
+        return proc
+
+    def first_launcher():
+        with serve_subprocess(spawn_unbound, 'localhost'):
+            finished.wait()
+
+    first = threading.Thread(target=first_launcher, daemon=True)
+    first.start()
+    assert spawned.wait(10.0)
+    first_port, first_server = starting[0]
+    try:
+        # The kernel gives the same free port again, as it can while the first server is still in its imports.
+        given = iter([first_port])
+        monkeypatch.setattr(launcher, 'free_port', lambda: next(given, None) or free_port())
+        with serve_subprocess(_listening_spawn, 'localhost') as (_, port):
+            assert port != first_port
+    finally:
+        finished.set()
+        _let_bind(first_server)
+        first.join(10.0)
+
+
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_gives_again_the_port_of_a_launcher_that_exited(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, '_PORT_LOCKS', tmp_path)
+    port = free_port()
+    monkeypatch.setattr(launcher, 'free_port', lambda: port)
+    for _ in range(2):
+        with serve_subprocess(_listening_spawn, 'localhost') as (_, given):
+            assert given == port
 
 
 @pytest.mark.timeout(60.0)
@@ -366,6 +426,11 @@ class TestChannelMapAction:
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.HOLD
         assert action['target_grip.right'] == 0.0
 
+    def test_a_vector_on_a_non_robot_channel_passes_through(self):
+        adapter = _CommandOnlyAdapter()
+        action = adapter.action(_held(**{'hand_command.left': np.arange(16.0)}))
+        np.testing.assert_array_equal(action['hand_command.left'], np.arange(16.0))
+
     def test_a_delta_fires_once_on_its_own_channel_only(self):
         adapter = _CommandOnlyAdapter()
         commands = _held(**{
@@ -386,6 +451,10 @@ class TestSingleArm:
     def test_the_wire_names_mirror_the_positronic_keys(self):
         assert protocol.ROBOT_COMMAND == keys.ROBOT_COMMAND
         assert protocol.TARGET_GRIP == keys.TARGET_GRIP
+        assert protocol.arm_channel(protocol.ROBOT_COMMAND, 'left') == keys.arm_channel(keys.ROBOT_COMMAND, 'left')
+        assert protocol.ROBOT_STATE == keys.ROBOT_STATE
+        assert protocol.JOINTS_SUFFIX == keys.JOINTS_SUFFIX
+        assert protocol.MOUNTS == eval_keys.MOUNTS
 
     def test_it_returns_the_two_channels(self):
         action = protocol.single_arm(protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.5))
@@ -409,6 +478,12 @@ class TestRemoteEmbodimentChannels:
     def _embodiment(self, arms):
         proxy = RemoteEnvControlSystem(_CommandOnlyAdapter(), nullcontext(('localhost', 0)))
         return remote_embodiment(proxy, {keys.EXTERIOR_IMAGE: 'cam'}, descriptor='remote.test', arms=arms)
+
+    def test_each_pose_signal_sits_at_the_gripper_site(self):
+        frames = ee_frames(self._embodiment(('left', 'right')).static_meta)
+
+        assert len(frames) == 4
+        assert {frame.site for frame in frames.values()} == {GRIPPER_SITE}
 
     def test_one_unnamed_arm_keeps_the_bare_names(self):
         embodiment = self._embodiment((None,))
@@ -453,45 +528,80 @@ class TestEnvControlFrame:
     """Commands must target the frame the environment measures, even when it differs from the default."""
 
     frame = geom.Transform3D(np.array([0.0, 0.0, 0.1]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 2]))
+    measured = geom.Transform3D(np.array([0.5, 0.0, 0.4]), geom.Rotation.from_euler([np.pi, 0.1, 0.0]))
     rotmat = geom.Rotation.Representation.ROTATION_MATRIX
 
     def test_an_absolute_pose_arrives_in_the_env_frame(self):
         pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
-        wired = _wire_command(_in_env_control_frame(roboarm_command.CartesianPosition(pose), self.frame))
+        wired = _wire_command(_in_env_control_frame(roboarm_command.CartesianPosition(pose), self.frame, None))
         np.testing.assert_allclose(wired[protocol.COMMAND_POSE], (pose * self.frame).as_vector(self.rotmat), atol=1e-12)
 
     def test_a_delta_already_in_the_env_frame_wires_bare(self):
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         cmd = roboarm_command.CartesianDelta(delta, frame=self.frame)
-        wired = _wire_command(_in_env_control_frame(cmd, self.frame))
+        wired = _wire_command(_in_env_control_frame(cmd, self.frame, None))
         np.testing.assert_allclose(wired[protocol.COMMAND_DELTA], delta.as_vector(self.rotmat), atol=1e-12)
 
     def test_a_command_re_expressed_for_the_env_keeps_its_mode(self):
         mode = roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
         pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.identity)
-        moved = _in_env_control_frame(roboarm_command.CartesianPosition(pose, mode=mode), self.frame)
+        moved = _in_env_control_frame(roboarm_command.CartesianPosition(pose, mode=mode), self.frame, None)
         assert moved.mode == mode
-        delta = _in_env_control_frame(roboarm_command.CartesianDelta(pose, mode=mode), self.frame)
+        delta = _in_env_control_frame(roboarm_command.CartesianDelta(pose, mode=mode), self.frame, self.measured)
         assert delta.mode == mode
 
-    def test_a_delta_outside_the_env_frame_is_refused(self):
+    def test_a_delta_outside_the_env_frame_is_refused_on_the_wire(self):
         """A delta needs the measured pose in its own frame, which the wire does not supply."""
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         with pytest.raises(ValueError, match='control frame'):
-            _wire_command(_in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame))
+            _wire_command(roboarm_command.CartesianDelta(delta, frame=self.frame))
+
+    def test_a_delta_at_default_arrives_as_the_target_it_composes_at_the_measured_pose(self):
+        delta = geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
+        cmd = roboarm_command.CartesianDelta(delta)
+        wired = _wire_command(_in_env_control_frame(cmd, self.frame, self.measured))
+        expected = cmd.apply(self.measured * self.frame.inv) * self.frame
+        assert wired[protocol.COMMAND_TYPE] == protocol.CARTESIAN
+        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], expected.as_vector(self.rotmat), atol=1e-12)
+
+    def test_a_delta_at_default_before_any_measurement_is_refused(self):
+        delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
+        with pytest.raises(ValueError, match='measured pose'):
+            _in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame, None)
+
+    def test_a_one_arm_adapter_composes_a_delta_at_the_pose_its_observation_measured(self):
+        adapter = RobolabAdapter(camera_dict={})
+        eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+        adapter.observations({
+            protocol.OBS_EEF_POS: eef.translation,
+            protocol.OBS_EEF_QUAT: eef.rotation.as_quat,
+            protocol.OBS_JOINT_POS: np.zeros(7),
+            protocol.OBS_JOINT_VEL: np.zeros(7),
+            protocol.OBS_GRIP: 0.0,
+        })
+        delta = geom.Transform3D(np.array([0.01, -0.02, 0.03]), geom.Rotation.from_euler([0.0, 0.0, 0.2]))
+        cmd = roboarm_command.CartesianDelta(delta)
+
+        wired = adapter.action({keys.ROBOT_COMMAND: pimm.Message(cmd)})[keys.ROBOT_COMMAND]
+
+        expected = cmd.apply(eef * adapter.env_control_frame.inv) * adapter.env_control_frame
+        assert wired[protocol.COMMAND_TYPE] == protocol.CARTESIAN
+        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], expected.as_vector(self.rotmat), atol=1e-12)
 
     def test_robolab_reports_and_drives_the_same_frame(self):
         adapter = RobolabAdapter(camera_dict={})
         eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
         raw = {
-            'eef_pos': eef.translation,
-            'eef_quat': eef.rotation.as_quat,
-            'joint_pos': np.zeros(7),
-            'joint_vel': np.zeros(7),
-            'grip': 0.0,
+            protocol.OBS_EEF_POS: eef.translation,
+            protocol.OBS_EEF_QUAT: eef.rotation.as_quat,
+            protocol.OBS_JOINT_POS: np.zeros(7),
+            protocol.OBS_JOINT_VEL: np.zeros(7),
+            protocol.OBS_GRIP: 0.0,
         }
         reported = adapter.observations(raw)[keys.ROBOT_STATE].ee_pose
-        commanded = _in_env_control_frame(roboarm_command.CartesianPosition(reported), adapter.env_control_frame).pose
+        commanded = _in_env_control_frame(
+            roboarm_command.CartesianPosition(reported), adapter.env_control_frame, None
+        ).pose
         np.testing.assert_allclose(commanded.as_vector(self.rotmat), eef.as_vector(self.rotmat), atol=1e-6)
 
 
@@ -668,6 +778,35 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
         assert task.instruction == 'countdown'
 
 
+class _PromptPerStepEnv(_CountdownEnv):
+    """Moves its prompt to ``step <n>`` at each step, as a task with several targets in turn does."""
+
+    def __init__(self):
+        super().__init__()
+        self.prompts: list[str] = []
+
+    def step(self, actions):
+        frame = super().step(actions)
+        self.prompts.append(f'step {self._steps}')
+        frame[protocol.SLOTS][0][protocol.FRAME_META] = {'task': self.prompts[-1]}
+        return frame
+
+
+@pytest.mark.timeout(60.0)
+def test_a_prompt_the_env_moves_in_the_episode_is_the_live_instruction():
+    env = _PromptPerStepEnv()
+    with serve_env(env) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
+        task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
+        scheduler = world.start([proxy])
+
+        proxy.reset({eval_keys.SEED: 0})
+        assert task.instruction == _COUNTDOWN
+        drive_scheduler(scheduler, steps=4)
+        assert env.prompts
+        assert task.instruction == env.prompts[-1]
+
+
 def test_the_canonical_contract_is_exactly_what_a_client_can_emit():
     pose = geom.Transform3D(np.zeros(3), geom.Rotation.identity)
     commands = [
@@ -679,6 +818,17 @@ def test_the_canonical_contract_is_exactly_what_a_client_can_emit():
     ]
     tags = {_wire_command(command)[protocol.COMMAND_TYPE] for command in commands}
     assert tags == set(protocol.CANONICAL_COMMAND_TYPES)
+
+
+def test_every_sim_reports_an_arm_under_the_shared_wire_names():
+    names = (
+        protocol.OBS_JOINT_POS,
+        protocol.OBS_JOINT_VEL,
+        protocol.OBS_EEF_POS,
+        protocol.OBS_EEF_QUAT,
+        protocol.OBS_GRIP,
+    )
+    assert names == ('joint_pos', 'joint_vel', 'eef_pos', 'eef_quat', 'grip')
 
 
 @pytest.mark.timeout(60.0)

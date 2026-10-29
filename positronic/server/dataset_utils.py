@@ -3,8 +3,9 @@
 import functools
 import io
 import logging
-import math
 import tempfile
+import threading
+import traceback
 import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -21,6 +22,8 @@ import rerun as rr
 import rerun.blueprint as rrb
 import rerun_bindings
 from av.video.stream import VideoStream
+from eval_vocabulary.progress import STATE_SIGNAL
+from eval_vocabulary.timeline import RECORDING_TIMELINE_ORDER
 from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
 from rerun.urdf import UrdfTree
 
@@ -80,8 +83,6 @@ class EpisodeSignals:
     joints: list[str]
     # Each text signal's distinct values, in the order they first appear.
     texts: dict[str, list[str]] = field(default_factory=dict)
-    # Width over height of each camera's frames.
-    camera_aspects: dict[str, float] = field(default_factory=dict)
     neither_numeric_nor_text: list[str] = field(default_factory=list)
 
     @property
@@ -91,6 +92,11 @@ class EpisodeSignals:
     @property
     def plotted_texts(self) -> dict[str, list[str]]:
         return {name: values for name, values in self.texts.items() if len(values) <= _MAX_PLOTTED_WIDTH}
+
+    @property
+    def plotted_lines(self) -> dict[str, int]:
+        """The line count of each plotted signal. A text signal plots one line, the index of its value."""
+        return self.plotted | dict.fromkeys(self.plotted_texts, 1)
 
     @property
     def unplotted(self) -> dict[str, str]:
@@ -113,14 +119,14 @@ def _infer_dims(sig) -> int:
     return int(arr.size) if arr is not None else 1
 
 
-def _log_static_trail(entity_path: str, positions: np.ndarray, base_rgb: list[int]) -> None:
+def _log_static_trail(rec: rr.RecordingStream, entity_path: str, positions: np.ndarray, base_rgb: list[int]) -> None:
     """Log the full trajectory as a thin, muted static background."""
     if len(positions) < 2:
         return
     segments = np.stack([positions[:-1], positions[1:]], axis=1)
     muted = [c // 3 + 40 for c in base_rgb]  # blend toward gray; rerun 3D doesn't do alpha
     colors = np.tile([*muted, 255], (len(segments), 1)).astype(np.uint8)
-    rr.log(entity_path, rr.LineStrips3D(segments, colors=colors, radii=0.0005), static=True)
+    rr.log(entity_path, rr.LineStrips3D(segments, colors=colors, radii=0.0005), static=True, recording=rec)
 
 
 def _format_value(value: Any, formatter: str | None, default: Any) -> Any:
@@ -212,11 +218,11 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:
             try:
-                height, width = np.asarray(sig[0][0]).shape[:2]
-                signals.videos.append(name)
-                signals.camera_aspects[name] = width / height
+                sig[0][0]
             except Exception:
                 logging.exception(f'Image signal {name!r} has no readable first frame: it is absent from the recording')
+                continue
+            signals.videos.append(name)
             continue
 
         first = sig[0][0] if len(sig) else 0.0
@@ -257,29 +263,7 @@ def _text_log_view(sig: str) -> rrb.TextLogView:
     return rrb.TextLogView(name=sig, origin=f'{_TEXT_LOG_ENTITY}/{sig}', columns=columns)
 
 
-# The layout is sized for a viewer this many times wider than tall: a wide browser window under the page header.
-_VIEWER_ASPECT = 2.4
-# Width over height a signal plot reads best at.
-_PLOT_CELL_ASPECT = 2.0
-# The cameras' share of the top row, and the 3D view's.
-_TOP_ROW_SHARES = [3, 1]
-_NO_CAMERA_TOP_SHARE = 0.75
-
-
-def _camera_row_share(signals: EpisodeSignals) -> float:
-    """The share of the viewer's height that shows every camera, side by side, without black bands."""
-    width = _TOP_ROW_SHARES[0] / sum(_TOP_ROW_SHARES) if signals.poses else 1.0
-    return float(np.clip(width / sum(signals.camera_aspects.values()) * _VIEWER_ASPECT, 0.2, 0.75))
-
-
-def _series_columns(cells: int, height_share: float) -> int:
-    """The column count that brings a grid of ``cells`` closest to plot-shaped cells."""
-    area_aspect = _VIEWER_ASPECT / height_share
-
-    def miss(columns: int) -> float:
-        return abs(math.log(area_aspect * math.ceil(cells / columns) / columns / _PLOT_CELL_ASPECT))
-
-    return min(range(1, cells + 1), key=miss)
+Charts = dict[str, list[str] | dict[str, str]]
 
 
 @dataclass(frozen=True)
@@ -291,14 +275,15 @@ class ReplayLayout:
     ``view_shares`` is not used. The charts form a row under the views, or with ``charts_beside`` a column on their
     right, and ``split_shares`` divides the height, or the width, between the views and the charts. ``charts`` holds
     the charts in order. A key ``Group/Chart`` puts the chart as a tab in that group, where the group first appears;
-    any other key is a chart of its own. A list names each line by its signal, and a dict by its key. A chart with no
-    signal in the episode is left out. With ``show_unnamed_signals``, the signals that no chart plots follow, grouped
-    by name prefix.
+    any other key is a chart of its own. A list names each line by its signal, and a dict by its key. A text signal
+    plots the index of its value, and its line name also names each value. A chart with no signal in the episode is
+    left out. With ``show_unnamed_signals``, the signals that no chart plots and the log of each text signal follow in
+    one group, Other. Other leaves out a command's control mode.
     """
 
     split_shares: tuple[float, float]  # views, charts
     view_shares: tuple[float, float]  # 3D view, camera grid
-    charts: dict[str, list[str] | dict[str, str]]
+    charts: Charts
     show_unnamed_signals: bool = True
     trajectory_in_camera_grid: bool = False
     charts_beside: bool = False
@@ -321,8 +306,11 @@ def _value_names(key: str, signals: EpisodeSignals, ep: Episode) -> list[str] | 
     return None
 
 
-def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | rrb.Container]:
-    """A view of each signal that is not in ``placed``: a group of signals that share a prefix shows as tabs."""
+def _signal_views(signals: EpisodeSignals, left_out: set[str]) -> list[rrb.View | rrb.Container]:
+    """A view of each signal that is not in ``left_out``, and the text log of each text signal, by name.
+
+    A group of signals that share a prefix shows as tabs.
+    """
 
     def _ts_view(sig: str) -> rrb.TimeSeriesView:
         return rrb.TimeSeriesView(
@@ -345,7 +333,7 @@ def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | 
 
     # Each group becomes a Tabs container that opens on its first text signal.
     # A text signal's log is a cell of its own beside its group: a share of one grid cell is too narrow to read.
-    unplaced = [sig for sig in [*signals.plotted, *signals.plotted_texts] if sig not in placed]
+    unplaced = sorted(sig for sig in [*signals.plotted, *signals.plotted_texts] if sig not in left_out)
     views: list[rrb.View | rrb.Container] = []
     for group_name, sigs in _group_signals_by_prefix(unplaced):
         if len(sigs) == 1:
@@ -355,7 +343,7 @@ def _signal_views(signals: EpisodeSignals, placed: set[str]) -> list[rrb.View | 
             view = rrb.Tabs(*[_view(sig) for sig in sigs], name=group_name, active_tab=texts[0] if texts else None)
         views.append(view)
         views.extend(_text_log_view(sig) for sig in sigs if sig in signals.plotted_texts)
-    views.extend(_text_log_view(sig) for sig in signals.texts if sig not in signals.plotted_texts)
+    views.extend(_text_log_view(sig) for sig in sorted(signals.texts) if sig not in unplaced)
     if signals.unplotted:
         views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
     return views
@@ -381,50 +369,83 @@ def _lines(signals: list[str] | dict[str, str]) -> list[tuple[str | None, str]]:
     return list(signals.items()) if isinstance(signals, dict) else [(None, signal) for signal in signals]
 
 
+def _value_legend(values: list[str]) -> str:
+    """The name of each value of a text signal, by the index it plots at."""
+    return ', '.join(f'{index} {value}' for index, value in enumerate(values))
+
+
 def _chart_view(
     name: str, lines: list[tuple[str | None, str]], signals: EpisodeSignals, ep: Episode
 ) -> rrb.TimeSeriesView | None:
-    shown = [(label, signal) for label, signal in lines if signal in signals.plotted]
+    widths = signals.plotted_lines
+    shown = [(label, signal) for label, signal in lines if signal in widths]
     if not shown:
         return None
+    plots_text = any(signal in signals.plotted_texts for _, signal in shown)
     line_names: dict[str, str] = {}
     for label, signal in shown:
         path = f'/signals/{signal}'
-        width = signals.plotted[signal]
-        if width == 1:
-            line_names[path] = signal if label is None else label
+        line = signal if label is None else label
+        if signal in signals.plotted_texts:
+            line_names[path] = f'{line}: {_value_legend(signals.plotted_texts[signal])}'
+        elif widths[signal] == 1:
+            line_names[path] = line
         elif label is not None:
             names = _value_names(signal, signals, ep)
-            line_names.update({f'{path}/{i}': f'{label} {names[i] if names else i}' for i in range(width)})
+            line_names.update({f'{path}/{i}': f'{label} {names[i] if names else i}' for i in range(widths[signal])})
     return rrb.TimeSeriesView(
         name=name,
         origin='/signals',
         contents=[f'/signals/{signal}/**' for _, signal in shown],
         overrides={path: rr.SeriesLines(names=[line]) for path, line in line_names.items()},
-        plot_legend=rrb.PlotLegend(visible=sum(signals.plotted[signal] for _, signal in shown) > 1),
+        plot_legend=rrb.PlotLegend(visible=plots_text or sum(widths[signal] for _, signal in shown) > 1),
         axis_y=rrb.ScalarAxis(zoom_lock=True),
     )
 
 
-def _chart_cells(layout: ReplayLayout, signals: EpisodeSignals, ep: Episode) -> list[rrb.View | rrb.Container]:
+def _charted(charts: Charts, signals: EpisodeSignals) -> set[str]:
+    """The signals that ``charts`` plot."""
+    return {signal for lines in charts.values() for _, signal in _lines(lines) if signal in signals.plotted_lines}
+
+
+def _titled_tabs(name: str, views: list[rrb.View | rrb.Container]) -> rrb.Tabs:
+    # The viewer titles a tab by its child's name and draws no container's own name, so the outer tab carries it.
+    return rrb.Tabs(rrb.Tabs(*views, name=name))
+
+
+def _chart_cells(charts: Charts, signals: EpisodeSignals, ep: Episode) -> list[rrb.View | rrb.Container]:
     """The chart cells: each group of charts, and each chart in no group."""
-    cells: dict[tuple[str, bool], list[rrb.TimeSeriesView]] = {}
-    for key, chart_signals in layout.charts.items():
+    cells: dict[tuple[str, bool], list[rrb.View | rrb.Container]] = {}
+    for key, chart_signals in charts.items():
         group, slash, chart = key.partition('/')
         view = _chart_view(chart if slash else key, _lines(chart_signals), signals, ep)
         if view is not None:
             cells.setdefault((group if slash else key, bool(slash)), []).append(view)
-    # The viewer titles a tab by its child's name and draws no container's own name, so the outer tab carries it.
-    return [rrb.Tabs(rrb.Tabs(*views, name=name)) if grouped else views[0] for (name, grouped), views in cells.items()]
+    return [_titled_tabs(name, views) if grouped else views[0] for (name, grouped), views in cells.items()]
+
+
+def _other_cell(signals: EpisodeSignals, placed: set[str]) -> rrb.Tabs | None:
+    """One group, Other, of the signals not in ``placed``, every text log, and the signals left unplotted.
+
+    A command's control mode stays out of Other: it shows only where a chart names it.
+    """
+    control_modes = {signal for signal in signals.plotted if keys.is_control_mode(signal)}
+    views = _signal_views(signals, placed | control_modes)
+    return _titled_tabs('Other', views) if views else None
+
+
+def _camera_grid(signals: EpisodeSignals, ep: Episode) -> rrb.Grid | None:
+    """The cameras and then the 3D view, in one grid."""
+    cells: list[rrb.View] = [*_image_views(signals)]
+    if signals.poses:
+        cells.append(_trajectory_view(signals, ep))
+    return rrb.Grid(*cells) if cells else None
 
 
 def _layout_views(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) -> rrb.View | rrb.Container | None:
-    trajectory = _trajectory_view(signals, ep) if signals.poses else None
     if layout.trajectory_in_camera_grid:
-        cells: list[rrb.View] = [*_image_views(signals)]
-        if trajectory is not None:
-            cells.append(trajectory)
-        return rrb.Grid(*cells) if cells else None
+        return _camera_grid(signals, ep)
+    trajectory = _trajectory_view(signals, ep) if signals.poses else None
     cameras = rrb.Grid(*_image_views(signals)) if signals.videos else None
     top = [
         (view, share) for view, share in zip((trajectory, cameras), layout.view_shares, strict=True) if view is not None
@@ -445,10 +466,10 @@ def _with_a_view(
 
 def _layout_root(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) -> rrb.Vertical | rrb.Horizontal:
     views = _layout_views(signals, ep, layout)
-    charts = _chart_cells(layout, signals, ep)
-    if layout.show_unnamed_signals:
-        charted = {signal for lines in layout.charts.values() for _, signal in _lines(lines)}
-        charts.extend(_signal_views(signals, placed=charted & signals.plotted.keys()))
+    charts = _chart_cells(layout.charts, signals, ep)
+    other = _other_cell(signals, _charted(layout.charts, signals)) if layout.show_unnamed_signals else None
+    if other is not None:
+        charts.append(other)
 
     views_share, charts_share = layout.split_shares
     if layout.charts_beside:
@@ -458,36 +479,88 @@ def _layout_root(signals: EpisodeSignals, ep: Episode, layout: ReplayLayout) -> 
     return rrb.Vertical(*parts, row_shares=shares)
 
 
-def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Vertical:
-    """Cameras side by side beside the 3D view, over a grid of every signal."""
-    series_views = _signal_views(signals, placed=set())
+# The charts of one arm, by the signal names of a one-arm robot.
+ARM_CHARTS: Charts = {
+    'Robot State/Joints': [keys.JOINTS],
+    'Robot State/End Effector': [keys.EE_POSE],
+    'Robot State/Joints Vel': [keys.JOINT_VEL],
+    'Grip': {'Target': keys.TARGET_GRIP, 'Current': keys.GRIP},
+    'Robot Commands – Joints': [keys.TARGET_JOINTS],
+    'Robot Commands – Joint Deltas': [keys.TARGET_JOINT_DELTAS],
+    'Robot Commands – End Effector': [keys.TARGET_EE_POSE],
+    'Robot Commands – End Effector Delta': {
+        'Delta': keys.TARGET_EE_POSE_DELTA,
+        'Frame': keys.TARGET_EE_POSE_DELTA_FRAME,
+    },
+}
 
-    top_items: list[rrb.View | rrb.Container] = []
-    if signals.videos:
-        # Widths in proportion to the aspect ratios give every camera one height.
-        aspects = [signals.camera_aspects[k] for k in signals.videos]
-        top_items.append(rrb.Horizontal(*_image_views(signals), column_shares=aspects))
-    if signals.poses:
-        top_items.append(_trajectory_view(signals, ep))
 
-    rows = []
-    row_shares = []
-    top_share = _camera_row_share(signals) if signals.videos else _NO_CAMERA_TOP_SHARE
-    if top_items:
-        rows.append(top_items[0] if len(top_items) == 1 else rrb.Horizontal(*top_items, column_shares=_TOP_ROW_SHARES))
-        row_shares.append(top_share)
-    if series_views:
-        series_share = 1 - top_share if top_items else 1.0
-        rows.append(rrb.Grid(*series_views, grid_columns=_series_columns(len(series_views), series_share)))
-        row_shares.append(series_share)
-    return rrb.Vertical(*rows, row_shares=row_shares)
+def _arm_signal(name: str, arm: str | None) -> str:
+    """``name``, a signal of a one-arm robot, as the signal of ``arm``: the arm follows the channel."""
+    channel, dot, rest = name.partition('.')
+    return f'{keys.arm_channel(channel, arm)}{dot}{rest}'
+
+
+# TODO(#839): read the arms, and which signals are each arm's, from signal meta.
+def _recorded_arms(names: Iterable[str]) -> list[str | None]:
+    """The arms whose state ``names`` record. None is the unnamed arm of a one-arm robot, and comes first."""
+    arms: set[str | None] = set()
+    for name in names:
+        # ``robot_state.left.q`` puts the arm between the channel and the last part.
+        arm = name.partition('.')[2].rpartition('.')[0] or None
+        if name in {_arm_signal(state, arm) for state in (keys.JOINTS, keys.EE_POSE, keys.JOINT_VEL)}:
+            arms.add(arm)
+    return sorted(arms, key=lambda arm: (arm is not None, arm or ''))
+
+
+def _arm_charts(arm: str | None) -> Charts:
+    """``ARM_CHARTS`` by the signal names of ``arm``."""
+    return {
+        chart: {label: _arm_signal(signal, arm) for label, signal in lines.items()}
+        if isinstance(lines, dict)
+        else [_arm_signal(signal, arm) for signal in lines]
+        for chart, lines in ARM_CHARTS.items()
+    }
+
+
+def _arm_cells(
+    charts_by_arm: dict[str | None, Charts], signals: EpisodeSignals, ep: Episode
+) -> list[tuple[rrb.View | rrb.Container, int]]:
+    """The arms' chart cells and their row shares. With more than one arm, each arm's charts are a tab."""
+    columns = {arm: cells for arm, charts in charts_by_arm.items() if (cells := _chart_cells(charts, signals, ep))}
+    if len(columns) == 1:
+        return [(cell, 1) for cell in next(iter(columns.values()))]
+    tabs = [rrb.Vertical(*cells, name=(arm or 'arm').title()) for arm, cells in columns.items()]
+    return [(rrb.Tabs(*tabs), max(len(cells) for cells in columns.values()))] if tabs else []
+
+
+# The channel of an operator's progress marks.
+_PROGRESS_CHANNEL = STATE_SIGNAL.partition('.')[0]
+# The default replay's width: the views, then the charts.
+_DEFAULT_SPLIT_SHARES = (3, 1)
+
+
+def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Horizontal:
+    charts_by_arm = {arm: _arm_charts(arm) for arm in _recorded_arms(signals.numerics)}
+    names = sorted([*signals.numerics, *signals.texts])
+    progress: Charts = {'Progress': [name for name in names if name.partition('.')[0] == _PROGRESS_CHANNEL]}
+    column = [*_arm_cells(charts_by_arm, signals, ep), *((cell, 1) for cell in _chart_cells(progress, signals, ep))]
+    placed = {signal for charts in [*charts_by_arm.values(), progress] for signal in _charted(charts, signals)}
+    other = _other_cell(signals, placed)
+    if other is not None:
+        column.append((other, 1))
+
+    chart_column = (
+        rrb.Vertical(*[cell for cell, _ in column], row_shares=[share for _, share in column]) if column else None
+    )
+    views_share, charts_share = _DEFAULT_SPLIT_SHARES
+    parts, shares = _with_a_view([(_camera_grid(signals, ep), views_share), (chart_column, charts_share)])
+    return rrb.Horizontal(*parts, column_shares=shares)
 
 
 # In preference order for playback and rate limiting. Unrecognized timelines retain integer units.
 _DURATION_TIMELINES = (
-    HARNESS_WORLD,
-    RECEIVED_WORLD,
-    RECORDED_TIME,
+    *RECORDING_TIMELINE_ORDER,
     EMITTED_WORLD,
     HARNESS_WALL,
     RECEIVED_WALL,
@@ -528,16 +601,16 @@ def _build_blueprint(
     )
 
 
-def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
+def _setup_series_names(rec: rr.RecordingStream, signals: EpisodeSignals, ep: Episode) -> None:
     for key, dim in signals.plotted.items():
         names = _value_names(key, signals, ep)
         if dim == 1:
             if names:
-                log_series_styles(f'/signals/{key}', [names[0]], static=True)
+                log_series_styles(f'/signals/{key}', [names[0]], static=True, recording=rec)
         else:
             for i in range(dim):
                 label = names[i] if names else str(i)
-                log_series_styles(f'/signals/{key}/{i}', [label], static=True)
+                log_series_styles(f'/signals/{key}/{i}', [label], static=True, recording=rec)
 
 
 class _BinaryStreamDrainer:
@@ -605,7 +678,12 @@ def _sample_indices(timestamps: dict[str, np.ndarray], max_hz: float) -> np.ndar
 
 
 def _encode_frames_as_video(
-    entity_path: str, sig: Signal, columns: dict[str, np.ndarray], max_resolution: int, max_hz: float
+    rec: rr.RecordingStream,
+    entity_path: str,
+    sig: Signal,
+    columns: dict[str, np.ndarray],
+    max_resolution: int,
+    max_hz: float,
 ) -> None:
     codec = rr.VideoCodec.H265
     # A frame may produce 0, 1 or more packets, and so may the final flush.
@@ -617,7 +695,10 @@ def _encode_frames_as_video(
             index = index_by_pts[packet.pts]
             timestamps = {name: values[index : index + 1] for name, values in columns.items()}
             rr.send_columns(
-                entity_path, indexes=_rerun_indexes(timestamps), columns=rr.VideoStream.columns(sample=[bytes(packet)])
+                entity_path,
+                indexes=_rerun_indexes(timestamps),
+                columns=rr.VideoStream.columns(sample=[bytes(packet)]),
+                recording=rec,
             )
 
     first_frame = np.asarray(sig[0][0])
@@ -631,7 +712,7 @@ def _encode_frames_as_video(
         stream.max_b_frames = 0
         stream.codec_context.time_base = _FRAME_INDEX_TIME_BASE
 
-        rr.log(entity_path, rr.VideoStream(codec=codec), static=True)
+        rr.log(entity_path, rr.VideoStream(codec=codec), static=True, recording=rec)
 
         for position, (index, (val, _)) in enumerate((i, sample) for i, sample in enumerate(sig) if i in kept):
             frame = av.VideoFrame.from_ndarray(np.asarray(val), format='rgb24')
@@ -678,6 +759,7 @@ def _mp4_reduced_to(src: Path, max_resolution: int) -> bytes:
 
 
 def _log_video_signals(
+    rec: rr.RecordingStream,
     ep: Episode,
     signals: EpisodeSignals,
     drainer: _BinaryStreamDrainer,
@@ -695,24 +777,31 @@ def _log_video_signals(
         if isinstance(sig, VideoSignal):
             video_bytes = _mp4_reduced_to(sig.video_path, max_resolution)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
-            rr.log(name, asset, static=True)
+            rr.log(name, asset, static=True, recording=rec)
 
             frame_pts_ns = asset.read_frame_timestamps_nanos()
             rr.send_columns(
-                name, indexes=_rerun_indexes(timestamps), columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns)
+                name,
+                indexes=_rerun_indexes(timestamps),
+                columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
+                recording=rec,
             )
         else:
-            _encode_frames_as_video(name, sig, timestamps, max_resolution, max_hz)
+            _encode_frames_as_video(rec, name, sig, timestamps, max_resolution, max_hz)
         yield from drainer.drain()
 
 
-def _send_scalar_columns(key: str, timestamps: dict[str, np.ndarray], vals: np.ndarray) -> None:
+def _send_scalar_columns(
+    rec: rr.RecordingStream, key: str, timestamps: dict[str, np.ndarray], vals: np.ndarray
+) -> None:
     time_idx = _rerun_indexes(timestamps)
     if vals.shape[1] == 1:
-        rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
+        columns = rr.Scalars.columns(scalars=vals.ravel())
+        rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=columns, recording=rec)
         return
     for i in range(vals.shape[1]):
-        rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
+        columns = rr.Scalars.columns(scalars=vals[:, i])
+        rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=columns, recording=rec)
 
 
 # Integer nanoseconds put a source recorded at the cap a hair above it.
@@ -735,7 +824,12 @@ def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
 
 
 def _log_numeric_signals(
-    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_hz: float, recorded_also_on: str | None
+    rec: rr.RecordingStream,
+    ep: Episode,
+    signals: EpisodeSignals,
+    drainer: _BinaryStreamDrainer,
+    max_hz: float,
+    recorded_also_on: str | None,
 ) -> Generator[bytes, None, dict[str, tuple[dict[str, np.ndarray], np.ndarray]]]:
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging.
 
@@ -769,7 +863,7 @@ def _log_numeric_signals(
         timestamps, vals = {name: values[keep] for name, values in timestamps.items()}, vals[keep]
 
         if key not in unplotted:
-            _send_scalar_columns(key, timestamps, vals)
+            _send_scalar_columns(rec, key, timestamps, vals)
 
         if key in stash_keys:
             pose_data[key] = (timestamps, vals)
@@ -797,6 +891,9 @@ def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path, name
         if filename in meshes:
             mesh_el.set('filename', str(dest / filename))
     for visual_el in root.iter('visual'):
+        # The URDF loader refuses a visual with two materials.
+        for own_material_el in visual_el.findall('material'):
+            visual_el.remove(own_material_el)
         material_el = ET.SubElement(visual_el, 'material', name='viewer_translucent')
         ET.SubElement(material_el, 'color', rgba=_ROBOT_VISUAL_RGBA)
     for el in root.iter():
@@ -812,7 +909,9 @@ def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path, name
     return urdf_path
 
 
-def _animate_joint(joint, q_column: np.ndarray, timestamps: dict[str, np.ndarray], entity_path: str) -> None:
+def _animate_joint(
+    rec: rr.RecordingStream, joint, q_column: np.ndarray, timestamps: dict[str, np.ndarray], entity_path: str
+) -> None:
     """Compute and log transforms for a single URDF joint across all timesteps."""
     n = len(q_column)
     translations = np.empty((n, 3), dtype=np.float64)
@@ -830,6 +929,7 @@ def _animate_joint(joint, q_column: np.ndarray, timestamps: dict[str, np.ndarray
             child_frame=[joint.child_link] * n,
             parent_frame=[joint.parent_link] * n,
         ),
+        recording=rec,
     )
 
 
@@ -837,6 +937,7 @@ _URDF_ANIM_HZ = 15
 
 
 def _log_urdf_robot(
+    rec: rr.RecordingStream,
     ep: Episode,
     joint_sig: str,
     numeric_data: dict[str, tuple[dict[str, np.ndarray], np.ndarray]],
@@ -845,7 +946,7 @@ def _log_urdf_robot(
     """Log the episode's robot model, its joints animated by `joint_sig`."""
     joint_names = ep.static.get(roboarm_keys.JOINT_NAMES)
     urdf_str = ep.static.get(roboarm_keys.URDF)
-    meshes = ep.static.get('meshes')
+    meshes = ep.static.get(roboarm_keys.MESHES)
     if not (joint_names and urdf_str and meshes):
         return
     timestamps, q_vals = numeric_data[joint_sig]
@@ -863,11 +964,12 @@ def _log_urdf_robot(
 
     with tempfile.TemporaryDirectory() as tmp:
         urdf_path = _write_urdf_to_dir(urdf_str, meshes, Path(tmp), namespace)
-        rr.log_file_from_path(str(urdf_path), entity_path_prefix=prefix, static=True)
+        rr.log_file_from_path(str(urdf_path), entity_path_prefix=prefix, static=True, recording=rec)
         tree = UrdfTree.from_file_path(str(urdf_path), entity_path_prefix=prefix)
 
     # An unattached root link frame shares no space with the poses, and the loader leaves it that way.
-    rr.log(prefix, rr.Transform3D(translation=mount or np.zeros(3), child_frame=tree.root_link().name), static=True)
+    root = rr.Transform3D(translation=mount or np.zeros(3), child_frame=tree.root_link().name)
+    rr.log(prefix, root, static=True, recording=rec)
     yield from drainer.drain()
 
     keep = _sample_indices(timestamps, _URDF_ANIM_HZ)
@@ -878,7 +980,7 @@ def _log_urdf_robot(
         for j_idx, name in enumerate(joint_names):
             joint = tree.get_joint_by_name(namespace + name)
             if joint is not None:
-                _animate_joint(joint, q_ds[:, j_idx], ts_ds, link_path(joint))
+                _animate_joint(rec, joint, q_ds[:, j_idx], ts_ds, link_path(joint))
                 yield from drainer.drain()
 
         # A single ``grip`` signal in [0, 1] drives the gripper joints, each joint's axis sign setting
@@ -894,11 +996,12 @@ def _log_urdf_robot(
             for name in gripper['joints']:
                 joint = tree.get_joint_by_name(namespace + name)
                 if joint is not None:
-                    _animate_joint(joint, finger_pos, grip_times, link_path(joint))
+                    _animate_joint(rec, joint, finger_pos, grip_times, link_path(joint))
                     yield from drainer.drain()
 
 
 def _log_pose_signals(
+    rec: rr.RecordingStream,
     ep: Episode,
     signals: EpisodeSignals,
     numeric_data: dict[str, tuple[dict[str, np.ndarray], np.ndarray]],
@@ -907,7 +1010,7 @@ def _log_pose_signals(
     """Log 3D pose: static full trajectory + current position ball + a URDF model per joint signal."""
     for joint_sig in signals.joints:
         if joint_sig in numeric_data:
-            yield from _log_urdf_robot(ep, joint_sig, numeric_data, drainer)
+            yield from _log_urdf_robot(rec, ep, joint_sig, numeric_data, drainer)
 
     for key in signals.poses:
         if key not in numeric_data:
@@ -918,7 +1021,7 @@ def _log_pose_signals(
         positions = vals[:, :3]
         color = _pose_color(key)
 
-        _log_static_trail(f'/3d/{key}/trail', positions, color)
+        _log_static_trail(rec, f'/3d/{key}/trail', positions, color)
 
         rr.send_columns(
             f'/3d/{key}',
@@ -928,6 +1031,7 @@ def _log_pose_signals(
                 *rr.Points3D.columns(colors=np.tile(color, (len(vals), 1))).partition([1] * len(vals)),
                 *rr.Points3D.columns(radii=np.full(len(vals), 0.01)),
             ],
+            recording=rec,
         )
         yield from drainer.drain()
 
@@ -938,7 +1042,11 @@ def _changes(values: np.ndarray) -> np.ndarray:
 
 
 def _log_text_signals(
-    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, recorded_also_on: str | None
+    rec: rr.RecordingStream,
+    ep: Episode,
+    signals: EpisodeSignals,
+    drainer: _BinaryStreamDrainer,
+    recorded_also_on: str | None,
 ) -> Iterator[bytes]:
     """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
 
@@ -954,25 +1062,32 @@ def _log_text_signals(
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
         time_idx = _rerun_indexes({name: values[changes] for name, values in timestamps.items()})
-        rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=rr.TextLog.columns(text=texts[changes]))
+        text_columns = rr.TextLog.columns(text=texts[changes])
+        rr.send_columns(f'{_TEXT_LOG_ENTITY}/{key}', indexes=time_idx, columns=text_columns, recording=rec)
 
         if key in plotted:
             values = plotted[key]
-            label = ', '.join(f'{index} {value}' for index, value in enumerate(values))
-            style = rr.SeriesLines(names=[label], interpolation_mode=rr.components.InterpolationMode.StepAfter)
-            rr.log(f'/signals/{key}', style, static=True)
+            style = rr.SeriesLines(
+                names=[_value_legend(values)], interpolation_mode=rr.components.InterpolationMode.StepAfter
+            )
+            rr.log(f'/signals/{key}', style, static=True, recording=rec)
             # The last sample holds the final value to the end of the episode.
             shown = np.union1d(changes, [len(texts) - 1])
             index_of = {value: index for index, value in enumerate(values)}
             indices = np.asarray([index_of[text] for text in texts[shown]], dtype=np.float64)
             _send_scalar_columns(
-                key, {name: values[shown] for name, values in timestamps.items()}, indices.reshape(-1, 1)
+                rec, key, {name: values[shown] for name, values in timestamps.items()}, indices.reshape(-1, 1)
             )
         yield from drainer.drain()
 
 
 DEFAULT_MAX_HZ = 30.0
 DEFAULT_MAX_RESOLUTION = 640
+
+
+# A new rerun stream waits for rerun's global recording list with the GIL held, and an orphan sweep holds the list
+# while it flushes. Threads that start, drop or sweep recordings only under this lock cannot deadlock.
+_RERUN_RECORDING_LIST_LOCK = threading.Lock()
 
 
 def _releases_orphaned_recordings(stream: Callable[..., Iterator[bytes]]) -> Callable[..., Generator[bytes]]:
@@ -983,7 +1098,8 @@ def _releases_orphaned_recordings(stream: Callable[..., Iterator[bytes]]) -> Cal
         try:
             yield from stream(*args, **kwargs)
         finally:
-            rerun_bindings.flush_and_cleanup_orphaned_recordings()
+            with _RERUN_RECORDING_LIST_LOCK:
+                rerun_bindings.flush_and_cleanup_orphaned_recordings()
 
     return wrapper
 
@@ -1006,8 +1122,43 @@ def _send_blueprint(rec: rr.RecordingStream, blueprint: rrb.Blueprint) -> None:
     stream.disconnect()
 
 
+def _log_episode(
+    rec: rr.RecordingStream,
+    ep: Episode,
+    episode_id: int,
+    max_hz: float,
+    max_resolution: int,
+    layout: ReplayLayout | None,
+    timeline: str | None,
+) -> Iterator[bytes]:
+    # Each call takes the recording explicitly: `with rec` swaps the thread's recording, and the handle that
+    # the swap returns runs an orphan sweep when it dies, outside the lock.
+    drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
+    signals = _collect_signal_groups(ep)
+    opening = _opening_timeline(ep, timeline)
+    recorded_also_on = opening if opening in _RECORDED_CLOCK_TIMELINES else None
+    blueprint = _build_blueprint(signals, ep, layout, opening)
+    with _RERUN_RECORDING_LIST_LOCK:
+        _send_blueprint(rec, blueprint)
+    if signals.unplotted:
+        logging.warning(f'Episode {episode_id}: not plotting {signals.unplotted}')
+        notice = _unplotted_notice(signals.unplotted)
+        document = rr.TextDocument(notice, media_type=rr.MediaType.MARKDOWN)
+        rr.log(_UNPLOTTED_ENTITY, document, static=True, recording=rec)
+    yield from drainer.drain()
+
+    _setup_series_names(rec, signals, ep)
+    yield from drainer.drain()
+
+    yield from _log_video_signals(rec, ep, signals, drainer, max_resolution, max_hz, recorded_also_on)
+    pose_data = yield from _log_numeric_signals(rec, ep, signals, drainer, max_hz, recorded_also_on)
+    yield from _log_text_signals(rec, ep, signals, drainer, recorded_also_on)
+    yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
+    yield from _log_pose_signals(rec, ep, signals, pose_data, drainer)
+    yield from drainer.drain(force=True)
+
+
 @_releases_orphaned_recordings
-@rr.recording_stream.recording_stream_generator_ctx
 def stream_episode_rrd(
     ds: Dataset,
     episode_id: int,
@@ -1020,8 +1171,9 @@ def stream_episode_rrd(
 
     Raw image streams and numeric signals with a recognized nanosecond clock are thinned to ``max_hz``; a stored
     video keeps every frame. ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
-    Without a ``layout``, the replay shows the cameras beside
-    the 3D view over a grid of every signal. ``timeline`` selects the initial view; all timelines are exported.
+    Without a ``layout``, the replay shows the cameras and the 3D view in one grid, and on its right a column: the
+    charts of each arm, a chart of the progress marks, and Other, a group of the other signals. ``timeline`` selects
+    the initial view; all timelines are exported.
     """
 
     ep = ds[episode_id]
@@ -1031,30 +1183,18 @@ def stream_episode_rrd(
     dataset_root = get_dataset_root(ds)
     dataset_name = Path(dataset_root).name if dataset_root else 'unknown'
     recording_id = f'positronic_ds_{dataset_name}_episode_{episode_id}'
-    rec = rr.RecordingStream(application_id=recording_id)
-    drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
-
-    with rec:
-        signals = _collect_signal_groups(ep)
-        opening = _opening_timeline(ep, timeline)
-        recorded_also_on = opening if opening in _RECORDED_CLOCK_TIMELINES else None
-        _send_blueprint(rec, _build_blueprint(signals, ep, layout, opening))
-        if signals.unplotted:
-            logging.warning(f'Episode {episode_id}: not plotting {signals.unplotted}')
-            notice = _unplotted_notice(signals.unplotted)
-            rr.log(_UNPLOTTED_ENTITY, rr.TextDocument(notice, media_type=rr.MediaType.MARKDOWN), static=True)
-        yield from drainer.drain()
-
-        _setup_series_names(signals, ep)
-        yield from drainer.drain()
-
-        yield from _log_video_signals(ep, signals, drainer, max_resolution, max_hz, recorded_also_on)
-        pose_data = yield from _log_numeric_signals(ep, signals, drainer, max_hz, recorded_also_on)
-        yield from _log_text_signals(ep, signals, drainer, recorded_also_on)
-        yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
-        yield from _log_pose_signals(ep, signals, pose_data, drainer)
-
-    yield from drainer.drain(force=True)
+    with _RERUN_RECORDING_LIST_LOCK:
+        rec = rr.RecordingStream(application_id=recording_id)
+    try:
+        yield from _log_episode(rec, ep, episode_id, max_hz, max_resolution, layout, timeline)
+    except BaseException as error:
+        # A traceback keeps the locals of its frames, so the recording would die after the lock below.
+        traceback.clear_frames(error.__traceback__)
+        raise
+    finally:
+        # The handle runs an orphan sweep when it dies.
+        with _RERUN_RECORDING_LIST_LOCK:
+            del rec
 
 
 def get_dataset_root(dataset: Dataset) -> str | None:

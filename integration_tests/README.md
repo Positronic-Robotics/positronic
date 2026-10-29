@@ -22,7 +22,7 @@ The default checks:
   their episode-relative timestamps match the committed reference arrays. The comparison reports the
   first differing field, sample time and value.
 
-Traces use `harness.world`: command emission and input receipt time. Recordings without it use
+Traces use `harness.world`: command emission and the harness's read of each input. Recordings without it use
 `received.world` or legacy `recorded`. Comparisons exclude wall time, which varies between runs.
 
 The references are tied to the environment in `fixtures/act_stack/provenance.json`. Exact matching
@@ -97,6 +97,32 @@ The CPU checks for the checker itself can be run separately:
 ```bash
 uv run --locked pytest integration_tests/tests -n0
 ```
+
+## Local MolmoSpaces eval
+
+`molmo_local_eval.py` runs the eval step of [Score a policy on MolmoSpaces on your
+machine](../docs/local-molmospaces-eval.md) and checks its result. It needs the guide's two asset variables
+and a policy server, as the guide starts them. The locked environment builds `ruckig` from source, so it also
+needs a C++ compiler (`build-essential` on Ubuntu). From the repository root:
+
+```bash
+uv run --locked python integration_tests/molmo_local_eval.py run --output_dir=/tmp/molmo-local-eval
+```
+
+The output directory must be new. It keeps the recording in `episodes/` and the eval log in `eval.log`.
+`--eval_name=molmo.franka_pick_mini` runs the full eval, and `--host` and `--port` name another server. The
+check passes when the recording holds each trial of the eval once, a labeler labels each episode, and the
+log holds one score line, equal to the score of the recorded episodes. A failed check, a failed eval or an
+eval longer than `--wall_timeout` (3600 seconds by default) exits nonzero. The check does not judge the
+policy: any score passes.
+
+Check a saved run again without the policy server:
+
+```bash
+uv run --locked python integration_tests/molmo_local_eval.py check --output_dir=/tmp/molmo-local-eval
+```
+
+`uv run --locked pytest integration_tests/tests/test_molmo_local_eval.py -n0` runs the CPU checks of the checker.
 
 ## Background camera recording
 

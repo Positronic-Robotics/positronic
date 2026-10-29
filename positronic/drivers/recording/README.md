@@ -6,7 +6,8 @@ Import from `positronic.drivers.recording.ds_writer_agent`.
 
 `DsWriterAgent` records data collection and replay runs. Inference recording belongs to
 [`Harness`](../../policy/harness.py), which writes through the same dataset interfaces.
-Harness adds `harness.world` and `harness.wall`: first receipt for inputs, emission for commands.
+Harness adds `harness.world` and `harness.wall`: first receipt for a new input, the harness's read for a
+held input, emission for a command.
 These coordinates align inputs and commands while preserving the original message timestamps.
 The agent is a control-loop component (based on our `pimm` library) that turns live inputs into episode recordings using a flexible serializer pipeline. It listens for episode lifecycle commands (start/stop/abort) and, while an episode is open, appends updated inputs with their `pimm.Message.time` timestamps.
 
@@ -17,9 +18,8 @@ Key ideas
 - Recording is best effort, and this is a deliberate trade rather than an oversight. Each input arrives over a one-slot `pimm` signal where a new value overwrites one still unread, so a recorder that stalls for longer than the gap between two samples loses the older one — commands exactly as much as camera frames or arm state. An episode is what the recorder managed to observe, not a guaranteed-complete log of what happened; treat a missing sample as possible in any analysis that counts them.
 - A separate `command` channel controls episode lifecycle.
 - Every message coordinate is saved: emission, first delivery, and optional producer timelines.
-  Training joins, export, and analysis use `harness.world`, then `received.world`, then legacy `recorded`.
-  TODO: Remove the `received.world` fallback when teleoperation becomes a Harness policy and
-  `data_collection.py` is removed.
+  Training joins, export, and analysis use `harness.world`, then `received.world`, then legacy `recorded`
+  (`eval_vocabulary.timeline.recording_timeline`).
   Playback uses `harness.world` when present and otherwise `recorded`.
   Replay of data collection recordings requires an explicit `received.world` timeline.
   Pass `--timeline=received.world` to `positronic/replay_record.py` for these recordings.

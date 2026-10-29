@@ -109,15 +109,15 @@ The server manages the OpenPI subprocess and handles observation encoding and ac
 ### Starting the Server
 
 ```bash
-# Default pipeline (ee codec). `--pipeline.ee_frame=None` says the checkpoint speaks the rig's `default`
+# The ee pipeline. `gripper_frame` states a checkpoint trained on the poses the rig reports at `gripper`
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee \
   --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --pipeline.ee_frame=None
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 # With joint feedback
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee_joints \
   --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --pipeline.ee_frame=None
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 
 # Pretrained DROID model (pi05_droid) — preset model (public checkpoint + config) and pipeline (codec)
 docker compose run --rm --service-ports openpi-server droid
@@ -140,9 +140,12 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
   `droid_jointpos` / `libero`, the paired OpenPI config. Available: `ee`, `ee_joints`, `ee_traj`,
   `ee_joints_traj`, `joints_traj`, `ee_flip_grip`, `droid`, `droid_jointpos`, `libero`
 - `--model.checkpoints_dir`: Full path to the experiment directory containing checkpoints
-- `--pipeline.ee_frame`: The end-effector frame the checkpoint speaks, relative to the rig's `default`
-  (`@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the one we ship). Required on the EE pipelines — pass
-  `None` for a checkpoint trained in `default`. The joint-space pipelines set it themselves: no pose crosses the wire
+- `--pipeline.ee_frame`: The end-effector frame the checkpoint speaks: an offset from a site of the rig's model.
+  Required on the EE pipelines. Pass `@positronic.cfg.codecs.gripper_frame` for a checkpoint trained on poses at
+  `gripper`, `@positronic.cfg.codecs.franka_hand_frame` or `panda_hand_frame` for one trained on real FR3 or MuJoCo
+  sim recordings made before the rigs reported at `gripper`, and `@positronic.cfg.codecs.droid_frame` for one that
+  speaks the DROID flange. `None` states a checkpoint that speaks joints only. The joint-space pipelines set `None`
+  themselves
 - `--model.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
 - `--model.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
 - `--websocket.served_address.port`: (Optional) WebSocket wire port (default: 8000)
@@ -150,6 +153,8 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
   WebSocket wire to a Unix socket for a client on the same machine; that address names no host and no port
 - `--grpc=@positronic.offboard.server.grpc --grpc.served_address.port=<port>`: (Optional) serve the gRPC wire beside the websocket one
 - `--model.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
+- `--model.infer_timeout`: (Optional) Seconds the server waits for one inference from the OpenPI subprocess
+  (default: 120). It covers the first inference, which compiles the model
 - `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity
 
 ### Serving More Than One Policy On One GPU
@@ -169,7 +174,7 @@ The `openpi-server-8001` service is a second server on the same machine, on host
 docker compose run --rm --service-ports -e XLA_PYTHON_CLIENT_MEM_FRACTION=.25 \
   -v ~/checkpoints:/checkpoints openpi-server-8001 ee \
   --model.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --pipeline.ee_frame=None
+  --pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame
 ```
 
 ### API Endpoints
@@ -263,9 +268,9 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 1. The EE pipelines (`serve`, `ee`, `ee_joints`, `ee_traj`, `ee_joints_traj`, `ee_flip_grip`) bind no
    checkpoint, so they state no frame and require `--pipeline.ee_frame`. The `droid`, `droid_jointpos` and
    `libero` deployments bind their own, which is why moving off one of them needs the flag added
-2. Pass `--pipeline.ee_frame=None` for a checkpoint trained in the rig's `default` frame
-3. Otherwise pass the frame the checkpoint speaks, relative to `default` —
-   `@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the shipped one
+2. Pass `--pipeline.ee_frame=@positronic.cfg.codecs.gripper_frame` for a checkpoint trained on poses at the rig's `gripper` site
+3. Otherwise pass the frame the checkpoint was trained in: `franka_hand_frame` or `panda_hand_frame` for real FR3 or
+   MuJoCo sim recordings made before the rigs reported at `gripper`, `droid_frame` for the DROID flange
 
 ### Action decoding fails
 

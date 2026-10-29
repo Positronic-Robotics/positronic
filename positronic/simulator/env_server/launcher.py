@@ -5,13 +5,21 @@ project, its ``PYTHONPATH`` entries) and its pinned source checkout — and comp
 """
 
 import fcntl
+import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
+
+# What ``server`` and ``protocol`` import beyond the benchmark's own dependencies.
+SERVER_DEPS = ('websockets>=15.0.1', 'msgpack')
+
+PYTHONPATH_ENV = 'PYTHONPATH'
+GL_BACKEND_ENV = 'MUJOCO_GL'
 
 
 def free_port() -> int:
@@ -50,6 +58,43 @@ def ensure_pinned_checkout(repo_url: str, commit: str, dest: Path, *, lfs: bool 
     return dest
 
 
+@contextmanager
+def setup_lock(cache: Path) -> Iterator[None]:
+    """Serialize a benchmark's setup (checkout, install, assets) across the processes that share ``cache``.
+
+    A fan-out of eval jobs mounts one cache, so two setups at once would install into a half-written tree.
+    """
+    cache.mkdir(parents=True, exist_ok=True)
+    with open(cache / 'setup.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def ensure_venv(venv: Path, python: str) -> Path:
+    """The interpreter of ``venv``; uv makes the venv on Python ``python`` when it is absent."""
+    if not venv.exists():
+        subprocess.run(['uv', 'venv', '--python', python, str(venv)], check=True)
+    return venv / 'bin' / 'python'
+
+
+def uv_pip_install(venv: Path, args: Sequence[str], cwd: Path | None = None) -> None:
+    subprocess.run(
+        ['uv', 'pip', 'install', *args],
+        cwd=None if cwd is None else str(cwd),
+        env={**os.environ, 'VIRTUAL_ENV': str(venv)},
+        check=True,
+    )
+
+
+def mujoco_server_env(pythonpath: Sequence[Path]) -> dict[str, str]:
+    """This process's environment with ``pythonpath``, and a MuJoCo GL backend where the operator set none."""
+    return {
+        **os.environ,
+        PYTHONPATH_ENV: os.pathsep.join(str(path) for path in pythonpath),
+        GL_BACKEND_ENV: os.environ.get(GL_BACKEND_ENV, 'cgl' if sys.platform == 'darwin' else 'egl'),
+    }
+
+
 def terminate(proc: subprocess.Popen) -> None:
     proc.terminate()
     try:
@@ -80,15 +125,40 @@ def _await_bind(proc: subprocess.Popen, host: str, port: int, deadline: float) -
         time.sleep(_BIND_POLL_INTERVAL)
 
 
+# One lock file per port that a launcher holds for its server. Do not remove a lock file: a launcher that
+# opened it before the removal and a launcher that opens it after can both hold the port.
+_PORT_LOCKS = Path.home() / '.cache' / 'positronic' / 'env_server_ports'
+
+
+@contextmanager
+def _reserved_port() -> Iterator[int]:
+    """Yield a free port that no other launcher on this machine holds, and hold it for the context.
+
+    A server binds its port only after its imports, and until then the kernel can give the port again.
+    """
+    _PORT_LOCKS.mkdir(parents=True, exist_ok=True)
+    while True:
+        port = free_port()
+        lock = open(_PORT_LOCKS / f'{port}.lock', 'w')
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock.close()
+            continue
+        with lock:
+            yield port
+        return
+
+
 @contextmanager
 def serve_subprocess(
     spawn: Callable[[str, int], subprocess.Popen], host: str, bind_deadline: float = _BIND_DEADLINE
 ) -> Iterator[tuple[str, int]]:
     """Yield the server's (host, port) once it accepts TCP connections; terminate the process on exit."""
-    port = free_port()
-    proc = spawn(host, port)
-    try:
-        _await_bind(proc, host, port, bind_deadline)
-        yield host, port
-    finally:
-        terminate(proc)
+    with _reserved_port() as port:
+        proc = spawn(host, port)
+        try:
+            _await_bind(proc, host, port, bind_deadline)
+            yield host, port
+        finally:
+            terminate(proc)

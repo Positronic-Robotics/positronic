@@ -258,6 +258,8 @@
                       <geom class="visual_ph" material="white_ph" mesh="link7_7_ph"/>
                       <geom class="collision_ph" mesh="link7_c_ph"/>
                       <site name="site_joint7_ph" pos="0 0 0"/>
+                      <site name="link8_ph" pos="0 0 0.107" group="4"/>
+                      <site name="gripper_ph" pos="0 0 0.21065" group="4"/>
                       <body name="hand_ph" pos="0 0 0.107" quat="0.92388 0 0 -0.382683">
                         <inertial pos="-0.01 0 0.03" mass="0.73" diaginertia="0.001 0.0025 0.0017"/>
                         <geom class="visual_ph" material="off_white_ph" mesh="hand_0_ph"/>
@@ -268,12 +270,13 @@
                         <geom class="collision_ph" mesh="hand_c_ph"/>
                         <geom name="hand_capsule_ph" class="collision_ph" size="0.04 0.06" pos="0 0 0.03" quat="0.707107 0.707107 0 0" type="capsule" conaffinity="1"/>
                         <site name="end_effector_ph" pos="0 0 0.0584" size="0.01" rgba="1 0 0 1"/>
-                        <site name="gripper_ph" pos="0 0 0.1"/>
+                        <site name="hand_marker_ph" pos="0 0 0.1"/>
                         <camera name="handcam_left_ph" pos="0.05 -0.05 0.01" quat="0 0.707105 0.707108 0" fovy="105"/>
                         <camera name="handcam_front_ph" pos="0.05 0 0.01" quat="0 0.707105 0.707108 0" fovy="105"/>
                         <camera name="handcam_back_ph" pos="-0.05 0 0.01" quat="0 0.707105 0.707108 0" fovy="105"/>
                         <camera name="handcam_right_ph" pos="0.05 0.05 0.01" quat="0 0.707105 0.707108 0" fovy="105"/>
                         <camera name="wrist_cam_ph" pos="-0.05 0.03 0.015" xyaxes="0 -1 0 -1 0 0.2" fovy="90"/>
+                        <camera name="wrist_cam_upright_ph" pos="-0.05 0.03 0.015" xyaxes="0 1 0 1 0 -0.2" fovy="90"/>
                         <body name="left_finger_ph" pos="0 0 0.0584">
                           <inertial pos="0 0 0" mass="0.015" diaginertia="2.375e-06 2.375e-06 7.5e-07"/>
                           <joint name="finger_joint1_ph" class="finger_ph" pos="0 0 0" axis="0 1 0" damping="10"/>

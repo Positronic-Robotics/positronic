@@ -1,6 +1,6 @@
 # Enter the Physical AI Competition
 
-The [competition site](https://physical-ai-competition.positronic.ro/index.html) has the rules, the dates
+The [competition site](https://competition.phail.ai/) has the rules, the dates
 and the leaderboard.
 
 A coding agent can do most of the work. You approve the sign-in, and you choose where to push your image.
@@ -16,14 +16,61 @@ Six steps: 1 [Install](#install-the-commands) · 2 [Register](#register) ·
   gives values for each example image. Some images also need a GPU.
   - No such machine? [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) creates one with one
     command. Sign up for Nebius Builder with the email address of the account that you register with.
-    Nebius also has the GPUs to train your policy.
-  - Do not use a Mac with Apple silicon, or another ARM machine. Docker emulates amd64 there, and the test
-    is very slow and can fail.
+    Nebius also has the GPUs to train your policy:
+    [Fine-tune GR00T on demonstrations](#fine-tune-gr00t-on-demonstrations) shows how.
+  - A Mac with Apple silicon, or another ARM machine, can build and submit the image: the build command
+    names `--platform linux/amd64`. Docker emulates amd64 there, so the build is slower. The local test
+    does not run there, because the model does not load in the time limit, and the test script stops at
+    once. Skip the test, or run it on an amd64 Linux machine. Without the test, a broken image uses one
+    submission of the day.
 - On that machine: git, [uv](https://docs.astral.sh/uv/) 0.8.5 or later, and Docker.
 - Push access to a container registry, such as Docker Hub.
 
-You can install the commands, register and submit on any computer. Run the other steps, and your coding
+You can install the commands, register, enter and submit on any computer. Do these four steps on the same
+computer, because the API key stays on the computer that registered. Build and test, and run your coding
 agent, on the build machine.
+
+## Quickstart
+
+These are the commands of the six steps, in order. Replace each `<...>` first:
+[Fill in the placeholders](#fill-in-the-placeholders) says what goes there. Run one step at a time, and
+read what it prints. Step 3 shows what becomes public before `competition-enter --yes` enters your team.
+Each step of [Get started by hand](#get-started-by-hand) tells more.
+
+```bash
+# 1 Install
+uv tool install --managed-python --python 3.13 'positronic @ git+https://github.com/Positronic-Robotics/positronic'
+# 2 Register: open the sign-in link within 5 minutes
+positronic account register --alias="<team name>"
+# 3 Enter: read what becomes public, then enter
+competition-enter
+competition-enter --yes
+# 4 Build and push an example image (π0.5 DROID)
+git clone https://github.com/Positronic-Robotics/positronic
+cd positronic
+docker login
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+    -f docker/Dockerfile.serve-pi05-droid -t docker.io/<you>/<image>:v1 --push .
+# 5 Test with the network denied (uses no submission)
+bash docker/test_policy_image.sh docker.io/<you>/<image>:v1
+# 6 Submit, pinned by digest, to the eval that the leaderboard ranks
+docker buildx imagetools inspect docker.io/<you>/<image>:v1
+positronic eval run --policy-image=docker.io/<you>/<image>@sha256:<digest> \
+    --transaction-key="<a name for this attempt>"
+positronic eval status --id=<submission id>
+```
+
+The first submission of your team asks it to accept the terms. [Submit](#submit) tells how.
+
+## Fill in the placeholders
+
+| Placeholder | What goes there |
+|---|---|
+| `<team name>` | The name of your team. The competition publishes it. |
+| `<you>/<image>` | Your repository on Docker Hub. For another registry, replace `docker.io` with the host of that registry in each command, and log in with `docker login <host>`. A private repository needs a credential: [A private image](#a-private-image). |
+| `<digest>` | The digest of your image, from `docker buildx imagetools inspect docker.io/<you>/<image>:v1`, without its `sha256:` prefix, because `--policy-image` already has `@sha256:`. A tag can move to an image that you did not test. |
+| `<a name for this attempt>` | The transaction key. Keep the quotes, because a name can contain spaces. Use a new key for a new image or another eval. The same key only retries the same submission. |
+| `<submission id>` | The id that `positronic eval run` prints. |
 
 ## Use a coding agent
 
@@ -35,8 +82,10 @@ Follow this guide step by step:
 https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competition.md
 
 1. Install the commands and register me. Ask me for a team name first.
-   Show me the sign-in code and link, and wait while I approve it.
-   Keep the API key in my environment. Never print it again.
+   Run the register command in the background, and show me its
+   sign-in line at once. The link expires in 5 minutes.
+   Wait while I sign in.
+   The command saves my API key on this computer. Never print the key.
 2. Enter me in the competition. Show me what becomes public and
    where to read how my data is used, and ask whether to enter.
    Never enter without explicit human approval.
@@ -54,48 +103,52 @@ https://github.com/Positronic-Robotics/positronic/blob/main/docs/nebius-competit
 
 ### Install the commands
 
-The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later, the first version with
-`--with-executables-from`. Run `uv --version` to check. To update uv, run `uv self update`, or use the
-tool that installed uv.
+The commands need [uv](https://docs.astral.sh/uv/) 0.8.5 or later. Run `uv --version` to check. To update
+uv, run `uv self update`, or use the tool that installed uv.
 
-This command installs the commands from the positronic repository on GitHub. It uses about 2 GB of disk
+This command installs `positronic` from the `main` branch of its repository. It uses about 2.5 GB of disk
 space.
 
 ```bash
-uv tool install --managed-python --with-executables-from positronic-platform-client \
-    git+https://github.com/Positronic-Robotics/positronic
+uv tool install --managed-python --python 3.13 'positronic @ git+https://github.com/Positronic-Robotics/positronic'
 ```
 
-`--managed-python` makes uv use a Python that it installs. The Python of Ubuntu cannot build one of the
-dependencies.
+`--managed-python --python 3.13` makes uv install Python 3.13 and use it, whatever Python the machine has.
+`positronic` does not run on Python 3.14 or later.
 
 To update the commands later, run `uv tool upgrade positronic`.
 
 ### Register
 
-Choose a team name. The command prints a code and a link. Open the link, sign in, and enter the code.
-The sign-in page shows the ways to sign in that the platform takes. The command then prints your API
-key one time.
+Choose a team name. The command prints a sign-in link and a code, and waits while you sign in. The link
+expires in 5 minutes. If it expires, run the command again. Open the link and sign in. The link carries the
+code, so the page shows it: make sure that it is the code that the command printed. If the page asks for
+the code, enter it. The sign-in page shows the ways to sign in that the platform takes. The sign-in can
+send you a code by email, from Physical AI Competition (`competition@phail.ai`). If the code is not in your
+inbox, look in your spam folder. The command saves your API key on this computer, and prints the path of
+the file. The other commands read the key from that file.
 
 ```bash
-platform-register --alias="<team name>"
-export POSITRONIC_PLATFORM_API_KEY=<the key it printed>
+positronic account register --alias="<team name>"
 ```
 
-- Keep the key secret. If you lose it, run `platform-register --rotate` to get a new key.
+- Keep the key file secret. If you lose it, run `positronic account register --rotate` to get a new key.
+  This stops the old key.
+- If your account already has a key, the command does not show the key again. Set
+  `POSITRONIC_PLATFORM_API_KEY` to the key that you have.
 
 ### Enter the competition
 
-The command shows the link to the [terms](https://competition.phail.ai/terms) and their version, and
-what becomes public. The section "Your data" of the terms tells how the organizers use your data. With
-`--yes`, your team enters. The entry asks for no terms: your team accepts them with its first submission
-(see [Submit](#submit)).
+The command shows what becomes public about your team. With `--yes`, your team enters. The entry asks
+for no terms: your team accepts the [terms](https://competition.phail.ai/terms) with its first submission
+(see [Submit](#submit)). The section "Your data" of the terms tells how the organizers use your data.
 
 ```bash
 competition-enter
 competition-enter --yes
 ```
 
+- The command prints the current version of the terms. `competition-enter --accept-terms=<version>` enters and accepts it.
 - When you enter, the competition publishes your team name and the date you entered. When a run is
   scored, it publishes the scores and the videos of the run. All of this stays public after the
   competition.
@@ -150,7 +203,7 @@ than on a GPU. Then it prints one of these lines, and the end of the log:
 
 - `the server answered: {"alive_seconds": ...}`: the server loaded its weights. The test passed.
 - `the server exited`: read the log. An image that needs a GPU stops with an error about CUDA. The GR00T
-  N1.7, FLUX 3 Action and Cosmos3-Nano example images stop in this way. Test such an image on a GPU.
+  N1.7 example image stops in this way. Test such an image on a GPU.
 - `the server answered HTTP <code>`: the server runs, but it refused the request. A `401` means that the
   server does not accept the token in `AUTH_TOKEN`. On the platform, this fails the run with
   `policy_setup_crash`.
@@ -168,25 +221,28 @@ On a machine with a GPU, add `--gpu`. The script then gives the server 600 s:
 bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
-- The platform gives the image one GPU with 40 GB of memory. On a larger GPU, use `nvidia-smi` to make
-  sure that your model uses less.
-- On the platform, machine boot, the image pull and the server's start share one deadline of 1800 s.
+- The platform gives the image one GPU with 24 GB of memory. A competition plan whose image endpoint
+  states `min_vram_gb` above 25 is refused. On a larger GPU, use `nvidia-smi` to make
+  sure that your model uses less. A memory setting that is a fraction of the GPU, such as
+  `XLA_PYTHON_CLIENT_MEM_FRACTION`, is a fraction of the 24 GB.
+- On the platform, the server's start has a deadline of 1800 s, from the end of the image pull to the
+  first answer. Machine boot and the pull have their own deadline, and a miss there is the
+  platform's fault.
 
 ### Submit
 
-Read the name of the competition eval, and the digest of your image:
+Read the digest of your image:
 
 ```bash
-positronic eval catalog
 docker buildx imagetools inspect docker.io/<you>/<image>:v1
 ```
 
-Submit the image to the competition eval, pinned by its digest. Then follow the submission:
+Submit the image, pinned by its digest. The command runs the eval that the leaderboard ranks, and prints
+its name. Then follow the submission:
 
 ```bash
-positronic eval run --eval=<eval> \
-    --policy-image=docker.io/<you>/<image>@sha256:<digest> \
-    --transaction-key=<a name for this attempt>
+positronic eval run --policy-image=docker.io/<you>/<image>@sha256:<digest> \
+    --transaction-key="<a name for this attempt>"
 positronic eval status --id=<submission id>
 positronic eval list
 ```
@@ -202,11 +258,12 @@ positronic eval list
   request under a used key with `transaction_conflict`.
 - You can make one submission per day. [Submissions per day](#submissions-per-day) says what counts.
 - [Read the outcome](#read-the-outcome) says what the status tells you.
+- To run another eval, add `--eval=<name>`. `positronic eval catalog` lists the evals that you can name.
 
 ### Choose your final entry
 
 Before submissions close, choose your final entry, as the
-[rules](https://physical-ai-competition.positronic.ro/rules.html#finale) say.
+[rules](https://competition.phail.ai/rules#finale) say.
 
 ### Ask for help
 
@@ -215,8 +272,10 @@ the platform's [HTTP API](https://platform.positronic.ro/docs), and your own too
 
 ---
 
-<!-- The competition site shows the sections above this line in full, and each section below it as a block
-that opens and closes. -->
+<!-- The competition site reads this file at its start page. It finds the sections above this line by
+their headings: keep "Quickstart", "Fill in the placeholders", "Use a coding agent", "Get started by hand"
+and the six step headings under it. It shows each section below this line as a block that opens and
+closes. -->
 
 ## Your policy image
 
@@ -235,18 +294,27 @@ eval against the server in the image.
 - The platform waits until `POST /api/v1/keepalive` answers on port 8000. Then it opens one WebSocket
   session for each episode at `/api/v1/session`.
 - If a route refuses the token of the run, the run fails with `policy_setup_crash`.
-- The GPU is one `3g.40gb` slice of an NVIDIA H100, with 40448 MiB of memory.
+- The GPU is one `1g.24gb` slice of an NVIDIA RTX PRO 6000, with 24192 MiB of memory and a quarter
+  of the card's compute.
+- The card is a Blackwell GPU with compute capability 12.0 (`sm_120`). Each framework in the image needs
+  kernels for `sm_120`, or the first inference fails with
+  `CUDA error: no kernel image is available for execution on the device`. For PyTorch, install a build
+  for CUDA 12.8 or newer (`cu128`): the PyPI build of torch 2.7.1 stops at `sm_90`. To check, run
+  `python -c "import torch; print(torch.cuda.get_arch_list())"` in the image on a machine with a GPU. The
+  list must contain `sm_120`.
 - The platform runs the image digest that it found when you submitted. It pulls that digest from your
   registry when the run starts, and it keeps no copy of the image.
-- The [rules](https://physical-ai-competition.positronic.ro/rules.html#limits) give the other limits on
+- The [rules](https://competition.phail.ai/rules#limits) give the other limits on
   the image.
 
 ### Start from an example image
 
-Each example image serves a public DROID checkpoint, such as π0.5 DROID or GR00T N1.7 DROID. CI publishes
-each one to Docker Hub as a `positro/` image, from a recipe in the positronic repository.
+Three example images fit the 24 GB of GPU memory that a competition run gets: π0.5 DROID, GR00T N1.7 DROID
+and MolmoAct2 DROID. Each one serves a public DROID checkpoint. CI publishes each one to Docker Hub as a
+`positro/` image, from a recipe in the positronic repository.
 [Example images](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#example-images)
-lists them, with the recipe for each.
+lists all five example images, with the recipe for each. FLUX 3 Action DROID and Cosmos3-Nano DROID need
+about 35 GB of GPU memory, so a competition run of them does not fit.
 
 - The comments in each recipe say where a checkpoint of your own goes.
 - The GR00T recipe needs a Hugging Face read token, because the repository of its backbone is gated.
@@ -331,6 +399,115 @@ bash positronic/docker/nebius_vm.sh delete
 - If Nebius refuses the VM because of a [quota](https://docs.nebius.com/overview/quotas), ask Nebius
   for a larger quota.
 
+## Fine-tune GR00T on demonstrations
+
+These steps fine-tune the GR00T N1.7 DROID example on MolmoSpaces demonstrations, and put the checkpoint into
+a policy image. A person records the demonstrations with a phone or a Meta Quest.
+
+You need two machines, or one machine that does both:
+
+- Any machine with uv and the positronic source converts the demonstrations.
+- A machine with a GPU trains the model. At the default batch of 64, training needs about 50 GB of GPU
+  memory, so an H100 with 80 GB has enough. An L40S with 48 GB does not have enough. On Nebius, make the VM of
+  [Build and test on a Nebius VM](#build-and-test-on-a-nebius-vm) with an H100 and a disk of 400 GB:
+
+  ```bash
+  NEBIUS_PLATFORM=gpu-h100-sxm NEBIUS_PRESET=1gpu-16vcpu-200gb NEBIUS_DISK_GIB=400 \
+    bash positronic/docker/nebius_vm.sh create
+  ```
+
+### 1. Get the demonstrations
+
+Use the 10 example demonstrations, `@positronic.cfg.ds.sim.molmo_pick_demos`. They are public, and the convert
+step downloads them. They are an example of the steps only: do not expect a dataset of this size to improve the
+policy.
+
+Or record your own. The
+[teleoperation guide](https://github.com/Positronic-Robotics/positronic/blob/main/positronic/teleop/README.md#collect-demonstrations-in-molmospaces)
+gives the commands.
+
+If you have ideas about how to get demonstrations for a fine-tune, please share them on the
+[Positronic Discord](https://discord.gg/PXvBy4NBgv). We are grateful for each one.
+
+### 2. Convert the demonstrations
+
+In the positronic source, convert the demonstrations into the training format of GR00T:
+
+```bash
+uv run --extra lerobot_0_3_3 python -m positronic.vendors.lerobot_0_3_3.to_lerobot convert \
+  --dataset=@positronic.cfg.ds.transform \
+  --dataset.base=@positronic.cfg.ds.sim.molmo_pick_demos \
+  '--dataset.transforms=["@positronic.vendors.gr00t.recipes.droid_molmo"]' \
+  --output_dir=$HOME/groot-data/datasets/molmo_pick_demos
+```
+
+- `droid_molmo` trains on the wrist camera and one shoulder camera, as the example image serves.
+- For your own recordings, set `--dataset.base=@positronic.cfg.ds.local_all` and
+  `--dataset.base.path=<the directory of your recordings>`. It reads every recording under that directory.
+- The convert step takes every episode. Delete the episodes that failed first, or the model learns them too.
+- Copy `$HOME/groot-data` to the GPU machine if the convert step ran on another machine.
+
+### 3. Train
+
+On the GPU machine, copy the weights of GR00T N1.7 DROID and of its gated backbone out of the example image,
+into the cache that training reads. Then training needs no Hugging Face token:
+
+```bash
+mkdir -p ~/.cache/huggingface
+cid=$(docker create positro/gr00t-n17-droid:latest)
+docker cp "$cid":/opt/hf/. ~/.cache/huggingface/
+docker rm "$cid"
+```
+
+In the `docker` directory of the positronic source, train:
+
+```bash
+docker compose run --rm -v "$HOME/groot-data:/data" \
+  -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e GROOT_PATCH_MISTRAL=1 -e WANDB_MODE=offline groot-train \
+  --input_path=/data/datasets/molmo_pick_demos --output_path=/data/checkpoints --exp_name=molmo_pick_demos \
+  --learning_rate=2e-5 --num_train_steps=2000 --save_steps=1000
+```
+
+- Before the first step, training loads the dataset and computes its statistics.
+- The step count and the learning rate are example values.
+- Training keeps the normalization statistics of the base checkpoint. The log shows `new stats DISCARDED`.
+- Each checkpoint is about 24 GB, and it goes to `$HOME/groot-data/checkpoints/molmo_pick_demos/checkpoint-<step>`.
+
+### 4. Build the image
+
+Delete the optimizer state from the checkpoint, because the server does not read it. It is about 12 GB. Then
+build the image from the example image:
+
+```bash
+cd $HOME/groot-data/checkpoints/molmo_pick_demos
+rm checkpoint-2000/optimizer.pt checkpoint-2000/scheduler.pt checkpoint-2000/rng_state.pth
+cat > Dockerfile <<'DOCKERFILE'
+FROM positro/gr00t-n17-droid:latest
+COPY checkpoint-2000 /opt/checkpoint
+ENV GROOT_MODEL_SOURCE=/opt/checkpoint
+DOCKERFILE
+docker login
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+  -t docker.io/<you>/<image>:v1 --push .
+```
+
+The example image serves the cameras of `droid_molmo`, so the image needs no other command.
+
+### 5. Test, score and submit
+
+- Go back to the positronic source, and test the image with the GPU, as [Test the image](#test-the-image)
+  says:
+
+  ```bash
+  cd <the positronic source>
+  bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
+  ```
+
+- Score it on your machine before you submit, as
+  [Score a policy on MolmoSpaces on your machine](https://github.com/Positronic-Robotics/positronic/blob/main/docs/local-molmospaces-eval.md)
+  says. Compare the score with the score of `positro/gr00t-n17-droid`.
+- Then [submit](#submit) the image.
+
 ## Submissions per day
 
 You can make one submission per day. The count starts again at 00:00 UTC each day, so you can submit at
@@ -345,7 +522,7 @@ You can make one submission per day. The count starts again at 00:00 UTC each da
 - A retry with the same `--transaction-key` returns the first submission, and it does not count again.
 - The platform refuses a submission over the limit with `quota_exceeded`.
 - The competition can change the limit during the season. It announces each change on the
-  [competition site](https://physical-ai-competition.positronic.ro/index.html).
+  [competition site](https://competition.phail.ai/).
 
 ## Read the outcome
 

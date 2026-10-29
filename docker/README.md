@@ -40,6 +40,23 @@ Now you are ready to build our Docker.
 docker/build.sh
 ```
 
+## Policy serving images
+
+Each `Dockerfile.serve-*` recipe builds an inference server image for one public DROID checkpoint. CI
+publishes the five example images to Docker Hub as `positro/*` images:
+
+| Recipe | Image | Model |
+|---|---|---|
+| [`Dockerfile.serve-pi05-droid`](Dockerfile.serve-pi05-droid) | `positro/pi05-droid` | openpi π0.5 DROID |
+| [`Dockerfile.serve-gr00t-n17-droid`](Dockerfile.serve-gr00t-n17-droid) | `positro/gr00t-n17-droid` | GR00T N1.7 DROID |
+| [`Dockerfile.serve-molmoact2-droid`](Dockerfile.serve-molmoact2-droid) | `positro/molmoact2-droid` | MolmoAct2 DROID |
+| [`Dockerfile.serve-flux3-action`](Dockerfile.serve-flux3-action) | `positro/flux3-action` | FLUX 3 Action DROID |
+| [`Dockerfile.serve-cosmos3-nano`](Dockerfile.serve-cosmos3-nano) | `positro/cosmos3-nano` | Cosmos3-Nano DROID |
+
+[Example images](../docs/submit-a-policy-image.md#example-images) gives the base, the build command and
+the memory that each image uses. The last two need more GPU memory than the 24 GB that a platform run
+gets by default.
+
 ## GR00T N1.7 containers
 
 `make build-groot` pulls the published `positro/gr00t-base:latest` image. The fork image contains

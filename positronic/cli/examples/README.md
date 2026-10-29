@@ -30,10 +30,11 @@ uv run positronic eval run --from-file=positronic/cli/examples/rig_plan.yaml --o
 uv run positronic eval run --from-file=positronic/cli/examples/yam_plan.yaml --org=<org>
 ```
 
-`eval catalog` prints the tasks your org may put in a plan. `rig_plan.yaml` runs a task on the
-single-arm Franka. `yam_plan.yaml` states `rig_shape: yam`, so its tasks run on the bimanual YAM.
-Every task of a plan runs on the rig that its `rig_shape` names, and the platform does not check a
-task against that rig, so put in one plan only the tasks laid out for that rig.
+`eval catalog` prints the tasks your org may put in a plan, each with the `embodiments` it runs on.
+`rig_plan.yaml` runs a task on the single-arm Franka. `yam_plan.yaml` states `rig_shape: yam`, so its
+tasks run on the bimanual YAM. Every task of a plan runs on the rig that its `rig_shape` names. A plan
+is refused when its `rig_shape` is not one of a task's `embodiments`, so put in one plan only the
+tasks laid out for that rig.
 
 Two or more endpoints in the plan make one blind sample: the operator is told no policy, and each
 episode records which one served it. The plan is a YAML or JSON file, and each endpoint in it names
@@ -64,7 +65,7 @@ uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<refe
 `--eval` takes one of the evals `standings.py` prints; with no `--eval`, the walkthrough prints them
 and stops. `--policy-image` names an image the platform can pull; there is no public one to default
 to. [Submit a policy image](../../../docs/submit-a-policy-image.md) says what the platform requires
-of an image and how to build one from a `positro/<vendor>` base. The key comes from `POSITRONIC_PLATFORM_API_KEY`, which `platform-register` prints. A caller who
+of an image and how to build one from a `positro/<vendor>` base. The key comes from `POSITRONIC_PLATFORM_API_KEY`, else from the record `positronic account register` saves. A caller who
 holds a token of the platform's identity provider sets `POSITRONIC_PLATFORM_CREDENTIAL` instead,
 and the walkthrough registers with it. Every script talks to `https://platform.positronic.ro` unless
 `--platform-url` says otherwise.

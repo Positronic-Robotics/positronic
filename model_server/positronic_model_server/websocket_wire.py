@@ -41,11 +41,13 @@ class WebsocketServerConnection(server_wire.ServerConnection):
         receive: ASGIReceiveCallable,
         send: ASGISendCallable,
         served_address: server_wire.ServedAddress,
+        close_timeout: float,
     ):
         self._scope = scope
         self._asgi_receive = receive
         self._asgi_send = send
         self._served_address = served_address
+        self._close_timeout = close_timeout
         self._closed = False
 
     @property
@@ -86,19 +88,28 @@ class WebsocketServerConnection(server_wire.ServerConnection):
             raise ValueError('A session message must be a binary WebSocket frame')
         return payload
 
-    async def refuse(self, reason: str) -> None:
-        # A close frame leaves 123 bytes for its UTF-8 reason after the status code.
-        reason = reason.encode('utf-8')[:123].decode('utf-8', errors='ignore')
-        await self._send({'type': 'websocket.close', 'code': 1008, 'reason': reason})
+    async def _wait_for_client_close(self) -> None:
+        while (await self._asgi_receive())['type'] != 'websocket.disconnect':
+            pass
+        self._closed = True
 
-    async def finish(self, timeout: float) -> None:
+    async def _close(self, code: int, reason: str = '') -> None:
+        """Wait up to the close timeout for the client to close the session, and close it with ``code`` if not."""
         if self._closed:
             return
-        # A server-initiated close can discard the final message on Unix sockets.
-        with suppress(TimeoutError, wire.PeerDisconnected):
-            await asyncio.wait_for(self.receive(), timeout=timeout)
+        # Uvicorn drops the connection as it sends a close from the server. The close reply of the client can then
+        # fail, and the websockets client discards the messages that came with the close, unread.
+        with suppress(TimeoutError):
+            await asyncio.wait_for(self._wait_for_client_close(), timeout=self._close_timeout)
         if not self._closed:
-            await self._send({'type': 'websocket.close', 'code': 1000})
+            await self._send({'type': 'websocket.close', 'code': code, 'reason': reason})
+
+    async def refuse(self, reason: str) -> None:
+        # A close frame leaves 123 bytes for its UTF-8 reason after the status code.
+        await self._close(1008, reason.encode('utf-8')[:123].decode('utf-8', errors='ignore'))
+
+    async def finish(self) -> None:
+        await self._close(1000)
 
 
 # The kernel picks a port free on the first address only, and another process can hold it on the next one.
@@ -250,9 +261,9 @@ class WebsocketWire(server_wire.Wire):
             await send({'type': 'websocket.close', 'code': 1008})
             return
         await send({'type': 'websocket.accept'})
-        conn = WebsocketServerConnection(scope, receive, send, self.served_address)
+        conn = WebsocketServerConnection(scope, receive, send, self.served_address, self.CLOSE_TIMEOUT_SEC)
         await session(conn)
-        await conn.finish(self.CLOSE_TIMEOUT_SEC)
+        await conn.finish()
 
     @staticmethod
     async def _answer_keepalive(

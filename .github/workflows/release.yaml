@@ -14,6 +14,7 @@ jobs:
   # put a distribution on the index first.
   verify-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,6 +45,7 @@ jobs:
   # failed release.
   publish-client-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: publish-evals-pypi
     steps:
       - name: Checkout
@@ -72,6 +74,7 @@ jobs:
 
   publish-wire-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: verify-release
     steps:
       - name: Checkout
@@ -100,6 +103,7 @@ jobs:
 
   publish-model-server-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: publish-wire-pypi
     steps:
       - name: Checkout
@@ -128,6 +132,7 @@ jobs:
 
   publish-vocabulary-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: verify-release
     steps:
       - name: Checkout
@@ -156,6 +161,7 @@ jobs:
 
   publish-evals-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: publish-vocabulary-pypi
     steps:
       - name: Checkout
@@ -184,6 +190,7 @@ jobs:
 
   publish-pypi:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [verify-release, publish-client-pypi, publish-evals-pypi, publish-wire-pypi, publish-model-server-pypi, publish-vocabulary-pypi]
     steps:
       - name: Checkout
@@ -212,9 +219,18 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
 
+  # `positro/openpi` and `positro/pi05-droid` build on this base.
+  openpi-base:
+    needs: verify-release
+    uses: ./.github/workflows/docker-openpi-base.yaml
+    with:
+      push: true
+    secrets: inherit
+
   publish-docker:
     runs-on: ubuntu-latest
-    needs: publish-pypi
+    timeout-minutes: 60
+    needs: [publish-pypi, openpi-base]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -250,7 +266,7 @@ jobs:
 
   # Each serving image holds its weights, so each builds on a runner of its own.
   publish-serve-images:
-    needs: publish-pypi
+    needs: [publish-pypi, openpi-base]
     strategy:
       fail-fast: false
       matrix:

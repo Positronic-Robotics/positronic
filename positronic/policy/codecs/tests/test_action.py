@@ -1,9 +1,10 @@
 import json
+from typing import cast
 
 import numpy as np
 import pytest
 from positronic_model_server import serialization
-from positronic_model_server.spec import ARGS, VERSION, component
+from positronic_model_server.spec import ARGS, component
 
 import positronic.drivers.roboarm.command as cmd_module
 from pimm.time import EMITTED_WORLD, RECEIVED_WORLD
@@ -20,12 +21,67 @@ from positronic.policy.codecs import (
     CartesianDeltaAction,
     Codec,
     JointPositionAction,
-    ObservationCodec,
+    PackFields,
+    SelectObservationFields,
     SetControlMode,
-    UnpackActionChunk,
+    SplitActionChunk,
+    StateObservationCodec,
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
 from positronic.policy.spec import from_spec
+
+
+def test_joint_commands_encode_through_composition_without_changing_the_plan():
+    codec = SelectObservationFields({'state': 'q'}) & JointPositionAction(
+        'joints', 'grip', num_joints=2, commands_path=('plan', 'commands')
+    )
+    codec = from_spec(json.loads(json.dumps(codec.to_spec())))
+    assert isinstance(codec, Codec)
+    commands = [{obs_keys.ROBOT_COMMAND: cmd_module.JointPosition(np.array([0.1, 0.2])), obs_keys.TARGET_GRIP: 1.0}]
+    plan = {'commands': commands, 'offset_sec': -0.02}
+    encoded = codec.encode({'q': [0.3, 0.4], 'plan': plan, 'unselected': 'omit'})
+    encoded = serialization.deserialise(serialization.serialise(encoded))
+    assert set(encoded) == {'state', 'plan'}
+    assert encoded['state'] == [0.3, 0.4]
+    assert encoded['plan']['offset_sec'] == -0.02
+    np.testing.assert_allclose(encoded['plan']['commands'][0]['joints'], [0.1, 0.2])
+    np.testing.assert_array_equal(encoded['plan']['commands'][0]['grip'], [1.0])
+    assert isinstance(commands[0][obs_keys.ROBOT_COMMAND], cmd_module.JointPosition)
+    decoded = codec.decode(encoded['plan']['commands'])
+    np.testing.assert_allclose(decoded[0][obs_keys.ROBOT_COMMAND].positions, [0.1, 0.2])
+    assert decoded[0][obs_keys.TARGET_GRIP] == 1.0
+
+
+def test_joint_command_path_can_select_inside_a_list_and_preserve_siblings():
+    codec = JointPositionAction('joints', 'grip', num_joints=2, commands_path=('plans', 1, 'commands'))
+    commands = [{obs_keys.ROBOT_COMMAND: cmd_module.JointPosition(np.array([1, 2])), obs_keys.TARGET_GRIP: 0.4}]
+    plans = [{'untouched': True}, {'commands': commands}]
+    encoded = codec.encode({'plans': plans})
+    assert encoded['plans'][0] is plans[0]
+    np.testing.assert_array_equal(encoded['plans'][1]['commands'][0]['joints'], [1, 2])
+    assert plans[1]['commands'] is commands
+
+
+def test_joint_command_encoding_distinguishes_empty_absent_and_malformed_input():
+    codec = JointPositionAction('joints', 'grip', commands_path=('plan', 'commands'))
+    assert codec.encode({}) == {}
+    assert codec.encode({'plan': {'commands': []}}) == {'plan': {'commands': []}}
+    with pytest.raises(KeyError):
+        codec.encode({'plan': {}})
+    with pytest.raises(ValueError, match='absolute joint targets'):
+        codec.encode({'plan': {'commands': [{obs_keys.ROBOT_COMMAND: JointDelta(np.zeros(7))}]}})
+    assert JointPositionAction('joints', 'grip').encode({'plan': {'commands': []}}) == {}
+
+
+@pytest.mark.parametrize('path', [[], (), ('plan', False), (0,), 'plan'])
+def test_joint_command_encoding_requires_a_named_tuple_path(path):
+    with pytest.raises(ValueError, match='commands_path'):
+        JointPositionAction('joints', 'grip', commands_path=path)
+
+
+def test_joint_command_wire_path_rejects_a_string():
+    with pytest.raises(ValueError, match='commands_path'):
+        from_spec(component('joint_position_action', joints_key='joints', grip_key='grip', commands_path='plan'))
 
 
 @pytest.mark.parametrize('positions', [False, True])
@@ -51,7 +107,7 @@ def test_training_rows_align_observations_and_commands_on_the_recording_clock(po
             timelines=(EMITTED_WORLD, timeline, RECORDED_TIME),
         ),
     })
-    observation = ObservationCodec(state={'state': {obs_keys.JOINTS: 1}}, images={})
+    observation = StateObservationCodec(state={'state': {obs_keys.JOINTS: 1}})
     action = (
         AbsolutePositionAction(target, obs_keys.TARGET_GRIP)
         if positions
@@ -66,13 +122,48 @@ def test_training_rows_align_observations_and_commands_on_the_recording_clock(po
 
 
 @pytest.mark.parametrize('horizon', [0, 1, 40])
+def test_packing_and_chunk_splitting_preserve_each_timestep(horizon):
+    codec = SplitActionChunk() | PackFields(decode_layout={'joints': [0, 'q'], 'grip': [0, 'grip']}, squeeze_dims=1)
+    codec = from_spec(json.loads(json.dumps(codec.to_spec())))
+    assert isinstance(codec, Codec)
+    joints = np.arange(horizon * 7, dtype=np.float32).reshape(1, horizon, 7)
+    grip = np.arange(horizon, dtype=np.float64).reshape(1, horizon)
+    native = ({'q': joints, 'grip': grip}, {'info': 'ignored'})
+    decoded = codec.decode(serialization.deserialise(serialization.serialise(native)))
+    assert len(decoded) == horizon
+    for index, row in enumerate(decoded):
+        np.testing.assert_array_equal(row['joints'], joints[0, index], strict=True)
+        assert row['grip'] == grip[0, index]
+        assert row['grip'].dtype == np.float64
+
+
+@pytest.mark.parametrize('value', [{}, [], {'q': np.array(1)}, {'q': [[1, 2]]}, {1: np.ones((2, 3))}])
+def test_chunk_splitting_requires_named_arrays_with_a_time_axis(value):
+    with pytest.raises(ValueError):
+        SplitActionChunk().decode(value)
+
+
+def test_chunk_splitting_requires_equal_horizons():
+    with pytest.raises(ValueError, match='share one horizon'):
+        SplitActionChunk().decode({'q': np.ones((2, 7)), 'grip': np.ones((3, 1))})
+
+
+def test_chunk_splitting_preserves_observations_and_training():
+    codec = SplitActionChunk()
+    observation = {'image': np.zeros((2, 3, 3), dtype=np.uint8)}
+    episode = EpisodeContainer({}, meta={})
+    assert codec.encode(observation) is observation
+    assert codec.training_encoder(episode) is episode
+
+
+@pytest.mark.parametrize('horizon', [0, 1, 40])
 @pytest.mark.parametrize('wire_round_trip', [False, True])
 def test_unpack_action_chunk_selects_fields_and_preserves_every_timestep(horizon, wire_round_trip):
     description = component(
         'unpack_action_chunk', fields={'joints': [0, 'robot.q'], 'grip': [0, 'robot/grip']}, squeeze_dims=1
     )
     codec = from_spec(json.loads(json.dumps(description)))
-    assert isinstance(codec, UnpackActionChunk)
+    assert isinstance(codec, Codec)
     joints = np.arange(horizon * 7, dtype=np.float32).reshape(1, horizon, 7)
     grip = np.arange(horizon, dtype=np.float64).reshape(1, horizon, 1)
     result = ({'robot.q': joints, 'robot/grip': grip, 'unused': np.zeros((2, 9))}, {'timing': 0.1})
@@ -88,40 +179,54 @@ def test_unpack_action_chunk_selects_fields_and_preserves_every_timestep(horizon
         np.testing.assert_array_equal(action['grip'], grip[0, index])
         assert action['joints'].dtype == np.float32
         assert action['grip'].dtype == np.float64
-    assert codec.to_spec() == {**description, VERSION: 1}
+    assert (
+        codec.to_spec()
+        == (
+            SplitActionChunk()
+            | PackFields(decode_layout={'joints': [0, 'robot.q'], 'grip': [0, 'robot/grip']}, squeeze_dims=1)
+        ).to_spec()
+    )
 
 
 @pytest.mark.parametrize('squeeze_dims', [0, 2])
 def test_unpack_action_chunk_accepts_a_root_array_and_keeps_trailing_dimensions(squeeze_dims):
     values = np.arange(24, dtype=np.float32).reshape(2, 3, 4).transpose(1, 0, 2)
     batched = values.reshape((1,) * squeeze_dims + values.shape)
-    decoded = UnpackActionChunk({ACTION: []}, squeeze_dims=squeeze_dims).decode(batched)
+    decoded = cast(
+        Codec, from_spec(component('unpack_action_chunk', version=1, fields={ACTION: []}, squeeze_dims=squeeze_dims))
+    ).decode(batched)
 
     assert len(decoded) == 3
     for action, expected in zip(decoded, values, strict=True):
         np.testing.assert_array_equal(action[ACTION], expected)
-    scalar_steps = UnpackActionChunk({'value': ['values']}).decode({'values': np.array([1, 2])})
+    scalar_steps = cast(
+        Codec, from_spec(component('unpack_action_chunk', version=1, fields={'value': ['values']}))
+    ).decode({'values': np.array([1, 2])})
     assert scalar_steps == [{'value': 1}, {'value': 2}]
 
 
 @pytest.mark.parametrize('values', [np.zeros((2, 3, 7)), np.zeros((0, 3, 7)), np.zeros(1), [[1, 2, 3]]])
 def test_unpack_action_chunk_requires_singleton_batch_dimensions_and_a_time_axis(values):
-    with pytest.raises(ValueError, match='leading size-one dimensions and a time axis'):
-        UnpackActionChunk({'value': []}, squeeze_dims=1).decode(values)
+    with pytest.raises(ValueError, match='leading size-one dimensions|time axis'):
+        cast(
+            Codec, from_spec(component('unpack_action_chunk', version=1, fields={'value': []}, squeeze_dims=1))
+        ).decode(values)
 
 
 def test_unpack_action_chunk_requires_matching_horizons():
-    codec = UnpackActionChunk({'joints': ['q'], 'grip': ['grip']})
+    codec = cast(
+        Codec, from_spec(component('unpack_action_chunk', version=1, fields={'joints': ['q'], 'grip': ['grip']}))
+    )
     with pytest.raises(ValueError, match='share one horizon'):
         codec.decode({'q': np.zeros((3, 7)), 'grip': np.zeros((2, 1))})
 
 
 def test_unpack_action_chunk_owns_its_paths_and_requires_selected_fields():
     fields = {'value': [0, 'input']}
-    codec = UnpackActionChunk(fields)
+    codec = cast(Codec, from_spec(component('unpack_action_chunk', version=1, fields=fields)))
     fields['value'][1] = 'changed'
     description = codec.to_spec()
-    description[ARGS]['fields']['value'][1] = 'changed'
+    description['seq'][1][ARGS]['decode_layout']['value'][1] = 'changed'
 
     assert codec.decode([{'input': np.array([5])}]) == [{'value': 5}]
     with pytest.raises(KeyError, match='input'):
@@ -131,19 +236,22 @@ def test_unpack_action_chunk_owns_its_paths_and_requires_selected_fields():
 @pytest.mark.parametrize('squeeze_dims', [-1, 1.5, True])
 def test_unpack_action_chunk_rejects_invalid_dimensions(squeeze_dims):
     with pytest.raises(ValueError, match='squeeze_dims'):
-        UnpackActionChunk({'value': []}, squeeze_dims=squeeze_dims)
+        cast(
+            Codec,
+            from_spec(component('unpack_action_chunk', version=1, fields={'value': []}, squeeze_dims=squeeze_dims)),
+        )
 
 
 @pytest.mark.parametrize(
     'fields', [{}, {'value': 'q'}, {'value': {'q': 0}}, {'value': [False]}, {'value': [0.5]}, {1: ['q']}]
 )
 def test_unpack_action_chunk_rejects_invalid_field_paths(fields):
-    with pytest.raises(ValueError, match='field'):
-        UnpackActionChunk(fields)
+    with pytest.raises(ValueError):
+        from_spec({'name': 'unpack_action_chunk', 'version': 1, ARGS: {'fields': fields}})
 
 
 def test_unpack_action_chunk_preserves_observations_and_training_columns():
-    codec = UnpackActionChunk({'value': ['prediction']})
+    codec = cast(Codec, from_spec(component('unpack_action_chunk', version=1, fields={'value': ['prediction']})))
     observation = {'image': np.zeros((2, 3, 3), dtype=np.uint8), 'state': np.zeros(7)}
     episode = EpisodeContainer({'value': DummySignal([0], [1])}, meta={'label': 'test'})
 
@@ -188,7 +296,11 @@ def test_cartesian_delta_action_uses_physical_units_and_live_pose():
 
 
 def test_cartesian_delta_action_spec_decodes_a_chunk_with_a_custom_key():
-    decoder = CartesianDeltaAction(action_key='prediction') | UnpackActionChunk({'prediction': ['actions']})
+    decoder = (
+        CartesianDeltaAction(action_key='prediction')
+        | SplitActionChunk()
+        | PackFields(decode_layout={'prediction': ['actions']})
+    )
     restored = from_spec(json.loads(json.dumps(decoder.to_spec())))
     assert isinstance(restored, Codec)
     predictions = np.array([[3, -3, 1, 0, 0, 1, 0.25], [-3, 3, -1, 0, 1, 0, 0.75]], dtype=np.float32)

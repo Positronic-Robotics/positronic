@@ -4,31 +4,35 @@ import json
 from concurrent.futures import Future
 from datetime import date
 from sys import maxsize
-from typing import cast
+from typing import Any, cast
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component
+from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component, parallel, sequence
 
 import pimm
 from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, JointPosition, PositionControl
+from positronic.drivers.roboarm.command import JointPosition, PositionControl
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
-from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
-from positronic.policy.base import Policy, PolicyEnd, Step
+from positronic.policy.base import Answer, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
+    ACTION,
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
+    Codec,
     EncodeImages,
+    EndCommand,
     FlipGrip,
     Metadata,
     Resample,
-    RestrictImageSize,
+    ResizeMode,
+    TransformImages,
 )
 from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
@@ -37,19 +41,26 @@ from positronic.policy.codecs.action import (
     JointDeltaAction,
     JointPositionAction,
     SetControlMode,
-    UnpackActionChunk,
+    SplitActionChunk,
 )
 from positronic.policy.codecs.geometry import ConvertPose
-from positronic.policy.codecs.observation import ObservationCodec, PackObservationFields, RenameObservationFields
+from positronic.policy.codecs.observation import (
+    PackFields,
+    RenameObservationFields,
+    SelectObservationFields,
+    StateObservationCodec,
+)
+from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.executor import Executor, _UnchargedAnswer
+from positronic.policy.keys import END, RTC
 from positronic.policy.processors import (
     ChunkedSchedule,
     ConstantDuration,
     DelayEstimate,
     DurationEstimate,
     DurationEstimateRun,
+    EndOnField,
     PauseOnUnavailable,
-    PrefixSampling,
     RTCSchedule,
     TemporalStack,
 )
@@ -84,7 +95,7 @@ def test_unavailability_withholds_commands_and_resumes_on_recovery(execution, st
         run.close()
 
 
-@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,))])
+@pytest.mark.parametrize('wrapper', [PauseOnUnavailable(), TemporalStack((MOTOR,), (0.0,)), EndOnField()])
 def test_a_wrapper_returns_what_its_inner_run_returned(execution, wrapper):
     runtime, _ = execution
 
@@ -349,9 +360,12 @@ class SlowModel:
         self._runtime = runtime
         self.calls: list[tuple[int, list]] = []
         self.prefixes: list[list] = []
+        self.requests: list[dict] = []
         self._pending: Future | None = None
 
-    def submit(self, function, obs, prefix=()):
+    def submit(self, function, obs):
+        self.requests.append(dict(obs))
+        prefix = obs[RTC.ACTION_PREFIX][RTC.PREFIX_ACTIONS] if RTC.ACTION_PREFIX in obs else []
         self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
         self.prefixes.append(list(prefix))
         self._pending = Future()
@@ -393,9 +407,9 @@ class ObservingModel(SlowModel):
         super().__init__(runtime)
         self.seen: list = []
 
-    def submit(self, function, obs, prefix=()):
+    def submit(self, function, obs):
         self.seen.append(obs[POSITION])
-        return super().submit(function, obs, prefix)
+        return super().submit(function, obs)
 
 
 @pytest.mark.parametrize('status', list(RobotStatus))
@@ -539,7 +553,7 @@ def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution):
     runtime, clock = execution
     declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 2, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
     schedule = spec.from_spec(declared)
-    assert schedule.to_spec() == declared
+    assert schedule.to_spec() == ChunkedSchedule(fps=10, replan_on_error=False).to_spec()
     infer = Mock(return_value=[{MOTOR: index} for index in range(5)])
     run = runtime.start(schedule, infer)
     try:
@@ -591,6 +605,24 @@ def test_a_fast_answer_is_asked_for_its_delay_before_the_chunk_ends(execution, m
         rig.run.close()
     assert [time_ns for time_ns, _ in model.calls] == [0, 300_000_000]
     assert model.seen == ['--', 'a2']
+
+
+def test_a_lead_of_the_whole_chunk_calls_again_in_the_round_that_reads_the_answer(execution, monkeypatch):
+    runtime, clock = execution
+    model = ObservingModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    # One command for each call, played at once, as the teleop service declares.
+    rig = Rig(runtime, clock, ChunkedSchedule(fps=100, inference_lead=ConstantDuration(0.01)))
+    try:
+        rig.tick(0)
+        model.answer('a', length=1)
+        assert rig.tick(66_000_000).commands == {MOTOR: 'a0'}
+        model.answer('b', length=1)
+        assert rig.tick(132_000_000).commands == {MOTOR: 'b0'}
+    finally:
+        rig.run.close()
+    assert [time_ns for time_ns, _ in model.calls] == [0, 66_000_000, 132_000_000]
+    assert model.seen == ['--', '--', 'a0']
 
 
 def test_an_early_answer_keeps_a_late_final_waypoint_and_observes_the_previous_one(execution, monkeypatch):
@@ -775,7 +807,7 @@ def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, esti
     estimate = estimate_factory()
     estimate.run().update(0.4)
     schedule = (
-        RTCSchedule(fps=10, call_after_sec=0.5, prefix_duration=estimate)
+        RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=estimate)
         if rtc
         else ChunkedSchedule(fps=10, inference_lead=estimate)
     )
@@ -793,7 +825,8 @@ def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, esti
                 run.send({})
             assert model.calls[-1][0] == call_ns
             if rtc:
-                assert len(model.calls[-1][1]) == delay_ns // PERIOD_NS
+                assert model.requests[-1][RTC.ESTIMATED_LATENCY_SEC] == pytest.approx(delay_ns / 1e9)
+                assert len(model.calls[-1][1]) == 5
         finally:
             run.close()
 
@@ -868,13 +901,11 @@ def test_lead_and_handoff_use_the_horizon_truncated_end(execution):
         run.close()
 
 
-def _rtc(execution, monkeypatch, call_after_sec, prefix_duration, prefix_sampling=PrefixSampling.PREVIOUS):
+def _rtc(execution, monkeypatch, call_after_sec, latency_estimate):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    schedule = RTCSchedule(
-        fps=10, call_after_sec=call_after_sec, prefix_duration=prefix_duration, prefix_sampling=prefix_sampling
-    )
+    schedule = RTCSchedule(fps=10, call_after_sec=call_after_sec, latency_estimate=latency_estimate)
     run = runtime.start(schedule, Mock())
 
     def step(index):
@@ -884,7 +915,7 @@ def _rtc(execution, monkeypatch, call_after_sec, prefix_duration, prefix_samplin
     return model, run, step
 
 
-def test_rtc_follows_the_drawing(execution, monkeypatch):
+def test_rtc_executes_old_plan_until_the_answer_then_skips_elapsed_new_actions(execution, monkeypatch):
     model, run, step = _rtc(execution, monkeypatch, 0.5, DelayEstimate.mean())
     answers = {3: 'o', 11: 'n'}
     executed = []
@@ -899,7 +930,11 @@ def test_rtc_follows_the_drawing(execution, monkeypatch):
     finally:
         run.close()
     assert executed == ['--'] * 3 + [f'o{i}' for i in range(8)] + [f'n{i}' for i in range(3, 10)]
-    assert model.calls == [(0, []), (8 * PERIOD_NS, ['o5', 'o6', 'o7']), (13 * PERIOD_NS, ['n5', 'n6', 'n7'])]
+    assert model.calls == [
+        (0, []),
+        (8 * PERIOD_NS, [f'o{i}' for i in range(5, 10)]),
+        (13 * PERIOD_NS, [f'n{i}' for i in range(5, 10)]),
+    ]
 
 
 def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execution, monkeypatch):
@@ -914,19 +949,12 @@ def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execut
     finally:
         run.close()
     assert executed == ['--', 'o0', 'o1', 'o2', 'o3', '--', '--', '--', 'n5', 'n6']
-    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2']), (8 * PERIOD_NS, ['n5', 'n6', 'n7'])]
+    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2', 'o3']), (8 * PERIOD_NS, [f'n{i}' for i in range(5, 10)])]
 
 
-@pytest.mark.parametrize(
-    ('prefix_duration', 'prefix'),
-    [
-        (DelayEstimate.mean(), ['n3', 'n4']),
-        (DelayEstimate.max(), ['n3', 'n4', 'n5']),
-        (DelayEstimate.max(max_sec=0.1), ['n3']),
-    ],
-)
-def test_rtc_calls_at_once_after_a_late_answer(execution, monkeypatch, prefix_duration, prefix):
-    model, run, step = _rtc(execution, monkeypatch, 0.2, prefix_duration)
+@pytest.mark.parametrize('estimate', [DelayEstimate.mean(), DelayEstimate.max(), ConstantDuration(0.1)])
+def test_rtc_sends_the_remaining_plan_independently_of_its_latency_estimate(execution, monkeypatch, estimate):
+    model, run, step = _rtc(execution, monkeypatch, 0.2, estimate)
     answers = {1: 'o', 6: 'n'}
     executed = []
     try:
@@ -937,108 +965,35 @@ def test_rtc_calls_at_once_after_a_late_answer(execution, monkeypatch, prefix_du
     finally:
         run.close()
     assert executed == ['--', 'o0', 'o1', 'o2', 'o3', 'o4', 'n3']
-    assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2']), (6 * PERIOD_NS, prefix)]
+    assert model.calls == [
+        (0, []),
+        (3 * PERIOD_NS, [f'o{i}' for i in range(2, 10)]),
+        (6 * PERIOD_NS, [f'n{i}' for i in range(3, 10)]),
+    ]
 
 
-@pytest.mark.parametrize(
-    ('call_after_sec', 'sampling', 'prefix'),
-    [
-        (0.4, PrefixSampling.PREVIOUS, ['o4', 'o5']),
-        (0.4, PrefixSampling.NEXT, ['o4', 'o5']),
-        (0.52, PrefixSampling.PREVIOUS, ['o5']),
-        (0.52, PrefixSampling.NEAREST, ['o5']),
-        (0.52, PrefixSampling.NEXT, []),
-    ],
-)
-def test_rtc_prefix_stops_at_the_end_of_the_old_chunk(execution, monkeypatch, call_after_sec, sampling, prefix):
-    model, run, step = _rtc(execution, monkeypatch, call_after_sec, ConstantDuration(0.5), sampling)
+@pytest.mark.parametrize('call_after_sec', [0.4, 0.42, 0.47, 0.52, 0.6, 0.7])
+def test_rtc_keeps_original_actions_and_reports_their_time_offsets(execution, monkeypatch, call_after_sec):
+    model, run, step = _rtc(execution, monkeypatch, call_after_sec, ConstantDuration(0.1))
     _, clock = execution
+    actions = [{MOTOR: float(i), 'joints': JointPosition(np.array([i, 2 * i]))} for i in range(6)]
     call_ns = round((0.1 + call_after_sec) * 1e9)
     try:
-        for index in range(6):
-            if index == 1:
-                model.answer('o', 6)
-            step(index)
+        step(0)
+        model.answer_with(actions)
+        step(1)
         clock.advance_to_ns(call_ns)
         run.send({})
+        prefix = model.requests[-1][RTC.ACTION_PREFIX]
+        first = min(int(round(call_after_sec * 1e9) // PERIOD_NS), len(actions))
+        assert [action[MOTOR] for action in prefix[RTC.PREFIX_ACTIONS]] == list(range(first, len(actions)))
+        if prefix[RTC.PREFIX_ACTIONS]:
+            assert prefix[RTC.CHUNK_OFFSET_SEC] == pytest.approx(first / 10)
+            assert prefix[RTC.OBSERVATION_OFFSET_SEC] == pytest.approx(first / 10 - call_after_sec)
+            for expected, actual in zip(actions[first:], prefix[RTC.PREFIX_ACTIONS], strict=True):
+                assert actual['joints'] is expected['joints']
     finally:
         run.close()
-    assert model.calls == [(0, []), (call_ns, prefix)]
-
-
-@pytest.mark.parametrize(
-    ('call_after_sec', 'sampling', 'prefix'),
-    [
-        (0.42, PrefixSampling.PREVIOUS, ['o4', 'o5', 'o6']),
-        (0.42, PrefixSampling.NEAREST, ['o4', 'o5', 'o6']),
-        (0.42, PrefixSampling.NEXT, ['o5', 'o6', 'o7']),
-        (0.45, PrefixSampling.NEAREST, ['o4', 'o5', 'o6']),
-        (0.47, PrefixSampling.PREVIOUS, ['o4', 'o5', 'o6']),
-        (0.47, PrefixSampling.NEAREST, ['o5', 'o6', 'o7']),
-        (0.47, PrefixSampling.NEXT, ['o5', 'o6', 'o7']),
-    ],
-)
-def test_rtc_prefix_reads_the_old_chunk_at_the_new_due_times(execution, monkeypatch, call_after_sec, sampling, prefix):
-    model, run, step = _rtc(execution, monkeypatch, call_after_sec, ConstantDuration(0.3), sampling)
-    _, clock = execution
-    call_ns = round((0.1 + call_after_sec) * 1e9)
-    try:
-        for index in range(6):
-            if index == 1:
-                model.answer('o')
-            step(index)
-        clock.advance_to_ns(call_ns)
-        run.send({})
-    finally:
-        run.close()
-    assert model.calls == [(0, []), (call_ns, prefix)]
-
-
-def _interpolation_action(i):
-    return {
-        MOTOR: 10.0 * i,
-        'joints': JointPosition(positions=np.array([i, 2.0 * i])),
-        'pose': CartesianPosition(
-            pose=Transform3D(np.array([i, 0.0, 0.0]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.1 * i])))
-        ),
-        'label': f'x{i}',
-    }
-
-
-def test_rtc_interpolates_each_command_type(execution, monkeypatch):
-    model, run, step = _rtc(execution, monkeypatch, 0.42, ConstantDuration(0.1), PrefixSampling.INTERPOLATE)
-    _, clock = execution
-    try:
-        for index in range(6):
-            if index == 1:
-                model.answer_with([_interpolation_action(i) for i in range(10)])
-            step(index)
-        clock.advance_to_ns(520_000_000)
-        run.send({})
-    finally:
-        run.close()
-    [action] = model.prefixes[1]
-    assert action[MOTOR] == pytest.approx(42.0)
-    np.testing.assert_allclose(action['joints'].positions, [4.2, 8.4])
-    np.testing.assert_allclose(action['pose'].pose.translation, [4.2, 0.0, 0.0])
-    np.testing.assert_allclose(action['pose'].pose.rotation.as_rotvec, [0.0, 0.0, 0.42])
-    assert action['label'] == 'x4'
-
-
-def test_rtc_interpolation_holds_the_last_old_action_after_its_due_time(execution, monkeypatch):
-    model, run, step = _rtc(execution, monkeypatch, 0.52, ConstantDuration(0.1), PrefixSampling.INTERPOLATE)
-    _, clock = execution
-    try:
-        for index in range(6):
-            if index == 1:
-                model.answer_with([_interpolation_action(i) for i in range(6)])
-            step(index)
-        clock.advance_to_ns(620_000_000)
-        run.send({})
-    finally:
-        run.close()
-    [action] = model.prefixes[1]
-    assert action[MOTOR] == 50.0
 
 
 @pytest.mark.parametrize('duration', [DelayEstimate.mean, DelayEstimate.max])
@@ -1048,7 +1003,7 @@ def test_delay_estimates_refuse_a_negative_cap(duration):
 
 
 @pytest.mark.parametrize(
-    ('prefix_duration', 'expected'),
+    ('latency_estimate', 'expected'),
     [
         (DelayEstimate.mean(last=2), 0.2),
         (DelayEstimate.max(last=2), 0.3),
@@ -1056,8 +1011,8 @@ def test_delay_estimates_refuse_a_negative_cap(duration):
         (DelayEstimate.max(max_sec=0.4), 0.4),
     ],
 )
-def test_delay_estimates_read_the_last_delays_and_cap_them(prefix_duration, expected):
-    estimate = prefix_duration.run()
+def test_delay_estimates_read_the_last_delays_and_cap_them(latency_estimate, expected):
+    estimate = latency_estimate.run()
     estimate.update(0.9)
     estimate.update(0.1)
     assert estimate.update(0.3) == pytest.approx(expected)
@@ -1090,7 +1045,7 @@ def test_rtc_accepts_a_constant_duration(execution, monkeypatch):
             if tick == 3:
                 model.answer('o')
             step(tick)
-        assert model.calls == [(0, []), (8 * PERIOD_NS, ['o5', 'o6'])]
+        assert model.calls == [(0, []), (8 * PERIOD_NS, [f'o{i}' for i in range(5, 10)])]
     finally:
         run.close()
 
@@ -1188,8 +1143,12 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     'definition',
     [
         Sequential(TemporalStack(('a', 'b'), (-0.5, 0.0), pad_start=False), ChunkedSchedule(fps=10, horizon_sec=0.5)),
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48)),
-        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), RestrictImageSize(64, 48, Resample.AREA)),
+        Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), TransformImages(64, 48, mode=ResizeMode.BOUND)),
+        Sequential(
+            PauseOnUnavailable(),
+            ChunkedSchedule(fps=10),
+            TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND),
+        ),
         ChunkedSchedule(fps=10, record_stats=False),
     ],
 )
@@ -1220,14 +1179,20 @@ def test_wire_names_match_the_registered_components():
         'chunked_schedule': ChunkedSchedule(fps=10),
         'encode_images': EncodeImages([['camera']]),
         'stop_on_fault': PauseOnUnavailable(),
+        'end_on_field': EndOnField(),
+        'end_command': EndCommand(),
         'temporal_stack': TemporalStack(('v',), (0.0,)),
         'binarize_grip_training': BinarizeGripTraining(('grip',)),
         'binarize_grip_inference': BinarizeGripInference(),
-        'flip_grip': FlipGrip(),
+        'flip_grip': FlipGrip(arms=keys.BIMANUAL_ARMS),
         'metadata': Metadata({'action_fps': 15}),
-        'restrict_image_size': RestrictImageSize(),
-        'observation_codec': ObservationCodec(state={}, images={}),
-        'pack_observation_fields': PackObservationFields({'state': 'input'}),
+        'transform_images': TransformImages(640, 640, mode=ResizeMode.BOUND),
+        'observation_codec': ObservationCodecV1(state={}, images={}),
+        'pack_fields': PackFields(encode_layout={'state': ['input']}),
+        'split_action_chunk': SplitActionChunk(),
+        'rtc_schedule': RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=DelayEstimate.max()),
+        'state_observation': StateObservationCodec(state={}),
+        'select_observation_fields': SelectObservationFields(mapping={}),
         'rename_observation_fields': RenameObservationFields({'state': 'input'}),
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
         'cartesian_delta_action': CartesianDeltaAction(),
@@ -1235,12 +1200,11 @@ def test_wire_names_match_the_registered_components():
         'joint_delta_action': JointDeltaAction(),
         'joint_position_action': JointPositionAction('joints', 'grip'),
         'set_control_mode': SetControlMode(PositionControl()),
-        'unpack_action_chunk': UnpackActionChunk({'action': ['prediction']}),
-        'change_ee_frame': ChangeEEFrame(Transform3D.identity),
+        'change_ee_frame': ChangeEEFrame(EEFrame(site=GRIPPER_SITE)),
         'convert_pose': ConvertPose('rot6d'),
     }
     registered = spec.COMPONENTS
-    assert set(instances) == set(registered)
+    assert set(instances) | {'restrict_image_size', 'pack_observation_fields', 'unpack_action_chunk'} == set(registered)
     for name, instance in instances.items():
         assert instance.to_spec()['name'] == name
         factory = registered[name][instance.WIRE_VERSION].implementation
@@ -1250,18 +1214,76 @@ def test_wire_names_match_the_registered_components():
         assert spec.from_spec({**instance.to_spec(), VERSION: LATEST}).to_spec() == instance.to_spec()
 
 
+@pytest.mark.parametrize('version', [None, 1, LATEST])
+def test_legacy_configs_translate_inside_nested_compositions(version):
+    packing = {NAME: 'pack_observation_fields', ARGS: {'layout': {'q': 'joints'}}}
+    resizing = {NAME: 'restrict_image_size', ARGS: {'width': 4, 'height': 4}}
+    unpacking = {NAME: 'unpack_action_chunk', ARGS: {'fields': {'q': [0, 'q']}, 'squeeze_dims': 1}}
+    if version is not None:
+        for node in (packing, resizing, unpacking):
+            node[VERSION] = version
+    description = sequence(
+        parallel(packing, SelectObservationFields({'image': 'camera'}).to_spec()), resizing, unpacking
+    )
+    original = json.loads(json.dumps(description))
+    codec = spec.from_spec(description)
+    assert isinstance(codec, Codec)
+    assert description == original
+    canonical = codec.to_spec()
+    assert spec.from_spec(canonical).to_spec() == canonical
+    image = np.zeros((8, 16, 3), dtype=np.uint8)
+    encoded = codec.encode({'joints': np.arange(7), 'camera': image})
+    assert set(encoded) == {'q', 'image'}
+    assert encoded['image'].shape == (2, 4, 3)
+    np.testing.assert_array_equal(encoded['q'], np.arange(7))
+    predicted = np.arange(21).reshape(1, 3, 7)
+    rows = codec.decode(({'q': predicted}, {}))
+    assert len(rows) == 3
+    for index, row in enumerate(rows):
+        assert set(row) == {'q'}
+        np.testing.assert_array_equal(row['q'], predicted[0, index])
+
+
+@pytest.mark.parametrize(
+    'name', ['pack_observation_fields', 'unpack_action_chunk', 'restrict_image_size', 'chunked_schedule']
+)
+@pytest.mark.parametrize('version', [0, True, 1.5, '1', 99])
+def test_translations_do_not_bypass_version_validation(name, version):
+    with pytest.raises(ValueError, match='version'):
+        spec.from_spec({NAME: name, VERSION: version})
+
+
+def test_legacy_translation_pins_its_replacement_version(monkeypatch):
+    versions = {**spec.COMPONENTS[PackFields.WIRE_NAME], 2: Version(lambda **args: Metadata({'wrong': True}))}
+    monkeypatch.setitem(spec.COMPONENTS, PackFields.WIRE_NAME, versions)
+    codec = spec.from_spec(component('pack_observation_fields', layout={'q': 'joints'}))
+    assert isinstance(codec, PackFields)
+    assert codec.encode({'joints': 7}) == {'q': 7}
+    assert codec.to_spec()[VERSION] == 1
+
+
+@pytest.mark.parametrize('lead', [0.0, 0.25, {'statistic': 'max', 'last': 3, 'max_sec': 0.4}])
+def test_scheduler_translation_preserves_explicit_settings(lead):
+    old = component(
+        ChunkedSchedule.WIRE_NAME, version=2, fps=20, horizon_sec=0.3, record_stats=False, inference_lead=lead
+    )
+    current = component(ChunkedSchedule.WIRE_NAME, version=3, **old[ARGS], replan_on_error=False)
+    assert spec.from_spec(old).to_spec() == spec.from_spec(current).to_spec()
+    assert old[VERSION] == 2
+    assert ChunkedSchedule.REPLAN_ON_ERROR_ARG not in old[ARGS]
+
+
 def test_latest_follows_client_upgrades_while_numeric_versions_stay_pinned(monkeypatch):
-    name = ChunkedSchedule.WIRE_NAME
-    latest = json.loads(json.dumps(component(name, fps=20)))
-    pinned = component(name, version=2, fps=20)
-    current = spec.COMPONENTS[name][3]
-    versions = {2: spec.COMPONENTS[name][2]}
+    name = Metadata.WIRE_NAME
+    latest = json.loads(json.dumps(component(name)))
+    pinned = component(name, version=1)
+    versions = {1: Version(lambda: Metadata({'implementation': 1}))}
     monkeypatch.setitem(spec.COMPONENTS, name, versions)
-    assert spec.from_spec(latest).to_spec()[VERSION] == 2
-    assert spec.from_spec(pinned).to_spec()[VERSION] == 2
-    versions[3] = current
-    assert spec.from_spec(latest).to_spec()[VERSION] == 3
-    assert spec.from_spec(pinned).to_spec()[VERSION] == 2
+    assert spec.from_spec(latest).to_spec()[ARGS]['values'] == {'implementation': 1}
+    assert spec.from_spec(pinned).to_spec()[ARGS]['values'] == {'implementation': 1}
+    versions[2] = Version(lambda: Metadata({'implementation': 2}))
+    assert spec.from_spec(latest).to_spec()[ARGS]['values'] == {'implementation': 2}
+    assert spec.from_spec(pinned).to_spec()[ARGS]['values'] == {'implementation': 1}
 
 
 def test_latest_skips_removed_versions_and_fails_when_none_are_supported(monkeypatch):
@@ -1282,3 +1304,288 @@ def test_unversioned_wire_specs_still_select_v1():
     assert isinstance(spec.from_spec({NAME: Metadata.WIRE_NAME, ARGS: {'values': {}}}), Metadata)
     with pytest.raises(ValueError, match='Unsupported .* version 1'):
         spec.from_spec({NAME: ChunkedSchedule.WIRE_NAME, ARGS: {ChunkedSchedule.FPS_ARG: 20}})
+
+
+class _EndingModel:
+    """Answers ``first``, then chunks of ``length``. Every answer after one with ``END`` carries ``END``.
+
+    ``on`` says which elements of such an answer carry it: ``'first'`` or ``'every'``.
+    """
+
+    def __init__(self, runtime, first, on='every', length=10):
+        self._runtime = runtime
+        self._first = first
+        self._on = on
+        self._length = length
+        self._ended = False
+        self.calls: list[int] = []
+        self.prefixes: list[list] = []
+
+    def __call__(self, obs):
+        prefix = obs[RTC.ACTION_PREFIX][RTC.PREFIX_ACTIONS] if RTC.ACTION_PREFIX in obs else []
+        call = len(self.calls)
+        self.calls.append(self._runtime.time_ns)
+        self.prefixes.append(list(prefix))
+        chunk: list[dict[str, Any]] = (
+            [dict(e) for e in self._first] if call == 0 else [{MOTOR: (call, i)} for i in range(self._length)]
+        )
+        if self._ended:
+            for i, element in enumerate(chunk):
+                if self._on == 'every' or i == 0:
+                    element[END] = 'complete'
+        self._ended |= any(END in element for element in chunk)
+        return chunk
+
+
+class _DueAnswer(Answer):
+    def __init__(self, runtime, value, due_ns):
+        self._runtime, self._value, self._due_ns = runtime, value, due_ns
+
+    def done(self):
+        return self._runtime.time_ns >= self._due_ns
+
+    def result(self):
+        return self._value
+
+
+def _answer_after(runtime, monkeypatch, *latencies_ns):
+    """Make call k answer ``latencies_ns[k]`` after its submission; later calls take the last latency."""
+    calls = []
+
+    def submit(function, *args):
+        latency_ns = latencies_ns[min(len(calls), len(latencies_ns) - 1)]
+        calls.append(latency_ns)
+        return _DueAnswer(runtime, function(*args), runtime.time_ns + latency_ns)
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+
+
+def _play(execution, schedule, model, times_ns, observations=None):
+    """The motor commands sent at each time, and the ``PolicyEnd`` the run returned, or ``None``."""
+    runtime, clock = execution
+    run = runtime.start(Sequential(EndOnField(), schedule), model)
+    sent = []
+    try:
+        for time_ns in times_ns:
+            clock.advance_to_ns(time_ns)
+            try:
+                step = run.send((observations or {}).get(time_ns, {}))
+            except StopIteration as stop:
+                return sent, stop.value
+            sent.append(step.commands.get(MOTOR))
+    finally:
+        run.close()
+    return sent, None
+
+
+def _ending(motor):
+    return {MOTOR: motor, END: 'complete'}
+
+
+def test_end_on_field_sends_the_other_commands_and_returns_at_the_next_observation(execution):
+    runtime, clock = execution
+    run = runtime.start(Sequential(EndOnField(), ChunkedSchedule(fps=10)), lambda obs: [{MOTOR: 1}, _ending(2)])
+    try:
+        assert run.send({}).commands == {MOTOR: 1}
+        clock.advance_to_ns(PERIOD_NS)
+        assert run.send({}) == Step({MOTOR: 2}, PERIOD_NS)
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.COMPLETE
+    finally:
+        run.close()
+
+
+def test_a_schedule_passes_end_up_as_a_command(execution):
+    runtime, clock = execution
+    run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}])
+    try:
+        run.send({})
+        clock.advance_to_ns(PERIOD_NS)
+        assert run.send({}).commands == {MOTOR: 2, END: 'complete'}
+        clock.advance_to_ns(2 * PERIOD_NS)
+        run.send({})
+    finally:
+        run.close()
+
+
+def test_a_declared_end_on_field_ends_a_declared_stack(execution):
+    runtime, clock = execution
+    pose = np.array([0.1, -0.2, 0.3, 1.0, 0.0, 0.0, 0.0, 0.5])
+    declared = sequence(
+        component(EndOnField.WIRE_NAME),
+        component(ChunkedSchedule.WIRE_NAME, fps=10),
+        parallel(
+            component(AbsolutePositionAction.WIRE_NAME, tgt_ee_pose_key='pose', tgt_grip_key='grip'),
+            component(EndCommand.WIRE_NAME),
+        ),
+    )
+    model = lambda obs: [{ACTION: pose}, {ACTION: pose, END: 'give_up'}]  # noqa: E731
+    run = runtime.start(cast(Policy, spec.from_spec(declared)), model)
+    try:
+        assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
+        clock.advance_to_ns(PERIOD_NS)
+        assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.GIVE_UP
+    finally:
+        run.close()
+    assert EndOnField().to_spec() == {NAME: EndOnField.WIRE_NAME, VERSION: EndOnField.WIRE_VERSION}
+
+
+def test_end_on_field_refuses_a_malformed_end_when_its_element_plays(execution):
+    runtime, _ = execution
+    run = runtime.start(Sequential(EndOnField(), ChunkedSchedule(fps=10)), lambda obs: [{MOTOR: 1, END: 'done'}])
+    try:
+        with pytest.raises(ValueError):
+            run.send({})
+    finally:
+        run.close()
+
+
+# A ready answer ends on its first element; a pending one lets the round play one element past the end.
+@pytest.mark.parametrize(('latency_ns', 'sent'), [(0, [1, (1, 0)]), (PERIOD_NS, [1, 5])])
+def test_a_late_round_ends_the_run_on_the_next_end_that_plays(execution, monkeypatch, latency_ns, sent):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [{MOTOR: 1}, {MOTOR: 2}, {MOTOR: 3}, _ending(4), {MOTOR: 5}])
+    _answer_after(runtime, monkeypatch, 0, latency_ns)
+    times_ns = [0, 5 * PERIOD_NS, 6 * PERIOD_NS]
+    assert _play(execution, ChunkedSchedule(fps=10, record_stats=False), model, times_ns) == (sent, PolicyEnd.COMPLETE)
+    assert model.calls == [0, 5 * PERIOD_NS]
+
+
+# Each schedule asks for the next chunk before the end plays: one more call, and no more motion.
+@pytest.mark.parametrize(
+    ('schedule', 'calls'),
+    [
+        (lambda: ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.1), record_stats=False), [0, PERIOD_NS]),
+        (lambda: RTCSchedule(fps=10, call_after_sec=0.1, latency_estimate=ConstantDuration()), [0, 2 * PERIOD_NS]),
+    ],
+    ids=['chunked', 'rtc'],
+)
+def test_a_queued_end_plays_on_its_own_element(execution, schedule, calls):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2)])
+    sent, end = _play(execution, schedule(), model, [i * PERIOD_NS for i in range(5)])
+    assert (sent[-1], end) == (2, PolicyEnd.COMPLETE)
+    assert model.calls == calls
+
+
+def test_an_end_past_the_horizon_plays_on_the_next_chunk(execution):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2)], on='first')
+    schedule = ChunkedSchedule(fps=10, horizon_sec=0.1, record_stats=False)
+    assert _play(execution, schedule, model, [i * PERIOD_NS for i in range(5)]) == ([1, (1, 0)], PolicyEnd.COMPLETE)
+
+
+def test_a_replan_after_an_arm_error_ends_on_the_replanned_chunk(execution):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [{MOTOR: i} for i in range(3)] + [_ending(3), {MOTOR: 4}], on='first')
+    error = {2 * PERIOD_NS: {keys.ROBOT_STATUS: RobotStatus.ERROR}}
+    sent, end = _play(execution, ChunkedSchedule(fps=10), model, [i * PERIOD_NS for i in range(6)], error)
+    assert (sent, end) == ([0, 1, (1, 0)], PolicyEnd.COMPLETE)
+
+
+# Answers arrive 2.5 periods late, so RTC skips each new chunk's first two elements.
+@pytest.mark.parametrize(('on', 'end'), [('every', PolicyEnd.COMPLETE), ('first', None)])
+def test_rtc_plays_an_end_only_from_an_element_that_it_does_not_skip(execution, monkeypatch, on, end):
+    runtime, _ = execution
+    model = _EndingModel(runtime, [_ending(i) if i == 6 else {MOTOR: i} for i in range(10)], on=on)
+    _answer_after(runtime, monkeypatch, 5 * PERIOD_NS // 2)
+    schedule = RTCSchedule(fps=10, call_after_sec=0.1, latency_estimate=ConstantDuration(0.25))
+    sent, ended = _play(execution, schedule, model, [i * PERIOD_NS // 2 for i in range(60)])
+    assert ended is end
+    assert 6 not in sent
+
+
+def test_the_rtc_prefix_carries_end_like_any_other_command(execution):
+    runtime, clock = execution
+    model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2), {MOTOR: 3}])
+    run = runtime.start(RTCSchedule(fps=10, call_after_sec=0, latency_estimate=ConstantDuration(0.3)), model)
+    try:
+        run.send({})
+        clock.advance_to_ns(PERIOD_NS // 2)
+        run.send({})
+    finally:
+        run.close()
+    assert model.prefixes == [[], [{MOTOR: 1}, _ending(2), {MOTOR: 3}]]
+
+
+def test_rtc_sends_measured_and_expected_latency_with_the_remaining_plan(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    schedule = RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration(0.2))
+    run = runtime.start(schedule, Mock())
+    try:
+        run.send({})
+        model.answer('old')
+        clock.advance_to_ns(100_000_000)
+        run.send({})
+        clock.advance_to_ns(600_000_000)
+        run.send({})
+        first = model.requests[0][RTC.ACTION_PREFIX]
+        second = model.requests[1][RTC.ACTION_PREFIX]
+        assert first[RTC.PREFIX_ACTIONS] == []
+        assert second[RTC.CHUNK_OFFSET_SEC] == 0.5
+        assert second[RTC.OBSERVATION_OFFSET_SEC] == 0.0
+        assert model.requests[0][RTC.MEASURED_LATENCY_SEC] is None
+        assert model.requests[1][RTC.MEASURED_LATENCY_SEC] == 0.1
+        assert model.requests[0][RTC.ESTIMATED_LATENCY_SEC] == 0.0
+        assert model.requests[1][RTC.ESTIMATED_LATENCY_SEC] == 0.2
+        assert [action[MOTOR] for action in second[RTC.PREFIX_ACTIONS]] == [f'old{i}' for i in range(5, 10)]
+    finally:
+        run.close()
+
+
+def test_rtc_description_preserves_commands_without_a_model_codec(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    description = RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration(0.2)).to_spec()
+    restored = spec.from_spec(description)
+    assert restored.to_spec() == description
+    run = runtime.start(restored, Mock())
+    try:
+        run.send({})
+        model.answer_with([
+            {keys.ROBOT_COMMAND: JointPosition(np.array([i, i + 1])), keys.TARGET_GRIP: float(i % 2)} for i in range(10)
+        ])
+        clock.advance_to_ns(100_000_000)
+        run.send({})
+        clock.advance_to_ns(600_000_000)
+        run.send({})
+        prefix = model.requests[-1][RTC.ACTION_PREFIX]
+        np.testing.assert_array_equal(
+            [action[keys.ROBOT_COMMAND].positions for action in prefix[RTC.PREFIX_ACTIONS]],
+            [[i, i + 1] for i in range(5, 10)],
+        )
+        assert [action[keys.TARGET_GRIP] for action in prefix[RTC.PREFIX_ACTIONS]] == [1.0, 0.0, 1.0, 0.0, 1.0]
+    finally:
+        run.close()
+
+
+def test_rtc_keeps_camera_history_lazy_until_inference(execution, monkeypatch):
+    runtime, _ = execution
+    submitted = []
+
+    def submit(function, observation):
+        submitted.append(observation)
+        return _UnchargedAnswer(Future())
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+    stack = Mock(wraps=np.stack)
+    monkeypatch.setattr(np, 'stack', stack)
+    schedule = Sequential(
+        TemporalStack(('camera',), (-0.1, 0.0)),
+        RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration()),
+    )
+    run = runtime.start(schedule, Mock())
+    try:
+        run.send({'camera': np.zeros((2, 3, 3), dtype=np.uint8)})
+        stack.assert_not_called()
+        assert submitted[0]['camera'].shape == (2, 2, 3, 3)
+        stack.assert_called_once()
+    finally:
+        run.close()

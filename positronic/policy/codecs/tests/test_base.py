@@ -1,11 +1,13 @@
 import numpy as np
 import pytest
+from positronic_model_server import serialization
 
 from positronic import keys as obs_keys
-from positronic.cfg.codecs import compose
+from positronic.cfg.codecs import compose, image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, parse_ee_frames
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Step
@@ -18,9 +20,12 @@ from positronic.policy.codecs import (
     Codec,
     FlipGrip,
     Metadata,
+    PackFields,
+    PolicyCommandError,
+    SplitActionChunk,
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction
-from positronic.policy.codecs.observation import ObservationCodec
+from positronic.policy.codecs.observation import StateObservationCodec
 
 
 class _TaggingCodec(Codec):
@@ -59,10 +64,9 @@ def test_composed_training_encoder_uses_parallel():
         obs_keys.TASK: 'test',
     })
 
-    obs = ObservationCodec(
-        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
-        images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
-    )
+    obs = StateObservationCodec(
+        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}}
+    ) & image_observation(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))})
     action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7)
     metadata = Metadata({'action_fps': 15.0})
     composed = metadata | (obs & action)
@@ -90,7 +94,7 @@ def test_composed_training_encoder_uses_parallel():
 
 def test_parallel_codec_encode_merges_outputs():
     """``obs & action`` encode produces only obs keys (action returns {})."""
-    obs = ObservationCodec(state={'observation.state': {'a': 1}}, images={})
+    obs = StateObservationCodec(state={'observation.state': {'a': 1}})
     action = AbsolutePositionAction('x', 'y')
     composed = obs & action
     result = composed.encode({'a': 1.0})
@@ -100,7 +104,7 @@ def test_parallel_codec_encode_merges_outputs():
 
 def test_parallel_codec_decode_merges_outputs():
     """``obs & action`` decode produces only action-decoded keys (obs returns {})."""
-    obs = ObservationCodec(state={'observation.state': {'a': 1}}, images={})
+    obs = StateObservationCodec(state={'observation.state': {'a': 1}})
     action = AbsolutePositionAction('x', 'y')
     composed = obs & action
 
@@ -112,6 +116,48 @@ def test_parallel_codec_decode_merges_outputs():
     assert obs_keys.ROBOT_COMMAND in result
     assert obs_keys.TARGET_GRIP in result
     assert ACTION not in result
+
+
+@pytest.mark.parametrize('serialized', [False, True])
+def test_parallel_codec_merges_packed_fields_from_a_model_reply(serialized):
+    codec = PackFields(decode_layout={'joints': [0, 'joints']}, squeeze_dims=1) & PackFields(decode_layout={})
+    joints = np.arange(21, dtype=np.float32).reshape(1, 3, 7)
+    reply = ({'joints': joints}, {})
+    if serialized:
+        reply = serialization.deserialise(serialization.serialise(reply))
+
+    decoded = codec.decode(reply)
+
+    assert isinstance(decoded, dict)
+    assert set(decoded) == {'joints'}
+    np.testing.assert_array_equal(decoded['joints'], joints[0], strict=True)
+
+
+@pytest.mark.parametrize('horizon', [0, 2])
+def test_parallel_codec_merges_decoded_chunks_from_a_mapping(horizon):
+    left = SplitActionChunk() | PackFields(decode_layout={'left': ['left']})
+    right = SplitActionChunk() | PackFields(decode_layout={'right': ['right']})
+    result = (left & right).decode({'left': np.arange(horizon), 'right': np.arange(horizon) + 10})
+
+    assert result == [{'left': i, 'right': i + 10} for i in range(horizon)]
+
+
+def test_parallel_codec_rejects_unequal_decoded_chunk_lengths():
+    left = SplitActionChunk() | PackFields(decode_layout={'left': ['left']})
+    right = SplitActionChunk() | PackFields(decode_layout={'right': ['right']})
+
+    with pytest.raises(ValueError, match='zip'):
+        (left & right).decode({'left': np.arange(2), 'right': np.arange(3)})
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_parallel_codec_rejects_mixed_decoded_shapes(reverse):
+    codecs = [SplitActionChunk(), PackFields(decode_layout={})]
+    if reverse:
+        codecs.reverse()
+
+    with pytest.raises(ValueError, match='both mappings or both lists'):
+        (codecs[0] & codecs[1]).decode({'joints': np.zeros((0, 7), dtype=np.float32)})
 
 
 def test_sequential_into_parallel_training():
@@ -128,10 +174,9 @@ def test_sequential_into_parallel_training():
         obs_keys.EXTERIOR_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
     })
 
-    obs = ObservationCodec(
-        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
-        images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
-    )
+    obs = StateObservationCodec(
+        state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}}
+    ) & image_observation(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))})
     action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7)
     binarize = BinarizeGripTraining((obs_keys.GRIP, obs_keys.TARGET_GRIP))
     composed = binarize | (obs & action)
@@ -163,10 +208,8 @@ def test_compose_training_encoder_produces_only_derived_keys():
     })
 
     codec = compose(
-        obs=ObservationCodec(
-            state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
-            images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
-        ),
+        obs=StateObservationCodec(state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}})
+        & image_observation(images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))}),
         action=AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7),
     )
 
@@ -216,6 +259,41 @@ def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned(
     assert end.value.value is PolicyEnd.GIVE_UP
 
 
+def _joints_codec() -> AbsoluteJointsAction:
+    return AbsoluteJointsAction(obs_keys.TARGET_JOINTS, obs_keys.TARGET_GRIP, num_joints=7)
+
+
+def test_a_command_of_the_wrong_size_raises_a_policy_command_error_with_the_codec_error_as_cause():
+    wrapped = _joints_codec().wrap(lambda _obs: {ACTION: np.zeros(3)})
+
+    with pytest.raises(PolicyCommandError, match='AbsoluteJointsAction') as raised:
+        wrapped({})
+    assert type(raised.value.__cause__) is ValueError
+
+
+def test_a_command_with_no_action_field_raises_a_policy_command_error_with_the_key_error_as_cause():
+    wrapped = _joints_codec().wrap(lambda _obs: {'other': np.zeros(8)})
+
+    with pytest.raises(PolicyCommandError) as raised:
+        wrapped({})
+    assert isinstance(raised.value.__cause__, KeyError)
+
+
+def test_a_value_error_from_the_wrapped_policy_stays_a_plain_value_error():
+    def policy(_obs):
+        raise ValueError('model failed')
+
+    with pytest.raises(ValueError, match='model failed') as raised:
+        _joints_codec().wrap(policy)({})
+    assert type(raised.value) is ValueError
+
+
+def test_a_command_the_codec_decodes_reaches_the_caller():
+    [decoded] = _joints_codec().wrap(lambda _obs: [{ACTION: np.arange(8.0)}])({})
+
+    assert decoded[obs_keys.TARGET_GRIP] == 7.0
+
+
 class TestCodecComposition:
     """Codec composition preserves metadata and frame declarations."""
 
@@ -236,29 +314,43 @@ class TestCodecComposition:
 
     def test_two_frame_codecs_refuse_to_advertise_one_frame(self):
         """Poses come out at the product of both transforms, which neither codec's declaration names."""
-        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        b = Transform3D(np.array([0.01, 0.0, 0.02]), Rotation.from_euler([0.0, 0.0, -0.4]))
-        with pytest.raises(ValueError, match=roboarm_keys.EE_FRAME):
+        a = EEFrame(
+            site=GRIPPER_SITE, offset=Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        )
+        b = EEFrame(
+            site=GRIPPER_SITE, offset=Transform3D(np.array([0.01, 0.0, 0.02]), Rotation.from_euler([0.0, 0.0, -0.4]))
+        )
+        with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
             _ = (ChangeEEFrame(a) | ChangeEEFrame(b)).meta
 
     def test_the_same_frame_twice_is_still_two_moves(self):
         """The second move starts where the first left off, so the shared value names neither end of the pair."""
-        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        with pytest.raises(ValueError, match=roboarm_keys.EE_FRAME):
+        a = EEFrame(
+            site=GRIPPER_SITE, offset=Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        )
+        with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
             _ = (ChangeEEFrame(a) | ChangeEEFrame(a)).meta
 
     def test_parallel_frame_codecs_keep_the_frame_they_share(self):
         """Both halves encode the same input, so one move happens and the shared declaration describes it."""
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        np.testing.assert_allclose(
-            (ChangeEEFrame(a) & ChangeEEFrame(a)).meta[roboarm_keys.EE_FRAME], a.as_vector(Rotation.Representation.QUAT)
+        frame_a = EEFrame(site=GRIPPER_SITE, offset=a)
+        meta = (ChangeEEFrame(frame_a) & ChangeEEFrame(frame_a)).meta
+        frame = parse_ee_frames(meta[roboarm_keys.EE_FRAMES])[obs_keys.EE_POSE]
+        np.testing.assert_allclose(frame.offset.as_matrix, a.as_matrix, atol=1e-12)
+
+    def test_sequential_frame_codecs_over_different_keys_state_both(self):
+        a = EEFrame(
+            site=GRIPPER_SITE, offset=Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
         )
+        composed = ChangeEEFrame(a, keys=('left',)) | ChangeEEFrame(a, keys=('right',))
+        assert parse_ee_frames(composed.meta[roboarm_keys.EE_FRAMES]).keys() == {'left', 'right'}
 
 
 @pytest.mark.parametrize(
     'definition',
     [
-        ObservationCodec(state={'state': {'grip': 1}}, images={}) & AbsolutePositionAction('pose', 'grip'),
+        StateObservationCodec(state={'state': {'grip': 1}}) & AbsolutePositionAction('pose', 'grip'),
         FlipGrip() | (BinarizeGripInference() & AbsoluteJointsAction('joints', 'grip')),
     ],
 )

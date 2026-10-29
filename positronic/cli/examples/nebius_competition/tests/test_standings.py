@@ -10,7 +10,11 @@ import httpx
 import pytest
 from platform_client import routes
 from platform_client.boards import BoardRef
-from platform_client.client import API_KEY_ENV, AUTH_HEADER, PlatformClient
+from platform_client.client import API_KEY_ENV, API_URL_ENV, AUTH_HEADER, PlatformClient
+from platform_client.config import CONFIG_DIR_ENV, Config, write_config
+from platform_client.ids import ApiKey
+
+from positronic.cli.conftest import SERVES_THIS_CLIENT
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'standings.py'
 BASE = 'http://gateway.test'
@@ -66,6 +70,14 @@ NOT_FOUND = {  # rules-allow: hardcoded-keys — a wire fixture pins the server'
 }
 
 
+@pytest.fixture(autouse=True)
+def no_saved_record(monkeypatch, tmp_path):
+    """A config directory with no record and no platform in the environment, so the box's own never reach a test."""
+    monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(API_KEY_ENV, raising=False)
+    monkeypatch.delenv(API_URL_ENV, raising=False)
+
+
 @pytest.fixture(scope='module')
 def standings() -> dict[str, Any]:
     """The script's globals, loaded from its path: the examples directory is not a package."""
@@ -82,7 +94,7 @@ class Platform:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         payload, status = self.answers[request.url.path]
-        return httpx.Response(status, json=payload)
+        return httpx.Response(status, json=payload, headers=SERVES_THIS_CLIENT)
 
 
 def make_client(platform: Platform) -> PlatformClient:
@@ -158,3 +170,29 @@ def test_an_empty_platform_url_is_a_cli_error_before_any_request(standings: dict
     with pytest.raises(SystemExit) as exit_info:
         standings['main'](['--platform-url='])
     assert 'base_url is empty' in str(exit_info.value)
+
+
+SAVED = 'http://saved.test'
+
+
+def listed_platforms(standings: dict[str, Any], monkeypatch, argv: list[str]) -> list[str | None]:
+    """Run `main` with `argv` and return the platform each anonymous client was made for."""
+    platforms: list[str | None] = []
+
+    def anonymous_client(platform_url: str | None) -> PlatformClient:
+        platforms.append(platform_url)
+        return make_client(Platform({routes.RANKINGS_LIST: (BOARDS, 200)}))
+
+    monkeypatch.setitem(standings['main'].__globals__, 'anonymous_client', anonymous_client)
+    standings['main'](argv)
+    return platforms
+
+
+def test_the_listing_reads_the_platform_that_register_saved(standings: dict[str, Any], monkeypatch, tmp_path):
+    write_config(tmp_path, Config(platform_url=SAVED, api_key=ApiKey('pk_live_saved')))
+    assert listed_platforms(standings, monkeypatch, []) == [SAVED]
+
+
+def test_a_platform_url_flag_wins_over_the_saved_platform(standings: dict[str, Any], monkeypatch, tmp_path):
+    write_config(tmp_path, Config(platform_url=SAVED, api_key=ApiKey('pk_live_saved')))
+    assert listed_platforms(standings, monkeypatch, [f'--platform-url={BASE}']) == [BASE]

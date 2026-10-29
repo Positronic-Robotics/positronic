@@ -4,12 +4,14 @@ import configuronic as cfn
 import pos3
 
 from pimm.logging import init_logging
+from positronic.cfg.codecs import franka_hand_frame
+from positronic.drivers.roboarm.models import EEFrame
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import RestrictImageSize
+from positronic.policy.codecs import ChangeEEFrame, ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot import codecs as lerobot_codecs
@@ -45,17 +47,23 @@ def lerobot_model(checkpoints_dir: str, checkpoint: str | None, device: str | No
     return policy
 
 
-# No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
-# so none has a transform to declare.
+# ``ee_frame`` has no default. A wrong frame raises no error and sends the arm to a different place, so each
+# deployment states the frame of its checkpoint. ``ee_frame=None`` serves a checkpoint that speaks joints only.
 @cfn.config(codec=lerobot_codecs.ee)
-def pipeline(codec: Codec, fps: float = 15.0, horizon_sec: float | None = 1.0) -> PolicyDeployment:
-    return PolicyDeployment(Sequential(ChunkedSchedule(fps, horizon_sec), RestrictImageSize(512, 512)), codec)
+def pipeline(
+    codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_sec: float | None = 1.0
+) -> PolicyDeployment:
+    local = Sequential(ChunkedSchedule(fps, horizon_sec), TransformImages(512, 512, mode=ResizeMode.BOUND))
+    if ee_frame is not None:
+        local = Sequential(ChangeEEFrame(ee_frame), local)
+    return PolicyDeployment(local, codec)
 
 
 ee = pipeline
+# Joint observations, absolute EE actions: a pose pipeline.
 joints = pipeline.override(codec=lerobot_codecs.joints)
-joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik)
-joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
+joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik, ee_frame=None)
+joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim, ee_frame=None)
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
@@ -67,7 +75,7 @@ COMMANDS = {
     'joints_ik_sim': serve.override(model=lerobot_model, pipeline=joints_ik_sim),
     'phail': serve.override(
         model=lerobot_model.override(checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/'),
-        pipeline=ee.override(codec=lerobot_codecs.phail_v1),
+        pipeline=ee.override(codec=lerobot_codecs.phail_v1, ee_frame=franka_hand_frame),
     ),
 }
 

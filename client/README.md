@@ -13,13 +13,13 @@ the eval names and definitions (`evals/`). So a service that only speaks to the 
 its own, at the exact version it was written against:
 
 ```bash
-uv add "positronic-platform-client==0.37.1"
+uv add "positronic-platform-client==0.41.2"
 uv add "positronic-platform-client @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=client"
 ```
 
-The package is not on PyPI yet. Until it is, use the second line, pinned to a tag or a commit. The
-client pins `positronic-evals` exactly, and the index supplies it. So a git install of an unreleased
-client needs that `positronic-evals` version released first. The
+The package is on PyPI, and the first line installs a released version. The second line installs from
+git, pinned to a tag or a commit. The client pins `positronic-evals` exactly, and the index supplies it.
+So a git install of an unreleased client needs that `positronic-evals` version released first. The
 platform serves the same contract as an OpenAPI schema at `<platform>/openapi.json`, and `/docs`
 browses it.
 
@@ -30,9 +30,11 @@ package.
 
 ## Registering
 
-`platform-register` mints the API key that every other call needs. It runs a device flow: it
-prints a short code and a URL, waits while you sign in and approve the code in a browser, and
-registers the account that signed in. The package install above puts the command on your path.
+`platform-register` mints the API key that every other call needs. It runs a device flow: it prints
+a sign-in link, a short code and the time that the code stays valid, waits while you sign in and
+approve the code in a browser, and registers the account that signed in. When the identity provider
+sends a link that carries the code, the command prints that link, and you type no code. The package
+install above puts the command on your path.
 
 ```bash
 platform-register --alias=<display name>
@@ -43,7 +45,8 @@ The platform names its identity provider at `GET /v1/auth.config`, and the comma
 flow of that provider:
 
 - WorkOS, when the platform names a WorkOS client. You sign in with the methods that the platform's
-  WorkOS environment offers, such as Google, GitHub or an email code.
+  WorkOS environment offers, such as Google, GitHub or an email code. A mail provider can put the
+  code mail in spam, so the sign-in line also tells you to look in your spam folder.
   `--workos-client-id` and `POSITRONIC_PLATFORM_WORKOS_CLIENT_ID` name another client instead.
 - GitHub, when the platform takes GitHub tokens and names no WorkOS client. The command uses the
   platform's own OAuth app, whose client id it carries as its default. `--client-id` and
@@ -124,8 +127,8 @@ An eval is a list of tasks. The platform offers named evals, and a customer comp
 episodes each endpoint takes on each task. A plan either states its own `tasks` or names an `eval`
 the catalogue expands into them; both arrive at the same set. The plan states the count once. A task may override it for that task, and an endpoint may
 override it for that endpoint, so a 10 + 10 + 2 round is one plan. The scene fields sit on the
-plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras`, `clutter` and
-`start_pose`. An endpoint states only its count. `episodes_total` is a checksum a caller may state.
+plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras`, `clutter`, `scene_seed`
+and `start_pose`. An endpoint states only its count. `episodes_total` is a checksum a caller may state.
 `max_cap_per_episode_sec` is the upper bound on every task's cap.
 
 `request_type` is required and states the rules a plan runs under. `private_eval` runs for the org
@@ -137,8 +140,10 @@ endpoint, and counts against the daily quota. `--org` states a `private_eval` on
 or `yam`, a bimanual YAM. A plan that names none runs on a `franka`. The platform picks the rig of
 that shape. A plan that names an eval runs on the embodiment the eval pins, and it is refused when it
 names a `rig_shape` other than `franka`. The gateway refuses `sim`. The platform runs every task of a
-plan on the rig its `rig_shape` names, and it does not check that a task suits that rig: a plan of
-two-arm tasks states `rig_shape: yam`.
+plan on the rig its `rig_shape` names. Each task in `catalog.tasks` lists the shapes it runs on in
+`embodiments`. A plan that states its tasks is refused when its `rig_shape` is not one of a task's
+`embodiments`, and the error names the task and the shapes it accepts. So a plan of two-arm tasks
+states `rig_shape: yam`.
 
 ```yaml
 request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
@@ -164,13 +169,14 @@ max_cap_per_episode_sec: 300
 policy_preset: production
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
-start_pose: droid_reset                  # nominal | droid_reset
+scene_seed: spoons-scene-a               # the organization's later plans with this seed replay the recorded parts
+start_pose: droid_reset                  # nominal | droid_reset | abc_init
 ```
 
-`start_pose` names where the arm starts each episode: `nominal`, the rig's own pose, or
-`droid_reset`, the reset pose of the DROID data collection. A plan that names none takes the pose
-of each task's catalogue entry. A `yam` rig opens each episode at its own pose, whatever the plan
-names.
+`start_pose` names where the arm starts each episode: `nominal`, the rig's own pose;
+`droid_reset`, the reset pose of the DROID data collection; or `abc_init`, the start pose of the
+ABC sim. `droid_reset` is a `franka` pose and `abc_init` is a `yam` pose, one per arm. A plan that
+names none takes the pose of each task's catalogue entry.
 
 An endpoint states where its policy comes from (`kind`) and the wire a session runs over (`wire`).
 Every kind names its wire. There is no default.
@@ -203,6 +209,12 @@ A `remote` endpoint may state `max_concurrent_sessions`, an integer of 1 or more
 holds at most that many sessions open to the policy at once. A server that serves one session at a
 time states 1. With no value, the platform picks the count. Only an entry that names its `address`
 states it: a label on a task takes the value of the plan endpoint it names.
+
+An `image` endpoint may state `min_vram_gb`, the least GPU memory the image needs, in GB of 10^9
+bytes. The platform gives the run the smallest GPU slice that holds it. With no value, the image gets
+the published slice of 24192 MiB. A need that no slice of the run's GPU holds is refused at submit,
+and so is a need above the published slice where the plan's eval keeps that slice. Only an entry
+that names its `image` states it.
 
 Each address field holds one grammar. The wire writes each value into what it dials with no change,
 so the grammar admits only a value the wire can write as it is:
@@ -243,6 +255,23 @@ the plan lays out that scene and that table, and runs the episodes in that order
 `cap_per_episode_sec` or no `policy_preset` at any level is refused `bad_request`, and the refusal
 names each task and what it lacks. Name a preset the rig carries: `production` serves each
 episode from one of the plan's endpoints.
+
+Each plan draws its scene again, so two plans of one task can lay out different scenes. A plan or a task that
+states `scene_seed` draws every random part of the task's scene from that seed alone. These parts are the
+table, the tote side and each camera side, where no level states the side or a level states `random`. The
+platform records each part the first time a plan of the organization draws it for that task under that seed.
+Every later plan of the organization with that seed and task lays out the recorded part, at any place in the
+task list and under any `transaction_key`. A change to the object kit or the task catalogue does not change a
+recorded part. A level that states a side lays out that side. The platform records one table for each
+`clutter` block that a plan states for the task, and one table for a plan that states none, drawn within the
+task's own block. A later plan with the same seed that states the same block, or states none, lays out the
+recorded table, whatever block the task catalogue gives the task now. A plan that states another block draws
+its own table and records it. `submissions.create` refuses a plan `bad_request` when the task no longer offers
+a recorded side or no longer defines a recorded camera mount, or when an object of the recorded table has left
+the kit or the task now names it. The refusal names the task and the side, the mount or the object. To file
+the plan, state the side, state another `clutter` block, or state another `scene_seed`. Another organization
+draws its own scene from the same seed. `submissions.resolve` shows the recorded scene, refuses the same
+plans, and records nothing. The episode order does not come from the seed: each plan draws its own.
 
 `submissions.resolve` takes the same plan and answers with `resolved` alone. For a pay_as_you_go
 organization, that `ResolvedPlan` carries a `credit_quote`. It files nothing, spends no quota and
@@ -290,9 +319,10 @@ endpoints:
 ```
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
-names, and `catalog.tasks` the tasks a plan may compose, each with its `embodiment`. Every registered
-user sees the evals a submission can name. A customer grant adds the rig's evals and tasks, filtered
-to the entries offered to the grant's client.
+names, and `catalog.tasks` the tasks a plan may compose, each with the `embodiments` it runs on, for
+example `["franka", "yam"]` or `["yam"]`. Every registered user sees the evals a submission can name.
+A customer grant adds the rig's evals and tasks, filtered to the entries offered to the grant's
+client.
 
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
 `platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
@@ -365,6 +395,18 @@ Calls go to `https://platform.positronic.ro` with nothing set. The environment c
 The record's key and its platform are read one at a time. A command that names another platform, and
 no key, sends the record's key to the platform it names. The client speaks one wire contract and runs
 against any platform that serves it, but it is built for ours. You take the risk of another one.
+
+Each side refuses a version of the other that is too old:
+
+- Every request names the client's version in `X-Positronic-Client-Version`. The platform refuses a
+  call with an API key from a client older than the oldest it accepts, with `bad_request` and the
+  version to install. Upgrade `positronic`, or `positronic-platform-client` alone. Your own HTTP code that
+  calls with an API key sends the header too.
+- Every answer names the contract version the platform serves in `X-Positronic-Platform-Version`. The
+  client refuses a successful answer that names none, or one older than
+  `platform_client.client.MIN_PLATFORM_VERSION`.
+  Before its first write, a client reads `auth.config` and checks the version there, so it sends no
+  write to a platform it cannot read.
 
 `rankings.list` names the boards, and `rankings.get?board=<slug>` reads one. From the command line,
 `positronic/cli/examples/nebius_competition/standings.py` prints the boards, or the rows of one:
@@ -469,19 +511,22 @@ or the caller's, which charges it.
 
 `submissions.get` answers one model per status. A finished run reads its score off `scores` and its
 outputs off `artifacts`. A failed run reads `reason_code` and `reason`, and `artifacts` links the
-records the run wrote: `result` is its outcome, and `diagnostics` says why its policy failed.
-`policy_log` is the policy container's own output, and a finished or failed run carries it. Each
-link is a signed URL, because the submitter holds no credential for the bucket. `artifacts` is
-absent on a run that wrote nothing, `diagnostics` on a run whose record was not written, and
-`policy_log` on a run whose container printed nothing.
+records the run wrote: `result` is its outcome, and `diagnostics` says why its policy failed. A
+failed run that published episodes before it failed also carries `scores` over those episodes, and
+`episodes` counts them against the episodes that the run asked for. `policy_log` is the policy
+container's own output, and a finished or failed run carries it. Each link is a signed URL, because
+the submitter holds no credential for the bucket. `artifacts` is absent on a run that wrote nothing,
+`diagnostics` on a run whose record was not written, and `policy_log` on a run whose container
+printed nothing.
 
-`submissions.artifacts` lists what a finished run wrote, one page at a time. Each entry names its
-`key` under the submission's own prefix, its `size`, and a signed `url` that expires. Pass `prefix`
-to keep the page to one part of the tree, so one attempt's episodes are `attempts/<n>/episodes/`
-and `result.json`'s `attempt_location` names the attempt that scored. Pass `after` with the `next`
-of the page before it to read the rest. The route answers a finished run alone: a run still going
-has a part-written prefix, and a run that failed reads its records off `submissions.get`. It refuses
-a rig plan, whose episodes are in the org's own bucket (§Eval plans).
+`submissions.artifacts` lists what a finished run wrote, one page at a time. It also lists a failed
+run that carries `scores`. Each entry names its `key` under the submission's own prefix, its `size`,
+and a signed `url` that expires. Pass `prefix` to keep the page to one part of the tree, so one
+attempt's episodes are `attempts/<n>/episodes/` and `result.json`'s `attempt_location` names the
+attempt that scored. Pass `after` with the `next` of the page before it to read the rest. The route
+refuses every other run: a run still going has a part-written prefix, and a run that failed with no
+`scores` reads its records off `submissions.get`. It refuses a rig plan, whose episodes are in the
+org's own bucket (§Eval plans).
 
 `users.me` reports the plan's rules as a list of `QuotaLimit`, each with its own key, window and
 subject; `MeResponse.quota_for(QUOTA_SUBMISSIONS_DAY)` reads one by key, from the keys the package

@@ -21,10 +21,18 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import bundled_panda_model
+from positronic.drivers.roboarm.ik import _prepare_spec
+from positronic.drivers.roboarm.models import (
+    EE_LINK,
+    FLANGE_LINK,
+    GRIPPER_SITE,
+    EEFrame,
+    bundled_panda_model,
+    parse_ee_frames,
+)
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.eval import keys as eval_keys
-from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
+from positronic.policy.tests.test_harness import FramedPolicy, RemoteStubPolicy, StubPolicy
 from positronic.simulator.env_server import telemetry as env_telemetry
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION, MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
@@ -69,7 +77,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
 
     monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', FakeRenderer)
 
-    policy = StubPolicy()
+    # The policy states the site the sim reports its poses at, so its observation carries the pose.
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
 
     camera_dict = {keys.WRIST_IMAGE: 'handcam_left_ph'}
 
@@ -100,6 +109,10 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     # The post-loader scene description rides robot_meta into static: with eval.seed it makes
     # the episode self-contained for downstream scoring and faithful replay.
     assert episode.static[SCENE_XML].startswith('<mujoco')
+    recorded_frames = parse_ee_frames(episode.static[roboarm_keys.EE_FRAMES])
+    assert {name: frame.site for name, frame in recorded_frames.items()} == dict.fromkeys(
+        (keys.EE_POSE, keys.TARGET_EE_POSE), GRIPPER_SITE
+    )
     signals = episode.signals
     assert keys.TARGET_EE_POSE in signals
     assert 'target_grip' in signals
@@ -201,7 +214,8 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
             keys.TARGET_GRIP: Command(producer.commands[keys.TARGET_GRIP], None),
         },
         prepare_handlers={eval_keys.SCENE: producer.env_reset},
-        static_meta=dict(ROBOT_STATIC_META),
+        # A rig that states frames carries the model they name.
+        static_meta={**ROBOT_STATIC_META, roboarm_keys.URDF: bundled_panda_model()[roboarm_keys.URDF]},
         meta_source=producer.robot_meta,
         control_systems=(producer,),
         simulated=True,
@@ -412,17 +426,19 @@ def test_sim_state_reconstructs_dynamics():
 
 def test_recorded_urdf_matches_sim_kinematics():
     """The model the sim records for the viewer and IK reproduces the MuJoCo model the sim runs:
-    the arm link frames and the ``end_effector`` control frame agree with ``panda.xml`` across joint
-    configurations, and the joint limits match. The control frame is the contract that keeps
+    the arm link frames, the flange, the grip point and the ``end_effector`` control frame agree with ``panda.xml``
+    across joint configurations, and the joint limits match. The control frame is the contract that keeps
     ``ik_joints_from_episode`` inverting ``robot_state.ee_pose`` against the grasp site the sim
     measured; the limits are what ``DLSIKSolverWithLimits`` constrains each solve to.
     """
-    joints = [f'joint{i}' for i in range(1, 8)]
+    joints = bundled_panda_model()[roboarm_keys.JOINT_NAMES]
 
     def compiled(spec):
-        # A URDF carries ``end_effector`` as a frame-only body; resolve it to a readable site.
-        if 'end_effector' not in {site.name for body in spec.bodies for site in body.sites}:
-            spec.body('end_effector').add_site().name = 'end_effector'
+        # A URDF carries its named frames as frame-only bodies; resolve each to a readable site.
+        sites = {site.name for body in spec.bodies for site in body.sites}
+        for name in (EE_LINK, FLANGE_LINK, GRIPPER_SITE):
+            if name not in sites and spec.body(name) is not None:
+                spec.body(name).add_site().name = name
         model = spec.compile()
         return model, mj.MjData(model)
 
@@ -435,8 +451,10 @@ def test_recorded_urdf_matches_sim_kinematics():
 
     qadr_urdf = [m_urdf.joint(n).qposadr.item() for n in joints]
     qadr_mjcf = [m_mjcf.joint(n).qposadr.item() for n in joints]
-    ee_urdf = mj.mj_name2id(m_urdf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
-    ee_mjcf = mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_SITE, 'end_effector')
+    sites = [
+        (mj.mj_name2id(m_urdf, mj.mjtObj.mjOBJ_SITE, urdf_name), mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_SITE, mjcf_name))
+        for urdf_name, mjcf_name in ((EE_LINK, EE_LINK), (FLANGE_LINK, FLANGE_LINK), (GRIPPER_SITE, GRIPPER_SITE))
+    ]
     for n in joints:
         np.testing.assert_allclose(m_urdf.joint(n).range, m_mjcf.joint(n).range, atol=1e-6)
     rng = np.random.default_rng(0)
@@ -451,5 +469,65 @@ def test_recorded_urdf_matches_sim_kinematics():
             bm = mj.mj_name2id(m_mjcf, mj.mjtObj.mjOBJ_BODY, link)
             np.testing.assert_allclose(d_urdf.xpos[bu], d_mjcf.xpos[bm], atol=1e-6)
             assert abs(float(np.dot(d_urdf.xquat[bu], d_mjcf.xquat[bm]))) > 1 - 1e-6
-        np.testing.assert_allclose(d_urdf.site_xpos[ee_urdf], d_mjcf.site_xpos[ee_mjcf], atol=1e-6)
-        np.testing.assert_allclose(d_urdf.site_xmat[ee_urdf], d_mjcf.site_xmat[ee_mjcf], atol=1e-6)
+        for site_urdf, site_mjcf in sites:
+            np.testing.assert_allclose(d_urdf.site_xpos[site_urdf], d_mjcf.site_xpos[site_mjcf], atol=1e-6)
+            np.testing.assert_allclose(d_urdf.site_xmat[site_urdf], d_mjcf.site_xmat[site_mjcf], atol=1e-6)
+
+
+def test_scene_frames_match_the_recorded_urdf_frames():
+    """The scene the sim runs carries the flange and the grip point of the model it records, measured from the
+    arm base."""
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+    frames = (FLANGE_LINK, GRIPPER_SITE)
+    m_urdf = _prepare_spec(bundled_panda_model()[roboarm_keys.URDF], *frames).compile()
+    d_urdf = mj.MjData(m_urdf)
+    joints = bundled_panda_model()[roboarm_keys.JOINT_NAMES]
+    # rules-allow: hardcoded-keys — the scene's name suffix and arm base are this test's input, not names it shares
+    suffix, scene_base = '_ph', 'link0_ph'
+
+    def frame_from_base(data, base, frame):
+        base_rotation = data.body(base).xmat.reshape(3, 3)
+        offset = base_rotation.T @ (data.site(frame).xpos - data.body(base).xpos)
+        return offset, base_rotation.T @ data.site(frame).xmat.reshape(3, 3)
+
+    rng = np.random.default_rng(0)
+    for _ in range(10):
+        q = rng.uniform(-1.5, 1.5, len(joints))
+        d_urdf.qpos[[m_urdf.joint(n).qposadr.item() for n in joints]] = q
+        sim.data.qpos[[sim.model.joint(f'{n}{suffix}').qposadr.item() for n in joints]] = q
+        mj.mj_forward(m_urdf, d_urdf)
+        mj.mj_forward(sim.model, sim.data)
+        for frame in frames:
+            urdf_pos, urdf_rot = frame_from_base(d_urdf, 'world', frame)
+            scene_pos, scene_rot = frame_from_base(sim.data, scene_base, f'{frame}{suffix}')
+            np.testing.assert_allclose(scene_pos, urdf_pos, atol=1e-6)
+            np.testing.assert_allclose(scene_rot, urdf_rot, atol=1e-6)
+
+
+def test_scene_frame_sites_stay_out_of_the_camera_images():
+    """The sim renders the default site groups, and the frame sites sit outside them."""
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+    rendered_groups = mj.MjvOption().sitegroup
+    for frame in (FLANGE_LINK, GRIPPER_SITE):
+        # rules-allow: hardcoded-keys — the scene's name suffix is this test's input, not a name it shares
+        assert not rendered_groups[sim.model.site(f'{frame}_ph').group.item()]
+
+
+def test_scene_gripper_sits_midway_between_the_fingertip_pads():
+    """The grip point is the midpoint of the two fingertip pads at every arm pose and every opening."""
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+    joints = bundled_panda_model()[roboarm_keys.JOINT_NAMES]
+    fingers = bundled_panda_model()[roboarm_keys.GRIPPER]['joints']
+    # rules-allow: hardcoded-keys — the scene's name suffix and pad geoms are this test's input, not names it shares
+    suffix, pads = '_ph', ('left_finger_pad_ph', 'right_finger_pad_ph')
+    arm_qpos = [sim.model.joint(f'{n}{suffix}').qposadr.item() for n in joints]
+    finger_qpos = [sim.model.joint(f'{n}{suffix}').qposadr.item() for n in fingers]
+
+    rng = np.random.default_rng(0)
+    for q in rng.uniform(-1.5, 1.5, (5, len(joints))):
+        for opening in (0.0, 0.02, 0.04):
+            sim.data.qpos[arm_qpos] = q
+            sim.data.qpos[finger_qpos] = opening
+            mj.mj_forward(sim.model, sim.data)
+            pad_midpoint = (sim.data.geom(pads[0]).xpos + sim.data.geom(pads[1]).xpos) / 2
+            np.testing.assert_allclose(sim.data.site(f'{GRIPPER_SITE}{suffix}').xpos, pad_midpoint, atol=1e-9)

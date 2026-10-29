@@ -1,0 +1,73 @@
+name: Build the MolmoSpaces Eval Image
+
+# Builds positro/molmospaces and checks that it holds only public files. A pull request that touches the recipe
+# builds it and pushes nothing. `docker-publish.yaml` calls this on main with `push`, which publishes the image.
+on:
+  pull_request:
+    paths:
+      - docker/Dockerfile.molmospaces
+      - docker/run_molmospaces_eval.sh
+      - docker/Makefile
+      - .dockerignore
+      - utilities/check_public_image.py
+      - positronic/simulator/molmo_spaces/launcher.py
+      - positronic/simulator/molmo_spaces/molmo_constraints.txt
+      - positronic/simulator/env_server/launcher.py
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/docker-molmospaces.yaml
+  workflow_call:
+    inputs:
+      push:
+        description: Push the image to Docker Hub after the check.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      DOCKER_USERNAME:
+        required: false
+      DOCKER_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  molmospaces:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The image is about 13 GB unpacked, and the build holds the uv downloads too.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm /usr/local/.ghcup \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/boost /usr/local/share/chromium \
+            /usr/local/lib/node_modules /opt/az /opt/microsoft /opt/google /opt/pipx /usr/lib/google-cloud-sdk \
+            /usr/share/miniconda "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"
+          docker system prune -af --volumes > /dev/null
+          df -h /
+
+      - name: Build
+        run: make -C docker build-molmospaces
+
+      - name: Check that the image holds only public files
+        run: python3 utilities/check_public_image.py positro/molmospaces:local
+
+      - name: Log in to Docker Hub
+        if: inputs.push
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Push
+        if: inputs.push
+        run: make -C docker push-molmospaces IMAGE_TAG=main
+
+      # Reads anonymously, as a Nebius job pulls it, so a repository that is not public fails here.
+      - name: Read the published digest and size
+        if: inputs.push
+        run: docker/read_image_digest.sh positro/molmospaces:main

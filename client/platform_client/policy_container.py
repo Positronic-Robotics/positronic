@@ -14,12 +14,14 @@ from pydantic import BaseModel, NonNegativeInt
 POLICY_PORT = 8000
 # The one variable the platform sets in the container: the run's bearer token.
 AUTH_TOKEN_ENV = 'AUTH_TOKEN'
-# The deadline that VM boot, the image pull and the server's start share.
-PROVISIONING_DEADLINE_S = 1800.0
+# The deadline for VM boot and the image pull, from the start of the VM. A miss is the platform's fault.
+IMAGE_FETCH_DEADLINE_S = 1800.0
+# The deadline for the server's start, from the end of the image pull to the first readiness answer.
+WARMUP_DEADLINE_S = 1800.0
 
-# The GPU: one MIG slice of an H100, and the memory it carries.
-MIG_PROFILE = '3g.40gb'
-VRAM_MIB = 40448
+# The published GPU: one MIG slice of an RTX PRO 6000, and the memory it carries.
+MIG_PROFILE = '1g.24gb'
+VRAM_MIB = 24192
 
 # What the platform pulls and unpacks. `COMPRESSED_IMAGE_BYTES` bounds `ImageManifest.compressed_size`.
 # The unpacked budgets count every entry of every layer: its size rounded up to a whole

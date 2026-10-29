@@ -58,7 +58,7 @@ of the task means where the metric sets `per_task`, and a board ranks on it. `ep
 episode, and `unscored` counts the episodes that no labeler labelled. `primary` does not count those
 as failures. No file holds a score: a score is a function of the labels.
 
-`PUBLIC_LABELERS` holds the labelers that this package publishes, `molmo` and `robolab`. A caller with
+`PUBLIC_LABELERS` holds the labelers that this package publishes, `molmo`, `robolab` and `abc`. A caller with
 labelers of its own passes `label` a table that holds them beside `PUBLIC_LABELERS`. The MolmoSpaces
 labeler takes the end of a trial from the episode's signal files: the time from the first sample to
 the last, on the world clock. That time can exceed the trial by up to one control step.
@@ -78,6 +78,18 @@ robolab = Scoring(
     labelers=(ROBOLAB_LABELER,), primary=MeanEpisodeScore(episode_score=EpisodeScore(use_subtask_score=True))
 )
 ```
+
+The ABC labeler reads the end of a trial in the same way, and its task is the task id that ABC names. ABC's
+evaluator records its progress through the task at each step as the `task_eval.reward` signal, from 0 to 1.
+`abc_max_progress(episode)` gives the largest value of that signal, which is how ABC scores progress. It gives
+None for an episode that records no such sample. An ABC eval ranks on the mean of its task success rates, and a
+trial that runs out of time scores 0. Progress is not part of `Scores`.
+
+## ABC evals
+
+`abc.yam_bimanual` runs the 29 tasks that ABC ships a success evaluator for, on the bimanual i2rt YAM.
+`abc.yam_bimanual_multitask` runs the five tasks that ABC's multi-task sim policy trained on. Each task runs 20
+trials with the seeds 20260511 to 20260530. By default, ABC's own sim eval draws its first 20 worlds from the same seeds.
 
 ## MolmoSpaces episode lists
 

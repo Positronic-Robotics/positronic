@@ -101,13 +101,78 @@ def resolve_checkpoint(
     }
 
 
+def _is_finite_number(value: Any) -> bool:
+    return type(value) in (int, float) and math.isfinite(value)
+
+
 class Gr00tSession(Session):
-    def __init__(self, policy: Any, client_stack: dict[str, Any]):
+    def __init__(self, policy: Any, client_stack: dict[str, Any], rtc: dict[str, float] | None = None, *, fps: float):
         super().__init__(client_stack)
         self._policy = policy
+        self._rtc = rtc
+        self._fps = fps
+        self._previous_poses: np.ndarray | None = None
+
+    def _rtc_options(self, context: dict[str, Any]) -> dict[str, Any] | None:
+        for name in (keys.RTC.CHUNK_OFFSET_SEC, keys.RTC.OBSERVATION_OFFSET_SEC, keys.RTC.ESTIMATED_LATENCY_SEC):
+            value = context[name]
+            if not _is_finite_number(value) or (name != keys.RTC.OBSERVATION_OFFSET_SEC and value < 0):
+                raise ValueError(f'{name} must be finite seconds, non-negative except for the observation offset')
+        targets = context[ACTION]
+        if not isinstance(targets, list) or any(not isinstance(target, dict) for target in targets):
+            raise ValueError('GR00T RTC actions must be a list of dictionaries')
+        if not targets:
+            return None
+        if self._previous_poses is None:
+            raise ValueError('RTC overlap requires a preceding prediction in this session')
+        horizon = len(self._policy.get_modality_config()[ACTION].delta_indices)
+        source_position = context[keys.RTC.CHUNK_OFFSET_SEC] * self._fps
+        start = round(source_position)
+        if not math.isclose(source_position, start, abs_tol=1e-6) or start + len(targets) > horizon:
+            raise ValueError('GR00T prefix must align with the preceding prediction and fit its horizon')
+        if context[keys.RTC.OBSERVATION_OFFSET_SEC] > 0:
+            raise ValueError('GR00T prefix must cover the observation moment')
+        skipped = math.floor(round(-context[keys.RTC.OBSERVATION_OFFSET_SEC] * 1e9) * self._fps / 1e9)
+        available = len(targets) - skipped
+        if available <= 0:
+            return None
+        assert self._rtc is not None
+        frozen = min(available, math.ceil(round(context[keys.RTC.ESTIMATED_LATENCY_SEC] * 1e9) * self._fps / 1e9))
+        overlap = min(available, frozen + math.ceil(self._rtc[keys.RTC.BLEND_SEC] * self._fps))
+        actions = {EE_POSE: self._previous_poses[start + skipped : start + skipped + overlap].copy()}
+        targets = targets[skipped : skipped + overlap]
+        if any(set(target) != {JOINT_POSITION, GRIP} for target in targets):
+            raise ValueError('GR00T RTC targets must contain joint_position and gripper_position')
+        for name in (JOINT_POSITION, GRIP):
+            values = np.asarray([target[name] for target in targets], dtype=np.float32)
+            if values.shape != (overlap, STATE_DIMS[name]) or not np.isfinite(values).all():
+                raise ValueError(f'Invalid RTC target for {name}')
+            actions[name] = values
+        # Checkpoint normalization statistics have a full time axis, before processor padding.
+        actions = {
+            name: np.pad(values, ((0, horizon - len(values)), (0, 0)), mode='edge') for name, values in actions.items()
+        }
+        return {
+            ACTION: actions,
+            keys.RTC.ACTION_HORIZON: overlap,
+            keys.RTC.OVERLAP_STEPS: overlap,
+            keys.RTC.FROZEN_STEPS: frozen,
+            keys.RTC.NATIVE_RAMP_RATE: self._rtc[keys.RTC.RAMP_RATE],
+        }
 
     def infer(self, observation: Any) -> Any:
-        return self._policy.get_action(observation)
+        if self._rtc is None:
+            if keys.RTC.FIELD in observation:
+                raise ValueError('This session does not enable RTC')
+            return self._policy.get_action(observation)
+        options = self._rtc_options(observation[keys.RTC.FIELD])
+        inputs = {name: value for name, value in observation.items() if name != keys.RTC.FIELD}
+        result = self._policy.get_action(inputs, options=options)
+        self._previous_poses = result[0][EE_POSE][0].copy()
+        return result
+
+    def close(self) -> None:
+        self._previous_poses = None
 
 
 class Gr00tModel(Model):
@@ -123,6 +188,7 @@ class Gr00tModel(Model):
         horizon_sec: float | None = 1.0,
         compress_images: bool = True,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+        rtc: dict[str, float] | None = None,
     ):
         self._policy = policy
         self._settings = json.loads(json.dumps(settings, allow_nan=False))
@@ -134,6 +200,7 @@ class Gr00tModel(Model):
                 model_settings.IMAGE_MAPPINGS: settings[model_settings.IMAGE_MAPPINGS],
                 keys.COMPRESS_IMAGES: compress_images,
                 keys.JPEG_QUALITY: jpeg_quality,
+                keys.RTC.FIELD: rtc,
             },
             metadata={**metadata, keys.TYPE: 'groot', keys.EMBODIMENT: EMBODIMENT},
         )
@@ -155,6 +222,30 @@ class Gr00tModel(Model):
             expected = (1, action_horizon, STATE_DIMS[name])
             if actions[name].shape != expected:
                 raise ValueError(f'Checkpoint action {name} has shape {actions[name].shape}, expected {expected}')
+        if rtc is not None:
+            warm = Gr00tSession(policy, {}, rtc, fps=self.parameters[keys.FPS])
+            warm.infer({
+                **observation,
+                keys.RTC.FIELD: {
+                    ACTION: [],
+                    keys.RTC.CHUNK_OFFSET_SEC: 0.0,
+                    keys.RTC.OBSERVATION_OFFSET_SEC: 0.0,
+                    keys.RTC.ESTIMATED_LATENCY_SEC: 0.0,
+                },
+            })
+            targets = [
+                {name: actions[name][0, index] for name in (JOINT_POSITION, GRIP)} for index in range(action_horizon)
+            ]
+            warm.infer({
+                **observation,
+                keys.RTC.FIELD: {
+                    ACTION: targets,
+                    keys.RTC.CHUNK_OFFSET_SEC: 0.0,
+                    keys.RTC.OBSERVATION_OFFSET_SEC: 0.0,
+                    keys.RTC.ESTIMATED_LATENCY_SEC: 1 / self.parameters[keys.FPS],
+                },
+            })
+            warm.close()
         policy.reset()
         logger.info('GR00T model is warm')
 
@@ -178,11 +269,23 @@ class Gr00tModel(Model):
         return action_horizon
 
     def prepare_session(self, params: dict[str, Any]) -> Gr00tSession:
+        rtc = params[keys.RTC.FIELD]
+        if rtc is not None:
+            if self.parameters[keys.RTC.FIELD] is None:
+                raise ValueError('Launch droid_rtc to enable warmed RTC sessions')
+            expected = {keys.RTC.CALL_AFTER_SEC, keys.RTC.BLEND_SEC, keys.RTC.MAX_DELAY_SEC, keys.RTC.RAMP_RATE}
+            if not isinstance(rtc, dict) or set(rtc) != expected:
+                raise ValueError(f'rtc must be None or contain {sorted(expected)}')
+            for name, value in rtc.items():
+                if not _is_finite_number(value) or value <= 0:
+                    raise ValueError(f'rtc.{name} must be positive and finite')
         fps, horizon = params[keys.FPS], params[keys.HORIZON_SEC]
+        if rtc is not None and horizon is not None:
+            raise ValueError('RTC uses call_after_sec; set horizon_sec=None')
         for name, value in ((keys.FPS, fps), (keys.HORIZON_SEC, horizon)):
             if name == keys.HORIZON_SEC and value is None:
                 continue
-            if isinstance(value, bool) or not isinstance(value, int | float) or not 0 < value < math.inf:
+            if not _is_finite_number(value) or value <= 0:
                 raise ValueError(f'{name} must be positive and finite')
         cameras = params[model_settings.IMAGE_MAPPINGS]
         if not isinstance(cameras, dict) or cameras.keys() != self._settings[model_settings.IMAGE_MAPPINGS].keys():
@@ -194,7 +297,7 @@ class Gr00tModel(Model):
             raise ValueError('jpeg_quality must be an integer between 0 and 100')
         if type(params[keys.COMPRESS_IMAGES]) is not bool:
             raise ValueError('compress_images must be a boolean')
-        return Gr00tSession(self._policy, recipe.client_stack(self._settings, **params))
+        return Gr00tSession(self._policy, recipe.client_stack(self._settings, **params), rtc, fps=fps)
 
     def close(self) -> None:
         del self._policy
@@ -211,14 +314,15 @@ def load_model(
     horizon_sec: float | None = 1.0,
     compress_images: bool = True,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+    rtc: dict[str, float] | None = None,
 ) -> Gr00tModel:
     path, metadata = resolve_checkpoint(model_source, checkpoint, revision)
     model_settings.validate(settings, path)
     # CLI inspection and checkpoint validation do not load the CUDA runtime.
-    from gr00t.policy.gr00t_policy import Gr00tPolicy  # noqa: PLC0415
+    from .native import Policy  # noqa: PLC0415
 
     logger.info('Loading GR00T checkpoint %s on %s', path, device)
-    policy = Gr00tPolicy(embodiment_tag=EMBODIMENT, model_path=str(path), device=device, strict=True)
+    policy = Policy(embodiment_tag=EMBODIMENT, model_path=str(path), device=device, strict=True)
     return Gr00tModel(
         policy,
         settings,
@@ -227,6 +331,7 @@ def load_model(
         horizon_sec=horizon_sec,
         compress_images=compress_images,
         jpeg_quality=jpeg_quality,
+        rtc=rtc,
     )
 
 
@@ -249,6 +354,7 @@ def grpc(served_address: dict[str, Any]):
         keys.HORIZON_SEC: 1.0,
         keys.COMPRESS_IMAGES: True,
         keys.JPEG_QUALITY: DEFAULT_JPEG_QUALITY,
+        keys.RTC.FIELD: None,
     },
     websocket=websocket,
     grpc=None,
@@ -270,7 +376,16 @@ def main() -> None:
     droid = serve.override(**{'model.model_source': os.environ.get(MODEL_SOURCE_ENV, HF_MODEL_PREFIX + BASE_MODEL)})
     three_cameras = droid.override(**{'pipeline.settings': model_settings.droid_three_cameras()})
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-    cfn.cli({'serve': droid, 'droid': droid, 'droid_three_cameras': three_cameras})
+    rtc = droid.override(**{
+        'pipeline.rtc': {
+            keys.RTC.CALL_AFTER_SEC: 0.5,
+            keys.RTC.BLEND_SEC: 0.5,
+            keys.RTC.MAX_DELAY_SEC: 1.0,
+            keys.RTC.RAMP_RATE: 5.0,
+        },
+        'pipeline.horizon_sec': None,
+    })
+    cfn.cli({'serve': droid, 'droid': droid, 'droid_three_cameras': three_cameras, 'droid_rtc': rtc})
 
 
 if __name__ == '__main__':

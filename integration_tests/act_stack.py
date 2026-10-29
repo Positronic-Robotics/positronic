@@ -12,15 +12,13 @@ import av
 import configuronic as cfn
 import mujoco as mj
 import numpy as np
+from eval_vocabulary.timeline import recording_timeline
 
-from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.dataset.vector import RECORDED_TIME
 from positronic.dataset.video import VideoSignal
-from positronic.drivers.recording import HARNESS_WORLD
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION
@@ -127,9 +125,7 @@ def cube_trace(
 
 
 def read_trace(episode: Episode) -> dict[str, np.ndarray]:
-    timelines = episode.timelines
-    # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-    timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+    timeline = recording_timeline(episode.timelines)
     trace = cube_trace(episode, timeline)
     start = episode.bounds(timeline).start
     for name in RECORDED_SIGNALS:

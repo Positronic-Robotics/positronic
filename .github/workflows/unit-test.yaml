@@ -11,6 +11,7 @@ on:
 jobs:
   core:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +39,7 @@ jobs:
 
   gstreamer:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -45,11 +47,39 @@ jobs:
         with:
           enable-cache: true
 
+      # The runner's Ubuntu mirror is slow at times, and 127 archive fetches then outlast the job.
+      - name: List the GStreamer packages
+        id: gst-packages
+        run: |
+          # The job needs nothing from the Microsoft source, and its fetch can fail the update.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.*
+          sudo apt-get update
+          mkdir -p "$RUNNER_TEMP/apt-archives/partial" "$RUNNER_TEMP/apt-empty/partial"
+          echo "names=$GST_PACKAGES" >> "$GITHUB_OUTPUT"
+          # The key hashes archive names and sizes; the mirror host in each URI changes per run.
+          echo "versions=$(apt-get install --print-uris -qq --no-install-recommends \
+            -o Dir::Cache::Archives="$RUNNER_TEMP/apt-empty" $GST_PACKAGES \
+            | awk '{print $2, $3}' | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+        env:
+          GST_PACKAGES: >-
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+
+      - name: Restore the GStreamer archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: gstreamer-apt-${{ runner.os }}-${{ steps.gst-packages.outputs.versions }}
+          restore-keys: gstreamer-apt-${{ runner.os }}-
+
       - name: Install GStreamer
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gstreamer1.0-tools gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
+            -o Dir::Cache::Archives="$RUNNER_TEMP/apt-archives" -o APT::Keep-Downloaded-Packages=true \
+            ${{ steps.gst-packages.outputs.names }}
+          # A fallback restore brings superseded archives; drop them so the saved cache does not grow.
+          sudo apt-get autoclean -o Dir::Cache::Archives="$RUNNER_TEMP/apt-archives"
+          sudo chown -R "$USER" "$RUNNER_TEMP/apt-archives"
 
       - name: Set up Python
         run: uv venv --python 3.13
@@ -70,6 +100,7 @@ jobs:
 
   packaging:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +118,7 @@ jobs:
   # The evals install with no positronic and no client, and their tests pass in that environment.
   evals-packaging:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -107,6 +139,7 @@ jobs:
 
   model-server-packaging:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -136,6 +169,7 @@ jobs:
 
   lerobot:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -156,6 +190,7 @@ jobs:
 
   lerobot-latest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -176,6 +211,7 @@ jobs:
 
   llm:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
         extra: [llm, llm-openai]
@@ -190,6 +226,7 @@ jobs:
 
   openpi:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Enable caching
@@ -208,6 +245,27 @@ jobs:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest positronic/vendors/openpi/tests
 
+  molmoact2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked --extra molmoact2
+
+      - name: Run molmoact2 vendor tests
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest positronic/vendors/molmoact2/tests
+
   lockfile-portability:
     strategy:
       fail-fast: false
@@ -215,6 +273,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python: ['3.11', '3.12', '3.13']
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -224,3 +283,24 @@ jobs:
         run: uv venv --python ${{ matrix.python }}
       - name: uv sync --locked succeeds on ${{ matrix.os }} (py${{ matrix.python }})
         run: uv sync --locked
+
+  install-without-compiler:
+    # The guides install with `uv tool install` on a machine that may have no C compiler and no X libraries.
+    runs-on: ubuntu-latest
+    container: debian:bookworm-slim
+    timeout-minutes: 20
+    steps:
+      - name: Install git and uv
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+      - name: No C compiler is present
+        run: if command -v cc gcc clang; then exit 1; fi
+      - name: The guide's install succeeds
+        run: uv tool install --managed-python --python 3.13 .
+      - name: The commands start
+        run: |
+          positronic --help
+          "$(uv tool dir)/positronic/bin/python" -c 'import positronic.cfg.eval.sim.molmo'

@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1.7
+# The public MolmoSpaces eval image: positronic, and MolmoSpaces at the commit that positronic pins. It holds
+# no assets: the first run downloads them. `run_molmospaces_eval.sh` is the entrypoint and says what it reads.
+#
+# Usage (from the repository root)
+#   make -C docker build-molmospaces         # positro/molmospaces:local
+#   docker run --rm --gpus all -e POLICY_HOST=<host> -e AUTH_TOKEN positro/molmospaces:local
+
+# 24.04: positronic's `evdev` sdist needs the input headers of a 6.x kernel.
+FROM ubuntu:24.04
+COPY --from=ghcr.io/astral-sh/uv:0.11.31 /uv /uvx /bin/
+
+# git and a compiler for the pinned MolmoSpaces checkout and the sdists. libEGL for MuJoCo: the NVIDIA EGL
+# library comes from the host, and Mesa is the software EGL that renders on the CPU without it.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    libegl1 \
+    libegl-mesa0 \
+    libgl1 \
+    libgl1-mesa-dri \
+    libglib2.0-0t64 \
+ && rm -rf /var/lib/apt/lists/*
+
+# libglvnd finds the NVIDIA EGL library through this file. The container toolkit mounts that library only with
+# the `graphics` capability.
+RUN mkdir -p /usr/share/glvnd/egl_vendor.d \
+ && printf '{"file_format_version": "1.0.0", "ICD": {"library_path": "libEGL_nvidia.so.0"}}\n' \
+    > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
+# The MolmoSpaces launcher keeps its checkout and environment under $HOME, so the build and the run must agree on it.
+ENV HOME=/root \
+    UV_LINK_MODE=copy \
+    PYTHONUNBUFFERED=1 \
+    MLSPACES_ASSETS_DIR=/molmospaces/assets \
+    MLSPACES_CACHE_DIR=/molmospaces/cache \
+    PATH=/positronic/.venv/bin:$PATH
+
+WORKDIR /positronic
+COPY . /positronic
+RUN uv sync --locked --python 3.13 --no-dev && uv cache clean
+
+# The same call that a run makes: it clones MolmoSpaces at the pin and builds its environment, so a run reuses both.
+RUN python -c 'from positronic.simulator.molmo_spaces.launcher import ensure_molmo_venv; ensure_molmo_venv()' \
+ && uv cache clean
+
+ENTRYPOINT ["/positronic/docker/run_molmospaces_eval.sh"]

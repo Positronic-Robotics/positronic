@@ -9,15 +9,19 @@ The adapter follows [upstream's DROID robot client](https://github.com/NVIDIA/Is
 
 - `droid`: wrist + one exterior camera, matching the published checkpoint.
 - `droid_three_cameras`: wrist + two exterior cameras. Fine-tune with this layout, then serve that checkpoint.
+- `droid_molmo` and `droid_molmo_three_cameras`: the same camera layouts with the action labels of MolmoSpaces
+  recordings. Serve their checkpoints with `droid` and `droid_three_cameras`.
 - RGB images first use the client's bilinear padded resize to **320×180**. The checkpoint processor
   resizes the shortest edge to **256**, crops **95%**, resizes the shortest edge again, then runs
   its vision processor. Positronic does not apply an additional square crop.
 - State is absolute tool position + row-based 6D rotation, gripper position and seven joint positions.
-  Poses move from Positronic's default tool frame to `DROID_EE_FRAME`, then receive upstream's
+  Poses move from the rig's `gripper` site to `DROID_EE_FRAME`, the flange, then receive upstream's
   DROID rotation correction. Gripper convention is **1 = closed**.
-- Conversion writes recorded state trajectories as absolute action labels. The checkpoint processor
-  computes pose-relative EEF actions and joint offsets for training, then restores absolute actions
-  at inference. Positronic does not subtract poses or rotations itself.
+- Conversion writes absolute action labels. The arm label is the measured pose and joints
+  `action_lead_sec` later, and the gripper label is `target_grip`, thresholded at 0.5 with `binarize_grip`.
+  Both depend on the rig: `droid` uses a lead of 0 and the raw command, `droid_molmo` 0.14 s and the threshold.
+  The checkpoint processor computes pose-relative EEF actions and joint offsets for training, then
+  restores absolute actions at inference. Positronic does not subtract poses or rotations itself.
 - Inference executes the first **15 of 40** predicted joint targets at **15 Hz**, with the DROID
   impedance settings and a gripper threshold of **0.5**, matching upstream's default execution horizon.
 
@@ -25,12 +29,9 @@ The published two-camera checkpoint does not consume an extra exterior view. Sel
 `droid_three_cameras` for both conversion and serving when fine-tuning with three views.
 N1.6 checkpoints require an N1.6 image; their custom action schemas are incompatible with this adapter.
 
-The default pose transform matches Franka rigs and the RoboLab adapter. The bundled MuJoCo
-Panda reports poses at a different tool frame; using the default transform on its recordings
-(including `sim_stack_cubes`) introduces a 45 mm offset. That frame alignment is tracked in
-[#550](https://github.com/Positronic-Robotics/positronic/issues/550). Such datasets and their
-serving codec require a matching simulator-specific `ee_frame`; the default is not a validated
-native-checkpoint configuration for that simulator.
+The pose transform is measured from the FR3 with the 2F-85, so it puts the flange where the FR3 has it. The bundled
+MuJoCo panda reports its own grip point at `gripper`, 103.65 mm off its flange, so on its recordings (including
+`sim_stack_cubes`) the same transform lands 51.35 mm behind that flange, along the approach axis.
 
 ## Docker
 
@@ -76,6 +77,7 @@ docker compose run --rm --pull never -v "$PWD/groot-data:/data" groot-train \
 
 Set `--dataset.base.path` to your recordings, or select another dataset configuration with `--dataset.base`.
 For three views, set `--dataset.transforms='["@positronic.vendors.gr00t.recipes.droid_three_cameras"]'`.
+For MolmoSpaces recordings, use `droid_molmo` or `droid_molmo_three_cameras`.
 The [training recipe](recipes.py) builds an episode transform. The [inference recipe](serving/recipe.py)
 builds a JSON-compatible description using only the lightweight wrapper.
 Both use [shared Python settings](serving/settings.py): observation keys, image size, camera mappings, tool frame,
@@ -85,7 +87,11 @@ This module uses only the standard library; the common model-server wrapper has 
 The standalone recipe's observation names live in [`serving/keys.py`](serving/keys.py).
 Tests check their agreement with the Positronic client without adding a server dependency on Positronic.
 The settings also contain the control mode, which only inference uses.
-The training transform preserves the recorded absolute pose, grip, and joint trajectories as action labels.
+The training transform labels each frame with the absolute pose and joints `action_lead_sec` later and with
+the commanded grip. The lead is the time the rig's arm controller takes to reach a target: on MolmoSpaces it is
+2 steps of 66 ms, so `droid_molmo` sets 0.14 s. A rig with another controller needs its own preset, for example
+`droid.override(action_lead_sec=..., binarize_grip=True)`. A frame before the first `target_grip` sample has no
+label, so the converted episode starts at the first command, as with `absolute_pos_action`.
 GR00T's checkpoint processor converts these labels to relative actions and restores absolute actions during inference.
 
 The launcher reads camera keys from `meta/modality.json`; no separate modality selection is needed.
@@ -126,7 +132,14 @@ The image size describes preprocessing before the native checkpoint processor, w
 `--learning_rate`, `--num_train_steps`, `--save_steps`, `--num_workers` and `--resume=True`.
 Resume restores the latest saved training state in the experiment directory.
 The fork retains checkpoint architecture and preprocessing while applying upstream's standard
-fine-tuning settings. Dataset statistics are computed by GR00T.
+fine-tuning settings. Training normalizes state and action with the base checkpoint's statistics.
+`--override_pretraining_statistics=True` normalizes them with statistics that GR00T computes from the dataset.
+With the base statistics, GR00T logs `new stats DISCARDED`; that is expected. It clips each value outside the base
+q01..q99, so a dataset that moves outside the DROID range loses that part of its range.
+The checkpoint's `statistics.json` holds the statistics that training and serving use.
+`experiment_cfg/dataset_statistics.json` holds the dataset's own statistics.
+Training records this choice and `--base_model` in the experiment directory and refuses a resume with other values.
+A run with no such record used the dataset statistics, so resume it with `--override_pretraining_statistics=True`.
 
 ## Serve
 
@@ -156,7 +169,7 @@ Camera source names, observation source keys and controller settings can differ 
 Native loading, warm-up and inference run on the wrapper's model thread, in the same process.
 The `ready` handshake includes the client recipe and resolved session parameters.
 The client performs pose conversion, image resize, optional JPEG encoding, action decoding and scheduling.
-The server deserializes the model input and calls `Gr00tPolicy.get_action` directly.
+The server deserializes the model input and runs the native processor and model directly.
 
 Session query parameters can override `fps`, `horizon_sec`, `image_mappings`, `compress_images` and `jpeg_quality`.
 The camera mapping must keep the checkpoint's camera roles. It can select different source observations for those roles.
@@ -168,6 +181,27 @@ WebSocket listens on port 8000. Set `--websocket.served_address.port=9000` to ch
 Add `--grpc=@gr00t_serving.server.grpc --grpc.served_address.port=8001` to serve gRPC too.
 `AUTH_TOKEN` enables bearer authentication. `--idle_timeout_min=20` enables idle shutdown.
 Keepalive requests renew the idle timer. Docker stop sends SIGINT so the wrapper finishes active work and closes sessions.
+
+### Real-time chunking
+
+Use `droid_rtc` to predict the next chunk while the client executes the current one:
+
+```bash
+docker compose run --rm --service-ports groot-server droid_rtc
+```
+
+The client sends its remaining planned joints and grip, time offsets and inference latency.
+GR00T uses the latency estimate to select frozen steps and its session settings to choose the blend overlap.
+The DROID checkpoint also requires end-effector poses. Each session caches those predictions,
+avoiding client-side pose reconstruction. Cached poses need not exactly match modified joint targets.
+See the [RTC design rationale](../../offboard/README.md#real-time-chunking) for the division of responsibilities.
+Native checkpoint transforms prepare the overlap for inference. Both inference paths are warm before the server accepts sessions.
+
+The preset starts a new prediction every **0.5 seconds**, with **0.5 seconds** of blend overlap.
+Set `--pipeline.rtc.call_after_sec` and `--pipeline.rtc.blend_sec` to change these durations.
+`--pipeline.rtc.max_delay_sec` caps the client's latency estimate; `--pipeline.rtc.ramp_rate` controls native blending.
+RTC requires `horizon_sec=None`. A session can override `rtc` or disable it with `rtc=null`.
+An ordinary `droid` launch cannot enable RTC through a session request because its RTC path is not warmed.
 
 ## Adapter parity tests
 

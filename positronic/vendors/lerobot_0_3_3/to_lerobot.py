@@ -23,16 +23,14 @@ import numpy as np
 import pos3
 import torch
 import tqdm
+from eval_vocabulary.timeline import recording_timeline
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from pimm.logging import init_logging
-from pimm.time import RECEIVED_WORLD
 from positronic import keys, utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.dataset.time import Time
-from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy.codecs import ACTION, GR00T_MODALITY, GR00T_MODALITY_PATH, LEROBOT_FEATURES
 from positronic.policy.codecs.metadata import MODEL_SETTINGS, MODEL_SETTINGS_PATH
 from positronic.policy.keys import ACTION_FPS
@@ -73,11 +71,19 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         episode = self.dataset[idx]
-        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in episode.timelines), RECORDED_TIME)
+        timeline = recording_timeline(episode.timelines)
         start, finish = episode.bounds(timeline)
         timestamps = [Time(**{timeline: ts}) for ts in np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)]
-        return episode.time[timestamps]
+        sampled = episode.time[timestamps]
+        # A DataLoader worker pickles its result, and the lazy values of a signal can hold a local function. Indexing up
+        # to `len` lets a decode error of a frame reach the caller.
+        signals = episode.signals
+        return {
+            name: [value[i] for i in range(len(value))]
+            if name in signals and not isinstance(value, np.ndarray)
+            else value
+            for name, value in sampled.items()
+        }
 
 
 # This function needs to be serialisable for PyTorch DataLoader
@@ -100,7 +106,13 @@ def append_data_to_dataset(
         episode_dataset = torch.utils.data.Subset(episode_dataset, indices)
         logging.info(f'Sampling {k}/{n} episodes (share={share}, seed={seed})')
     dataloader = torch.utils.data.DataLoader(
-        episode_dataset, batch_size=1, shuffle=False, num_workers=num_workers, collate_fn=_collate_fn
+        episode_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=_collate_fn,
+        # Each worker holds the decoded frames of a whole episode.
+        prefetch_factor=1 if num_workers else None,
     )
 
     for episode_idx, ep_dict in enumerate(tqdm.tqdm(dataloader, desc='Processing episodes')):
@@ -135,9 +147,9 @@ def _export_fps(dataset: Dataset, fps: int | None) -> int:
     return fps
 
 
-@cfn.config(video=True, dataset=apply_codec, fps=None, share=1.0, seed=42)
+@cfn.config(video=True, dataset=apply_codec, fps=None, share=1.0, seed=42, num_workers=16)
 def convert_to_lerobot_dataset(
-    output_dir: str, fps: int | None, video: bool, dataset: Dataset, task=None, share=1.0, seed=42
+    output_dir: str, fps: int | None, video: bool, dataset: Dataset, task=None, share=1.0, seed=42, num_workers=16
 ):
     fps = _export_fps(dataset, fps)
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
@@ -167,12 +179,16 @@ def convert_to_lerobot_dataset(
             with modality_path.open('w', encoding='utf-8') as f:
                 json.dump(modality, f, indent=2)
 
-    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed)
+    append_data_to_dataset(
+        lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed, num_workers=num_workers
+    )
     logging.info(f'Dataset converted and saved to {output_dir}')
 
 
-@cfn.config(dataset=apply_codec, fps=None, share=1.0, seed=42)
-def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int | None, task=None, share=1.0, seed=42):
+@cfn.config(dataset=apply_codec, fps=None, share=1.0, seed=42, num_workers=16)
+def append_data_to_lerobot_dataset(
+    output_dir: str, dataset: Dataset, fps: int | None, task=None, share=1.0, seed=42, num_workers=16
+):
     fps = _export_fps(dataset, fps)
     output_dir = pos3.sync(output_dir, interval=None, sync_on_error=False)
     lr_dataset = LeRobotDataset(repo_id='local', root=output_dir)
@@ -199,7 +215,9 @@ def append_data_to_lerobot_dataset(output_dir: str, dataset: Dataset, fps: int |
     elif ds_modality is not None:
         raise ValueError("'gr00t_modality' exists in dataset.meta but not in the destination LeRobot dataset.")
 
-    append_data_to_dataset(lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed)
+    append_data_to_dataset(
+        lr_dataset=lr_dataset, p_dataset=dataset, task=task, fps=fps, share=share, seed=seed, num_workers=num_workers
+    )
     logging.info(f'Dataset extended and saved to {output_dir}')
 
 

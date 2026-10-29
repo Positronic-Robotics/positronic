@@ -11,14 +11,16 @@ import pytest
 from platform_client import routes
 from platform_client.catalog import EvalListResponse, EvalSummary, TaskListResponse, TaskSummary
 from platform_client.client import PlatformClient
-from platform_client.enums import ErrorCode, SubmissionStatus
+from platform_client.enums import ErrorCode, ReasonCode, RigShape, SubmissionStatus
 from platform_client.ids import SubmissionId
 from platform_client.requests import CancelRequest
 from platform_client.responses import (
     BlockedSubmissionView,
     CancelResponse,
     EpisodeCounts,
+    ErroredSubmissionView,
     PendingSubmissionView,
+    Scores,
     SubmissionListResponse,
     SubmissionListRow,
     SubmissionView,
@@ -34,6 +36,13 @@ from positronic.cli.conftest import BASE, ID, SUBMISSION, USER, WHEN, refusal
 from positronic.cli.eval.submissions import CatalogView, cancel, catalog, list_submissions, status
 
 PENDING = PendingSubmissionView(id=SUBMISSION, received_at=WHEN, queued_at=WHEN, queue_position=3)
+PARTIAL = ErroredSubmissionView(
+    id=SUBMISSION,
+    reason_code=ReasonCode.policy_inference_crash,
+    reason='the policy session dropped; 6 of 12 episodes were published and scored',
+    scores=Scores(primary=0.5),
+    episodes=EpisodeCounts(total=12, done=6, outstanding=6),
+)
 
 
 def test_status_prints_the_fields_of_the_variant_it_got(platform, run_command, capsys):
@@ -48,6 +57,34 @@ def test_status_prints_the_fields_of_the_variant_it_got(platform, run_command, c
     assert '  queue_position: 3' in out
     # The header carries the id and the status, so the body below it repeats neither.
     assert [line for line in out[1:] if line.startswith(('  id:', '  status:'))] == []
+
+
+def test_status_prints_the_score_of_a_failed_run_over_the_episodes_that_closed(platform, run_command, capsys):
+    platform.answer(PARTIAL)
+
+    run_command(status, id=ID)
+
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == f'submission {ID} errored'
+    assert "  scores: {'primary': 0.5}" in out
+    assert "  episodes: {'total': 12, 'done': 6, 'outstanding': 6}" in out
+
+
+def test_status_prints_no_score_for_a_failed_run_that_published_no_episodes(platform, run_command, capsys):
+    platform.answer(ErroredSubmissionView(id=SUBMISSION, reason_code=ReasonCode.policy_oom, reason='out of memory'))
+
+    run_command(status, id=ID)
+
+    assert capsys.readouterr().out.splitlines() == [
+        f'submission {ID} errored',
+        "  episodes: {'total': 0, 'done': 0, 'outstanding': 0}",
+        '  runs: []',
+        '  resolved: None',
+        '  reason_code: policy_oom',
+        '  reason: out of memory',
+        '  artifacts: None',
+        '  scores: None',
+    ]
 
 
 NO_SUBMISSION = (refusal(ErrorCode.not_found, 'no such submission'), 404)
@@ -118,7 +155,7 @@ def test_a_response_the_client_cannot_read_is_a_refusal_without_the_body(platfor
 
 
 EVAL = EvalSummary(id=EvalRef('fake.smoke'), embodiment='franka', tasks=['a'], composable=True)
-TASK = TaskSummary(id=TaskRef('eight-spoons-into-grey-tote'), embodiment='franka', task='spoons')
+TASK = TaskSummary(id=TaskRef('eight-spoons-into-grey-tote'), embodiments=[RigShape.franka], task='spoons')
 EVALS_ANSWER = (EvalListResponse(evals=[EVAL]), 200)
 TASKS_ANSWER = (TaskListResponse(tasks=[TASK]), 200)
 NO_GRANT = (refusal(ErrorCode.forbidden, 'no customer grant'), 403)
@@ -135,14 +172,19 @@ def test_catalog_prints_the_evals_where_the_key_has_no_grant_for_the_tasks(platf
 
 
 def test_catalog_prints_what_the_key_may_name(platform, run_command, capsys):
-    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: TASKS_ANSWER})
+    two_arm = TaskSummary(id=TaskRef('fold-the-towel'), embodiments=[RigShape.yam], task='towel')
+    tasks = TaskListResponse(tasks=[TASK, two_arm])
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: (tasks, 200)})
 
     run_command(catalog)
 
     assert platform.request.url.path == routes.CATALOG_TASKS
+    decoder = json.JSONDecoder()
     out = capsys.readouterr().out
-    assert EVAL.id in out
-    assert TASK.id in out
+    evals, end = decoder.raw_decode(out)
+    printed_tasks, _ = decoder.raw_decode(out[end:].lstrip())
+    assert EvalListResponse.model_validate(evals).evals == [EVAL]
+    assert [task['embodiments'] for task in printed_tasks['tasks']] == [['franka'], ['yam']]
 
 
 def test_catalog_json_prints_the_evals_and_the_tasks_as_one_value(platform, run_command, capsys):
@@ -329,6 +371,14 @@ def test_status_json_prints_the_view_the_platform_answered(platform, run_command
     run_command(status, id=ID, json=True)
 
     assert TypeAdapter(SubmissionView).validate_json(capsys.readouterr().out) == PENDING
+
+
+def test_status_json_keeps_the_score_of_a_failed_run(platform, run_command, capsys):
+    platform.answer(PARTIAL)
+
+    run_command(status, id=ID, json=True)
+
+    assert TypeAdapter(SubmissionView).validate_json(capsys.readouterr().out) == PARTIAL
 
 
 def test_list_json_prints_every_page_as_one(platform, run_command, capsys):

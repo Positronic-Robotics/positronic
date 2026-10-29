@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from positronic_model_server import serialization
+from positronic_model_server.spec import SEQ
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
@@ -15,9 +16,12 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import models
+from positronic.drivers.roboarm.command import JointPosition
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec
+from positronic.policy.codecs import ACTION, GR00T_MODALITY, Codec, EncodeImages
 from positronic.policy.codecs.metadata import MODEL_SETTINGS
 from positronic.policy.keys import ACTION_FPS
 from positronic.vendors.gr00t import recipes
@@ -41,9 +45,14 @@ def observation():
     }
 
 
-def _episode(observation, task_key=keys.TASK):
+def _episode(observation, task_key=keys.TASK, pose_key=keys.EE_POSE):
     return EpisodeContainer({
-        name: value if name == task_key else DummySignal([0, 1], [value, value]) for name, value in observation.items()
+        **{
+            name: value if name == task_key else DummySignal([0, 1], [value, value])
+            for name, value in observation.items()
+        },
+        keys.TARGET_GRIP: DummySignal([0, 1], [1.0, 1.0]),
+        **models.ee_frames_entry({pose_key: models.EEFrame(site=models.GRIPPER_SITE)}),
     })
 
 
@@ -67,8 +76,8 @@ def test_training_and_inference_encode_the_same_absolute_state_and_images(config
     for name, frames in encoded[gr00t.VIDEO].items():
         assert frames.shape == (1, 1, 180, 320, 3)
         np.testing.assert_array_equal(training[name][0][0], frames[0, 0])
-    expected_action = np.concatenate([encoded[gr00t.STATE][name][0, 0] for name in gr00t.STATE_DIMS])
-    np.testing.assert_allclose(training[ACTION][0][0], expected_action)
+    expected_action = {**{name: value[0, 0] for name, value in encoded[gr00t.STATE].items()}, gr00t.GRIP: [1.0]}
+    np.testing.assert_allclose(training[ACTION][0][0], np.concatenate([expected_action[n] for n in gr00t.STATE_DIMS]))
 
 
 @pytest.mark.parametrize('image_mappings', [{}, {gr00t.EE_POSE: keys.WRIST_IMAGE}])
@@ -82,7 +91,6 @@ def test_observation_layout_preserves_empty_camera_groups_and_names_shared_with_
     assert encoded[gr00t.STATE][gr00t.EE_POSE].shape == (1, 1, 9)
     for name in image_mappings:
         assert encoded[gr00t.VIDEO][name].shape == (1, 1, 180, 320, 3)
-    assert codec.meta[Codec.IMAGE_SIZES] == ((320, 180) if image_mappings else {})
 
 
 def test_observation_layout_requires_a_live_prompt(observation):
@@ -118,7 +126,8 @@ def test_action_metadata_matches_values_when_state_dimensions_are_reordered(monk
     encoded = encoder(_episode(observation))
     action = encoded[ACTION][0][0]
     for name, bounds in encoder.meta[GR00T_MODALITY][ACTION].items():
-        np.testing.assert_allclose(action[bounds[gr00t.START] : bounds[gr00t.END]], encoded[name][0][0])
+        expected = [1.0] if name == gr00t.GRIP else encoded[name][0][0]
+        np.testing.assert_allclose(action[bounds[gr00t.START] : bounds[gr00t.END]], expected)
 
 
 def test_standalone_observation_names_match_the_client():
@@ -126,12 +135,17 @@ def test_standalone_observation_names_match_the_client():
         assert getattr(serving_keys, name) == getattr(keys, name)
 
 
+def test_standalone_ee_frames_match_the_client():
+    assert model_settings.EE_FRAMES == roboarm_keys.EE_FRAMES
+    assert {model_settings.SITE, model_settings.OFFSET} == set(models.EEFrame.model_fields)
+    assert model_settings.GRIPPER_SITE == models.GRIPPER_SITE
+
+
 def test_python_settings_drive_independent_training_and_inference_recipes(observation):
     settings = {
         **model_settings.droid(),
         model_settings.IMAGE_SIZE: [160, 90],
         model_settings.IMAGE_MAPPINGS: {'custom_camera': keys.EXTERIOR_IMAGE_2},
-        model_settings.EE_FRAME: [0, 0, 0, 1, 0, 0, 0],
         model_settings.ROTATION_OFFSET: [1, 0, 0, 0],
         ACTION_FPS: 20,
     }
@@ -139,11 +153,15 @@ def test_python_settings_drive_independent_training_and_inference_recipes(observ
         renamed = f'custom.{name}'
         observation[renamed] = observation.pop(source)
         settings[model_settings.OBSERVATION_KEYS][name] = renamed
+    pose_key = settings[model_settings.OBSERVATION_KEYS][gr00t.EE_POSE]
+    settings[model_settings.EE_FRAMES] = {
+        pose_key: {model_settings.SITE: model_settings.GRIPPER_SITE, model_settings.OFFSET: [0, 0, 0, 1, 0, 0, 0]}
+    }
     training = recipes.droid(settings=settings)
     description = json.loads(json.dumps(recipe.inference(settings)))
     codec = spec.from_spec(description)
     assert isinstance(codec, Codec)
-    prepared = training(_episode(observation, settings[model_settings.OBSERVATION_KEYS][gr00t.TASK]))
+    prepared = training(_episode(observation, settings[model_settings.OBSERVATION_KEYS][gr00t.TASK], pose_key))
     encoded = codec.encode(observation)
     assert prepared[keys.TASK] == encoded[gr00t.LANGUAGE][gr00t.TASK][0][0]
     assert encoded[gr00t.VIDEO]['custom_camera'].shape == (1, 1, 90, 160, 3)
@@ -205,3 +223,46 @@ def test_droid_frame_and_pixels_match_upstream_robot_client(observation):
     for name, source in {gr00t.EXTERIOR_IMAGE: keys.EXTERIOR_IMAGE, gr00t.WRIST_IMAGE: keys.WRIST_IMAGE}.items():
         expected = loaded['image'].resize_with_pad(observation[source], 180, 320)
         np.testing.assert_array_equal(encoded[gr00t.VIDEO][name][0, 0], expected)
+
+
+def test_rtc_targets_survive_observation_packing_and_image_compression(observation):
+    settings = model_settings.droid()
+    stack = recipe.client_stack(
+        settings,
+        fps=15,
+        horizon_sec=None,
+        image_mappings=settings[model_settings.IMAGE_MAPPINGS],
+        compress_images=True,
+        rtc={serving_keys.RTC.CALL_AFTER_SEC: 0.5, serving_keys.RTC.MAX_DELAY_SEC: 1.0},
+    )
+    definition = spec.from_spec(stack[SEQ][1])
+    assert isinstance(definition, Codec)
+    codec = definition | EncodeImages()
+    targets = [{keys.ROBOT_COMMAND: JointPosition(np.ones(7)), keys.TARGET_GRIP: 1.0}]
+    prefix = {
+        policy_keys.RTC.PREFIX_ACTIONS: targets,
+        policy_keys.RTC.CHUNK_OFFSET_SEC: 0.2,
+        policy_keys.RTC.OBSERVATION_OFFSET_SEC: -0.01,
+    }
+    received = []
+
+    def infer(encoded):
+        received.append(serialization.deserialise(serialization.serialise(encoded)))
+        reply = ({gr00t.JOINT_POSITION: np.zeros((1, 40, 7)), gr00t.GRIP: np.zeros((1, 40, 1))}, {})
+        return serialization.deserialise(serialization.serialise(reply))
+
+    result = codec.wrap(infer)({
+        **observation,
+        policy_keys.RTC.ACTION_PREFIX: prefix,
+        policy_keys.RTC.ESTIMATED_LATENCY_SEC: 0.2,
+        policy_keys.RTC.MEASURED_LATENCY_SEC: 0.15,
+    })
+    assert len(result) == 40
+    restored = received[0][serving_keys.RTC.FIELD]
+    assert restored[serving_keys.RTC.CHUNK_OFFSET_SEC] == 0.2
+    assert restored[serving_keys.RTC.OBSERVATION_OFFSET_SEC] == -0.01
+    np.testing.assert_array_equal(restored[gr00t.ACTION][0][gr00t.JOINT_POSITION], np.ones(7, dtype=np.float32))
+    np.testing.assert_array_equal(restored[gr00t.ACTION][0][gr00t.GRIP], [1.0])
+    assert restored[serving_keys.RTC.ESTIMATED_LATENCY_SEC] == 0.2
+    assert restored[serving_keys.RTC.MEASURED_LATENCY_SEC] == 0.15
+    assert set(received[0]) == {gr00t.VIDEO, gr00t.STATE, gr00t.LANGUAGE, serving_keys.RTC.FIELD}

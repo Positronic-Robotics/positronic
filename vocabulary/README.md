@@ -10,8 +10,8 @@ has no robot installed at all.
 An episode keeps its statics in one file and its id in another. A labeler reads from them how the
 trial ended, who ended it, the task and the id. It reads how long the trial ran from the times in the
 signal files. The RoboLab labeler also reads the subtasks that the trial completed from the `subtask`
-signal. `eval_vocabulary.episode` names the files, the keys and that signal. `eval_vocabulary.timeline`
-names the timelines whose columns hold those times.
+signal, and the ABC progress reader reads ABC's progress from the `task_eval.reward` signal. `eval_vocabulary.episode` names the files, the keys and that signal. `eval_vocabulary.timeline`
+names the timelines whose columns hold those times, and the order in which a reader picks one.
 
 This distribution defines those words once. It depends on nothing, so any of those
 programs installs it alone.

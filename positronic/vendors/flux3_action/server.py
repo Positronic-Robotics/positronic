@@ -16,7 +16,7 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
-from platform_client.policy_container import PROVISIONING_DEADLINE_S
+from platform_client.policy_container import WARMUP_DEADLINE_S
 
 from pimm.logging import init_logging
 from positronic import keys
@@ -27,7 +27,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codecs import ACTION, Codec, RestrictImageSize
+from positronic.policy.codecs import ACTION, Codec, ResizeMode, TransformImages
 from positronic.policy.processors import ChunkedSchedule
 from positronic.vendors import flux3_action
 from positronic.vendors.flux3_action import codecs
@@ -113,7 +113,7 @@ def flux3_action_model(
             lambda: probe.probe() is None,
             partial(_exit_status, backend),
             'FLUX 3 Action backend',
-            max_wait=PROVISIONING_DEADLINE_S,
+            max_wait=WARMUP_DEADLINE_S,
         )
         warmup(model, _warm_observation())
     except Exception:
@@ -125,7 +125,9 @@ def flux3_action_model(
 @cfn.config(codec=codecs.droid)
 def pipeline(codec: Codec) -> PolicyDeployment:
     """The client plays each chunk whole, as BFL's DROID settings do, and `codec` runs on this server."""
-    return PolicyDeployment(Sequential(ChunkedSchedule(codecs.FPS), RestrictImageSize(*codecs.VIEW_SIZE)), codec)
+    return PolicyDeployment(
+        Sequential(ChunkedSchedule(codecs.FPS), TransformImages(*codecs.VIEW_SIZE, mode=ResizeMode.BOUND)), codec
+    )
 
 
 COMMANDS = {

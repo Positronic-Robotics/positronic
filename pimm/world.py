@@ -23,9 +23,9 @@ from multiprocessing.context import BaseContext
 from multiprocessing.managers import SyncManager
 from multiprocessing.synchronize import Event as EventClass
 from multiprocessing.synchronize import Lock as LockClass
-from queue import Empty, Full, Queue
+from queue import Empty, Queue
 from types import FrameType
-from typing import TypeVar, cast, overload
+from typing import Any, TypeVar, cast, overload
 
 from .calls import ControlSystemCaller, ControlSystemHandler, handlers_of
 from .core import (
@@ -96,23 +96,6 @@ class _SharedTime:
         self._size.value = len(payload)
 
 
-class QueueEmitter(SignalEmitter[T]):
-    def __init__(self, queue: Queue, clock: Clock):
-        self._queue = queue
-        self._clock = clock
-
-    def _emit(self, data: T, time: Time):
-        try:
-            self._queue.put_nowait(Message(data, time))
-        except Full:
-            # Queue is full, try to remove old message and try again
-            try:
-                self._queue.get_nowait()
-                self._queue.put_nowait(Message(data, time))
-            except (Empty, Full):
-                pass
-
-
 class MultiprocessEmitter(SignalEmitter[T]):
     """Signal emitter that transparently bridges processes.
 
@@ -127,7 +110,7 @@ class MultiprocessEmitter(SignalEmitter[T]):
     def __init__(
         self,
         clock: Clock,
-        queues: list[Queue],
+        queues: list[deque[Message[T]]],
         mode_value: ctypes.c_int,
         lock: LockClass,
         time_value: _SharedTime,
@@ -181,23 +164,10 @@ class MultiprocessEmitter(SignalEmitter[T]):
             self._set_mode(TransportMode.QUEUE)
         return self._mode
 
-    def _emit_queue(self, data: T, time: Time) -> bool:
+    def _emit_queue(self, data: T, time: Time) -> None:
         msg = Message(data, time)
-        success = False
-
         for q in self._queues:
-            try:
-                q.put_nowait(msg)
-                success = True
-            except Full:
-                try:
-                    q.get_nowait()  # drop oldest
-                    q.put_nowait(msg)
-                    success = True
-                except (Empty, Full):
-                    pass  # try next queue
-
-        return success
+            q.append(msg)
 
     def _emit_shared_memory(self, data: SMCompliant, time: Time) -> bool:
         if self._data_type is None:
@@ -277,7 +247,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
     def __init__(
         self,
-        queue: Queue,
+        queue: deque[Message[T]],
         clock: Clock,
         mode_value: ctypes.c_int,
         lock: LockClass,
@@ -322,8 +292,8 @@ class MultiprocessReceiver(SignalReceiver[T]):
 
     def _read_queue(self) -> Message[T] | None:
         try:
-            message = self._queue.get_nowait()
-        except Empty:
+            message = self._queue.popleft()
+        except IndexError:
             message = None
         else:
             self._last_queue_message = message._received(self._clock)
@@ -390,11 +360,7 @@ class MultiprocessReceiver(SignalReceiver[T]):
         if not self._error_flag.value:
             return
         self._error_flag.value = False
-        while True:
-            try:
-                self._queue.get_nowait()
-            except Empty:
-                break
+        self._queue.clear()
 
     def read(self) -> Message[T] | None:
         mode = self.transport_mode
@@ -573,6 +539,22 @@ class _WallOnlyClock(SystemClock):
 
     def time(self) -> Time:
         return Time(wall=self.now_ns())
+
+
+class _PipeManager(SyncManager):
+    """A ``SyncManager`` that also serves ``deque``, the store of each queue transport.
+
+    The store is slow: each read and each emit to each receiver is a round trip to the manager process, and each
+    message is pickled twice, into the manager and out of it. A pickled message in a shared-memory slot, as
+    ``_SharedTime`` keeps a time, would cost one pickle and no round trip. The manager stays because it needs no server
+    code in a pimm process.
+    """
+
+    deque: Callable[..., deque[Any]]
+
+
+# A full deque drops its oldest message in the call that appends, so a reader never finds the store empty.
+_PipeManager.register('deque', deque)
 
 
 class World:
@@ -1187,7 +1169,7 @@ class World:
     def _manager(self):
         """A spawn-context manager, so queues and values behave synchronously even within a single process."""
         # It runs as a process of its own, so a world that opens no mp pipe never starts one.
-        manager = SyncManager(ctx=self._mp_ctx)
+        manager = _PipeManager(ctx=self._mp_ctx)
         # The manager serves each connection on a thread of its own, and it unpickles each message there. If pimm is not
         # imported yet, two first messages import `pimm` and `pimm.shared_memory` at once, and CPython can raise
         # `_DeadlockError` between a package and its submodule. So the manager imports pimm before it serves.
@@ -1235,7 +1217,7 @@ class World:
         if len(receiver_clocks) != num_receivers:
             raise ValueError('Each receiver needs one clock')
 
-        message_queues = [self._manager.Queue(maxsize=maxsize) for _ in range(num_receivers)]
+        message_queues = [self._manager.deque(maxlen=maxsize or None) for _ in range(num_receivers)]
         sm_queues = [self._manager.Queue() for _ in range(num_receivers)]
         # Every emit and read touches these, and a manager proxy costs a round trip per access.
         lock = self._mp_ctx.Lock()

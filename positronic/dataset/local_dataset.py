@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import platform
 import shutil
@@ -8,7 +9,7 @@ import time
 import uuid
 import weakref
 from collections.abc import Callable, Iterator
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -471,16 +472,32 @@ class LocalDatasetWriter(DatasetWriter):
     """Writer that appends Episodes into a local directory structure.
 
     - Stores episodes under root / {block:012d} / {episode_id:012d}
-    - Scans existing structure on init to continue episode numbering safely.
+    - Exclusively locks the directory and scans existing episode numbers on context entry.
     - `new_episode()` allocates a new episode directory and returns a
       DiskEpisodeWriter.
     """
 
     def __init__(self, root: Path, *, video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER) -> None:
         self.root = root.expanduser()
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._next_episode_id = self._compute_next_episode_id()
         self._video_encoder = video_encoder
+        self._next_episode_id = 0
+        self._lock: ExitStack | None = None
+
+    def __enter__(self) -> LocalDatasetWriter:
+        if self._lock is not None:
+            raise RuntimeError('Dataset writer is already open')
+        self._video_encoder.ensure_available()
+        self.root.mkdir(parents=True, exist_ok=True)
+        with ExitStack() as stack:
+            # Keep the lock file: removing it would let writers lock different inodes for the same directory.
+            lock = stack.enter_context((self.root / '.writer.lock').open('a'))
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError(f'Dataset is already open for writing: {self.root}') from exc
+            self._next_episode_id = max(self._next_episode_id, self._compute_next_episode_id())
+            self._lock = stack.pop_all()
+        return self
 
     def _compute_next_episode_id(self) -> int:
         max_id = -1
@@ -504,6 +521,8 @@ class LocalDatasetWriter(DatasetWriter):
             uid: Optional episode identity (defaults to a fresh uuid4 hex).
                 Use this to preserve identity when copying an existing recording.
         """
+        if self._lock is None:
+            raise RuntimeError('Open the dataset writer with a context manager before allocating an episode')
         eid = self._next_episode_id
         self._next_episode_id += 1  # Reserve id immediately
 
@@ -516,7 +535,9 @@ class LocalDatasetWriter(DatasetWriter):
         return writer
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        pass
+        if self._lock is not None:
+            self._lock.close()
+            self._lock = None
 
 
 def load_dataset(root: Path) -> EditedDataset:

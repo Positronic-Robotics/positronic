@@ -19,24 +19,35 @@ from pimm.tests.testing import Passive, wire_call
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from pimm.world import VirtualClock
 from positronic import keys, telemetry, telemetry_keys, wire
-from positronic.cli.eval.run import run_world
 from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import Episode, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.video import LibavEncoder
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, from_wire, to_wire
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
+from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
+from positronic.drivers.roboarm.models import (
+    EE_LINK,
+    FRANKA_HAND_FRAME,
+    GRIPPER_SITE,
+    PANDA_HAND_FRAME,
+    YAM_GRASP_SITE_FRAME,
+    EEFrame,
+    bundled_franka_model,
+    bundled_panda_model,
+    bundled_yam_model,
+    ee_frames_entry,
+)
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import Command, Embodiment, Observation, Task
+from positronic.eval import NO_MODEL_ROBOT_META, ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
+from positronic.policy.codecs import ChangeEEFrame
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
@@ -70,6 +81,17 @@ class StubPolicy(Policy):
             obs = yield Step(
                 {keys.ROBOT_COMMAND: self.command, keys.TARGET_GRIP: self.target_grip}, runtime.time_ns + 100_000_000
             )
+
+
+class FramedPolicy(StubPolicy):
+    """A ``StubPolicy`` that states ``frames`` as its ``EE_FRAMES``."""
+
+    def __init__(self, frames, command=None):
+        super().__init__(command)
+        self.frames = frames
+
+    def meta(self):
+        return ee_frames_entry(self.frames)
 
 
 class RemoteStubPolicy(StubPolicy):
@@ -157,7 +179,7 @@ def observed_harness():
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
-        step = partial(harness._step, Task('test', None), runtime, policy_run, None)
+        step = partial(harness._step, Task('test', None), frozenset(), runtime, policy_run, None)
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
@@ -306,8 +328,7 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             simulated=True,
         )
         dataset = MemoryDataset()
-        dataset_factory = Mock(return_value=dataset)
-        harness = Harness(embodiment, dataset_factory=dataset_factory)
+        harness = Harness(embodiment)
         for name, handler in readiness.items():
             wire_call(world, harness.ready[name], handler)
         for name, handler in preparation.items():
@@ -345,8 +366,6 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             privileged=privileged_emitters,
             serializer=serializer,
             dataset=dataset,
-            dataset_factory=dataset_factory,
-            output_path=Path('recording'),
             deadlines=Trace(world.clock),
             commands=Trace(world.clock),
         )
@@ -394,12 +413,12 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     frame = np.array([1])
     h.observation.emit(frame)
     h.done.emit({'stale': True})
-    first = h.caller(Rollout(Task('first', 0.01), Observe(), h.output_path))
+    first = h.caller(Rollout(Task('first', 0.01), Observe(), h.dataset))
     next(h.loop)
     assert h.deadlines.values == [(0, 10_000_000)]
 
     h.manual.emit({MOTOR: 99})
-    overlapping = h.caller(Rollout(Task('overlapping', None), Observe(), h.output_path))
+    overlapping = h.caller(Rollout(Task('overlapping', None), Observe(), h.dataset))
     h.world.clock.advance_to_ns(5_000_000)
     h.done.emit({'success': True})
     h.world.clock.advance_to_ns(12_000_000)
@@ -415,7 +434,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     assert h.dataset.episodes[-1].static[keys.TASK] == 'first'
 
     frame[0] = 2  # No new signal: the next episode must rebuild its observation cache.
-    second = h.caller(Rollout(Task('second', None), Observe(), h.output_path))
+    second = h.caller(Rollout(Task('second', None), Observe(), h.dataset))
     next(h.loop)
     assert h.serializer.call_count == 2
     assert [obs[POSITION][0] for obs in observations] == [1, 2]
@@ -491,7 +510,7 @@ def test_a_return_inside_the_budget_ends_the_episode_and_records_the_policy_and_
     h = episode_harness
     policy = EndAfter(calls=3, end=end)
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('test', 1.0), policy, h.output_path))
+    answer = h.caller(Rollout(Task('test', 1.0), policy, h.dataset))
     ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.POLICY_END: end, eval_keys.TERMINATED: True}
     assert _until_answered(h, answer) == ended
     assert policy.calls == 3
@@ -504,7 +523,7 @@ def test_a_return_inside_the_budget_ends_the_episode_and_records_the_policy_and_
 def test_an_env_done_in_the_iteration_of_a_return_ends_the_episode(episode_harness):
     h = episode_harness
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=1), h.output_path))
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=1), h.dataset))
     next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     assert _until_answered(h, answer) == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
@@ -514,7 +533,7 @@ def test_a_return_after_the_deadline_counts_as_a_timeout(episode_harness):
     h = episode_harness
     h.observation.emit(1)
     policy = EndAfter(calls=1, clock=h.world.clock, slow_to_ns=11_000_000)
-    answer = h.caller(Rollout(Task('test', 0.01), policy, h.output_path))
+    answer = h.caller(Rollout(Task('test', 0.01), policy, h.dataset))
     assert _until_answered(h, answer) == {eval_keys.TERMINATED: False}
     assert eval_keys.ENDED_BY not in h.dataset.episodes[0].static
 
@@ -529,7 +548,7 @@ def test_a_return_that_is_not_a_policy_end_fails_the_episode(episode_harness, re
             return returned
 
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('test', 1.0), cast(Policy, ReturnsSomethingElse()), h.output_path))
+    answer = h.caller(Rollout(Task('test', 1.0), cast(Policy, ReturnsSomethingElse()), h.dataset))
     with pytest.raises(ValueError, match='PolicyEnd'):
         _until_answered(h, answer)
 
@@ -554,7 +573,7 @@ def test_a_failed_episode_closes_the_generator_answers_its_call_and_the_next_cal
     if failure == 'conversion':
         error = pimm.NoValueException
         h.serializer.side_effect = error('conversion failed')
-    answer = h.caller(Rollout(Task('test', 0.01), Failing(), h.output_path))
+    answer = h.caller(Rollout(Task('test', 0.01), Failing(), h.dataset))
     next(h.loop)
     assert closed == [True]
     with pytest.raises(error, match=f'{failure} failed'):
@@ -565,7 +584,7 @@ def test_a_failed_episode_closes_the_generator_answers_its_call_and_the_next_cal
     assert [deadline for _, deadline in h.deadlines.values] == ([10_000_000, None] if opened else [])
 
     h.serializer.side_effect = lambda value: value
-    h.caller(Rollout(Task('next', None), Hold(), h.output_path))
+    h.caller(Rollout(Task('next', None), Hold(), h.dataset))
     next(h.loop)
     assert not h.dataset.episodes[-1].closed
 
@@ -619,7 +638,7 @@ def test_an_observation_error_discards_the_episode_and_an_old_value_does_not(epi
     h.harness._embodiment = replace(h.embodiment, simulated=False)
     policy = Positions()
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('move', None), policy, h.output_path))
+    answer = h.caller(Rollout(Task('move', None), policy, h.dataset))
     next(h.loop)
     error = pimm.SignalError('camera lost')
     if lost:
@@ -648,7 +667,7 @@ def test_recorder_polls_do_not_fail_on_errors_between_policy_calls(episode_harne
     h = episode_harness
     policy = Positions()
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('move', None), policy, h.output_path if record else None))
+    answer = h.caller(Rollout(Task('move', None), policy, h.dataset if record else None))
     next(h.loop)
 
     h.world.clock.advance_to_ns(1_000_000)
@@ -952,17 +971,14 @@ class Hold(Policy):
 
 
 @pytest.mark.parametrize('record', [False, True])
-def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
+def test_recording_writer_and_final_metadata(episode_harness, record):
     h = episode_harness
     h.embodiment.static_meta['rig'] = 'test-rig'
-    output = tmp_path if record else None
+    writer = h.dataset if record else None
     task = Task('move', None, meta={'seed': 42})
-    answer = h.caller(Rollout(task, Hold(), output))
+    answer = h.caller(Rollout(task, Hold(), writer))
     next(h.loop)
-    if record:
-        h.dataset_factory.assert_called_once_with(output)
-    else:
-        h.dataset_factory.assert_not_called()
+    assert bool(h.dataset.episodes) is record
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
     next(h.loop)
@@ -979,6 +995,73 @@ def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
     assert eval_keys.TIMEOUT not in meta
     assert meta[eval_keys.SUCCESS] is True
     assert answer.result()[eval_keys.TERMINATED] is True
+
+
+class ReadInstruction(Policy):
+    """Keep each instruction that the policy gets, and ask for the next observation 5 ms later."""
+
+    def __init__(self):
+        self.instructions: list[str] = []
+
+    def run(self, runtime):
+        obs = yield
+        while True:
+            self.instructions.append(obs[keys.TASK])
+            obs = yield Step({}, runtime.time_ns + 5_000_000)
+
+
+def test_each_instruction_the_policy_gets_is_recorded_at_the_time_it_changes(episode_harness, tmp_path):
+    h = episode_harness
+    current = ['open the top drawer']
+    policy = ReadInstruction()
+    h.observation.emit(np.array([0]))
+    answer = h.caller(Rollout(Task(lambda: current[0], None), policy, LocalDatasetWriter(tmp_path)))
+    next(h.loop)
+    for at_ns, instruction in [
+        (5_000_000, 'open the top drawer'),
+        (10_000_000, 'open the middle drawer'),
+        (15_000_000, 'open the middle drawer'),
+        (20_000_000, 'open the bottom drawer'),
+    ]:
+        current[0] = instruction
+        h.world.clock.advance_to_ns(at_ns)
+        next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert answer.result()[eval_keys.TERMINATED]
+    assert policy.instructions == [
+        'open the top drawer',
+        'open the top drawer',
+        'open the middle drawer',
+        'open the middle drawer',
+        'open the bottom drawer',
+    ]
+    episode = LocalDataset(tmp_path)[0]
+    assert [(value, ts[HARNESS_WORLD]) for value, ts in episode[eval_keys.INSTRUCTION]] == [
+        ('open the top drawer', 0),
+        ('open the middle drawer', 10_000_000),
+        ('open the bottom drawer', 20_000_000),
+    ]
+    assert episode.static[keys.TASK] == 'open the bottom drawer'
+
+
+def test_an_instruction_that_never_changes_is_recorded_once_at_the_first_observation(episode_harness):
+    h = episode_harness
+    h.world.clock.advance_to_ns(1_000_000)
+    answer = h.caller(Rollout(Task('move', None), ReadInstruction(), h.dataset))
+    next(h.loop)  # no observation yet: the policy gets nothing, so nothing is recorded
+    h.world.clock.advance_to_ns(2_000_000)
+    h.observation.emit(0)
+    for at_ns in (3_000_000, 8_000_000, 13_000_000):
+        h.world.clock.advance_to_ns(at_ns)
+        next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert answer.result()[eval_keys.TERMINATED]
+    episode = h.dataset.episodes[0]
+    recorded = [(data, ts[HARNESS_WORLD]) for name, data, ts in episode.records if name == eval_keys.INSTRUCTION]
+    assert recorded == [('move', 3_000_000)]
+    assert episode.static[keys.TASK] == 'move'
 
 
 def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(episode_harness, tmp_path):
@@ -1003,7 +1086,7 @@ def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(epi
     policy = Record()
     h.observation.emit(0)
     for _ in range(2):
-        answer = h.caller(Rollout(Task('move', None), policy, tmp_path))
+        answer = h.caller(Rollout(Task('move', None), policy, h.dataset))
         next(h.loop)
         h.done.emit({eval_keys.SUCCESS: True})
         next(h.loop)
@@ -1024,9 +1107,8 @@ def test_policy_cleanup_failure_keeps_recording_and_next_episode_inputs(episode_
                 raise RuntimeError('policy cleanup failed')
 
     h = episode_harness
-    h.harness._dataset_factory = LocalDatasetWriter
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('move', None), FailsOnClose(), tmp_path))
+    answer = h.caller(Rollout(Task('move', None), FailsOnClose(), LocalDatasetWriter(tmp_path)))
     next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
@@ -1036,7 +1118,7 @@ def test_policy_cleanup_failure_keeps_recording_and_next_episode_inputs(episode_
     assert episode.static[eval_keys.SUCCESS] is True
     assert list(episode[POSITION].values()) == [1]
 
-    answer = h.caller(Rollout(Task('again', None), Hold(), tmp_path))
+    answer = h.caller(Rollout(Task('again', None), Hold(), LocalDatasetWriter(tmp_path)))
     next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
@@ -1130,7 +1212,14 @@ def test_every_device_is_asked_to_be_ready_before_each_episode_and_before_its_pr
         assert answer.result() == {eval_keys.TERMINATED: False}
 
 
-@pytest.mark.parametrize('error', [pimm.SignalError('camera lost'), RuntimeError('the arm holds a fault')])
+@pytest.mark.parametrize(
+    'error',
+    [
+        pimm.SignalError('camera lost'),
+        DeviceFault('camera lost', FaultKind.CAMERA),
+        RuntimeError('the arm holds a fault'),
+    ],
+)
 def test_a_device_that_answers_ready_with_an_error_fails_the_ask_and_is_asked_again(ready_harness, error):
     h = ready_harness
     task = Task('move', None, prepare_args={RESET: 'home'})
@@ -1201,7 +1290,7 @@ def test_idle_manual_commands_pass_through(episode_harness):
 def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_path, ending):
     h = episode_harness
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode'):
-        h.caller(Rollout(Task('move', None), Hold(), h.output_path))
+        h.caller(Rollout(Task('move', None), Hold(), h.dataset))
         next(h.loop)
         h.world.clock.advance_to_ns(100_000_000)
         if ending == 'failure':
@@ -1365,7 +1454,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged)
         caller = world.pair(harness.perform_task)
         loop = world.start([harness, motion])
-        answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), Move(), tmp_path))
+        answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), Move(), LocalDatasetWriter(tmp_path)))
         try:
             for _ in range(1000):
                 next(loop)
@@ -1407,26 +1496,6 @@ def test_wiring_rejects_privileged_names_shared_with_policy_signals(episode_harn
         wire.wire_embodiment(h.world, h.harness, h.embodiment, privileged=privileged)
 
 
-def test_recorder_refuses_an_encoder_this_host_cannot_run():
-    class AbsentEncoder(LibavEncoder):
-        def ensure_available(self) -> None:
-            raise RuntimeError('no such encoder here')
-
-    motion = Motion()
-    embodiment = Embodiment(
-        descriptor='recording-test',
-        observations={POSITION: Observation(motion.position, None)},
-        commands={MOTOR: Command(motion.command, None)},
-        prepare_handlers={},
-        static_meta={},
-        meta_source=None,
-        simulated=True,
-        video_encoder=AbsentEncoder(),
-    )
-    with pytest.raises(RuntimeError, match='no such encoder here'):
-        run_world(embodiment, Passive())
-
-
 def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):
     class Move(Policy):
         def run(self, runtime):
@@ -1449,7 +1518,7 @@ def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):
         wire.wire_embodiment(world, harness, embodiment)
         caller = world.pair(harness.perform_task)
         loop = world.start([harness, timer])
-        answer = caller(Rollout(Task('move', 0.005), Move(), tmp_path))
+        answer = caller(Rollout(Task('move', 0.005), Move(), LocalDatasetWriter(tmp_path)))
         try:
             while not answer.done():
                 next(loop)
@@ -1480,7 +1549,7 @@ def test_policy_completion_resets_the_sampling_deadline(episode_harness):
                 obs = yield Step({}, runtime.time_ns + 100_000_000)
 
     h.observation.emit(0)
-    h.caller(Rollout(Task('sample', None), Await(), h.output_path))
+    h.caller(Rollout(Task('sample', None), Await(), h.dataset))
     try:
         assert next(h.loop) == pimm.Sleep(0.001)
         h.world.clock.advance_to_ns(800_000)
@@ -1509,10 +1578,10 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         policy = Positions()
         h.observation.emit(0)
         h.privileged[GROUND_TRUTH].emit(np.array([10]))
-        answer = h.caller(Rollout(Task('sample', None), policy, h.output_path))
+        answer = h.caller(Rollout(Task('sample', None), policy, h.dataset))
         next(h.loop)
         episode = h.dataset.episodes[0]
-        assert [name for name, _, _ in episode.records] == [POSITION, GROUND_TRUTH]
+        assert [name for name, _, _ in episode.records] == [POSITION, GROUND_TRUTH, eval_keys.INSTRUCTION]
 
         h.world.clock.advance_to_ns(1_000_000)
         frame = np.array([20])
@@ -1534,9 +1603,10 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         assert all(GROUND_TRUTH not in obs for obs in policy.observations)
         assert [data for name, data, _ in episode.records if name == POSITION] == [0, 1]
         assert [data.tolist() for name, data, _ in episode.records if name == GROUND_TRUTH] == [[10], [20], [30]]
-        for _, _, timestamps in episode.records:
-            assert timestamps[HARNESS_WORLD] == timestamps[RECEIVED_WORLD]
-            assert timestamps[HARNESS_WALL] == timestamps[RECEIVED_WALL]
+        for name, _, timestamps in episode.records:
+            if name in (POSITION, GROUND_TRUTH):
+                assert timestamps[HARNESS_WORLD] == timestamps[RECEIVED_WORLD]
+                assert timestamps[HARNESS_WALL] == timestamps[RECEIVED_WALL]
 
 
 def test_disabled_recording_does_not_read_privileged_data_or_add_sampling_wakeups():
@@ -1546,12 +1616,11 @@ def test_disabled_recording_does_not_read_privileged_data_or_add_sampling_wakeup
         h.observation.emit(0)
         h.caller(Rollout(Task('move', None), Hold(), None))
         assert next(h.loop) == pimm.Sleep(0.1)
-        h.dataset_factory.assert_not_called()
+        assert h.dataset.episodes == []
 
 
 def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_instant(episode_harness, tmp_path):
     h = episode_harness
-    h.harness._dataset_factory = LocalDatasetWriter
 
     class Chain(Policy):
         def run(self, runtime):
@@ -1564,7 +1633,7 @@ def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_ins
                 yield Step({}, runtime.time_ns + 100_000_000)
 
     h.observation.emit(0)
-    answer = h.caller(Rollout(Task('move', None, charge_inference_time=False), Chain(), tmp_path))
+    answer = h.caller(Rollout(Task('move', None, charge_inference_time=False), Chain(), LocalDatasetWriter(tmp_path)))
     next(h.loop)
     assert h.world.clock.now_ns() == 0
     h.done.emit({eval_keys.SUCCESS: True})
@@ -1588,16 +1657,16 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
         def run(self, runtime):
             obs = yield
             while True:
-                episode = h.dataset.episodes[0]
-                assert episode.records[-1][0] == POSITION
-                assert episode.records[-1][1][0] == obs[POSITION][0]
+                inputs = [record for record in h.dataset.episodes[0].records if record[0] != eval_keys.INSTRUCTION]
+                assert inputs[-1][0] == POSITION
+                assert inputs[-1][1][0] == obs[POSITION][0]
                 commands[0] += 1
                 calls.append(obs)
                 obs = yield Step({MOTOR: commands}, runtime.time_ns + 5_000_000)
 
     frame = np.array([10])
     h.observation.emit(frame)
-    h.caller(Rollout(Task('move', None), Move(), h.output_path))
+    answer = h.caller(Rollout(Task('move', None), Move(), h.dataset))
     next(h.loop)
     episode = h.dataset.episodes[0]
     append = episode.append
@@ -1612,7 +1681,10 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
     h.world.clock.advance_to_ns(5_000_000)
     h.observation.emit(frame)
     next(h.loop)
-    assert [data.tolist() for _, data, _ in episode.records] == [[10], [1], [20], [2]]
+    assert not answer.done()
+    assert [data for name, data, _ in episode.records if name == eval_keys.INSTRUCTION] == ['move']
+    inputs_and_commands = [data.tolist() for name, data, _ in episode.records if name != eval_keys.INSTRUCTION]
+    assert inputs_and_commands == [[10], [1], [20], [2]]
     for name, _, ts in episode.records:
         expected = {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
         if name == POSITION:
@@ -1627,7 +1699,6 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
 
 def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_harness, tmp_path):
     h = episode_harness
-    h.harness._dataset_factory = LocalDatasetWriter
     observations = []
 
     class Normalize(Policy):
@@ -1640,7 +1711,7 @@ def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_ha
 
     frame = np.array([10])
     h.observation.emit(frame)
-    answer = h.caller(Rollout(Task('move', None), Normalize(), tmp_path))
+    answer = h.caller(Rollout(Task('move', None), Normalize(), LocalDatasetWriter(tmp_path)))
     next(h.loop)
     frame[:] = 20
     h.world.clock.advance_to_ns(5_000_000)
@@ -1653,31 +1724,42 @@ def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_ha
     np.testing.assert_array_equal(LocalDataset(tmp_path)[0][POSITION].values(), [[10], [20]])
 
 
-def test_recording_keeps_first_receipt_times_and_does_not_change_messages(episode_harness):
-    h = episode_harness
-    h.observation.emit(1)
-    h.world.clock.advance_to_ns(1_000_000)
-    message = h.harness.observations[POSITION].read()
-    original_time = message.time
-    h.world.clock.advance_to_ns(2_000_000)
-    h.caller(Rollout(Task('move', None), Hold(), h.output_path))
-    next(h.loop)
-    h.world.clock.advance_to_ns(3_000_000)
-    next(h.loop)
-    records = h.dataset.episodes[0].records
-    assert len(records) == 1
-    _, _, timestamps = records[0]
-    assert timestamps[HARNESS_WORLD] == original_time[RECEIVED_WORLD] == 1_000_000
-    assert timestamps[HARNESS_WALL] == original_time[RECEIVED_WALL]
-    assert message.time is original_time
-    assert HARNESS_WORLD not in message.time and HARNESS_WALL not in message.time
+@pytest.mark.parametrize('name', [POSITION, GROUND_TRUTH])
+def test_a_held_input_records_once_at_the_read_and_keeps_its_receipt_times(name):
+    with _episode_ports(privileged=(GROUND_TRUTH,)) as h:
+        emitter, receiver = (
+            (h.privileged[name], h.harness.privileged[name])
+            if name == GROUND_TRUTH
+            else (h.observation, h.harness.observations[name])
+        )
+        emitter.emit(1)
+        h.world.clock.advance_to_ns(1_000_000)
+        message = receiver.read()
+        assert message is not None
+        original_time = message.time
+        h.world.clock.advance_to_ns(2_000_000)
+        h.caller(Rollout(Task('move', None), Hold(), h.dataset))
+        wall_before_ns = time.monotonic_ns()
+        next(h.loop)
+        wall_after_ns = time.monotonic_ns()
+        h.world.clock.advance_to_ns(3_000_000)
+        next(h.loop)
+        records = [record for record in h.dataset.episodes[0].records if record[0] == name]
+        assert len(records) == 1
+        _, _, timestamps = records[0]
+        assert timestamps[HARNESS_WORLD] == 2_000_000
+        assert wall_before_ns <= timestamps[HARNESS_WALL] <= wall_after_ns
+        assert timestamps[RECEIVED_WORLD] == original_time[RECEIVED_WORLD] == 1_000_000
+        assert timestamps[RECEIVED_WALL] == original_time[RECEIVED_WALL]
+        assert message.time is original_time
+        assert HARNESS_WORLD not in message.time and HARNESS_WALL not in message.time
 
 
 @pytest.mark.parametrize('timeline', [HARNESS_WORLD, HARNESS_WALL])
 def test_producer_cannot_overwrite_harness_recording_timestamps(episode_harness, timeline):
     h = episode_harness
     h.observation.emit(1, time=pimm.Time(**{timeline: 123}))
-    answer = h.caller(Rollout(Task('move', None), Hold(), h.output_path))
+    answer = h.caller(Rollout(Task('move', None), Hold(), h.dataset))
     next(h.loop)
     with pytest.raises(TypeError, match=timeline):
         answer.result()
@@ -1690,7 +1772,7 @@ def test_writer_failure_reaches_the_episode_caller(episode_harness, failure, mon
     if failure == 'close':
         monkeypatch.setattr(MemoryEpisode, '__exit__', Mock(side_effect=OSError('disk failed')))
     h.observation.emit(0)
-    answer = h.caller(Rollout(Task('fail', None), Hold(), h.output_path))
+    answer = h.caller(Rollout(Task('fail', None), Hold(), h.dataset))
     next(h.loop)
     episode = h.dataset.episodes[0]
     if failure == 'append':
@@ -1746,29 +1828,203 @@ def test_cartesian_delta_applies_in_world_frame():
 def test_robot_state_serializer_emits_the_status_beside_the_pose(status):
     state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=status)
     serialized = Serializers.robot_state(state)
-    assert set(serialized) == {'.status', '.q', '.dq', '.ee_pose'}
-    assert serialized['.status'] is status
+    assert {suffix for suffix, value in serialized.items() if value is not None} == {
+        keys.STATUS_SUFFIX,
+        keys.JOINTS_SUFFIX,
+        keys.JOINT_VEL_SUFFIX,
+        keys.EE_POSE_SUFFIX,
+    }
+    assert serialized[keys.STATUS_SUFFIX] is status
 
 
-@pytest.mark.parametrize('late', [False, True])
+def run_robot_rollout(policy, static_meta=None, robot_meta=None, *, ticks=1, commands=None, sensors=None, state=None):
+    """Run one episode of ``policy`` for ``ticks`` world ticks on a robot embodiment that reports the poses
+    ``static_meta`` states, and whose arm publishes ``robot_meta`` and reports ``state``, a stationary arm at
+    ``[0.1, 0.2, 0.3]`` by default. The rig also reports each value of ``sensors`` under its name. Append each robot
+    command the rig gets to ``commands``."""
+    sensors = sensors or {}
+    if state is None:
+        state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    with pimm.World(virtual_time=True) as world:
+        device = Passive()
+        state_out = pimm.ControlSystemEmitter(device)
+        sensors_out = {name: pimm.ControlSystemEmitter(device) for name in sensors}
+        embodiment = Embodiment(
+            descriptor='robot',
+            observations={
+                keys.ROBOT_STATE: Observation(state_out, Serializers.robot_state),
+                **{name: Observation(emitter, None) for name, emitter in sensors_out.items()},
+            },
+            commands={
+                keys.ROBOT_COMMAND: Command(pimm.FakeReceiver(device), Serializers.robot_command),
+                keys.TARGET_GRIP: Command(pimm.FakeReceiver(device), None),
+            },
+            prepare_handlers={},
+            static_meta=dict(ROBOT_STATIC_META if static_meta is None else static_meta),
+            meta_source=None,
+            simulated=True,
+        )
+        harness = Harness(embodiment)
+        wire.wire_embodiment(world, harness, embodiment)
+        if robot_meta is not None:
+            meta_out, meta_in = world.local_pipe()
+            harness.robot_meta_in._bind(meta_in)
+            meta_out.emit(robot_meta)
+        received = Trace(world.clock)
+        harness.commands[keys.ROBOT_COMMAND]._bind(received, clock=world.clock)
+        caller = world.pair(harness.perform_task)
+        done = world.pair(harness.done)
+        loop = world.start([harness, device])
+        try:
+            state_out.emit(state)
+            for name, value in sensors.items():
+                sensors_out[name].emit(value)
+            answer = caller(Rollout(Task('move', None), policy, None))
+            for _ in range(ticks):
+                next(loop)
+            done.emit({eval_keys.SUCCESS: True})
+            while not answer.done():
+                next(loop)
+            if commands is not None:
+                commands.extend(command for _, command in received.values)
+            return answer
+        finally:
+            world.request_stop()
+            list(loop)
+
+
+def legacy_point_warnings(caplog):
+    return [record for record in caplog.records if 'legacy point' in record.getMessage()]
+
+
 @pytest.mark.parametrize(
-    'model',
+    'static_meta, robot_meta, legacy_offset',
     [
-        {roboarm_keys.URDF: bundled_franka_model()[roboarm_keys.URDF], roboarm_keys.CONTROL_FRAME: EE_LINK},
-        {roboarm_keys.URDF: '<robot name="r"><link name="base"/></robot>', roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME},
+        (ROBOT_STATIC_META, bundled_franka_model(), FRANKA_HAND_FRAME),
+        (ROBOT_STATIC_META, bundled_panda_model(), PANDA_HAND_FRAME),
+        (ROBOT_STATIC_META, bundled_yam_model(), YAM_GRASP_SITE_FRAME),
     ],
+    ids=['fr3', 'panda', 'yam'],
 )
-def test_observations_reject_an_invalid_control_frame(observed_harness, model, late):
-    world, harness, _, _, _, step = observed_harness
-    if late:
-        step()
-        emitter, receiver = world.local_pipe()
-        harness.robot_meta_in._bind(receiver)
-        emitter.emit(model)
-    else:
-        harness._embodiment.static_meta.update(model)
-    with pytest.raises(ValueError, match=model[roboarm_keys.CONTROL_FRAME]):
-        step()
+def test_a_policy_that_states_no_frames_observes_and_commands_the_rig_at_its_legacy_point(
+    static_meta, robot_meta, legacy_offset
+):
+    policy = StubPolicy()
+    commands = []
+    assert run_robot_rollout(policy, static_meta, robot_meta, commands=commands).result()[eval_keys.TERMINATED]
+    rig_pose = Transform3D(translation=np.array([0.1, 0.2, 0.3]))
+    observed = policy.observations[0][keys.EE_POSE]
+    np.testing.assert_allclose(observed, (rig_pose * legacy_offset).as_vector(Rotation.Representation.QUAT), atol=1e-9)
+    assert keys.JOINTS in policy.observations[0]
+    expected = policy.command.pose * legacy_offset.inv
+    np.testing.assert_allclose(commands[0].pose.translation, expected.translation, atol=1e-9)
+    np.testing.assert_allclose(commands[0].pose.rotation.as_quat, expected.rotation.as_quat, atol=1e-9)
+
+
+def test_a_policy_that_states_no_frames_is_refused_on_a_rig_that_states_frames_without_a_model():
+    policy = StubPolicy()
+    with pytest.raises(ValueError, match=roboarm_keys.URDF):
+        run_robot_rollout(policy).result()
+    assert policy.observations == []
+
+
+def test_a_policy_that_states_no_frames_gets_one_legacy_point_warning_per_session(caplog):
+    policy = StubPolicy()
+    assert run_robot_rollout(policy, robot_meta=bundled_franka_model(), ticks=250).result()[eval_keys.TERMINATED]
+    assert len(policy.observations) > 1
+    assert len(legacy_point_warnings(caplog)) == 1
+
+
+def test_a_policy_that_states_frames_sees_no_other_signal_the_rig_states_as_a_pose_whatever_its_name():
+    framed = {signal: EEFrame(site=GRIPPER_SITE) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.JOINTS)}
+    static_meta = {**ROBOT_STATIC_META, **ee_frames_entry(framed)}
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    assert run_robot_rollout(policy, static_meta).result()[eval_keys.TERMINATED] is True
+    assert keys.JOINTS not in policy.observations[0]
+    assert keys.EE_POSE in policy.observations[0]
+
+
+def test_a_policy_that_states_the_rig_site_sees_the_pose(caplog):
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    commands = []
+    assert run_robot_rollout(policy, commands=commands).result()[eval_keys.TERMINATED] is True
+    np.testing.assert_allclose(policy.observations[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
+    np.testing.assert_allclose(commands[0].pose.translation, policy.command.pose.translation)
+    assert legacy_point_warnings(caplog) == []
+
+
+class RecordingFramesPolicy(StubPolicy):
+    """A ``StubPolicy`` whose run writes ``frames`` as its ``EE_FRAMES`` before its first yield, as a remote run
+    does once its session opens."""
+
+    def __init__(self, frames):
+        super().__init__()
+        self.frames = frames
+
+    def run(self, runtime) -> PolicyRun:
+        runtime.set_metadata(roboarm_keys.EE_FRAMES, ee_frames_entry(self.frames)[roboarm_keys.EE_FRAMES])
+        return (yield from super().run(runtime))
+
+
+def test_a_run_that_records_the_rig_site_as_it_starts_sees_only_the_poses_it_states(caplog):
+    framed = {signal: EEFrame(site=GRIPPER_SITE) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.JOINTS)}
+    static_meta = {**ROBOT_STATIC_META, **ee_frames_entry(framed)}
+    policy = RecordingFramesPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    assert run_robot_rollout(policy, static_meta).result()[eval_keys.TERMINATED] is True
+    assert keys.JOINTS not in policy.observations[0]
+    np.testing.assert_allclose(policy.observations[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
+    assert legacy_point_warnings(caplog) == []
+
+
+def test_a_run_that_records_another_site_as_it_starts_is_refused_before_its_first_observation():
+    policy = RecordingFramesPolicy({keys.EE_POSE: EEFrame(site=EE_LINK)})
+    with pytest.raises(ValueError, match=EE_LINK):
+        run_robot_rollout(policy).result()
+    assert policy.observations == []
+
+
+def test_a_frame_codec_around_a_run_that_records_the_frame_of_the_same_pose_is_refused():
+    inner = RecordingFramesPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    policy = Sequential(ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)), inner)
+    with pytest.raises(ValueError, match='Only one component'):
+        run_robot_rollout(policy).result()
+    assert inner.observations == []
+
+
+def test_a_frame_codec_around_a_run_that_records_the_frame_of_another_pose_states_both(caplog):
+    inner = RecordingFramesPolicy({keys.TARGET_EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    policy = Sequential(ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)), inner)
+    assert run_robot_rollout(policy).result()[eval_keys.TERMINATED] is True
+    assert keys.EE_POSE in inner.observations[0]
+    assert legacy_point_warnings(caplog) == []
+
+
+def test_a_policy_that_states_another_site_is_refused():
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=EE_LINK)})
+    with pytest.raises(ValueError, match=EE_LINK):
+        run_robot_rollout(policy).result()
+    assert policy.observations == []
+
+
+def test_an_arm_with_no_model_runs_a_joint_policy_without_the_pose(caplog):
+    policy = StubPolicy(command=JointPosition(positions=np.zeros(7)))
+    assert run_robot_rollout(policy, robot_meta=NO_MODEL_ROBOT_META).result()[eval_keys.TERMINATED] is True
+    assert keys.EE_POSE not in policy.observations[0]
+    assert keys.JOINTS in policy.observations[0]
+    assert legacy_point_warnings(caplog) == []
+
+
+def test_an_arm_with_no_model_refuses_a_policy_that_reads_poses():
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
+        run_robot_rollout(policy, robot_meta=NO_MODEL_ROBOT_META).result()
+    assert policy.observations == []
+
+
+def test_a_rig_that_states_no_frame_for_a_pose_signal_is_refused():
+    static_meta = {**ROBOT_STATIC_META, roboarm_keys.EE_FRAMES: {}}
+    with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
+        run_robot_rollout(StubPolicy(), static_meta).result()
 
 
 @pytest.mark.parametrize('requested_ns, expected_ns', [(-1, 5_000_000), (100_000_000, 100_000_000), (10**12, 10**9)])
@@ -1787,7 +2043,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
     try:
-        assert h.harness._step(Task('test', None), runtime, run, None) == expected_ns
+        assert h.harness._step(Task('test', None), frozenset(), runtime, run, None) == expected_ns
     finally:
         runtime.close()
         run.close()
@@ -1820,7 +2076,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), runtime, run, None)
+            harness._step(Task('move', None), frozenset(), runtime, run, None)
         finally:
             runtime.close()
             run.close()
@@ -1833,6 +2089,55 @@ def test_robot_observation_serialization_and_typed_command_emission():
         assert obs[keys.DESCRIPTOR] == 'robot'
         assert 'obs_time_ns' not in obs and 'wall_time_ns' not in obs
         assert emitted.values == [(0, policy.command)]
+
+
+@pytest.mark.parametrize(
+    'command, expected_pose_signals',
+    [
+        (
+            CartesianPosition(pose=Transform3D(translation=np.array([0.4, 0.5, 0.6]), rotation=Rotation.identity)),
+            [keys.EE_POSE, keys.TARGET_EE_POSE],
+        ),
+        (JointPosition(positions=np.zeros(7)), [keys.EE_POSE]),
+    ],
+)
+def test_episode_statics_keep_only_written_viewer_signals(command, expected_pose_signals):
+    with pimm.World(virtual_time=True) as world:
+        device = Passive()
+        state_out = pimm.ControlSystemEmitter(device)
+        embodiment = Embodiment(
+            descriptor='robot',
+            observations={keys.ROBOT_STATE: Observation(state_out, Serializers.robot_state)},
+            commands={
+                keys.ROBOT_COMMAND: Command(pimm.FakeReceiver(device), Serializers.robot_command),
+                keys.TARGET_GRIP: Command(pimm.FakeReceiver(device), None),
+            },
+            prepare_handlers={},
+            static_meta=dict(ROBOT_STATIC_META),
+            meta_source=None,
+            simulated=True,
+        )
+        dataset = MemoryDataset()
+        harness = Harness(embodiment)
+        wire.wire_embodiment(world, harness, embodiment)
+        caller = world.pair(harness.perform_task)
+        done = world.pair(harness.done)
+        loop = world.start([harness, device])
+        try:
+            state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
+            policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}, command=command)
+            answer = caller(Rollout(Task('move', None), policy, dataset))
+            next(loop)
+            done.emit({eval_keys.SUCCESS: True})
+            while not answer.done():
+                next(loop)
+            assert answer.result()[eval_keys.TERMINATED] is True
+        finally:
+            world.request_stop()
+            list(loop)
+    static = dataset.episodes[-1].static
+    assert static[eval_keys.JOINT_SIGNALS] == [keys.JOINTS]
+    assert static[eval_keys.POSE_SIGNALS] == expected_pose_signals
 
 
 def test_real_sleep_stops_at_episode_deadline(episode_harness):

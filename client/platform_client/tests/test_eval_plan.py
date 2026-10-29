@@ -163,6 +163,7 @@ A_PER_TASK_VALUE = {
     'camera_vantage': 'phail',
     'external_cameras': {'side': 'left'},
     'clutter': {'count_min': 1, 'count_max': 2},
+    'scene_seed': 'scene-a',
     'start_pose': 'droid_reset',
 }
 
@@ -210,6 +211,39 @@ def test_a_plan_and_a_task_each_state_a_start_pose():
     assert EvalPlan.model_validate(sent) == plan
     with pytest.raises(ValidationError):
         a_plan(start_pose='home')
+
+
+def test_a_plan_and_a_task_each_state_a_scene_seed():
+    plan = a_plan(scene_seed='scene-a', tasks=[SPOONS, {'task_id': MUG, 'scene_seed': 'scene-b'}])
+    assert (plan.scene_seed, plan.tasks[0].scene_seed, plan.tasks[1].scene_seed) == ('scene-a', None, 'scene-b')
+    sent = plan.model_dump(mode='json')
+    assert sent['scene_seed'] == 'scene-a' and sent['tasks'][1]['scene_seed'] == 'scene-b'
+    assert EvalPlan.model_validate(sent) == plan
+
+
+def test_an_empty_scene_seed_is_refused_at_every_level():
+    with pytest.raises(ValidationError, match='at least 1 character'):
+        a_plan(scene_seed='')
+    with pytest.raises(ValidationError, match='at least 1 character'):
+        a_plan(tasks=[{'task_id': SPOONS, 'scene_seed': ''}])
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_a_level_without_a_scene_seed_omits_it_from_its_dump(mode: str):
+    """A platform that does not declare the field refuses it as unknown, so a plan that states no seed
+    must send none."""
+    sent = a_plan().model_dump(mode=mode)
+    assert 'scene_seed' not in sent
+    assert 'scene_seed' not in sent['tasks'][0]
+    assert not any('scene_seed' in entry for entry in sent['endpoints'])
+    stated = a_plan(tasks=[{'task_id': SPOONS, 'scene_seed': 'scene-a'}]).model_dump(mode=mode)
+    assert stated['tasks'][0]['scene_seed'] == 'scene-a' and 'scene_seed' not in stated
+
+
+@pytest.mark.parametrize('model', [Cascade, TaskNode, Endpoint, EvalPlan])
+def test_every_field_a_dump_omits_while_none_is_a_field_of_the_model(model: type[Cascade]):
+    """The serializer reads these names off the dump, so a renamed field would be sent as null."""
+    assert set(model._OMITTED_WHEN_NONE) <= set(model.model_fields)
 
 
 def test_a_scene_value_outside_the_closed_set_is_refused():
@@ -320,6 +354,41 @@ def test_an_endpoint_without_a_session_limit_omits_it_from_its_dump(mode: str):
     assert 'max_concurrent_sessions' not in Endpoint.model_validate(BASELINE).model_dump(mode=mode)
     stated = Endpoint.model_validate(remote('baseline', max_concurrent_sessions=3)).model_dump(mode=mode)
     assert stated['max_concurrent_sessions'] == 3
+
+
+_IMAGE_ENTRY = {'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket'}
+
+
+def test_an_image_endpoint_states_the_least_gpu_memory_it_needs():
+    entry = Endpoint.model_validate({**_IMAGE_ENTRY, 'min_vram_gb': 40})
+    assert entry.min_vram_gb == 40
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+    assert Endpoint.model_validate(_IMAGE_ENTRY).min_vram_gb is None
+
+
+@pytest.mark.parametrize('need', [0, -1])
+def test_a_memory_need_below_one_gb_is_refused(need: int):
+    with pytest.raises(ValidationError, match='greater than or equal to 1'):
+        Endpoint.model_validate({**_IMAGE_ENTRY, 'min_vram_gb': need})
+
+
+def test_a_remote_or_a_served_endpoint_states_no_memory_need():
+    with pytest.raises(ValidationError, match='which only an image endpoint carries'):
+        Endpoint.model_validate(remote('baseline', min_vram_gb=40))
+    with pytest.raises(ValidationError, match='which only an image endpoint carries'):
+        Endpoint(name='candidate', kind=EndpointKind.served, spec='pi05', wire=Wire.grpc, min_vram_gb=40)
+
+
+@pytest.mark.parametrize('label', [{'name': 'policy'}, {'name': 'policy', 'kind': 'image'}])
+def test_a_label_states_no_memory_need_of_its_own(label: dict[str, str]):
+    with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
+        Endpoint.model_validate({**label, 'min_vram_gb': 40})
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_an_endpoint_without_a_memory_need_omits_it_from_its_dump(mode: str):
+    assert 'min_vram_gb' not in Endpoint.model_validate(_IMAGE_ENTRY).model_dump(mode=mode)
+    assert Endpoint.model_validate({**_IMAGE_ENTRY, 'min_vram_gb': 48}).model_dump(mode=mode)['min_vram_gb'] == 48
 
 
 def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():

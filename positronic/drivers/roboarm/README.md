@@ -3,54 +3,73 @@
 Every arm driver here reports one end-effector pose (`robot_state.ee_pose`) and accepts Cartesian commands
 against it. Which point that is, is a choice; this file states the choice and what a new embodiment owes.
 
-## `default`
+## `gripper`
 
-**Every embodiment's model declares a frame named `default`, reports `robot_state.ee_pose` in it, and accepts
-Cartesian commands in it.** The model is the `urdf` the driver publishes in its `robot_meta`; `control_frame`
-names the frame within it, and under this contract that name is always `default` (`models.DEFAULT_FRAME`).
+**Every Franka embodiment's model declares a site named `gripper` (`models.GRIPPER_SITE`), reports
+`robot_state.ee_pose` at it, and accepts Cartesian commands at it.** The model is the `urdf` the driver
+publishes in its `robot_meta`. `gripper` is the grip point, with the axes of the flange `link8`, so z is the
+approach axis. On the FR3 with the 2F-85 it is 155 mm along that axis, where the closed pads meet. On the MuJoCo
+panda it is 103.65 mm, the midpoint of the fingertip pads.
 
-Every frame conversion is measured from `default`. A policy trained in some other end-effector frame carries
-the constant transform from `default` to it rather than naming it (`ChangeEEFrame`, see
-[codec guide](../../policy/codecs/README.md#end-effector-frames)) — which is what lets one checkpoint run on any
-embodiment honouring the contract.
+**Every rig, recording and pose-reading policy states where each pose signal sits, as `ee_frames`.** The entry is
+`{signal: {site, offset}}` (`models.EEFrame`): the pose is `offset` from `site`, a site of the model. The
+embodiment states it in its static meta for each entry of `pose_signals`, so a recording carries it.
+`ik.ee_frames` reads it, and refuses a pose signal with no entry and a site that a carried model does not have.
+An arm that publishes no model, such as Kinova, states no frame for any pose signal and no `pose_signals` in its
+`robot_meta` (`eval.NO_MODEL_ROBOT_META`). Its rig runs joint-only policies only: the harness refuses a policy that
+states frames there.
 
-The harness checks the declaration on every observation, not once per episode: a remote env publishes its
-`robot_meta` a turn after the reset that produced it, so at episode start there is no model to check.
+A policy trained in some other end-effector frame carries the constant transform from the rig site to it
+(`ChangeEEFrame`, see [codec guide](../../policy/codecs/README.md#end-effector-frames)). The transform lets one
+checkpoint run on any embodiment that keeps the contract. At the start of each episode the harness compares the
+policy's `ee_frames` with the rig's. A remote policy gets its `ee_frames` from its server when its session opens, so
+the harness compares them then, before the first observation goes to the server. A policy observes only the poses it
+states at the rig's site. A policy that names another site is refused. A policy that states none observes each pose at
+the rig's legacy point, the point the rig reported before `gripper`, and its pose commands go back from that point. The
+legacy point is `end_effector` (`models.EE_LINK`) on a model that names it, as the FR3, the MuJoCo panda and YAM do,
+and the rig site on any other model, such as SO-101. The harness reads it from the rig's model and logs a warning for
+each such session. This fallback is transitional (#550).
 
-## Where to put it
+`Impedance.frame` is the stiffness point, measured from the rig site. The Franka driver accepts an offset only, and
+refuses a turned frame. `DROID_IMPEDANCE` puts it at the flange.
 
-**Put `default` at the flange when the gripper can be swapped.** Recorded data outlives grippers, and nothing
-in a dataset says where a gripper frame was. Inside the gripper is fine for an arm whose end effector is
-fixed, or whose vendor frame is already the convention everybody uses.
+## Old recordings
 
-A checkpoint's transform is portable only while every embodiment puts `default` at the same physical place.
-Today's placements do not — the FR3 and the sim panda sit 45 mm apart along the approach axis — which is what
-[#550](https://github.com/Positronic-Robotics/positronic/issues/550) closes.
+Recordings made before `gripper` state their poses at `default`, the point each model now names `end_effector` (the
+first YAM recordings name it `grasp_site`), or before `ee_frames` at the site that `control_frame` names, with a
+codec offset in `ee_frame`. `cfg.ds.internal.REAL_ROBOT_TRANSFORM`, `SIM_ROBOT_TRANSFORM` and `YAM_ROBOT_TRANSFORM`
+relabel these as `ee_frames`, and then re-express every pose signal at `gripper` from the model the recording
+carries (`ik.MoveToSite`). A model with no `gripper` gets one at the grip point of its gripper. A YAM recording with
+no model gets the bundled YAM model.
 
-Two things are pinned to the Franka's FR3's current placement: recordings predating this contract state a frame name
-rather than an `ee_frame` transform and `ik.pose_anchor` solves at that name, and `models.DROID_EE_FRAME` is
-measured from where `default` sits. `test_default_frame_still_coincides_with_the_franka_tool_frame` fails when
-the placement moves.
+Checkpoints trained on those recordings speak the old frame. They state it as an offset from `gripper`:
+`models.FRANKA_HAND_FRAME` (the FR3's `F_T_EE`, 51.6 mm short of `gripper` and −45°), `models.PANDA_HAND_FRAME`
+(the sim panda's `end_effector`, 45.25 mm short of `gripper` and −45°) and `models.YAM_GRASP_SITE_FRAME` (the
+YAM's i2rt `grasp_site`, on the wrist axis, 40.8 mm to the side of `gripper`, 3.3 mm short of it and −90°).
+Each model names that old point `end_effector`. `test_ik.py` pins each constant to the model.
 
-| Embodiment | `default` sits at | Note |
+| Embodiment | Reports at | Note |
 | --- | --- | --- |
-| Franka FR3 (`franka.py`) | `end_effector` | The arm's `F_T_EE`, 103.4 mm and −45° off the flange. Moving it to the flange is [#550](https://github.com/Positronic-Robotics/positronic/issues/550). |
-| MuJoCo panda (`models.py`) | `end_effector` | The sim's grasp site. |
-| RoboLab (`simulator/robolab/`) | `end_effector` | Ships the FR3 model unchanged. The env measures and drives at `droid_eef`; `RobolabAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
-| YAM (`yam/driver.py`) | the `default` site in `yam.xml` | Coincident with the vendor's `grasp_site`. |
-| SO-101 (`so101/driver.py`) | `gripper_frame_link` | |
+| Franka FR3 (`franka.py`) | `gripper` | The driver publishes the flange pose times the 2F-85 grip offset, and solves IK at the flange. The `F_T_EE` setting in Desk changes no pose. |
+| MuJoCo panda (`simulator/mujoco/sim.py`) | `gripper` | The site in `panda.xml` and `franka_table.xml`. The sim adds it to an older scene that lacks it. |
+| RoboLab (`simulator/robolab/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at `robolab_eef`; `RobolabAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
+| MolmoSpaces (`simulator/molmo_spaces/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at the 2F-85 grasp site, in the arm base `fr3_link0`. MolmoSpaces' own robot base is at the bottom of the stand below it. |
+| LIBERO (`simulator/libero/`) | `gripper` | `LiberoAdapter` takes the env's grip site to be the panda's `end_effector` (`PANDA_HAND_FRAME`); it is not ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)). |
+| YAM (`yam/driver.py`) | `gripper` | The site in `yam.xml` and the link in the bundled URDF, where the closed fingertips meet: 40.8 mm off the wrist axis. The vendor's `grasp_site` is on the axis. |
+| SO-101 (`so101/driver.py`) | `gripper` | Coincident with `gripper_frame_link`. |
 
 ## Adding an embodiment
 
-1. Ship a model: `robot_meta` carries `urdf`, `joint_names`, `control_frame`, and the meshes the viewer needs.
-2. Declare `default` in that URDF — `models.add_default_frame` attaches it to a link you name.
-3. Set `control_frame` to `models.DEFAULT_FRAME`.
-4. Report `robot_state.ee_pose` at that frame and drive `CartesianPosition` to it.
+1. Ship a model: `robot_meta` carries `urdf`, `joint_names`, and the meshes the viewer needs.
+2. Declare `gripper` in that URDF at the grip point, with the flange axes — `models.attach_frame` adds it.
+3. State `ee_frames` at `models.GRIPPER_SITE` for each pose signal in the embodiment's static meta.
+   `eval.ROBOT_STATIC_META` does this for one arm.
+4. Report `robot_state.ee_pose` at that site and drive `CartesianPosition` to it.
 5. For `CartesianDelta`, compose through `CartesianDelta.apply`, which applies the command's own `frame`
    before anchoring on the measured pose.
 
 A remote benchmark env that measures somewhere else is wrapped, not excused: give `WireCommandAdapter` an
-`env_control_frame` — the transform from `default` to what the env uses — and it converts both paths
+`env_control_frame` — the transform from `gripper` to what the env uses — and it converts both paths
 (`RobolabAdapter`).
 
 An arm mounted away from the world origin reports poses in its own base frame, and the model carries no base

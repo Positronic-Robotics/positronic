@@ -8,18 +8,16 @@ project.
 """
 
 import argparse
-import fcntl
 import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager
 from functools import partial
 from pathlib import Path
 
 from positronic.drivers.roboarm.models import bundled_franka_model
-from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess, terminate
+from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess, setup_lock, terminate
 from positronic.simulator.env_server.protocol import encode
 from positronic.simulator.robolab import keys
 
@@ -60,21 +58,10 @@ def _ensure_robolab_src() -> Path:
     return src
 
 
-@contextmanager
-def _checkout_lock() -> Iterator[None]:
-    """Serialize checkout + patch + ``uv sync`` across processes sharing the cache. A warm-cache fan-out of
-    eval jobs mounts one ``~/.cache/positronic/robolab`` filesystem, so without this two concurrent setups
-    race: one's ``git checkout`` resets ``pyproject.toml`` from under the other's ``uv sync``, which then
-    installs from a pristine or half-written project. The per-eval ``env.py`` runs outside the lock, so
-    evals still fan out — only the setup is one-at-a-time."""
-    _ROBOLAB_SRC.parent.mkdir(parents=True, exist_ok=True)
-    with open(_ROBOLAB_SRC.parent / 'setup.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
-
-
 def _spawn(host: str, port: int, cameras: str, num_envs: int) -> subprocess.Popen:
-    with _checkout_lock():
+    # Only the setup is one at a time: a concurrent checkout would reset the patched pyproject.toml from under
+    # ``uv sync``. The per-eval ``env.py`` runs outside the lock, so evals still fan out.
+    with setup_lock(_ROBOLAB_SRC.parent):
         src = _ensure_robolab_src()
         # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
         # exceeds the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast
@@ -107,8 +94,8 @@ def _spawn(host: str, port: int, cameras: str, num_envs: int) -> subprocess.Pope
     # interpreter and cannot build it, so it is serialized here (wire codec) and env.py emits it as
     # ``robot_meta``. A fresh temp file per spawn, in the container-local tmpdir — never the shared cache
     # filesystem, where a concurrent eval's rewrite could tear a reader mid-decode.
-    # The rig's own model, unaltered: RoboLab measures and drives at ``droid_eef``, and ``RobolabAdapter``
-    # converts between that and the model's ``default`` frame on both the observation and command paths.
+    # The rig's own model, unaltered: RoboLab measures and drives at ``robolab_eef``, and ``RobolabAdapter``
+    # converts between that and the model's ``GRIPPER_SITE`` on both the observation and command paths.
     robot_meta = bundled_franka_model()
     fd, meta_path = tempfile.mkstemp(prefix='robolab_robot_meta_', suffix='.bin')
     with os.fdopen(fd, 'wb') as meta_file:

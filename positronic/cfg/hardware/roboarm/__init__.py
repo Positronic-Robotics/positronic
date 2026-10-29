@@ -6,6 +6,7 @@ import configuronic as cfn
 import positronic.cfg.hardware.motors
 from positronic.drivers.fakes.franka import FakeFranka
 from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm.models import DROID_EE_FRAME
 
 if TYPE_CHECKING:
     from positronic.drivers.roboarm.yam.settle import SettleTuning
@@ -16,12 +17,14 @@ YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
-# The gains DROID's Franka ran, which its pretrained checkpoints were trained under.
+# The law that DROID-pretrained checkpoints run under: the joint gains and the Cartesian damping of DROID's Franka,
+# and a Cartesian stiffness at the flange, where DROID measures its poses.
 DROID_IMPEDANCE = command.Impedance(
     kq=(40.0, 30.0, 50.0, 25.0, 35.0, 25.0, 10.0),
     kqd=(4.0, 6.0, 5.0, 5.0, 3.0, 2.0, 1.0),
-    kx=(750.0, 750.0, 750.0, 15.0, 15.0, 15.0),
+    kx=(400.0, 400.0, 400.0, 15.0, 15.0, 15.0),
     kxd=(37.0, 37.0, 37.0, 2.0, 2.0, 2.0),
+    frame=DROID_EE_FRAME,
 )
 
 
@@ -31,7 +34,6 @@ DROID_IMPEDANCE = command.Impedance(
     load=None,
     collision_coeff=2.0,
     manage_desk=True,
-    reboot_on_safety_error=False,
     brake_after_idle_s=None,
 )
 def franka(
@@ -40,7 +42,6 @@ def franka(
     load: tuple | None = None,
     collision_coeff: float = 2.0,
     manage_desk: bool = True,
-    reboot_on_safety_error: bool = False,
     brake_after_idle_s: float | None = None,
 ):
     from positronic.drivers.roboarm import franka  # noqa: F401
@@ -51,7 +52,6 @@ def franka(
         load=load,
         collision_coeff=collision_coeff,
         manage_desk=manage_desk,
-        reboot_on_safety_error=reboot_on_safety_error,
         brake_after_idle_s=brake_after_idle_s,
     )
 

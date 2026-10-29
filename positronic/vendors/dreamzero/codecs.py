@@ -5,17 +5,14 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
-from PIL import Image as PilImage
+from eval_vocabulary.timeline import recording_timeline
 
-from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.cfg import codecs, layers
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
-from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
 from positronic.policy.codecs import (
@@ -112,8 +109,8 @@ class DreamZeroObservationCodec(Codec):
             return np.zeros((h, w, 3), dtype=np.uint8)
         frame = np.asarray(frame)
         if frame.ndim == 4:
-            return np.stack([image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, f) for f in frame])
-        return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
+            return np.stack([image.resize_with_pad_per_frame(w, h, image.Resample.BILINEAR, f) for f in frame])
+        return image.resize_with_pad_per_frame(w, h, image.Resample.BILINEAR, frame)
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         joint_pos = np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(-1)
@@ -131,10 +128,6 @@ class DreamZeroObservationCodec(Codec):
             obs[roboarena.PROMPT] = inputs[keys.TASK]
 
         return obs
-
-    @property
-    def meta(self):
-        return {self.IMAGE_SIZES: self._image_size}
 
     @property
     def training_encoder(self):
@@ -178,9 +171,7 @@ class DreamZeroActionCodec(Codec):
 
     def _encode_action(self, episode: Episode):
         joints, grip = episode[self._tgt_joints_key], episode[self._tgt_grip_key]
-        timelines = joints.timelines + grip.timelines
-        # TODO: Remove the received.world fallback when teleoperation becomes a Harness policy.
-        timeline = next((name for name in (HARNESS_WORLD, RECEIVED_WORLD) if name in timelines), RECORDED_TIME)
+        timeline = recording_timeline(joints.timelines + grip.timelines)
         return transforms.concat(joints, grip, timelines=(timeline,), dtype=np.float32)
 
     def _decode_single(self, data: dict) -> dict:

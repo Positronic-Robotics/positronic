@@ -31,11 +31,11 @@ def _marked_frame(base_rgb: tuple[int, int, int]) -> np.ndarray:
 
 def build_payload() -> dict[str, Any]:
     return {
-        mapping.OBS_JOINT_POS: np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float32),
-        mapping.OBS_JOINT_VEL: np.linspace(-0.2, 0.2, 7, dtype=np.float32),
-        mapping.OBS_EEF_POS: np.array([0.4, 0.0, 0.35], dtype=np.float32),
-        mapping.OBS_EEF_QUAT: np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-        mapping.OBS_GRIP: np.float32(0.5),
+        protocol.OBS_JOINT_POS: np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float32),
+        protocol.OBS_JOINT_VEL: np.linspace(-0.2, 0.2, 7, dtype=np.float32),
+        protocol.OBS_EEF_POS: np.array([0.4, 0.0, 0.35], dtype=np.float32),
+        protocol.OBS_EEF_QUAT: np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        protocol.OBS_GRIP: np.float32(0.5),
         protocol.OBS_ARM_ERROR: False,
         _WRIST: _marked_frame((200, 40, 40)),
         _LEFT: _marked_frame((40, 160, 40)),

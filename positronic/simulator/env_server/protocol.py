@@ -36,9 +36,18 @@ JOINT_DELTA = 'joint_vel'  # Wire spelling used by existing environment servers.
 HOLD = 'hold'
 CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_DELTA, HOLD)
 
-# The command channels of a single-arm env. The wire cannot import positronic's ``keys``; a test pins them equal.
+# The command channels of one arm. The wire cannot import positronic's ``keys``; a test pins them equal.
 ROBOT_COMMAND = 'robot_command'
 TARGET_GRIP = 'target_grip'
+# The joint signal an arm's mount is keyed by in the recorded static meta.
+ROBOT_STATE = 'robot_state'
+JOINTS_SUFFIX = '.q'
+MOUNTS = 'mounts'
+
+
+def arm_channel(channel: str, arm: str) -> str:
+    return f'{channel}.{arm}'
+
 
 COMMAND_TYPE = 'type'
 COMMAND_POSE = 'pose'  # CARTESIAN — an absolute pose, [t(3), R(9)]
@@ -56,6 +65,13 @@ FRAME_DONE = 'done'
 FRAME_SUCCESS = 'success'
 # Whether the environment reports an arm error in this observation.
 OBS_ARM_ERROR = 'arm_error'
+# The raw observation fields of one arm. A bimanual env names them per arm with ``arm_channel``. Each env states
+# the frame of its end-effector pose and the order of its quaternion.
+OBS_JOINT_POS = 'joint_pos'
+OBS_JOINT_VEL = 'joint_vel'
+OBS_EEF_POS = 'eef_pos'  # Metres.
+OBS_EEF_QUAT = 'eef_quat'
+OBS_GRIP = 'grip'  # Closure in [0, 1].
 # An env answers the server one entry per slot under this field; the wire to a client carries one slot's frame.
 SLOTS = 'slots'
 

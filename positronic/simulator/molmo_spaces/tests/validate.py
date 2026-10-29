@@ -36,13 +36,13 @@ _DELTA_Q = 0.01  # radians
 
 
 def _fk(sim_env, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """The grasp-site robot-frame pose for candidate joints, computed on a copy of the scene state."""
+    """The grasp-site arm-base pose for candidate joints, computed on a copy of the scene state."""
     arm = sim_env._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
     data = mujoco.MjData(arm.mj_model)
     mujoco.mj_copyData(data, arm.mj_model, arm.mj_data)
     data.qpos[np.asarray(arm.joint_posadr)] = np.asarray(q, dtype=np.float64).reshape(-1)
     mujoco.mj_forward(arm.mj_model, data)
-    base = np.asarray(sim_env._robot_view.base.pose, dtype=np.float64)
+    base = np.asarray(arm.root_frame_to_world, dtype=np.float64)
     pos_world, rot_world = data.site_xpos[arm.leaf_frame_id], data.site_xmat[arm.leaf_frame_id].reshape(3, 3)
     return base[:3, :3].T @ (pos_world - base[:3, 3]), base[:3, :3].T @ rot_world
 
@@ -70,7 +70,7 @@ def _check_ik_roundtrip(sim_env) -> None:
 def _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env) -> None:
     pos, rot = sim_env._measured_eef_pose()
     command = {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.concatenate([pos, rot.reshape(-1)])}
-    target = env.mapping.wire_command_to_arm_action(
+    target = env.arm_action.wire_command_to_arm_action(
         command, sim_env._measured_arm_q(), ik=sim_env._ik, current_eef=(pos, rot)
     )
     drift = np.abs(np.asarray(target, dtype=np.float64) - np.asarray(sim_env._measured_arm_q(), dtype=np.float64))
@@ -94,7 +94,7 @@ def _check_every_canonical_command_converts(sim_env) -> None:
 
     for kind in protocol.CANONICAL_COMMAND_TYPES:
         command = {protocol.COMMAND_TYPE: kind, **payloads[kind]}
-        target = env.mapping.wire_command_to_arm_action(
+        target = env.arm_action.wire_command_to_arm_action(
             command, measured, ik=sim_env._ik, current_eef=sim_env._measured_eef_pose()
         )
         target = np.asarray(target, dtype=np.float64)
@@ -104,7 +104,7 @@ def _check_every_canonical_command_converts(sim_env) -> None:
     print(f'  command contract: OK ({covered} -> {measured.size} joint targets)')
 
 
-_OUT_OF_REACH = np.array([3.0, 0.0, 0.5])  # metres in the robot base frame, past a Franka's full extension
+_OUT_OF_REACH = np.array([3.0, 0.0, 0.5])  # metres in the arm base frame, past a Franka's full extension
 _HOLD_ATOL = 1e-2  # radians
 
 

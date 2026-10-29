@@ -14,6 +14,7 @@ import pytest
 import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic.drivers.camera import CAPTURE_TIME
+from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.tests.testing_coutils import RecordingEmitter
 
@@ -313,6 +314,7 @@ def test_a_lost_camera_sends_an_error_and_keeps_it_until_it_is_asked_to_be_ready
     (camera,) = sdk.cameras
     assert camera.closed_at is None
     (error,) = _errors(frames)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.CAMERA
     assert 'CAMERA_REBOOTING' in str(error)
     assert isinstance(frames.emitted[-1][1], pimm.SignalError)
     assert max(_frame_times(frames)) < LOST_AT
@@ -372,6 +374,23 @@ def test_a_ready_call_reopens_a_camera_whose_images_stopped_with_no_error(zed_mo
     assert stale.closed_at is not None and len(_frame_times(frames)) > sent
 
 
+def test_a_ready_call_on_a_reopened_camera_that_gives_no_image_answers_a_camera_fault(zed_module, world, monkeypatch):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    camera = _camera(zed_module, DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER), frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=1.0)
+    monkeypatch.setattr(FakeCamera, 'retrieve_image', lambda _camera, _image, _view: ErrorCode.FAILURE)
+    _drive(loop, clock, until=clock.now() + 2 * zed_module.SLCamera.STALE_FRAME_SEC)
+
+    answer = _readier(world, camera)(None)
+    _drive(loop, clock, until=clock.now() + 0.01)
+
+    with pytest.raises(DeviceFault, match='opened and sent no frame') as raised:
+        answer.result()
+    assert raised.value.kind is FaultKind.CAMERA
+    assert _errors(frames) == [raised.value]
+
+
 def test_a_camera_that_does_not_open_answers_ready_with_its_error_and_the_next_call_opens_it(zed_module, world):
     clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = DroppingSdk(clock, lost_at=LOST_AT, listed_at=NEVER)
@@ -381,8 +400,9 @@ def test_a_camera_that_does_not_open_answers_ready_with_its_error_and_the_next_c
     _drive(loop, clock, until=10.0)
     refused = ready(None)
     _drive(loop, clock, until=clock.now() + 20.0)
-    with pytest.raises(pimm.SignalError, match='did not open'):
+    with pytest.raises(DeviceFault, match='did not open') as raised:
         refused.result()
+    assert raised.value.kind is FaultKind.CAMERA
     assert not _returned(loop)
     assert max(_frame_times(frames)) < LOST_AT
 
