@@ -70,7 +70,7 @@ def short_model_name(model_id: str) -> str:
 def model(ep: Episode) -> str:
     policy_type = ep.get(f'{policy_keys.POLICY_META}.{policy_keys.TYPE}', '')
 
-    if policy_type == 'llm':
+    if policy_type == policy_keys.LLM_TYPE:
         return short_model_name(ep[f'{policy_keys.POLICY_META}.{policy_keys.MODEL}'])
 
     if policy_type == 'remote':
