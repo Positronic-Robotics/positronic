@@ -187,8 +187,9 @@ This metadata tells the client:
 - `frame_stream` — optional, protocol v1 or v2 (rows go without the v2 envelope):
   `{"version": 1, "codecs": ["jpeg", "h264"]}`.
   A client that asks for it with `RemotePolicy(frame_stream='jpeg')` (or `'h264'`) sends the history
-  frames of the next request while the robot executes the current chunk. The request then refers to
-  them, and the server can start its work before the request arrives. Without a request from the
+  frames of the next request while the robot executes the current chunk. A declared `encode_images` sets the
+  JPEG quality of the rows and the requests. The request then refers to them, and the server can start
+  its work before the request arrives. Without a request from the
   client and a declaration from the server, requests go in full. `positronic/offboard/frame_stream.py`
   describes the messages. `PolicyServer` declares the stream for a deployment whose client compresses
   images and stacks frames with a `TemporalStack`, and resolves each request's rows (`StreamedRows`).

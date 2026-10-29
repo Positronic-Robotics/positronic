@@ -39,6 +39,7 @@ from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
+from positronic.offboard import frame_stream as frame_stream_module
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
@@ -52,6 +53,7 @@ from positronic.offboard.client import (
 from positronic.offboard.frame_stream import FRAME_STREAM, REF, ROW, StreamedRows
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
+from positronic.policy import remote as remote_module
 from positronic.policy.base import Obs, Policy, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, ResizeMode, TransformImages
 from positronic.policy.codecs.image import ResizeCache
@@ -1395,6 +1397,25 @@ def test_a_frame_stream_sends_the_rows_of_the_next_request_and_the_request_refer
     assert (second[REF], second[b'call'], second[b'rows']) == (True, 1, [2, 1])
     (tail,) = serialization.deserialise(serialization.serialise(second[b'tail']))
     assert _frame_index(tail) == stacked[-1]
+
+
+def test_a_declared_encode_images_leaves_the_stack_for_the_frame_stream_to_refer_to(monkeypatch):
+    qualities = []
+    for module in (frame_stream_module, remote_module):
+        encode = module.encode_jpeg
+        monkeypatch.setattr(
+            module, 'encode_jpeg', lambda image, q=90, *a, _e=encode: qualities.append(q) or _e(image, q)
+        )
+    session = _run_v1(_stream_meta({'name': 'encode_images', 'args': {'quality': 75}}), 8, frame_stream='jpeg')
+
+    rows = [call.args[0][ROW] for call in session.send_message.call_args_list]
+    assert [(row['call'], row['back']) for row in rows] == [(1, 2), (1, 1)]
+    first, second = (call.args[0]['image'] for call in session.infer.call_args_list)
+    assert REF not in first
+    # The request compares its stack with the streamed rows before any frame is encoded, so it refers to them.
+    assert (second[REF], second[b'call'], second[b'rows']) == (True, 1, [2, 1])
+    # The rows and the frames each request carries go at the declared quality.
+    assert qualities and set(qualities) == {75}
 
 
 def test_a_protocol_v2_session_streams_the_rows_as_a_v1_session_does():

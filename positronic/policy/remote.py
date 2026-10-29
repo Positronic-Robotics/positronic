@@ -22,7 +22,7 @@ from positronic.offboard.frame_stream import FrameCodec, FrameStreamer, declared
 from positronic.policy import keys as policy_keys
 
 from .base import Answer, Policy, PolicyRun, Processor, Runtime
-from .codecs import TransformImages
+from .codecs import EncodeImages, TransformImages
 from .codecs.image import ResizeCache
 from .compatibility import from_v1_spec
 from .processors import ChunkedSchedule, TemporalStack
@@ -193,6 +193,19 @@ def _transform_row(transforms: cabc.Sequence[TransformImages], images: dict[str,
     return images
 
 
+class _PassImages(EncodeImages):
+    """A declared ``encode_images`` in a streaming session: it leaves the frames as arrays, so that the frame
+    streamer compares the stack with its rows and encodes the frames the request carries itself, at the declared
+    quality."""
+
+    @property
+    def quality(self) -> int:
+        return self._quality
+
+    def encode(self, data: dict) -> dict:
+        return data
+
+
 def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict[str, Any]:
     """The frame of each pose signal that a server states in its metadata or through its client stack."""
     # A server repeats its client stack's frames in its metadata, and the harness checks only the merged copy.
@@ -250,7 +263,7 @@ class RemotePolicy(Policy):
             compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
                 server_meta.get(policy_keys.COMPRESS_IMAGES)
             )
-            stack, streamer = self._stack_and_streamer(session, compress_images, connection_lock, runtime)
+            stack, streamer, quality = self._stack_and_streamer(session, compress_images, connection_lock, runtime)
             client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
             # Either side of the server's deployment may state the frames, so the run records both as one entry keyed
             # by pose signal.
@@ -271,17 +284,17 @@ class RemotePolicy(Policy):
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
                 if streamer is None or streamer.call == 0:
                     with connection_lock:
-                        return round_trip(session, obs, compress_images, self._jpeg_quality)
+                        return round_trip(session, obs, compress_images, quality)
                 streamed = streamer.request(obs)
                 with connection_lock:
                     try:
-                        return round_trip(session, streamed, compress_images, self._jpeg_quality)
+                        return round_trip(session, streamed, compress_images, quality)
                     except FrameMiss as miss:
                         # The protocol takes the request in full after a frame_miss answer.
                         logger.warning(
                             'The server does not have the streamed rows %s; sending the request in full', miss.missing
                         )
-                        return round_trip(session, obs, compress_images, self._jpeg_quality)
+                        return round_trip(session, obs, compress_images, quality)
 
             with closing(policy_runtime.start(stack, infer)) as run:
                 obs = yield
@@ -302,37 +315,42 @@ class RemotePolicy(Policy):
 
     def _stack_and_streamer(
         self, session: InferenceSession, compress_images: bool, connection_lock: Lock, runtime: Runtime
-    ) -> tuple[Processor, FrameStreamer | None]:
-        """The declared stack of ``session``, and its frame streamer when this policy streams frames on it."""
+    ) -> tuple[Processor, FrameStreamer | None, int]:
+        """The declared stack of ``session``, its frame streamer when this policy streams frames on it, and the
+        JPEG quality of the images its requests carry."""
         meta, version = session.metadata, session.protocol_version
         if self._frame_codec is None:
-            return declared_stack(meta, version), None
+            return declared_stack(meta, version), None, self._jpeg_quality
         streams = version in (ProtocolVersion.V1, ProtocolVersion.V2)
         if not (compress_images and streams and self._frame_codec in declared_codecs(meta)):
             logger.warning('The session offers no %s frame stream; requests go in full', self._frame_codec.value)
-            return declared_stack(meta, version), None
+            return declared_stack(meta, version), None, self._jpeg_quality
         # The streamer mirrors the declared temporal stack, and transforms each row as the stack transforms its
-        # frames. The stack's transforms share one cache with the streamer, so a frame is resized once.
+        # frames. The stack's transforms share one cache with the streamer, so a frame is resized once. A declared
+        # encode_images leaves the stack's frames as arrays; the streamer and the request encode them at its quality.
         cache = ResizeCache()
         temporal: list[TemporalStack] = []
         transforms: list[TransformImages] = []
         schedules: list[ChunkedSchedule] = []
+        encodes: list[_PassImages] = []
         overrides: dict[ComponentFactory, ComponentFactory] = {
             TemporalStack.from_spec_args: _recorded(TemporalStack.from_spec_args, temporal),
             TransformImages.from_spec_args: _recorded(partial(TransformImages.from_spec_args, cache=cache), transforms),
             ChunkedSchedule.from_spec_args: _recorded(ChunkedSchedule.from_spec_args, schedules),
+            EncodeImages.from_spec_args: _recorded(_PassImages.from_spec_args, encodes),
         }
         stack = declared_stack(meta, version, overrides)
         if len(temporal) != 1:
             raise ValueError('A frame stream needs one temporal_stack in the declared local stack')
         (stacked,) = temporal
+        quality = encodes[0].quality if encodes else self._jpeg_quality
         stack_meta = stack.meta()
 
         def send(message: dict[str, Any]) -> None:
             with connection_lock:
                 session.send_message(message)
 
-        return stack, FrameStreamer(
+        streamer = FrameStreamer(
             send,
             lambda: runtime.time_ns,
             codec=self._frame_codec,
@@ -344,5 +362,6 @@ class RemotePolicy(Policy):
             # The schedule's own estimate of its lead, fed the same delays: one estimate per session, as per episode.
             lead=schedules[0].inference_lead.run().update if len(schedules) == 1 else None,
             resize=partial(_transform_row, transforms) if transforms else None,
-            jpeg_quality=self._jpeg_quality,
+            jpeg_quality=quality,
         )
+        return stack, streamer, quality
