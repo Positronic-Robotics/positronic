@@ -623,9 +623,21 @@ def test_a_socket_directory_that_others_can_open_is_refused(tmp_path):
             pass
 
 
-def test_a_service_on_a_host_and_a_port_needs_a_token():
-    with pytest.raises(ValueError, match='needs an auth token'):
-        TeleopService(ServedHostPort('127.0.0.1', 0), 1.0, 0.1, HOLD_SEC)
+def test_a_service_on_a_host_and_a_port_with_no_token_opens_a_session_with_no_token():
+    with TeleopService(ServedHostPort('127.0.0.1', 0), 5.0, 0.1, HOLD_SEC) as service:
+        served = service.served_address
+        assert isinstance(served, ServedHostPort)
+        address = HostPortAddress(served.host, served.port, SESSION_PATH, '')
+
+        def cancel_when_asked() -> None:
+            _until_phase(service, Phase.READY_WAIT)
+            service.cancel_ready_wait()
+
+        opening = threading.Thread(target=cancel_when_asked)
+        opening.start()
+        with pytest.raises(RuntimeError, match='cancelled the trial'):
+            InferenceClient(registry.client_wire('websocket'), address, connect_deadline=5.0).new_session()
+        opening.join()
 
 
 def test_a_service_on_a_host_and_a_port_opens_a_session_only_with_its_token():
