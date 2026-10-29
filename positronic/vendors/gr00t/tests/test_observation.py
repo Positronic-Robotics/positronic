@@ -248,7 +248,8 @@ def test_rtc_targets_survive_observation_packing_and_image_compression(observati
 
     def infer(encoded):
         received.append(serialization.deserialise(serialization.serialise(encoded)))
-        return ({gr00t.JOINT_POSITION: np.zeros((1, 40, 7)), gr00t.GRIP: np.zeros((1, 40, 1))}, {})
+        reply = ({gr00t.JOINT_POSITION: np.zeros((1, 40, 7)), gr00t.GRIP: np.zeros((1, 40, 1))}, {})
+        return serialization.deserialise(serialization.serialise(reply))
 
     result = codec.wrap(infer)({
         **observation,

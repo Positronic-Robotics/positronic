@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from positronic_model_server import serialization
 
 from positronic import keys as obs_keys
 from positronic.cfg.codecs import compose, image_observation
@@ -19,7 +20,9 @@ from positronic.policy.codecs import (
     Codec,
     FlipGrip,
     Metadata,
+    PackFields,
     PolicyCommandError,
+    SplitActionChunk,
 )
 from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction
 from positronic.policy.codecs.observation import StateObservationCodec
@@ -113,6 +116,48 @@ def test_parallel_codec_decode_merges_outputs():
     assert obs_keys.ROBOT_COMMAND in result
     assert obs_keys.TARGET_GRIP in result
     assert ACTION not in result
+
+
+@pytest.mark.parametrize('serialized', [False, True])
+def test_parallel_codec_merges_packed_fields_from_a_model_reply(serialized):
+    codec = PackFields(decode_layout={'joints': [0, 'joints']}, squeeze_dims=1) & PackFields(decode_layout={})
+    joints = np.arange(21, dtype=np.float32).reshape(1, 3, 7)
+    reply = ({'joints': joints}, {})
+    if serialized:
+        reply = serialization.deserialise(serialization.serialise(reply))
+
+    decoded = codec.decode(reply)
+
+    assert isinstance(decoded, dict)
+    assert set(decoded) == {'joints'}
+    np.testing.assert_array_equal(decoded['joints'], joints[0], strict=True)
+
+
+@pytest.mark.parametrize('horizon', [0, 2])
+def test_parallel_codec_merges_decoded_chunks_from_a_mapping(horizon):
+    left = SplitActionChunk() | PackFields(decode_layout={'left': ['left']})
+    right = SplitActionChunk() | PackFields(decode_layout={'right': ['right']})
+    result = (left & right).decode({'left': np.arange(horizon), 'right': np.arange(horizon) + 10})
+
+    assert result == [{'left': i, 'right': i + 10} for i in range(horizon)]
+
+
+def test_parallel_codec_rejects_unequal_decoded_chunk_lengths():
+    left = SplitActionChunk() | PackFields(decode_layout={'left': ['left']})
+    right = SplitActionChunk() | PackFields(decode_layout={'right': ['right']})
+
+    with pytest.raises(ValueError, match='zip'):
+        (left & right).decode({'left': np.arange(2), 'right': np.arange(3)})
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_parallel_codec_rejects_mixed_decoded_shapes(reverse):
+    codecs = [SplitActionChunk(), PackFields(decode_layout={})]
+    if reverse:
+        codecs.reverse()
+
+    with pytest.raises(ValueError, match='both mappings or both lists'):
+        (codecs[0] & codecs[1]).decode({'joints': np.zeros((0, 7), dtype=np.float32)})
 
 
 def test_sequential_into_parallel_training():
