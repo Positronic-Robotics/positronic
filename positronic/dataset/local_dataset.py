@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import platform
 import shutil
 import sys
@@ -478,8 +479,9 @@ class LocalDatasetWriter(DatasetWriter):
         self._video_encoder.ensure_available()
         self.root.mkdir(parents=True, exist_ok=True)
         with ExitStack() as stack:
-            # Keep the lock file: removing it would let writers lock different inodes for the same directory.
-            lock = stack.enter_context((self.root / '.writer.lock').open('a'))
+            # Lock the directory itself: a lock file in it would go to every mirror of the dataset.
+            lock = os.open(self.root, os.O_RDONLY)
+            stack.callback(os.close, lock)
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
