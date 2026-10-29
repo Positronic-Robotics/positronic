@@ -99,7 +99,6 @@ with LocalDatasetWriter(Path(sys.argv[1])) as writer, writer.new_episode() as ep
 
 
 def test_writer_adds_no_file_beside_the_episodes_while_open_or_after_close(tmp_path):
-    # A mirror of the dataset directory uploads every file in it, while the writer is open too.
     with LocalDatasetWriter(tmp_path) as writer:
         assert list(tmp_path.iterdir()) == []
         with writer.new_episode() as episode:
