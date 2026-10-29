@@ -359,7 +359,7 @@ class LLMPolicy(Policy):
         frames = ee_frames_entry(dict.fromkeys((keys.EE_POSE, keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE)))
         return frames | flatten_dict({
             policy_keys.TYPE: 'llm',
-            'model': self.endpoint.model_id,
+            policy_keys.MODEL: self.endpoint.model_id,
             'settings': dict(self.endpoint.settings),
             'motion': asdict(self.motion),
             'max_calls': self.max_calls,

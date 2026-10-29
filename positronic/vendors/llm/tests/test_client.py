@@ -28,7 +28,7 @@ def test_model_name_policy_and_metadata_cross_a_spawned_process(model):
     with multiprocessing.get_context('spawn').Pool(1) as pool:
         restored = pool.apply(copy, (policy,))
     assert restored.meta() == metadata
-    assert metadata['model'] == model
+    assert metadata[policy_keys.MODEL] == model
     assert metadata['settings.temperature'] == 0.5
 
 
@@ -215,5 +215,5 @@ def test_config_accepts_a_configured_model_and_records_generation_settings():
     policy = llm(model=model, timeout=2, settings={'temperature': 0.5})
     with execution(policy) as (active, rt, clock):
         assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
-        assert policy.meta()['model'] == 'function:configured'
+        assert policy.meta()[policy_keys.MODEL] == 'function:configured'
         assert policy.meta()['settings.temperature'] == 0.5

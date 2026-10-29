@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 from datetime import datetime
 from functools import partial
@@ -49,8 +50,28 @@ def _model_label_from_path(model_type: str, checkpoint_path: str) -> str | None:
     return None
 
 
+# Keys are model ids without the provider prefix and the release date, so one model has one name on every provider.
+SHORT_MODEL_NAMES = {
+    'gpt-4.1': 'gpt4.1',
+    'gpt-6-astra': 'gpt6-astra',
+    'claude-opus-5-5': 'opus5.5',
+    'claude-fable-5-1': 'fable5.1',
+    'claude-sonnet-5-5': 'sonnet5.5',
+}
+_RELEASE_DATE = re.compile(r'-(\d{4}-\d{2}-\d{2}|\d{8})$')
+
+
+def short_model_name(model_id: str) -> str:
+    """The family and version of a `provider:model` id, or the id without prefix and date for an unknown model."""
+    name = _RELEASE_DATE.sub('', model_id.split(':', 1)[-1])
+    return SHORT_MODEL_NAMES.get(name, name)
+
+
 def model(ep: Episode) -> str:
     policy_type = ep.get(f'{policy_keys.POLICY_META}.{policy_keys.TYPE}', '')
+
+    if policy_type == 'llm':
+        return short_model_name(ep[f'{policy_keys.POLICY_META}.{policy_keys.MODEL}'])
 
     if policy_type == 'remote':
         server_type = ep.get(f'{policy_keys.SERVER_META}.{policy_keys.TYPE}', '')
