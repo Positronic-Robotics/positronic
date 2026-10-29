@@ -20,6 +20,7 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.policy import keys as policy_keys
 
 from .base import Policy, PolicyRun, Processor, Runtime
+from .codecs import PolicyCommandError
 from .compatibility import from_v1_spec
 from .spec import from_spec
 
@@ -60,16 +61,22 @@ def round_trip(
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:
-    """The client stack a server's handshake declares, in the form ``protocol_version`` runs."""
+    """The client stack a server's handshake declares, in the form ``protocol_version`` runs.
+
+    Raise ``PolicyCommandError`` when this client cannot build that stack.
+    """
     declared = meta.get(offboard_keys.LOCAL_STACK)
     if declared is None:
-        raise ValueError('Server declares no client processor stack')
-    if protocol_version is ProtocolVersion.V1:
-        stack = from_v1_spec(declared, meta, from_spec)
-    else:
-        stack = from_spec(declared)
+        raise PolicyCommandError('Server declares no client processor stack')
+    try:
+        if protocol_version is ProtocolVersion.V1:
+            stack = from_v1_spec(declared, meta, from_spec)
+        else:
+            stack = from_spec(declared)
+    except Exception as e:
+        raise PolicyCommandError(f'This client cannot build the client stack that the server declares: {e!r}') from e
     if not isinstance(stack, Processor):
-        raise ValueError('The declared client stack must be a processor')
+        raise PolicyCommandError('The declared client stack must be a processor')
     return stack
 
 
@@ -188,6 +195,13 @@ class RemotePolicy(Policy):
                         step = run.send(obs)
                     except StopIteration as end:
                         return end.value
+                    except PolicyCommandError:
+                        raise
+                    # A data error from the declared stack is the policy's; a transport error is not one of these.
+                    except (KeyError, TypeError, ValueError, IndexError, AttributeError) as e:
+                        raise PolicyCommandError(
+                            f'The client stack that the server declares cannot use the answer or the observation: {e!r}'
+                        ) from e
                     obs = yield step
         finally:
             # Generator failure can reach cleanup while inference still owns the connection.

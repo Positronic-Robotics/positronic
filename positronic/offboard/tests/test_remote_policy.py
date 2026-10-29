@@ -50,7 +50,7 @@ from positronic.offboard.client import (
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd, Step
-from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, ResizeMode, TransformImages
+from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, PolicyCommandError, ResizeMode, TransformImages
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
@@ -938,11 +938,23 @@ def runtime():
         runtime.close()
 
 
-@pytest.mark.parametrize('declaration', [None, {'seq': []}, {'name': 'run_arbitrary_code'}, {'name': 'flip_grip'}])
-def test_invalid_declaration_fails_before_inference_and_closes_connection(runtime, declaration):
+@pytest.mark.parametrize(
+    'declaration',
+    [
+        None,
+        {'seq': []},
+        {'name': 'run_arbitrary_code'},
+        {'name': 'flip_grip'},
+        # A frame codec with no site: its factory raises a KeyError.
+        {'name': 'change_ee_frame', 'version': 2, 'args': {'transform': [0, 0, 0, 1, 0, 0, 0]}},
+    ],
+)
+def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_and_closes_connection(
+    runtime, declaration
+):
     metadata = {} if declaration is None else {offboard_keys.LOCAL_STACK: declaration}
     policy, session = _mock_remote_policy(metadata)
-    with pytest.raises(ValueError):
+    with pytest.raises(PolicyCommandError):
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()
@@ -968,7 +980,7 @@ def test_stack_failure_finishes_active_inference_before_closing_session(runtime)
         run.send({'image': _make_image(8, 8)})
         assert started.wait(5)
         releaser.start()
-        with pytest.raises(KeyError, match='image'):
+        with pytest.raises(PolicyCommandError, match='image'):
             run.send({})
     finally:
         release.set()
@@ -1318,6 +1330,43 @@ def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_
         span = spans[span.parent_id]
         assert span.name == parent_name
     assert span.parent_id is None
+
+
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+def test_a_legacy_command_mapping_with_no_positions_fails_as_a_policy_command_error(
+    start_server, make_mock_model, runtime, transport
+):
+    model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'joint_pos'}}], {})
+    server = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
+    address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
+    run = runtime.start(RemotePolicy(transport, address))
+    try:
+        run.send({})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+        with pytest.raises(PolicyCommandError) as raised:
+            run.send({})
+        assert isinstance(raised.value.__cause__, KeyError)
+    finally:
+        runtime.close()
+        run.close()
+
+
+@pytest.mark.parametrize(
+    'failure', [RuntimeError('Server error: model failed'), wire.PeerDisconnected('closed'), TimeoutError('stalled')]
+)
+def test_a_server_error_or_a_lost_connection_reaches_the_caller_unchanged(runtime, failure):
+    policy, session = _mock_remote_policy(CHUNKED_STACK)
+    session.infer.side_effect = failure
+    run = runtime.start(policy)
+    try:
+        with pytest.raises(type(failure)) as raised:
+            run.send({})
+            runtime.wait(timeout_sec=5)
+            run.send({})
+        assert raised.value is failure
+    finally:
+        runtime.close()
+        run.close()
 
 
 def test_a_client_refuses_a_wire_handed_the_other_wire_address():

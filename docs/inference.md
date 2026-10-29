@@ -124,7 +124,14 @@ Anything richer — a foot pedal, a rig UI — is a driver of its own rather tha
 
 **A device error names its kind.** A device driver emits a `positronic.drivers.faults.DeviceFault`, a subclass of `pimm.SignalError`. Its `kind` field is a `FaultKind`: `E_STOP` for a pressed emergency stop, `CAMERA` for a camera, `ARM` for an arm, and `GRIPPER` for a gripper. The kind names the device that failed, so an arm that also drives its gripper puts its `ARM` fault on the grip too when the arm fails. A consumer reads `kind` to tell the faults apart. A device failure that the driver knows, such as a lost bus or a lost controller, never leaves the driver as a raised exception. The device's signal carries it, and a call to the driver, such as a move or a ready call, answers with the same `DeviceFault`, with the raw error as its `__cause__`. A command streamed with no answer reports its failure only on the signal. A malformed command answers with its own error. The error keeps its kind and its cause when it crosses a process boundary.
 
-**A command a codec cannot decode is a `PolicyCommandError`.** `Codec.wrap` decodes each command that the policy returns. When a codec raises a `ValueError` or a `KeyError` on that command, the wrap raises `positronic.policy.PolicyCommandError`, a subclass of `ValueError`, with the codec's error as its cause. An error that the policy itself raises reaches the caller unchanged.
+**What the client cannot use from a policy is a `PolicyCommandError`.** The error is `positronic.policy.PolicyCommandError`, a subclass of `ValueError`, and the error that refused the policy's data is its cause. Four places raise it:
+
+- `Codec.wrap`, when a codec raises any error on a command that the policy returns.
+- `RemotePolicy`, when it cannot build the client stack that the server declares.
+- `RemotePolicy`, when that stack raises a `KeyError`, `TypeError`, `ValueError`, `IndexError` or `AttributeError` on an answer or an observation.
+- The harness, when a step names a channel that the embodiment does not take, or puts no command object at a robot command channel.
+
+An error that the policy itself raises reaches the caller unchanged, and so does a server's error answer, a timeout or a lost connection.
 
 **Every device is ready before an episode starts.** Before each episode, the harness calls each handler in `Embodiment.ready_handlers` with no argument, then the prepare handlers that the task names. A healthy device answers at once. A device that holds an error repairs first and answers when it gives data again. A device that cannot repair answers with its error. That error fails the ask, and the harness keeps serving asks. The next ask calls the handler again.
 

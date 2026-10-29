@@ -20,14 +20,15 @@ from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ee_frames, frame_transform
 from positronic.drivers.roboarm.keys import EE_FRAMES, URDF
 from positronic.drivers.roboarm.models import EE_LINK, EEFrame
 from positronic.eval import Embodiment, Task, only_keep_written_signals
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun
-from positronic.policy.codecs import ChangeEEFrame, Codec
+from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun, Step
+from positronic.policy.codecs import ChangeEEFrame, Codec, PolicyCommandError
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.utils import flatten_dict, frozen_view
 
@@ -90,6 +91,39 @@ class _EpisodeTelemetry:
         telemetry.pop_anchor(self._span)
         self._span = None
         telemetry.force_flush()
+
+
+def _commands_checked(run: PolicyRun, channels: frozenset[str]) -> PolicyRun:
+    """``run``, primed, refusing a step that names a channel outside ``channels`` or carries no command object at a
+    robot command channel."""
+
+    def checked() -> PolicyRun:
+        obs = yield
+        while True:
+            try:
+                step = run.send(obs)
+            except StopIteration as end:
+                return end.value
+            if not isinstance(step, Step):
+                obs = yield step
+                continue
+            if unknown := sorted(step.commands.keys() - channels):
+                raise PolicyCommandError(f'The step names {unknown}, and the embodiment takes only {sorted(channels)}')
+            for name, value in step.commands.items():
+                if keys.is_robot_command(name) and not isinstance(value, command.CommandType):
+                    raise PolicyCommandError(_NOT_A_COMMAND.format(name=name, kind=type(value).__name__))
+            obs = yield step
+
+    primed = checked()
+    next(primed)
+    return primed
+
+
+_NOT_A_COMMAND = (
+    '{name} carries a {kind}, not a command. A protocol v3 server answers the output of its model, and the client '
+    'stack that it declares decodes that output into commands, for example with joint_position_action. Only a v1 or '
+    'v2 server can answer a command as a plain mapping.'
+)
 
 
 @dataclass(frozen=True)
@@ -552,8 +586,9 @@ class Harness(pimm.ControlSystem):
         try:
             policy_run = runtime.start(rollout.policy)
             withheld_poses, pose_codec = self._pose_handshake(rollout.policy, runtime)
-            # Closing ``policy_run`` is enough: the codec run holds no resource of its own.
-            stepped_run = policy_run if pose_codec is None else pose_codec.wrap(policy_run)
+            checked = _commands_checked(policy_run, frozenset(self._embodiment.commands))
+            # Closing ``policy_run`` is enough: the check and the codec run hold no resource of their own.
+            stepped_run = checked if pose_codec is None else pose_codec.wrap(checked)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
