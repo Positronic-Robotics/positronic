@@ -25,7 +25,7 @@ from .base import Answer, Policy, PolicyRun, Processor, Runtime
 from .codecs import EncodeImages, TransformImages
 from .codecs.image import ResizeCache
 from .compatibility import from_v1_spec
-from .processors import ChunkedSchedule, TemporalStack
+from .processors import ChunkedSchedule, RTCSchedule, TemporalStack
 from .spec import ComponentFactory, from_spec
 
 P = ParamSpec('P')
@@ -259,6 +259,7 @@ class RemotePolicy(Policy):
                         return round_trip(session, streamed, compress_images, quality)
                     except FrameMiss as miss:
                         # The protocol takes the request in full after a frame_miss answer.
+                        streamer.frame_misses += 1
                         logger.warning(
                             'The server does not have the streamed rows %s; sending the request in full', miss.missing
                         )
@@ -344,6 +345,7 @@ class RemotePolicy(Policy):
         temporal: list[TemporalStack] = []
         transforms: list[TransformImages] = []
         schedules: list[ChunkedSchedule] = []
+        rtc: list[RTCSchedule] = []
         encodes: list[RemotePolicy._PassImages] = []
         hooks = self._StreamerHooks()
         overrides: dict[ComponentFactory, ComponentFactory] = {
@@ -354,6 +356,7 @@ class RemotePolicy(Policy):
             ChunkedSchedule.from_spec_args: self._recorded(
                 partial(ChunkedSchedule.from_spec_args, on_replan=hooks.replan), schedules
             ),
+            RTCSchedule.from_spec_args: self._recorded(RTCSchedule.from_spec_args, rtc),
             EncodeImages.from_spec_args: self._recorded(self._PassImages.from_spec_args, encodes),
         }
         stack = declared_stack(meta, version, overrides)
@@ -383,6 +386,7 @@ class RemotePolicy(Policy):
             lead=schedules[0].inference_lead.run().update if len(schedules) == 1 else None,
             resize=partial(self._transform_row, transforms) if transforms else None,
             jpeg_quality=quality,
+            call_after_sec=rtc[0].call_after_sec if len(rtc) == 1 else None,
         )
         hooks.streamer = streamer
         return stack, streamer, quality

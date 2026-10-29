@@ -423,3 +423,49 @@ def test_a_row_past_the_held_bytes_is_dropped_and_its_request_misses_it(monkeypa
     with pytest.raises(RowsMissing) as raised:
         rows.resolve(_wire({KEY: {REF: True, b'call': 1, b'rows': [2, 1], b'tail': encode_jpeg(_gradient(2)[None])}}))
     assert raised.value.missing == [[KEY, 1]]
+
+
+def test_an_rtc_stream_targets_the_rows_from_the_submit_time_plus_call_after():
+    # OFFSETS (-0.25, -0.15, 0.0): the next call is due at submit + 0.8 s, its rows at +0.55 s and +0.65 s.
+    with _streamer(call_after_sec=0.8) as (streamer, clock, sent):
+        _tick(streamer, clock, *range(3))
+        streamer.on_answer([{}] * 24)  # the first answer, read at 0.2 s: the schedule calls again at 1.0 s
+        _tick(streamer, clock, *range(3, 11))
+        streamer.on_submit()  # the call on tick 10 at 1.0 s, due again at 1.8 s
+        streamer.flush()
+        assert _rows(sent) == [(1, 2, 7), (1, 1, 8)]
+        _tick(streamer, clock, 11, 12, 13)
+        streamer.on_answer([{}] * 24)  # read at 1.3 s: rows at 1.55 s and 1.65 s
+        _tick(streamer, clock, 14, 15, 16, 17)
+        streamer.flush()
+        assert _rows(sent)[2:] == [(2, 2, 15), (2, 1, 16)]
+
+
+def test_an_rtc_answer_read_in_time_sends_the_rows_whose_targets_have_passed_at_once():
+    with _streamer(call_after_sec=0.3) as (streamer, clock, sent):
+        _tick(streamer, clock, 0)
+        streamer.on_answer([{}] * 24)
+        _tick(streamer, clock, 1, 2)
+        streamer.on_submit()  # at 0.2 s: due again at 0.5 s, its rows at 0.25 s and 0.35 s
+        _tick(streamer, clock, 3, 4)
+        streamer.on_answer([{}] * 24)  # read at 0.4 s, before 0.5 s: both rows are due already
+        streamer.flush()
+        assert _rows(sent)[-2:] == [(2, 2, 2), (2, 1, 3)]
+
+
+def test_an_rtc_answer_read_after_the_predicted_call_plans_no_rows():
+    with _streamer(call_after_sec=0.3) as (streamer, clock, sent):
+        _tick(streamer, clock, 0)
+        streamer.on_answer([{}] * 24)
+        _tick(streamer, clock, 1, 2)
+        streamer.on_submit()  # at 0.2 s: due again at 0.5 s
+        _tick(streamer, clock, 3, 4, 5, 6)
+        streamer.flush()
+        before = len(sent)
+        streamer.on_answer([{}] * 24)  # read at 0.6 s: the schedule calls at once
+        _tick(streamer, clock, 7, 8)
+        streamer.flush()
+        assert len(sent) == before
+        assert streamer.counts['unplanned'] == 1
+        request = streamer.request({KEY: np.stack([_frame(5), _frame(7), _frame(8)])})
+        assert request[KEY][b'rows'] == []

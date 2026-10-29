@@ -57,18 +57,20 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy import remote as remote_module
 from positronic.policy.base import Obs, Policy, PolicyEnd, Step
-from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, ResizeMode, TransformImages
+from positronic.policy.codecs import ChangeEEFrame, Codec, EncodeImages, EndCommand, ResizeMode, TransformImages
 from positronic.policy.codecs.image import ResizeCache
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
     ChunkedSchedule,
     ConstantDuration,
+    DelayEstimate,
     EndOnField,
     PauseOnUnavailable,
+    RTCSchedule,
     TemporalStack,
 )
-from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
+from positronic.policy.remote import RemotePolicy, declared_stack, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 from positronic.policy.tests.test_harness import legacy_point_warnings, run_robot_rollout
@@ -1690,6 +1692,159 @@ def test_a_server_decodes_each_message_of_a_streamed_session_off_its_event_loop(
     _served_run(address, 'jpeg', 8)
     assert len(model.observations) >= 2
     assert on_loop and not any(on_loop)
+
+
+def _rtc_stream_meta(*parts: dict) -> dict:
+    """A protocol v2 handshake with an ``rtc_schedule``: ``image`` at 0.1 s ticks, a call 0.4 s after the previous
+    one, and a declared ``encode_images`` at quality 75."""
+    temporal = TemporalStack(('image',), (-0.25, -0.15, 0.0), pad_start=False).to_spec()
+    rtc = RTCSchedule(fps=10.0, call_after_sec=0.4, latency_estimate=DelayEstimate.max(last=5, max_sec=0.3))
+    encode = EncodeImages(quality=75).to_spec()
+    return {
+        offboard_keys.LOCAL_STACK: {'seq': [temporal, rtc.to_spec(), *parts, encode]},
+        ACTION_FPS: 10.0,
+        policy_keys.COMPRESS_IMAGES: True,
+        FRAME_STREAM: {'version': 1, 'codecs': ['jpeg', 'h264']},
+    }
+
+
+def _run_v2_rtc(meta: dict, ticks: int, frame=_stream_frame, **policy_kwargs) -> MagicMock:
+    """Run a ``RemotePolicy`` with a frame stream on a mocked protocol v2 rtc session, one tick every 0.1 s.
+
+    ``frame`` gives the image of each tick index."""
+    policy, session = _mock_remote_policy(meta, frame_stream='jpeg', **policy_kwargs)
+    session.protocol_version = protocol.ProtocolVersion.V2
+    tick_ended = threading.Event()
+
+    def infer(obs):
+        assert tick_ended.wait(5)
+        return [{'value': i} for i in range(12)]
+
+    session.infer.side_effect = infer
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    run = runtime.start(policy)
+    try:
+        for index in range(ticks):
+            now[0] = index * 100_000_000
+            tick_ended.clear()
+            run.send({'image': frame(index)})
+            tick_ended.set()
+            runtime.wait(timeout_sec=5)
+    finally:
+        tick_ended.set()
+        runtime.close()
+        run.close()
+    return session
+
+
+def test_an_rtc_frame_stream_targets_its_rows_from_the_call_time_plus_call_after(monkeypatch):
+    qualities = []
+    for module in (frame_stream_module, remote_module):
+        encode = module.encode_jpeg
+        monkeypatch.setattr(
+            module, 'encode_jpeg', lambda image, q=90, *a, _e=encode: qualities.append(q) or _e(image, q)
+        )
+    session = _run_v2_rtc(_rtc_stream_meta(), 11)
+
+    # Call 0 at 0.0 s, read at 0.1 s: the first chunk counts from its answer, so call 1 goes at 0.5 s (rows at 0.25 s
+    # and 0.35 s: ticks 2 and 3). Call 1 is read at 0.6 s: call 2 goes at 0.9 s, its rows on ticks 6 and 7.
+    rows = [call.args[0][ROW] for call in session.send_message.call_args_list]
+    assert [(row['call'], row['back']) for row in rows] == [(1, 2), (1, 1), (2, 2), (2, 1)]
+    images = [serialization.deserialise(serialization.serialise(row['images']))['image'] for row in rows]
+    assert [_frame_index(image) for image in images] == [2, 3, 6, 7]
+    requests = [call.args[0]['image'] for call in session.infer.call_args_list]
+    assert len(requests) == 3
+    assert [(r[b'call'], r[b'rows']) for r in requests[1:]] == [(1, [2, 1]), (2, [2, 1])]
+    (tail,) = serialization.deserialise(serialization.serialise(requests[2][b'tail']))
+    assert _frame_index(tail) == 9
+    # The declared encode_images leaves the stack as arrays; the rows and the requests go at its quality.
+    assert qualities and set(qualities) == {75}
+
+
+def test_a_session_without_a_frame_stream_keeps_the_declared_encode_images():
+    stack = declared_stack(_rtc_stream_meta(), protocol.ProtocolVersion.V2)
+    assert isinstance(stack, Sequential)
+    assert type(stack._components[-1]) is EncodeImages
+
+
+def test_a_frame_stream_logs_its_frame_miss_answers_at_close(caplog):
+    chunk = [{'value': i} for i in range(5)]
+    with caplog.at_level(logging.INFO, logger=frame_stream_module.__name__):
+        _run_on_mock_session(_stream_meta(), 7, frame_stream='jpeg', replies=[chunk, FrameMiss([['image', 2]]), chunk])
+    assert '1 frame_miss answers' in caplog.text
+
+
+def _drop_the_rows_of_call(monkeypatch, call: int) -> list[list[int]]:
+    """Make every served session lose the rows of ``call``; returns, per resolved request, the rows each of its stacks
+    refers to."""
+    resolved: list[list[int]] = []
+    resolve, add = StreamedRows.resolve, StreamedRows.add
+
+    def recording_resolve(rows, obs):
+        resolved.append([len(value[b'rows']) for value in obs.values() if isinstance(value, Mapping) and REF in value])
+        return resolve(rows, obs)
+
+    def dropping_add(rows, row):
+        add(rows, row)
+        if row['call'] == call:
+            rows._rows.pop(row['back'], None)
+
+    monkeypatch.setattr(StreamedRows, 'resolve', recording_resolve)
+    monkeypatch.setattr(StreamedRows, 'add', dropping_add)
+    return resolved
+
+
+class _EightActionModel(FixedModel):
+    def __call__(self, obs: Obs, *, session_id: str):
+        super().__call__(obs, session_id=session_id)
+        return [{'value': index} for index in range(8)]
+
+
+def _rtc_context(obs: Mapping[str, object]) -> tuple:
+    """The RTC fields of an observation as the model receives them: the remaining plan, its two offsets and the
+    estimated and measured latencies."""
+    prefix = obs[policy_keys.RTC.ACTION_PREFIX]
+    assert isinstance(prefix, Mapping)
+    return (
+        prefix[policy_keys.RTC.PREFIX_ACTIONS],
+        prefix[policy_keys.RTC.CHUNK_OFFSET_SEC],
+        prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC],
+        obs[policy_keys.RTC.ESTIMATED_LATENCY_SEC],
+        obs[policy_keys.RTC.MEASURED_LATENCY_SEC],
+    )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize('frame_stream, atol', [('jpeg', 0), ('h264', 12)])
+def test_a_served_rtc_frame_stream_gives_the_model_the_observations_of_full_requests(
+    served, monkeypatch, frame_stream, atol
+):
+    resolved = _drop_the_rows_of_call(monkeypatch, 2)
+    rtc = RTCSchedule(fps=10.0, call_after_sec=0.4, latency_estimate=DelayEstimate.max(last=5, max_sec=0.3))
+    local = _streamed_stack(rtc, TransformImages(24, 16, mode=ResizeMode.BOUND), EncodeImages(quality=80))
+    observed = {}
+    for stream in (None, frame_stream):
+        resolved.clear()
+        address, model, _ = served(local=local, model=_EightActionModel())
+        _served_run(address, stream, 19)
+        observed[stream] = [(obs['image'], _rtc_context(obs)) for obs in model.observations]
+
+    full, streamed = observed[None], observed[frame_stream]
+    # Calls at 0.0 s, then (the first chunk counts from its answer) 0.5, 0.9, 1.3 and 1.7 s.
+    assert len(full) == len(streamed) == 5
+    for (expected, expected_context), (got, context) in zip(full, streamed, strict=True):
+        assert got.shape == expected.shape == (3, 16, 24, 3)
+        np.testing.assert_allclose(got, expected, atol=atol)
+        assert context == expected_context
+    # The model gets the remaining plan from the second call on, with its offsets and the latencies.
+    assert full[0][1] == ([], 0.0, 0.0, 0.0, None)
+    # The model gets the remaining plan of each 8-action chunk from the second call on: the call 0.4 s into a chunk
+    # leaves its last 4 actions, and each answer took one 0.1 s tick.
+    assert full[0][1] == ([], 0.0, 0.0, 0.0, None)
+    assert [context for _, context in full[1:]] == [([{'value': i} for i in range(4, 8)], 0.4, 0.0, 0.1, 0.1)] * 4
+    # Calls 1, 3 and 4 refer to both rows; call 2 misses them and goes again in full.
+    assert resolved == [[], [2], [2], [], [2], [2]]
 
 
 def test_an_answer_reports_its_result_once_at_its_first_read(runtime):

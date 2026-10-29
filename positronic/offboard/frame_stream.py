@@ -34,6 +34,12 @@ has passed, so the last row reaches the server before the request; a row whose t
 plan goes at once. An answer whose next request is due at once, such as an empty chunk, plans no rows.
 The request compares each row of its stack with the streamed row, and it refers only to equal rows. A
 wrong prediction costs bytes, but it never changes an observation.
+
+``RTCSchedule`` calls ``call_after_sec`` after its previous call, whenever the answer arrives in time. With
+``call_after_sec`` the streamer predicts ``T`` as the submit time of the current call plus ``call_after_sec`` (after
+the first answer: its read time plus ``call_after_sec``, as the schedule counts the first chunk from its answer).
+It plans the rows when the schedule first reads the answer, since the server takes a call's rows only after it
+sent the answer before. An answer read after the predicted time plans no rows: the next call goes at once, in full.
 """
 
 import collections.abc as cabc
@@ -242,8 +248,10 @@ class FrameStreamer:
     ``keys``, ``offsets_sec`` and ``pad_start`` are those of the declared ``TemporalStack``. ``resize``
     sizes the frames as the declared stack does. ``fps`` and ``horizon_sec`` are those of the schedule, and
     ``lead`` gives its inference lead from the delay of an answer (``DurationEstimateRun.update``; None: no lead),
-    and ``on_replan`` takes its replans. ``send`` puts one message on the session's connection, under the lock of
-    the connection. ``clock`` is the episode clock in nanoseconds.
+    and ``on_replan`` takes its replans.
+    ``call_after_sec`` is that of an ``RTCSchedule`` (None: a ``ChunkedSchedule``).
+    ``send`` puts one message on the session's connection, under the lock of the connection. ``clock`` is
+    the episode clock in nanoseconds.
     """
 
     def __init__(
@@ -261,6 +269,7 @@ class FrameStreamer:
         resize: cabc.Callable[[dict[str, np.ndarray]], dict[str, np.ndarray]] | None = None,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
         crf: int = 18,
+        call_after_sec: float | None = None,
     ) -> None:
         if not offsets_sec or offsets_sec[-1] != 0.0:
             raise ValueError('A frame stream needs the current frame as the last stack offset')
@@ -278,6 +287,7 @@ class FrameStreamer:
         self._resize = resize
         self._quality = jpeg_quality
         self._crf = crf
+        self._call_after_sec = call_after_sec
         self._ticks: deque[tuple[float, dict[str, np.ndarray]]] = deque()
         self._image_keys: tuple[str, ...] | None = None
         self.call = 0
@@ -290,6 +300,7 @@ class FrameStreamer:
         self._wake = threading.Event()
         self._closed = False
         self._rows_sent = self._rows_referred = self._frames_inline = 0
+        self._unplanned = self.frame_misses = 0
         threading.Thread(target=self._send_rows, name='FrameStreamer', daemon=True).start()
         threading.Thread(target=self._time_rows, name='FrameStreamerTimer', daemon=True).start()
 
@@ -324,6 +335,29 @@ class FrameStreamer:
         """Plan the rows of the next request when the schedule reads ``chunk``."""
         self.flush()
         now = self._clock() / 1e9
+        t_next = self._next_call(now, chunk)
+        n = len(self._offsets)
+        with self._lock:
+            self.call += 1
+            self._streamed = {}
+            planned = t_next is not None and t_next > now
+            if planned and t_next is not None:
+                self._targets = [(n - 1 - i, t_next + offset) for i, offset in enumerate(self._offsets[:-1])]
+            else:
+                self._targets = []
+                self._unplanned += 1
+        self._wake.set()
+        if planned:
+            self._dispatch_due(now)  # rows whose target has passed go at once
+
+    def _next_call(self, now: float, chunk: cabc.Sized) -> float | None:
+        """When the schedule that read ``chunk`` at ``now`` calls next, or None for a call it makes at once."""
+        if self._call_after_sec is not None:
+            if self.call == 0:
+                return now + self._call_after_sec  # the first chunk counts from its answer: the robot waited for it
+            if self._submitted_at is None or self._submitted_at + self._call_after_sec <= now:
+                return None  # a late answer: the schedule calls at once, and that request goes in full
+            return self._submitted_at + self._call_after_sec
         delay = 0.0 if self._submitted_at is None else now - self._submitted_at
         lead = 0.0 if self._lead is None else self._lead(delay)
         duration = len(chunk) / self._fps
@@ -331,16 +365,7 @@ class FrameStreamer:
             duration = min(duration, self._horizon_sec)
         start = max(now, self._chunk_end)  # an early answer waits behind the commands still due
         self._chunk_end = start + duration
-        t_next = self._chunk_end - min(lead, duration)
-        n = len(self._offsets)
-        with self._lock:
-            self.call += 1
-            self._streamed = {}
-            planned = t_next > now
-            self._targets = [(n - 1 - i, t_next + o) for i, o in enumerate(self._offsets[:-1])] if planned else []
-        self._wake.set()
-        if planned:
-            self._dispatch_due(now)  # rows whose target has passed go at once
+        return self._chunk_end - min(lead, duration)
 
     def request(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
         """The observation of a request, with each image stack referring to the streamed rows it holds."""
@@ -367,21 +392,35 @@ class FrameStreamer:
         self._wake.set()
         self._queue.put(None)
         logger.info(
-            'Frame stream closed: %d rows sent, %d rows referred to, %d frames inline',
+            'Frame stream closed: %d rows sent, %d rows referred to, %d frames inline, '
+            '%d answers whose next request went in full at once, %d frame_miss answers',
             self._rows_sent,
             self._rows_referred,
             self._frames_inline,
+            self._unplanned,
+            self.frame_misses,
         )
+
+    @property
+    def counts(self) -> dict[str, int]:
+        """The session's counters so far."""
+        return {
+            'rows_sent': self._rows_sent,
+            'rows_referred': self._rows_referred,
+            'frames_inline': self._frames_inline,
+            'unplanned': self._unplanned,
+            'frame_misses': self.frame_misses,
+        }
 
     def _dispatch_due(self, now: float) -> None:
         """Queue every row whose target time has passed, with the frame that ``TemporalStack`` samples for it:
         the latest tick at or before the target."""
         with self._lock:
+            times = [t for t, _ in self._ticks]
             while self._targets and now >= self._targets[0][1]:
                 back, target = self._targets.pop(0)
                 if not self._ticks or (not self._pad_start and target < self._ticks[0][0]):
                     continue  # TemporalStack drops an offset before its first entry
-                times = [t for t, _ in self._ticks]
                 index = max(int(np.searchsorted(times, target, side='right')) - 1, 0)
                 self._queue.put((self.call, back, self._ticks[index][1]))
 

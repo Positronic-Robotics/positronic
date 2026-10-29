@@ -557,6 +557,10 @@ class RTCSchedule(Policy):
         self._call_after_ns = round(call_after_sec * 1e9)
         self._latency_estimate = latency_estimate
 
+    @property
+    def call_after_sec(self) -> float:
+        return self._call_after_ns / 1e9
+
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         duration = self._latency_estimate.run()
         expected_sec = 0.0
