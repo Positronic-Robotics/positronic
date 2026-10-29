@@ -8,11 +8,13 @@ from positronic_model_server import serialization
 from positronic_model_server.spec import LATEST, NAME, component
 
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
+from positronic import keys
 from positronic.cfg.codecs import image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.policy import spec, training
 from positronic.policy.codecs import LEROBOT_FEATURES, Codec, EncodeImages, Resample, ResizeMode, TransformImages
+from positronic.policy.keys import RTC
 
 
 @pytest.mark.parametrize(
@@ -232,6 +234,24 @@ class TestTransformImages:
     def test_actions_pass_through_untouched(self):
         actions = [{'target_grip': 0.5}, {'target_grip': 1.0}]
         assert TransformImages(64, 48, mode=ResizeMode.BOUND).decode(actions) == actions
+
+    def test_an_rtc_prefix_passes_through_while_the_images_shrink(self):
+        prefix = {
+            RTC.PREFIX_ACTIONS: [{keys.TARGET_GRIP: 0.5}, {keys.TARGET_GRIP: 1.0}],
+            RTC.CHUNK_OFFSET_SEC: 0.2,
+            RTC.OBSERVATION_OFFSET_SEC: -0.01,
+        }
+        received = []
+
+        def model(obs):
+            received.append(obs)
+            return []
+
+        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
+        codec.wrap(model)({'cam': _image(480, 640), RTC.ACTION_PREFIX: prefix})
+
+        assert received[0][RTC.ACTION_PREFIX] == prefix
+        assert received[0]['cam'].shape == (48, 64, 3)
 
     def test_training_encoder_refuses(self):
         with pytest.raises(NotImplementedError, match='full-resolution'):

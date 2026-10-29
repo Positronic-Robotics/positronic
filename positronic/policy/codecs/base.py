@@ -190,9 +190,11 @@ class _ParallelCodec(Codec):
     def decode(self, data):
         left_out = self._left.decode(data)
         right_out = self._right.decode(data)
-        if isinstance(data, list):
+        if isinstance(left_out, list) and isinstance(right_out, list):
             return [{**lf, **rt} for lf, rt in zip(left_out, right_out, strict=True)]
-        return {**left_out, **right_out}
+        if isinstance(left_out, cabc.Mapping) and isinstance(right_out, cabc.Mapping):
+            return {**left_out, **right_out}
+        raise ValueError('Parallel codec outputs must be both mappings or both lists')
 
     @property
     def training_encoder(self):
