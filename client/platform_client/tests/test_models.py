@@ -93,6 +93,7 @@ from platform_client.responses import (
     RankingsResponse,
     RegisterResponse,
     ReplayLink,
+    ReportLink,
     ResolvedEndpoint,
     ResolvedPlan,
     ResolvedTask,
@@ -124,6 +125,7 @@ EPISODE_URL = 'https://pp-artifacts.example/users/a0/submissions/1f/episodes/000
 EPISODE_KEY = 'episodes/0000/meta.json'
 REPLAY_URL = 'https://replays.example/r/token/index.html'
 REPLAY_DATA_URL = 'https://replays.example/r/token/replay.json'
+REPORT_URL = 'https://reports.example/r/token/report.html'
 
 DAILY = QuotaLimit(
     key=QUOTA_SUBMISSIONS_DAY,
@@ -308,6 +310,7 @@ MODELS: list[BaseModel] = [
         id=SUB,
         artifacts=ArtifactRefs(result='s3://b/episodes/'),
         replay=ReplayLink(url='https://viewer.example/v/token/', expires_at=AT),
+        report=ReportLink(url=REPORT_URL, expires_at=AT),
         outcome=PlanOutcome(endpoints=[EndpointOutcome(endpoint='a', kept=9, judged=4, succeeded=3)]),
         runs=[
             RunSummary(
@@ -579,6 +582,17 @@ def test_a_board_row_has_a_rank_exactly_when_it_is_not_a_baseline():
 def test_a_finished_run_replay_carries_no_data_object():
     view = FinishedSubmissionView(id=SUB, artifacts=ArtifactRefs(result=RESULT_URL), replay=ReplayLink(url=REPLAY_URL))
     assert view.model_dump(mode='json')['replay'] == {'url': REPLAY_URL, 'expires_at': None}
+
+
+def test_a_finished_run_reads_the_link_to_its_report():
+    payload = {'id': '1f', 'status': 'finished', 'artifacts': {'result': RESULT_URL}}
+    expiring = {'url': REPORT_URL, 'expires_at': AT.isoformat()}
+    assert FinishedSubmissionView.model_validate({**payload, 'report': expiring}).report == ReportLink(
+        url=REPORT_URL, expires_at=AT
+    )
+    lasting = FinishedSubmissionView.model_validate({**payload, 'report': {'url': REPORT_URL}})
+    assert lasting.report == ReportLink(url=REPORT_URL)
+    assert lasting.model_dump(mode='json')['report'] == {'url': REPORT_URL, 'expires_at': None}
 
 
 def test_an_id_reaches_the_query_string_in_its_hex_wire_form():
@@ -1122,7 +1136,7 @@ def test_a_plan_outcome_totals_its_endpoints():
 def test_a_view_from_a_gateway_that_sends_no_outcome_reads_as_none():
     """The fields are additive: a payload that carries none of them still validates."""
     view = FinishedSubmissionView.model_validate({'id': '1f', 'status': 'finished', 'artifacts': {'result': 's3://b/'}})
-    assert view.replay is None and view.outcome is None
+    assert view.replay is None and view.report is None and view.outcome is None
 
 
 @pytest.mark.parametrize(

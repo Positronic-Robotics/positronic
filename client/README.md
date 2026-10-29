@@ -241,10 +241,10 @@ image runs the platform executes itself. `users.me` names the grant's client in 
 
 Each run of a rig plan carries `episodes`: what the run took on, and what it recorded. `done` moves
 as the rig records each episode. A finished rig plan also carries `replay`, a page that plays back its
-episodes, and `outcome`, the kept, judged and successful episodes per endpoint. `replay` is absent
-until the platform has built the page. The rig writes the episodes to the org's own bucket, and
-`artifacts.result` names the prefix they landed under. Read it with the org's own credential for that
-bucket: `submissions.artifacts` refuses a rig plan.
+episodes, `report`, a page that shows their results, and `outcome`, the kept, judged and successful
+episodes per endpoint. `replay` and `report` are absent until the platform has built each page. The
+rig writes the episodes to the org's own bucket, and `artifacts.result` names the prefix they landed
+under. Read it with the org's own credential for that bucket: `submissions.artifacts` refuses a rig plan.
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
